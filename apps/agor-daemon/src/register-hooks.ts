@@ -25,6 +25,7 @@ import {
 import {
   ArtifactRepository,
   assertTenantWritable,
+  attachHiddenTenant,
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
@@ -63,6 +64,7 @@ import {
   boardObjectQueryValidator,
   boardQueryValidator,
   branchQueryValidator,
+  knowledgeDocumentQueryValidator,
   mcpCatalogQueryValidator,
   mcpServerQueryValidator,
   messageQueryValidator,
@@ -81,6 +83,7 @@ import type {
   AuthenticatedParams,
   Board,
   BoardID,
+  BoardImportResult,
   Branch,
   DeepReadonly,
   GatewayChannel,
@@ -2385,6 +2388,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     captureMarketplaceInvalidationTargets,
   ];
 
+  const publishCommittedBoardMove = (context: HookContext): HookContext => {
+    if (!context.event || !context.data || !Object.hasOwn(context.data, 'board_id')) return context;
+    // Board moves can join an outer admission transaction (e.g. unarchive).
+    // Feathers' automatic event fires when this nested method returns, not when
+    // that transaction commits. Replace only this event with the existing queue;
+    // rollback drops it, and successful commit emits it exactly once.
+    const event = context.event;
+    context.event = null;
+    emitServiceEvent(app, {
+      path: 'branches',
+      event,
+      method: context.method,
+      id: context.id,
+      data: context.dispatch ?? context.result,
+      params: context.params,
+    });
+    return context;
+  };
+
   app.service('branches').hooks({
     before: {
       all: [typedValidateQuery(branchQueryValidator), requireAuth],
@@ -2413,8 +2435,16 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
     after: {
       create: [invalidateRealtimeBranchFromResult],
-      update: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
-      patch: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
+      update: [
+        invalidateRealtimeBranchFromResult,
+        publishMarketplaceInvalidation,
+        publishCommittedBoardMove,
+      ],
+      patch: [
+        invalidateRealtimeBranchFromResult,
+        publishMarketplaceInvalidation,
+        publishCommittedBoardMove,
+      ],
       remove: [
         invalidateRealtimeBranchFromResult,
         publishMarketplaceInvalidation,
@@ -2429,7 +2459,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   type BranchCustomHookRegistrar = {
     hooks(options: {
       before: Record<
-        'updateEnvironment' | 'ensureTeammateKnowledgeNamespace' | 'clean',
+        'ensureTeammateKnowledgeNamespace' | 'clean',
         Array<(context: HookContext) => HookContext>
       >;
     }): void;
@@ -2437,7 +2467,6 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   (app.service('branches') as unknown as BranchCustomHookRegistrar).hooks({
     before: {
       clean: [requireMinimumRole(ROLES.MEMBER, 'clean branches')],
-      updateEnvironment: [requireMinimumRole(ROLES.MEMBER, 'update branch environments')],
       ensureTeammateKnowledgeNamespace: [
         requireMinimumRole(ROLES.MEMBER, 'create teammate knowledge namespaces'),
       ],
@@ -2469,7 +2498,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('kb/documents')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [typedValidateQuery(knowledgeDocumentQueryValidator), requireAuth],
       create: [requireMinimumRole(ROLES.MEMBER, 'create knowledge documents')],
       patch: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
       update: [requireMinimumRole(ROLES.MEMBER, 'update knowledge documents')],
@@ -3683,6 +3712,23 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     }
   };
 
+  // Import custom methods don't publish automatically; emit `created` manually.
+  // `import_skipped` is diagnostics for the importing caller only, so it stays
+  // out of the broadcast board (keeping the hidden tenant marker).
+  const emitImportedBoardCreated = async (context: HookContext<Board>) => {
+    const result = context.result as BoardImportResult | undefined;
+    if (result) {
+      const { import_skipped: _importSkipped, ...board } = result;
+      emitServiceEvent(app, {
+        path: 'boards',
+        event: 'created',
+        data: attachHiddenTenant(board, result),
+        params: context.params,
+      });
+    }
+    return context;
+  };
+
   const boardUpdateAuthorization = [
     requireMinimumRole(ROLES.MEMBER, 'update boards'),
     ensureCanMutateBoard('update this board'),
@@ -3884,34 +3930,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           return context;
         },
       ],
-      fromBlob: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          if (context.result) {
-            emitServiceEvent(app, {
-              path: 'boards',
-              event: 'created',
-              data: context.result,
-              params: context.params,
-            });
-          }
-          return context;
-        },
-      ],
-      fromYaml: [
-        clearRealtimeBranchVisibility,
-        async (context: HookContext<Board>) => {
-          if (context.result) {
-            emitServiceEvent(app, {
-              path: 'boards',
-              event: 'created',
-              data: context.result,
-              params: context.params,
-            });
-          }
-          return context;
-        },
-      ],
+      fromBlob: [clearRealtimeBranchVisibility, emitImportedBoardCreated],
+      fromYaml: [clearRealtimeBranchVisibility, emitImportedBoardCreated],
       setPrimaryTeammate: [
         clearRealtimeBranchVisibility,
         // Replacing an attached primary is cache-only because its board_id is

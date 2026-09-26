@@ -1568,7 +1568,9 @@ export async function createBranch(
   /** Separately bounded credentials for the selected source transport. */
   sourceEnv: UserGitEnvironment | undefined = env,
   /** Resolver identity: names (including hexadecimal branch names) are not kinds. */
-  resolvedSource?: Pick<ResolvedGitRef, 'kind' | 'remoteName'>
+  resolvedSource?: Pick<ResolvedGitRef, 'kind' | 'remoteName'>,
+  /** Filesystem recovery must fail rather than delete a ref that appeared during I/O. */
+  preserveExistingBranch = false
 ): Promise<void> {
   console.log('🔍 createBranch called with:', {
     repoPath,
@@ -1779,6 +1781,12 @@ export async function createBranch(
           throw new Error(
             `A branch named '${ref}' already exists and is in use by another branch. ` +
               `Please choose a different name.`
+          );
+        }
+
+        if (preserveExistingBranch) {
+          throw new Error(
+            `Local branch '${ref}' appeared during filesystem recovery; refusing to replace it. Retry recovery.`
           );
         }
 
@@ -2268,7 +2276,9 @@ export async function restoreBranchFilesystem(
   baseRemoteUrl?: string,
   baseRefType: 'branch' | 'tag' = 'branch',
   /** Canonical tenant-owned destination remote from the database. */
-  destinationRemoteUrl?: string
+  destinationRemoteUrl?: string,
+  /** Internal policy: only a trusted, admitted filesystem recovery may preserve a retained tip. */
+  preserveLocalRef = false
 ): Promise<RestoreBranchResult> {
   // Validate refs early — this function both passes them to createBranch
   // (which re-validates) and to ls-remote (which does not).
@@ -2289,6 +2299,21 @@ export async function restoreBranchFilesystem(
     throw new Error('Credential-bearing branch restore requires destinationRemoteUrl');
   }
   const { git } = createGit(repoPath);
+
+  // Ordinary restore keeps destination fast-forward/refusal semantics below.
+  // Recovery reattaches retained history before remote I/O, without resetting it.
+  if (preserveLocalRef && (await resolveCommitSha(git, `refs/heads/${ref}`))) {
+    try {
+      await createBranch(repoPath, branchPath, ref, false, false);
+      return { success: true, strategy: 'checkout' };
+    } catch (error) {
+      return {
+        success: false,
+        strategy: 'checkout',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
 
   // Step 1: Fetch from remote
   try {
@@ -2356,6 +2381,11 @@ export async function restoreBranchFilesystem(
       }
       destinationSha = fetchedSha;
       const localSha = await resolveCommitSha(git, `refs/heads/${ref}`);
+      if (preserveLocalRef && localSha) {
+        throw new Error(
+          `Local branch '${ref}' appeared during filesystem recovery; refusing to move it. Retry recovery.`
+        );
+      }
       if (localSha && localSha !== destinationSha) {
         try {
           const ancestor = (await git.raw(['merge-base', localSha, destinationSha])).trim();
@@ -2382,7 +2412,8 @@ export async function restoreBranchFilesystem(
         safeDestinationRemoteUrl,
         destinationSha,
         env,
-        { kind: 'remote_branch', remoteName: 'origin' }
+        { kind: 'remote_branch', remoteName: 'origin' },
+        preserveLocalRef
       );
       return { success: true, strategy: 'checkout' };
     }
@@ -2399,7 +2430,11 @@ export async function restoreBranchFilesystem(
       env,
       baseRefType,
       baseRemoteUrl,
-      safeDestinationRemoteUrl
+      safeDestinationRemoteUrl,
+      undefined,
+      env,
+      undefined,
+      preserveLocalRef
     );
     return { success: true, strategy: 'create' };
   } catch (error) {
@@ -2750,12 +2785,40 @@ export async function removeBranchWorkspace(options: {
   const { branchPath, branchesRoot, repoPath, storageMode } = options;
   const target = await resolveManagedBranchDeletionPath(branchPath, branchesRoot);
   const { realpath } = await import('node:fs/promises');
-  // Require the authoritative repo to be available; canonicalize its root, not
-  // the victim (whose symlink descendants are rejected by the validator).
-  const repository = await realpath(repoPath);
-  if (repository === target || repository.startsWith(`${target}${sep}`))
-    throw new Error('Cannot delete the shared base repository');
+  // A clone is self-contained, so its base checkout may be absent from an
+  // external executor. Worktrees still require it to remove Git registration.
+  // Check both the declared location and a live canonical location before
+  // deleting: neither may point into the victim workspace.
+  const declaredRepository = resolve(repoPath);
+  const assertOutsideTarget = (candidate: string) => {
+    if (candidate === target || candidate.startsWith(`${target}${sep}`))
+      throw new Error('Cannot delete the shared base repository');
+  };
+  assertOutsideTarget(declaredRepository);
+  let repository: string | undefined;
+  try {
+    repository = await realpath(repoPath);
+  } catch (error) {
+    if (storageMode === 'worktree' || (error as NodeJS.ErrnoException).code !== 'ENOENT')
+      throw error;
+    // The checkout itself can be absent, but an existing ancestor could still
+    // be a symlink into the branch slated for removal.
+    let ancestor = dirname(declaredRepository);
+    for (;;) {
+      try {
+        assertOutsideTarget(await realpath(ancestor));
+        break;
+      } catch (ancestorError) {
+        if ((ancestorError as NodeJS.ErrnoException).code !== 'ENOENT') throw ancestorError;
+        const parent = dirname(ancestor);
+        if (parent === ancestor) throw ancestorError;
+        ancestor = parent;
+      }
+    }
+  }
+  if (repository) assertOutsideTarget(repository);
   if (storageMode === 'worktree') {
+    if (!repository) throw new Error('Shared base repository is unavailable');
     const registrations = await listGitWorktrees(repository);
     if (registrations.some((item) => resolve(item.path) === target)) {
       await removeGitWorktree(repository, target);

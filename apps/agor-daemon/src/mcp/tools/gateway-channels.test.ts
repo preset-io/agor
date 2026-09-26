@@ -2927,7 +2927,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         rate_limit_max_total_delay_ms: 10000,
       },
       files: false,
-      agent_tools: [],
+      agent_tools: { channel_history: false },
       outbound_enabled: true,
       default_outbound_target: 'channel:333333333333333333',
     });
@@ -3280,5 +3280,241 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     await expect(tools.agor_gateway_slack_manifest_generate.handler(dmOnly)).rejects.toThrow(
       'admin role required'
     );
+  });
+});
+
+describe('Discord channel history agent tool (MCP)', () => {
+  const discordChannel = {
+    ...slackChannel,
+    name: 'Eng Discord',
+    channel_type: 'discord',
+    config: {
+      bot_token: 'discord-bot-secret',
+      application_id: '111111111111111111',
+      guild_id: '222222222222222222',
+      allowed_channel_ids: ['333333333333333333'],
+      agent_tools: { channel_history: true },
+    },
+  };
+  const discordSource = {
+    channel_id: 'chan-1',
+    channel_name: 'Eng Discord',
+    channel_type: 'discord',
+    thread_id: '444444444444444444',
+  };
+  const historyResult = {
+    channelId: '333333333333333333',
+    has_more: true,
+    next_cursor: { before: '555555555555555555' },
+    messages: [
+      {
+        id: '555555555555555555',
+        iso_time: '2026-09-24T12:00:00.000Z',
+        actor_label: 'Richard',
+        author_id: '666666666666666666',
+        text: 'standup: shipped the gateway fix',
+        is_bot: false,
+        is_system: false,
+        is_mention: false,
+        is_forwarded: true,
+        attachments: [{ filename: 'plan.png', content_type: 'image/png', size: 10 }],
+        thread_id: '777777777777777777',
+      },
+    ],
+  };
+
+  function spyDiscordSession(branchId: string, source: Record<string, unknown> | null) {
+    return vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue({
+      session_id: 'sess-1',
+      branch_id: branchId,
+      custom_context: source ? { gateway_source: source } : {},
+    } as any);
+  }
+
+  function mockConnector() {
+    const connector = { fetchChannelHistory: vi.fn(async () => historyResult) };
+    vi.mocked(getConnector).mockReturnValue(connector as any);
+    return connector;
+  }
+
+  it("defaults to the session thread's parent channel and returns untrusted, token-free output", async () => {
+    const connector = mockConnector();
+    spyDiscordSession('branch-1', discordSource);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      discordChannel as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_discord_channel_history_get.handler({ limit: 10 });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(getConnector).toHaveBeenCalledWith('discord', discordChannel.config);
+    expect(connector.fetchChannelHistory).toHaveBeenCalledWith({
+      sessionThreadKey: '444444444444444444',
+      limit: 10,
+      includeBotMessages: false,
+    });
+    expect(payload.warning).toContain('untrusted external content');
+    expect(payload.channel).toEqual({ discord_channel_id: '333333333333333333' });
+    expect(payload.pagination).toEqual({
+      requested_limit: 10,
+      returned: 1,
+      has_more: true,
+      next_cursor: { before: '555555555555555555' },
+    });
+    expect(payload.messages[0]).toMatchObject({ text: 'standup: shipped the gateway fix' });
+    expect(JSON.stringify(payload)).not.toContain('discord-bot-secret');
+  });
+
+  it('reads an explicit channel with a cursor and renders markdown', async () => {
+    const connector = mockConnector();
+    spyDiscordSession('branch-1', null);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      discordChannel as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_discord_channel_history_get.handler({
+      gatewayChannelId: 'chan-1',
+      discordChannelId: '777777777777777777',
+      before: '888888888888888888',
+      format: 'markdown',
+    });
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(connector.fetchChannelHistory).toHaveBeenCalledWith({
+      channelId: '777777777777777777',
+      before: '888888888888888888',
+      limit: 50,
+      includeBotMessages: false,
+    });
+    expect(payload.markdown).toContain('# Discord channel 333333333333333333 history');
+    expect(payload.markdown).toContain('standup: shipped the gateway fix');
+    expect(payload.markdown).toContain('Richard <666666666666666666>');
+    expect(payload.markdown).toContain('(555555555555555555) [forwarded]');
+    expect(payload.markdown).toContain('Attached file: plan.png (image/png, 10 bytes)');
+    expect(payload.markdown).toContain('Started thread 777777777777777777');
+    expect(payload.messages).toBeUndefined();
+  });
+
+  it('requires discordChannelId for sessions not created by this Discord channel', async () => {
+    mockConnector();
+    spyDiscordSession('branch-1', null);
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      discordChannel as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+    const tools = await captureTools('member');
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('discordChannelId is required');
+  });
+
+  it('is off for legacy [] and absent agent_tools, before any Discord call', async () => {
+    for (const agentTools of [[], undefined, { channel_history: false }]) {
+      spyDiscordSession('branch-1', discordSource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+        ...discordChannel,
+        config: { ...discordChannel.config, agent_tools: agentTools },
+      } as any);
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('admin');
+      await expect(tools.agor_gateway_discord_channel_history_get.handler({})).rejects.toThrow(
+        "capability 'channel_history' is disabled"
+      );
+      expect(getConnector).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('refuses other branches, non-Discord and disabled channels, and missing channels', async () => {
+    spyCallerSessionBranch('branch-2');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      discordChannel as any
+    );
+    let tools = await captureTools('admin');
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('targets a different branch');
+    vi.restoreAllMocks();
+
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    const findById = vi.spyOn(GatewayChannelRepository.prototype, 'findById');
+    tools = await captureTools('admin');
+
+    findById.mockResolvedValue({
+      ...slackChannel,
+      config: { ...slackChannel.config, agent_tools: { channel_history: true } },
+    } as any);
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('is slack, not discord');
+
+    findById.mockResolvedValue({ ...discordChannel, enabled: false } as any);
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('is disabled');
+
+    // A foreign tenant's channel is invisible to the tenant-scoped repository.
+    findById.mockResolvedValue(null as any);
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({ gatewayChannelId: 'chan-other' })
+    ).rejects.toThrow('Gateway channel not found');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('denies unauthorized no-session callers without leaking channel details', async () => {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+      discordChannel as any
+    );
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue('view' as any);
+
+    const tools = await captureTools('member', makeFakeApp({}), null);
+    const error = await tools.agor_gateway_discord_channel_history_get
+      .handler({ gatewayChannelId: 'chan-1', discordChannelId: '333333333333333333' })
+      .then(() => null)
+      .catch((err: Error) => err);
+
+    expect(error!.message).toContain("admin role or 'all' branch permission");
+    expect(error!.message).not.toContain('Eng Discord');
+    expect(error!.message).not.toContain('channel_history');
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('validates cursors and limits in the input schema', async () => {
+    const tools = await captureTools('member');
+    const schema = tools.agor_gateway_discord_channel_history_get.cfg.inputSchema;
+    expect(schema.safeParse({ limit: 200, before: '555555555555555555' }).success).toBe(true);
+    expect(schema.safeParse({ limit: 201 }).success).toBe(false);
+    expect(schema.safeParse({ before: 'abc' }).success).toBe(false);
+    expect(schema.safeParse({ discordChannelId: '12' }).success).toBe(false);
+    await expect(
+      tools.agor_gateway_discord_channel_history_get.handler({
+        before: '555555555555555555',
+        after: '555555555555555556',
+      })
+    ).rejects.toThrow('either before or after');
+  });
+
+  it('exposes the channelHistory setup option as agent_tools config', async () => {
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_discord_setup.handler({
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      messageContentAcknowledged: true,
+      allowedChannelIds: ['333333333333333333'],
+      allowedUserIds: ['444444444444444444'],
+      agorUserId: 'user-1',
+      channelHistory: true,
+    });
+    const payload = JSON.parse(result.content[0].text);
+    expect(JSON.stringify(payload)).toContain('"agent_tools":{"channel_history":true}');
   });
 });

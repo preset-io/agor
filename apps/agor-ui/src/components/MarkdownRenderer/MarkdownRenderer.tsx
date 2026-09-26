@@ -22,6 +22,7 @@ import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { useThemedMessage } from '../../utils/message';
 import { isDarkTheme } from '../../utils/theme';
+import { openUploadBlob } from '../../utils/uploadBlob';
 import {
   streamdownRemarkPlugins,
   streamdownRichContentPlugins,
@@ -314,14 +315,7 @@ function UploadAttachmentLink({
         { headers: getAuthHeaders() }
       );
       if (!response.ok) throw new Error('Upload is unavailable');
-      const objectUrl = URL.createObjectURL(await response.blob());
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      if (download) anchor.download = filename;
-      else anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
-      anchor.click();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+      openUploadBlob(await response.blob(), filename, download);
     } catch (error) {
       showError(error instanceof Error ? error.message : 'Upload is unavailable');
     }

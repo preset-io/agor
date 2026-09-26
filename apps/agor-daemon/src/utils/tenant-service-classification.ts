@@ -181,6 +181,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // Operator surfaces the lanes read. Registered through the tenant-scoped
   // route registrar, so the scope is armed at registration.
   // --------------------------------------------------------------------------
+  'api/v1/user/me': {
+    scopeClass: 'scoped',
+    why: 'Registered through createTenantScopedAuthenticatedRouteRegistrar; returns the authenticated caller projection only.',
+  },
   'mcp-slack-connect/card': {
     scopeClass: 'scoped',
     why: 'Registered through createTenantScopedAuthenticatedRouteRegistrar; reads and writes one app variable in the request scope.',
@@ -210,6 +214,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // predate this mechanism and sit in the baseline; this one is new, so it
   // answers.
   // --------------------------------------------------------------------------
+  'branches/:id/retire-teammate': {
+    scopeClass: 'identity-only',
+    why: 'Metadata-only retirement carries authenticated tenant identity and the write gate at registration. Branch/repo reads, the authority-fenced preference-and-archive admission, session archival and final read each open short tenant units in requestWorkspaceOperation; terminal closure and realtime delivery happen outside those units. No global or creator authority is used.',
+  },
   'branches/:id/retry-provisioning': {
     scopeClass: 'identity-only',
     why: 'Long route that crosses the executor spawn boundary: the authorization read, the repo lookup, the failed -> creating CAS and the dispatch each open their own short unit via reposService.withTenantDatabase, so no transaction is held across the spawn.',

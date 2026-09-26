@@ -99,7 +99,8 @@ const CatalogGrid = memo<{
   entries: MCPCatalogEntry[];
   onOpen: (entry: MCPCatalogEntry) => void;
 }>(({ entries, onOpen }) => (
-  <Row gutter={[16, 16]}>
+  // Keep the half-gutters inside the scroll container, not outside its width.
+  <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
     {entries.map((entry) => (
       <Col key={entry.name} {...GRID_SPANS}>
         <CatalogCard entry={entry} onOpen={onOpen} />
@@ -856,7 +857,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         />
       ) : status === 'loading' ? (
         showDisconnected ? null : (
-          <Row gutter={[16, 16]}>
+          <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
             {Array.from({ length: 6 }, (_, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
               <Col key={index} {...GRID_SPANS}>

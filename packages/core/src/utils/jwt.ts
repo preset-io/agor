@@ -15,26 +15,33 @@
  */
 
 /**
- * Return the `exp` claim (Unix seconds) from a JWT, or null on any failure.
- * Never throws. Does not verify the signature.
+ * Return a JWT's decoded payload object, or null on any failure. Never
+ * throws. Does not verify the signature: callers may use claims only as
+ * hints (e.g. to notice that a credential now belongs to someone else).
  */
-export function readJwtExpClaim(token: string): number | null {
+export function readUnverifiedJwtPayload(token: string): Record<string, unknown> | null {
   const parts = token.split('.');
   if (parts.length !== 3) return null;
   const payloadSegment = parts[1];
   if (!payloadSegment) return null;
 
   try {
-    const decoded = base64UrlDecodeToString(payloadSegment);
-    const parsed = JSON.parse(decoded) as unknown;
-    if (parsed && typeof parsed === 'object' && 'exp' in parsed) {
-      const exp = (parsed as { exp: unknown }).exp;
-      if (typeof exp === 'number' && Number.isFinite(exp) && exp > 0) return exp;
-    }
-    return null;
+    const parsed = JSON.parse(base64UrlDecodeToString(payloadSegment)) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Return the `exp` claim (Unix seconds) from a JWT, or null on any failure.
+ * Never throws. Does not verify the signature.
+ */
+export function readJwtExpClaim(token: string): number | null {
+  const exp = readUnverifiedJwtPayload(token)?.exp;
+  return typeof exp === 'number' && Number.isFinite(exp) && exp > 0 ? exp : null;
 }
 
 /**

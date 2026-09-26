@@ -1,4 +1,9 @@
 import { getUploadPolicyErrorDefinition, UPLOAD_REQUEST_ID_HEADER } from '@agor/core/types';
+import { isExpiringSoon } from '../../utils/jwtExpiry';
+import {
+  readStoredCredentialOwner,
+  refreshStoredAccessTokenForOwner,
+} from '../../utils/storedTokenRecovery';
 import { ACCESS_TOKEN_KEY } from '../../utils/tokenRefresh';
 
 export interface UploadedFile {
@@ -28,6 +33,9 @@ export interface UploadFilesToSessionResult {
 }
 
 const MAX_UPLOAD_ERROR_LENGTH = 240;
+// Refresh a stored access token this close to expiry before spending an
+// upload on it; the daemon rejects expired bearers before reading the body.
+const UPLOAD_TOKEN_REFRESH_BUFFER_MS = 30_000;
 const SAFE_REQUEST_ID = /^[a-zA-Z0-9-]{1,64}$/;
 
 function boundedErrorMessage(value: unknown): string | undefined {
@@ -97,25 +105,47 @@ export async function uploadFilesToSession({
   formData.append('message', message);
 
   const uploadUrl = `${daemonUrl}/sessions/${sessionId}/upload`;
-  const accessToken =
+  // An explicit snapshot is never swapped for whatever localStorage holds
+  // now. The ambient stored token may be refreshed, but only while it still
+  // belongs to whoever initiated the upload (another tab can sign in as
+  // someone else mid-request).
+  let accessToken =
     explicitAccessToken === undefined
       ? localStorage.getItem(ACCESS_TOKEN_KEY)
       : explicitAccessToken;
-  const headers: HeadersInit = {};
+  const owner = explicitAccessToken === undefined ? readStoredCredentialOwner(accessToken) : null;
 
-  if (accessToken) {
-    headers.Authorization = `Bearer ${accessToken}`;
-  } else {
-    console.warn('[FileUpload] No access token found in localStorage');
+  if (owner && accessToken && isExpiringSoon(accessToken, UPLOAD_TOKEN_REFRESH_BUFFER_MS)) {
+    accessToken = (await refreshStoredAccessTokenForOwner(daemonUrl, owner)) ?? accessToken;
   }
 
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers,
-    body: formData,
-    signal,
-    // Bearer-only endpoint; do not send cookies/credentials.
-  });
+  const send = (token: string | null | undefined) => {
+    const headers: HeadersInit = {};
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    } else {
+      console.warn('[FileUpload] No access token found in localStorage');
+    }
+    return fetch(uploadUrl, {
+      method: 'POST',
+      headers,
+      body: formData,
+      signal,
+      // Bearer-only endpoint; do not send cookies/credentials.
+    });
+  };
+
+  let response = await send(accessToken);
+
+  // The access token can expire while the tab's socket stays connected (the
+  // socket authenticated at handshake), so a 401 here usually means only this
+  // raw fetch holds a stale bearer. Refresh once and retry with the new token.
+  if (response.status === 401 && owner) {
+    const refreshed = await refreshStoredAccessTokenForOwner(daemonUrl, owner);
+    if (refreshed && refreshed !== accessToken) {
+      response = await send(refreshed);
+    }
+  }
 
   if (!response.ok) {
     throw new Error(await getUploadErrorMessage(response));

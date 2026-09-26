@@ -3,6 +3,30 @@ import { mutateCredentialFile, writeVerifiedCodexAuthFile } from '@agor/core/cod
 import { buildAllowlistedEnv } from '@agor/core/config';
 import { requestExecutor } from './spawn-executor.js';
 
+const WRITE_FAILURE_CODES = new Set([
+  'EXECUTOR_TIMEOUT',
+  'EXECUTOR_SPAWN_ERROR',
+  'EXECUTOR_STDIN_ERROR',
+  'EXECUTOR_RESULT_MISSING',
+  'EXECUTOR_RESPONSE_UNSUPPORTED',
+  'AUTH_FILE_STALE',
+  'AUTH_FILE_VERIFY_FAILED',
+  'EXECUTOR_REQUEST_FAILED',
+  'INVALID_RESPONSE',
+]);
+
+/** Only reviewed categories cross the credential boundary into operational logs. */
+export class CodexAuthCredentialWriteError extends Error {
+  readonly code: string;
+  readonly durationMs: number;
+
+  constructor(code: string | undefined, durationMs: number) {
+    super('Executor credential write failed');
+    this.code = code && WRITE_FAILURE_CODES.has(code) ? code : 'EXECUTOR_FAILURE';
+    this.durationMs = Number.isSafeInteger(durationMs) && durationMs >= 0 ? durationMs : 0;
+  }
+}
+
 export interface CodexAuthCredentialRouting {
   delegatedHomeKey: string | null;
   userId: string;
@@ -112,17 +136,29 @@ export async function writeCodexAuthCredential(
   if (authorityGeneration !== undefined && routing.codexHome) {
     return writeCodexAuthLocally(content, routing.codexHome, authorityGeneration);
   }
-  const result = await mutateViaExecutor(
-    {
-      command: 'codex.auth-file',
-      params: { operation: 'write', content, generation: authorityGeneration },
-    },
-    routing
-  );
-  if (!result.success) throw new Error('Executor credential write failed');
-  const data = result.data as Record<string, unknown>;
-  if (data.status !== 'written' || (data.authMode !== 'chatgpt' && data.authMode !== 'api_key')) {
-    throw new Error('Executor credential write verification failed');
+  const startedAt = performance.now();
+  let result: Awaited<ReturnType<typeof mutateViaExecutor>>;
+  try {
+    result = await mutateViaExecutor(
+      {
+        command: 'codex.auth-file',
+        params: { operation: 'write', content, generation: authorityGeneration },
+      },
+      routing
+    );
+  } catch {
+    throw new CodexAuthCredentialWriteError(
+      'EXECUTOR_REQUEST_FAILED',
+      Math.round(performance.now() - startedAt)
+    );
+  }
+  const durationMs = Math.round(performance.now() - startedAt);
+  if (!result.success) {
+    throw new CodexAuthCredentialWriteError(result.error?.code, durationMs);
+  }
+  const data = result.data as Record<string, unknown> | undefined;
+  if (data?.status !== 'written' || (data.authMode !== 'chatgpt' && data.authMode !== 'api_key')) {
+    throw new CodexAuthCredentialWriteError('INVALID_RESPONSE', durationMs);
   }
   return {
     authMode: data.authMode,

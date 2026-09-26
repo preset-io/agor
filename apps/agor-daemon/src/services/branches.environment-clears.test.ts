@@ -41,14 +41,11 @@ dbTest(
       await service.updateEnvironment(branch.branch_id, failed);
       expect((await read())?.environment_instance?.last_error).toBe('PR2682_FAIL');
       for (const action of ['stop', 'nuke'] as const) {
-        const stopped = await service.updateEnvironment({
-          branch_id: branch.branch_id,
-          environment_update: {
-            status: 'stopped',
-            process: null,
-            last_error: null,
-            last_command: { action, status: 'succeeded', timestamp: stamp },
-          },
+        const stopped = await service.updateEnvironment(branch.branch_id, {
+          status: 'stopped',
+          process: null,
+          last_error: null,
+          last_command: { action, status: 'succeeded', timestamp: stamp },
         });
         for (const env of [stopped.environment_instance, (await read())?.environment_instance]) {
           expect(env).toMatchObject({

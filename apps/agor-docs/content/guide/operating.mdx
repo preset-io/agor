@@ -1,0 +1,52 @@
+---
+title: Operating Agor
+description: Install, secure, maintain, and upgrade an Agor deployment.
+---
+
+# Operating Agor
+
+These guides are for people responsible for an Agor deployment or workspace administration.
+If your workspace is already running, start with [Using Agor](/guide/features-overview)
+and [Sharing & Permissions](/guide/permissions) instead.
+
+## Install and choose an execution model
+
+- [Installation options](/guide/extended-install): packaged, Docker, and source installations.
+- [Deployment configuration](/guide/config-yaml): daemon settings, authentication configuration,
+  telemetry, and configuration ownership.
+- [Execution isolation](/guide/multiplayer-unix-isolation): choose trusted local `simple`,
+  fail-closed local `sandbox`, or explicitly configured `delegated` execution.
+- [Containerized execution](/guide/containerized-execution): provision an external executor
+  substrate and persistent workspaces. A launcher template alone does not provide isolation.
+
+Running executors in containers and running multiple daemon replicas are separate choices.
+For multiple daemons, follow [Daemon High Availability](/guide/daemon-ha): active-active mode
+requires PostgreSQL, Redis, sticky Engine.IO ingress, and a supported storage topology.
+SQLite on shared storage is not a substitute.
+
+## Secure access and connections
+
+- [Security](/security): security boundaries and deployment responsibilities.
+- [Multi-tenant filesystem](/guide/multi-tenant-filesystem): tenant storage layout and isolation.
+- [One-time launch authentication](/guide/one-time-launch-auth): integrate an external identity entry point.
+- [MCP administration](/guide/mcp-administration): tenant connection restrictions, diagnostics,
+  OAuth client recovery, and shared-grant upgrades.
+
+Deployment-global settings belong to the deployment owner. Tenant administrators cannot change
+those settings through workspace preferences. MCP security modes are tenant-owned API settings,
+not `config.yaml` keys; personal connections and credentials remain user-owned.
+
+## Maintain and upgrade
+
+Before an upgrade, check the migration instructions relevant to your deployment. Some changes
+require stopping **all** daemons and taking tested backups; they are not rolling upgrades.
+
+- [Execution and permission migrations](/guide/multiplayer-unix-isolation#capability-policy-upgrade),
+  including the [0.24.7 to 0.25.1 cutover](/guide/multiplayer-unix-isolation#migrating-from-024).
+- [HA rollout and rollback](/guide/daemon-ha#rollout-and-rollback-checklist).
+- [Shared OAuth grant migration](/guide/mcp-administration#upgrade-shared-grant-attribution-0105-both-databases).
+- [Tenant data portability](/guide/tenant-data-portability): export, import, verification,
+  and the limits of what moves with a tenant.
+
+For repository contributions and local test environments, use the
+[Development Guide](/guide/development), not a production deployment runbook.

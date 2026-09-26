@@ -7,7 +7,12 @@ import {
   normalizeCursorToolName,
 } from './cursor.js';
 
-const mocks = vi.hoisted(() => ({ send: vi.fn() }));
+const mocks = vi.hoisted(() => ({ send: vi.fn(), configured: vi.fn() }));
+// Configuration fixtures must not depend on the invoking executor's environment.
+vi.mock('../../config.js', () => ({
+  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+}));
+
 vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(async () => {
     const agent = {
@@ -15,12 +20,32 @@ vi.mock('@agor/core/agentic-integrations', () => ({
       send: mocks.send,
       close: vi.fn(),
     };
-    return { Agent: { create: vi.fn(async () => agent), resume: vi.fn(async () => agent) } };
+    return {
+      Agent: {
+        create: vi.fn(async (options) => {
+          mocks.configured(options);
+          return agent;
+        }),
+        resume: vi.fn(async (_id, options) => {
+          mocks.configured(options);
+          return agent;
+        }),
+      },
+    };
   }),
 }));
 vi.mock('@agor/core/mcp', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/mcp')>()),
-  getMcpServersForSession: vi.fn(async () => []),
+  getMcpServersForSession: vi.fn(async () => [
+    {
+      server: {
+        name: 'external',
+        transport: 'http',
+        url: 'https://example.com/mcp',
+      },
+    },
+  ]),
+  resolveScopedMCPAuthHeaders: vi.fn(async () => ({ Authorization: 'Bearer external-token' })),
 }));
 vi.mock('../../db/feathers-repositories.js', () => ({
   createFeathersBackedRepositories: () => ({}),
@@ -45,6 +70,7 @@ it('refreshes Cursor request identity without persisting the identity block as u
       get: async (id: string) => ({
         session_id: id,
         branch_id: 'branch-1',
+        mcp_token: 'test-token',
         sdk_session_id: 'provider-thread-A',
       }),
     },
@@ -60,6 +86,18 @@ it('refreshes Cursor request identity without persisting the identity block as u
       taskId: 'task-1' as TaskID,
       prompt: 'Inherited ID: A',
       abortController: new AbortController(),
+    });
+    expect(mocks.configured).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        mcpServers: expect.objectContaining({
+          agor: expect.objectContaining({
+            headers: { Authorization: 'Bearer test-token', 'x-agor-mcp-client': 'cursor' },
+          }),
+        }),
+      })
+    );
+    expect(mocks.configured.mock.lastCall?.[0].mcpServers.external.headers).toEqual({
+      Authorization: 'Bearer external-token',
     });
     expect(mocks.send).toHaveBeenLastCalledWith(
       expect.stringContaining(`Current Agor session ID: ${id}`),

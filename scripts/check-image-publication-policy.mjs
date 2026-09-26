@@ -153,11 +153,76 @@ assert.deepEqual(
 const managedEnvironments = await readFile(path.join(root, '.agor.yml'), 'utf8');
 assert.doesNotMatch(managedEnvironments, imageReference);
 assert.doesNotMatch(managedEnvironments, /docker (?:compose )?pull\b/);
+const explicitStarts = [...managedEnvironments.matchAll(/^\s+start:\s*>-/gm)].length;
+const localWorktreeBuildStarts = [
+  ...managedEnvironments.matchAll(/\bup -d(?:\s+--build|[\s\S]{0,120}?\s+--build)\b/g),
+].length;
+const codespacesWorktreeBuildStarts = [
+  ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
+].length;
+// Reviewed remote-source exception: Railway builds the adopted pushed branch,
+// not the caller's dirty worktree and not a published application image.
+const railwaySourceBuildStarts = [
+  ...managedEnvironments.matchAll(
+    /node scripts\/managed-environments\/railway\/launcher\.mjs start\b/g
+  ),
+].length;
 assert.equal(
-  [...managedEnvironments.matchAll(/^\s+start:\s*>-/gm)].length,
-  [...managedEnvironments.matchAll(/\bup -d(?:\s+--build|[\s\S]{0,120}?\s+--build)\b/g)].length,
-  'every explicit managed-environment start must build from its checked-out worktree'
+  explicitStarts,
+  localWorktreeBuildStarts + codespacesWorktreeBuildStarts + railwaySourceBuildStarts,
+  'every explicit managed-environment start must build local source or use a reviewed remote-source exception'
 );
+
+if (railwaySourceBuildStarts > 0) {
+  assert.equal(railwaySourceBuildStarts, 1, 'only one adopted Railway variant is reviewed');
+  assert.match(
+    managedEnvironments,
+    /railway-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
+  );
+  const railway = await readFile(path.join(root, '.railway/railway.ts'), 'utf8');
+  assert.match(railway, /source: github\('preset-io\/agor',/);
+  assert.match(railway, /builder: 'DOCKERFILE', dockerfilePath: 'docker\/Dockerfile'/);
+  assert.match(railway, /AGOR_RUNTIME_TARGET: 'runtime-build'/);
+  assert.doesNotMatch(railway, imageReference);
+  const checkout = await readFile(path.join(root, 'docker/runtime-checkout.mjs'), 'utf8');
+  assert.match(
+    checkout,
+    /\.clone\(repo, staging, \['--depth=1', '--single-branch', '--branch', branch\]\)/
+  );
+  assert.match(checkout, /\.fetch\('origin', branch, \['--depth=1', '--no-tags'\]\)/);
+}
+
+if (codespacesWorktreeBuildStarts > 0) {
+  assert.equal(
+    codespacesWorktreeBuildStarts,
+    1,
+    'the reviewed remote-worktree build exception is limited to one Codespaces variant'
+  );
+  assert.match(
+    managedEnvironments,
+    /--devcontainer-path \.devcontainer\/agor-managed\/devcontainer\.json/,
+    'the Codespaces variant must select the reviewed managed devcontainer'
+  );
+  const codespacesDevcontainer = JSON.parse(
+    await readFile(path.join(root, '.devcontainer/agor-managed/devcontainer.json'), 'utf8')
+  );
+  assert.deepEqual(
+    codespacesDevcontainer.features?.['ghcr.io/devcontainers/features/sshd:1'],
+    { version: 'latest' },
+    'the managed devcontainer must install SSH for gh codespace health/log commands'
+  );
+  const codespacesBootstrap = await readFile(
+    path.join(root, '.devcontainer/agor-managed/start-agor-sqlite.sh'),
+    'utf8'
+  );
+  assert.match(
+    codespacesBootstrap,
+    /docker compose -p agor-codespaces-sqlite up -d --build\b/,
+    'the Codespaces bootstrap must build from the cloned remote worktree'
+  );
+  assert.doesNotMatch(codespacesBootstrap, imageReference);
+  assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);
+}
 
 console.log(
   'Image publication policy valid: PRs build+smoke locally, publish no image/cache, and checked-in consumers do not pull preset/agor.'

@@ -22,21 +22,71 @@ http://localhost:3030
 
 ### Authentication
 
-Agor uses JWT-based authentication:
+Every request carries a bearer credential — either a short-lived access token
+from password login, or a personal API key (`agor_sk_…`):
 
 ```bash
-Authorization: Bearer <your-token>
+Authorization: Bearer <your-token-or-api-key>
 ```
 
-#### Getting a Bearer Token
+#### Personal API keys
 
-Use the CLI to authenticate and retrieve a token:
+Create a key in the web UI under your user settings → **API tokens**. It is
+shown once. Keys act as you, never expire on their own, and stop working as
+soon as you delete them. They also work as `X-API-Key: agor_sk_…`, including on the `/mcp`
+endpoint.
+
+#### Signing in to the CLI
+
+On deployments that sign in with Google or another SSO provider instead of
+passwords, such as Agor Cloud, `agor login` uses your browser:
+
+```bash
+agor login --url https://your-workspace.example.com
+```
+
+The CLI prints (and opens) a page in your workspace. Sign in if asked, click
+**Create CLI key**, and paste the key into the terminal. The key is tagged
+**CLI** under **API tokens** and named after the machine
+(`agor-cli-<hostname>-<id>`); logging in again on the same machine replaces it,
+so each machine has one. `agor logout` deletes that machine's key on the server
+(`--keep-key` only removes the local login). Use `--web` to pick the browser
+flow on a deployment that also has password login.
+
+To use a key you created yourself instead:
+
+```bash
+agor login --url https://your-workspace.example.com --api-key
+# paste the key at the prompt, or pipe it in:
+pbpaste | agor login --url https://your-workspace.example.com --api-key
+```
+
+Either way the CLI checks the key against the deployment, saves it to
+`~/.agor/cli-token` (mode 0600), and sends it on every later command. Keys are
+never accepted on the command line and never sent to a plain `http://` URL other
+than localhost. `agor logout` does not delete keys you created yourself, since
+they may be used elsewhere. For CI, `AGOR_API_KEY` with `DAEMON_URL` and
+`AGOR_DEPLOYMENT_ID` still works without a saved login.
+
+**Keys are bound to the workspace they were created in.** On a multi-tenant
+deployment the daemon uses the workspace URL you connect to to decide which
+workspace to check the key against, and the key must belong to that workspace.
+A key presented at another workspace's URL is rejected, as is any request to a
+workspace URL the daemon has not yet seen a browser sign-in for. Use the same
+URL you open in your browser.
+
+#### Password login
+
+On deployments with email/password sign-in:
 
 ```bash
 agor login
 ```
 
-You'll be prompted for your email and password. Your token is automatically saved to `~/.agor/cli-token` and is valid for 7 days.
+You'll be prompted for your email and password. The access token is saved to
+`~/.agor/cli-token`; it is short-lived (15 minutes), so run `agor login` again
+when commands report that your session expired, or use an API key for longer
+work.
 
 **Using the token with cURL:**
 

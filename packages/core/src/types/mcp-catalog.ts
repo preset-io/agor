@@ -3,7 +3,7 @@
 // The catalog is a browsable index of MCP servers users can connect. Its
 // contents are `curated.yaml`, a file checked into this repository: every entry
 // is reviewed, versioned, and rolled back like any other change, and the
-// catalog offers exactly what that file names.
+// catalog offers the visible entries that file names.
 //
 // Nothing here originates with a tenant, a user, or a request. An entry is
 // authored text plus the transport details needed to dial the server.
@@ -142,6 +142,9 @@ export type MCPCatalogTransport = 'streamable-http' | 'sse' | 'stdio';
 export interface MCPCatalogEntry {
   /** Reverse-DNS identity, e.g. `io.github.github/github-mcp-server`. */
   name: string;
+
+  /** Discovery/install visibility only; omission and false both mean visible. */
+  hidden?: boolean;
 
   title?: string;
   description?: string;

@@ -709,6 +709,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             'environment.stop:recovery',
             seeded.user.user_id,
             seeded.branch.branch_id,
+            undefined,
+            undefined,
             'safety-recovery'
           )
         );

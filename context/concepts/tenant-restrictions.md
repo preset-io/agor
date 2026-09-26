@@ -72,11 +72,16 @@ return unsupported rather than claiming a hosted tenant boundary exists.
 
 ## Persistence and portability
 
-Migration `0115_tenant_restrictions` adds dialect-parity tables and PostgreSQL
+Migrations `0117_tenant_restrictions` (PostgreSQL) and `0116_tenant_restrictions`
+(SQLite) add dialect-parity tables and PostgreSQL
 FORCE RLS. On databases that ran the earlier feature's `0112_tenant_restrictions`,
 the old ledger timestamp collides with main's `0112_kb_import_receipts`; the
-idempotent `0115` also reconciles that skipped main table, indexes, and FORCE RLS
-without replacing existing rows. No broad cross-tenant operator policy is added. The table is included
+idempotent restriction migration also reconciles that skipped main table, indexes, and FORCE RLS
+without replacing existing rows. The prior feature's `0115` watermark also
+collides with newer main: PostgreSQL re-establishes main's narrowly scoped API-key
+host-discovery policy; the SQLite runner recognizes the exact old migration hash
+and restores the skipped API-key source column only if absent. Main's migration
+entries are unchanged. No broad cross-tenant operator policy is added. The table is included
 in the runtime-derived tenant erasure manifest but excluded from portable data
 archives: placement/controller authority belongs to the deployment, not to
 customer content. A destination must receive its own authoritative restriction

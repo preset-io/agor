@@ -446,24 +446,16 @@ In Claude Code CLI, when you use the [Task tool](https://docs.claude.com/en/docs
 - Subsession **reports back** to parent with results
 - Subsession history is **not** kept after completion
 
-In Agor (currently):
+In Agor:
 
-- Parent agent **does NOT wait** (fire-and-forget, may change in future)
-- Subsession **does NOT report back** automatically (may add callback option in future)
-- Subsession history **IS kept** - you can:
-  - Inspect the full conversation
-  - Post-prompt the subsession
-  - Fork from the subsession
-  - Spawn nested subsessions
+- The parent can continue working while the child runs.
+- Enable a completion callback when the child should report back automatically.
+- The child’s history is kept: inspect it, prompt it again, fork it, or spawn
+  nested subsessions.
 
-**You can still close the loop manually** since subsessions are live and accessible:
-
-1. **Two-step approach**: Prompt the subsession to produce a report, then ask the parent session to read it
-2. **One-step approach**: Include "produce a report in `/tmp/subsession-results.md` when done" right in your spawn prompt
-
-Example spawn prompt: `"Implement payment gateway integration. When complete, write a summary of the implementation and any issues to /tmp/payment-report.md"`
-
-Then later, prompt the parent: `"Read /tmp/payment-report.md and integrate the payment module"`
+Ask your agent to arrange the callback when delegating. See
+[completion notifications](#how-do-i-get-notified-when-a-session-on-another-branch-finishes)
+for one-off and persistent callbacks.
 
 **Note**: You can still use Claude Code's Task tool and subagent workflows in Agor exactly like the CLI - those follow the normal Claude Code flow with waiting and callbacks.
 
@@ -586,8 +578,8 @@ sharing choices.
 | **Branch**              | **SHARED** (same filesystem)               | **SHARED** (same filesystem)                   |
 | **Relationship**        | Sibling (parallel work)                    | Child (delegated work)                         |
 | **Use case**            | Parallel tasks with same starting context  | Delegate focused subsession with clean context |
-| **Parent waits?**       | No                                         | No (currently, may change)                     |
-| **Reports back?**       | No                                         | No (currently, may add callback)               |
+| **Parent waits?**       | No                                         | No                                            |
+| **Reports back?**       | No                                         | Optional completion callback                  |
 
 ---
 

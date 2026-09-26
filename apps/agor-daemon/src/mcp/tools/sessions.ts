@@ -26,6 +26,9 @@ import {
   getSessionType,
   type Session,
   type SessionID,
+  type SpawnConfig,
+  USER_DEFAULT_AGENTIC_CONFIGURATION,
+  WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
   type ZoneBoardObject,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -638,6 +641,31 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'MCP server IDs to attach. Overrides parent session inheritance. Omit to inherit from parent. Pass empty array for no MCPs.'
           ),
         modelConfig: modelConfigInputSchema,
+        presetId: mcpOptionalNonEmptyString(
+          'presetId',
+          `Child configuration preset UUID, ${USER_DEFAULT_AGENTIC_CONFIGURATION}, or ${WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION}. Cannot be combined with individual configuration overrides.`
+        ),
+        permissionMode: z
+          .enum([
+            'default',
+            'acceptEdits',
+            'bypassPermissions',
+            'plan',
+            'dontAsk',
+            'autoEdit',
+            'yolo',
+            'ask',
+            'auto',
+            'on-failure',
+            'allow-all',
+          ])
+          .optional()
+          .describe(
+            'Child permission mode. Inline configuration must be allowed by the workspace.'
+          ),
+        codexSandboxMode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
+        codexApprovalPolicy: z.enum(['untrusted', 'on-failure', 'on-request', 'never']).optional(),
+        codexNetworkAccess: z.boolean().optional(),
       }),
     },
     async (args) => {
@@ -654,6 +682,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         task_id: args.taskId,
         mcpServerIds: args.mcpServerIds,
         modelConfig: coerceModelConfig(args.modelConfig),
+        presetId: args.presetId as SpawnConfig['presetId'],
+        permissionMode: args.permissionMode,
+        codexSandboxMode: args.codexSandboxMode,
+        codexApprovalPolicy: args.codexApprovalPolicy,
+        codexNetworkAccess: args.codexNetworkAccess,
       };
 
       // spawn/fork are custom methods, not Feathers transport methods. Scope

@@ -31,6 +31,7 @@ import {
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   ChannelType,
   EnvVarMetadata,
@@ -406,7 +407,7 @@ async function loadExistingOAuthServer(
   return {
     server,
     catalogEntryName: server.catalog_entry_name,
-    ...(await installedCatalogDisclosure(ctx, server)),
+    ...(await installedCatalogDisclosure(server)),
   };
 }
 
@@ -427,15 +428,16 @@ async function loadExistingOAuthServer(
  * applies, for the same reason: Agor does not shorten what someone agrees to.
  */
 async function installedCatalogDisclosure(
-  ctx: McpContext,
   server: MCPServer
 ): Promise<{ permissionDisclosure?: string; disclosureRefusal?: string }> {
   const serverLabel = server.display_name || server.name;
   let entry: MCPCatalogEntry;
   try {
-    entry = (await ctx.app
-      .service('mcp-catalog')
-      .get(server.catalog_entry_name as string, ctx.baseServiceParams)) as MCPCatalogEntry;
+    // The caller has already authorized this saved server. Hiding discovery
+    // must not remove its reconnect disclosure; removed definitions still fail closed.
+    const definition = findCatalogEntry(await loadCatalog(), server.catalog_entry_name as string);
+    if (!definition) throw new Error('Catalog definition removed');
+    entry = definition;
   } catch {
     return {
       disclosureRefusal:

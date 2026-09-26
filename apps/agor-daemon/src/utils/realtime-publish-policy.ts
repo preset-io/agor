@@ -266,6 +266,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Invocation-scoped workspace reports; branch state publishes through branches.',
   },
+  'branches/:id/retire-teammate': {
+    audience: 'none',
+    why: 'Retirement admission response; archived branch state publishes through branches.',
+  },
   'branches/:id/clean': {
     audience: 'none',
     why: 'Cleanup admission response; status publishes through branches.',
@@ -283,6 +287,7 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Returns a command-scoped Git credential DTO to one executor.',
   },
   'api/v1/user/api-keys': { audience: 'none', why: 'Returns a freshly minted user API key.' },
+  'api/v1/user/me': { audience: 'none', why: 'Returns the caller identity to that caller only.' },
   terminals: {
     audience: 'none',
     why: 'Shell control plane; output rides native terminal:* socket packets.',

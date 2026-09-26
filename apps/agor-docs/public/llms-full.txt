@@ -87,6 +87,14 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 
 ## Documentation
 
+Start with [Using Agor](https://agor.live/guide/features-overview),
+[Operating Agor](https://agor.live/guide/operating), or the
+[Development Guide](https://agor.live/guide/development) for your task.
+
+- [Sharing & Permissions](https://agor.live/guide/permissions): Roles, ownership transfer, and shared-session boundaries
+- [MCP Catalog & Connections](https://agor.live/guide/mcp-servers): Connect tools and manage personal authorization
+- [MCP Administration](https://agor.live/guide/mcp-administration): Tenant connection security, recovery, and upgrades
+
 - [Getting Started](https://agor.live/guide/getting-started): Install and set up Agor in under 5 minutes
 - [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, optional Zellij
 - [Branches](https://agor.live/guide/branches): Isolated workspaces backed by git worktrees or self-standing clones — primary unit of work

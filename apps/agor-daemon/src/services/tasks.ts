@@ -132,6 +132,41 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
+function elapsedMs(from: string | undefined, to: string | undefined): number | 'none' {
+  if (!from || !to) return 'none';
+  const ms = Date.parse(to) - Date.parse(from);
+  return Number.isFinite(ms) ? ms : 'none';
+}
+
+/**
+ * Detection facts for a winning termination claim. Ages are measured against
+ * the durable request time so daemon clock skew cannot distort them.
+ * `error_message` is deliberately omitted: a user Stop reason can reach it.
+ */
+function terminationRequestDiagnostics(task: Task): string {
+  const request = task.termination_request;
+  const pulse = task.latest_executor_pulse;
+  return (
+    `session_id=${shortId(task.session_id)} ` +
+    `executor_connected=${task.executor_connected_at ? 'true' : 'false'} ` +
+    `heartbeat_age_ms=${elapsedMs(task.last_executor_heartbeat_at, request?.requested_at)} ` +
+    `last_pulse=${pulse?.kind ?? 'none'} ` +
+    `last_pulse_age_ms=${elapsedMs(pulse?.observed_at, request?.requested_at)} ` +
+    `sdk_failure=${task.sdk_failure?.reason ?? 'none'}`
+  );
+}
+
+function terminationSettlementDiagnostics(task: Task): string {
+  const request = task.termination_request;
+  return (
+    `session_id=${shortId(task.session_id)} ` +
+    `cause=${request?.cause ?? 'unknown'} ` +
+    `containment=${task.sdk_failure?.termination ?? 'unknown'} ` +
+    `executor_quiesced=${request?.executor_quiesced_at ? 'true' : 'false'} ` +
+    `request_to_settle_ms=${elapsedMs(request?.requested_at, task.completed_at)}`
+  );
+}
+
 const TASK_SORT_FIELDS = new Set([
   'task_id',
   'session_id',
@@ -329,15 +364,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    */
   async find(params?: TaskParams): Promise<Task[] | Paginated<Task>> {
     const query = (params?.query ?? {}) as Query;
-    const requestedLimit = query.$limit ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT;
-    const skip = query.$skip ?? 0;
-    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 0) {
+    if (query.$limit !== undefined && (!Number.isSafeInteger(query.$limit) || query.$limit < 0)) {
       throw new BadRequest('$limit must be a finite non-negative integer');
     }
+    const { limit, skip } = this.pageWindow(query);
     if (!Number.isSafeInteger(skip) || skip < 0) {
       throw new BadRequest('$skip must be a finite non-negative integer');
     }
-    const limit = Math.min(requestedLimit, this.paginate?.max ?? PAGINATION.MAX_LIMIT);
     const sort = query.$sort;
     if (sort) {
       for (const [field, direction] of Object.entries(sort)) {
@@ -566,7 +599,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `[task.termination] event=request_committed task_id=${shortId(result.task.task_id)} ` +
             `cause=${result.task.termination_request?.cause ?? 'unknown'} ` +
-            `mode=${result.task.executor_mode ?? 'local'}`
+            `mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationRequestDiagnostics(result.task)
         );
         emitServiceEvent(this.app, {
           path: 'tasks',
@@ -642,12 +676,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (result.outcome === 'unverified') {
         console.warn(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
-            `outcome=unverified mode=${result.task.executor_mode ?? 'local'}`
+            `outcome=unverified mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationSettlementDiagnostics(result.task)
         );
       } else {
         console.log(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
-            `outcome=${result.task.status} mode=${result.task.executor_mode ?? 'local'}`
+            `outcome=${result.task.status} mode=${result.task.executor_mode ?? 'local'} ` +
+            terminationSettlementDiagnostics(result.task)
         );
       }
       emitServiceEvent(this.app, {

@@ -13,6 +13,7 @@ import {
   BranchRepository,
   CapabilityPolicyRepository,
   getCurrentTenantId,
+  lockBranchReferenceMutation,
   mapBoardExportBlobToCreateData,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
@@ -29,6 +30,7 @@ import {
   type BoardComment,
   type BoardExportBlob,
   type BoardID,
+  type BoardImportResult,
   type BoardObject,
   type BranchID,
   boardCommentZoneParentObjectKey,
@@ -215,10 +217,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
               Array.isArray((boardFilter as { $in?: unknown }).$in)
             ? (boardFilter as { $in: BoardID[] }).$in
             : undefined;
-      const requestedLimit =
-        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
-      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
-      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const page = await this.boardRepo.findPage({
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         boardIds,
@@ -416,6 +415,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       typeof data === 'string' ? _maybeParams : (branchIdOrParams as BoardParams | undefined);
     return runWithTenantDatabaseTransaction(this.db, params?.tenant?.tenant_id, async (db) => {
       await lockTenantAuthorizationFence(db, params);
+      // Match branch relocation: reference writers may also update User rows.
+      // Never hold the human actor row while waiting for their reference lock.
+      await lockBranchReferenceMutation(db);
       const current = await resolveCurrentTenantAuthorityActor(db, params, {
         allowActorlessTrusted: true,
       });
@@ -503,19 +505,11 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   /**
    * Import board from blob (JSON)
    */
-  async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<Board> {
-    // Hook chain enforces auth before we get here.
-    const userId = params!.user!.user_id;
-    this.boardRepo.validateBoardBlob(blob);
-    const data = mapBoardExportBlobToCreateData(blob, userId);
-
-    // Create board through repository (not super.create to avoid double-emit issues)
-    const board = await this.boardRepo.create(data);
-
-    // Note: Events must be emitted by the caller using app.service('boards').emit()
-    // this.emit() doesn't work reliably in custom methods due to execution context
-
-    return board;
+  async fromBlob(blob: BoardExportBlob, params?: BoardParams): Promise<BoardImportResult> {
+    // Hook chain enforces auth before we get here. The repository owns import
+    // (validation, skipping unusable objects, artifact resolution, create);
+    // after-hooks emit the `created` event.
+    return this.boardRepo.fromBlob(blob, params!.user!.user_id);
   }
 
   /**
@@ -535,7 +529,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
   async fromYaml(
     data: { yaml?: string; content?: string } | string,
     params?: BoardParams
-  ): Promise<Board> {
+  ): Promise<BoardImportResult> {
     const yamlContent = typeof data === 'string' ? data : (data.yaml ?? data.content);
     if (!yamlContent) throw new Error('YAML content required');
     const blob = this.boardRepo.parseYamlToBlob(yamlContent);

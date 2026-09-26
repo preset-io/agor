@@ -7,9 +7,14 @@ import type {
   Repo,
   User,
 } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { Alert, Button, Modal, Radio, Space, Typography } from 'antd';
 import { useEffect, useId, useState } from 'react';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
+import { useThemedMessage } from '../../utils/message';
 import { BranchCleanupWarning } from '../BranchCleanupWarning';
 import { RepoCleanupSettingsModal } from './RepoCleanupSettingsModal';
 import { useArchiveDeleteEligibility } from './useArchiveDeleteEligibility';
@@ -47,6 +52,62 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsRepo, setSettingsRepo] = useState<Repo | null>(null);
   const eligibility = useArchiveDeleteEligibility(client, currentUser, branch, open);
+  const authority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
+  const guard = useAuthorityOperationGuard(
+    authority.operationScope ? [...authority.operationScope, branch.branch_id, open] : null
+  );
+  const connectionDisabled = !authority.connectionReady;
+  const { showSuccess } = useThemedMessage();
+  const [primaryAction, setPrimaryAction] = useState<'clear' | 'retire' | null>(null);
+  const [confirmPrimary, setConfirmPrimary] = useState<'clear' | 'retire' | null>(null);
+  const [primaryError, setPrimaryError] = useState<string>();
+  const teammate = isTeammate(branch) && !branch.archived;
+  // Unavailable board data is unknown, not proof this teammate is non-primary.
+  // The server independently enforces clearance before admitting retirement.
+  const boardPrimary = eligibility.board
+    ? eligibility.board.primary_teammate_id === branch.branch_id
+    : undefined;
+  const ownPrimary = currentUser?.primary_teammate_id === branch.branch_id;
+  const primaryReason = teammate
+    ? 'For an active teammate, use explicit file-preserving retirement below. Permanent deletion is available after retirement.'
+    : undefined;
+  const primaryDisabled = !!eligibility.managementReason || connectionDisabled || !!primaryAction;
+  const boardActionDisabled = connectionDisabled || !!primaryAction || !eligibility.canEditBoard;
+  const runPrimaryAction = async (action: 'clear' | 'retire') => {
+    if (!client || (action === 'clear' ? boardActionDisabled : primaryDisabled || boardPrimary))
+      return;
+    const operation = guard.begin();
+    if (!operation.isCurrent()) return;
+    setPrimaryAction(action);
+    setPrimaryError(undefined);
+    try {
+      if (action === 'clear' && eligibility.board && eligibility.canEditBoard) {
+        await client.service('boards').clearPrimaryTeammate(eligibility.board.board_id);
+        if (operation.isCurrent()) {
+          setConfirmPrimary(null);
+          eligibility.refresh();
+        }
+      } else if (action === 'retire') {
+        await client.service(`branches/${branch.branch_id}/retire-teammate`).create({});
+        if (operation.isCurrent()) {
+          setConfirmPrimary(null);
+          showSuccess('Teammate retired; files preserved');
+          onCancel();
+        }
+      }
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      setPrimaryError(
+        error instanceof Error ? error.message : 'Teammate action failed. Refresh and try again.'
+      );
+      eligibility.refresh();
+    } finally {
+      if (operation.isCurrent()) setPrimaryAction(null);
+    }
+  };
   const canConfigure = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const [metadataAction, setMetadataAction] = useState<BranchMetadataAction>(initialMetadataAction);
 
@@ -58,8 +119,17 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
       setSelectionTouched(false);
       setSettingsOpen(false);
       setSettingsRepo(null);
+      setPrimaryError(undefined);
+      setPrimaryAction(null);
+      setConfirmPrimary(null);
     }
-  }, [initialMetadataAction, open, branch.branch_id, branch.deletion_status]);
+  }, [
+    initialMetadataAction,
+    open,
+    branch.branch_id,
+    branch.deletion_status,
+    authority.operationScope,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -69,19 +139,21 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   // Derive the untouched default from current eligibility, rather than racing
   // asynchronous policy refreshes against another state update.
-  const selectedFilesystemAction =
-    !selectionTouched || (filesystemAction === 'cleaned' && eligibility.cleanupReason)
+  const selectedFilesystemAction = primaryReason
+    ? 'preserved'
+    : !selectionTouched || (filesystemAction === 'cleaned' && eligibility.cleanupReason)
       ? eligibility.cleanupReason
         ? 'preserved'
         : 'cleaned'
       : filesystemAction;
 
   const actionReason =
-    metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
+    primaryReason ??
+    (metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
       ? eligibility.workspaceReason
       : selectedFilesystemAction === 'cleaned'
         ? eligibility.cleanupReason
-        : eligibility.managementReason;
+        : eligibility.managementReason);
   const handleOk = () => {
     if (actionReason) return;
     onConfirm(
@@ -93,14 +165,23 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
 
   // Determine button text and style based on metadata action
   const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
-  const okButtonProps = { danger: metadataAction === 'delete', disabled: !!actionReason };
+  const okButtonProps = {
+    danger: metadataAction === 'delete',
+    disabled: !!actionReason || connectionDisabled || !!primaryAction,
+  };
 
   return (
     <Modal
       title="Archive or Delete Branch"
       open={open}
       onOk={handleOk}
-      onCancel={onCancel}
+      onCancel={() => {
+        if (!primaryAction) onCancel();
+      }}
+      closable={!primaryAction}
+      keyboard={!primaryAction}
+      maskClosable={!primaryAction}
+      cancelButtonProps={{ disabled: !!primaryAction }}
       afterClose={afterClose}
       okText={okText}
       okButtonProps={okButtonProps}
@@ -116,6 +197,85 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           <Text strong>Git ref: </Text>
           <Text>{branch.ref}</Text>
         </div>
+
+        {teammate && (
+          <Alert
+            type="info"
+            showIcon
+            title="Retire a teammate without deleting its files"
+            description={
+              <Space orientation="vertical">
+                <Text>
+                  Any active teammate may be someone else's private primary. This dialog uses
+                  explicit retirement for all active teammates because those preferences are not
+                  visible to you. Retirement archives this teammate and its sessions, preserves all
+                  files, and clears everyone's personal primary preference for it. It does not
+                  choose a replacement.
+                </Text>
+                {eligibility.boardUnavailable && (
+                  <Text>
+                    Board details or permissions are unavailable; board controls are disabled.
+                    Retirement still checks board-primary protection on the server. A board Editor
+                    or Manager must clear or replace any board primary designation first.
+                  </Text>
+                )}
+                {boardPrimary && (
+                  <>
+                    <Text>
+                      First clear or replace this board's primary teammate. Nothing changes until
+                      you confirm.
+                    </Text>
+                    <Space wrap>
+                      {eligibility.canEditBoard && (
+                        <Button
+                          aria-label="Clear board primary"
+                          disabled={boardActionDisabled}
+                          loading={primaryAction === 'clear'}
+                          onClick={() => {
+                            setPrimaryError(undefined);
+                            setConfirmPrimary('clear');
+                          }}
+                        >
+                          Clear board primary
+                        </Button>
+                      )}
+                      {!eligibility.boardUnavailable && (
+                        <Typography.Link href={eligibility.board?.url}>
+                          Open board to replace primary
+                        </Typography.Link>
+                      )}
+                    </Space>
+                    {!eligibility.canEditBoard && (
+                      <Text>A board Editor or Manager must clear or replace the primary.</Text>
+                    )}
+                  </>
+                )}
+                {ownPrimary && (
+                  <Text>
+                    This is your personal primary teammate. Retirement clears that preference too.
+                  </Text>
+                )}
+                {eligibility.managementReason && <Text>{eligibility.managementReason}</Text>}
+                <Text>
+                  For active teammates, Archive uses explicit retirement. Permanent deletion is
+                  available after retirement.
+                </Text>
+                <Button
+                  aria-label="Retire teammate — keep files"
+                  danger
+                  disabled={primaryDisabled || boardPrimary}
+                  loading={primaryAction === 'retire'}
+                  onClick={() => {
+                    setPrimaryError(undefined);
+                    setConfirmPrimary('retire');
+                  }}
+                >
+                  Retire teammate — keep files
+                </Button>
+              </Space>
+            }
+          />
+        )}
 
         {branch.deletion_status && (
           <Alert
@@ -174,7 +334,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="cleaned" disabled={!!eligibility.cleanupReason}>
+              <Radio value="cleaned" disabled={!!eligibility.cleanupReason || !!primaryReason}>
                 <div>
                   <div>Clean — {eligibility.policy?.command || 'repository cleanup command'}</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -183,7 +343,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="deleted" disabled={!!eligibility.workspaceReason}>
+              <Radio value="deleted" disabled={!!eligibility.workspaceReason || !!primaryReason}>
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
@@ -294,6 +454,42 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           </Text>
         </div>
       </Space>
+      <Modal
+        destroyOnHidden
+        open={confirmPrimary !== null}
+        title={
+          confirmPrimary === 'clear'
+            ? 'Clear board primary teammate?'
+            : 'Retire teammate and keep all files?'
+        }
+        okText={confirmPrimary === 'clear' ? 'Clear primary' : 'Retire teammate'}
+        confirmLoading={!!primaryAction}
+        okButtonProps={{
+          'aria-label': confirmPrimary === 'clear' ? 'Clear primary' : 'Retire teammate',
+          danger: confirmPrimary === 'retire',
+          disabled:
+            confirmPrimary === 'clear' ? boardActionDisabled : primaryDisabled || boardPrimary,
+        }}
+        cancelButtonProps={{ disabled: !!primaryAction }}
+        closable={!primaryAction}
+        keyboard={!primaryAction}
+        maskClosable={!primaryAction}
+        onCancel={() => {
+          if (!primaryAction) setConfirmPrimary(null);
+        }}
+        onOk={() => confirmPrimary && runPrimaryAction(confirmPrimary)}
+      >
+        <p>
+          {confirmPrimary === 'clear'
+            ? 'The board will have no primary until you assign a replacement. The teammate stays active.'
+            : 'Archives this teammate and its sessions and clears all personal primary preferences. All files stay intact. No replacement is selected.'}
+        </p>
+        {primaryError && (
+          <div role="alert" aria-label="Teammate action failed">
+            {primaryError}
+          </div>
+        )}
+      </Modal>
       {client && currentUser && settingsRepo && canConfigure && settingsOpen && (
         <RepoCleanupSettingsModal
           client={client}

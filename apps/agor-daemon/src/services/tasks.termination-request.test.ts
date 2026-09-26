@@ -58,6 +58,49 @@ describe('TasksService termination request publication', () => {
     );
   });
 
+  it('logs structured claim facts without the caller-supplied Stop reason', async () => {
+    const secretReason = 'customer-secret-reason-4f2c';
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000011',
+      session_id: '018f0000-0000-7000-8000-000000000012',
+      status: TaskStatus.STOPPING,
+      executor_connected_at: '2026-07-23T11:59:00.000Z',
+      last_executor_heartbeat_at: '2026-07-23T11:59:55.000Z',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-07-23T12:00:00.000Z',
+        error_message: secretReason,
+      },
+    } as Task;
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', {
+      claimTermination: vi.fn().mockResolvedValue({ outcome: 'claimed', task }),
+    });
+    Reflect.set(service, 'app', {
+      service(path: string) {
+        if (path === 'tasks') return { emit: vi.fn() };
+        if (path === 'sessions')
+          return { get: vi.fn().mockResolvedValue({ session_id: task.session_id }), emit: vi.fn() };
+        throw new Error(`Unexpected service ${path}`);
+      },
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await service.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: secretReason,
+      });
+      const lines = log.mock.calls.map((call) => String(call[0]));
+      const committed = lines.find((line) => line.includes('event=request_committed'));
+      expect(committed).toContain('executor_connected=true');
+      expect(committed).toContain('heartbeat_age_ms=5000');
+      expect(lines.join('\n')).not.toContain(secretReason);
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('re-publishes an unchanged active request without pretending the Task was patched', async () => {
     const task = {
       task_id: '018f0000-0000-7000-8000-000000000001',

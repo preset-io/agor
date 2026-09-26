@@ -1,4 +1,4 @@
-import type { Board } from '@agor-live/client';
+import { type BoardImportResult, summarizeBoardImportSkips } from '@agor-live/client';
 import { Args } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 
@@ -42,7 +42,7 @@ export default class BoardImport extends BaseCommand {
       }
 
       // Import based on content (JSON or YAML)
-      let board: Board;
+      let board: BoardImportResult;
       try {
         // Try parsing as JSON first
         const blob = JSON.parse(content);
@@ -53,6 +53,13 @@ export default class BoardImport extends BaseCommand {
       }
 
       this.log(`Board imported: ${board.name} (${board.board_id})`);
+      const skippedSummary = summarizeBoardImportSkips(board.import_skipped);
+      if (skippedSummary) {
+        this.warn(skippedSummary);
+        for (const skipped of board.import_skipped ?? []) {
+          this.log(`  - ${skipped.object_id}: ${skipped.detail}`);
+        }
+      }
     } catch (error) {
       await this.cleanupClient(client);
       this.error(

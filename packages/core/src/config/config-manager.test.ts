@@ -371,6 +371,25 @@ describe('assertValidEffectiveExecutionConfig', () => {
     ).toThrow(/requires execution\.executor_command_template/);
   });
 
+  it('requires an explicit delegated executor for permanent deletion', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({ execution: { delegated_branch_deletion: true } })
+    ).toThrow(/requires delegated mode/);
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          delegated_branch_deletion: true,
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launcher',
+          executor_response: {
+            external_protocol: 'executor-response-v1',
+            origin_url: 'http://daemon.internal:3030',
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+
   it.each(['{unix_user_uid}', '{unix_user_gid}'])(
     'rejects removed delegated template placeholder %s at startup',
     (placeholder) => {

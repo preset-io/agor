@@ -797,7 +797,21 @@
       "idx": 114,
       "version": "7",
       "when": 1790129000214,
-      "tag": "0115_tenant_restrictions",
+      "tag": "0115_api_key_host_tenant_discovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 115,
+      "version": "7",
+      "when": 1790129000215,
+      "tag": "0116_user_api_key_source",
+      "breakpoints": true
+    },
+    {
+      "idx": 116,
+      "version": "7",
+      "when": 1790129000216,
+      "tag": "0117_tenant_restrictions",
       "breakpoints": true
     }
   ]

@@ -5,14 +5,16 @@
  * board object management (zones/text), and JSON field handling.
  */
 
-import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
+import type { Board, BoardID, BoardImportSkipReason, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
+import { summarizeBoardImportSkips } from '../../types/board';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { boards as boardsTable } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
+import { ArtifactRepository } from './artifacts';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
@@ -1623,6 +1625,232 @@ describe('BoardRepository import/export', () => {
       preset: 'viewer',
       fs_access: 'read',
     });
+  });
+});
+
+describe('BoardRepository import object handling', () => {
+  const ARTIFACT_ID = '019f1616-a59e-7b1c-99a9-8b2a53df6938';
+  const zone: BoardObject = {
+    type: 'zone',
+    x: -460,
+    y: 1860,
+    width: 682.97,
+    height: 974.98,
+    label: 'Implement the Plan',
+    locked: true,
+    trigger: { behavior: 'show_picker', template: 'Go ahead and implement the plan suggested!' },
+    borderColor: '#d9d9d9',
+    backgroundColor: '#d9d9d91a',
+  };
+  const markdown: BoardObject = {
+    type: 'markdown',
+    x: -580,
+    y: -1740,
+    width: 1000,
+    content: '# This is a test',
+  };
+
+  dbTest(
+    'round-trips zones with triggers, markdown, apps, and same-workspace artifact references',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const original = await repo.create(
+        createBoardData({
+          name: 'Round Trip',
+          access_mode: 'shared',
+          default_others_can: 'session',
+          default_others_fs_access: 'write',
+        })
+      );
+      const artifact = await new ArtifactRepository(db).create({
+        artifact_id: generateId(),
+        board_id: original.board_id,
+        name: 'mine',
+        created_by: 'test-user',
+      });
+      const artifactObject: BoardObject = {
+        type: 'artifact',
+        x: 740,
+        y: -600,
+        width: 920,
+        height: 1340,
+        locked: false,
+        artifact_id: artifact.artifact_id,
+      };
+      const app: BoardObject = {
+        type: 'app',
+        x: 10,
+        y: 20,
+        width: 600,
+        height: 400,
+        title: 'Inline app',
+        template: 'react',
+        files: { '/App.js': 'export default () => null;' },
+      };
+      await repo.batchUpsertBoardObjects(original.board_id, {
+        'zone-1770517487066': zone,
+        'markdown-1789334120446': markdown,
+        'app-1': app,
+        [`artifact-${artifact.artifact_id}`]: artifactObject,
+      });
+
+      const exported = await repo.toYaml(original.board_id);
+      expect(exported).toContain('type: artifact');
+
+      const imported = await repo.fromYaml(exported, 'test-user');
+
+      expect(imported.board_id).not.toBe(original.board_id);
+      expect(imported.objects).toEqual({
+        'zone-1770517487066': zone,
+        'markdown-1789334120446': markdown,
+        'app-1': app,
+        [`artifact-${artifact.artifact_id}`]: artifactObject,
+      });
+      expect(imported.import_skipped).toBeUndefined();
+      const policy = await new CapabilityPolicyRepository(db).getBoardPolicies(imported.board_id);
+      expect(policy.board_access.sharing_mode).toBe('shared');
+      expect(policy.branch_template.access.others).toMatchObject({
+        preset: 'collaborator',
+        fs_access: 'write',
+      });
+    }
+  );
+
+  dbTest('imports a cross-instance export with an unresolvable artifact', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    // Trimmed from a real local → Cloud export that previously failed with
+    // "Invalid object artifact-…: unsupported type".
+    const exported = [
+      '# Agor Board Export',
+      '# Version: 1.0',
+      "name: Max's Board",
+      'slug: agor-claw-experiment',
+      'icon: 🪀',
+      'custom_css: null',
+      'access_mode: shared',
+      'default_others_can: session',
+      'default_others_fs_access: write',
+      'objects:',
+      '  zone-1770517487066:',
+      '    x: -460',
+      "    'y': 1860",
+      '    type: zone',
+      '    label: Implement the Plan',
+      '    width: 682.97',
+      '    height: 974.98',
+      '    trigger:',
+      '      behavior: show_picker',
+      '      template: Go ahead!',
+      '  markdown-1789334120446:',
+      '    x: -580',
+      "    'y': -1740",
+      '    type: markdown',
+      '    width: 1000',
+      "    content: '# This is a test'",
+      `  artifact-${ARTIFACT_ID}:`,
+      '    x: 740',
+      "    'y': -600",
+      '    type: artifact',
+      '    width: 920',
+      '    height: 1340',
+      `    artifact_id: ${ARTIFACT_ID}`,
+      'custom_context: null',
+      '',
+    ].join('\n');
+
+    const imported = await repo.fromYaml(exported, 'test-user');
+
+    expect(imported.name).toBe("Max's Board");
+    expect(Object.keys(imported.objects ?? {}).sort()).toEqual([
+      'markdown-1789334120446',
+      'zone-1770517487066',
+    ]);
+    expect(imported.objects?.['zone-1770517487066']).toMatchObject({
+      trigger: { behavior: 'show_picker', template: 'Go ahead!' },
+    });
+    expect(imported.import_skipped).toEqual([
+      {
+        object_id: `artifact-${ARTIFACT_ID}`,
+        type: 'artifact',
+        reason: 'unresolved_reference',
+        detail: `artifact ${ARTIFACT_ID} is not available to you in this workspace`,
+      },
+    ]);
+  });
+
+  dbTest('skips unknown or malformed objects instead of failing the import', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const imported = await repo.fromBlob(
+      {
+        name: 'Partial Board',
+        objects: {
+          'zone-ok': zone,
+          'zone-bad': { type: 'zone', x: 0, y: 0 } as unknown as BoardObject,
+          'mystery-1': { type: 'hologram', x: 0, y: 0 } as unknown as BoardObject,
+          'proto-1': { type: 'constructor' } as unknown as BoardObject,
+          'null-1': null as unknown as BoardObject,
+          'artifact-prefix': {
+            type: 'artifact',
+            x: 0,
+            y: 0,
+            width: 600,
+            height: 400,
+            artifact_id: '019f1616',
+          } as unknown as BoardObject,
+        },
+      },
+      'test-user'
+    );
+
+    expect(imported.objects).toEqual({ 'zone-ok': zone });
+    expect(imported.import_skipped?.map(({ object_id, reason }) => [object_id, reason])).toEqual([
+      ['zone-bad', 'invalid'],
+      ['mystery-1', 'unsupported_type'],
+      ['proto-1', 'unsupported_type'],
+      ['null-1', 'invalid'],
+      ['artifact-prefix', 'invalid'],
+    ]);
+  });
+
+  dbTest('reports nothing skipped when every object imports', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const imported = await repo.fromBlob(
+      { name: 'Clean Board', objects: { 'zone-ok': zone } },
+      'test-user'
+    );
+    expect(imported.import_skipped).toBeUndefined();
+  });
+});
+
+describe('summarizeBoardImportSkips', () => {
+  const skip = (reason: BoardImportSkipReason, i: number) => ({
+    object_id: `o-${i}`,
+    reason,
+    detail: 'x',
+  });
+
+  it('returns null when nothing was skipped', () => {
+    expect(summarizeBoardImportSkips(undefined)).toBeNull();
+    expect(summarizeBoardImportSkips([])).toBeNull();
+  });
+
+  it('collapses many unavailable references into one sentence', () => {
+    const skipped = Array.from({ length: 12 }, (_, i) => skip('unresolved_reference', i));
+    expect(summarizeBoardImportSkips(skipped)).toBe(
+      "12 referenced objects aren't available to you in this workspace and couldn't be linked."
+    );
+  });
+
+  it('reports unreadable objects separately', () => {
+    expect(
+      summarizeBoardImportSkips([
+        skip('unresolved_reference', 0),
+        skip('invalid', 1),
+        skip('unsupported_type', 2),
+      ])
+    ).toBe(
+      "1 referenced object isn't available to you in this workspace and couldn't be linked; 2 objects were unsupported or malformed and were skipped."
+    );
   });
 });
 

@@ -209,7 +209,11 @@ export interface DiscordGatewayConfig {
   catch_up?: DiscordCatchUpConfig;
   /** Opt-in bounded PNG/JPEG ingestion for live Discord messages. */
   files?: boolean;
-  agent_tools?: never[];
+  /**
+   * Agent-callable MCP tool toggles. `[]` is the legacy all-off value and
+   * stays valid; see {@link resolveDiscordAgentTools}.
+   */
+  agent_tools?: DiscordAgentToolsConfig | never[];
   outbound_enabled?: boolean;
   default_outbound_target?: string | null;
 }
@@ -330,6 +334,113 @@ function validateCatchUpConfig(raw: unknown, errors: string[]): void {
   }
 }
 
+/**
+ * Per-channel toggles for agent-callable Discord MCP tools, stored at
+ * `config.agent_tools` on Discord gateway channels. Every capability is off
+ * unless an admin enables it; the legacy `[]` value means all off.
+ */
+export interface DiscordAgentToolsConfig {
+  /** Read allowlisted channel history (agor_gateway_discord_channel_history_get). */
+  channel_history?: boolean;
+}
+
+export type DiscordAgentToolCapability = keyof DiscordAgentToolsConfig;
+
+export const DISCORD_AGENT_TOOL_DEFAULTS: Record<DiscordAgentToolCapability, boolean> = {
+  channel_history: false,
+};
+
+function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
+  if (raw === undefined) return;
+  if (Array.isArray(raw)) {
+    if (raw.length > 0) errors.push('agent_tools must be [] or an object of capability toggles');
+    return;
+  }
+  if (!isRecord(raw)) {
+    errors.push('agent_tools must be [] or an object of capability toggles');
+    return;
+  }
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(DISCORD_AGENT_TOOL_DEFAULTS, key)) {
+      errors.push(`agent_tools.${key} is not a supported Discord agent tool`);
+    } else if (typeof value !== 'boolean') {
+      errors.push(`agent_tools.${key} must be a boolean`);
+    }
+  }
+}
+
+/**
+ * Resolve a Discord channel's `config.agent_tools` value (absent, legacy `[]`,
+ * or a toggle object) into a fully-populated capability map.
+ */
+export function resolveDiscordAgentTools(
+  raw: unknown
+): Record<DiscordAgentToolCapability, boolean> {
+  const resolved = { ...DISCORD_AGENT_TOOL_DEFAULTS };
+  if (!isRecord(raw)) return resolved;
+  for (const capability of Object.keys(resolved) as DiscordAgentToolCapability[]) {
+    if (typeof raw[capability] === 'boolean') resolved[capability] = raw[capability] as boolean;
+  }
+  return resolved;
+}
+
+/** One agent read of recent messages from an already-authorized channel. */
+export interface DiscordChannelHistoryRequest {
+  channelId: string;
+  /** Exclusive cursor: return the newest matches older than this message. */
+  before?: string;
+  /** Exclusive cursor: return the oldest matches newer than this message. */
+  after?: string;
+  /** Matching messages to return (1–200, default 50). */
+  limit?: number;
+  /** Include bot and system messages. Defaults to false. */
+  includeBotMessages?: boolean;
+}
+
+/**
+ * Connector-level agent read: an explicit channel, or the allowlisted parent
+ * channel of a Discord gateway session's thread.
+ */
+export interface DiscordAgentChannelHistoryRequest
+  extends Omit<DiscordChannelHistoryRequest, 'channelId'> {
+  channelId?: string;
+  /** Gateway session thread key whose allowlisted parent channel is read. */
+  sessionThreadKey?: string;
+}
+
+export interface DiscordChannelHistoryAttachment {
+  filename: string;
+  content_type?: string;
+  size: number;
+}
+
+export interface DiscordChannelHistoryMessage {
+  id: string;
+  iso_time: string;
+  actor_label: string;
+  author_id?: string;
+  text: string;
+  /** Set when the text alone exceeded the byte budget and was cut. */
+  text_truncated?: true;
+  is_bot: boolean;
+  is_system: boolean;
+  is_mention: boolean;
+  /** Set for a forward; text and attachments are the forwarded message's. */
+  is_forwarded?: true;
+  attachments?: DiscordChannelHistoryAttachment[];
+  /** Thread started from this message, readable with the same tool. */
+  thread_id?: string;
+}
+
+export interface DiscordChannelHistoryResult {
+  channelId: string;
+  /** Chronological order. */
+  messages: DiscordChannelHistoryMessage[];
+  has_more: boolean;
+  /** Cursor for the next call in the same direction; null when complete. */
+  next_cursor: { before: string } | { after: string } | null;
+}
+
 /** Fill only non-authority defaults; Message Content and identity stay explicit. */
 export function withDiscordConfigDefaults(raw: Record<string, unknown>): Record<string, unknown> {
   const catchUp = isRecord(raw.catch_up)
@@ -446,12 +557,7 @@ export function validateDiscordConfig(
   if (raw.files !== undefined && typeof raw.files !== 'boolean') {
     errors.push('files must be a boolean');
   }
-  if (
-    raw.agent_tools !== undefined &&
-    (!Array.isArray(raw.agent_tools) || raw.agent_tools.length > 0)
-  ) {
-    errors.push('agent_tools must be an empty array');
-  }
+  validateDiscordAgentTools(raw.agent_tools, errors);
 
   if (raw.outbound_enabled !== undefined && typeof raw.outbound_enabled !== 'boolean') {
     errors.push('outbound_enabled must be a boolean');

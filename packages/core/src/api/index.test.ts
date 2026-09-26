@@ -775,7 +775,6 @@ describe('createClient', () => {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
       expect(branchesService.methods).toHaveBeenCalledWith(
-        'updateEnvironment',
         'ensureTeammateKnowledgeNamespace',
         'clean'
       );

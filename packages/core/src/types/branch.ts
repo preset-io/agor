@@ -26,6 +26,42 @@ export function isBranchProvisioningOutcome(value: unknown): value is BranchProv
   );
 }
 
+/** Resolved source only; never materialization intent or filesystem readiness. */
+export type BranchProvisioningProvenance = Required<Pick<Branch, 'base_ref' | 'base_sha'>> &
+  Pick<Branch, 'base_source'>;
+
+export function isBranchProvisioningProvenance(
+  value: unknown
+): value is BranchProvisioningProvenance {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const ref = (v: unknown) =>
+    typeof v === 'string' &&
+    v.length > 0 &&
+    v.length <= 1024 &&
+    !v.startsWith('-') &&
+    !Array.from(v).some((c) => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 127 || /\s/.test(c));
+  const source = record.base_source as Record<string, unknown> | undefined;
+  return (
+    Object.keys(record).every((key) => ['base_ref', 'base_sha', 'base_source'].includes(key)) &&
+    ref(record.base_ref) &&
+    typeof record.base_sha === 'string' &&
+    /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(record.base_sha) &&
+    (source === undefined ||
+      (!!source &&
+        typeof source === 'object' &&
+        !Array.isArray(source) &&
+        Object.keys(source).every((key) => key === 'name' || key === 'remote_url') &&
+        ref(source.name) &&
+        typeof source.remote_url === 'string' &&
+        source.remote_url.length > 0 &&
+        source.remote_url.length <= 4096 &&
+        !Array.from(source.remote_url).some(
+          (c) => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127
+        )))
+  );
+}
+
 /** Canonical request contract for the hooked branch archive/delete boundary. */
 export type BranchArchiveOrDeleteOptions =
   | { metadataAction: 'archive'; filesystemAction: BranchFilesystemAction }
@@ -589,6 +625,8 @@ export interface BranchEnvironmentInstance {
   process?: {
     /** Process ID */
     pid?: number;
+    /** Opaque ID used to reject a late Start result from an older attempt. */
+    attempt_id?: string;
     /** When process started */
     started_at?: string;
     /** Human-readable uptime */
@@ -616,6 +654,14 @@ export interface BranchEnvironmentInstance {
     name: string;
     url: string;
   }>;
+
+  /**
+   * Runtime health URL reported by the most recent successful Start command.
+   * It overrides the rendered static health URL until the next lifecycle
+   * boundary. Unlike operator-authored static URLs, this value is always
+   * treated as untrusted outbound input by the daemon.
+   */
+  health_url?: string;
 
   /**
    * Process logs (last N lines)
@@ -656,6 +702,8 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_error',
   'last_command',
   'logs',
+  'access_urls',
+  'health_url',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 
 export type BranchEnvironmentClearableField = (typeof BRANCH_ENVIRONMENT_CLEARABLE_FIELDS)[number];

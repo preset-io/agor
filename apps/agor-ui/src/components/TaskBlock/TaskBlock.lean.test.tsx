@@ -7,7 +7,9 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from './TaskBlock';
 
 afterEach(cleanup);
@@ -437,4 +439,35 @@ it('uses each loaded group count instead of repeating the recorded turn total', 
     screen.getByRole('button', { name: '2 tool calls' }).querySelector('.ant-tag')
   ).toHaveTextContent(/^2$/);
   expect(screen.queryByRole('button', { name: '3 tool calls' })).toBeNull();
+});
+
+it('retains prompt disclosure and surrounding message order when history supplies the initial row', () => {
+  const prompt = 'Long prompt text. '.repeat(100);
+  const initial = message(1, MessageRole.USER, prompt);
+  const before = message(0, MessageRole.ASSISTANT, 'Earlier event');
+  const after = message(2, MessageRole.USER, 'Later user message');
+  function Harness({ rows }: { rows: Message[] }) {
+    const [choices, setChoices] = useState(() => new Map<string, boolean>());
+    return (
+      <HistoryTextChoices.Provider
+        value={{
+          choices,
+          setChoice: (key, expanded) => setChoices(new Map(choices).set(key, expanded)),
+        }}
+      >
+        {view({ task: { ...task, full_prompt: prompt }, taskMessages: rows })}
+      </HistoryTextChoices.Provider>
+    );
+  }
+  const { container, rerender } = render(<Harness rows={[before]} />);
+  const promptSection = screen.getByRole('region', { name: 'User prompt and turn metadata' });
+  fireEvent.click(screen.getByRole('button', { name: /show less/i }));
+  expect(screen.getByRole('button', { name: /show more/i })).toBeInTheDocument();
+  rerender(<Harness rows={[before, initial, after]} />);
+  expect(screen.getByRole('region', { name: 'User prompt and turn metadata' })).toBe(promptSection);
+  expect(screen.getByRole('button', { name: /show more/i })).toBeInTheDocument();
+  const text = Array.from(container.querySelectorAll('[data-conversation-block]'))
+    .map((el) => el.textContent)
+    .join('|');
+  expect(text).toMatch(/Earlier event[\s\S]*Long prompt text[\s\S]*Later user message/);
 });

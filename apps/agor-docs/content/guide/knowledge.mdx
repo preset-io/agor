@@ -145,10 +145,10 @@ permissions; they do not require export-admin access or write Knowledge data.
 
 ```bash
 agor kb namespace list
-agor kb namespace show pr-2821-test
-agor kb document list --namespace pr-2821-test
-agor kb document list --namespace pr-2821-test --status draft
-agor kb document get index.md --namespace pr-2821-test
+agor kb namespace show team-docs
+agor kb document list --namespace team-docs
+agor kb document list --namespace team-docs --status draft
+agor kb document get index.md --namespace team-docs
 ```
 
 Lists default to 50 rows, sorted by namespace slug or document path. Use
@@ -166,8 +166,7 @@ version, and content. Without `--json`, document get writes only current Markdow
 to stdout, preserving content when piped or redirected. Interactive terminal output
 escapes control characters. Paths are logical Knowledge paths, including `.md`
 when stored that way, not local filenames. Read these details before exporting and
-again after importing to spot-check the destination. No archive, edit, or history
-management commands are added by this workflow.
+again after importing to spot-check the destination. These four commands are read-only.
 
 ## Move a namespace with the CLI
 

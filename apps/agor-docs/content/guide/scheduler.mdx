@@ -27,7 +27,7 @@ _The scheduler dovetails with [Teammates](/guide/teammates): a daily cron firing
 ## How Scheduled Runs Work
 
 - **Branch-scoped configuration.** Each branch can store a single schedule (toggleable at any time). All metadata lives with the branch so it survives session churn.
-- **Cron-driven cadence.** The daemon tracks `schedule_cron`, `schedule_next_run_at`, and `schedule_last_triggered_at` for efficient ticking. Cron parsing and humanization use `cron-parser` and `cronstrue`.
+- **Cron-driven cadence.** Each schedule tracks its next run and last trigger.
 - **Fresh session per run.** When a run fires, Agor creates a new session titled `Scheduled: <branch>`, stamps `scheduled_run_at` with the planned timestamp, and records run details in `session.custom_context.scheduled_run`.
 - **Self-aware execution.** The session launches with the branch + board context, inherits the agent/tool settings you chose, and (with MCP enabled) can take all the actions a user could.
 - **Smart reliability.** Runs are deduplicated (two-minute grace window), there’s no backfill flood after downtime (only the most recent missed slot fires), and an optional retention policy keeps history trimmed.
@@ -39,8 +39,8 @@ _The scheduler dovetails with [Teammates](/guide/teammates): a daily cron firing
 1. **Open the branch modal.** From a board card or the branch list, choose “Open” → `Schedule` tab.
 2. **Toggle `Enable Schedule`.** Flip the switch to activate or pause the schedule for that branch.
 3. **Set the cadence.**
-   - Use the visual cron builder (`react-js-cron`) or type directly.
-   - A human-readable preview (via `cronstrue`) confirms the cadence.
+   - Use the visual cron builder or type directly.
+   - A human-readable preview confirms the cadence.
    - Schedules run in UTC today; adjust the cron expression if you need a different local time.
 4. **Configure the agent.**
    - Pick the agentic tool (Claude Code, Codex, Gemini) that will own the run.
@@ -103,7 +103,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
 
 ## Troubleshooting
 
-- **“Invalid cron expression.”** The UI validates with `cron-parser`; edit the expression or pick a preset.
+- **“Invalid cron expression.”** The UI validates the expression; edit the expression or pick a preset.
 - **No session fired.** Confirm the schedule is enabled and `Next run` is in the past. Remember the two-minute grace window.
 - **Agent lacks permissions.** Switch permission mode to `auto` or attach the necessary MCP servers in advanced settings.
 - **Timezone surprises.** Everything evaluates in UTC today; adjust the cron or translate from your local time.
@@ -113,5 +113,4 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
 - [Teammates](/guide/teammates): Long-lived agents whose **heartbeats** are powered by the scheduler. If you want a persistent AI teammate, start there.
 - [Branches](/guide/branches): The container a schedule attaches to.
 - [Agor MCP Server](/guide/internal-mcp): What scheduled agents can reach out to (boards, sessions, users, etc.).
-- [Architecture: Scheduler service](/guide/architecture#scheduler-service): Deeper dive into the daemon's background workers.
 - [SDK Comparison](/guide/sdk-comparison): Choose the right agent for scheduled tasks.

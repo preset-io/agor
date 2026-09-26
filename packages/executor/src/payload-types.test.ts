@@ -338,7 +338,13 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         branchPath: '/data/agor/worktrees/repo/feature',
         action: 'start',
         startCommand: 'docker compose up -d --build',
-        appUrl: 'http://localhost:3000',
+        attempt: {
+          id: '550e8400-e29b-41d4-a716-446655440001',
+          claimDeadline: '2026-01-01T00:00:00.000Z',
+          commandDeadline: '2026-01-01T00:05:00.000Z',
+          resultDeadline: '2026-01-01T00:06:00.000Z',
+          externalJobDeadlineMs: 365000,
+        },
       },
     };
 
@@ -355,7 +361,15 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         sessionToken: 'jwt-token-here',
         params: {
           branchId: '550e8400-e29b-41d4-a716-446655440000',
+          branchPath: '/data/agor/worktrees/repo/feature',
           action: 'start',
+          attempt: {
+            id: '550e8400-e29b-41d4-a716-446655440001',
+            claimDeadline: '2026-01-01T00:00:00.000Z',
+            commandDeadline: '2026-01-01T00:05:00.000Z',
+            resultDeadline: '2026-01-01T00:06:00.000Z',
+            externalJobDeadlineMs: 365000,
+          },
         },
       })
     ).toThrow();

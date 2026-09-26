@@ -869,14 +869,17 @@ export function registerKnowledgeTools(server: McpServer, ctx: McpContext): void
     const memory =
       args.includeMemory === false || !docsService?.find
         ? []
-        : await docsService.find(
-            mcpParams(ctx, {
-              namespace_id: namespace.namespace_id,
-              kind: 'memory',
-              include_content: true,
-              include_my_drafts: true,
-              limit: args.limit ?? 10,
-            })
+        : knowledgeSearchRows(
+            await docsService.find(
+              mcpParams(ctx, {
+                namespace_id: namespace.namespace_id,
+                kind: 'memory',
+                include_content: true,
+                include_my_drafts: true,
+                $limit: args.limit ?? 10,
+                $sort: { updated_at: -1 },
+              })
+            )
           );
     return textResult({
       branch_id: branch.branch_id,

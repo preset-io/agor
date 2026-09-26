@@ -1,4 +1,11 @@
-import type { AgorClient, Board, Branch, Session, User } from '@agor-live/client';
+import {
+  type AgorClient,
+  type Board,
+  type Branch,
+  type Session,
+  summarizeBoardImportSkips,
+  type User,
+} from '@agor-live/client';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -49,7 +56,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   onUnarchive,
 }) => {
   const { modal } = App.useApp();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showError, showWarning } = useThemedMessage();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
@@ -179,15 +186,16 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
     try {
       const boardsService = client.service('boards');
-      let board: Board;
+      const board = file.name.endsWith('.json')
+        ? await boardsService.fromBlob(JSON.parse(content))
+        : await boardsService.fromYaml({ yaml: content });
 
-      if (file.name.endsWith('.json')) {
-        board = await boardsService.fromBlob(JSON.parse(content));
+      const skippedSummary = summarizeBoardImportSkips(board.import_skipped);
+      if (skippedSummary) {
+        showWarning(`Board imported: ${board.name}. ${skippedSummary}`, { duration: 8 });
       } else {
-        board = await boardsService.fromYaml({ yaml: content });
+        showSuccess(`Board imported: ${board.name}`);
       }
-
-      showSuccess(`Board imported: ${board.name}`);
       onCreate?.(board);
     } catch (error) {
       showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);

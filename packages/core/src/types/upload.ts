@@ -9,6 +9,10 @@ export const UPLOAD_REQUEST_ID_HEADER = 'x-agor-upload-request-id';
 
 /** Code/status pairs whose upload-policy messages are safe to display. */
 export const UPLOAD_POLICY_ERROR_CONTRACT = {
+  /**
+   * Legacy: general uploads no longer restrict file types. Kept so clients and
+   * daemons across the version boundary still render the reviewed message.
+   */
   unsupportedMediaType: { code: 'UNSUPPORTED_MEDIA_TYPE', status: 415 },
   fileSize: { code: 'LIMIT_FILE_SIZE', status: 413 },
   totalFileSize: { code: 'LIMIT_TOTAL_FILE_SIZE', status: 413 },
@@ -61,6 +65,45 @@ export interface UploadPromptAttachment {
 }
 
 export const UPLOAD_VIRTUAL_URL_PREFIX = 'https://agor.live/_uploads/';
+
+/**
+ * Raster image types the browser may preview (thumbnails, inline display).
+ * SVG is excluded because it can carry script.
+ */
+export const UPLOAD_PREVIEW_IMAGE_MIME_TYPES: ReadonlySet<string> = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * Upload media types that may be displayed from the Agor origin. Any file type
+ * may be uploaded, so the declared MIME is client-controlled: everything
+ * outside this set (HTML, SVG, XML, JS, ...) is served as an opaque
+ * `application/octet-stream` attachment so it can never render as active
+ * content under the Agor origin (stored XSS).
+ */
+export const UPLOAD_INLINE_MIME_TYPES: ReadonlySet<string> = new Set([
+  ...UPLOAD_PREVIEW_IMAGE_MIME_TYPES,
+  'application/pdf',
+]);
+
+/** Bare, lower-cased media type (drops `; charset=...` style parameters). */
+export function normalizeUploadMimeType(mimeType: string | null | undefined): string {
+  return (mimeType ?? '').split(';', 1)[0].trim().toLowerCase();
+}
+
+/** How an upload with the given declared MIME may be served back to a browser. */
+export function resolveUploadServeType(mimeType: string | null | undefined): {
+  contentType: string;
+  inline: boolean;
+} {
+  const normalized = normalizeUploadMimeType(mimeType);
+  return UPLOAD_INLINE_MIME_TYPES.has(normalized)
+    ? { contentType: normalized, inline: true }
+    : { contentType: 'application/octet-stream', inline: false };
+}
 
 /** Public, resolved ingress limits shared by daemon and browser clients. */
 export interface UploadIngressPolicy {

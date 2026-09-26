@@ -1,8 +1,27 @@
-# External MCP servers and Catalog
+---
+title: MCP Catalog & Connections
+description: Find and connect MCP servers, manage authentication, and troubleshoot tool access.
+---
+
+<a id="external-mcp-servers-and-catalog" />
+
+# MCP Catalog & Connections
 
 Agor can attach external MCP servers to individual sessions. Use **Catalog** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
 
 Open **MCP Catalog** from the header’s shop icon or the same icon in the session’s **MCP** popover. Search the session picker to find existing servers; its no-match action also opens the Catalog. Catalog **Connect** adds a server to **My Servers**, without creating a session. Choose **Start new session** afterward to select an eligible teammate and agent tool; its starter prompt opens in the composer as editable, unsent text. To attach a saved server to the current conversation, select it in that picker.
+
+## Catalog visibility
+
+The Catalog shows servers available for new connections. Hidden entries cannot
+be found or installed through Catalog. Hiding an entry does not revoke an
+existing connection: manage saved servers and reconnect through **My Servers**.
+Existing authentication and access checks still apply.
+
+Catalog availability can change between releases, including when a provider
+requires client approval that Agor cannot complete. A listed entry is not a
+guarantee that every provider account can connect; follow the readiness guidance
+and provider requirements shown before connecting.
 
 ## Authentication
 
@@ -14,6 +33,15 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
+
+Datadog now uses its [documented US1 endpoint](https://github.com/datadog-labs/mcp-server),
+`https://mcp.datadoghq.com/v1/mcp`, without additional toolsets or permissions.
+Saved rows are not automatically migrated from `/api/unstable/mcp-server/mcp`.
+Those rows no longer match the current catalog: absent an explicit compatibility
+override, they fall back to strict OAuth, which invalidates grants bound to the
+former marketplace policy. Explicit Catalog Connect can reconcile the caller's
+owned row to the new endpoint through the existing flow; old-resource grants are
+not reusable there, so renewed authorization is required.
 
 ### Inspecting OAuth policy and failures
 
@@ -75,23 +103,10 @@ that the provider did not consume the token and will not replay it.
 
 ### Recovering a provider-deleted OAuth client (administrators)
 
-If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
-
-On **PostgreSQL deployments**, an authenticated administrator in the server's tenant can explicitly reset it through the daemon REST API:
-
-```http
-POST /mcp-servers/oauth-client-registration-reset
-Authorization: Bearer <Agor administrator access token>
-Content-Type: application/json
-
-{"mcp_server_id":"<saved MCP server UUID>"}
-```
-
-Use your existing authenticated API client and the saved server's `mcp_server_id` from **Settings → MCP Servers** or `GET /mcp-servers`; this is an **Agor** credential, not a provider token. Do not paste credentials into chat or logs. A successful response is `{"success":true}`. Missing authentication, non-admin callers, and servers in another tenant are refused.
-
-**Coordinate this reset with affected users:** it advances the server's configuration epoch and atomically retires the current DCR material, pending sign-in attempts, and **all users' Agor-stored OAuth grants for that server**. It does not delete the server or revoke tokens at the provider. Close old sign-in windows, reload any open settings form, then reconnect/sign in again to register a fresh client. Configured/static client IDs must instead be repaired in the server configuration; reset does not replace them. SQLite intentionally uses process-local DCR and rejects this durable reset endpoint.
-
-DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
+If reconnect repeatedly reports an unknown or deleted OAuth client, ask your
+workspace administrator to follow the [client recovery procedure](/guide/mcp-administration#recovering-a-provider-deleted-oauth-client-administrators).
+An administrative reset affects every user's saved grant for that server; it
+is not a routine reconnect and does not revoke tokens at the provider.
 
 ### Saved OAuth status
 
@@ -125,7 +140,51 @@ Editing authentication is patch-safe: leaving a saved secret blank preserves it,
 
 Connecting an entry again reuses the same owner-specific install; starting a session is a separate, explicit action. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
-> **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
+## Connection restrictions and recovery
+
+Your workspace's MCP security mode can restrict which servers are available.
+In `off` and `observe`, agents connect directly and receive reusable credentials;
+editing or removing a saved connection is **not a synchronous revocation boundary**
+for an already-running agent.
+
+In `compatibility` and `enforced`, eligible bounded Streamable HTTP connections go
+through the daemon instead. Reusable provider credentials stay in the daemon;
+the agent receives access scoped to its current task and authorized user, tenant,
+session, and server. This access stops working when the task is no longer live.
+
+These mediated modes do **not** support stdio, legacy SSE endpoint handoff,
+WebSocket, unbounded streaming, or servers requiring `ask` approval. Unsupported
+connections are omitted or fail closed, including on remote executors; they do
+not silently fall back to direct credentials. Some environment templates are
+also unsupported. If a required server disappears, ask an administrator to check
+[connection diagnostics and mode restrictions](/guide/mcp-administration#mcp-connection-security).
+
+After a connection, credential, attachment, or permission change:
+
+- **Claude:** **Reconnect MCP** can refresh the connections without restarting
+  the conversation. Tool visibility changes that require a new turn still wait
+  for that turn. An uncertain reconnect timeout blocks further live replacement
+  for the current turn.
+- **Other integrations and historical Claude CLI sessions:** changes apply on
+  the next turn, not midway through the current one.
+- **Sign-in required:** replaced or disconnected OAuth grants may need fresh
+  authorization. Routine access-token refresh does not require reconnecting.
+
+Live recovery applies only in `compatibility` and `enforced`; direct modes apply
+configuration changes on the next turn. An excluded server does not prevent
+other eligible connections from recovering.
+
+**Agor does not replay a failed provider tool call automatically.** If dispatch
+was uncertain, check the external system before asking the agent to repeat an
+action: it may already have happened. In mediated modes, no new request hop is
+admitted after a relevant change commits, but an already-admitted request may
+complete. Disconnecting retires Agor's local grant; it does not revoke the grant
+at the provider.
+
+Only connect providers you trust. The gateway filters accidental credential
+reflection in bounded responses, but cannot stop a malicious provider from
+encoding or exfiltrating a credential it legitimately received. Filtering does
+not cover every short or low-complexity value.
 
 ## Shared OAuth consent and account deletion
 
@@ -156,37 +215,13 @@ a stored grant; a successful probe alone is not durable shared authorization.
 
 ### Upgrade: shared-grant attribution (`0105`, both databases)
 
-1. Inventory affected shared OAuth servers in each tenant and identify a current
-   administrator in that tenant to own reauthorization.
-2. Quiesce OAuth exchanges and refreshes: stop new sign-ins and OAuth-using work,
-   let in-flight exchanges/refreshes settle, close outstanding sign-in windows,
-   and stop **all** daemons against the database.
-3. Take and verify a database backup, then run `agor db migrate --offline-cutover`
-   with the new binary.
-4. Start only the new binaries and have the identified administrators authorize
-   their shared servers again. Verify fresh authentication status and **Save & Test
-   Connection** for each affected server before resuming OAuth-using work.
-
-The migration preserves per-user grants, including tokens, configuration
-bindings, refresh state and timestamps. It cannot know historical shared
-consenters and does **not** guess from ownership: all historical shared grant
-rows are removed. Server definitions, configured clients and per-user grants
-are retained. This is local retirement, not a provider revocation request.
-
-The migration is transactional; a failed migration rolls back, and a bounded
-PostgreSQL lock timeout can be retried after stopping competing workers. A
-successful migration's deleted shared grants cannot be recovered by a schema
-rollback. Older binaries cannot supply the new required attribution and must
-not run against the upgraded schema. Returning to an older binary requires a
-coordinated offline restoration of a pre-upgrade backup, which also restores
-its old credential-retention behavior and may reintroduce retired credentials.
-Restoring a backup cannot undo provider-side authorization-code consumption or
-token rotation; prefer a forward fix and fresh consent.
+This upgrade removes historical shared grants and requires new administrator
+consent. Per-user grants are preserved. Operators must follow the
+[offline migration and rollback instructions](/guide/mcp-administration#upgrade-shared-grant-attribution-0105-both-databases)
+before upgrading; do not run old and new daemons against the upgraded schema.
 
 ## Catalog curation for operators
 
-The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
-
-Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
-
-The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret. Unit tests inject the network and OAuth discovery seams and never depend on public endpoints.
+To propose or maintain catalog entries, see
+[Contributing to the MCP catalog](/guide/development#contributing-to-the-mcp-catalog).
+Hiding an entry prevents new catalog installs, but does not revoke existing connections.

@@ -7,17 +7,26 @@
 
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import {
+  isUserApiKeySource,
+  PERSONAL_API_KEY_PREFIX,
+  type UserApiKeySource,
+} from '../../types/user-api-key';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
 import { userApiKeys } from '../schema';
 import { enqueueTenantDatabasePostCommitCallback } from '../tenant-context';
 
-const KEY_PREFIX = 'agor_sk_';
+const KEY_PREFIX = PERSONAL_API_KEY_PREFIX;
 const KEY_PREFIX_LENGTH = 12;
 const KEY_RANDOM_BYTES = 32;
 const BCRYPT_ROUNDS = 10;
+
+function toSource(value: unknown): UserApiKeySource {
+  return isUserApiKeySource(value) ? value : 'manual';
+}
 
 export interface UserApiKeyRow {
   id: string;
@@ -25,6 +34,7 @@ export interface UserApiKeyRow {
   name: string;
   prefix: string;
   key_hash: string;
+  source?: string;
   created_at: number | Date;
   last_used_at: number | Date | null;
 }
@@ -33,6 +43,7 @@ export interface UserApiKeyPublic {
   id: string;
   name: string;
   prefix: string;
+  source: UserApiKeySource;
   created_at: Date;
   last_used_at?: Date;
 }
@@ -56,7 +67,11 @@ export class UserApiKeysRepository {
   }
 
   /** Create a new API key for a user. Returns the raw key (shown once) + metadata. */
-  async create(userId: string, name: string): Promise<{ rawKey: string; key: UserApiKeyPublic }> {
+  async create(
+    userId: string,
+    name: string,
+    source: UserApiKeySource = 'manual'
+  ): Promise<{ rawKey: string; key: UserApiKeyPublic }> {
     const { rawKey, id, prefix, keyHash } = await this.generateKey();
     const now = new Date();
     await insert(this.db, userApiKeys)
@@ -66,13 +81,43 @@ export class UserApiKeysRepository {
         name,
         prefix,
         key_hash: keyHash,
+        source,
         created_at: now,
       })
       .run();
     return {
       rawKey,
-      key: { id, name, prefix, created_at: now },
+      key: { id, name, prefix, source, created_at: now },
     };
+  }
+
+  /**
+   * Remove a user's `cli_login` keys with exactly this machine name that are
+   * OLDER than `keepId`. Used when `agor login` runs again on the same machine
+   * so each machine has one CLI key. Never touches manual keys.
+   *
+   * Only strictly older keys are removed (ids are time-ordered UUIDv7s,
+   * compared bytewise here rather than by database collation), so two
+   * overlapping logins for the same machine can never delete each other's key:
+   * the newer one survives.
+   */
+  async deleteReplacedCliKeys(userId: string, name: string, keepId: string): Promise<number> {
+    const candidates = await select(this.db, { id: userApiKeys.id })
+      .from(userApiKeys)
+      .where(
+        and(
+          eq(userApiKeys.user_id, userId),
+          eq(userApiKeys.name, name),
+          eq(userApiKeys.source, 'cli_login'),
+          ne(userApiKeys.id, keepId)
+        )
+      )
+      .all();
+    const replaced = (candidates as Array<{ id: string }>).filter((row) => row.id < keepId);
+    for (const row of replaced) {
+      await this.delete(row.id, userId);
+    }
+    return replaced.length;
   }
 
   /** List all API keys for a user (never returns hashes) */
@@ -85,6 +130,7 @@ export class UserApiKeysRepository {
       id: r.id,
       name: r.name,
       prefix: r.prefix,
+      source: toSource(r.source),
       created_at: new Date(r.created_at),
       last_used_at: r.last_used_at ? new Date(r.last_used_at) : undefined,
     }));

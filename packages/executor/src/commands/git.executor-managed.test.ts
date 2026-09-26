@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
   createBranch: vi.fn(),
+  restoreBranchFilesystem: vi.fn(),
   createBranchAsClone: vi.fn(),
   resolveGitRef: vi.fn(),
   isRemoteRefVisibleForClone: vi.fn(),
@@ -67,6 +68,7 @@ vi.mock('../git/index.js', async () => {
     })),
     cloneRepo: mocks.cloneRepo,
     createBranch: mocks.createBranch,
+    restoreBranchFilesystem: mocks.restoreBranchFilesystem,
     createBranchAsClone: mocks.createBranchAsClone,
     resolveGitRef: mocks.resolveGitRef,
     isRemoteRefVisibleForClone: mocks.isRemoteRefVisibleForClone,
@@ -117,6 +119,7 @@ function createClient(records: {
   patchedRepos?: Array<Record<string, unknown>>;
   patchedBranches?: Array<Record<string, unknown>>;
   renderedBranches?: string[];
+  branchGetError?: Error;
 }) {
   const client = {
     io: { disconnect: vi.fn() },
@@ -173,9 +176,12 @@ function createClient(records: {
           }
         );
         return {
-          get: vi.fn(async () =>
-            records.branch ? { filesystem_status: 'creating', ...records.branch } : undefined
-          ),
+          get: vi.fn(async () => {
+            if (records.branchGetError) throw records.branchGetError;
+            return records.branch
+              ? { filesystem_status: 'creating', ...records.branch }
+              : undefined;
+          }),
           find,
           patch: vi.fn(async (_id: string, data: Record<string, unknown>) => {
             records.patchedBranches?.push(data);
@@ -233,6 +239,7 @@ beforeEach(() => {
     })
   );
   mocks.isRemoteRefVisibleForClone.mockResolvedValue(false);
+  mocks.restoreBranchFilesystem.mockResolvedValue({ success: true, strategy: 'checkout' });
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
@@ -360,6 +367,108 @@ describe('managed executor git/fs commands', () => {
     );
   });
 
+  it.each(['create', 'retry', 'restore'] as const)(
+    'derives retained-ref policy from admitted row intent, not the restoreMode hint: %s',
+    async (operation) => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-recovery-intent-'));
+      try {
+        createClient({
+          repo: { repo_id: repoId, local_path: root, remote_url: 'https://example.test/repo.git' },
+          branch: {
+            branch_id: branchId,
+            repo_id: repoId,
+            name: 'personal',
+            ref: 'personal',
+            path: join(root, 'missing'),
+            storage_mode: 'worktree',
+            provisioning_operation: operation,
+            provisioning_attempt_id: 'admitted',
+          },
+        });
+        const result = await handleGitBranchAdd(
+          {
+            command: 'git.branch.add',
+            sessionToken: 'tenant-token',
+            params: {
+              branchId,
+              repoId,
+              allowExistingCheckout: false,
+              useReference: false,
+              restoreMode: true,
+              provisioningAttemptId: 'admitted',
+            },
+          },
+          {}
+        );
+        expect(result.success).toBe(true);
+        expect(mocks.restoreBranchFilesystem).toHaveBeenCalledWith(
+          root,
+          join(root, 'missing'),
+          'personal',
+          'main',
+          {},
+          undefined,
+          'branch',
+          'https://example.test/repo.git',
+          operation === 'restore'
+        );
+        expect(mocks.resolveGitRef).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.each(['stale-attempt', 'missing-attempt', 'missing-hint', 'wrong-repo', 'denied-branch'])(
+    'refuses recovery before Git work when authority/admission is invalid: %s',
+    async (kind) => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-denied-recovery-'));
+      try {
+        createClient({
+          branchGetError:
+            kind === 'denied-branch' ? new Error('Branch is outside caller tenant') : undefined,
+          repo: { repo_id: repoId, local_path: root },
+          branch: {
+            branch_id: branchId,
+            repo_id: kind === 'wrong-repo' ? 'foreign-repo' : repoId,
+            path: join(root, 'missing'),
+            name: 'personal',
+            provisioning_operation: 'restore',
+            provisioning_attempt_id: kind === 'missing-attempt' ? undefined : 'admitted',
+          },
+        });
+        const result = await handleGitBranchAdd(
+          {
+            command: 'git.branch.add',
+            sessionToken: 'tenant-token',
+            params: {
+              branchId,
+              repoId,
+              allowExistingCheckout: false,
+              useReference: false,
+              restoreMode: kind !== 'missing-hint',
+              provisioningAttemptId:
+                kind === 'missing-attempt'
+                  ? undefined
+                  : kind === 'stale-attempt'
+                    ? 'stale'
+                    : 'admitted',
+            },
+          },
+          {}
+        );
+        expect(result.success).toBe(false);
+        expect(mocks.restoreBranchFilesystem).not.toHaveBeenCalled();
+        expect(mocks.createBranch).not.toHaveBeenCalled();
+        expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+        expect(mocks.writeFile).not.toHaveBeenCalled();
+        await expect(stat(join(root, 'missing'))).rejects.toThrow();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+
   it('resolves trusted repo metadata just-in-time inside git.branch.add', async () => {
     const patchedBranches: Array<Record<string, unknown>> = [];
     const renderedBranches: string[] = [];
@@ -398,6 +507,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          allowExistingCheckout: false,
           useReference: true,
         },
       },
@@ -471,7 +581,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, useReference: false },
+        params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
       },
       {}
     );
@@ -556,7 +666,13 @@ describe('managed executor git/fs commands', () => {
           {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
-            params: { branchId, repoId, useReference: false, restoreMode },
+            params: {
+              branchId,
+              repoId,
+              allowExistingCheckout: false,
+              useReference: false,
+              restoreMode,
+            },
           },
           {}
         );
@@ -584,7 +700,13 @@ describe('managed executor git/fs commands', () => {
                 {
                   command: 'git.branch.add',
                   sessionToken: 'tenant-token',
-                  params: { branchId, repoId, useReference: false, restoreMode },
+                  params: {
+                    branchId,
+                    repoId,
+                    allowExistingCheckout: false,
+                    useReference: false,
+                    restoreMode,
+                  },
                 },
                 {}
               )
@@ -645,7 +767,7 @@ describe('managed executor git/fs commands', () => {
         const payload = {
           command: 'git.branch.add' as const,
           sessionToken: 'tenant-token',
-          params: { branchId, repoId, useReference: true },
+          params: { branchId, repoId, allowExistingCheckout: false, useReference: true },
         };
         expect((await handleGitBranchAdd(payload, {})).success).toBe(true);
         const provenance = patchedBranches.find((patch) => 'base_ref' in patch);
@@ -705,7 +827,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true, useReference: false },
+        params: {
+          branchId,
+          repoId,
+          allowExistingCheckout: false,
+          restoreMode: true,
+          useReference: false,
+        },
       },
       {}
     );
@@ -753,7 +881,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true, useReference: false },
+        params: {
+          branchId,
+          repoId,
+          allowExistingCheckout: false,
+          restoreMode: true,
+          useReference: false,
+        },
       },
       {}
     );
@@ -795,7 +929,13 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, restoreMode: true, useReference: false },
+        params: {
+          branchId,
+          repoId,
+          allowExistingCheckout: false,
+          restoreMode: true,
+          useReference: false,
+        },
       },
       {}
     );
@@ -832,7 +972,7 @@ describe('managed executor git/fs commands', () => {
       {
         command: 'git.branch.add',
         sessionToken: 'tenant-token',
-        params: { branchId, repoId, useReference: false },
+        params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
       },
       {}
     );
@@ -860,6 +1000,7 @@ describe('managed executor git/fs commands', () => {
         params: {
           branchId,
           repoId,
+          allowExistingCheckout: false,
           useReference: false,
         },
       },
@@ -1342,7 +1483,13 @@ describe('local teammate materialization', () => {
           {
             command: 'git.branch.add',
             sessionToken: 'tenant-token',
-            params: { branchId, repoId, useReference: true, restoreMode },
+            params: {
+              branchId,
+              repoId,
+              allowExistingCheckout: false,
+              useReference: true,
+              restoreMode,
+            },
           },
           {}
         );

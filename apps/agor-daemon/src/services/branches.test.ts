@@ -250,6 +250,7 @@ function createServiceHarness() {
   };
 
   const reposService = {
+    retryBranchProvisioning: vi.fn(async () => ({})),
     get: vi.fn(async () => ({ repo_id: 'repo-1', local_path: '/tmp/repo' })),
   };
 
@@ -292,6 +293,7 @@ function createServiceHarness() {
   return {
     service,
     branchRepo,
+    reposService,
     boardObjectsService,
     sessionsService,
     branchesService,
@@ -301,10 +303,6 @@ function createServiceHarness() {
 
 async function runInTestTenantScope<T>(work: () => Promise<T>): Promise<T> {
   return runWithTenantDatabaseScope(createTenantScopeTestDb() as never, 'tenant-test', work);
-}
-
-function waitForDeferredWork(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
@@ -416,103 +414,26 @@ describe('BranchesService environment start async behavior', () => {
       environment_instance: { status: 'stopped' },
     };
 
-    let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
     vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
-    vi.spyOn(service, 'get').mockImplementation(async () => {
-      return { ...branch, environment_instance: currentEnvironment } as never;
-    });
-    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
-      kind: 'shell',
-      command: branch.start_command,
-    } as never);
-    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
-      env: { PATH: '/usr/bin:/bin' },
-      delegatedHomeKey: undefined,
-      executionUserId: 'user-1',
-      branchFsAccess: 'write',
-    } as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
 
-    const environmentUpdates: Array<Record<string, unknown>> = [];
-    const lifecycleOptions: Array<unknown> = [];
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update, _params, internalOptions) => {
-        environmentUpdates.push(update as Record<string, unknown>);
-        lifecycleOptions.push(internalOptions);
-        currentEnvironment = {
-          ...currentEnvironment,
-          ...update,
-        };
-        return {
-          ...branch,
-          environment_instance: currentEnvironment,
-        } as never;
-      }
-    );
-
-    return { service, branch, environmentUpdates, lifecycleOptions };
+    return { service, branch };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
+    const { service, branch } = createStartHarness();
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockResolvedValue({
+        ...branch,
+        environment_instance: { status: 'starting' },
+      } as never);
 
-    const result = await Promise.race([
-      runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
-      new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 50)),
-    ]);
+    const result = await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
 
-    expect(result).not.toBe('timed-out');
+    expect(result.environment_instance?.status).toBe('starting');
+    expect(runReported).toHaveBeenCalledWith(branch, 'start', undefined, undefined);
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
-
-    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        sessionToken: 'executor-token',
-        daemonUrl: 'http://daemon.test',
-        env: { PATH: '/usr/bin:/bin' },
-        params: expect.objectContaining({
-          action: 'start',
-          branchId: branch.branch_id,
-          branchPath: branch.path,
-          cwd: branch.path,
-          principalBranchAccess: 'write',
-          startCommand: branch.start_command,
-          appUrl: branch.app_url,
-        }),
-      }),
-      expect.objectContaining({
-        logPrefix: `[Environment.start ${branch.name}]`,
-        preparedEnv: { PATH: '/usr/bin:/bin' },
-        templateVariables: {
-          branch_id: branch.branch_id,
-          user_id: 'user-1',
-          branch_fs_access: 'write',
-        },
-      })
-    );
-    expect(environmentUpdates).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          status: 'starting',
-          last_error: undefined,
-          access_urls: [{ name: 'App', url: 'http://localhost:3000' }],
-        }),
-      ])
-    );
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
-  });
-
-  it('marks a repeated starting request as a fresh lifecycle boundary', async () => {
-    const { service, branch, lifecycleOptions } = createStartHarness();
-    vi.spyOn(service, 'get').mockResolvedValue({
-      ...branch,
-      environment_instance: { status: 'starting' },
-    } as never);
-
-    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
-
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -556,30 +477,21 @@ describe('BranchesService environment start async behavior', () => {
     (
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
     ).processes.set(branch.branch_id, { process: { kill } });
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockResolvedValue({
+        ...branch,
+        environment_instance: { status: 'starting' },
+      } as never);
 
     await runInTestTenantScope(() => service.restartEnvironment(branch.branch_id));
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
-
-    await waitForDeferredWork();
-
-    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        params: expect.objectContaining({
-          action: 'start',
-          branchId: branch.branch_id,
-          startCommand: branch.start_command,
-        }),
-      }),
-      expect.objectContaining({ logPrefix: `[Environment.start ${branch.name}]` })
-    );
-    expect(mockedSpawnExecutor).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ action: 'restart' }),
-      }),
-      expect.anything()
+    expect(runReported).toHaveBeenCalledWith(
+      expect.objectContaining({ branch_id: branch.branch_id }),
+      'start',
+      undefined,
+      undefined
     );
   });
 
@@ -615,13 +527,6 @@ describe('BranchesService environment start async behavior', () => {
       executionUserId: 'user-1',
       branchFsAccess: 'write',
     } as never);
-    const executeWebhookSpy = vi
-      .spyOn(service as never, 'executeEnvironmentWebhook')
-      .mockResolvedValue({
-        body: 'ok',
-        truncated: false,
-        status: 200,
-      } as never);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
       currentEnvironment = {
         ...currentEnvironment,
@@ -629,31 +534,20 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRequestExecutor.mockResolvedValue({
-      success: true,
-      data: { branchId: branch.branch_id, action: 'stop' },
-    });
+    const runReported = vi
+      .spyOn(service as never, 'runReportedEnvironmentAction')
+      .mockImplementation(async (_branch, action) => {
+        currentEnvironment = {
+          status: action === 'stop' ? 'stopped' : 'starting',
+          last_command: { status: 'succeeded' },
+        };
+        return { ...branch, environment_instance: currentEnvironment } as never;
+      });
 
     await service.restartEnvironment(branch.branch_id);
 
-    expect(mockedRequestExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: 'environment.lifecycle',
-        params: expect.objectContaining({
-          action: 'stop',
-          branchId: branch.branch_id,
-          stopCommand: branch.stop_command,
-        }),
-      }),
-      expect.objectContaining({ logPrefix: `[Environment.stop ${branch.name}]` })
-    );
-    expect(executeWebhookSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: branch.start_command,
-        commandType: 'start',
-      })
-    );
-    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
+    expect(runReported.mock.calls.map((call) => call[1])).toEqual(['stop', 'start']);
+    expect(runReported.mock.calls[0]?.[4]).toEqual({ awaitResult: true });
   });
 
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
@@ -993,7 +887,7 @@ describe('BranchesService environment start async behavior', () => {
     });
   });
 
-  it('accepts branch-scoped RPC envelope for updateEnvironment', async () => {
+  it('clears nullable environment fields for internal callers', async () => {
     const { service } = createServiceHarness();
     const branch = {
       branch_id: 'wt-env-rpc' as BranchID,
@@ -1005,6 +899,8 @@ describe('BranchesService environment start async behavior', () => {
       environment_instance: {
         status: 'stopping',
         process: { pid: 123 },
+        access_urls: [{ name: 'App', url: 'https://old.example.test' }],
+        health_url: 'https://old.example.test/health',
         last_health_check: {
           timestamp: '2026-01-01T00:00:00.000Z',
           status: 'healthy',
@@ -1017,15 +913,12 @@ describe('BranchesService environment start async behavior', () => {
       return { ...branch, ...(data as object) } as never;
     });
 
-    await service.updateEnvironment({
-      branch_id: branch.branch_id,
-      environment_update: {
-        status: 'stopped',
-        // Remote executor calls cross JSON, where undefined is dropped; null is
-        // the explicit clear sentinel.
-        process: null,
-        last_health_check: null,
-      },
+    await service.updateEnvironment(branch.branch_id, {
+      status: 'stopped',
+      process: null,
+      last_health_check: null,
+      access_urls: null,
+      health_url: null,
     });
 
     const patchedEnvironment = patchSpy.mock.calls[0]?.[1]?.environment_instance as
@@ -1034,6 +927,8 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
     expect(patchedEnvironment).toHaveProperty('process', undefined);
     expect(patchedEnvironment).toHaveProperty('last_health_check', undefined);
+    expect(patchedEnvironment).toHaveProperty('access_urls', undefined);
+    expect(patchedEnvironment).toHaveProperty('health_url', undefined);
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
@@ -1395,65 +1290,31 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 describe('BranchesService.unarchive', () => {
   const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
 
-  it.each([
-    [true, 'spawn'],
-    [false, 'spawn'],
-    [true, 'missing-remote'],
-    [false, 'missing-remote'],
-    [true, 'local-home'],
-    [false, 'local-home'],
-  ] as const)(
-    'publishes restore failure only after an applied CAS (%s, %s)',
-    async (applied, failure) => {
-      const { service, branchRepo, branchesService } = createServiceHarness();
-      const branchId = 'restore-failure' as BranchID;
-      const current = {
-        branch_id: branchId,
-        repo_id: 'repo-1',
-        name: 'Restore',
-        path: '/tmp/restore',
-        archived: true,
-        storage_mode: failure === 'missing-remote' ? 'clone' : 'worktree',
-        ...(failure === 'local-home'
-          ? { custom_context: { teammate: { ...teammateContext.teammate, localHome: true } } }
-          : {}),
-      };
-      vi.spyOn(service, 'get').mockResolvedValue(current as never);
-      vi.spyOn(service, 'patch').mockImplementation(
-        async (_id, data) => ({ ...current, ...data }) as never
-      );
-      mockedRequestExecutor.mockResolvedValue({ success: true, data: { exists: false } });
-      mockedSpawnExecutor.mockImplementation(() => {
-        throw new Error('launcher unavailable');
-      });
-      vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
-        applied,
-        branch: {
-          ...current,
-          archived: false,
-          filesystem_status: applied ? 'failed' : 'ready',
-        } as never,
-      });
-      vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(
-        async (branch) => branch as never
-      );
-      await service.unarchive(branchId, undefined, userParams);
-      expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
-        branchId,
-        expect.objectContaining({ filesystem_status: 'failed' }),
-        expect.any(String)
-      );
-      const failures = branchesService.emit.mock.calls.filter(
-        (args) => args[1]?.filesystem_status === 'failed'
-      );
-      expect(failures).toHaveLength(applied ? 1 : 0);
-      if (applied)
-        expect(failures[0][2].params.user).toEqual({ user_id: 'user-1', role: 'member' });
+  // Filesystem restoration, failure publication, and missing homes are tested
+  // through real repositories and executor handlers in branches.restore.integration.test.ts.
+
+  it.each([false, true])(
+    'compares explicit placement inside admission, not preflight (moved=%s)',
+    async (moved) => {
+      const { service, reposService } = createServiceHarness();
+      const branchId = 'wt-raced' as BranchID;
+      const requested = 'board-requested' as BoardID;
+      const other = 'board-other' as BoardID;
+      const base = { branch_id: branchId, name: 'Raced', archived: true };
+      vi.spyOn(service, 'get')
+        .mockResolvedValue({ ...base, board_id: moved ? other : requested } as never)
+        .mockResolvedValueOnce({ ...base, board_id: moved ? requested : other } as never);
+      const patch = vi.spyOn(service, 'patch').mockResolvedValue(base as never);
+      await service.unarchive(branchId, { boardId: requested }, userParams);
+      expect(patch).toHaveBeenCalledTimes(moved ? 1 : 0);
+      if (moved) expect(patch).toHaveBeenCalledWith(branchId, { board_id: requested }, userParams);
+      expect(reposService.retryBranchProvisioning).toHaveBeenCalledWith(branchId, userParams, true);
     }
   );
 
   it('preserves existing board_id when options.boardId is not provided', async () => {
-    const { service, boardObjectsService, sessionsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService, sessionsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-a' });
     const branchId = 'wt-1' as BranchID;
     const existingBoardId = 'board-a' as BoardID;
 
@@ -1478,17 +1339,7 @@ describe('BranchesService.unarchive', () => {
 
     await service.unarchive(branchId, undefined, userParams);
 
-    expect(patchSpy).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({
-        archived: false,
-        archived_at: undefined,
-        archived_by: undefined,
-        filesystem_status: undefined,
-      }),
-      userParams
-    );
-    expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
+    expect(patchSpy).not.toHaveBeenCalled();
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).toHaveBeenCalledWith({
@@ -1504,7 +1355,8 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('does not create a new board object when one already exists', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-b' });
     const branchId = 'wt-2' as BranchID;
     const boardId = 'board-b' as BoardID;
 
@@ -1531,7 +1383,8 @@ describe('BranchesService.unarchive', () => {
   });
 
   it('uses explicit options.boardId override for patch and placement', async () => {
-    const { service, boardObjectsService } = createServiceHarness();
+    const { service, reposService, boardObjectsService } = createServiceHarness();
+    reposService.retryBranchProvisioning.mockResolvedValue({ board_id: 'board-new' });
     const branchId = 'wt-3' as BranchID;
     const oldBoardId = 'board-old' as BoardID;
     const newBoardId = 'board-new' as BoardID;
@@ -1560,7 +1413,6 @@ describe('BranchesService.unarchive', () => {
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
       expect.objectContaining({
-        archived: false,
         board_id: newBoardId,
       }),
       userParams
@@ -2816,6 +2668,87 @@ describe('BranchesService environment health requests', () => {
     });
   });
 
+  it('uses the pinned public-only fetch path for a runtime health URL', async () => {
+    const branch = {
+      branch_id: 'wt-health-runtime' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-runtime',
+      path: '/tmp/wt-health-runtime',
+      branch_unique_id: 11,
+      health_check_url: 'http://localhost:3030/old-health',
+      environment_instance: {
+        status: 'error',
+        health_url: 'https://space-3000.app.github.dev/health',
+      },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const dynamicFetch = vi
+      .spyOn(
+        service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
+        'fetchDynamicEnvironmentHealth'
+      )
+      .mockResolvedValue(new Response('', { status: 200 }));
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(dynamicFetch).toHaveBeenCalledWith(
+      branch.environment_instance.health_url,
+      expect.objectContaining({ method: 'GET', redirect: 'manual' })
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'healthy',
+      message: 'HTTP 200',
+    });
+  });
+
+  it('blocks a private runtime health URL without falling back to static health', async () => {
+    const branch = {
+      branch_id: 'wt-health-runtime-private' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-runtime-private',
+      path: '/tmp/wt-health-runtime-private',
+      branch_unique_id: 12,
+      health_check_url: 'http://localhost:3030/old-health',
+      environment_instance: {
+        status: 'error',
+        health_url: 'http://127.0.0.1:3000/health',
+      },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const dynamicFetch = vi.spyOn(
+      service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
+      'fetchDynamicEnvironmentHealth'
+    );
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(dynamicFetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+  });
+
   it('does not probe an errored environment for an automatic observation', async () => {
     const branch = {
       branch_id: 'wt-health-error-automatic' as BranchID,
@@ -3349,45 +3282,5 @@ describe('server-selected local teammate homes', () => {
     get.mockRejectedValueOnce(new Error('Repo not found in tenant-b'));
     await expect(internal.applyBranchCreateDefaults(data, params)).rejects.toThrow('tenant-b');
     expect(get).toHaveBeenCalledWith(data.repo_id, params);
-  });
-
-  it('does not recreate a lost marked home during unarchive', async () => {
-    const { service, branchRepo } = createServiceHarness();
-    const branchId = 'lost-home' as BranchID;
-    const branch = {
-      branch_id: branchId,
-      name: 'Lost',
-      path: '/lost-home',
-      archived: true,
-      storage_mode: 'clone',
-      custom_context: { teammate: { ...teammateContext.teammate, localHome: true } },
-    };
-    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    vi.spyOn(service, 'patch').mockImplementation(
-      async (_id, data) => ({ ...branch, ...data }) as never
-    );
-    vi.mocked(requestExecutor).mockResolvedValueOnce({
-      success: true,
-      data: { exists: false },
-    } as never);
-    vi.mocked(spawnExecutor).mockClear();
-    vi.spyOn(branchRepo, 'acknowledgeProvisioningAttempt').mockResolvedValue({
-      applied: true,
-      branch: { ...branch, archived: false, filesystem_status: 'failed' } as never,
-    });
-    vi.spyOn(branchRepo, 'enrichWithZoneInfo').mockImplementation(async (row) => row as never);
-    const result = await service.unarchive(branchId, undefined, {
-      user: { user_id: 'user-1' as UUID, role: 'member' },
-    } as never);
-    expect(result.filesystem_status).toBe('failed');
-    expect(branchRepo.acknowledgeProvisioningAttempt).toHaveBeenCalledWith(
-      branchId,
-      expect.objectContaining({
-        filesystem_status: 'failed',
-        error_message: expect.stringContaining('cannot recover personal state'),
-      }),
-      expect.anything()
-    );
-    expect(spawnExecutor).not.toHaveBeenCalled();
   });
 });

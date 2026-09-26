@@ -633,6 +633,27 @@ export async function runMigrations(
     // 3. Runs them in order within transaction
     // 4. Updates tracking table
     if (isSQLiteDatabase(db)) {
+      // The prior restriction feature used main's 0115 source-column timestamp.
+      // Only that exact historical ledger needs the skipped ALTER: never replay
+      // it on main databases (SQLite has no ADD COLUMN IF NOT EXISTS).
+      if (
+        status.applied.includes('0115_user_api_key_source') &&
+        status.pending.includes('0116_tenant_restrictions')
+      ) {
+        const historical = await db.run(sql`
+          SELECT 1 FROM __drizzle_migrations
+          WHERE created_at = 1790129000212
+            AND hash = '82f1b30221a6d626e90af4414666b976f576bb5a32689635f81e05a6aee49c0b'
+        `);
+        if (historical.rows.length > 0) {
+          const columns = await db.run(sql`PRAGMA table_info(user_api_keys)`);
+          if (!columns.rows.some((column) => column.name === 'source')) {
+            await db.run(
+              sql`ALTER TABLE user_api_keys ADD COLUMN source text DEFAULT 'manual' NOT NULL`
+            );
+          }
+        }
+      }
       await migrateSQLite(db, { migrationsFolder });
     } else if (isPostgresDatabase(db)) {
       await migratePostgres(db, { migrationsFolder });

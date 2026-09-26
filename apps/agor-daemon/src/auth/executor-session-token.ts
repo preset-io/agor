@@ -16,6 +16,8 @@ export type ExecutorSessionTokenPayload = JwtPayload & {
   sessionId?: string;
   task_id?: string;
   branch_id?: string;
+  /** Signed generation for the source-resolution capability of git.branch.add. */
+  provisioning_attempt_id?: string;
 };
 
 export type AuthenticatedExecutorSessionTokenPayload = ExecutorSessionTokenPayload & {

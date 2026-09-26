@@ -1094,7 +1094,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       data.codexApprovalPolicy !== undefined ||
       data.codexNetworkAccess !== undefined;
     const inheritedPresetId =
-      targetTool === parent.agentic_tool ? parent.agentic_tool_preset_id : undefined;
+      // Explicit inline selection detaches from the parent's preset. The
+      // materializer still enforces the workspace's inline-configuration policy.
+      !hasAtomicOverride && targetTool === parent.agentic_tool
+        ? parent.agentic_tool_preset_id
+        : undefined;
     const presetId = data.presetId ?? inheritedPresetId ?? undefined;
     if (presetId && hasAtomicOverride) {
       throw new BadRequest(
@@ -1939,11 +1943,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         Array.isArray((branchFilter as { $in?: unknown }).$in)
           ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
           : undefined;
-      const limit = Math.min(
-        (query?.$limit as number | undefined) ?? this.paginate?.default ?? PAGINATION.DEFAULT_LIMIT,
-        this.paginate?.max ?? 1000 // Same fallback as DrizzleService.paginateData.
-      );
-      const skip = (query?.$skip as number | undefined) ?? 0;
+      const { limit, skip } = this.pageWindow(query ?? {});
       const { data, total } = await this.sessionRepo.findPage({
         includeTotal: query?.$count !== false,
         status: query?.status as SessionStatus | undefined,

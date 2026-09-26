@@ -10,7 +10,7 @@
 
 import { catalogDisplayName, type MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { loadCatalog } from './catalog';
+import { findCatalogEntry, loadCatalog } from './catalog';
 import { filterCatalog } from './query';
 
 function entry(overrides: Partial<MCPCatalogEntry> & { name: string }): MCPCatalogEntry {
@@ -273,5 +273,57 @@ describe('filterCatalog isolation', () => {
     filterCatalog(input, { sort: 'name' });
 
     expect(input.map((e) => e.name)).toEqual(before);
+  });
+});
+
+describe('catalog visibility', () => {
+  it('discovers Fellow by name and productivity capabilities', async () => {
+    const full = await loadCatalog();
+    const fellow = findCatalogEntry(full, 'app.fellow/mcp');
+    expect(fellow).toBeDefined();
+    for (const capability of ['notes', 'tasks', 'channels']) {
+      expect(
+        filterCatalog(full, { search: 'Fellow', category: 'productivity', capability })
+      ).toEqual([fellow]);
+    }
+  });
+
+  it('hides only true, before filtering, sorting, and paging; false re-enables', () => {
+    const hidden = entry({ name: 'com.hidden/mcp', hidden: true, popularity_rank: 1 });
+    const visible = entry({ name: 'com.visible/mcp', hidden: false });
+    const omitted = entry({ name: 'com.omitted/mcp' });
+    expect(filterCatalog([hidden, visible, omitted])).toEqual([omitted, visible]);
+    expect(filterCatalog([hidden], { search: 'hidden', capability: 'issues' })).toEqual([]);
+    expect(filterCatalog([{ ...hidden, hidden: false }])).toHaveLength(1);
+    expect(findCatalogEntry([hidden], hidden.name)).toBe(hidden);
+  });
+
+  it('retains exactly the seven blocked definitions internally, with no extra providers hidden', async () => {
+    const full = await loadCatalog();
+    const hiddenNames = [
+      'com.figma.mcp/mcp',
+      'com.vercel/vercel-mcp',
+      'com.intercom/mcp',
+      'com.squareup/mcp',
+      'com.canva/mcp',
+      'com.dropbox/mcp',
+      'com.newrelic/mcp-server',
+    ].sort();
+    expect(
+      full
+        .filter((e) => e.hidden)
+        .map((e) => e.name)
+        .sort()
+    ).toEqual(hiddenNames);
+    const visible = filterCatalog(full);
+    expect(visible).toHaveLength(full.length - 7);
+    for (const name of hiddenNames) {
+      expect(findCatalogEntry(full, name)).toBeDefined();
+      expect(filterCatalog(full, { search: name })).toEqual([]);
+    }
+    for (const publisher of ['asana', 'incident', 'datadog']) {
+      expect(visible.some((e) => e.name.includes(publisher))).toBe(true);
+    }
+    expect(filterCatalog(full.map((e) => ({ ...e, hidden: false })))).toHaveLength(full.length);
   });
 });

@@ -1,0 +1,11 @@
+{
+  "01a0d4aa-9880-718b-a682-96d2ba737a99": {
+    "repository": "preset-io/agor",
+    "ref": "investigate-railway-environment-variants",
+    "projectId": "aa86ab4f-8ccd-466f-b29c-27a818594081",
+    "environmentId": "c5cfea2f-c938-4ad4-a285-73b2c77469fc",
+    "serviceId": "28acddc0-1370-4b2e-89d0-37230b205380",
+    "volumeId": "3c5bbeca-7997-4894-9dfb-62b882ddca2e",
+    "domain": "agor-production-47ca.up.railway.app"
+  }
+}

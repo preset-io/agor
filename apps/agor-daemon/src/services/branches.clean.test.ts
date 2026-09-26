@@ -5,6 +5,9 @@ import {
   GroupRepository,
   generateId,
   RepoRepository,
+  SessionRepository,
+  TaskRepository,
+  UserPrimaryTeammateRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -352,3 +355,78 @@ for (const binding of ['inherit', 'override'] as const) {
     });
   }
 }
+
+test('explicit Manager retirement clears revoked collaborators preferences, preserves files and retains board protection', async ({
+  db,
+}) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const { service } = setup(db);
+  const branches = new BranchRepository(db);
+  const boards = new BoardRepository(db);
+  const prefs = new UserPrimaryTeammateRepository(db);
+  const collaborator = await new UsersRepository(db).create({
+    email: 'retirement-peer@example.test',
+    role: 'member',
+  });
+  const board = await boards.create({ name: 'Retirement', created_by: user.user_id });
+  await branches.update(branch.branch_id, {
+    board_id: board.board_id,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
+  });
+  await setTestBranchUserRole(
+    db,
+    branch.branch_id,
+    collaborator.user_id,
+    'collaborator',
+    'write',
+    user.user_id
+  );
+  await prefs.setPrimaryTeammate(collaborator.user_id, branch.branch_id, { source: 'explicit' });
+  await expect(
+    service.retireTeammate(branch.branch_id, { user: collaborator, tenant })
+  ).rejects.toThrow(/Manager/);
+  // Revocation does not require cooperation from the preference holder.
+  await setTestBranchUserRole(
+    db,
+    branch.branch_id,
+    collaborator.user_id,
+    'viewer',
+    'none',
+    user.user_id
+  );
+  await boards.setPrimaryTeammate(board.board_id, branch.branch_id);
+  await expect(service.retireTeammate(branch.branch_id, { user, tenant })).rejects.toThrow(
+    'Primary teammate is protected'
+  );
+  expect(await prefs.getBranchId(collaborator.user_id)).toBe(branch.branch_id);
+  expect((await branches.findById(branch.branch_id))?.archived).toBe(false);
+  await boards.clearPrimaryTeammate(board.board_id);
+  const session = await new SessionRepository(db).create({
+    branch_id: branch.branch_id,
+    created_by: user.user_id,
+    agentic_tool: 'codex',
+  });
+  const task = await new TaskRepository(db).create({
+    session_id: session.session_id,
+    created_by: user.user_id,
+    status: 'queued',
+  });
+  await expect(service.retireTeammate(branch.branch_id, { user, tenant })).rejects.toThrow(
+    'unfinished tasks'
+  );
+  expect(await prefs.getBranchId(collaborator.user_id)).toBe(branch.branch_id);
+  expect((await branches.findById(branch.branch_id))?.archived).toBe(false);
+  await new TaskRepository(db).update(task.task_id, { status: 'stopped' });
+  await service.retireTeammate(branch.branch_id, { user, tenant });
+  expect(await prefs.getBranchId(collaborator.user_id)).toBeNull();
+  expect(await branches.findById(branch.branch_id)).toMatchObject({
+    archived: true,
+    path: branch.path,
+    filesystem_status: 'ready',
+  });
+  expect(spawnExecutor).not.toHaveBeenCalled();
+  expect(requestExecutor).not.toHaveBeenCalled();
+  await expect(
+    prefs.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' })
+  ).rejects.toThrow(/active/);
+});

@@ -35,15 +35,9 @@ turn never automatically collapses text you were already reading. Your explicit
 **show more / show less** choices last while that conversation is mounted, including
 reconnects and tool-detail loading. Reopening it applies the history defaults again.
 
-Messages over 1,200 source characters **or** 15 source lines are eligible for
-collapse. The preview stops at 10 source lines or roughly 600 characters, whichever
-comes first. The character boundary prefers a newline within the next 100
-characters, then whitespace in that window; otherwise it cuts at the target.
-These are literal source newlines, not estimates of wrapped lines or screen height.
-Streamdown handles incomplete Markdown in the preview. Partial
-code/table export controls are hidden until expansion; the message copy action
-still copies the full source. All fetched text remains available for expansion and
-copying; this is a display preference, not a payload reduction.
+Collapsed messages show a shortened preview. Expand the message to use code or
+table export controls. The message copy action still copies the full source;
+collapsing is a display preference, not a reduction in saved content.
 
 ---
 
@@ -134,8 +128,8 @@ These limits change only saved history/UI projections, not tool execution or
 model inputs. They do not promise retrieval from provider-local history. Pagination
 and filtering can reduce large tool outputs, but cannot fix generated enrichment
 or every legitimate large payload. Full-payload upload, storage, retrieval,
-permissions, retention, and cleanup require a separate future design; no payload
-archive or retrieval mechanism is provided by this fallback. The final transport
+permissions, retention, and cleanup are not provided by this fallback; it has no
+payload archive or retrieval mechanism. The final transport
 guard and finite acknowledgement timeout remain in effect.
 
 If omitted fields are needed to reconstruct the sticky task list, Agor shows
@@ -145,10 +139,7 @@ than displaying an empty or apparently current list.
 ### Large session lists
 
 Branch cards and the branch teammate panel keep manual and gateway genealogy
-trees in a virtual, scrollable viewport. Board cards keep a 400-pixel maximum;
-the teammate panel sizes trees to its available height and resizes with its
-container. Expanded manual and gateway trees share the remaining space; short
-trees release unused space to overflowing siblings. On board cards,
+trees in a bounded, scrollable viewport. On board cards,
 two-finger scrolling over a session tree pans the canvas, and pinching zooms it;
 drag the tree's scrollbar to reach older sessions. In the branch teammate panel,
 scroll inside the tree normally. Collapsing a parent still hides its descendants.

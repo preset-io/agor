@@ -37,6 +37,7 @@ import {
   MCP_TOKEN_ISSUER,
   shutdownMcpTokens,
   validateSessionToken,
+  verifySessionTokenDetailed,
 } from './tokens.js';
 
 // ---------------------------------------------------------------------------
@@ -443,6 +444,73 @@ describe('validateSessionToken', () => {
         sessionId,
         tenantId: 'tenant-a',
       });
+    }
+  );
+});
+
+describe('verification diagnostics', () => {
+  dbTest(
+    'returns safe categories without logging credentials or library error values',
+    async ({ db }) => {
+      initTestMcpTokens(db);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const now = Math.floor(Date.now() / 1000);
+        const claims = {
+          sub: 'session',
+          uid: 'user',
+          tid: 'tenant-a',
+          jti: 'synthetic-jti',
+          aud: MCP_TOKEN_AUDIENCE,
+          iss: MCP_TOKEN_ISSUER,
+          exp: now + 60,
+        };
+        const signed = (overrides: Record<string, unknown> = {}, secret = JWT_SECRET) =>
+          jwt.sign(
+            Object.fromEntries(
+              Object.entries({ ...claims, ...overrides }).filter(([, value]) => value !== undefined)
+            ),
+            secret,
+            { algorithm: 'HS256' }
+          );
+        const cases = [
+          ['synthetic-opaque-secret', 'wrong_segment_count'],
+          ['invalid.encoding.signature', 'invalid_encoding'],
+          [
+            `${Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url')}.${Buffer.from('not-json').toString('base64url')}.dummy`,
+            'invalid_encoding',
+          ],
+          [signed({}, 'other-secret'), 'invalid_signature'],
+          [signed({ aud: 'private-audience' }), 'invalid_audience'],
+          [signed({ iss: 'private-issuer' }), 'invalid_issuer'],
+          [signed({ exp: now - 60 }), 'expired'],
+          [signed({ nbf: now + 60 }), 'not_active'],
+          [signed({ tid: undefined }), 'missing_identity'],
+          [signed({ exp: undefined }), 'missing_lifetime'],
+        ] as const;
+        for (const [token, reason] of cases) {
+          expect(verifySessionTokenDetailed(makeApp(), token)).toEqual({ context: null, reason });
+        }
+        expect(verifySessionTokenDetailed(makeApp(), signed()).context?.tenantId).toBe('tenant-a');
+        expect(
+          verifySessionTokenDetailed(
+            { settings: {} } as Parameters<typeof verifySessionTokenDetailed>[0],
+            signed()
+          )
+        ).toEqual({ context: null, reason: 'secret_missing' });
+        vi.spyOn(jwt, 'verify').mockImplementation(() => {
+          throw new Error('private-error-content');
+        });
+        expect(verifySessionTokenDetailed(makeApp(), 'synthetic-secret')).toEqual({
+          context: null,
+          reason: 'verify_error',
+        });
+        expect(warn).not.toHaveBeenCalled();
+        expect(error).not.toHaveBeenCalled();
+      } finally {
+        vi.restoreAllMocks();
+      }
     }
   );
 });

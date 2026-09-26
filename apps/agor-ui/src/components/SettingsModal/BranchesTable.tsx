@@ -463,24 +463,11 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                     record.branch_id,
                     record.board_id ? { boardId: record.board_id } : undefined
                   )
-                )
-                  .then(() => {
-                    setArchivedBranches((prev) =>
-                      prev.map((branch) =>
-                        branch.branch_id === record.branch_id
-                          ? {
-                              ...branch,
-                              archived: false,
-                              archived_at: undefined,
-                              archived_by: undefined,
-                            }
-                          : branch
-                      )
-                    );
-                  })
-                  .catch(() => {
-                    // Error surfaced by parent handler (toast); keep local state unchanged
-                  });
+                ).catch(() => {
+                  // Error surfaced by parent handler (toast); keep local state unchanged
+                });
+                // Only authoritative branch events update this cache. An ack
+                // means accepted, not ready; a lost ack may arrive after unmount.
                 return;
               }
               setSelectedBranch(record);

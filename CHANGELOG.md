@@ -33,6 +33,29 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.7 (2026-09-25)
+
+Release preparation covers merged changes from `v0.26.6` (`d5ef6a03`) through `4d7c3320`: [compare changes](https://github.com/preset-io/agor/compare/v0.26.6...4d7c3320fc5bb6b3927de7191322c6a16b74edd3). This entry does not imply publication or deployment.
+
+### Features
+
+- **CLI sign-in for hosted workspaces** — adds browser-assisted sign-in with an explicitly created, pasted CLI key, plus `agor login --api-key` for existing personal keys. CLI-created keys are managed per machine and normally revoked on logout; hosted use requires trusted workspace-host routing and an edge that forwards CLI REST requests to the daemon. ([#2847](https://github.com/preset-io/agor/pull/2847))
+- **Git changes in the Files tab** — shows staged and working-tree status separately, with status colors, badges, and File/Changes previews, including deleted files. Large diff previews are bounded rather than freezing the browser. ([#2621](https://github.com/preset-io/agor/pull/2621))
+- **Manage pending work without interrupting active tasks** — authorized agents can atomically cancel selected queued tasks or reorder a complete queue snapshot; stale queues are rejected. A conditional Stop workflow guards against stopping a different task after the observed task changes. ([#2800](https://github.com/preset-io/agor/pull/2800))
+- **Connect MCP accounts from the conversation** — agents can request a browser OAuth Connect card, including delivery into supported Slack threads. Credentials remain with the prompting user, and session attachment follows verified sign-in and attachment permissions, not merely a button click. ([#2774](https://github.com/preset-io/agor/pull/2774))
+- **More attachment options** — session uploads accept any file type within existing size/count limits, while only raster images and PDFs are eligible for inline viewing and other types download instead. Discord gateway messages gain image attachments; gateway ingestion retains its own narrower file policy. ([#2844](https://github.com/preset-io/agor/pull/2844), [#2773](https://github.com/preset-io/agor/pull/2773))
+- **Clearer session lists** — unifies rows across panels, board cards, and the Sessions tab, with roomier spacing, clearer failure and selection states, faster tree toggles, and title tooltips only for truncated titles. ([#2820](https://github.com/preset-io/agor/pull/2820), [#2837](https://github.com/preset-io/agor/pull/2837), [#2848](https://github.com/preset-io/agor/pull/2848), [#2855](https://github.com/preset-io/agor/pull/2855))
+
+### Fixes
+
+- **Conversation content stays intact** — preserves Claude thinking content before persistence and keeps confirmed prompt bubbles stable as messages arrive. ([#2833](https://github.com/preset-io/agor/pull/2833), [#2858](https://github.com/preset-io/agor/pull/2858))
+- **Concurrent Codex launches preserve authentication mounts** — keeps branch credential mountpoints stable across concurrent sandbox launches. ([#2851](https://github.com/preset-io/agor/pull/2851))
+- **Uploads recover from stale access tokens** — refreshes authentication after an upload 401 and retries rather than leaving a stale-token failure. ([#2838](https://github.com/preset-io/agor/pull/2838))
+- **Board imports tolerate unavailable objects** — imports boards containing artifact or app objects, retaining only artifact references accessible in the importing workspace; malformed or unavailable objects are skipped with a summary rather than failing the whole import. ([#2845](https://github.com/preset-io/agor/pull/2845))
+- **Knowledge lists respect pagination** — applies read permissions, sorting, limits, offsets, and totals in SQL instead of loading the full document corpus. API consumers should follow the returned pages rather than assume one request returns every document. ([#2843](https://github.com/preset-io/agor/pull/2843))
+- **Gateway activity and delegated cleanup recover** — restores Slack channel activity status and permits contained branch deletion in delegated execution mode without relaxing path containment. ([#2850](https://github.com/preset-io/agor/pull/2850), [#2841](https://github.com/preset-io/agor/pull/2841))
+- **More useful failure diagnostics** — distinguishes executor interruption causes, records safe credential-write failures, and adds bounded MCP authentication-rejection logs with safe client hints. Caller-supplied Stop reasons stay out of operational logs. ([#2835](https://github.com/preset-io/agor/pull/2835), [#2840](https://github.com/preset-io/agor/pull/2840), [#2857](https://github.com/preset-io/agor/pull/2857))
+
 ## 0.26.6 (2026-09-23)
 
 Release preparation includes merged changes from `v0.26.5` through `0c9ad63a`, plus the Claude and Codex runtime updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.5...0c9ad63adfaae859f65993f66d05939b137c9bcd).

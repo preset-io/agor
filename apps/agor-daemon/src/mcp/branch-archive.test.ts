@@ -247,9 +247,9 @@ dbTest(
         for (const filesystem_status of ['failed', 'ready'] as const) {
           // Each terminal acknowledgement must belong to its own active attempt.
           const attemptId = generateId();
-          expect(
-            (await branches.claimFailedForProvisioningRetry(branch.branch_id, attemptId)).claimed
-          ).toBe(true);
+          expect((await branches.claimForProvisioning(branch.branch_id, attemptId)).claimed).toBe(
+            true
+          );
           await expect(
             fixture.service.patch(
               branch.branch_id,

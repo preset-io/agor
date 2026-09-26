@@ -2,6 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { getRouterBasename, responsiveRoutePath, uiRouteHref } from './uiRoutes';
 
 describe('uiRoutes', () => {
+  it('supports a reverse-proxied Vite preview mounted at /ui', () => {
+    expect(getRouterBasename('/ui/', '/ui/login')).toBe('/ui');
+    expect(uiRouteHref('/login', '/ui/')).toBe('/ui/login');
+  });
+
   it('uses the /ui basename when the UI is mounted under /ui', () => {
     expect(getRouterBasename('/ui/')).toBe('/ui');
     expect(uiRouteHref('/a/artifact/fullscreen', '/ui/')).toBe('/ui/a/artifact/fullscreen');

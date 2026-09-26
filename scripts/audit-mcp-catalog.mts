@@ -10,6 +10,7 @@ const catalogSource = await readFile(
   new URL('../packages/core/src/mcp-catalog/curated.yaml', import.meta.url),
   'utf8'
 );
+// Validate every definition before live auditing applies catalog visibility.
 const results = await auditCatalogHealth(parseCuratedCatalog(catalogSource));
 
 const actionable = results.filter(({ status }) =>
@@ -18,6 +19,7 @@ const actionable = results.filter(({ status }) =>
 const advisory = results.filter(({ status }) => ['unreachable', 'indeterminate'].includes(status));
 const credentialRequired = results.filter(({ status }) => status === 'credential-required');
 const ready = results.filter(({ status }) => status === 'ready');
+const skipped = results.filter(({ status }) => status === 'skipped-hidden');
 
 function resultLine(result: CatalogHealthResult): string {
   return (
@@ -58,7 +60,7 @@ const noteworthy = results.filter(({ status }) => status !== 'ready');
 const summary = [
   '## MCP catalog health audit',
   '',
-  `Checked ${results.length} entries: ${ready.length} fully ready, ${credentialRequired.length} credential-required (public challenge only), ${advisory.length} advisory, ${actionable.length} actionable.`,
+  `Validated ${results.length} entries; live-checked ${results.length - skipped.length}, skipped ${skipped.length} hidden: ${ready.length} fully ready, ${credentialRequired.length} credential-required (public challenge only), ${advisory.length} advisory, ${actionable.length} actionable.`,
   '',
   '| Entry | Status | Expected | Observed | Reason | Error |',
   '| --- | --- | --- | --- | --- | --- |',
@@ -67,7 +69,7 @@ const summary = [
       `| \`${item.name}\` | ${item.status} | ${item.expectedAuth} | ${item.observedAuth} | ${tableCell(item.reason)} | ${tableCell(item.error)} |`
   ),
   '',
-  '> Reachability/indeterminate results are advisory. Authentication contradictions, unusable OAuth contracts, and a newly usable OAuth route for a bearer exception are actionable and fail this audit.',
+  '> Hidden entries retain full static validation but skip live reachability and OAuth discovery. For visible entries, reachability/indeterminate results are advisory. Authentication contradictions, unusable OAuth contracts, and a newly usable OAuth route for a bearer exception are actionable and fail this audit.',
 ].join('\n');
 
 const summaryFlag = process.argv.indexOf('--summary-file');
@@ -77,6 +79,6 @@ if (summaryFile) await appendFile(summaryFile, `${summary}\n`);
 console.log(
   `[mcp-catalog/audit] complete total=${results.length} ready=${ready.length}` +
     ` credential_required=${credentialRequired.length} advisory=${advisory.length}` +
-    ` actionable=${actionable.length}`
+    ` actionable=${actionable.length} skipped_hidden=${skipped.length}`
 );
 if (actionable.length > 0) process.exitCode = 1;

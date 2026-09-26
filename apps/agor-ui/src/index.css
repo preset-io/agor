@@ -200,7 +200,8 @@
 
 /* Plain level guides under each parent's chevron (no elbow connectors).
    Unlike Tree's show-line mode, every level draws its guide, including under
-   a last sibling, so a whole subtree reads as one group. */
+   a last sibling, so a whole subtree reads as one group. Rows are separated by
+   node padding (set with --agor-session-row-gap), so each guide reaches across it. */
 .agor-flat-tree.agor-session-tree .ant-tree-indent-unit {
   position: relative;
   height: 100%;
@@ -208,7 +209,7 @@
 .agor-flat-tree.agor-session-tree .ant-tree-indent-unit::before {
   position: absolute;
   top: 0;
-  bottom: 0;
+  bottom: calc(-1 * var(--agor-session-row-gap, 0px));
   inset-inline-end: 50%;
   border-inline-end: var(--ant-line-width) var(--ant-line-type) var(--ant-color-border-secondary);
   content: "";

@@ -12,11 +12,13 @@ import {
   MinusCircleOutlined,
   PlayCircleOutlined,
   PoweroffOutlined,
+  QuestionCircleOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
-import { Badge, Button, Space, Tooltip } from 'antd';
+import { Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
+import { getEnvironmentHealthUrl } from '../../utils/environmentHealthUrl';
 
 /** Render environment status icon for a branch */
 export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
@@ -67,8 +69,8 @@ export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
       );
     }
     return (
-      <Tooltip title="Running">
-        <Badge status="processing" />
+      <Tooltip title="Started; health unavailable">
+        <QuestionCircleOutlined style={{ color: token.colorInfo }} />
       </Tooltip>
     );
   }
@@ -94,11 +96,10 @@ export function renderEnvCell(
   const isRunningOrHealthy =
     status === 'running' || status === 'starting' || healthStatus === 'healthy';
 
-  // The "open health URL" button uses the branch's own `health_check_url`
-  // (rendered at branch creation, then user-editable via the branch
-  // modal) rather than re-rendering the repo template at click time. This
-  // honours user edits and avoids a daemon round-trip.
-  const healthUrl = branch.health_check_url;
+  // Prefer the current runtime's provider-reported health URL, falling back
+  // to the branch's static health URL. Treat either as an untrusted external
+  // destination when opening it.
+  const healthUrl = getEnvironmentHealthUrl(branch);
 
   return (
     <Space size={4}>
@@ -133,7 +134,7 @@ export function renderEnvCell(
               icon={<GlobalOutlined />}
               onClick={(e) => {
                 e.stopPropagation();
-                window.open(healthUrl, '_blank');
+                window.open(healthUrl, '_blank', 'noopener,noreferrer');
               }}
               style={{ padding: '0 4px' }}
             />
