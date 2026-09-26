@@ -32,6 +32,7 @@ import {
   type BranchWithZoneAndSessions,
   BranchWorkspaceOperationRepository,
   CapabilityPolicyRepository,
+  createTenantScopedDatabaseProxy,
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
@@ -137,7 +138,7 @@ import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sand
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
-import type { InternalEnrichmentParams, SessionsService } from './sessions';
+import { type InternalEnrichmentParams, SessionsService } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 import {
   lockTenantAuthorizationFence,
@@ -1932,19 +1933,32 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       const reason = getBranchCleanupBlockReason(policy, branch.cleanup_protected ?? false);
       if (reason) throw new Conflict(reason);
     }
+    // Custom branch routes already authenticated the caller. Do not strip that
+    // authority when the cascade reaches sessions on other branches.
+    const archiveParams = { ...params, provider: params?.provider ?? 'rest' };
+    if (action === 'archive') {
+      await this.withTenantDatabase(params, () =>
+        new SessionsService(this.db, this.app).prepareBranchArchive(id, archiveParams)
+      );
+    }
     const admission = retireTeammate
       ? await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
           // Retirement clears User preferences under reference/Branch locks.
           // Enter the same authority fence as board designation BEFORE any of
           // those locks, so its human-actor lock cannot form the reverse edge.
-          // Only this metadata admission belongs in the transaction, not the
-          // subsequent session archival or external workspace work.
+          // The session cascade joins retirement so failed authorization also
+          // rolls back preferences and branch archival. Filesystem work stays out.
           await lockTenantAuthorizationFence(db, params);
-          return new BranchMaintenanceRepository(db).claimForTeammateRetirement(
+          const retirement = await new BranchMaintenanceRepository(db).claimForTeammateRetirement(
             id,
             user.user_id as UserID,
             validate
           );
+          await new SessionsService(
+            createTenantScopedDatabaseProxy(db),
+            this.app
+          ).archiveBranchSessions(id, archiveParams);
+          return retirement;
         })
       : await this.withTenantDatabase(params, () =>
           new BranchMaintenanceRepository(this.db).claim(
@@ -2004,14 +2018,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         )
           throw new Conflict('Branch workspace is unavailable; nothing was cleaned');
       }
-      if (action === 'archive') {
-        await this.withTenantDatabase(params, () =>
-          new BranchWorkspaceOperationRepository(this.db).archiveMetadata(admission.claim)
-        );
-        const sessionsService = this.app.service('sessions') as unknown as SessionsService;
-        await this.withTenantDatabase(params, () =>
-          sessionsService.archiveBranchSessions(id, { ...params, provider: undefined })
-        );
+      if (action === 'archive' && !retireTeammate) {
+        await runWithTenantDatabaseTransaction(this.db, tenantId, async (db) => {
+          // Recheck against the current tree before either archive write. The
+          // transaction also defers session events until both owners commit.
+          await new SessionsService(
+            createTenantScopedDatabaseProxy(db),
+            this.app
+          ).archiveBranchSessions(id, archiveParams);
+          await new BranchWorkspaceOperationRepository(db).archiveMetadata(admission.claim);
+        });
       }
       if (!needsFiles) {
         await this.withTenantDatabase(params, () =>

@@ -11,14 +11,15 @@ import {
   RepoRepository,
   releaseTenantWriteGate,
   runWithTenantDatabaseScope,
+  SessionRelationshipRepository,
   SessionRepository,
   sql,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { SessionID, TenantID } from '@agor/core/types';
+import type { SessionID, TenantID, UserID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionsService } from './sessions.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -88,7 +89,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       );
       expect(role).toMatchObject({ rolsuper: false, rolbypassrls: false });
-    }, 60_000);
+    }, 120_000);
 
     afterAll(async () => {
       await (rawDb as Database & { $client: { end: () => Promise<void> } }).$client.end();
@@ -104,7 +105,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const treeA = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
         createTree(scoped, 'tenant-a')
       );
-      await runWithTenantDatabaseScope(db, tenantB, (scoped) => createTree(scoped, 'tenant-b'));
+      const remoteA = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+        createTree(scoped, 'tenant-a-remote')
+      );
+      const treeB = await runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+        createTree(scoped, 'tenant-b')
+      );
+      const link = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+        new SessionRelationshipRepository(scoped).create({
+          source_session_id: treeA.root.session_id,
+          target_session_id: remoteA.root.session_id,
+          relationship_type: 'remote_create',
+          created_by: treeA.root.created_by as UserID,
+        })
+      );
       const events: SessionID[] = [];
       const app = {
         get: () => ({ execution: { branch_rbac: false } }),
@@ -114,13 +128,40 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       } as unknown as Application;
       const service = new SessionsService(db, app);
 
+      // A foreign target must still be refused if a corrupt/stale edge reaches
+      // the collector. The session lookup below uses real PostgreSQL RLS.
+      const forgedEdge = vi
+        .spyOn(SessionRelationshipRepository.prototype, 'findForSessions')
+        .mockResolvedValue([{ ...link, target_session_id: treeB.root.session_id }]);
+      try {
+        await expect(
+          runWithTenantDatabaseScope(db, tenantA, () => service.archive(treeA.root.session_id))
+        ).rejects.toThrow('Cannot archive the complete session tree');
+        expect(events).toEqual([]);
+        expect(
+          await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+            new SessionRepository(scoped).findById(treeA.root.session_id)
+          )
+        ).toMatchObject({ archived: false });
+      } finally {
+        forgedEdge.mockRestore();
+      }
+
       const result = await runWithTenantDatabaseScope(db, tenantA, () =>
         service.archive(treeA.root.session_id, undefined, {
           tenant: { tenant_id: tenantA, source: 'explicit' },
         })
       );
-      expect(result.count).toBe(2);
-      expect(events).toEqual([treeA.root.session_id, treeA.child.session_id]);
+      expect(result.count).toBe(4);
+      expect(new Set(events)).toEqual(
+        new Set([
+          treeA.root.session_id,
+          treeA.child.session_id,
+          remoteA.root.session_id,
+          remoteA.child.session_id,
+        ])
+      );
+      expect(events).toHaveLength(4);
 
       await expect(
         runWithTenantDatabaseScope(db, tenantB, () =>
@@ -133,9 +174,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantAState = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
         new SessionRepository(scoped).findAll()
       );
-      expect(tenantAState).toHaveLength(2);
+      expect(tenantAState).toHaveLength(4);
       expect(tenantAState.every((session) => session.archived)).toBe(true);
 
+      const tenantBState = await runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+        new SessionRepository(scoped).findAll()
+      );
+      expect(tenantBState).toHaveLength(2);
+      expect(tenantBState.every((session) => !session.archived)).toBe(true);
       await expect(service.archive(treeA.root.session_id)).rejects.toThrow(/tenant.*scope/i);
     }, 30_000);
 

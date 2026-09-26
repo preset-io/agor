@@ -1,6 +1,12 @@
 import type { Board, Session } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { buildById, buildSessionMaps, reconcileByIdMap } from './agorMaps';
+import {
+  applySessionPatchToMaps,
+  buildById,
+  buildSessionMaps,
+  EMPTY_MAPS,
+  reconcileByIdMap,
+} from './agorMaps';
 
 // These guard the "reference-stable rebuild" contract: a wholesale rebuild of
 // already-loaded data (the background "load whole store" hydration, reconnect
@@ -117,5 +123,17 @@ describe('buildSessionMaps reference stability', () => {
     expect(surrogate?.genealogy?.parent_session_id).toBe('source');
     expect(surrogate?.remote_surrogate?.source_session_id).toBe('source');
     expect(surrogate?.remote_surrogate?.target_branch_id).toBe('B');
+    // Archive events can arrive parent-first; the target patch must remove
+    // both its canonical row and the surrogate, without a board reload.
+    const parentArchived = applySessionPatchToMaps(
+      { ...EMPTY_MAPS, ...rebuilt },
+      { ...source, archived: true }
+    );
+    const childArchived = applySessionPatchToMaps(parentArchived, { ...target, archived: true });
+    expect(childArchived.sessionById.size).toBe(0);
+    expect([...childArchived.sessionsByBranch.values()].flat()).toEqual([]);
+    expect(applySessionPatchToMaps(childArchived, { ...target, archived: true })).toEqual(
+      childArchived
+    );
   });
 });

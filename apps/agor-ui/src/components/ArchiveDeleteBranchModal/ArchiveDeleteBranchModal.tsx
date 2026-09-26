@@ -208,9 +208,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                 <Text>
                   Any active teammate may be someone else's private primary. This dialog uses
                   explicit retirement for all active teammates because those preferences are not
-                  visible to you. Retirement archives this teammate and its sessions, preserves all
-                  files, and clears everyone's personal primary preference for it. It does not
-                  choose a replacement.
+                  visible to you. Retirement archives this teammate, its sessions and their
+                  descendants across branches, preserves all files, and clears everyone's personal
+                  primary preference for it. It does not choose a replacement.
                 </Text>
                 {eligibility.boardUnavailable && (
                   <Text>
@@ -292,6 +292,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         )}
         {metadataAction === 'delete' && actionReason && (
           <Alert type="warning" showIcon title={actionReason} />
+        )}
+        {metadataAction === 'archive' && (
+          <Text type="secondary">
+            Session descendants on other branches are included. You need archive permission on every
+            affected branch. Running tasks on other branches are hidden, not stopped.
+          </Text>
         )}
         {/* Environment Warning */}
         {environmentRunning && (
@@ -482,7 +488,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         <p>
           {confirmPrimary === 'clear'
             ? 'The board will have no primary until you assign a replacement. The teammate stays active.'
-            : 'Archives this teammate and its sessions and clears all personal primary preferences. All files stay intact. No replacement is selected.'}
+            : 'Archives this teammate, its sessions and their descendants across branches, and clears all personal primary preferences. All files stay intact. No replacement is selected.'}
         </p>
         {primaryError && (
           <div role="alert" aria-label="Teammate action failed">

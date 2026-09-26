@@ -5,6 +5,7 @@ import {
   RepoRepository,
   SessionRelationshipRepository,
   SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -123,7 +124,10 @@ describe('SessionsService archive routes', () => {
   dbTest(
     'archives and unarchives branch-local spawned, forked, and nested descendants',
     async ({ db }) => {
-      const service = new SessionsService(db, STUB_APP);
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        STUB_APP
+      );
       const branchId = await createBranch(db);
       const parent = await createSession(db, branchId);
       const spawnedChild = await createSession(db, branchId, {
@@ -179,7 +183,10 @@ describe('SessionsService archive routes', () => {
   );
 
   dbTest('preserves descendants that were already archived for other reasons', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const branchId = await createBranch(db);
     const parent = await createSession(db, branchId);
     const activeChild = await createSession(db, branchId, {
@@ -239,7 +246,10 @@ describe('SessionsService archive routes', () => {
   });
 
   dbTest('preserves archive coverage through a prompted intermediate session', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const branchId = await createBranch(db);
     const root = await createSession(db, branchId);
     const independent = await createSession(db, branchId, {
@@ -284,7 +294,10 @@ describe('SessionsService archive routes', () => {
   });
 
   dbTest('honors includeChildren false and rejects generic archive patches', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const branchId = await createBranch(db);
     const parent = await createSession(db, branchId);
     const child = await createSession(db, branchId, {
@@ -309,8 +322,11 @@ describe('SessionsService archive routes', () => {
     });
   });
 
-  dbTest('does not cascade through remote session relationships', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+  dbTest('archives remote children by default without broadening unarchive', async ({ db }) => {
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const sourceBranchId = await createBranch(db, 'source');
     const targetBranchId = await createBranch(db, 'target');
     const parent = await createSession(db, sourceBranchId);
@@ -325,21 +341,255 @@ describe('SessionsService archive routes', () => {
 
     const archiveResult = await service.archive(parent.session_id);
 
-    expect(archiveResult.count).toBe(1);
+    expect(archiveResult.count).toBe(2);
     await expect(getArchivedState(db, parent.session_id)).resolves.toMatchObject({
       archived: true,
     });
     await expect(getArchivedState(db, remoteChild.session_id)).resolves.toMatchObject({
-      archived: false,
+      archived: true,
+      archived_reason: 'parent_archived',
+    });
+    expect((await service.unarchive(parent.session_id)).count).toBe(1);
+    await expect(getArchivedState(db, remoteChild.session_id)).resolves.toMatchObject({
+      archived: true,
     });
   });
 
   dbTest(
-    'archives a spawn/fork tree built by the real child APIs and restores it symmetrically',
+    'walks mixed archived intermediates, cycles and diamonds once without stopping tasks',
+    async ({ db }) => {
+      const emit = vi.fn();
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        {
+          service: () => ({ emit }),
+        } as unknown as Application
+      );
+      const a = await createBranch(db, 'mixed-a');
+      const b = await createBranch(db, 'mixed-b');
+      const c = await createBranch(db, 'mixed-c');
+      const root = await createSession(db, a, { archived: true, archived_reason: 'manual' });
+      const remote = await createSession(db, b, { archived: true, archived_reason: 'manual' });
+      const child = await createSession(db, b, {
+        status: SessionStatus.RUNNING,
+        genealogy: { parent_session_id: remote.session_id, children: [] },
+      });
+      const leaf = await createSession(db, c, { status: SessionStatus.IDLE });
+      const tasks = new TaskRepository(db);
+      const running = await tasks.create({
+        session_id: child.session_id,
+        created_by: TEST_USER_ID,
+        status: 'running',
+      });
+      const queued = await tasks.create({
+        session_id: leaf.session_id,
+        created_by: TEST_USER_ID,
+        status: 'queued',
+      });
+      const unrelated = await createSession(db, c);
+      const incoming = await createSession(db, a);
+      const links = new SessionRelationshipRepository(db);
+      for (const [source, target] of [
+        [root, remote],
+        [child, leaf],
+        [root, leaf],
+        [leaf, root],
+        [incoming, root],
+      ]) {
+        await links.create({
+          source_session_id: source!.session_id,
+          target_session_id: target!.session_id,
+          relationship_type: 'remote_create',
+          created_by: TEST_USER_ID,
+          callback_enabled: true,
+          callback_session_id: unrelated.session_id,
+        });
+      }
+      const result = await service.archive(
+        root.session_id,
+        undefined,
+        externalParams(TEST_USER_ID)
+      );
+      expect(new Set(result.affectedSessions.map((session) => session.session_id))).toEqual(
+        new Set([child.session_id, leaf.session_id])
+      );
+      expect(result.count).toBe(2);
+      expect(emit).toHaveBeenCalledTimes(2);
+      expect(await tasks.findById(running.task_id)).toMatchObject({ status: 'running' });
+      expect(await tasks.findById(queued.task_id)).toMatchObject({ status: 'queued' });
+      expect(await new SessionRepository(db).findById(child.session_id)).toMatchObject({
+        archived: true,
+        status: SessionStatus.RUNNING,
+      });
+      expect(await new SessionRepository(db).findById(leaf.session_id)).toMatchObject({
+        archived: true,
+        status: SessionStatus.IDLE,
+      });
+      expect(await getArchivedState(db, remote.session_id)).toEqual({
+        archived: true,
+        archived_reason: 'manual',
+      });
+      expect(await getArchivedState(db, incoming.session_id)).toMatchObject({ archived: false });
+      expect(await getArchivedState(db, unrelated.session_id)).toMatchObject({ archived: false });
+      expect((await service.archive(root.session_id)).count).toBe(0);
+      expect(emit).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  dbTest('denies the whole tree through an inaccessible no-op intermediary', async ({ db }) => {
+    const emit = vi.fn();
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      {
+        service: () => ({ emit }),
+      } as unknown as Application
+    );
+    const source = await createBranch(db, 'allowed');
+    const hidden = await createBranch(db, 'hidden', {
+      created_by: OTHER_USER_ID,
+      primary_owner_user_id: OTHER_USER_ID,
+    });
+    const root = await createSession(db, source);
+    const middle = await createSession(db, hidden, {
+      created_by: OTHER_USER_ID,
+      archived: true,
+      archived_reason: 'manual',
+    });
+    const leaf = await createSession(db, source);
+    const links = new SessionRelationshipRepository(db);
+    for (const [parent, child] of [
+      [root, middle],
+      [middle, leaf],
+    ]) {
+      await links.create({
+        source_session_id: parent!.session_id,
+        target_session_id: child!.session_id,
+        relationship_type: 'remote_create',
+        created_by: TEST_USER_ID,
+      });
+    }
+    await expect(
+      service.archive(root.session_id, undefined, externalParams(TEST_USER_ID))
+    ).rejects.toThrow(/prompt/);
+    expect(await getArchivedState(db, root.session_id)).toMatchObject({ archived: false });
+    expect(await getArchivedState(db, leaf.session_id)).toMatchObject({ archived: false });
+    expect(emit).not.toHaveBeenCalled();
+    expect(
+      (
+        await service.archive(
+          root.session_id,
+          { includeChildren: false },
+          externalParams(TEST_USER_ID)
+        )
+      ).count
+    ).toBe(1);
+    expect(await getArchivedState(db, leaf.session_id)).toMatchObject({ archived: false });
+  });
+
+  dbTest('fails closed for a missing remote target before writes', async ({ db }) => {
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
+    const branch = await createBranch(db);
+    const root = await createSession(db, branch);
+    const missing = generateId() as SessionID;
+    const spy = vi
+      .spyOn(SessionRelationshipRepository.prototype, 'findForSessions')
+      .mockResolvedValue([
+        {
+          relationship_id: generateId(),
+          source_session_id: root.session_id,
+          target_session_id: missing,
+          relationship_type: 'remote_create',
+          created_by: TEST_USER_ID,
+          created_at: new Date().toISOString(),
+          updated_at: null,
+          callback_enabled: false,
+          callback_session_id: null,
+          data: null,
+        },
+      ]);
+    try {
+      await expect(service.archive(root.session_id)).rejects.toThrow(
+        'Cannot archive the complete session tree'
+      );
+      expect(await getArchivedState(db, root.session_id)).toMatchObject({ archived: false });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  dbTest(
+    'branch archive includes remote descendants of already archived home sessions',
+    async ({ db }) => {
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        STUB_APP
+      );
+      const home = await createBranch(db, 'branch-home');
+      const away = await createBranch(db, 'branch-away');
+      const root = await createSession(db, home, { archived: true, archived_reason: 'manual' });
+      const active = await createSession(db, home);
+      const remote = await createSession(db, away);
+      await new SessionRelationshipRepository(db).create({
+        source_session_id: root.session_id,
+        target_session_id: remote.session_id,
+        relationship_type: 'remote_create',
+        created_by: TEST_USER_ID,
+      });
+      expect((await service.archiveBranchSessions(home, externalParams(TEST_USER_ID))).count).toBe(
+        2
+      );
+      expect(await getArchivedState(db, root.session_id)).toEqual({
+        archived: true,
+        archived_reason: 'manual',
+      });
+      expect(await getArchivedState(db, active.session_id)).toEqual({
+        archived: true,
+        archived_reason: 'branch_archived',
+      });
+      expect(await getArchivedState(db, remote.session_id)).toEqual({
+        archived: true,
+        archived_reason: 'parent_archived',
+      });
+      expect((await service.unarchiveBranchSessions(home)).count).toBe(1);
+      expect(await getArchivedState(db, remote.session_id)).toMatchObject({ archived: true });
+    }
+  );
+
+  dbTest('automatic BTW and filtered bulk archive remain local', async ({ db }) => {
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
+    const home = await createBranch(db, 'automatic-home');
+    const away = await createBranch(db, 'automatic-away');
+    const root = await createSession(db, home, { fork_origin: 'btw' });
+    const remote = await createSession(db, away);
+    await new SessionRelationshipRepository(db).create({
+      source_session_id: root.session_id,
+      target_session_id: remote.session_id,
+      relationship_type: 'remote_create',
+      created_by: TEST_USER_ID,
+    });
+    expect((await service.archiveBtwSession(root.session_id)).count).toBe(1);
+    await service.unarchive(root.session_id);
+    expect(
+      (await service.archiveRootsInBranch(home, [root.session_id], { includeChildren: true })).count
+    ).toBe(1);
+    expect(await getArchivedState(db, remote.session_id)).toMatchObject({ archived: false });
+  });
+
+  dbTest(
+    'archives a real spawn/fork tree across branches and restores only local descendants',
     async ({ db }) => {
       const emit = vi.fn();
       const app = { service: () => ({ emit }) } as unknown as Application;
-      const service = new SessionsService(db, app);
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        app
+      );
       // Child config materialization resolves the owner by UUID.
       const ownerId = generateId() as UUID;
       const branchId = await createBranch(db, 'tree', { created_by: ownerId });
@@ -363,23 +613,20 @@ describe('SessionsService archive routes', () => {
       // Same call shape as POST /sessions/:id/archive from the UI (body `{}`).
       const archived = await service.archive(root.session_id, {});
 
-      expect(archived.count).toBe(4);
+      expect(archived.count).toBe(5);
       expect(archived.affectedSessions.map((session) => session.session_id).sort()).toEqual(
-        tree.map((session) => session.session_id).sort()
+        [...tree, remoteChild].map((session) => session.session_id).sort()
       );
       await expect(getArchivedState(db, root.session_id)).resolves.toEqual({
         archived: true,
         archived_reason: 'manual',
       });
-      for (const descendant of [child, grandchild, greatGrandchild]) {
+      for (const descendant of [child, grandchild, greatGrandchild, remoteChild]) {
         await expect(getArchivedState(db, descendant.session_id)).resolves.toEqual({
           archived: true,
           archived_reason: 'parent_archived',
         });
       }
-      await expect(getArchivedState(db, remoteChild.session_id)).resolves.toMatchObject({
-        archived: false,
-      });
       // Every affected row is published, and creators carry their remote edges
       // on the realtime payload so clients can retire (and later re-project)
       // remote surrogates.
@@ -390,7 +637,7 @@ describe('SessionsService archive routes', () => {
       const grandchildRemoteEdges = [
         expect.objectContaining({ target_session_id: remoteChild.session_id }),
       ];
-      expect(emit).toHaveBeenCalledTimes(4);
+      expect(emit).toHaveBeenCalledTimes(5);
       expect(emittedGrandchild()).toMatchObject({ archived: true });
       expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
 
@@ -404,6 +651,10 @@ describe('SessionsService archive routes', () => {
           archived_reason: undefined,
         });
       }
+      await expect(getArchivedState(db, remoteChild.session_id)).resolves.toEqual({
+        archived: true,
+        archived_reason: 'parent_archived',
+      });
       expect(emit).toHaveBeenCalledTimes(4);
       expect(emittedGrandchild()).toMatchObject({ archived: false });
       expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
@@ -413,7 +664,10 @@ describe('SessionsService archive routes', () => {
   dbTest('does not rewrite or re-emit an already satisfied transition', async ({ db }) => {
     const emit = vi.fn();
     const app = { service: () => ({ emit }) } as unknown as Application;
-    const service = new SessionsService(db, app);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      app
+    );
     const branchId = await createBranch(db);
     const root = await createSession(db, branchId);
 
@@ -456,7 +710,10 @@ describe('SessionsService archive routes', () => {
   });
 
   dbTest('uses BTW and branch causes without overwriting independent reasons', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const branchId = await createBranch(db);
     const btwRoot = await createSession(db, branchId, { fork_origin: 'btw' });
     const child = await createSession(db, branchId, {
@@ -508,7 +765,10 @@ describe('SessionsService archive routes', () => {
   dbTest(
     'plans bulk roots with optional local descendants and executing counts',
     async ({ db }) => {
-      const service = new SessionsService(db, STUB_APP);
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        STUB_APP
+      );
       const branchId = await createBranch(db);
       const root = await createSession(db, branchId);
       const child = await createSession(db, branchId, {
@@ -558,7 +818,10 @@ describe('SessionsService archive routes', () => {
   dbTest(
     'previews roots by default without requiring permission on their children',
     async ({ db }) => {
-      const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        makeAppWithConfig()
+      );
       const branchId = await createBranch(db, 'bulk-preview-permissions', {
         primary_owner_user_id: OTHER_USER_ID,
         others_can: 'session',
@@ -606,7 +869,10 @@ describe('SessionsService archive routes', () => {
   );
 
   dbTest('rejects archive fields from update and multi-patch', async ({ db }) => {
-    const service = new SessionsService(db, STUB_APP);
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      STUB_APP
+    );
     const branchId = await createBranch(db);
     const root = await createSession(db, branchId);
 
@@ -621,7 +887,10 @@ describe('SessionsService archive routes', () => {
   dbTest(
     'rejects external archive and unarchive before mutating when RBAC prompt permission is missing',
     async ({ db }) => {
-      const service = new SessionsService(db, makeAppWithConfig());
+      const service = new SessionsService(
+        createTenantScopedDatabaseProxy(db, { requireScope: false }),
+        makeAppWithConfig()
+      );
       const branchId = await createBranch(db, 'rbac-session-only', {
         primary_owner_user_id: OTHER_USER_ID,
         others_can: 'session',
@@ -662,7 +931,10 @@ describe('SessionsService archive routes', () => {
   );
 
   dbTest('allows external archive when RBAC prompt permission is present', async ({ db }) => {
-    const service = new SessionsService(db, makeAppWithConfig());
+    const service = new SessionsService(
+      createTenantScopedDatabaseProxy(db, { requireScope: false }),
+      makeAppWithConfig()
+    );
     const branchId = await createBranch(db, 'rbac-prompt', { others_can: 'prompt' });
     const parent = await createSession(db, branchId, { created_by: OTHER_USER_ID });
     const child = await createSession(db, branchId, {

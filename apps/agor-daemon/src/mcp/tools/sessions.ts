@@ -1453,7 +1453,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_archive',
     {
       description:
-        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, same-branch forked and spawned descendants are also archived. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to archive only the target session.',
+        'Archive a session (soft delete). Archived sessions are hidden from listings by default but can be restored. By default, forked, spawned and remote-created descendants across branches are also archived. Running tasks are not stopped. Unarchive remains branch-local. Set includeChildren to false to archive only the target session.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         sessionId: mcpRequiredId(
@@ -1465,7 +1465,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .boolean()
           .optional()
           .describe(
-            'Also archive same-branch forked and spawned descendants. Remote-created sessions are excluded. Default: true.'
+            'Also archive forked, spawned and remote-created descendants across branches. Default: true.'
           ),
       }),
     },
@@ -1493,7 +1493,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_unarchive',
     {
       description:
-        'Restore a previously archived session. By default, same-branch descendants archived because of their parent are also restored. Remote-created sessions retain an independent lifecycle. Set includeChildren to false to restore only the target session.',
+        'Restore a previously archived session. By default, same-branch descendants archived because of their parent are also restored. Remote-created sessions must be restored separately. Set includeChildren to false to restore only the target session.',
       inputSchema: z.object({
         sessionId: mcpRequiredId(
           'sessionId',

@@ -22,7 +22,7 @@ import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
 
 export const ARCHIVE_REFRESH_WARNING =
-  'Session and same-branch children archived; refresh required to update the session list.';
+  'Session and descendants archived; refresh required to update the session list.';
 
 type ArchiveSessionResult = {
   session: Session;

@@ -1,10 +1,13 @@
 import {
   BoardRepository,
   BranchRepository,
+  BranchWorkspaceOperationRepository,
   CapabilityPolicyRepository,
+  createTenantScopedDatabaseProxy,
   GroupRepository,
   generateId,
   RepoRepository,
+  SessionRelationshipRepository,
   SessionRepository,
   TaskRepository,
   UserPrimaryTeammateRepository,
@@ -23,6 +26,7 @@ import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delet
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor';
 import { BranchesService } from './branches';
 import { setupBranchEffectiveAccessService } from './groups';
+import { SessionsService } from './sessions';
 
 vi.mock('../utils/spawn-executor', () => ({
   requestExecutor: vi.fn(),
@@ -34,7 +38,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { exists: true } });
 });
-function setup(db: ConstructorParameters<typeof BranchesService>[0], allowSuperadmin = false) {
+function setup(db: Parameters<typeof createTenantScopedDatabaseProxy>[0], allowSuperadmin = false) {
   const archiveBranchSessions = vi.fn().mockResolvedValue({ count: 0 });
   const emit = vi.fn();
   const app = {
@@ -43,8 +47,11 @@ function setup(db: ConstructorParameters<typeof BranchesService>[0], allowSupera
     sessionTokenService: { generateCommandToken: vi.fn().mockResolvedValue('fixture-token') },
     service: () => ({ emit, archiveBranchSessions }),
   } as unknown as Application;
-  const service = new BranchesService(db, app);
-  vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+  const service = new BranchesService(createTenantScopedDatabaseProxy(db), app);
+  vi.spyOn(
+    service as unknown as { resolveEnvironmentExecutorContext: () => Promise<unknown> },
+    'resolveEnvironmentExecutorContext'
+  ).mockResolvedValue({
     env: {},
     executionUserId: 'fixture',
     branchFsAccess: 'write',
@@ -112,7 +119,7 @@ test('Collaborators and read-only Managers cannot clean; Preserve needs manageme
     email: 'workspace-member@example.test',
     role: 'member',
   });
-  const { service, archiveBranchSessions, emit } = setup(db);
+  const { service, emit } = setup(db);
   const board = await new BoardRepository(db).create({
     name: 'Archive fixture',
     created_by: user.user_id,
@@ -156,7 +163,6 @@ test('Collaborators and read-only Managers cannot clean; Preserve needs manageme
     filesystem_status: 'ready',
     workspace_operation: { status: 'succeeded' },
   });
-  expect(archiveBranchSessions).toHaveBeenCalledOnce();
   expect(emit).toHaveBeenCalledWith(
     'patched',
     expect.objectContaining({ archived: true }),
@@ -430,3 +436,168 @@ test('explicit Manager retirement clears revoked collaborators preferences, pres
     prefs.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' })
   ).rejects.toThrow(/active/);
 });
+
+for (const retirement of [false, true]) {
+  test(`cross-branch ${retirement ? 'retirement' : 'archive'} preflights access and preserves remote execution`, async ({
+    db,
+  }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const away = await seedEnvironmentCommandBranch(db);
+    await new BranchRepository(db).update(away.branch.branch_id, {
+      path: `/tmp/remote-archive-${away.branch.branch_id}`,
+    });
+    const branches = new BranchRepository(db);
+    const sessions = new SessionRepository(db);
+    const preferences = new UserPrimaryTeammateRepository(db);
+    if (retirement) {
+      await branches.update(branch.branch_id, {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Archive fixture' } },
+      });
+      await preferences.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' });
+    }
+    const root = await sessions.create({
+      branch_id: branch.branch_id,
+      created_by: user.user_id,
+      agentic_tool: 'codex',
+    });
+    const remote = await sessions.create({
+      branch_id: away.branch.branch_id,
+      created_by: away.user.user_id,
+      agentic_tool: 'codex',
+      status: 'running',
+    });
+    const task = await new TaskRepository(db).create({
+      session_id: remote.session_id,
+      created_by: away.user.user_id,
+      status: 'running',
+    });
+    await new SessionRelationshipRepository(db).create({
+      source_session_id: root.session_id,
+      target_session_id: remote.session_id,
+      relationship_type: 'remote_create',
+      created_by: user.user_id,
+    });
+    const { service, emit } = setup(createTenantScopedDatabaseProxy(db, { requireScope: true }));
+    const archive = () => {
+      const params = { user, tenant };
+      if (retirement) return service.retireTeammate(branch.branch_id, params);
+      markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
+      return service.archiveOrDelete(
+        branch.branch_id,
+        { metadataAction: 'archive', filesystemAction: 'preserved' },
+        params
+      );
+    };
+    await expect(archive()).rejects.toThrow(/prompt/);
+    expect(await branches.findById(branch.branch_id)).toMatchObject({ archived: false });
+    expect(await sessions.findById(root.session_id)).toMatchObject({ archived: false });
+    expect(await sessions.findById(remote.session_id)).toMatchObject({ archived: false });
+    expect(emit).not.toHaveBeenCalled();
+    if (retirement) expect(await preferences.getBranchId(user.user_id)).toBe(branch.branch_id);
+    await setTestBranchUserRole(
+      db,
+      away.branch.branch_id,
+      user.user_id,
+      'manager',
+      'none',
+      away.user.user_id
+    );
+    await archive();
+    expect(await branches.findById(branch.branch_id)).toMatchObject({ archived: true });
+    expect(await branches.findById(away.branch.branch_id)).toMatchObject({ archived: false });
+    expect(await sessions.findById(root.session_id)).toMatchObject({
+      archived: true,
+      archived_reason: 'branch_archived',
+    });
+    expect(await sessions.findById(remote.session_id)).toMatchObject({
+      archived: true,
+      archived_reason: 'parent_archived',
+      status: 'running',
+    });
+    expect(await new TaskRepository(db).findById(task.task_id)).toMatchObject({
+      status: 'running',
+    });
+    if (retirement) expect(await preferences.getBranchId(user.user_id)).toBeNull();
+    expect(requestExecutor).not.toHaveBeenCalled();
+    expect(spawnExecutor).not.toHaveBeenCalled();
+  });
+
+  test(`cross-branch ${retirement ? 'retirement' : 'archive'} rolls back its transactional archive phase`, async ({
+    db,
+  }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const away = await seedEnvironmentCommandBranch(db);
+    await new BranchRepository(db).update(away.branch.branch_id, {
+      path: `/tmp/remote-archive-${away.branch.branch_id}`,
+    });
+    const branches = new BranchRepository(db);
+    const sessions = new SessionRepository(db);
+    const preferences = new UserPrimaryTeammateRepository(db);
+    if (retirement) {
+      await branches.update(branch.branch_id, {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Rollback fixture' } },
+      });
+      await preferences.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' });
+    }
+    const root = await sessions.create({
+      branch_id: branch.branch_id,
+      created_by: user.user_id,
+      agentic_tool: 'codex',
+    });
+    const remote = await sessions.create({
+      branch_id: away.branch.branch_id,
+      created_by: away.user.user_id,
+      agentic_tool: 'codex',
+    });
+    await new SessionRelationshipRepository(db).create({
+      source_session_id: root.session_id,
+      target_session_id: remote.session_id,
+      relationship_type: 'remote_create',
+      created_by: user.user_id,
+    });
+    await setTestBranchUserRole(
+      db,
+      away.branch.branch_id,
+      user.user_id,
+      'manager',
+      'none',
+      away.user.user_id
+    );
+    const { service, emit } = setup(createTenantScopedDatabaseProxy(db, { requireScope: true }));
+    // Ordinary archive fails after session writes; retirement fails its second
+    // permission check after the preference/branch writes, before commit.
+    const prepare = SessionsService.prototype.prepareBranchArchive;
+    let calls = 0;
+    const failure = retirement
+      ? vi
+          .spyOn(SessionsService.prototype, 'prepareBranchArchive')
+          .mockImplementation(async function (this: SessionsService, ...args) {
+            const plan = await prepare.apply(this, args);
+            if (++calls === 2) throw new Error('transactional preflight failed');
+            return plan;
+          })
+      : vi
+          .spyOn(BranchWorkspaceOperationRepository.prototype, 'archiveMetadata')
+          .mockRejectedValueOnce(new Error('metadata write failed'));
+    try {
+      const params = { user, tenant };
+      markBranchArchiveDeleteAuthorized(params, branch.branch_id, 'archive');
+      await expect(
+        retirement
+          ? service.retireTeammate(branch.branch_id, params)
+          : service.archiveOrDelete(
+              branch.branch_id,
+              { metadataAction: 'archive', filesystemAction: 'preserved' },
+              params
+            )
+      ).rejects.toThrow(/failed/);
+      expect(await branches.findById(branch.branch_id)).toMatchObject({ archived: false });
+      expect(await sessions.findById(root.session_id)).toMatchObject({ archived: false });
+      expect(await sessions.findById(remote.session_id)).toMatchObject({ archived: false });
+      expect(emit).not.toHaveBeenCalled();
+      if (retirement) expect(await preferences.getBranchId(user.user_id)).toBe(branch.branch_id);
+    } finally {
+      failure.mockRestore();
+    }
+  });
+}
