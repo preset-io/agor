@@ -1,3 +1,4 @@
+import { runWithTenantContext } from '@agor/core/db';
 import type { GatewayChannel } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { describe, expect, it } from 'vitest';
@@ -127,5 +128,83 @@ describe('Teams standard-channel Graph history', () => {
     const result = await createTeamsStandardChannelHistoryFetcher({ fetchImpl })(request);
     expect(result.complete).toBe(false);
     expect(result.reason).toBe('unavailable');
+  });
+});
+
+// A single fetcher serves channels with identical provider identities across tenants.
+describe('Teams Graph credential isolation', () => {
+  function fixture() {
+    const token = jwt.sign({ roles: [TEAMS_GRAPH_CHANNEL_MESSAGE_PERMISSION] }, 'test-only');
+    const credentials: string[] = [];
+    let graphCalls = 0;
+    const fetchImpl = async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes('/oauth2/')) {
+        const secret = new URLSearchParams(String(init?.body)).get('client_secret')!;
+        credentials.push(secret);
+        return ['valid-a', 'rotated-a'].includes(secret)
+          ? new Response(JSON.stringify({ access_token: token, expires_in: 3600 }))
+          : new Response('{}', { status: 401 });
+      }
+      graphCalls += 1;
+      return new Response(
+        JSON.stringify(
+          String(url).endsWith('/messages/root')
+            ? { id: 'root', createdDateTime: '2026-08-27T11:58:00Z', body: { content: 'Root' } }
+            : {
+                value: [
+                  {
+                    id: 'current',
+                    createdDateTime: '2026-08-27T12:00:00Z',
+                    body: { content: 'Current' },
+                  },
+                ],
+              }
+        )
+      );
+    };
+    const history = createTeamsStandardChannelHistoryFetcher({ fetchImpl });
+    const call = (tenant: string, id: string, password: string) =>
+      runWithTenantContext(tenant, () =>
+        history({
+          ...request,
+          afterActivityId: null,
+          channel: {
+            ...channel,
+            id,
+            config: { ...channel.config, app_password: password },
+          } as GatewayChannel,
+        })
+      );
+    return { call, credentials, graphCalls: () => graphCalls };
+  }
+
+  it('rejects another tenant/channel invalid secret cold and after a valid channel warmed the fetcher', async () => {
+    const f = fixture();
+    expect(await f.call('agor-b', 'channel-b', 'invalid-b')).toMatchObject({
+      complete: false,
+      reason: 'unavailable',
+    });
+    expect(f.graphCalls()).toBe(0);
+    expect(await f.call('agor-a', 'channel-a', 'valid-a')).toMatchObject({ complete: true });
+    expect(f.graphCalls()).toBe(2);
+    expect(await f.call('agor-b', 'channel-b', 'invalid-b')).toMatchObject({
+      complete: false,
+      reason: 'unavailable',
+    });
+    expect(f.graphCalls()).toBe(2);
+    expect(f.credentials).toEqual(['invalid-b', 'valid-a', 'invalid-b']);
+  });
+
+  it('uses the current password for invalid and successful rotations on the same channel', async () => {
+    const f = fixture();
+    expect(await f.call('agor-a', 'channel-a', 'valid-a')).toMatchObject({ complete: true });
+    expect(await f.call('agor-a', 'channel-a', 'invalid-rotation')).toMatchObject({
+      complete: false,
+      reason: 'unavailable',
+    });
+    expect(f.graphCalls()).toBe(2);
+    expect(await f.call('agor-a', 'channel-a', 'rotated-a')).toMatchObject({ complete: true });
+    expect(f.graphCalls()).toBe(4);
+    expect(f.credentials).toEqual(['valid-a', 'invalid-rotation', 'rotated-a']);
   });
 });

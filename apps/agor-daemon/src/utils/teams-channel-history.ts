@@ -6,7 +6,6 @@ import jwt from 'jsonwebtoken';
 export const TEAMS_GRAPH_CHANNEL_MESSAGE_PERMISSION = 'ChannelMessage.Read.Group';
 
 const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
-const TOKEN_CACHE_MAX = 128;
 const MAX_GRAPH_RESPONSE_BYTES = 256 * 1024;
 
 interface GraphMessage {
@@ -23,11 +22,6 @@ interface GraphMessage {
 interface GraphCollection {
   value?: unknown;
   '@odata.nextLink'?: unknown;
-}
-
-interface CachedToken {
-  accessToken: string;
-  expiresAt: number;
 }
 
 export interface TeamsStandardChannelHistoryRequest {
@@ -125,7 +119,6 @@ export function createTeamsStandardChannelHistoryFetcher(
   options: { fetchImpl?: typeof fetch } = {}
 ): TeamsStandardChannelHistoryFetcher {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const tokenCache = new Map<string, CachedToken>();
 
   const acquireToken = async (
     config: Record<string, unknown>,
@@ -135,9 +128,9 @@ export function createTeamsStandardChannelHistoryFetcher(
     const appId = textValue(config.app_id);
     const appPassword = textValue(config.app_password);
     if (!appId || !appPassword) throw new Error('Teams Graph app credentials are unavailable');
-    const cacheKey = `${tenantId}:${appId}`;
-    const cached = tokenCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now() + 60_000) return cached.accessToken;
+    // Never share bearer authority between requests: provider identities can repeat
+    // across Agor tenants, and password-only rotation does not bump generation.
+    // Authenticate the supplied channel credentials on every bounded catch-up.
     const response = await fetchImpl(
       `https://login.microsoftonline.com/${graphPathPart(tenantId)}/oauth2/v2.0/token`,
       {
@@ -156,21 +149,10 @@ export function createTeamsStandardChannelHistoryFetcher(
     if (!response.ok) throw new Error(`Teams Graph token request returned ${response.status}`);
     const body = (await readJson(response)) as {
       access_token?: unknown;
-      expires_in?: unknown;
     };
     const accessToken = textValue(body.access_token);
     if (!accessToken || !graphTokenHasPermission(accessToken)) {
       throw new Error(`Teams Graph app role ${TEAMS_GRAPH_CHANNEL_MESSAGE_PERMISSION} is missing`);
-    }
-    const expiresIn = typeof body.expires_in === 'number' ? body.expires_in : 300;
-    tokenCache.set(cacheKey, {
-      accessToken,
-      expiresAt: Date.now() + Math.max(60, expiresIn) * 1_000,
-    });
-    while (tokenCache.size > TOKEN_CACHE_MAX) {
-      const oldest = tokenCache.keys().next().value;
-      if (typeof oldest !== 'string') break;
-      tokenCache.delete(oldest);
     }
     return accessToken;
   };
