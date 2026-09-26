@@ -1,12 +1,13 @@
 import { knowledgeTransferSlug } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
+import { assertKnowledgeDirectorySupported } from '../../lib/knowledge/directory';
 import { exportKnowledge, knowledgeTransferClient } from '../../lib/knowledge/transfer';
 import { withKnowledgeTransfer } from '../../lib/knowledge/transfer-lifecycle';
 
 export default class KnowledgeExport extends BaseCommand {
   static override description =
-    'Plan and export current Knowledge markdown to a private directory (Linux). Requires workspace admin; excludes history, trash, assets and ACLs.';
+    'Plan and export current Knowledge markdown to a private directory (Linux, macOS). Requires workspace admin; excludes history, trash, assets and ACLs.';
   static override flags = {
     namespace: Flags.string({ required: true, description: 'Source namespace slug' }),
     output: Flags.string({
@@ -21,6 +22,12 @@ export default class KnowledgeExport extends BaseCommand {
   async run() {
     const { flags } = await this.parse(KnowledgeExport);
     const namespace = knowledgeTransferSlug.parse(flags.namespace);
+    try {
+      // Unsupported platforms fail before any remote work or resume advice.
+      assertKnowledgeDirectorySupported();
+    } catch (error) {
+      this.error((error as Error).message);
+    }
     const client = await this.connectToDaemon();
     try {
       await withKnowledgeTransfer(

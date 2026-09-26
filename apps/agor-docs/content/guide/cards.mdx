@@ -24,9 +24,7 @@ heroImage: '/screenshots/cards-hero.png'
 **Beta.** Cards are a new feature. The data model and MCP tools are stable, but the UI and workflows are evolving based on feedback.
 </div>
 
-Every entity on an Agor board used to be a **branch**, a git branch tied to a repo. That works for coding, but what about support tickets, sales leads, patient records, or content pipelines?
-
-**Cards** are generic entities that live on boards alongside branches. They give you spatial oversight of any workflow, not just code. An [teammate](/guide/teammates) creates and manages cards via MCP tools, and you see the work unfold on the board in real time.
+**Cards** are generic entities that live on boards alongside branches. They give you spatial oversight of any workflow, not just code. A [teammate](/guide/teammates) creates and manages cards via MCP tools, and you see the work unfold on the board in real time.
 
 The board becomes a dashboard: 12 tickets in triage, 8 being worked, 3 escalated, 27 resolved, all at a glance, without asking the agent "what's the status?" The spatial layout IS the status.
 
@@ -41,7 +39,7 @@ A teammate manages cards through Agor's [MCP tools](/guide/internal-mcp). The ty
 3. **Move cards through zones.** As work progresses, the teammate moves cards between zones (Triage → In Progress → Resolved)
 4. **Update cards.** The teammate keeps cards current with descriptions, notes, and structured data
 
-Cards are **dumb by design** in v1. They don't trigger automation or spawn sessions. The teammate is the brain. Cards are how it shows you what's happening.
+Cards do not trigger automation or spawn sessions. The teammate manages the workflow; cards show you what is happening.
 
 ---
 
@@ -136,17 +134,6 @@ In each case, a teammate processes the work while the board gives you real-time 
 The three-column layout lets you browse: Card Types → Cards of that type → Card detail. Most card management happens through agents, but the Settings UI is there when you need direct access.
 
 Cards can also be clicked on the board canvas to open a detail modal. Same view, two entry points.
-
----
-
-## What's next
-
-Cards in v1 are intentionally simple. Agents manage everything, cards are visual feedback. Future iterations may explore:
-
-- **Card events.** Track who moved what, when, enabling teammates to react to user actions on the board
-- **Zone triggers for cards.** Moving a card into a zone could notify a teammate automatically
-- **Dynamic forms.** Auto-generate edit forms from Card Type JSON schemas
-- **List layout zones.** Ordered Kanban-style columns for boards with many cards
 
 ---
 

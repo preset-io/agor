@@ -92,6 +92,44 @@ describe('shouldHidePersistedClaudeSdkEvent', () => {
     ).toBe(true);
   });
 
+  it('hides vcs_state_changed rows emitted after git push/commit', () => {
+    const event = {
+      type: 'system',
+      subtype: 'vcs_state_changed',
+      kind: 'push',
+      cwd: '/home/agor/.agor/worktrees/repo/branch',
+      uuid: '0eb87a4f-f8dc-48d9-9b2a-003fcc2d2740',
+      session_id: '8806d154-77ee-40af-be00-e1ae9651f919',
+    };
+    expect(shouldSuppressClaudeSystemEvent(event)).toBe(true);
+    expect(
+      shouldHidePersistedClaudeSdkEvent({
+        type: 'sdk_event',
+        sdkType: 'system',
+        sdkSubtype: 'vcs_state_changed',
+        metadata: event,
+      })
+    ).toBe(true);
+  });
+
+  it('hides other internal host signals and command-list pushes', () => {
+    for (const sdkSubtype of [
+      'code_change_published',
+      'dev_intent',
+      'task_summary',
+      'commands_changed',
+    ]) {
+      expect(
+        shouldHidePersistedClaudeSdkEvent({
+          type: 'sdk_event',
+          sdkType: 'system',
+          sdkSubtype,
+          metadata: { subtype: sdkSubtype },
+        })
+      ).toBe(true);
+    }
+  });
+
   it('hides status=requesting rows via the metadata path', () => {
     expect(
       shouldHidePersistedClaudeSdkEvent({

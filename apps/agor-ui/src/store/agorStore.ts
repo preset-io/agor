@@ -29,7 +29,7 @@ import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { type DataMaps, EMPTY_MAPS, MAP_KEYS, pickMaps } from './agorMaps';
+import { type DataMaps, EMPTY_MAPS, isSessionRowRemovedWith, MAP_KEYS, pickMaps } from './agorMaps';
 
 // Immer needs this to draft Map/Set state. Called once at module load; the
 // store's state is entirely Maps and one Set.
@@ -312,15 +312,9 @@ export const agorStore = createStore<AgorState>()(
           removeRelationshipsToDeletedSessions(session, removedSessionIds);
         }
         for (const [bucketBranchId, sessions] of draft.sessionsByBranch) {
-          const remaining = sessions.filter((session) => {
-            if (removedSessionIds.has(session.session_id)) return false;
-            const surrogate = session.remote_surrogate;
-            return !(
-              surrogate &&
-              (removedSessionIds.has(surrogate.source_session_id) ||
-                removedSessionIds.has(surrogate.relationship.target_session_id))
-            );
-          });
+          const remaining = sessions.filter(
+            (session) => !isSessionRowRemovedWith(session, removedSessionIds)
+          );
           for (const session of remaining) {
             removeRelationshipsToDeletedSessions(session, removedSessionIds);
           }

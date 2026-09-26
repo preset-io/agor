@@ -317,6 +317,17 @@ stamps the stable operational defaults needed for a working deployment, but deli
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
 
+<a id="choosing-a-mode" />
+<a id="supported-connections-and-limits" />
+<a id="diagnostics" />
+<a id="enabling-mediation-and-rolling-back" />
+
+## MCP connection security
+
+MCP security modes are **tenant-owned API settings**, not `config.yaml` keys.
+See [MCP Administration](/guide/mcp-administration#mcp-connection-security) for
+mode selection, diagnostics, supported connections, and safe rollout or rollback.
+
 ## Operator-configured analytics
 
 Analytics is disabled by default. It sends curated analytics events to the configured
@@ -401,9 +412,9 @@ Rollout checklist (operator work, not performed automatically):
 - Keep historical tables. A rename does not consolidate them; if needed, separately
   authorize a historical UNION/view with aligned columns/types and deduplication.
   See Segment's [historical data FAQ](https://www.twilio.com/docs/segment/connections/storage/warehouses/faq).
-- Validate destination delivery and schema after the separately authorized rollout.
-  No warehouse migration, backfill, live destination configuration, or dashboard edit
-  is included in this change.
+- Validate destination delivery and schema after rollout. Agor does not migrate
+  warehouse data, backfill historical events, configure live destinations, or update
+  dashboards for you.
 
 These transports use best-effort in-memory batches, not a persisted event outbox;
 failed HTTP batches are not retried. This rename does not change those guarantees

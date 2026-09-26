@@ -278,9 +278,7 @@ claude mcp add -s user -t http agor-sandbox https://agor.sandbox.preset.zone/mcp
 The single quotes are important: your shell passes the placeholder rather than
 the secret. Claude Code stores `${AGOR_API_KEY}` in its user configuration and
 expands it when it loads the MCP server, so the variable must also exist in the
-environment that launches Claude Code. This exact behavior was verified with
-Claude Code's generated configuration; it also matches Anthropic's documented
-environment expansion for HTTP headers.
+environment that launches Claude Code.
 
 Use `-s local` (the default) for private configuration in only the current
 project, or `-s project` only when the shareable `.mcp.json` contains the

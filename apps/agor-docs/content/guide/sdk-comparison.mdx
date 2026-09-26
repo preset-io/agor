@@ -18,6 +18,10 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 > SDK/CLI pair that supports this switch; an incompatible CLI configuration fails the Task
 > rather than silently enabling native subagents.
 
+For agent selection, start with [Choosing an Agent](#choosing-an-agent). The
+reference below also covers integration behavior and SDK-specific limitations.
+Connection setup is covered separately in [MCP Catalog & Connections](/guide/mcp-servers).
+
 ## Feature Matrix
 
 <ScrollTable>
@@ -388,14 +392,12 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 **Gemini:** ❌ **Not implemented**
 
 - Gemini API provides usage data but not yet extracted
-- Future: Will track input/output token counts
 
 **Copilot:** ⚠️ **Via turn events**
 
 - Usage data available through `turn.completed` events
 - Token counts can be extracted from SDK event metadata
 - Not yet fully wired into Agor's token tracking pipeline
-- Future: Will populate TaskHeader pills and cost estimates
 
 **Why it matters:**
 
@@ -417,86 +419,14 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 
 ### 10. Context Window Tracking
 
-**Claude Code:** 🟡 **Estimated (conversation size only)**
+Agor prefers the provider's context-usage snapshot when one is available. Claude
+and Codex can report this directly; availability and fallback estimates depend
+on the integration and the data returned for that turn. Missing usage is not
+evidence that the context window is empty.
 
-- Tracks cumulative conversation tokens (input + output)
-- Resets counter on compaction events
-- **Does NOT include system overhead** (~46K tokens for CLAUDE.md + tools + MCP)
-- Labeled as "Estimated" in UI to reflect limitations
-- Shows 0-200K range accurately for conversation size
-
-**Codex:** 🟡 **Estimated (conversation + cache reads)**
-
-- Uses SDK `input_tokens + cache_read_tokens` per task
-- Reuses Claude context-window utility for TaskHeader + footer pills
-- Provides percentage vs. model-specific limit (gpt-5-codex, gpt-4o, etc.)
-- Same limitations as Claude (system overhead not included)
-
-**Gemini:** ❌ **Not implemented**
-
-- No context tracking available yet
-
-**Copilot:** 🟡 **Estimated**
-
-- Uses same cumulative conversation token formula as Claude/Codex
-- Model context limits vary by selected model (GPT-4o, Claude, etc. via Copilot)
-- Same limitations as other agents (system overhead not included)
-
-**The Challenge:**
-
-Accurately tracking context window usage is surprisingly difficult because **Anthropic doesn't document which tokens count toward the 200K limit**. Here's what Agor does:
-
-**What we know:**
-
-- `input_tokens` - Fresh user prompt for this turn (definitely counts)
-- `output_tokens` - Claude's response (definitely counts)
-- `cache_read_tokens` - Reading cached content (counts toward context but inflated by tool executions)
-- `cache_creation_tokens` - Creating new cache entries (~46K baseline for CLAUDE.md + tools + MCP)
-
-**The problem with cache tokens:**
-
-- `cache_read_tokens` can be **10x inflated** due to tool calls
-  - Example: 38 tool calls × 40K cached system = 1.6M tokens reported (8x the 200K limit!)
-  - This is a **billing metric**, not an accurate context measure
-- `cache_creation_tokens` represents system overhead but grows unpredictably
-  - First task: ~46K (CLAUDE.md + system prompt + tools)
-  - Later tasks: Can grow to 100K+ as more content gets cached
-
-**Agor's approach:**
-
-```typescript
-// Sum conversation tokens across all tasks
-context_window = Σ(task.input_tokens + task.output_tokens);
-
-// Reset on compaction events
-if (compaction_detected) {
-  context_window = 0; // Start fresh
-}
-```
-
-**What this gives you:**
-
-- ✅ Accurate tracking of **conversation size** (0-200K range)
-- ✅ Proper accumulation across turns
-- ✅ Automatic reset on compaction
-- ❌ Excludes ~46K system overhead (CLAUDE.md, tools, MCP)
-
-**Example session:**
-
-```
-Task 1:  8,956 tokens →  4.5% (conversation only)
-Task 2: 10,593 tokens →  5.3% (growing)
-Task 3: 13,540 tokens →  6.8%
-Task 7: 23,546 tokens → 11.8%
-
-Actual context: ~70K tokens (24K conversation + 46K system overhead)
-```
-
-**Why "Estimated":**
-
-Without official Anthropic documentation on the exact formula, we can't be 100% certain our calculation matches their internal tracking. We're confident in the conversation size tracking, but system overhead remains an educated guess.
-
-**Future:** If Anthropic publishes official context window calculation docs, we'll update our implementation immediately.
+Use the meter to judge when to compact or start a focused session, not as a
+guarantee of remaining capacity. Cumulative token spend is not current context
+occupancy: repeated cached input can be billed across multiple tool calls.
 
 ---
 
@@ -610,7 +540,6 @@ Current Task:
 - The Copilot SDK (v0.2.0) does not expose a `updatedPermissions`-equivalent mechanism
 - The Copilot CLI natively supports persistent rules (`~/.copilot/config.json`, `--allow-tool` flags, and `!` to allow-all-similar in interactive mode), but these are not accessible through the SDK callback
 - Agor shows a simple Approve/Deny UI without scope options
-- Future: When the SDK adds permission persistence support, Agor will wire it up
 
 **Codex / Gemini:** ⚠️ **Basic modes only**
 
@@ -834,23 +763,6 @@ OpenCode supports MCP servers via its REST API:
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
 - **Execution is local-only.** Agor must be able to contain the native writer process safely.
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
-
----
-
-## Future Improvements
-
-As agent SDKs evolve, Agor will gain new capabilities.
-
-Agent integration priorities:
-
-- **Codex text streaming** - The Codex SDK (`@openai/codex-sdk`) does not support token-level text streaming as of v0.99.0. When OpenAI adds `item.updated` support for `agent_message` items (or a new text delta event), Agor's code is already prepared to handle it
-- **Token tracking for Gemini & Copilot** - Extract usage data from Google and GitHub APIs
-- **Gemini project files** - If Google adds instruction file support
-- **Copilot project instructions** - Track `.github/copilot-instructions.md` convention as it evolves
-- **Better stop controls** - More graceful cancellation for all agents
-- **Richer tool metadata** - If Codex/Gemini expose more tool details
-- **Copilot permission persistence** - The Copilot SDK (v0.2.0) doesn't expose a way to persist permission rules. When the SDK adds an `updatedPermissions`-equivalent, Agor will support persistent scopes (session, project, user) matching Claude Code's UX
-- **OpenCode session forking** - When OpenCode adds fork/replay API support
 
 ---
 

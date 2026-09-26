@@ -654,7 +654,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       modal.confirm({
         title: 'Archive session and same-branch children?',
         content:
-          'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions remain active.',
+          'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
         okText: 'Archive',
         cancelText: 'Cancel',
         onOk: async () => {

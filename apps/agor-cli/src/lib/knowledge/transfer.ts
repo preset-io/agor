@@ -87,8 +87,7 @@ export async function exportKnowledge(
   options: TransferOptions,
   progress: KnowledgeProgress
 ) {
-  const source = await inventory(client, options.namespace, progress, options.signal);
-  const fingerprint = transferDigest({ sourceIdentity: options.sourceIdentity, ...source });
+  // Validate the local directory before any remote work so local problems fail fast.
   let directory: KnowledgeDirectory | undefined;
   try {
     directory = await KnowledgeDirectory.open(options.directory, !options.dryRun);
@@ -96,6 +95,8 @@ export async function exportKnowledge(
     if (!options.dryRun || (error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   try {
+    const source = await inventory(client, options.namespace, progress, options.signal);
+    const fingerprint = transferDigest({ sourceIdentity: options.sourceIdentity, ...source });
     if (!options.dryRun) await directory!.lock();
     const oldText = await directory?.read('manifest.json', KNOWLEDGE_TRANSFER.maxManifestBytes);
     const old = oldText ? validateTransferManifest(JSON.parse(oldText)) : null;

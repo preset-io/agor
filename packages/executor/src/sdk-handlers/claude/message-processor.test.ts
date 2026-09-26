@@ -242,6 +242,28 @@ describe('SDKMessageProcessor system event suppression', () => {
     expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
   });
 
+  it('suppresses internal VCS/PR host signals emitted after git push', async () => {
+    const processor = createProcessor();
+    const signals = [
+      { subtype: 'vcs_state_changed', kind: 'push', cwd: '/tmp/wt' },
+      {
+        subtype: 'code_change_published',
+        provider: 'github',
+        url: 'https://github.com/o/r/pull/1',
+        repo: 'o/r',
+        identifier: '1',
+        action: 'pushed',
+      },
+    ];
+
+    for (const signal of signals) {
+      const events = await processor.process(
+        systemMsg({ ...signal, session_id: 's', uuid: `u-${signal.subtype}` })
+      );
+      expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
+    }
+  });
+
   it('surfaces failed hook responses for diagnostics', async () => {
     const processor = createProcessor();
     const events = await processor.process(
