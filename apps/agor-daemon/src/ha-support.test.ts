@@ -82,6 +82,7 @@ describe('constrained HA support profile', () => {
     ['claude-code', { mode: 'bypassPermissions' }],
     ['codex', { mode: 'allow-all', codex: { approvalPolicy: 'never' } }],
     ['gemini', { mode: 'yolo' }],
+    ['gemini', { mode: 'autoEdit' }],
     ['copilot', { mode: 'bypassPermissions' }],
     ['cursor', { mode: 'default' }],
   ] as const)('admits noninteractive %s execution', (agenticTool, permission_config) => {

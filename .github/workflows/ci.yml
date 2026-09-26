@@ -116,6 +116,7 @@ jobs:
       # all of its workspace declaration dependencies cheaply or reliably.
       - run: pnpm --filter @agor/executor exec vitest run
       - run: pnpm --filter @agor/executor test:runtime
+      - run: pnpm --filter @agor/executor test:gemini-contract
 
       # Every @agor/core dist entry imported by plain Node, then the tenant
       # scope stores driven across those entries. Vitest resolves this package

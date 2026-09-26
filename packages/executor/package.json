@@ -13,10 +13,11 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test:gemini-contract": "node --import tsx scripts/gemini-contract.mts",
     "test:runtime": "node scripts/runtime-smoke.mjs",
     "test:claude-auth-precedence": "node scripts/claude-auth-precedence-smoke.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && pnpm test:runtime && pnpm test:claude-auth-precedence",
+    "test": "vitest run && pnpm test:runtime && pnpm test:claude-auth-precedence && pnpm test:gemini-contract",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -32,7 +33,7 @@
   },
   "devDependencies": {
     "@cursor/sdk": "1.0.31",
-    "@google/gemini-cli-core": "0.59.0",
+    "@google/gemini-cli-core": "0.61.0",
     "@google/genai": "^1.52.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/diff": "^6.0.0",

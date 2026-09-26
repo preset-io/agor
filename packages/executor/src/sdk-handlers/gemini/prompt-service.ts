@@ -1,43 +1,23 @@
-/**
- * Gemini Prompt Service - Handles live execution via @google/gemini-cli-core SDK
- *
- * Features:
- * - Token-level streaming via AsyncGenerator
- * - Session continuity via setHistory()
- * - Permission modes (DEFAULT, AUTO_EDIT, YOLO)
- * - Event-driven architecture (13 event types)
- * - CLAUDE.md auto-loading
- */
-
-import * as crypto from 'node:crypto';
+import { constants } from 'node:fs';
 import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { shortId } from '@agor/core/db';
+import {
+  getMcpServersForSession,
+  listMcpToolsWithPermission,
+  PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
+  sanitizeMCPExternalError,
+} from '@agor/core/mcp';
 import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
 import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
-import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
-
-const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
-type ResumedSessionData = GeminiTypes.ResumedSessionData;
-
-class GeminiSessionNotFoundError extends Error {}
-
-import { shortId } from '@agor/core/db';
-import {
-  getMcpServersForSession,
-  isMCPAbortError,
-  listMcpToolsWithPermission,
-  PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
-  resolveScopedMCPAuthHeaders,
-  sanitizeMCPExternalError,
-} from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
   BranchRepository,
@@ -49,104 +29,103 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
-import { convertConversationToHistory } from './conversation-converter.js';
 import { buildGeminiMcpServerConfig } from './mcp-server-config.js';
-import { DEFAULT_GEMINI_MODEL, type GeminiModel } from './models.js';
+import { DEFAULT_GEMINI_MODEL } from './models.js';
 import { mapPermissionMode } from './permission-mapper.js';
+import { buildGeminiPolicy, installGeminiPolicy } from './policy.js';
+import {
+  disposeGeminiRuntime,
+  enterGeminiRuntime,
+  findGeminiRecording,
+  GEMINI_HISTORY_NOTICE,
+  GEMINI_KEY_MESSAGE,
+  GeminiIntegrationError,
+  geminiError,
+  geminiSessionId,
+} from './runtime.js';
 import { extractGeminiTokenUsage } from './usage.js';
 
-/**
- * GeminiClient with internal config property exposed
- * The SDK doesn't expose this in types, but we need it for executeToolCall()
- * Note: config is private in GeminiClient, so we use unknown cast
- */
-interface GeminiClientWithConfig {
-  config: InstanceType<typeof Gemini.Config>;
-}
-
-/**
- * Streaming event types for prompt service consumers
- */
+const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
+type ContentBlock = {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: Record<string, unknown>;
+  tool_use_id?: string;
+  content?: string;
+  is_error?: boolean;
+};
 export type GeminiStreamEvent =
-  | {
-      type: 'partial';
-      textChunk: string;
-      resolvedModel?: string;
-      sessionId?: string;
-    }
+  | { type: 'stopped' }
+  | { type: 'partial'; textChunk: string; resolvedModel?: string; sessionId?: string }
   | {
       type: 'complete';
-      content: Array<{
-        type: string;
-        text?: string;
-        id?: string;
-        name?: string;
-        input?: Record<string, unknown>;
-      }>;
+      content: ContentBlock[];
       toolUses?: Array<{ id: string; name: string; input: Record<string, unknown> }>;
       resolvedModel?: string;
       sessionId?: string;
       usage?: TokenUsage;
-      rawSdkResponse?: import('../../types/sdk-response').GeminiSdkResponse; // The actual response from Gemini SDK
+      rawSdkResponse?: import('../../types/sdk-response.js').GeminiSdkResponse;
     }
-  | {
-      type: 'tool_start';
-      toolName: string;
-      toolInput: Record<string, unknown>;
-    }
-  | {
-      type: 'tool_complete';
-      toolName: string;
-      result: unknown;
-    };
+  | { type: 'tool_start'; toolName: string; toolInput: Record<string, unknown> }
+  | { type: 'tool_complete'; toolName: string; result: unknown };
 
-/** SDK invocation model — falls back to DEFAULT_GEMINI_MODEL. Never used for recording. */
+const RETIRED: Record<string, string | null> = {
+  'gemini-2.0-flash': 'gemini-3.8-flash',
+  'gemini-2.0-flash-thinking-experimental': 'gemini-3.8-flash',
+  'gemini-3-flash': 'gemini-3.8-flash',
+  'gemini-2.0-flash-lite': 'gemini-3.5-flash-lite',
+  'gemini-2.0-pro': null,
+  'gemini-3-pro': null,
+};
 export function resolveGeminiInvocationModel(session: {
   model_config?: { model?: string } | null;
-}): GeminiModel {
-  return (session.model_config?.model as GeminiModel | undefined) ?? DEFAULT_GEMINI_MODEL;
+}): string {
+  const model = session.model_config?.model ?? DEFAULT_GEMINI_MODEL;
+  if (Object.hasOwn(RETIRED, model)) {
+    if (RETIRED[model] === null)
+      throw new GeminiIntegrationError(`Model ${model} is retired. Pick another Gemini model.`);
+    return RETIRED[model]!;
+  }
+  return model;
 }
+const TOOL_ALIASES: Record<string, string> = {
+  read_file: 'Read',
+  read_many_files: 'Read',
+  write_file: 'Write',
+  replace: 'Edit',
+  run_shell_command: 'Bash',
+  list_directory: 'LS',
+  glob: 'Glob',
+  grep_search: 'Grep',
+  web_fetch: 'WebFetch',
+  google_web_search: 'WebSearch',
+};
 
 export class GeminiPromptService {
-  private sessionClients = new Map<SessionID, InstanceType<typeof Gemini.GeminiClient>>();
-  /** Invocation model bound on each cached client — triggers recreate when it changes. */
-  private sessionClientInvocationModels = new Map<SessionID, string>();
   private activeControllers = new Map<SessionID, AbortController>();
-  private apiKey?: string; // Resolved API key from base-executor
-  private useNativeAuth: boolean; // Whether to use OAuth (no API key found)
-
   constructor(
-    _messagesRepo: MessagesRepository,
+    private messagesRepo: MessagesRepository,
     private sessionsRepo: SessionRepository,
-    apiKey?: string,
+    private apiKey?: string,
     private branchesRepo?: BranchRepository,
     _reposRepo?: RepoRepository,
     private mcpServerRepo?: MCPServerRepository,
     private sessionMCPRepo?: SessionMCPServerRepository,
     private mcpEnabled?: boolean,
-    useNativeAuth?: boolean, // Flag from base-executor indicating OAuth should be used
+    _useNativeAuth?: boolean,
     _usersRepo?: UsersRepository,
     private tasksService?: TasksService,
     private mcpOAuthAuthHeadersRepo?: MCPOAuthAuthHeadersRepository
-  ) {
-    this.apiKey = apiKey;
-    this.useNativeAuth = useNativeAuth ?? false; // Default to false if not provided
-  }
+  ) {}
 
-  /**
-   * Execute prompt with streaming via @google/gemini-cli-core SDK
-   *
-   * @param sessionId - Agor session ID
-   * @param prompt - User prompt text
-   * @param taskId - Optional task ID for message linking
-   * @param permissionMode - Agor permission mode ('ask' | 'auto' | 'allow-all')
-   * @yields Streaming events (partial chunks and complete messages)
-   */
   async *promptSessionStreaming(
     sessionId: SessionID,
     prompt: string,
@@ -155,557 +134,264 @@ export class GeminiPromptService {
     onActivity?: SdkActivityCallback,
     outerAbortSignal?: AbortSignal
   ): AsyncGenerator<GeminiStreamEvent> {
-    // Register cancellation before any asynchronous initialization. Stop can
-    // otherwise arrive while credentials/client configuration is loading,
-    // before Gemini has an active SDK request to abort.
-    const abortController = new AbortController();
-    const forwardOuterAbort = () => abortController.abort(outerAbortSignal?.reason);
-    if (outerAbortSignal?.aborted) {
-      forwardOuterAbort();
-    } else {
-      outerAbortSignal?.addEventListener('abort', forwardOuterAbort, { once: true });
-    }
-    this.activeControllers.set(sessionId, abortController);
-
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    if (outerAbortSignal?.aborted) abort();
+    outerAbortSignal?.addEventListener('abort', abort, { once: true });
+    this.activeControllers.set(sessionId, controller);
+    let cleanup: (() => Promise<void>) | undefined;
+    let config: GeminiTypes.Config | undefined;
+    let model = DEFAULT_GEMINI_MODEL as string;
     try {
-      // Get session metadata for model
+      if (!this.apiKey) throw new GeminiIntegrationError(GEMINI_KEY_MESSAGE);
+      if (isGeminiManualMode(permissionMode))
+        throw new GeminiIntegrationError(GEMINI_MANUAL_MESSAGE);
       const session = await this.sessionsRepo.findById(sessionId);
-      if (!session) {
-        throw new GeminiSessionNotFoundError(`Session ${sessionId} not found`);
+      const branch = session?.branch_id
+        ? await this.branchesRepo?.findById(session.branch_id).catch(() => null)
+        : null;
+      if (
+        !session ||
+        !branch?.path ||
+        !(await fs.stat(branch.path).catch(() => null))?.isDirectory()
+      ) {
+        throw new GeminiIntegrationError(
+          'Gemini session has no accessible branch; the task was not started'
+        );
       }
-
-      // Context user for per-user OAuth/API-key resolution — the task creator
-      // (prompter) when known, else the session owner.
+      try {
+        await fs.access(branch.path, constants.R_OK | constants.X_OK);
+      } catch {
+        throw new GeminiIntegrationError(
+          'Gemini session has no accessible branch; the task was not started'
+        );
+      }
+      const requestedModel = session.model_config?.model ?? DEFAULT_GEMINI_MODEL;
+      model = resolveGeminiInvocationModel(session);
+      if (requestedModel !== model)
+        yield {
+          type: 'complete',
+          content: [{ type: 'text', text: `Model ${requestedModel} is retired; using ${model}.` }],
+        };
+      if (controller.signal.aborted) {
+        yield { type: 'stopped' };
+        return;
+      }
+      cleanup = await enterGeminiRuntime();
       const contextUserId = await resolveContextUserId({
         session,
         taskId,
         tasksService: this.tasksService,
       });
-
-      // Get or create Gemini client for this session
-      const client = await this.getOrCreateClient(sessionId, permissionMode, contextUserId);
-
-      // For recording on stream events. SDK invocation uses the model bound
-      // on the cached client (see getOrCreateClient).
-      const configuredModel = session.model_config?.model;
-
-      // Prepare initial prompt (just text for now - can enhance with file paths later)
-      let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
-
-      // Generate unique prompt ID for this turn
-      const promptId = `${sessionId}-${Date.now()}`;
-
-      // Tool execution loop - keep going until no more tool calls
-      let loopCount = 0;
-      const MAX_LOOPS = 50; // Safety limit to prevent infinite loops
-
-      while (loopCount < MAX_LOOPS) {
-        // Initialization and tool execution can both outlive the original Stop
-        // callback. Never submit another provider request after cancellation.
-        if (abortController.signal.aborted) return;
-
-        loopCount++;
-        console.debug(`[Gemini Loop ${loopCount}] Starting turn with ${parts.length} parts`);
-
-        // Note: User environment variables and API key resolution
-        // now happen in base-executor.ts before tool creation
-
-        // Stream events from Gemini SDK
-        const stream = client.sendMessageStream(parts, abortController.signal, promptId);
-
-        // Accumulate content blocks for THIS turn (reset after Finished event)
-        let fullTextContent = '';
-        const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
-        const pendingToolCalls: Array<{
-          callId: string;
-          name: string;
-          args: Record<string, unknown>;
-        }> = [];
-
-        // Stream all events from this turn
-        for await (const event of stream) {
-          reportSdkActivity(onActivity, 'gemini', String(event.type));
-          // Debug logging for all events
-          // Event values may include MCP tool results or provider errors.
-          // Logging the closed event type is sufficient for stream diagnosis.
-          console.debug(`[Gemini Event] type=${event.type}`);
-
-          // Handle different event types from Gemini SDK
-          switch (event.type) {
-            case Gemini.GeminiEventType.Content: {
-              // Text chunk from model - stream it immediately!
-              const textChunk = event.value || '';
-              fullTextContent += textChunk;
-
-              yield {
-                type: 'partial',
-                textChunk,
-                resolvedModel: configuredModel,
-                sessionId,
-              };
-              break;
-            }
-
-            case Gemini.GeminiEventType.ToolCallRequest: {
-              // Agent wants to call a tool
-              let { name, args, callId } = event.value;
-
-              // Normalize tool names to match Claude Code conventions (PascalCase)
-              // This ensures UI renderers work consistently across all agents
-              if (
-                name?.toLowerCase() === 'bash' ||
-                name === 'ExecuteCommand' ||
-                name === 'command'
-              ) {
-                name = 'Bash';
-              }
-
-              // Track tool use for complete message
-              toolUses.push({
-                id: callId,
-                name,
-                input: args,
-              });
-
-              // Track pending tool call for loop continuation
-              pendingToolCalls.push({
-                callId,
-                name,
-                args,
-              });
-
-              // Notify consumer that tool started
-              yield {
-                type: 'tool_start',
-                toolName: name,
-                toolInput: args,
-              };
-              break;
-            }
-
-            case Gemini.GeminiEventType.ToolCallResponse: {
-              // Tool execution completed
-              const toolResponse = event.value as unknown as Record<string, unknown>;
-
-              yield {
-                type: 'tool_complete',
-                toolName: (toolResponse.name as string) || 'unknown',
-                result: toolResponse.response || toolResponse,
-              };
-              break;
-            }
-
-            case Gemini.GeminiEventType.Finished: {
-              // Turn complete - yield final message (if we have any content)
-              console.debug(
-                `[Gemini Turn Finished] Text: ${fullTextContent.length} chars, Tools: ${toolUses.length}`
-              );
-
-              // Type-assert event as ServerGeminiFinishedEvent since we're in Finished case
-              const finishedEvent = event as import('../../types/sdk-response').GeminiSdkResponse;
-
-              // Extract token usage from SDK response
-              const mappedUsage = extractGeminiTokenUsage(finishedEvent.value?.usageMetadata);
-
-              const content: Array<{
-                type: string;
-                text?: string;
-                id?: string;
-                name?: string;
-                input?: Record<string, unknown>;
-              }> = [];
-
-              // Add text block if we have content
-              if (fullTextContent) {
-                content.push({
-                  type: 'text',
-                  text: fullTextContent,
-                });
-              }
-
-              // Add tool use blocks
-              for (const toolUse of toolUses) {
-                content.push({
-                  type: 'tool_use',
-                  id: toolUse.id,
-                  name: toolUse.name,
-                  input: toolUse.input,
-                });
-              }
-
-              // Only yield complete message if we actually have content
-              if (content.length > 0) {
-                yield {
-                  type: 'complete',
-                  content,
-                  toolUses: toolUses.length > 0 ? toolUses : undefined,
-                  resolvedModel: configuredModel,
-                  sessionId,
-                  usage: mappedUsage,
-                  rawSdkResponse: finishedEvent, // Pass through the actual SDK response (UNMUTATED)
-                };
-              }
-
-              // Update session history for continuity
-              await this.updateSessionHistory(sessionId, client);
-              break;
-            }
-
-            case Gemini.GeminiEventType.Error: {
-              const errorValue = 'value' in event ? event.value : 'Unknown error';
-              const safe = sanitizeMCPExternalError(errorValue, { stage: 'runtime' });
-              console.error(
-                `Gemini SDK error category=${safe.category} type=${safe.diagnostic.type}`
-              );
-              throw new Error(safe.message);
-            }
-
-            case Gemini.GeminiEventType.Thought: {
-              // Thought values can contain provider-reflected tool/auth data.
-              // The closed event type logged above is sufficient diagnostics.
-              break;
-            }
-
-            case Gemini.GeminiEventType.ToolCallConfirmation: {
-              // User approval needed (should be handled by ApprovalMode config)
-              console.warn(
-                '[Gemini] Tool call needs confirmation - this should not happen in AUTO_EDIT/YOLO mode!'
-              );
-              break;
-            }
-
-            default: {
-              // Unknown SDK event payloads are untrusted and may reflect URLs,
-              // headers, or provider error bodies. Never stringify them.
-              break;
-            }
-          }
-        }
-
-        // Check if there are pending tool calls that need execution
-        if (pendingToolCalls.length === 0) {
-          console.debug('[Gemini Loop] No pending tool calls - conversation complete!');
-          break; // No more tools to execute, we're done!
-        }
-
-        console.debug(`[Gemini Loop] Found ${pendingToolCalls.length} pending tool calls`);
-
-        // CRITICAL: The Gemini SDK does NOT auto-execute tools in streaming mode!
-        // We need to manually execute the tools using SDK's Scheduler and send results back.
-
-        // Get config for Scheduler
-        const config = (client as unknown as GeminiClientWithConfig).config;
-
-        // Create Scheduler instance (SDK 0.27.2+ uses event-driven scheduler)
-        // The Scheduler needs a MessageBus and PolicyEngine for approval workflows
-        const policyEngine = new Gemini.PolicyEngine({
-          approvalMode: mapPermissionMode(permissionMode), // Convert our permission mode to Gemini's ApprovalMode
-          nonInteractive: false,
-        });
-        const messageBus = new Gemini.MessageBus(policyEngine);
-        const scheduler = new Gemini.Scheduler({
-          // Gemini 0.40 replaced the standalone config option with its
-          // execution-scoped AgentLoopContext. Config implements that contract.
-          context: config,
-          messageBus,
-          getPreferredEditor: () => undefined,
-          schedulerId: `scheduler-${promptId}`,
-        });
-
-        // Convert pending tool calls to ToolCallRequestInfo format and execute via Scheduler
-        const toolCallRequests: GeminiTypes.ToolCallRequestInfo[] = pendingToolCalls.map(
-          (toolCall) => ({
-            callId: toolCall.callId,
-            name: toolCall.name,
-            args: toolCall.args,
-            isClientInitiated: false,
-            prompt_id: promptId,
-          })
-        );
-
-        console.debug(
-          `[Gemini Loop] Executing ${toolCallRequests.length} tool calls via Scheduler...`
-        );
-
-        // Execute all tool calls via Scheduler (handles validation, confirmation, execution)
-        const completedCalls = await scheduler.schedule(toolCallRequests, abortController.signal);
-        console.debug(`[Gemini Loop] Scheduler completed ${completedCalls.length} tool calls`);
-
-        // Convert completed calls to function response parts for Gemini
-        const functionResponseParts: Part[] = [];
-
-        for (const completedCall of completedCalls) {
-          try {
-            console.debug(
-              `[Gemini Loop] Processing completed tool: ${completedCall.request.name}`,
-              completedCall.status
-            );
-
-            // Extract response parts from the completed call
-            // The response.responseParts contains the Gemini-formatted Parts array
-            // We need to append these parts directly, as they're already in the correct format
-            // Use optional chaining to safely handle cases where response is undefined
-            if (
-              completedCall.response?.responseParts &&
-              completedCall.response.responseParts.length > 0
-            ) {
-              functionResponseParts.push(...completedCall.response.responseParts);
-            } else {
-              // Fallback: If no response parts, create a generic error response
-              // Include callId to ensure Gemini correlates the response to the request
-              console.warn(
-                `[Gemini Loop] Tool ${completedCall.request.name} returned no response parts, status: ${completedCall.status}`
-              );
-              functionResponseParts.push({
-                functionResponse: {
-                  name: completedCall.request.name,
-                  response: {
-                    error:
-                      completedCall.status === 'error'
-                        ? sanitizeMCPExternalError(completedCall.response?.error, {
-                            stage: 'runtime',
-                          }).message
-                        : 'Tool execution returned no response',
-                  },
-                },
-              } as Part);
-            }
-          } catch (error) {
-            const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-            console.error(
-              `[Gemini Loop] Error processing completed tool category=${safe.category} type=${safe.diagnostic.type}`
-            );
-            functionResponseParts.push({
-              functionResponse: {
-                name: completedCall.request.name,
-                response: { error: safe.message },
-              },
-            } as Part);
-          }
-        }
-
-        // Prepare next message with tool results
-        // Send the function responses back to the model to get its response
-        parts = functionResponseParts;
-        console.debug(
-          `[Gemini Loop] Sending ${functionResponseParts.length} tool result parts back to model...`
-        );
-
-        // Loop will continue with the function response parts sent to the model
-      }
-
-      if (loopCount >= MAX_LOOPS) {
-        console.warn(
-          `[Gemini Loop] Hit maximum loop count (${MAX_LOOPS}) - stopping to prevent infinite loop`
-        );
-      }
-    } catch (error) {
-      // Check if error is from abort
-      if (isMCPAbortError(error)) {
-        console.log(`🛑 Gemini execution stopped for session ${sessionId}`);
-        // Don't re-throw abort errors - this is expected behavior
+      config = await this.createConfig(
+        sessionId,
+        branch.path,
+        model,
+        permissionMode,
+        contextUserId
+      );
+      await config.storage.initialize();
+      const file = await findGeminiRecording(Gemini, config, config.getSessionId());
+      const conversation = file
+        ? await Gemini.loadConversationRecord(file).catch(() => undefined)
+        : undefined;
+      await config.initialize();
+      installGeminiPolicy(Gemini, config);
+      if (controller.signal.aborted) {
+        yield { type: 'stopped' };
         return;
       }
-      if (error instanceof GeminiSessionNotFoundError) throw error;
-      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-      console.error(
-        `Gemini streaming error category=${safe.category} type=${safe.diagnostic.type}`
+      await config.refreshAuth(Gemini.AuthType.USE_GEMINI, this.apiKey);
+      const client = config.getGeminiClient();
+      let restored = false;
+      if (conversation && file) {
+        const startup = client.getChatRecordingService();
+        const startupFile = startup?.getConversationFilePath();
+        try {
+          await client.resumeChat(Gemini.convertSessionToClientHistory(conversation.messages), {
+            conversation,
+            filePath: file,
+          });
+          restored = true;
+        } catch {
+          // A damaged recording is not reconstructed from Agor's rendered messages.
+          await client.resetChat();
+        }
+        if (startupFile !== file) await startup?.deleteCurrentSessionIfNotResumableAsync();
+      }
+      if (!restored && (await this.messagesRepo.getNextIndexBySessionId(sessionId)) > 1) {
+        yield { type: 'complete', content: [{ type: 'text', text: GEMINI_HISTORY_NOTICE }] };
+      }
+      await client.setTools();
+      let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
+      const promptId = `${sessionId}-${Date.now()}`;
+      const totals: TokenUsage = {};
+      let reportedModel: string | undefined;
+      for (let round = 0; round < 50; round++) {
+        if (controller.signal.aborted) {
+          yield { type: 'stopped' };
+          return;
+        }
+        let text = '';
+        const pending: GeminiTypes.ToolCallRequestInfo[] = [];
+        let lastUsage: GeminiTypes.GeminiFinishedEventValue['usageMetadata'];
+        const stream = client.sendMessageStream(parts, controller.signal, promptId);
+        let next = await stream.next();
+        while (!next.done) {
+          const event = next.value;
+          reportSdkActivity(onActivity, 'gemini', String(event.type));
+          switch (event.type) {
+            case Gemini.GeminiEventType.Content:
+              text += event.value;
+              yield { type: 'partial', textChunk: event.value, resolvedModel: reportedModel };
+              break;
+            case Gemini.GeminiEventType.ModelInfo:
+              reportedModel = event.value;
+              break;
+            case Gemini.GeminiEventType.ToolCallRequest:
+              pending.push(event.value);
+              break;
+            case Gemini.GeminiEventType.Finished:
+              lastUsage = event.value.usageMetadata;
+              break;
+            case Gemini.GeminiEventType.Error:
+              throw geminiError(Gemini.classifyGoogleError(event.value.error), model);
+            case Gemini.GeminiEventType.UserCancelled:
+              controller.abort();
+              yield { type: 'stopped' };
+              return;
+            case Gemini.GeminiEventType.LoopDetected:
+              throw new GeminiIntegrationError('Gemini stopped because it detected a loop.');
+            case Gemini.GeminiEventType.ContextWindowWillOverflow:
+              throw new GeminiIntegrationError(
+                'Gemini conversation is too large. Start a new session.'
+              );
+            case Gemini.GeminiEventType.InvalidStream:
+              throw new GeminiIntegrationError('Gemini returned an invalid response. Try again.');
+            case Gemini.GeminiEventType.MaxSessionTurns:
+              throw new GeminiIntegrationError(
+                'Gemini reached the session turn limit. Start a new session.'
+              );
+            case Gemini.GeminiEventType.AgentExecutionStopped:
+              throw new GeminiIntegrationError('Gemini stopped the agent execution.');
+            case Gemini.GeminiEventType.ChatCompressed:
+              yield {
+                type: 'complete',
+                content: [{ type: 'text', text: 'Gemini compressed the conversation context.' }],
+              };
+              break;
+            case Gemini.GeminiEventType.AgentExecutionBlocked:
+              yield {
+                type: 'complete',
+                content: [{ type: 'text', text: 'Gemini blocked an action and continued.' }],
+              };
+              break;
+          }
+          next = await stream.next();
+        }
+        const response = next.value?.getDebugResponses().at(-1);
+        reportedModel = response?.modelVersion ?? reportedModel;
+        const usage = extractGeminiTokenUsage(lastUsage);
+        if (usage)
+          for (const key of Object.keys(usage) as (keyof TokenUsage)[])
+            totals[key] = (totals[key] ?? 0) + (usage[key] ?? 0);
+        const toolUses = pending.map((call) => ({
+          id: call.callId,
+          name: TOOL_ALIASES[call.name] ?? call.name,
+          input: call.args,
+        }));
+        yield {
+          type: 'complete',
+          content: [
+            ...(text ? [{ type: 'text', text }] : []),
+            ...toolUses.map((tool) => ({ type: 'tool_use', ...tool })),
+          ],
+          toolUses,
+          resolvedModel: reportedModel,
+          usage: { ...totals },
+          rawSdkResponse: {
+            type: Gemini.GeminiEventType.Finished,
+            value: { reason: undefined, usageMetadata: lastUsage },
+            agor: { usage: { ...totals }, requestedModel, reportedModel, costEstimated: true },
+          },
+        };
+        if (taskId && this.tasksService) {
+          const task = await this.tasksService.get(taskId);
+          await this.tasksService.patch(taskId, {
+            metadata: {
+              ...task.metadata,
+              gemini: { requestedModel, reportedModel, costEstimated: true },
+            },
+          });
+        }
+        if (!pending.length) return;
+        const scheduler = new Gemini.Scheduler({
+          context: config,
+          messageBus: config.getMessageBus(),
+          getPreferredEditor: () => undefined,
+          schedulerId: `${promptId}-${round}`,
+        });
+        let completed: Awaited<ReturnType<typeof scheduler.schedule>>;
+        try {
+          completed = await scheduler.schedule(pending, controller.signal);
+        } finally {
+          scheduler.dispose();
+        }
+        parts = [];
+        const results: ContentBlock[] = [];
+        for (const call of completed) {
+          const responseParts = call.response?.responseParts ?? [];
+          parts.push(...responseParts);
+          results.push({
+            type: 'tool_result',
+            tool_use_id: call.request.callId,
+            content:
+              typeof call.response?.resultDisplay === 'string'
+                ? call.response.resultDisplay
+                : JSON.stringify(responseParts),
+            is_error: call.status !== 'success',
+          });
+        }
+        yield { type: 'complete', content: results, resolvedModel: reportedModel };
+        if (controller.signal.aborted) {
+          yield { type: 'stopped' };
+          return;
+        }
+      }
+      throw new GeminiIntegrationError(
+        'Gemini reached the limit of 50 tool rounds. Send a follow-up to continue.'
       );
-      throw new Error(safe.message);
+    } catch (error) {
+      if (controller.signal.aborted) {
+        yield { type: 'stopped' };
+        return;
+      }
+      throw geminiError(
+        error instanceof GeminiIntegrationError ? error : Gemini.classifyGoogleError(error),
+        model
+      );
     } finally {
-      outerAbortSignal?.removeEventListener('abort', forwardOuterAbort);
-      if (this.activeControllers.get(sessionId) === abortController) {
+      try {
+        await disposeGeminiRuntime(config, cleanup);
+      } finally {
+        outerAbortSignal?.removeEventListener('abort', abort);
         this.activeControllers.delete(sessionId);
       }
     }
   }
 
-  /**
-   * Load session file from SDK's filesystem storage
-   *
-   * Searches for session file in ~/.gemini/tmp/{projectHash}/chats/
-   * matching pattern: session-*-{sessionId-first8}.json
-   */
-  private async loadSessionFile(
+  private async createConfig(
     sessionId: SessionID,
-    projectRoot: string
-  ): Promise<ResumedSessionData | null> {
-    try {
-      // Calculate project hash (same as SDK does)
-      const projectHash = crypto.createHash('sha256').update(projectRoot).digest('hex');
-      // Read from the SAME location the Gemini CLI writes to. GEMINI_CLI_HOME is
-      // a home ROOT (the CLI appends `.gemini`), so honor it when a per-branch
-      // SDK home relocates it (design §8 item 3); else fall back to the passwd
-      // home. Without this, Agor would read the old `~/.gemini` while the SDK
-      // wrote to the relocated branch home (silent split-brain).
-      const geminiHomeRoot = process.env.GEMINI_CLI_HOME || os.homedir();
-      const chatsDir = path.join(geminiHomeRoot, '.gemini', 'tmp', projectHash, 'chats');
-
-      // Check if chats directory exists
-      try {
-        await fs.access(chatsDir);
-      } catch {
-        console.debug(`No chats directory found for project ${projectRoot}`);
-        return null;
-      }
-
-      // Find session file matching pattern: session-*-{sessionId-first8}.json
-      const sessionIdShort = shortId(sessionId);
-      const files = await fs.readdir(chatsDir);
-      const sessionFile = files.find((f) => f.includes(sessionIdShort) && f.endsWith('.json'));
-
-      if (!sessionFile) {
-        console.debug(`No session file found for ${sessionId} (looking for *${sessionIdShort}*)`);
-        return null;
-      }
-
-      // Load and parse the conversation file
-      const filePath = path.join(chatsDir, sessionFile);
-      const fileContent = await fs.readFile(filePath, 'utf-8');
-      const conversation = JSON.parse(fileContent);
-
-      console.log(`📂 Found session file: ${sessionFile}`);
-      return { conversation, filePath };
-    } catch (error) {
-      console.error('Error loading session file:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get or create GeminiClient for a session
-   *
-   * Manages client lifecycle and session continuity via history restoration.
-   */
-  private async getOrCreateClient(
-    sessionId: SessionID,
-    permissionMode?: PermissionMode,
+    workingDirectory: string,
+    model: string,
+    permissionMode: PermissionMode | undefined,
     contextUserId?: UserID
-  ): Promise<InstanceType<typeof Gemini.GeminiClient>> {
-    // Resolve per-user API key FIRST, before checking for existing client
-    // This ensures we use the correct key even when reusing a cached client
+  ): Promise<GeminiTypes.Config> {
     const session = await this.sessionsRepo.findById(sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-
-    // Use pre-resolved API key and auth type from base-executor
-    // No need to resolve again - precedence already handled (user → config → env)
-    let authType: (typeof Gemini.AuthType)[keyof typeof Gemini.AuthType];
-    if (this.apiKey) {
-      // API key was found at some level - use it
-      process.env.GEMINI_API_KEY = this.apiKey;
-      authType = Gemini.AuthType.USE_GEMINI;
-      console.log('🔑 [Gemini] Using resolved API key');
-    } else if (this.useNativeAuth) {
-      // No API key found at any level - use OAuth authentication
-      authType = Gemini.AuthType.LOGIN_WITH_GOOGLE;
-      console.log('🔐 [Gemini] Using OAuth authentication (Gemini CLI)');
-      delete process.env.GEMINI_API_KEY;
-    } else {
-      // Fallback case (shouldn't happen if base-executor works correctly)
-      authType = Gemini.AuthType.USE_GEMINI;
-      console.warn('⚠️  [Gemini] No API key and useNativeAuth=false - SDK may fail');
-    }
-
-    // Map Agor permission mode to Gemini ApprovalMode
-    const approvalMode = mapPermissionMode(permissionMode || 'ask');
-
-    // Recreate the cached client if the session's model changed —
-    // Gemini binds the model at construction.
-    const invocationModel = resolveGeminiInvocationModel(session);
-    const cachedInvocationModel = this.sessionClientInvocationModels.get(sessionId);
-    const cachedClient = this.sessionClients.get(sessionId);
-
-    if (cachedClient && cachedInvocationModel === invocationModel) {
-      const config = (cachedClient as unknown as GeminiClientWithConfig).config;
-
-      if (config && typeof config.setApprovalMode === 'function') {
-        config.setApprovalMode(approvalMode);
-        console.log(`🔄 [Gemini] Updated approval mode for existing client: ${approvalMode}`);
-      }
-
-      if (config && typeof config.refreshAuth === 'function') {
-        try {
-          await config.refreshAuth(authType);
-          const authMethod = authType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
-          console.log(`🔄 [Gemini] Refreshed authentication using ${authMethod}`);
-        } catch (error) {
-          // Log but don't throw - let the subsequent prompt attempt fail with a better error
-          const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-          console.warn(
-            `⚠️  [Gemini] refreshAuth() failed category=${safe.category} type=${safe.diagnostic.type}`
-          );
-          console.warn(`   Continuing anyway - prompt may fail if credentials are invalid`);
-        }
-      }
-
-      return cachedClient;
-    }
-
-    if (cachedClient) {
-      // Model changed — recreate. Conversation history is preserved via
-      // the SDK's per-session chat-recording file.
-      console.log(
-        `🔄 [Gemini] Model changed (${cachedInvocationModel} → ${invocationModel}); recreating client`
+    if (!session)
+      throw new GeminiIntegrationError(
+        'Gemini session has no accessible branch; the task was not started'
       );
-      this.sessionClients.delete(sessionId);
-      this.sessionClientInvocationModels.delete(sessionId);
-    }
-
-    // Session was already fetched above for API key resolution
-    // Determine working directory from branch (branch-centric architecture)
-    let workingDirectory = process.cwd();
-    if (session.branch_id && this.branchesRepo) {
-      try {
-        const branch = await this.branchesRepo.findById(session.branch_id);
-        if (branch) {
-          workingDirectory = branch.path;
-          console.log(`✅ Using branch path as cwd: ${workingDirectory}`);
-        } else {
-          console.warn(
-            `⚠️  Session ${sessionId} references non-existent branch ${session.branch_id}, using process.cwd(): ${workingDirectory}`
-          );
-        }
-      } catch (error) {
-        console.error(`❌ Failed to fetch branch ${session.branch_id}:`, error);
-        console.warn(`   Falling back to process.cwd(): ${workingDirectory}`);
-      }
-    } else if (!this.branchesRepo) {
-      console.warn(
-        `⚠️  GeminiPromptService initialized without branchesRepo, using process.cwd(): ${workingDirectory}`
-      );
-    } else {
-      console.warn(
-        `⚠️  Session ${sessionId} has no branch_id, using process.cwd(): ${workingDirectory}`
-      );
-    }
-
-    const model = invocationModel;
-
-    // approvalMode already mapped at top of function
-    console.log(
-      `🔧 [Gemini] Creating new client with approval mode: ${permissionMode || 'ask'} → ${approvalMode}`
-    );
-
-    // Inject static Agor orientation via temp file (no race conditions!)
-    // Gemini SDK supports geminiMdFilePaths parameter to load additional context files.
-    // We use a per-session temp file to avoid race conditions between concurrent sessions.
-    //
-    // IMPORTANT: Gemini uses GEMINI.md (not CLAUDE.md) for project instructions!
-    // User's project GEMINI.md files are still loaded hierarchically.
-    const agorSystemPrompt = await renderAgorSystemPrompt();
-
-    // Write to temp file (unique per session, no races!)
-    // Use mode 0o600 (rw-------) to prevent other users from reading session metadata
-    const tempSessionContextPath = path.join(os.tmpdir(), `agor-gemini-${sessionId}.md`);
-    await fs.writeFile(tempSessionContextPath, agorSystemPrompt, {
-      encoding: 'utf-8',
-      mode: 0o600,
-    });
-    console.log(`✅ Created Agor session context at ${tempSessionContextPath}`);
-    console.log(`   Will be loaded alongside project GEMINI.md files`);
-
     // Fetch and configure MCP servers for this session (hierarchical scoping)
     const mcpServersConfig: Record<string, InstanceType<typeof Gemini.MCPServerConfig>> = {};
 
@@ -854,179 +540,40 @@ export class GeminiPromptService {
       }
     }
 
-    // Create SDK config
-    const config = new Gemini.Config({
-      sessionId, // Use Agor session ID
+    const approvalMode = mapPermissionMode(permissionMode);
+    return new Gemini.Config({
+      sessionId: geminiSessionId(sessionId),
       targetDir: workingDirectory,
       cwd: workingDirectory,
       model,
-      interactive: false, // Use non-interactive mode (we'll handle tool execution ourselves)
+      interactive: false,
       approvalMode,
-      debugMode: true, // Enable debug logging to see what's happening
-      folderTrust: true, // CRITICAL: Trust folder to allow YOLO/AUTO_EDIT modes
-      trustedFolder: true, // CRITICAL: Mark folder as trusted
-      fileFiltering: {
-        respectGitIgnore: true,
-        respectGeminiIgnore: true,
-      },
-      mcpServers: Object.keys(mcpServersConfig).length > 0 ? mcpServersConfig : undefined,
-      geminiMdFilePaths: [tempSessionContextPath], // Load session-specific context (no race conditions!)
-      // output: { format: 'stream-json' }, // Streaming JSON events (omitting for now - may not be needed)
+      debugMode: false,
+      folderTrust: true,
+      trustedFolder: true,
+      usageStatisticsEnabled: false,
+      telemetry: { enabled: false, logPrompts: false },
+      enableHooks: false,
+      enableHooksUI: false,
+      extensionsEnabled: false,
+      enableEnvironmentVariableRedaction: false,
+      enableAgents: true,
+      agents: { overrides: { browser: { enabled: false } } },
+      policyEngineConfig: buildGeminiPolicy(Gemini, approvalMode, mcpServersConfig),
+      mcpServers: mcpServersConfig,
+      userMemory: await renderAgorSystemPrompt(),
+      fileFiltering: { respectGitIgnore: true, respectGeminiIgnore: true },
     });
-
-    // CRITICAL: Initialize config first to set up tool registry, etc.
-    await config.initialize();
-
-    // NOTE: API key was already resolved in getOrCreateClient() before client was reused/created
-    // So process.env.GEMINI_API_KEY is already set with the correct per-user or global key
-
-    // CRITICAL: Set up authentication (creates ContentGenerator and BaseLlmClient)
-    // Use authType determined above (OAuth or API key)
-    // The SDK will look for GEMINI_API_KEY environment variable (if using API key)
-    // or use OAuth credentials from ~/.gemini/oauth_creds.json (if using OAuth)
-
-    // Wrap auth in a timeout to prevent hanging on OAuth prompts
-    const AUTH_TIMEOUT_MS = 10000; // 10 seconds
-    try {
-      await Promise.race([
-        config.refreshAuth(authType),
-        new Promise((_, reject) =>
-          setTimeout(
-            () =>
-              reject(
-                new Error(
-                  'Authentication timeout. If using OAuth, please set GEMINI_API_KEY instead or run `gemini login` outside of Agor to authenticate.'
-                )
-              ),
-            AUTH_TIMEOUT_MS
-          )
-        ),
-      ]);
-      const authMethod = authType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
-      console.log(`🔐 [Gemini] Authenticated using ${authMethod}`);
-    } catch (error) {
-      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-      console.error(
-        `❌ [Gemini] Authentication failed category=${safe.category} type=${safe.diagnostic.type}`
-      );
-      throw new Error(safe.message);
-    }
-
-    // Try to load existing session file from SDK's filesystem storage
-    const resumedSessionData = await this.loadSessionFile(sessionId, workingDirectory);
-
-    // Create client (config must be initialized and authenticated first!)
-    const client = new Gemini.GeminiClient(config);
-    await client.initialize();
-
-    // CRITICAL: Set tools for the client (this triggers MCP tool discovery and registration)
-    await client.setTools();
-    console.log('🔧 Tools initialized for Gemini client');
-
-    // Check if we have existing conversation history
-    if (resumedSessionData) {
-      // Use SDK's native resumption mechanism
-      const recordingService = client.getChatRecordingService();
-      if (recordingService) {
-        recordingService.initialize(resumedSessionData);
-        console.log(
-          `🔄 Resumed session from file: ${resumedSessionData.conversation.messages.length} messages`
-        );
-
-        // Also restore to client history for API continuity
-        // Convert ConversationRecord messages to Content[] format
-        const history = convertConversationToHistory(resumedSessionData.conversation);
-        client.setHistory(history);
-      }
-    }
-
-    // Cache client + the invocation model it was bound to. Both maps must
-    // be set together so the next call's cache-invalidation check sees a
-    // consistent (client, model) pair.
-    this.sessionClients.set(sessionId, client);
-    this.sessionClientInvocationModels.set(sessionId, invocationModel);
-
-    return client;
   }
 
-  /**
-   * Map Agor permission mode to Gemini ApprovalMode
-   *
-   * Gemini SDK supports 3 modes:
-   * - DEFAULT: Prompt for each tool use
-   * - AUTO_EDIT: Auto-approve file edits, prompt for shell/web commands
-   * - YOLO: Auto-approve all operations
-   */
-  /**
-   * Update session history after turn completion
-   *
-   * The SDK's ChatRecordingService automatically persists to filesystem,
-   * so we just log for debugging purposes.
-   */
-  private async updateSessionHistory(
-    sessionId: SessionID,
-    client: InstanceType<typeof Gemini.GeminiClient>
-  ): Promise<void> {
-    const history = client.getHistory();
-    const recordingService = client.getChatRecordingService();
-
-    if (recordingService) {
-      console.debug(
-        `📝 Session ${sessionId} history updated: ${history.length} turns (auto-saved to filesystem)`
-      );
-    } else {
-      console.warn(
-        `⚠️  No ChatRecordingService found for session ${sessionId} - history not persisted`
-      );
-    }
-  }
-
-  /**
-   * Stop currently executing task
-   *
-   * Calls abort() on the AbortController to gracefully stop streaming.
-   *
-   * @param sessionId - Session identifier
-   * @returns Success status
-   */
   stopTask(sessionId: SessionID): { success: boolean; reason?: string } {
     const controller = this.activeControllers.get(sessionId);
-    if (!controller) {
-      return {
-        success: false,
-        reason: 'No active task found for this session',
-      };
-    }
-
-    // Abort the streaming request
+    if (!controller) return { success: false, reason: 'No active task found for this session' };
     controller.abort();
-    console.log(`🛑 Stopping Gemini task for session ${sessionId}`);
-
     return { success: true };
   }
 
-  /**
-   * Clean up client for a session (e.g., on session close)
-   */
   async closeSession(sessionId: SessionID): Promise<void> {
-    const client = this.sessionClients.get(sessionId);
-    if (client) {
-      await client.resetChat(); // Clear history
-      this.sessionClients.delete(sessionId);
-      this.sessionClientInvocationModels.delete(sessionId);
-      console.log(`🗑️  Closed Gemini client for session ${sessionId}`);
-    }
-
-    // Clean up temp session context file
-    const tempSessionContextPath = path.join(os.tmpdir(), `agor-gemini-${sessionId}.md`);
-    try {
-      await fs.unlink(tempSessionContextPath);
-      console.log(`🗑️  Removed temp session context file`);
-    } catch (error) {
-      // File may not exist if session never ran - that's ok
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn(`⚠️  Failed to remove temp session context file:`, error);
-      }
-    }
+    this.stopTask(sessionId);
   }
 }

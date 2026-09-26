@@ -1,3 +1,4 @@
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * Detail view for one catalog entry, and the only place a connect starts.
  *
@@ -59,7 +60,12 @@ const { Title, Paragraph, Text, Link } = Typography;
 const DEFAULT_AGENT: AgenticToolName = 'claude-code';
 
 const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
-  label: agent.name,
+  label: (
+    <Space>
+      <span>{agent.name}</span>
+      <ToolBetaBadge tool={agent.id as AgenticToolName} />
+    </Space>
+  ),
   value: agent.id,
 }));
 

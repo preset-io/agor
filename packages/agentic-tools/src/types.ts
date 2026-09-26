@@ -37,6 +37,7 @@ export interface ConfigHomeOverride {
 export interface AgenticToolIntegration {
   name: AgenticToolName;
   displayName: string;
+  beta?: boolean;
   capabilities: AgenticToolCapabilities;
   authentication: 'api-key' | 'runtime-managed';
   apiKeyName?: ApiKeyName;

@@ -1,4 +1,5 @@
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolName,
   CodexApprovalPolicy,
@@ -130,16 +131,9 @@ const CODEX_MODES: ModeOption[] = [
 // Gemini permission modes (Google Gemini SDK - native ApprovalMode values)
 const GEMINI_MODES: ModeOption[] = [
   {
-    mode: 'default',
-    label: 'Manual',
-    description: 'Asks before every tool use · for high-stakes changes',
-    icon: <LockOutlined />,
-    tone: 'danger',
-  },
-  {
     mode: 'autoEdit',
     label: 'Accept edits',
-    description: 'Auto-approves file edits, asks for shell/web · for reviewed code',
+    description: 'Auto-approves reads, edits and MCP; shell and web need Bypass',
     icon: <EditOutlined />,
     tone: 'success',
   },
@@ -262,7 +256,10 @@ const getModesForTool = (tool: PermissionModeSelectorProps['agentic_tool']): Mod
 export const getPermissionModeLabel = (
   tool: PermissionModeSelectorProps['agentic_tool'],
   mode: PermissionMode
-): string => getModesForTool(tool).find((option) => option.mode === mode)?.label ?? mode;
+): string =>
+  tool === 'gemini' && isGeminiManualMode(mode)
+    ? 'Manual (unavailable)'
+    : (getModesForTool(tool).find((option) => option.mode === mode)?.label ?? mode);
 
 /** Full option metadata (label/icon/tone) for a mode, for chip-style rendering. */
 export const getPermissionModeMeta = (
@@ -377,68 +374,84 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   // show the two-part description and the raw mode value; tight toolbar
   // contexts (compact) collapse to an icon or plain label via `iconOnly`/`plain`.
   const effectiveFullWidth = fullWidth || !compact;
+  const manualUnavailable =
+    agentic_tool === 'gemini' && value !== undefined && isGeminiManualMode(value);
   const currentMode = modes.find((m) => m.mode === effectiveValue);
   return (
-    <Tooltip
-      title={currentMode ? `${currentMode.label} — ${currentMode.description}` : 'Permission mode'}
-    >
-      <Select
-        value={effectiveValue}
-        onChange={onChange}
-        style={{ fontSize: token.fontSizeSM, width: effectiveFullWidth ? '100%' : undefined }}
-        size={size}
-        popupMatchSelectWidth={false}
-        optionLabelProp="label"
-        options={modes.map(({ mode, label, description, icon, tone }) => {
-          const color = getModeColor(tone, token);
-          return {
-            label: plain ? (
-              label
-            ) : iconOnly ? (
-              <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
-            ) : (
-              <Space size={token.marginXXS} style={{ fontSize: token.fontSizeSM }}>
-                <span style={{ color }}>{icon}</span>
-                <span>{label}</span>
-              </Space>
-            ),
-            value: mode,
-            title: description,
-          };
-        })}
-        optionRender={(option) => {
-          const modeData = modes.find((m) => m.mode === option.value);
-          if (!modeData) return null;
-          const color = getModeColor(modeData.tone, token);
-          return (
-            <Flex
-              justify="space-between"
-              align="start"
-              gap={12}
-              style={{ minWidth: iconOnly ? undefined : 260 }}
-            >
-              <Space size={6} align="start">
-                <span style={{ color }}>{modeData.icon}</span>
-                {/* whiteSpace:normal lets the two-part description wrap instead
+    <Flex vertical gap={4}>
+      {manualUnavailable && (
+        <Typography.Text type="warning">
+          {GEMINI_MANUAL_MESSAGE} If your settings are managed, ask a workspace admin to update the
+          preset.
+        </Typography.Text>
+      )}
+      <Tooltip
+        title={
+          currentMode ? `${currentMode.label} — ${currentMode.description}` : 'Permission mode'
+        }
+      >
+        <Select
+          value={effectiveValue}
+          labelRender={manualUnavailable ? () => 'Manual (unavailable)' : undefined}
+          onChange={onChange}
+          style={{ fontSize: token.fontSizeSM, width: effectiveFullWidth ? '100%' : undefined }}
+          size={size}
+          popupMatchSelectWidth={false}
+          optionLabelProp="label"
+          options={modes.map(({ mode, label, description, icon, tone }) => {
+            const color = getModeColor(tone, token);
+            return {
+              label: plain ? (
+                label
+              ) : iconOnly ? (
+                <span style={{ color, fontSize: token.fontSizeSM }}>{icon}</span>
+              ) : (
+                <Space size={token.marginXXS} style={{ fontSize: token.fontSizeSM }}>
+                  <span style={{ color }}>{icon}</span>
+                  <span>{label}</span>
+                </Space>
+              ),
+              value: mode,
+              title: description,
+            };
+          })}
+          optionRender={(option) => {
+            const modeData = modes.find((m) => m.mode === option.value);
+            if (!modeData) return null;
+            const color = getModeColor(modeData.tone, token);
+            return (
+              <Flex
+                justify="space-between"
+                align="start"
+                gap={12}
+                style={{ minWidth: iconOnly ? undefined : 260 }}
+              >
+                <Space size={6} align="start">
+                  <span style={{ color }}>{modeData.icon}</span>
+                  {/* whiteSpace:normal lets the two-part description wrap instead
                     of truncating with antd's default option ellipsis. */}
-                <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
-                  <div style={{ color: modeData.tone === 'warning' ? color : undefined }}>
-                    {modeData.label}
+                  <div style={{ lineHeight: 1.3, whiteSpace: 'normal' }}>
+                    <div style={{ color: modeData.tone === 'warning' ? color : undefined }}>
+                      {modeData.label}
+                    </div>
+                    <Typography.Text
+                      type="secondary"
+                      style={{ fontSize: 11, whiteSpace: 'normal' }}
+                    >
+                      {modeData.description}
+                    </Typography.Text>
                   </div>
-                  <Typography.Text type="secondary" style={{ fontSize: 11, whiteSpace: 'normal' }}>
-                    {modeData.description}
+                </Space>
+                {!iconOnly && (
+                  <Typography.Text type="secondary" code style={{ fontSize: 11 }}>
+                    {modeData.mode}
                   </Typography.Text>
-                </div>
-              </Space>
-              {!iconOnly && (
-                <Typography.Text type="secondary" code style={{ fontSize: 11 }}>
-                  {modeData.mode}
-                </Typography.Text>
-              )}
-            </Flex>
-          );
-        }}
-      />
-    </Tooltip>
+                )}
+              </Flex>
+            );
+          }}
+        />
+      </Tooltip>
+    </Flex>
   );
 };

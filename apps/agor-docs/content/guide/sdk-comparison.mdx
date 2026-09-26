@@ -18,6 +18,32 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 > SDK/CLI pair that supports this switch; an incompatible CLI configuration fails the Task
 > rather than silently enabling native subagents.
 
+## Gemini Beta
+
+Gemini is **Beta** and supports **AI Studio API keys only**. Add a key in
+Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
+
+- **Accept edits** (the default): auto-approves reads, edits and permitted MCP tools;
+  shell, background processes and web access need **Bypass permissions**.
+- **Bypass permissions** uses the SDK's YOLO behavior for built-ins, shell, web,
+  skills and loaded sub-agents. It is not a sandbox. Agor's MCP selection and
+  per-tool restrictions still apply.
+- Manual approval, interactive questions and plan mode are unavailable. Existing
+  Manual configurations fail when run; switch to Accept edits or Bypass. If a
+  workspace manages your preset, ask an admin to change it.
+- Built-in file edits can update build files inside the branch. MCP tools and
+  sub-agents cannot edit build files. An agent declaring an MCP server name that
+  clashes with an Agor-configured server cannot run. Two loaded agents declaring
+  the same MCP server name share one merged server configuration in Bypass.
+- Attachments and thinking display are not supported. Hooks and extensions are off.
+- Follow-ups use SDK conversation recordings in the session's SDK home, including
+  across executors. If history cannot be restored, a notice explains the fresh start.
+- The default model is `gemini-3.8-flash`. The picker also offers `gemini-3.7-flash`,
+  `gemini-3.5-flash-lite` and the paid preview `gemini-3.1-pro-preview`. Stored 2.5
+  selections remain usable when the API key has access. Retired Flash selections
+  are remapped with a notice; retired Pro selections require another model.
+- Usage sums all model turns; context size reflects the last turn. Costs are estimates.
+
 ## Feature Matrix
 
 <ScrollTable>
@@ -28,12 +54,12 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 | **Stop mid-execution**      | ✅ Yes          | ⚠️ Limited         | ⚠️ Limited       | ⚠️ Limited      | ⚠️ Limited         | Claude has `interrupt()`, others may lose partial work                                        |
 | **Session forkable**        | ✅ SDK-native   | ✅ App Server fork | ❌ Not yet       | ❌ Not yet      | ❌ Not yet         | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar    |
 | **MCP integration**         | ✅ Native       | ✅ Native          | ✅ Native        | ✅ Native       | ✅ Native          | All agents support MCP with Agor's built-in self-access server                                |
-| **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ⚠️ Basic         | ✅ Interactive  | ✅ Interactive     | OpenCode routes permission decisions through Agor and honors session permission mode          |
+| **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ❌ No Manual | ✅ Interactive  | ✅ Interactive     | OpenCode routes permission decisions through Agor and honors session permission mode          |
 | **Project instructions**    | ✅ CLAUDE.md    | ✅ AGENTS.md       | ⚠️ Manual        | ⚠️ Manual       | ✅ opencode.json   | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md               |
-| **Tool execution**          | ✅ Rich widgets | ⚠️ Basic           | ⚠️ Basic         | ✅ Rich events  | ✅ Rich events     | OpenCode streams tool parts with state tracking (pending/running/completed)                   |
-| **Session continuity**      | ✅ SDK-managed  | ✅ History-based   | ✅ History-based | ✅ SDK-managed  | ✅ SDK-managed     | OpenCode, Claude, and Copilot use SDK session IDs; others replay message history              |
-| **Token usage tracking**    | ✅ Full         | ✅ Full            | ❌ No            | ⚠️ Via events   | ✅ Via step-finish | OpenCode provides token counts and cost via `step-finish` message parts                       |
-| **Context window tracking** | 🟡 Estimated    | 🟡 Estimated       | ❌ No            | 🟡 Estimated    | 🟡 Estimated       | Agor derives cumulative conversation usage from SDK metrics                                   |
+| **Tool execution**          | ✅ Rich widgets | ⚠️ Basic           | ✅ Standard results | ✅ Rich events  | ✅ Rich events     | OpenCode streams tool parts with state tracking (pending/running/completed)                   |
+| **Session continuity**      | ✅ SDK-managed  | ✅ History-based   | ✅ SDK-managed | ✅ SDK-managed  | ✅ SDK-managed     | Gemini resumes native SDK conversation recordings |
+| **Token usage tracking**    | ✅ Full         | ✅ Full            | ✅ Per-turn | ⚠️ Via events   | ✅ Via step-finish | OpenCode provides token counts and cost via `step-finish` message parts                       |
+| **Context window tracking** | 🟡 Estimated    | 🟡 Estimated       | 🟡 Estimated | 🟡 Estimated    | 🟡 Estimated       | Agor derives cumulative conversation usage from SDK metrics                                   |
 
 </ScrollTable>
 
@@ -72,7 +98,7 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - Token-level text streaming via `sendMessageStream()` (`Content` events)
 - True real-time typewriter effect
 - Tool call request/response events stream in real-time
-- 13 distinct event types for rich progress feedback
+- Progress, compression and blocked-action notices
 
 **Copilot:** ✅ **Full text + tool streaming**
 
@@ -108,11 +134,10 @@ Agor integrates with multiple AI coding agents. Each SDK has different capabilit
 - May lose partial work
 - Less graceful than Claude
 
-**Gemini:** ⚠️ **Limited**
+**Gemini:** **Task cancellation**
 
-- Can abort stream
-- May lose partial tool execution results
-- Similar to Codex limitations
+- Stop aborts streams and running tools and marks the task stopped
+- Follow-ups resume the SDK recording; side effects already performed are not rolled back
 
 **Copilot:** ⚠️ **Limited**
 
@@ -212,11 +237,9 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - Modes: `'ask'`, `'auto'`, `'allow-all'`
 - Less granular than Claude
 
-**Gemini:** ⚠️ **Basic permission modes**
+**Gemini:** **Accept edits and Bypass**
 
-- Similar to Codex
-- Function calling requires explicit approval
-- Less detailed context than Claude
+See [Gemini Beta](#gemini-beta) for the permission boundary and limitations.
 
 **Copilot:** ✅ **Interactive permission system**
 
@@ -296,11 +319,11 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - Less structured than Claude's tools
 - Agor normalizes to common format
 
-**Gemini:** ⚠️ **Basic function calling**
+**Gemini:** **Standard tool results**
 
-- Google function calling format
-- Similar to Codex in structure
-- Agor normalizes to common format
+- Google function calls and results map to Agor tool blocks
+- Reads, edits, shell and searches use the standard renderers
+- Denials and tool errors remain visible in the transcript
 
 **Copilot:** ✅ **Rich event-based tool tracking**
 
@@ -342,11 +365,10 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Agor passes message history array to each API call
 - Seamless from user perspective, more work behind the scenes
 
-**Gemini:** 🟡 **History-based continuity**
+**Gemini:** **SDK-managed conversation recordings**
 
-- Uses `setHistory()` to restore conversation state
-- Similar to Codex pattern
-- Works reliably but requires explicit history management
+- Restores the exact session recording through SDK resume
+- Missing or ambiguous history continues fresh with a notice
 
 **Copilot:** ✅ **SDK-managed conversation**
 
@@ -362,7 +384,7 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Seamless continuity via session resume with the stored ID
 - No message replay needed (OpenCode server maintains conversation state)
 
-**Performance Consideration:** Claude, Copilot, and OpenCode's session ID approach scales better for very long conversations (no need to resend full history). Codex/Gemini history-based approach works fine for typical sessions.
+Gemini resumes its SDK recording rather than reconstructing history from rendered transcript messages.
 
 ---
 
@@ -385,10 +407,10 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Populates TaskHeader + Session footer pills with counts + $ estimate
 - Feeds daemon cost calculator + context utilities automatically
 
-**Gemini:** ❌ **Not implemented**
+**Gemini:** **Per-turn usage**
 
-- Gemini API provides usage data but not yet extracted
-- Future: Will track input/output token counts
+- Sums input, output and cache-read usage across model turns
+- Uses the last turn for context size; costs are estimated
 
 **Copilot:** ⚠️ **Via turn events**
 
@@ -411,7 +433,7 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Agor stores these in message metadata under `opencode` key
 - Supports cost tracking across all 75+ providers
 
-**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini and Copilot support is next.
+**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini also records per-turn usage; Copilot support varies by event.
 
 ---
 
@@ -432,9 +454,10 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Provides percentage vs. model-specific limit (gpt-5-codex, gpt-4o, etc.)
 - Same limitations as Claude (system overhead not included)
 
-**Gemini:** ❌ **Not implemented**
+**Gemini:** 🟡 **Estimated**
 
-- No context tracking available yet
+- Context size uses the latest model turn, not summed task usage
+- Task usage sums all turns; costs are estimated
 
 **Copilot:** 🟡 **Estimated**
 
@@ -844,8 +867,7 @@ As agent SDKs evolve, Agor will gain new capabilities.
 Agent integration priorities:
 
 - **Codex text streaming** - The Codex SDK (`@openai/codex-sdk`) does not support token-level text streaming as of v0.99.0. When OpenAI adds `item.updated` support for `agent_message` items (or a new text delta event), Agor's code is already prepared to handle it
-- **Token tracking for Gemini & Copilot** - Extract usage data from Google and GitHub APIs
-- **Gemini project files** - If Google adds instruction file support
+- **Token tracking for Copilot** - Extract usage data from GitHub APIs
 - **Copilot project instructions** - Track `.github/copilot-instructions.md` convention as it evolves
 - **Better stop controls** - More graceful cancellation for all agents
 - **Richer tool metadata** - If Codex/Gemini expose more tool details

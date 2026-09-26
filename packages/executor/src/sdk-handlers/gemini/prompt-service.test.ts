@@ -1,380 +1,313 @@
-import type { BranchRepository } from '@agor/core/db/repositories/branches';
-import type { MCPServerRepository } from '@agor/core/db/repositories/mcp-servers';
-import type { MessagesRepository } from '@agor/core/db/repositories/messages';
-import type { SessionMCPServerRepository } from '@agor/core/db/repositories/session-mcp-servers';
-import type { SessionRepository } from '@agor/core/db/repositories/sessions';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import type { SessionID } from '@agor/core/types';
+import type * as SDK from '@google/gemini-cli-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type {
+  BranchRepository,
+  MessagesRepository,
+  SessionRepository,
+} from '../../db/feathers-repositories.js';
 
-const capturedConfig = vi.hoisted(() => vi.fn());
-// Configuration fixtures must not depend on the invoking executor's environment.
-vi.mock('../../config.js', () => ({
-  getDaemonUrl: vi.fn(async () => 'http://localhost:3030'),
+const state = vi.hoisted(() => ({
+  config: vi.fn(),
+  auth: vi.fn(),
+  prompts: vi.fn(),
+  schedule: vi.fn(),
+  dispose: vi.fn(),
+  resume: vi.fn(),
+  reset: vi.fn(),
+  events: [] as SDK.ServerGeminiStreamEvent[][],
 }));
-
-vi.mock('node:fs/promises', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('node:fs/promises')>()),
-  writeFile: vi.fn(),
+vi.mock('../../config.js', () => ({ getDaemonUrl: vi.fn(async () => 'http://localhost:3030') }));
+vi.mock('./runtime.js', async (original) => ({
+  ...(await original<typeof import('./runtime.js')>()),
+  enterGeminiRuntime: vi.fn(async () => async () => {}),
+  findGeminiRecording: vi.fn(async () => undefined),
 }));
-vi.mock('@agor/core/mcp', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@agor/core/mcp')>()),
-  getMcpServersForSession: vi.fn(async () => [
-    {
-      server: {
-        name: 'external',
-        transport: 'http',
-        url: 'https://example.com/mcp',
-      },
-    },
-  ]),
-  resolveScopedMCPAuthHeaders: vi.fn(async () => ({ Authorization: 'Bearer external-token' })),
-}));
-vi.mock('@google/gemini-cli-core', () => ({
-  ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
-  GeminiEventType: { Error: 'error' },
-  AuthType: { USE_GEMINI: 'gemini' },
-  MCPServerConfig: class {
-    constructor(...args: unknown[]) {
-      Object.assign(this, { headers: args[6] });
-    }
-  },
-  Config: class {
-    constructor(options: unknown) {
-      capturedConfig(options);
-      // Stop at the config boundary: never initialize/authenticate a provider.
-      throw new Error('config captured');
-    }
-  },
+vi.mock('./policy.js', () => ({
+  buildGeminiPolicy: vi.fn(() => ({})),
+  installGeminiPolicy: vi.fn(),
 }));
 vi.mock('@agor/core/agentic-integrations', () => ({
-  loadManagedAgenticToolSdk: vi.fn(() => import('@google/gemini-cli-core')),
+  loadManagedAgenticToolSdk: vi.fn(async () => ({
+    ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
+    AuthType: { USE_GEMINI: 'gemini' },
+    classifyGoogleError: (error: unknown) => error,
+    loadConversationRecord: vi.fn(async () => ({ messages: [] })),
+    convertSessionToClientHistory: vi.fn(() => []),
+    GeminiEventType: {
+      Content: 'content',
+      ModelInfo: 'model_info',
+      ToolCallRequest: 'tool_call_request',
+      Finished: 'finished',
+      Error: 'error',
+      UserCancelled: 'user_cancelled',
+      LoopDetected: 'loop_detected',
+      ContextWindowWillOverflow: 'context_window_will_overflow',
+      InvalidStream: 'invalid_stream',
+      MaxSessionTurns: 'max_session_turns',
+      AgentExecutionStopped: 'agent_execution_stopped',
+      ChatCompressed: 'chat_compressed',
+      AgentExecutionBlocked: 'agent_execution_blocked',
+    },
+    Config: class {
+      storage = { initialize: vi.fn() };
+      constructor(options: unknown) {
+        state.config(options);
+      }
+      getSessionId() {
+        return 'sdk-id';
+      }
+      async initialize() {}
+      refreshAuth = state.auth;
+      dispose = state.dispose;
+      getMessageBus() {
+        return {};
+      }
+      getGeminiClient() {
+        return {
+          setTools: vi.fn(),
+          getChatRecordingService: () => undefined,
+          resumeChat: state.resume,
+          resetChat: state.reset,
+          sendMessageStream: async function* (...args: unknown[]) {
+            state.prompts(...args);
+            for (const event of state.events.shift() ?? []) yield event;
+            return { getDebugResponses: () => [{ modelVersion: 'sdk-reported-model' }] };
+          },
+        };
+      }
+    },
+    Scheduler: class {
+      schedule = state.schedule;
+      dispose() {}
+    },
+    MCPServerConfig: class {
+      constructor(...args: unknown[]) {
+        Object.assign(this, { headers: args[6] });
+      }
+    },
+  })),
 }));
 
-import { GeminiPromptService } from './prompt-service.js';
+import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
+import { findGeminiRecording } from './runtime.js';
 
-describe('GeminiPromptService', () => {
-  let service: GeminiPromptService;
-  let mockMessagesRepo: MessagesRepository;
-  let mockSessionsRepo: SessionRepository;
-  let mockBranchesRepo: BranchRepository;
-  let mockMCPServerRepo: MCPServerRepository;
-  let mockSessionMCPRepo: SessionMCPServerRepository;
-  let originalEnv: NodeJS.ProcessEnv;
+let directory: string;
+let messages: MessagesRepository;
+let sessions: SessionRepository;
+let branches: BranchRepository;
+const id = 'session-id' as SessionID;
+const event = (type: string, value?: unknown) => ({ type, value }) as SDK.ServerGeminiStreamEvent;
+function service(key: string | undefined = 'fake-key') {
+  return new GeminiPromptService(
+    messages,
+    sessions,
+    key,
+    branches,
+    undefined,
+    undefined,
+    undefined,
+    false
+  );
+}
+async function collect(
+  s = service(),
+  mode: 'autoEdit' | 'default' | 'ask' | 'plan' | 'yolo' | undefined = 'autoEdit',
+  signal?: AbortSignal
+) {
+  const events = [];
+  for await (const e of s.promptSessionStreaming(id, 'hello', undefined, mode, undefined, signal))
+    events.push(e);
+  return events;
+}
+beforeEach(async () => {
+  vi.clearAllMocks();
+  state.events = [];
+  vi.mocked(findGeminiRecording).mockResolvedValue(undefined);
+  state.resume.mockResolvedValue(undefined);
+  directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-unit-'));
+  messages = { getNextIndexBySessionId: vi.fn(async () => 1) } as unknown as MessagesRepository;
+  sessions = {
+    findById: vi.fn(async () => ({
+      branch_id: 'branch',
+      created_by: 'owner',
+      model_config: { model: 'gemini-3.8-flash' },
+    })),
+  } as unknown as SessionRepository;
+  branches = { findById: vi.fn(async () => ({ path: directory })) } as unknown as BranchRepository;
+  state.schedule.mockResolvedValue([]);
+});
+afterEach(async () => {
+  await fs.rm(directory, { recursive: true, force: true });
+});
 
-  beforeEach(() => {
-    originalEnv = { ...process.env };
-
-    // Create minimal mock repositories
-    mockMessagesRepo = {} as MessagesRepository;
-
-    mockSessionsRepo = {
-      findById: vi.fn(),
-    } as unknown as SessionRepository;
-
-    mockBranchesRepo = {
-      findById: vi.fn(),
-    } as unknown as BranchRepository;
-
-    mockMCPServerRepo = {
-      findAll: vi.fn().mockResolvedValue([]),
-    } as unknown as MCPServerRepository;
-
-    mockSessionMCPRepo = {
-      findBySessionId: vi.fn().mockResolvedValue([]),
-    } as unknown as SessionMCPServerRepository;
-
-    service = new GeminiPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      undefined,
-      mockBranchesRepo,
-      undefined, // reposRepo
-      mockMCPServerRepo,
-      mockSessionMCPRepo,
-      false
-    );
-  });
-
-  afterEach(() => {
-    process.env = originalEnv;
-    vi.clearAllMocks();
-  });
-
-  it('sends fresh execution identity after inherited text on every turn', async () => {
-    vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
-      created_by: 'session-owner',
-      sdk_session_id: 'provider-thread-A',
-    } as never);
-    const sendMessageStream = vi.fn(async function* () {});
-    (
-      service as unknown as {
-        getOrCreateClient: () => Promise<{ sendMessageStream: typeof sendMessageStream }>;
-      }
-    ).getOrCreateClient = vi.fn().mockResolvedValue({ sendMessageStream });
-    for (const id of ['fork-B', 'fork-B', 'nested-C']) {
-      for await (const _event of service.promptSessionStreaming(
-        id as SessionID,
-        'Inherited ID: A'
-      )) {
-        // Consume the provider turn.
-      }
-      expect(sendMessageStream).toHaveBeenLastCalledWith(
-        [
-          { text: 'Inherited ID: A' },
-          { text: expect.stringContaining(`Current Agor session ID: ${id}`) },
-        ],
-        expect.any(AbortSignal),
-        expect.any(String)
-      );
+describe('Gemini prompt boundary', () => {
+  it.each(['default', 'ask', 'plan'] as const)(
+    'rejects Manual mapping %s before SDK startup',
+    async (mode) => {
+      await expect(collect(service(), mode)).rejects.toThrow("Manual approval isn't available");
+      expect(state.config).not.toHaveBeenCalled();
     }
-  });
-
-  it('adds the Gemini hint only to the built-in connection and preserves both credentials', async () => {
-    vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
-      mcp_token: 'test-token',
-      model_config: null,
-    } as never);
-    const configured = new GeminiPromptService(
-      mockMessagesRepo,
-      mockSessionsRepo,
-      'test-api-key',
-      undefined,
-      undefined,
-      mockMCPServerRepo,
-      mockSessionMCPRepo,
-      true
-    );
-    await expect(
-      (
-        configured as unknown as {
-          getOrCreateClient(id: SessionID): Promise<unknown>;
-        }
-      ).getOrCreateClient('test-session' as SessionID)
-    ).rejects.toThrow('config captured');
-    expect(capturedConfig.mock.lastCall?.[0]).toMatchObject({
-      mcpServers: {
-        agor: { headers: { Authorization: 'Bearer test-token', 'x-agor-mcp-client': 'gemini' } },
-        external: { headers: { Authorization: 'Bearer external-token' } },
-      },
-    });
-    expect(capturedConfig.mock.lastCall?.[0].mcpServers.external.headers).not.toHaveProperty(
-      'x-agor-mcp-client'
-    );
-  });
-
-  describe('Constructor', () => {
-    it('should initialize with all dependencies', () => {
-      expect(service).toBeInstanceOf(GeminiPromptService);
-    });
-
-    it('should initialize with minimal dependencies', () => {
-      const minimalService = new GeminiPromptService(mockMessagesRepo, mockSessionsRepo);
-      expect(minimalService).toBeInstanceOf(GeminiPromptService);
-    });
-
-    it('should accept optional API key', () => {
-      const serviceWithKey = new GeminiPromptService(
-        mockMessagesRepo,
-        mockSessionsRepo,
-        'test-api-key'
-      );
-      expect(serviceWithKey).toBeInstanceOf(GeminiPromptService);
-    });
-
-    it('should accept optional MCP configuration', () => {
-      const serviceWithMCP = new GeminiPromptService(
-        mockMessagesRepo,
-        mockSessionsRepo,
-        undefined,
-        mockBranchesRepo,
-        undefined, // reposRepo
-        mockMCPServerRepo,
-        mockSessionMCPRepo,
-        true
-      );
-      expect(serviceWithMCP).toBeInstanceOf(GeminiPromptService);
-    });
-  });
-
-  describe('Task Management', () => {
-    const sessionId = 'test-session-id-123' as SessionID;
-
-    it('does not start a provider request when stopped during initialization', async () => {
-      const sendMessageStream = vi.fn();
-      let finishInitialization!: (client: { sendMessageStream: typeof sendMessageStream }) => void;
-      const initialization = new Promise<{ sendMessageStream: typeof sendMessageStream }>(
-        (resolve) => {
-          finishInitialization = resolve;
-        }
-      );
-      const getOrCreateClient = vi.fn().mockReturnValue(initialization);
-      (
-        service as unknown as {
-          getOrCreateClient: typeof getOrCreateClient;
-        }
-      ).getOrCreateClient = getOrCreateClient;
-      vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
-        created_by: 'user-1',
-        model_config: null,
-      } as never);
-
-      const outerAbortController = new AbortController();
-      const nextEvent = service
-        .promptSessionStreaming(
-          sessionId,
-          'test prompt',
-          undefined,
-          undefined,
-          undefined,
-          outerAbortController.signal
-        )
-        .next();
-
-      await vi.waitFor(() => expect(getOrCreateClient).toHaveBeenCalledOnce());
-      outerAbortController.abort();
-      expect(service.stopTask(sessionId)).toEqual({ success: true });
-      finishInitialization({ sendMessageStream });
-
-      await expect(nextEvent).resolves.toMatchObject({ done: true });
-      expect(sendMessageStream).not.toHaveBeenCalled();
-    });
-
-    it('should return failure when stopping non-existent task', () => {
-      const result = service.stopTask(sessionId);
-      expect(result.success).toBe(false);
-      expect(result.reason).toBe('No active task found for this session');
-    });
-
-    it('should return consistent failure response for same non-existent session', () => {
-      const sessionId = 'missing-session' as SessionID;
-      const result1 = service.stopTask(sessionId);
-      const result2 = service.stopTask(sessionId);
-
-      expect(result1.success).toBe(false);
-      expect(result2.success).toBe(false);
-      expect(result1.reason).toBe(result2.reason);
-    });
-
-    it('should handle different non-existent sessions independently', () => {
-      const sessionId1 = 'session-1' as SessionID;
-      const sessionId2 = 'session-2' as SessionID;
-
-      const result1 = service.stopTask(sessionId1);
-      const result2 = service.stopTask(sessionId2);
-
-      expect(result1.success).toBe(false);
-      expect(result2.success).toBe(false);
-    });
-  });
-
-  describe('Session Management', () => {
-    const sessionId = 'test-session-id-456' as SessionID;
-
-    it('should handle closing non-existent session gracefully', async () => {
-      await expect(service.closeSession(sessionId)).resolves.toBeUndefined();
-    });
-
-    it('should allow closing same session multiple times without error', async () => {
-      await expect(service.closeSession(sessionId)).resolves.toBeUndefined();
-      await expect(service.closeSession(sessionId)).resolves.toBeUndefined();
-      await expect(service.closeSession(sessionId)).resolves.toBeUndefined();
-    });
-
-    it('should handle closing multiple different sessions', async () => {
-      const sessionId1 = 'session-1' as SessionID;
-      const sessionId2 = 'session-2' as SessionID;
-      const sessionId3 = 'session-3' as SessionID;
-
-      await expect(service.closeSession(sessionId1)).resolves.toBeUndefined();
-      await expect(service.closeSession(sessionId2)).resolves.toBeUndefined();
-      await expect(service.closeSession(sessionId3)).resolves.toBeUndefined();
-    });
-  });
-
-  describe('Error Handling', () => {
-    it('should handle session not found error in promptSessionStreaming', async () => {
-      const sessionId = 'non-existent-session' as SessionID;
-      vi.mocked(mockSessionsRepo.findById).mockResolvedValue(null);
-
-      const generator = service.promptSessionStreaming(sessionId, 'test prompt');
-
-      await expect(generator.next()).rejects.toThrow(`Session ${sessionId} not found`);
-    });
-
-    it('should return failure for missing session in stopTask', () => {
-      const sessionId = 'missing-session' as SessionID;
-      const result = service.stopTask(sessionId);
-
-      expect(result.success).toBe(false);
-      expect(result.reason).toContain('No active task found');
-    });
-
-    it('should handle multiple error calls consistently', async () => {
-      const sessionId = 'non-existent' as SessionID;
-      vi.mocked(mockSessionsRepo.findById).mockResolvedValue(null);
-
-      const gen1 = service.promptSessionStreaming(sessionId, 'test 1');
-      const gen2 = service.promptSessionStreaming(sessionId, 'test 2');
-
-      await expect(gen1.next()).rejects.toThrow('not found');
-      await expect(gen2.next()).rejects.toThrow('not found');
-    });
-
-    it('never logs or returns a secret-bearing provider error event', async () => {
-      const sessionId = 'provider-error-session' as SessionID;
-      const sentinel = 'SENTINEL_GEMINI_PROVIDER_d4c2';
-      vi.mocked(mockSessionsRepo.findById).mockResolvedValue({
-        created_by: 'user-1',
-        model_config: null,
-      } as never);
-      const sendMessageStream = vi.fn(async function* () {
-        yield {
-          type: 'error',
-          value: new Error(`TLS failure for https://${sentinel}.example.test`),
-        };
-      });
-      (
-        service as unknown as {
-          getOrCreateClient: () => Promise<{ sendMessageStream: typeof sendMessageStream }>;
-        }
-      ).getOrCreateClient = vi.fn().mockResolvedValue({ sendMessageStream });
-      const spies = [
-        vi.spyOn(console, 'log').mockImplementation(() => undefined),
-        vi.spyOn(console, 'warn').mockImplementation(() => undefined),
-        vi.spyOn(console, 'error').mockImplementation(() => undefined),
-        vi.spyOn(console, 'debug').mockImplementation(() => undefined),
-      ];
-
-      try {
-        const failure = await service
-          .promptSessionStreaming(sessionId, 'test prompt')
-          .next()
-          .catch((error: unknown) => error);
-        expect(String(failure)).not.toContain(sentinel);
-        expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
-      } finally {
-        for (const spy of spies) spy.mockRestore();
+  );
+  it('rejects a missing mode without promoting it', async () => {
+    const s = service();
+    await expect(async () => {
+      for await (const _ of s.promptSessionStreaming(id, 'hello')) {
       }
-    });
+    }).rejects.toThrow("Manual approval isn't available");
+  });
+  it('rejects absent credentials and missing branches before SDK startup', async () => {
+    await expect(collect(service(''))).rejects.toThrow('Gemini needs an API key');
+    vi.mocked(branches.findById).mockResolvedValue(null);
+    await expect(collect()).rejects.toThrow('Gemini session has no accessible branch');
+    expect(state.config).not.toHaveBeenCalled();
+  });
+  it('starts fresh with a notice when SDK resume rejects a damaged recording', async () => {
+    vi.mocked(findGeminiRecording).mockResolvedValue('/fixture/recording.jsonl');
+    vi.mocked(messages.getNextIndexBySessionId).mockResolvedValue(3);
+    state.resume.mockRejectedValueOnce(new Error('private recording detail'));
+    const result = await collect();
+    expect(state.reset).toHaveBeenCalledOnce();
+    expect(JSON.stringify(result)).toContain('Earlier Gemini conversation could not be restored');
+    expect(JSON.stringify(result)).not.toContain('private recording detail');
   });
 
-  describe('Public API Behavior', () => {
-    it('should expose stopTask method', () => {
-      expect(service.stopTask).toBeInstanceOf(Function);
+  it('uses one SDK-owned client, API-key auth and private defaults', async () => {
+    state.events = [
+      [
+        event('content', 'answer'),
+        event('finished', { usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2 } }),
+      ],
+    ];
+    const result = await collect();
+    expect(state.auth).toHaveBeenCalledWith('gemini', 'fake-key');
+    expect(state.config).toHaveBeenCalledWith(
+      expect.objectContaining({
+        debugMode: false,
+        enableHooks: false,
+        extensionsEnabled: false,
+        usageStatisticsEnabled: false,
+      })
+    );
+    expect(state.prompts).toHaveBeenCalledWith(
+      [{ text: 'hello' }, { text: expect.stringContaining(`Current Agor session ID: ${id}`) }],
+      expect.any(AbortSignal),
+      expect.any(String)
+    );
+    expect(result.at(-1)).toMatchObject({
+      resolvedModel: 'sdk-reported-model',
+      usage: { input_tokens: 4, output_tokens: 2 },
     });
+    expect(state.dispose).toHaveBeenCalledOnce();
+  });
+  it('records every tool result and sums model turns, keeping last context usage', async () => {
+    state.events = [
+      [
+        event('tool_call_request', {
+          callId: 'call',
+          name: 'run_shell_command',
+          args: { command: 'x' },
+          prompt_id: 'p',
+        }),
+        event('finished', { usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 2 } }),
+      ],
+      [
+        event('content', 'done'),
+        event('finished', { usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 3 } }),
+      ],
+    ];
+    state.schedule.mockResolvedValue([
+      {
+        request: { callId: 'call' },
+        status: 'error',
+        response: {
+          resultDisplay: 'needs Bypass',
+          responseParts: [
+            {
+              functionResponse: { name: 'run_shell_command', response: { error: 'needs Bypass' } },
+            },
+          ],
+        },
+      },
+    ]);
+    const result = await collect();
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        content: [
+          expect.objectContaining({
+            type: 'tool_result',
+            tool_use_id: 'call',
+            content: 'needs Bypass',
+            is_error: true,
+          }),
+        ],
+      })
+    );
+    expect(result.at(-1)).toMatchObject({
+      usage: { input_tokens: 30, output_tokens: 5 },
+      rawSdkResponse: { value: { usageMetadata: { promptTokenCount: 20 } } },
+    });
+    expect(state.schedule.mock.calls[0][0][0]).not.toHaveProperty('isClientInitiated');
+  });
+  it.each([
+    ['loop_detected', 'detected a loop'],
+    ['context_window_will_overflow', 'too large'],
+    ['invalid_stream', 'invalid response'],
+    ['max_session_turns', 'turn limit'],
+  ])('fails on %s instead of completing', async (type, message) => {
+    state.events = [[event(type)]];
+    await expect(collect()).rejects.toThrow(message);
+  });
+  it('adds notices for compression and blocked-then-continued', async () => {
+    state.events = [
+      [event('chat_compressed'), event('agent_execution_blocked'), event('content', 'done')],
+    ];
+    const result = await collect();
+    expect(JSON.stringify(result)).toContain('compressed');
+    expect(JSON.stringify(result)).toContain('blocked an action');
+  });
+  it('does not reflect raw provider errors', async () => {
+    state.events = [[event('error', { error: { status: 401, message: 'SECRET' } })]];
+    await expect(collect()).rejects.toThrow('Gemini rejected the API key.');
+  });
+  it('stops during a tool without sending another turn', async () => {
+    const abort = new AbortController();
+    state.events = [[event('tool_call_request', { callId: 'c', name: 'read_file', args: {} })]];
+    state.schedule.mockImplementation(async () => {
+      abort.abort();
+      return [];
+    });
+    await collect(service(), 'autoEdit', abort.signal);
+    expect(state.prompts).toHaveBeenCalledOnce();
+  });
+  it('warns only when prior messages exist and history is unavailable', async () => {
+    expect(JSON.stringify(await collect())).not.toContain('could not be restored');
+    vi.mocked(messages.getNextIndexBySessionId).mockResolvedValue(3);
+    expect(JSON.stringify(await collect())).toContain('could not be restored');
+  });
+});
 
-    it('should expose closeSession method', () => {
-      expect(service.closeSession).toBeInstanceOf(Function);
-    });
-
-    it('should expose promptSessionStreaming method', () => {
-      expect(service.promptSessionStreaming).toBeInstanceOf(Function);
-    });
-
-    it('should return proper types from stopTask', () => {
-      const result = service.stopTask('test' as SessionID);
-      expect(result).toHaveProperty('success');
-      expect(typeof result.success).toBe('boolean');
-    });
+describe('retired models', () => {
+  it.each(['gemini-2.0-flash', 'gemini-2.0-flash-thinking-experimental', 'gemini-3-flash'])(
+    'remaps %s without modifying settings',
+    (model) => {
+      const session = { model_config: { model } };
+      expect(resolveGeminiInvocationModel(session)).toBe('gemini-3.8-flash');
+      expect(session.model_config.model).toBe(model);
+    }
+  );
+  it('keeps 2.5 and remaps Lite, but fails retired Pro', () => {
+    expect(resolveGeminiInvocationModel({ model_config: { model: 'gemini-2.5-pro' } })).toBe(
+      'gemini-2.5-pro'
+    );
+    expect(resolveGeminiInvocationModel({ model_config: { model: 'gemini-2.0-flash-lite' } })).toBe(
+      'gemini-3.5-flash-lite'
+    );
+    expect(() => resolveGeminiInvocationModel({ model_config: { model: 'gemini-3-pro' } })).toThrow(
+      'retired'
+    );
   });
 });

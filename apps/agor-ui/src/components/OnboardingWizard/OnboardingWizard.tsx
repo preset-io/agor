@@ -1,4 +1,5 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
  * OnboardingWizard — 5-step first-run flow.
  *
@@ -1628,6 +1629,7 @@ export function OnboardingWizard({
                       <span style={{ color: TEXT_PRIMARY, fontWeight: 600, fontSize: 14 }}>
                         {option.title}
                       </span>
+                      <ToolBetaBadge tool={option.agent} />
                       {option.provider && (
                         <span style={{ color: TEXT_MUTED, fontSize: 12 }}>
                           by {option.provider}

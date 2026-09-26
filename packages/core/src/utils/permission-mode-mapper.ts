@@ -180,3 +180,11 @@ export function mapToCodexPermissionConfig(mode: PermissionMode): CodexPermissio
 export function getDefaultCodexPermissionConfig(): CodexPermissionDefaults {
   return mapToCodexPermissionConfig(getDefaultPermissionMode('codex'));
 }
+
+/** Manual cannot be answered by the headless Gemini integration. Saves remain valid. */
+export function isGeminiManualMode(mode: PermissionMode | undefined): boolean {
+  return mode === undefined || mapPermissionMode(mode, 'gemini') === 'default';
+}
+
+export const GEMINI_MANUAL_MESSAGE =
+  "Manual approval isn't available for Gemini yet. Switch to Accept edits or Bypass.";

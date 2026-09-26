@@ -4,8 +4,8 @@
  * Current capabilities:
  * - ✅ Live execution via @google/gemini-cli-core SDK
  * - ✅ Token-level streaming with AsyncGenerator
- * - ✅ Permission modes (ask, auto, allow-all)
- * - ✅ Session continuity via setHistory()
+ * - ✅ Accept edits and Bypass permissions
+ * - ✅ Session continuity via SDK recording and resumeChat()
  * - ❌ Import sessions (deferred - need checkpoint format)
  * - ❌ Session creation (handled via live execution)
  */
@@ -44,8 +44,10 @@ import type {
 import { buildAssistantMessageMetadata, patchTaskModelIfKnown } from '../base/model-recording.js';
 import { createUserMessage } from '../claude/message-builder.js';
 import { GeminiPromptService } from './prompt-service.js';
+import { extractGeminiTokenUsage } from './usage.js';
 
 interface GeminiExecutionResult {
+  wasStopped?: boolean;
   userMessageId: MessageID;
   assistantMessageIds: MessageID[];
   tokenUsage?: TokenUsage;
@@ -124,7 +126,7 @@ export class GeminiTool implements ITool {
    * @param sessionId - Session to execute prompt in
    * @param prompt - User prompt text
    * @param taskId - Optional task ID for linking messages
-   * @param permissionMode - Permission mode for tool execution ('ask' | 'auto' | 'allow-all')
+   * @param permissionMode - Permission mode (Manual is rejected at execution)
    * @param streamingCallbacks - Optional callbacks for real-time streaming (enables typewriter effect)
    * @returns User message ID and array of assistant message IDs
    */
@@ -166,6 +168,7 @@ export class GeminiTool implements ITool {
 
     // Execute prompt via Gemini SDK with streaming
     const assistantMessageIds: MessageID[] = [];
+    let wasStopped = false;
     let resolvedModel: string | undefined;
     let currentMessageId: MessageID | null = null;
     let tokenUsage: TokenUsage | undefined;
@@ -181,13 +184,14 @@ export class GeminiTool implements ITool {
       streamingCallbacks?.onPulse,
       abortController?.signal
     )) {
-      // Capture resolved model from partial/complete events
-      if (!resolvedModel) {
-        if (event.type === 'partial') {
-          resolvedModel = event.resolvedModel;
-        } else if (event.type === 'complete') {
-          resolvedModel = event.resolvedModel;
-        }
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        continue;
+      }
+      if (event.type === 'partial') {
+        resolvedModel = event.resolvedModel ?? resolvedModel;
+      } else if (event.type === 'complete') {
+        resolvedModel = event.resolvedModel ?? resolvedModel;
       }
 
       // Capture token usage from complete event
@@ -223,7 +227,7 @@ export class GeminiTool implements ITool {
         }
       }
       // Handle complete message (save to database)
-      else if (event.type === 'complete' && event.content) {
+      else if (event.type === 'complete' && event.content.length > 0) {
         // End streaming if active
         if (currentMessageId && streamingCallbacks) {
           const streamEndTime = Date.now();
@@ -250,7 +254,7 @@ export class GeminiTool implements ITool {
           taskId,
           nextIndex++,
           resolvedModel,
-          tokenUsage
+          extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
         );
         assistantMessageIds.push(assistantMessageId);
 
@@ -264,6 +268,7 @@ export class GeminiTool implements ITool {
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      wasStopped,
       tokenUsage,
       // Gemini SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,
@@ -327,7 +332,7 @@ export class GeminiTool implements ITool {
    * @param sessionId - Session to execute prompt in
    * @param prompt - User prompt text
    * @param taskId - Optional task ID for linking messages
-   * @param permissionMode - Permission mode for tool execution ('ask' | 'auto' | 'allow-all')
+   * @param permissionMode - Permission mode (Manual is rejected at execution)
    */
   async executePrompt(
     sessionId: SessionID,
@@ -365,6 +370,7 @@ export class GeminiTool implements ITool {
 
     // Execute prompt via Gemini SDK
     const assistantMessageIds: MessageID[] = [];
+    let wasStopped = false;
     let resolvedModel: string | undefined;
     let tokenUsage: TokenUsage | undefined;
     let _contextWindow: number | undefined;
@@ -377,19 +383,22 @@ export class GeminiTool implements ITool {
       taskId,
       permissionMode
     )) {
-      // Capture resolved model from partial/complete events
-      if (!resolvedModel) {
-        if (event.type === 'partial') {
-          resolvedModel = event.resolvedModel;
-        } else if (event.type === 'complete') {
-          resolvedModel = event.resolvedModel;
-        }
+      if (event.type === 'stopped') {
+        wasStopped = true;
+        continue;
+      }
+      if (event.type === 'partial') {
+        resolvedModel = event.resolvedModel ?? resolvedModel;
+      } else if (event.type === 'complete') {
+        resolvedModel = event.resolvedModel ?? resolvedModel;
       }
 
       // Capture token usage from complete event
       if (event.type === 'complete' && event.usage) {
         tokenUsage = event.usage;
       }
+
+      if (event.type === 'complete' && event.rawSdkResponse) rawSdkResponse = event.rawSdkResponse;
 
       // Skip partial and tool events in non-streaming mode
       if (
@@ -414,7 +423,7 @@ export class GeminiTool implements ITool {
           taskId,
           nextIndex++,
           resolvedModel,
-          tokenUsage
+          extractGeminiTokenUsage(event.rawSdkResponse?.value.usageMetadata)
         );
         assistantMessageIds.push(messageId);
       }
@@ -423,6 +432,7 @@ export class GeminiTool implements ITool {
     return {
       userMessageId: userMessage.message_id,
       assistantMessageIds,
+      wasStopped,
       tokenUsage,
       // Gemini SDK doesn't provide contextWindow/contextWindowLimit
       contextWindow: undefined,

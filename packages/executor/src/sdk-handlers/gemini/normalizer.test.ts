@@ -36,6 +36,22 @@ describe('GeminiNormalizer', () => {
     expect(normalized.durationMs).toBeUndefined();
   });
 
+  it('uses summed task usage and SDK-reported model without replacing last-turn usage', () => {
+    const event = {
+      value: { usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 3 } },
+      agor: {
+        usage: { input_tokens: 30, output_tokens: 5 },
+        requestedModel: 'requested',
+        reportedModel: 'reported',
+        costEstimated: true,
+      },
+    } as GeminiSdkResponse;
+    const result = normalizer.normalize(event);
+    expect(result.tokenUsage.totalTokens).toBe(35);
+    expect(result.primaryModel).toBe('reported');
+    expect(event.value.usageMetadata?.promptTokenCount).toBe(20);
+  });
+
   it('defaults missing usage metadata to zeros', () => {
     const event = {
       value: {},

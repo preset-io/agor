@@ -266,7 +266,9 @@ describe('executeToolTask credential preflight', () => {
         toolName: 'gemini',
         createTool,
       })
-    ).rejects.toThrow('No scoped gemini credential');
+    ).rejects.toThrow(
+      'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).'
+    );
 
     expect(createTool).not.toHaveBeenCalled();
     expect(taskPatch).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'failed' }));

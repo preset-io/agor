@@ -1818,9 +1818,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // registry loaded by the running daemon; it is not provider discovery.
   //
   // Caveats:
-  //   - Gemini's authoritative list is fetched live from the Google API per
-  //     user (fetchGeminiModels). The hardcoded fallback IS exposed here as a
-  //     best-effort starter list.
+  //   - Gemini uses the static model registry; availability depends on the
+  //     API key and plan.
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
   //   - OpenCode is a provider+model matrix and doesn't have a single static
@@ -1885,7 +1884,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         gemini: {
           default: DEFAULT_GEMINI_MODEL,
           models: geminiModels,
-          note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
+          note: 'Static Gemini model list. Availability depends on the API key and plan.',
         },
         opencode: {
           default: null,

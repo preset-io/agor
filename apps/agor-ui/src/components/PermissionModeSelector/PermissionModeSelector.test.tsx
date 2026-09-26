@@ -37,3 +37,19 @@ describe('PermissionModeSelector', () => {
     expect(within(listbox).getByText(/isolated environments only/)).toBeInTheDocument();
   });
 });
+
+describe('Gemini permissions', () => {
+  it('hides Manual without changing an existing saved value', () => {
+    const onChange = vi.fn();
+    render(<PermissionModeSelector agentic_tool="gemini" value="default" onChange={onChange} />);
+    expect(screen.getByText(/Manual approval isn't available/)).toHaveTextContent(
+      'workspace admin'
+    );
+    expect(onChange).not.toHaveBeenCalled();
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const options = within(screen.getByRole('listbox')).getAllByRole('option');
+    expect(options).toHaveLength(2);
+    expect(options[0]).toHaveTextContent('Accept edits');
+    expect(options[1]).toHaveTextContent('Bypass permissions');
+  });
+});
