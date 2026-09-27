@@ -1,6 +1,7 @@
 /** Structured settings tables in the actual Settings shell, using synthetic inventories. */
 import type {
   AgorClient,
+  Artifact,
   Board,
   Branch,
   GatewayChannel,
@@ -38,7 +39,11 @@ const service = vi.fn((name: string) => {
 });
 const client = { io: { on: vi.fn(), off: vi.fn() }, service } as unknown as AgorClient;
 
-function renderSettings(dark: boolean, tab: 'mcp' | 'gateway' | 'teammates', longName = false) {
+function renderSettings(
+  dark: boolean,
+  tab: 'mcp' | 'gateway' | 'teammates' | 'artifacts',
+  longName = false
+) {
   const servers = SERVER_NAMES.map(
     (name, index) =>
       ({
@@ -85,7 +90,29 @@ function renderSettings(dark: boolean, tab: 'mcp' | 'gateway' | 'teammates', lon
         config: {},
       }) as unknown as GatewayChannel
   );
+  const artifacts = [
+    'API explorer',
+    'Launch checklist',
+    'Metrics dashboard',
+    'Release notes',
+    'Team directory',
+  ].map(
+    (name, index) =>
+      ({
+        artifact_id: `artifact-${index}`,
+        name,
+        description: index === 0 ? 'Explore the API with synthetic examples.' : undefined,
+        board_id: `board-${index % 2}`,
+        branch_id: branches[index].branch_id,
+        created_by: index % 2 ? SAM.user_id : ADMIN.user_id,
+        template: index % 2 ? 'static' : 'react-ts',
+        build_status: index === 2 ? 'error' : 'success',
+        created_at: '2026-01-01T00:00:00Z',
+        archived: false,
+      }) as Artifact
+  );
   agorStore.setState({
+    artifactById: new Map(artifacts.map((artifact) => [artifact.artifact_id, artifact])),
     mcpServerById: new Map(servers.map((server) => [server.mcp_server_id, server])),
     userById: new Map([
       [ADMIN.user_id, ADMIN],
@@ -151,70 +178,84 @@ const headers = {
   mcp: ['Server', 'Owner', 'Enabled', 'Access / discovery', 'Actions'],
   teammates: ['Teammate', 'Primary owner', 'Board', 'Actions'],
   gateway: ['Channel', 'Created by', 'Enabled', 'Actions'],
+  artifacts: ['Artifact', 'Board', 'Owner', 'Build', 'Actions'],
 };
 
-describe.each(['mcp', 'gateway', 'teammates'] as const)('%s structured settings', (tab) => {
-  it.each([false, true])('fits realistic rows, dark=%s', async (dark) => {
-    renderSettings(dark, tab);
-    const dialog = screen.getByRole('dialog');
-    await waitFor(() =>
-      expect(
-        screen.getAllByRole('button', {
-          name: tab === 'teammates' ? 'Edit teammate' : 'Edit',
-          exact: true,
-        })[0]
-      ).toBeEnabled()
-    );
-    const edit = screen.getAllByRole('button', {
-      name: tab === 'teammates' ? 'Edit teammate' : 'Edit',
-      exact: true,
-    })[0];
-    await waitFor(() => expect(edit).toBeVisible());
-    expectInside(dialog, edit);
-    expectInside(dialog, within(dialog).getByRole('textbox'));
-    expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth + 1);
-    if (window.innerWidth >= 768) {
-      const table = screen.getByRole('table');
-      expect(
-        within(table)
-          .getAllByRole('columnheader')
-          .map((header) => header.textContent)
-      ).toEqual(headers[tab]);
-      expect(table.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(5);
-      // MCP retains a bounded horizontal scroller only in the narrow desktop shell;
-      // the fixed actions remain reachable rather than clipping outside the modal.
-      const viewport = table.closest('.ant-table-content') as HTMLElement;
-      expectInside(viewport, edit);
-      for (const identity of table.querySelectorAll<HTMLElement>('[data-settings-identity]')) {
-        expect(identity.getBoundingClientRect().height).toBeLessThanOrEqual(52);
+describe.each(['mcp', 'gateway', 'teammates', 'artifacts'] as const)(
+  '%s structured settings',
+  (tab) => {
+    it.each([false, true])('fits realistic rows, dark=%s', async (dark) => {
+      renderSettings(dark, tab);
+      const dialog = screen.getByRole('dialog');
+      await waitFor(() =>
+        expect(
+          screen.getAllByRole('button', {
+            name:
+              tab === 'teammates'
+                ? 'Edit teammate'
+                : tab === 'artifacts'
+                  ? 'Edit artifact'
+                  : 'Edit',
+            exact: true,
+          })[0]
+        ).toBeEnabled()
+      );
+      const edit = screen.getAllByRole('button', {
+        name:
+          tab === 'teammates' ? 'Edit teammate' : tab === 'artifacts' ? 'Edit artifact' : 'Edit',
+        exact: true,
+      })[0];
+      await waitFor(() => expect(edit).toBeVisible());
+      expectInside(dialog, edit);
+      expectInside(dialog, within(dialog).getByRole('textbox'));
+      expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth + 1);
+      if (window.innerWidth >= 768) {
+        const table = screen.getByRole('table');
+        expect(
+          within(table)
+            .getAllByRole('columnheader')
+            .map((header) => header.textContent)
+        ).toEqual(headers[tab]);
+        expect(table.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(5);
+        // MCP retains a bounded horizontal scroller only in the narrow desktop shell;
+        // the fixed actions remain reachable rather than clipping outside the modal.
+        const viewport = table.closest('.ant-table-content') as HTMLElement;
+        expectInside(viewport, edit);
+        for (const identity of table.querySelectorAll<HTMLElement>('[data-settings-identity]')) {
+          expect(identity.getBoundingClientRect().height).toBeLessThanOrEqual(52);
+        }
       }
-    }
-    await page.screenshot({
-      path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
-    });
-    if (window.innerWidth === 1000) {
-      await page.viewport(1440, 1000);
       await page.screenshot({
-        path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-1440.png`,
+        path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
       });
-    }
-    edit.focus();
-    expect(edit).toHaveFocus();
-    if (tab !== 'gateway') {
-      screen.getByRole('button', { name: /^Description for/ }).focus();
-      await userEvent.keyboard('{Enter}');
-      expect(
-        await screen.findByText(
-          tab === 'mcp'
-            ? 'Review pull requests and issues.'
-            : 'Coordinates engineering work across branches.'
-        )
-      ).toBeVisible();
-    }
-    if (tab === 'mcp') expect(screen.getByText('Not signed in')).toBeInTheDocument();
-    if (tab === 'gateway') expect(screen.queryByText(/Execution owner/)).not.toBeInTheDocument();
-  });
-});
+      if (window.innerWidth === 1000) {
+        await page.viewport(1440, 1000);
+        await page.screenshot({
+          path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-1440.png`,
+        });
+      }
+      edit.focus();
+      expect(edit).toHaveFocus();
+      if (tab !== 'gateway') {
+        screen.getByRole('button', { name: /^Description for/ }).focus();
+        await userEvent.keyboard('{Enter}');
+        expect(
+          await screen.findByText(
+            tab === 'mcp'
+              ? 'Review pull requests and issues.'
+              : tab === 'artifacts'
+                ? 'Explore the API with synthetic examples.'
+                : 'Coordinates engineering work across branches.'
+          )
+        ).toBeVisible();
+      }
+      if (tab === 'mcp') expect(screen.getByText('Not signed in')).toBeInTheDocument();
+      if (tab === 'gateway')
+        expect(screen.queryByText('Beta Feature — Security Notice')).not.toBeInTheDocument();
+      if (tab === 'gateway') expect(screen.queryByText(/Execution owner/)).not.toBeInTheDocument();
+    });
+  }
+);
 
 it('ellipsizes an unusually long name without growing the identity beyond two lines', async () => {
   renderSettings(false, 'mcp', true);
