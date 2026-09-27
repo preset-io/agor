@@ -3711,12 +3711,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // be overwritten by a slower earlier response.
   const slackAppInfoChannelIdRef = useRef<string | null>(null);
 
+  const editingTargetInInventory = branchById.has(editingChannel?.target_branch_id ?? '');
+
   // Resolve only the open editor's missing target, never every inventory row.
   // The authorized get keeps hidden branches hidden; failures leave the saved ID intact.
   useEffect(() => {
     const operation = operationGuard.begin();
     const id = editingChannel?.target_branch_id;
-    if (!client || !editModalOpen || !id || branchById.has(id) || !operation.isCurrent()) return;
+    if (!client || !editModalOpen || !id || editingTargetInInventory || !operation.isCurrent())
+      return;
     void client
       .service('branches')
       .get(id)
@@ -3727,7 +3730,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         // Missing or unauthorized targets must not reveal metadata.
       });
     return () => operation.cancel();
-  }, [client, editModalOpen, editingChannel?.target_branch_id, branchById, operationGuard]);
+  }, [
+    client,
+    editModalOpen,
+    editingChannel?.target_branch_id,
+    editingTargetInInventory,
+    operationGuard,
+  ]);
 
   const branchOptionsById = useMemo(() => {
     const merged = new Map<string, Branch>();

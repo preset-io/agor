@@ -1221,27 +1221,42 @@ describe('gateway inventory boundaries', () => {
   });
 });
 
-it('resolves only the opened target and preserves its ID when access is denied', async () => {
-  const get = vi.fn().mockRejectedValue(new Error('Forbidden'));
-  const client = { service: vi.fn(() => ({ get })) } as unknown as AgorClient;
-  const user = makeUser();
-  const channel = {
-    ...makeSlackChannel(),
-    channel_type: 'discord',
-    target_branch_id: 'hidden-target',
-  } as GatewayChannel;
-  renderWithProviders(
-    <GatewayChannelsTable
-      client={client}
-      gatewayChannelById={new Map([[channel.id, channel]])}
-      branchById={new Map()}
-      userById={new Map([[user.user_id, user]])}
-      mcpServerById={new Map()}
-      currentUser={user}
-    />
-  );
-  expect(get).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByLabelText('Edit'));
-  await waitFor(() => expect(get).toHaveBeenCalledExactlyOnceWith('hidden-target'));
-  expect(screen.getByLabelText('branch-select')).toHaveValue('hidden-target');
-});
+it.each([false, true])(
+  'does not repeat editor lookup on unrelated inventory changes (denied=%s)',
+  async (denied) => {
+    const get = denied
+      ? vi.fn().mockRejectedValue(new Error('Forbidden'))
+      : vi.fn().mockResolvedValue({ ...makeBranch(), branch_id: 'hidden-target' });
+    const client = { service: vi.fn(() => ({ get })) } as unknown as AgorClient;
+    const user = makeUser();
+    const channel = {
+      ...makeSlackChannel(),
+      channel_type: 'discord',
+      target_branch_id: 'hidden-target',
+    } as GatewayChannel;
+    const table = (branches: Map<string, Branch>) => (
+      <GatewayChannelsTable
+        client={client}
+        gatewayChannelById={new Map([[channel.id, channel]])}
+        branchById={branches}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map()}
+        currentUser={user}
+      />
+    );
+    const { rerender } = renderWithProviders(table(new Map()));
+    expect(get).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText('Edit'));
+    await waitFor(() => expect(get).toHaveBeenCalledExactlyOnceWith('hidden-target'));
+    expect(screen.getByLabelText('branch-select')).toHaveValue('hidden-target');
+    rerender(
+      <MemoryRouter>
+        <AntdApp>
+          {table(new Map([['unrelated', { ...makeBranch(), branch_id: 'unrelated' } as Branch]]))}
+        </AntdApp>
+      </MemoryRouter>
+    );
+    expect(get).toHaveBeenCalledExactlyOnceWith('hidden-target');
+    expect(screen.getByLabelText('branch-select')).toHaveValue('hidden-target');
+  }
+);

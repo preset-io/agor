@@ -108,3 +108,28 @@ it('resets the inventory page on search and distinguishes primary owner from cre
   expect(screen.queryByText('Original creator')).not.toBeInTheDocument();
   expect(screen.getByText('Unavailable user')).toBeInTheDocument();
 });
+
+it('searches tokens across teammate, board and email-only owner using the shared search pattern', () => {
+  const branch = {
+    ...makeTeammate(1),
+    board_id: 'board-1',
+    primary_owner_user_id: 'owner-1',
+  } as Branch;
+  renderWithProviders(
+    <TeammatesTable
+      branchById={new Map([[branch.branch_id, branch]])}
+      repoById={new Map()}
+      boardById={new Map([['board-1', { board_id: 'board-1', name: 'Engineering' } as Board]])}
+      sessionsByBranch={new Map()}
+      userById={new Map([['owner-1', { user_id: 'owner-1', email: 'owner@example.test' } as User]])}
+    />
+  );
+  fireEvent.change(screen.getByPlaceholderText('Search teammates...'), {
+    target: { value: 'Teammate Engineering owner@example.test' },
+  });
+  expect(screen.getAllByRole('row')[1]).toHaveTextContent('Teammate 1');
+  fireEvent.change(screen.getByPlaceholderText('Search teammates...'), {
+    target: { value: 'Teammate Finance owner@example.test' },
+  });
+  expect(screen.queryByRole('button', { name: 'Edit teammate' })).not.toBeInTheDocument();
+});

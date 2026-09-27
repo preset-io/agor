@@ -11,6 +11,7 @@ import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
@@ -74,7 +75,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   const teammates = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
     const teammateBranches = Array.from(branchById.values())
       .filter((w) => !w.archived && isTeammate(w))
       .sort((a, b) => {
@@ -86,25 +86,20 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         );
       });
 
-    if (!term) return teammateBranches;
-
-    return teammateBranches.filter((w) => {
-      const config = getTeammateConfig(w);
-      const repo = repoById.get(w.repo_id);
-      const creator = userById.get(w.created_by);
-      const haystacks = [
-        config?.displayName,
-        w.name,
-        w.notes,
-        userById.get(w.primary_owner_user_id ?? '')?.name,
-        creator?.name,
-        creator?.email,
-        repo?.name,
-        repo?.slug,
-      ];
-      return haystacks.some((v) => v?.toLowerCase().includes(term));
-    });
-  }, [branchById, repoById, userById, searchTerm]);
+    return filterBySettingsSearch(teammateBranches, searchTerm, [
+      (branch) => [getTeammateConfig(branch)?.displayName, branch.name, branch.notes],
+      (branch) => {
+        const owner = userById.get(branch.primary_owner_user_id ?? '');
+        const creator = userById.get(branch.created_by);
+        return [owner?.name, owner?.email, creator?.name, creator?.email];
+      },
+      (branch) => {
+        const repo = repoById.get(branch.repo_id);
+        return [repo?.name, repo?.slug];
+      },
+      (branch) => boardById.get(branch.board_id ?? '')?.name,
+    ]);
+  }, [branchById, repoById, userById, boardById, searchTerm]);
 
   const columns = [
     {
