@@ -8,23 +8,17 @@ import type {
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import {
-  AimOutlined,
-  EditOutlined,
-  InfoCircleOutlined,
-  PlusOutlined,
-  RobotOutlined,
-} from '@ant-design/icons';
-import { Button, Empty, Input, Popover, Space, Tooltip, Typography, theme } from 'antd';
+import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
+import { Button, Empty, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { SettingsIdentity } from './SettingsIdentity';
 
 interface TeammatesTableProps {
   client?: AgorClient | null;
@@ -118,48 +112,54 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       key: 'teammate',
       render: (_: unknown, record: Branch) => {
         const config = getTeammateConfig(record);
-        const owner = userById.get(record.primary_owner_user_id ?? '');
-        const creator = userById.get(record.created_by);
+        const repo = repoById.get(record.repo_id);
         return (
-          <Space
-            orientation="vertical"
-            size={token.marginXXS}
-            style={{ width: '100%', minWidth: 0 }}
-          >
-            <Space wrap>
-              <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
-                {config?.emoji || <RobotOutlined />}{' '}
-                <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
+          <SettingsIdentity
+            name={config?.displayName ?? record.name}
+            query={searchTerm}
+            icon={config?.emoji || <RobotOutlined />}
+            description={
+              record.notes?.trim() ? (
+                <MarkdownRenderer content={record.notes} showControls={false} />
+              ) : undefined
+            }
+            metadata={
+              <Typography.Text
+                type="secondary"
+                ellipsis={{ tooltip: repo?.name || record.name }}
+                style={{ display: 'block', fontSize: token.fontSizeSM }}
+              >
+                {repo?.name || record.name}
               </Typography.Text>
-              {record.notes?.trim() && (
-                <Popover
-                  content={
-                    <div style={{ maxWidth: 'min(480px, 75vw)', maxHeight: 400, overflow: 'auto' }}>
-                      <MarkdownRenderer content={record.notes} showControls={false} />
-                    </div>
-                  }
-                  trigger="click"
-                >
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<InfoCircleOutlined />}
-                    aria-label={`Description for ${config?.displayName ?? record.name}`}
-                    onClick={(event) => event.stopPropagation()}
-                  />
-                </Popover>
-              )}
-            </Space>
-            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
-              Primary owner: {owner?.name || owner?.email || 'Unavailable user'}
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
-              Created by:{' '}
-              {creator?.name ||
-                creator?.email ||
-                (record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown user')}
-            </Typography.Text>
-          </Space>
+            }
+          />
+        );
+      },
+    },
+    {
+      title: 'Primary owner',
+      key: 'owner',
+      width: 140,
+      render: (_: unknown, record: Branch) => {
+        const owner = userById.get(record.primary_owner_user_id ?? '');
+        const name = owner?.name || owner?.email || 'Unavailable user';
+        return (
+          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
+            {name}
+          </Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Board',
+      key: 'board',
+      width: 120,
+      render: (_: unknown, record: Branch) => {
+        const name = boardById.get(record.board_id ?? '')?.name || '—';
+        return (
+          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
+            {name}
+          </Typography.Text>
         );
       },
     },

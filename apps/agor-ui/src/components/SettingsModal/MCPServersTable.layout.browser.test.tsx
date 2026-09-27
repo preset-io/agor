@@ -1,9 +1,13 @@
-/**
- * Real-Chromium coverage for the MCP table inside the actual Settings shell.
- * The shell removes the navigation rail and content padding from the modal,
- * so a standalone full-width table does not reproduce this layout contract.
- */
-import type { AgorClient, Branch, GatewayChannel, MCPServer, User } from '@agor-live/client';
+/** Structured settings tables in the actual Settings shell, using synthetic inventories. */
+import type {
+  AgorClient,
+  Board,
+  Branch,
+  GatewayChannel,
+  MCPServer,
+  Repo,
+  User,
+} from '@agor-live/client';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntdApp, ConfigProvider, theme } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
@@ -15,75 +19,86 @@ import { SettingsModal } from './SettingsModal';
 
 const ADMIN = {
   user_id: 'layout-admin',
-  email: 'layout-admin@agor.live',
-  name: 'Alexandria Layout Administrator With A Long Name',
+  email: 'alex@example.test',
+  name: 'Alex Morgan',
   role: 'admin',
 } as User;
+const SAM = { ...ADMIN, user_id: 'layout-sam', name: 'Sam Lee', email: 'sam@example.test' } as User;
+const TEAMMATE_NAMES = ['Ada', 'Atlas', 'Relay', 'Scout', 'Scribe'];
+const SERVER_NAMES = ['GitHub', 'Internal docs', 'Playwright', 'Search', 'Team wiki'];
+const CHANNEL_NAMES = ['Engineering', 'PR reviews', 'Dev community', 'Operations', 'Support'];
+const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+const service = vi.fn((name: string) => {
+  if (name === 'mcp-member-policy')
+    return {
+      find: vi.fn(async () => ({ policy: 'allow_crud', can_configure: true })),
+      patch: vi.fn(),
+    };
+  return { on: vi.fn(), removeListener: vi.fn() };
+});
+const client = { io: { on: vi.fn(), off: vi.fn() }, service } as unknown as AgorClient;
 
-const SERVER = {
-  mcp_server_id: 'layout-server',
-  name: 'a-very-long-canonical-mcp-server-name-that-must-not-set-the-column-width',
-  display_name: 'A very long MCP server display name that needs truncation',
-  description: 'Layout fixture',
-  transport: 'http',
-  url: 'https://mcp.example.com/a/path/that/is/deliberately/far/too/long/for/the/settings-modal',
-  scope: 'global',
-  source: 'a-deliberately-long-provider-source',
-  owner_user_id: ADMIN.user_id,
-  enabled: true,
-  tools: [{ name: 'search', description: 'Search' }],
-  created_at: '2026-01-01T00:00:00.000Z',
-} as MCPServer;
-
-const eventService = { on: vi.fn(), removeListener: vi.fn() };
-const client = {
-  io: { on: vi.fn(), off: vi.fn() },
-  service: vi.fn((name: string) => {
-    if (name === 'mcp-member-policy') {
-      return {
-        find: vi.fn(async () => ({ policy: 'allow_crud', can_configure: true })),
-        patch: vi.fn(),
-      };
-    }
-    if (name === 'mcp-servers') return eventService;
-    return {};
-  }),
-} as unknown as AgorClient;
-
-function renderSettings(dark = false, activeTab: 'mcp' | 'gateway' | 'teammates' = 'mcp') {
+function renderSettings(dark: boolean, tab: 'mcp' | 'gateway' | 'teammates', longName = false) {
+  const servers = SERVER_NAMES.map(
+    (name, index) =>
+      ({
+        mcp_server_id: `server-${index}`,
+        name: name.toLowerCase().replaceAll(' ', '-'),
+        display_name:
+          longName && index === 0
+            ? 'An unusually long server name that should truncate rather than grow the row'
+            : name,
+        description: index === 0 ? 'Review pull requests and issues.' : undefined,
+        transport: index === 2 ? 'stdio' : 'http',
+        scope: index % 2 ? 'session' : 'global',
+        source: 'user',
+        owner_user_id: index % 2 ? undefined : index === 2 ? SAM.user_id : ADMIN.user_id,
+        enabled: index !== 3,
+        tools: index === 4 ? [] : [{ name: 'search' }],
+        auth: index === 4 ? { type: 'oauth', oauth_mode: 'per_user' } : undefined,
+        created_at: new Date('2026-01-01'),
+      }) as unknown as MCPServer
+  );
+  const branches = TEAMMATE_NAMES.map(
+    (name, index) =>
+      ({
+        branch_id: `teammate-${index}`,
+        name: `${name.toLowerCase()}-home`,
+        repo_id: 'repo',
+        board_id: `board-${index % 2}`,
+        primary_owner_user_id: index % 2 ? SAM.user_id : ADMIN.user_id,
+        created_by: 'unlisted-creator',
+        notes: index === 0 ? 'Coordinates engineering work across branches.' : undefined,
+        custom_context: { teammate: { kind: 'teammate', displayName: name } },
+      }) as unknown as Branch
+  );
+  const channels = CHANNEL_NAMES.map(
+    (name, index) =>
+      ({
+        id: `channel-${index}`,
+        name,
+        created_by: index % 2 ? SAM.user_id : ADMIN.user_id,
+        agor_user_id: ADMIN.user_id,
+        channel_type: ['slack', 'github', 'discord', 'teams', 'slack'][index],
+        target_branch_id: 'not-in-inventory',
+        enabled: index !== 2,
+        config: {},
+      }) as unknown as GatewayChannel
+  );
   agorStore.setState({
-    mcpServerById: new Map([[SERVER.mcp_server_id, SERVER]]),
-    userById: new Map([[ADMIN.user_id, ADMIN]]),
-    gatewayChannelById: new Map([
-      [
-        'fixture-channel',
-        {
-          id: 'fixture-channel',
-          name: 'A very long gateway name with an unbroken suffix ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789',
-          channel_type: 'discord',
-          created_by: ADMIN.user_id,
-          agor_user_id: ADMIN.user_id,
-          target_branch_id: 'not-in-inventory',
-          enabled: false,
-          config: {},
-        } as GatewayChannel,
-      ],
+    mcpServerById: new Map(servers.map((server) => [server.mcp_server_id, server])),
+    userById: new Map([
+      [ADMIN.user_id, ADMIN],
+      [SAM.user_id, SAM],
     ]),
-    branchById: new Map([
-      [
-        'fixture-teammate',
-        {
-          branch_id: 'fixture-teammate',
-          name: 'A very long teammate name ABCDEFGHIJKLMNOPQRSTUVWXYZ01234567890123456789',
-          primary_owner_user_id: ADMIN.user_id,
-          created_by: ADMIN.user_id,
-          notes: 'Keyboard and touch accessible teammate description.',
-          custom_context: { teammate: { kind: 'teammate' } },
-        } as unknown as Branch,
-      ],
+    gatewayChannelById: new Map(channels.map((channel) => [channel.id, channel])),
+    branchById: new Map(branches.map((branch) => [branch.branch_id, branch])),
+    repoById: new Map([['repo', { repo_id: 'repo', name: 'agor-teammate' } as Repo]]),
+    boardById: new Map([
+      ['board-0', { board_id: 'board-0', name: 'Engineering' } as Board],
+      ['board-1', { board_id: 'board-1', name: 'Platform' } as Board],
     ]),
   });
-
   return render(
     <ConfigProvider
       theme={{
@@ -105,10 +120,11 @@ function renderSettings(dark = false, activeTab: 'mcp' | 'gateway' | 'teammates'
           >
             <SettingsModal
               open
-              activeTab={activeTab}
+              activeTab={tab}
               currentUser={ADMIN}
               client={client}
               onClose={vi.fn()}
+              onCreateTeammate={vi.fn()}
             />
           </ConnectionProvider>
         </AntdApp>
@@ -118,102 +134,95 @@ function renderSettings(dark = false, activeTab: 'mcp' | 'gateway' | 'teammates'
 }
 
 function expectInside(container: HTMLElement, element: HTMLElement) {
-  const containerRect = container.getBoundingClientRect();
-  const elementRect = element.getBoundingClientRect();
-  expect(elementRect.left).toBeGreaterThanOrEqual(containerRect.left - 1);
-  expect(elementRect.right).toBeLessThanOrEqual(containerRect.right + 1);
-}
-
-async function expectTableFits() {
-  await waitFor(() => expect(screen.getByText('New MCP Server').closest('button')).toBeEnabled());
-
-  const row = screen.getByText(SERVER.display_name as string).closest('tr');
-  expect(row).toBeTruthy();
-  if (!row) return;
-  const table = row.closest('table');
-  expect(table).toBeTruthy();
-  if (!table) return;
-  const tableViewport = table.closest('.ant-table-content') as HTMLElement | null;
-  expect(tableViewport).toBeTruthy();
-  if (!tableViewport) return;
-
-  const actions = within(table).getByRole('columnheader', { name: 'Actions' });
-  const view = within(row).getByRole('button', { name: 'View details' });
-  const edit = within(row).getByRole('button', { name: 'Edit' });
-  const remove = within(row).getByRole('button', { name: 'Delete' });
-  const headers = within(table)
-    .getAllByRole('columnheader')
-    .map((header) => header.textContent);
-
-  expect(table.style.tableLayout).toBe('fixed');
-  expect(headers).toEqual(['Server', 'Actions']);
-  expect(tableViewport.scrollWidth).toBeLessThanOrEqual(tableViewport.clientWidth + 1);
-  expectInside(tableViewport, actions);
-  expectInside(tableViewport, view);
-  expectInside(tableViewport, edit);
-  expectInside(tableViewport, remove);
-  await waitFor(() => expect(view).toBeVisible());
-  expect(edit).toBeVisible();
-  expect(remove).toBeVisible();
-  expect(row).toHaveTextContent('HTTP');
-  expect(row).toHaveTextContent('global');
-  expect(row).toHaveTextContent('Enabled');
-  expect(row).toHaveTextContent('1 tools');
-  expect(row).toHaveTextContent(ADMIN.name as string);
-  expect(row).toHaveTextContent(SERVER.source as string);
-
-  view.focus();
-  expect(view).toHaveFocus();
+  const bounds = container.getBoundingClientRect();
+  const rect = element.getBoundingClientRect();
+  expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+  expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
 }
 
 beforeEach(() => agorStore.getState().reset());
-afterEach(() => {
+afterEach(async () => {
   cleanup();
   agorStore.getState().reset();
+  await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-describe('MCP Servers Settings table layout (real browser)', () => {
-  it.each([false, true])(
-    'theme dark=%s keeps the table and its complete action group inside the modal at every supported viewport',
-    async (dark) => {
-      renderSettings(dark);
-      await expectTableFits();
+const headers = {
+  mcp: ['Server', 'Owner', 'Enabled', 'Access / discovery', 'Actions'],
+  teammates: ['Teammate', 'Primary owner', 'Board', 'Actions'],
+  gateway: ['Channel', 'Created by', 'Enabled', 'Actions'],
+};
+
+describe.each(['mcp', 'gateway', 'teammates'] as const)('%s structured settings', (tab) => {
+  it.each([false, true])('fits realistic rows, dark=%s', async (dark) => {
+    renderSettings(dark, tab);
+    const dialog = screen.getByRole('dialog');
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('button', {
+          name: tab === 'teammates' ? 'Edit teammate' : 'Edit',
+          exact: true,
+        })[0]
+      ).toBeEnabled()
+    );
+    const edit = screen.getAllByRole('button', {
+      name: tab === 'teammates' ? 'Edit teammate' : 'Edit',
+      exact: true,
+    })[0];
+    await waitFor(() => expect(edit).toBeVisible());
+    expectInside(dialog, edit);
+    expectInside(dialog, within(dialog).getByRole('textbox'));
+    expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth + 1);
+    if (window.innerWidth >= 768) {
+      const table = screen.getByRole('table');
+      expect(
+        within(table)
+          .getAllByRole('columnheader')
+          .map((header) => header.textContent)
+      ).toEqual(headers[tab]);
+      expect(table.querySelectorAll('tbody tr[data-row-key]')).toHaveLength(5);
+      // MCP retains a bounded horizontal scroller only in the narrow desktop shell;
+      // the fixed actions remain reachable rather than clipping outside the modal.
+      const viewport = table.closest('.ant-table-content') as HTMLElement;
+      expectInside(viewport, edit);
+      for (const identity of table.querySelectorAll<HTMLElement>('[data-settings-identity]')) {
+        expect(identity.getBoundingClientRect().height).toBeLessThanOrEqual(52);
+      }
+    }
+    await page.screenshot({
+      path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
+    });
+    if (window.innerWidth === 1000) {
+      await page.viewport(1440, 1000);
       await page.screenshot({
-        path: `./.vitest/settings-mcp-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
+        path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-1440.png`,
       });
     }
-  );
+    edit.focus();
+    expect(edit).toHaveFocus();
+    if (tab !== 'gateway') {
+      screen.getByRole('button', { name: /^Description for/ }).focus();
+      await userEvent.keyboard('{Enter}');
+      expect(
+        await screen.findByText(
+          tab === 'mcp'
+            ? 'Review pull requests and issues.'
+            : 'Coordinates engineering work across branches.'
+        )
+      ).toBeVisible();
+    }
+    if (tab === 'mcp') expect(screen.getByText('Not signed in')).toBeInTheDocument();
+    if (tab === 'gateway') expect(screen.queryByText(/Execution owner/)).not.toBeInTheDocument();
+  });
 });
 
-describe.each(['gateway', 'teammates'] as const)('%s settings layout', (tab) => {
-  it.each([false, true])(
-    'fits light/dark=%s with long identities and reachable actions',
-    async (dark) => {
-      renderSettings(dark, tab);
-      const edit = await screen.findByRole('button', {
-        name: tab === 'gateway' ? 'Edit' : 'Edit teammate',
-      });
-      const dialog = screen.getByRole('dialog');
-      expectInside(dialog, edit);
-      await waitFor(() => expect(edit).toBeVisible());
-      expect(dialog.scrollWidth).toBeLessThanOrEqual(dialog.clientWidth + 1);
-      for (const table of dialog.querySelectorAll('table')) {
-        const viewport = table.closest('.ant-table-content') as HTMLElement;
-        expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.clientWidth + 1);
-        expectInside(viewport, edit);
-      }
-      edit.focus();
-      expect(edit).toHaveFocus();
-      await page.screenshot({
-        path: `./.vitest/settings-${tab}-${dark ? 'dark' : 'light'}-${window.innerWidth}.png`,
-      });
-      if (tab === 'teammates') {
-        screen.getByRole('button', { name: /^Description for/ }).focus();
-        await userEvent.keyboard('{Enter}');
-        expect(
-          await screen.findByText('Keyboard and touch accessible teammate description.')
-        ).toBeVisible();
-      }
-    }
+it('ellipsizes an unusually long name without growing the identity beyond two lines', async () => {
+  renderSettings(false, 'mcp', true);
+  const label = screen.getByText(
+    'An unusually long server name that should truncate rather than grow the row'
   );
+  await waitFor(() => expect(label).toBeVisible());
+  const identity = label.closest('[data-settings-identity]') as HTMLElement;
+  expect(identity.getBoundingClientRect().height).toBeLessThanOrEqual(52);
+  expect(label.getBoundingClientRect().height).toBeLessThanOrEqual(24);
 });

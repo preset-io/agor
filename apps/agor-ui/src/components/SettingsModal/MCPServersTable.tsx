@@ -15,7 +15,6 @@ import {
   EyeOutlined,
   PlusOutlined,
   TeamOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import {
@@ -23,17 +22,14 @@ import {
   Badge,
   Button,
   Descriptions,
-  Flex,
   Form,
   Input,
   Popconfirm,
   Space,
-  Table,
   Tabs,
   Tag,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
@@ -70,7 +66,9 @@ import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { SettingsIdentity } from './SettingsIdentity';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -115,7 +113,7 @@ const getServerHealth = (
   if (toolCount > 0) {
     return {
       status: 'success' as const,
-      text: `${toolCount} tools`,
+      text: `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}`,
     };
   }
 
@@ -208,7 +206,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
   const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
-  const { token } = theme.useToken();
 
   const [formRevision, bumpFormRevision] = useFormRevision();
   const createOperationGuard = useAuthorityOperationGuard(
@@ -467,24 +464,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const renderOwner = useCallback(
     (server: MCPServer) => {
       const owner = describeOwner(server);
-      return (
+      return owner.shared ? (
         <Tooltip title={owner.hint}>
-          <Tag
-            icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
-            color={owner.shared ? 'default' : 'geekblue'}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              maxWidth: '100%',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'normal',
-              overflowWrap: 'anywhere',
-            }}
-          >
-            <HighlightMatch text={owner.text} query={searchTerm} />
-          </Tag>
+          <Tag icon={<TeamOutlined />}>Shared</Tag>
         </Tooltip>
+      ) : (
+        <Typography.Text ellipsis={{ tooltip: owner.hint }} style={{ display: 'block' }}>
+          <HighlightMatch text={owner.text} query={searchTerm} />
+        </Typography.Text>
       );
     },
     [describeOwner, searchTerm]
@@ -494,63 +481,52 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     () => [
       {
         title: 'Server',
-        dataIndex: 'name',
         key: 'name',
-
-        render: (_: string, server: MCPServer) => {
-          const displayName = server.display_name || server.name;
+        render: (_: unknown, server: MCPServer) => (
+          <SettingsIdentity
+            name={server.display_name || server.name}
+            query={searchTerm}
+            description={server.description}
+            metadata={
+              <>
+                <Tag>{server.transport.toUpperCase()}</Tag>
+                <Tag>{server.scope}</Tag>
+              </>
+            }
+          />
+        ),
+      },
+      {
+        title: 'Owner',
+        key: 'owner',
+        width: 150,
+        render: (_: unknown, server: MCPServer) => renderOwner(server),
+      },
+      {
+        title: 'Enabled',
+        key: 'enabled',
+        width: 94,
+        render: (_: unknown, server: MCPServer) => (
+          <Badge
+            status={server.enabled ? 'success' : 'default'}
+            text={server.enabled ? 'Enabled' : 'Disabled'}
+          />
+        ),
+      },
+      {
+        title: 'Access / discovery',
+        key: 'health',
+        width: 128,
+        render: (_: unknown, server: MCPServer) => {
           const health = getServerHealth(server, userAuthenticatedMcpServerIds);
-          const scopeColors: Record<string, string> = {
-            global: 'purple',
-            repo: 'cyan',
-            session: 'magenta',
-          };
-          return (
-            <Flex vertical gap={token.marginXXS} style={{ minWidth: 0 }}>
-              <Flex vertical style={{ minWidth: 0 }}>
-                <Typography.Text strong ellipsis={{ tooltip: displayName }}>
-                  <HighlightMatch text={displayName} query={searchTerm} />
-                </Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  ellipsis={{ tooltip: server.name }}
-                  style={{ fontSize: token.fontSizeSM }}
-                >
-                  <HighlightMatch text={server.name} query={searchTerm} />
-                </Typography.Text>
-              </Flex>
-              <Flex wrap gap={token.marginXXS} align="center">
-                <Tag color={server.transport === 'stdio' ? 'blue' : 'green'}>
-                  {server.transport.toUpperCase()}
-                </Tag>
-                <Tag color={scopeColors[server.scope]}>{server.scope}</Tag>
-                <Badge
-                  status={server.enabled ? 'success' : 'default'}
-                  text={server.enabled ? 'Enabled' : 'Disabled'}
-                />
-                <Badge status={health.status} text={health.text} />
-              </Flex>
-              <div style={{ minWidth: 0 }}>{renderOwner(server)}</div>
-              <Flex gap={token.marginXXS} style={{ minWidth: 0 }}>
-                <Typography.Text type="secondary" style={{ flex: '0 0 auto' }}>
-                  Source:
-                </Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  ellipsis={{ tooltip: server.source }}
-                  style={{ minWidth: 0 }}
-                >
-                  <HighlightMatch text={server.source} query={searchTerm} />
-                </Typography.Text>
-              </Flex>
-            </Flex>
-          );
+          return <Badge status={health.status} text={health.text} />;
         },
       },
       {
         title: 'Actions',
         key: 'actions',
         width: 96,
+        fixed: 'right',
         align: 'right',
         render: (_: unknown, server: MCPServer) => {
           const editable = canEditMcpServer(server, capability);
@@ -636,8 +612,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       policyPendingHint,
       renderOwner,
       searchTerm,
-      token.fontSizeSM,
-      token.marginXXS,
       userAuthenticatedMcpServerIds,
     ]
   );
@@ -670,13 +644,21 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       <ResponsiveSettingsHeader
         description="Configure Model Context Protocol servers for enhanced AI capabilities."
         actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+          <Space
+            wrap
+            style={{ width: compact ? '100%' : undefined, maxWidth: '100%' }}
+            styles={{ item: { minWidth: 0, maxWidth: '100%' } }}
+          >
             <Input
               allowClear
               placeholder="Search name, owner, URL, command, tools, transport, or scope"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+              style={{
+                width: compact ? '100%' : 360,
+                maxWidth: '100%',
+                flex: compact ? '1 1 100%' : undefined,
+              }}
             />
             {canAdd ? (
               <Button
@@ -701,8 +683,9 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         )}
       />
 
-      {/* Plain Table: this one already collapses to a phone-width Server/Actions layout (see the layout browser test). */}
-      <Table
+      <ResponsiveTable
+        primaryColumnKey="name"
+        scroll={{ x: 660 }}
         key={searchTerm}
         dataSource={servers}
         columns={columns}

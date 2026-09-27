@@ -960,7 +960,7 @@ describe('MCPServersTable unfinished installs', () => {
       servers: [makeServer({ tools: [{ name: 'search' }] } as Partial<MCPServer>)],
     });
 
-    expect(await screen.findByText('1 tools')).toBeVisible();
+    expect(await screen.findByText('1 tool')).toBeVisible();
     expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
   });
 });

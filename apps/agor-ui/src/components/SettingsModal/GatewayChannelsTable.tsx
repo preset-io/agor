@@ -46,7 +46,6 @@ import type {
 } from '@agor-live/client';
 import {
   GATEWAY_REDACTED_SENTINEL,
-  GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   hasMinimumRole,
   isAgenticToolName,
   ROLES,
@@ -114,13 +113,13 @@ import {
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid } from '../AgentSelectionGrid';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
-import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { SettingsIdentity } from './SettingsIdentity';
 import { UserSelect } from './UserSelect';
 
 interface GatewayChannelsTableProps {
@@ -4495,50 +4494,44 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     {
       title: 'Channel',
       key: 'name',
+      render: (_: unknown, channel: GatewayChannel) => (
+        <SettingsIdentity
+          name={channel.name}
+          query={searchTerm}
+          icon={getChannelTypeIcon(channel.channel_type)}
+          metadata={<Tag>{channel.channel_type}</Tag>}
+        />
+      ),
+    },
+    {
+      title: 'Created by',
+      key: 'creator',
+      width: 150,
       render: (_: unknown, channel: GatewayChannel) => {
         const creator = userById.get(channel.created_by);
-        const alignmentKey =
-          GATEWAY_USER_ALIGNMENT_CONFIG_KEYS[
-            channel.channel_type as keyof typeof GATEWAY_USER_ALIGNMENT_CONFIG_KEYS
-          ];
-        const aligned = alignmentKey && channel.config[alignmentKey] === true;
-        const executionUser = channel.agor_user_id ? userById.get(channel.agor_user_id) : null;
+        const name = creator?.name || creator?.email || 'Unknown user';
         return (
-          <Space
-            orientation="vertical"
-            size={token.marginXXS}
-            style={{ width: '100%', minWidth: 0 }}
-          >
-            <Typography.Text strong style={{ overflowWrap: 'anywhere' }}>
-              {getChannelTypeIcon(channel.channel_type)}{' '}
-              <HighlightMatch text={channel.name} query={searchTerm} />
-            </Typography.Text>
-            <Space wrap size={token.marginXXS}>
-              <Tag>{channel.channel_type}</Tag>
-              <Badge
-                status={channel.enabled ? 'success' : 'default'}
-                text={channel.enabled ? 'Enabled' : 'Disabled'}
-              />
-            </Space>
-            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
-              Created by: {creator?.name || creator?.email || 'Unknown user'}
-            </Typography.Text>
-            <Typography.Text type="secondary" style={{ overflowWrap: 'anywhere' }}>
-              Execution owner:{' '}
-              {aligned
-                ? 'Aligned sender'
-                : channel.agor_user_id
-                  ? executionUser?.name || executionUser?.email || 'Unavailable user'
-                  : 'Unavailable user'}
-            </Typography.Text>
-          </Space>
+          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
+            {name}
+          </Typography.Text>
         );
       },
     },
     {
+      title: 'Enabled',
+      key: 'enabled',
+      width: 94,
+      render: (_: unknown, channel: GatewayChannel) => (
+        <Badge
+          status={channel.enabled ? 'success' : 'default'}
+          text={channel.enabled ? 'Enabled' : 'Disabled'}
+        />
+      ),
+    },
+    {
       title: 'Actions',
       key: 'actions',
-      width: 96,
+      width: 80,
       render: (_: unknown, channel: GatewayChannel) => (
         <SettingsActionGroup>
           <Button
@@ -4599,13 +4592,21 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       <ResponsiveSettingsHeader
         description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
         actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+          <Space
+            wrap
+            style={{ width: compact ? '100%' : undefined, maxWidth: '100%' }}
+            styles={{ item: { minWidth: 0, maxWidth: '100%' } }}
+          >
             <Input
               allowClear
               placeholder="Search name, type, target branch, or person"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+              style={{
+                width: compact ? '100%' : 360,
+                maxWidth: '100%',
+                flex: compact ? '1 1 100%' : undefined,
+              }}
             />
             <Button
               type="primary"

@@ -105,6 +105,6 @@ it('resets the inventory page on search and distinguishes primary owner from cre
     target: { value: 'Teammate 20' },
   });
   expect(screen.getByText('Teammate 20')).toBeInTheDocument();
-  expect(screen.getByText('Created by: Original creator')).toBeInTheDocument();
-  expect(screen.getByText('Primary owner: Unavailable user')).toBeInTheDocument();
+  expect(screen.queryByText('Original creator')).not.toBeInTheDocument();
+  expect(screen.getByText('Unavailable user')).toBeInTheDocument();
 });

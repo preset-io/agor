@@ -1191,8 +1191,8 @@ describe('gateway inventory boundaries', () => {
     });
     expect(screen.getByText('Channel 24')).toBeInTheDocument();
     expect(service).not.toHaveBeenCalled();
-    expect(screen.getByText('Created by: Unknown user')).toBeInTheDocument();
-    expect(screen.getByText('Execution owner: Ada Lovelace')).toBeInTheDocument();
+    expect(screen.getByText('Unknown user')).toBeInTheDocument();
+    expect(screen.queryByText(/Execution owner/)).not.toBeInTheDocument();
   });
 
   it('keeps non-admin gateway mutation controls disabled', () => {
