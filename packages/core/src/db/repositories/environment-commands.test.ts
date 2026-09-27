@@ -9,6 +9,29 @@ import { EnvironmentHealthRepository } from './environment-health';
 
 afterEach(() => vi.useRealTimers());
 describe('shared environment command admission and transitions', () => {
+  dbTest('allows a 90-second cold start without lengthening command execution', async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const commands = new EnvironmentCommandRepository(db);
+    const attemptId = generateId();
+    const admittedAt = Date.now();
+    const admitted = await commands.admit({
+      branch,
+      action: 'start',
+      attemptId,
+      userId: user.user_id,
+    });
+    expect(Date.parse(admitted.command_attempt!.claim_deadline) - admittedAt).toBe(180_000);
+    vi.setSystemTime(admittedAt + 90_000);
+    expect(await commands.expire(branch.branch_id)).toBe(false);
+    const claimed = await commands.report({
+      branch_id: branch.branch_id,
+      attempt_id: attemptId,
+      action: 'start',
+      kind: 'claim',
+    });
+    expect(Date.parse(claimed.command_attempt!.command_deadline) - Date.now()).toBe(300_000);
+  });
   dbTest(
     'serializes competing admissions/claims, fences stale reports, and ignores duplicate results',
     async ({ db }) => {

@@ -29,7 +29,7 @@ async function fixture(command: string) {
         claimDeadline: new Date(Date.now() + 10000).toISOString(),
         commandDeadline: new Date(Date.now() + 10000).toISOString(),
         resultDeadline: new Date(Date.now() + 12000).toISOString(),
-        externalJobDeadlineMs: 365000,
+        externalJobDeadlineMs: 485000,
       },
     },
   };

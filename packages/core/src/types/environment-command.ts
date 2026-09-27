@@ -7,8 +7,10 @@ export const ENVIRONMENT_COMMAND_ACTIONS = ['start', 'stop', 'nuke'] as const;
 export type EnvironmentCommandAction = (typeof ENVIRONMENT_COMMAND_ACTIONS)[number];
 export const ENVIRONMENT_COMMAND_REPORT_SERVICE = 'environment-command-reports';
 export const ENVIRONMENT_COMMAND_BUDGET = {
-  launchMs: 10_000,
-  claimMs: 60_000,
+  /** Admission only: the launcher must not wait for the executor to start. */
+  launchMs: 30_000,
+  /** Includes admission overhead, cold-node scheduling, and image pulls. */
+  claimMs: 180_000,
   /** External/HA jobs keep their existing short execution envelope. */
   commandMs: 300_000,
   /** Standalone commands historically had no cap; bound them without breaking slow cold starts. */

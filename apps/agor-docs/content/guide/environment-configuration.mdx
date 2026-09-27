@@ -604,7 +604,7 @@ expose them.
 HA `hybrid` mode supports **remote-environment trigger scripts**, not application
 hosting. Agor dispatches a bounded executor, which claims its admitted attempt
 and reports progress and completion to any daemon replica. The initiating HTTP
-request waits at most 10 seconds for launcher admission, **not** for the command
+request waits at most 30 seconds for launcher admission, **not** for the command
 or its result. An accepted Start is not a readiness guarantee.
 
 | Deployment / action           | Start, Stop, Nuke                                                 | Restart                                | Diagnostic shell Logs                                                           |
@@ -634,8 +634,8 @@ execution:
   executor_command_template: /path/to/reviewed-external-launcher
   # Assertion about the external Job's TOTAL lifetime, including termination grace.
   # Set only after the launcher/control plane enforce this bound.
-  environment_command_job_deadline_ms: 365000
-  session_token_expiration_ms: 900000 # at least 405000
+  environment_command_job_deadline_ms: 485000
+  session_token_expiration_ms: 900000 # at least 545000
 ```
 
 Do **not** simply flip the mode on an existing Cloud installation. The trusted
@@ -649,15 +649,20 @@ Keep daemon, database, and executor clocks synchronized for the absolute deadlin
 
 #### Deadlines and rollout coordination
 
+Admission and claim budgets are shared fixed defaults, not configurable settings.
+The longer startup allowance applies to managed environments across Agor; it does
+not change normal agent execution timeouts. Admission acknowledges the external
+Job, while the claim budget also covers cold-node scheduling and image pulls.
+
 | Bound                                           | Budget                                                             |
 | ----------------------------------------------- | ------------------------------------------------------------------ |
-| Local launcher admission                        | 10 seconds                                                         |
-| Executor claim, measured from durable admission | 60 seconds                                                         |
+| Local launcher admission                        | 30 seconds                                                         |
+| Executor claim, measured from durable admission | 180 seconds                                                         |
 | Command, measured from claim                    | At most 300 seconds, also capped by the admitted absolute deadline |
 | Owned process-group cleanup                     | TERM, then KILL after at most 5 seconds                            |
 | Result delivery grace                           | 30 seconds beyond the admitted command and cleanup deadline        |
-| Final result deadline, measured from admission  | 395 seconds                                                        |
-| External Job total bound                        | Operator-enforced 305–365 seconds, including termination grace     |
+| Final result deadline, measured from admission  | 515 seconds                                                        |
+| External Job total bound                        | Operator-enforced 305–485 seconds, including termination grace     |
 
 For Kubernetes, configure command-specific `activeDeadlineSeconds` **plus**
 `terminationGracePeriodSeconds` within the asserted total, with `backoffLimit: 0`
