@@ -125,13 +125,18 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
      * verify the key the way the api-key strategy does: inside the scope the
      * hook opened, through the RLS-bound repository.
      */
-    async function authenticate(headers: Record<string, unknown>, rawKey: string) {
+    async function authenticate(headers: Record<string, unknown>, rawKey: string, body = false) {
       const around = createTenantDatabaseScopeAroundHook({
         db,
         config: hostedConfig,
         jwtSecret: 'unused-jwt-secret',
       });
-      const context = { params: { provider: 'rest', headers } } as unknown as HookContext;
+      const context = {
+        path: body ? 'authentication' : 'boards',
+        method: body ? 'create' : 'find',
+        ...(body ? { data: { strategy: 'api-key', apiKey: rawKey } } : {}),
+        params: { provider: 'rest', headers },
+      } as unknown as HookContext;
       let observed: { tenantId: string | undefined; keyTenant: unknown } | undefined;
       await around(context, async () => {
         const row = await new UserApiKeysRepository(db).verifyKey(rawKey);
@@ -156,6 +161,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const crossed = await authenticate({ host: hostB, authorization: `Bearer ${keyA}` }, keyA);
       expect(crossed.tenant?.tenant_id).toBe(tenantB);
       expect(crossed.observed).toEqual({ tenantId: tenantB, keyTenant: null });
+    });
+
+    it('routes body-only key exchange by trusted Host, never by key ownership', async () => {
+      const own = await authenticate({ host: hostA }, keyA, true);
+      expect(own.observed).toEqual({ tenantId: tenantA, keyTenant: tenantA });
+      const crossed = await authenticate({ host: hostB }, keyA, true);
+      expect(crossed.observed).toEqual({ tenantId: tenantB, keyTenant: null });
+      await expect(authenticate({}, keyA, true)).rejects.toMatchObject({ code: 401 });
     });
 
     it.each([

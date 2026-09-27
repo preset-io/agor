@@ -69,6 +69,9 @@ function migrationTenantTables(): string[] {
   const transferMigration = readRepoFile(
     'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
+  const authorityMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0117_user_access_authority.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -87,6 +90,7 @@ function migrationTenantTables(): string[] {
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...authorityMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...transferMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
@@ -113,6 +117,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0110_user_provider_oauth_grants.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
     readRepoFile('packages/core/drizzle/postgres/0112_kb_import_receipts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0117_user_access_authority.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

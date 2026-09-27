@@ -68,11 +68,20 @@ import {
   type SocketIOOptions,
 } from './socketio';
 
+// These transport unit tests use fake users; durable revocation is covered by
+// socketio-user(s)-revocation.integration.test.ts and PostgreSQL/Redis coverage.
+vi.mock('../auth/user-authority.js', () => ({
+  getUserAuthorityCheck: () => async () => ({ role: 'member' }),
+}));
+
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
 
 interface FakeSocket {
+  once: (event: string, handler: () => void) => void;
+  use: (...args: unknown[]) => void;
+  client: { writeToEngine: (...args: unknown[]) => void };
   id: string;
   feathers?: any;
   data: Record<string, any>;
@@ -128,10 +137,16 @@ interface FakeIO {
 
 function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
   const handlers = new Map<string, (...args: any[]) => any>();
+  const onceHandlers = new Map<string, Array<() => void>>();
   const socket: FakeSocket = {
     id,
     data: {},
     handshake: { auth: {}, headers: {} },
+    client: { writeToEngine: vi.fn() },
+    use: vi.fn(),
+    once(event, handler) {
+      onceHandlers.set(event, [...(onceHandlers.get(event) ?? []), handler]);
+    },
     connected: true,
     joined: new Set(),
     get rooms() {
@@ -157,6 +172,9 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
       this.connected = false;
       this.joined.clear();
       this.handlers.get('disconnect')?.('server namespace disconnect');
+      const callbacks = onceHandlers.get('disconnect') ?? [];
+      onceHandlers.delete('disconnect');
+      for (const callback of callbacks) callback();
     },
     broadcast: {
       emit: (event: string, data: unknown) => {

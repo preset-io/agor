@@ -18,6 +18,7 @@ let launcher;
 
 before(async () => {
   launcher = createDevLauncher({
+    authority: { synchronize: async () => ({ active: true, revision: '1', login_epoch: '1' }) },
     publicOrigin: 'http://127.0.0.1:3030',
     issuer: ISSUER,
     audience: AUDIENCE,
@@ -119,6 +120,8 @@ test('assertion contains the selected tenant and user claims', async () => {
   assert.equal(claims.aud, AUDIENCE);
   assert.equal(claims.instance_id, INSTANCE_ID);
   assert.equal(claims.provider, 'agor-ha-dev-launcher');
+  assert.equal(claims.authority_revision, '1');
+  assert.equal(claims.login_epoch, '1');
   assert.equal(claims.tenant_id, 'acme');
   assert.equal(claims.sub, 'aaron-member');
   assert.equal(claims.email, 'aaron@acme.example.test');
@@ -154,6 +157,7 @@ test('burns a code on an invalid audience and never redirects outside the HA ori
 
 test('bounds pending launch codes and evicts the oldest unexchanged identity', async () => {
   const bounded = createDevLauncher({
+    authority: { synchronize: async () => ({ active: true, revision: '1', login_epoch: '1' }) },
     publicOrigin: 'http://127.0.0.1:3030',
     issuer: ISSUER,
     audience: AUDIENCE,
@@ -188,6 +192,7 @@ test('snapshots trusted tenant origins and issuance time at mint, independently 
   let now = 1_800_000_000_000;
   const origins = { acme: 'https://acme.example.test/', globex: 'https://globex.example.test' };
   const instance = createDevLauncher({
+    authority: { synchronize: async () => ({ active: true, revision: '1', login_epoch: '1' }) },
     publicOrigin: 'https://cell.example.test',
     tenantOrigins: origins,
     issuer: ISSUER,
@@ -250,10 +255,59 @@ test('rejects invalid configured tenant origins without reflecting their content
     assert.throws(
       () =>
         createDevLauncher({
+          authority: {
+            synchronize: async () => ({ active: true, revision: '1', login_epoch: '1' }),
+          },
           publicOrigin: 'http://localhost:3030',
           tenantOrigins: { acme: value },
         }),
       { message: 'Invalid development tenant public origin' }
     );
   }
+});
+
+test('exchange fails closed when authority sync fails or the fixed persona is disabled', async () => {
+  for (const unavailable of [true, false]) {
+    const fixture = createDevLauncher({
+      publicOrigin: 'http://127.0.0.1:3030',
+      issuer: ISSUER,
+      audience: AUDIENCE,
+      instanceId: INSTANCE_ID,
+      sharedSecret: SHARED_SECRET,
+      authority: {
+        synchronize: async () => {
+          if (unavailable) throw new Error('synthetic failure');
+          return { active: false, revision: '2', login_epoch: '2' };
+        },
+      },
+    });
+    await new Promise((resolve) => fixture.server.listen(0, '127.0.0.1', resolve));
+    const base = `http://127.0.0.1:${fixture.server.address().port}`;
+    try {
+      const code = launchCodeFrom(await selectPersona('acme-aaron', 'acme', '/ui/', base));
+      assert.equal((await exchange(code, {}, base)).status, unavailable ? 503 : 401);
+      assert.equal((await exchange(code, {}, base)).status, 401);
+    } finally {
+      await new Promise((resolve) => fixture.server.close(resolve));
+    }
+  }
+});
+
+test('authority controls accept only fixed matching tenant/persona and action', async () => {
+  for (const form of [
+    { tenant: 'globex', persona: 'acme-aaron', action: 'disable' },
+    { tenant: 'acme', persona: 'arbitrary', action: 'disable' },
+    { tenant: 'acme', persona: 'acme-aaron', action: 'arbitrary' },
+  ]) {
+    const response = await fetch(`${baseUrl}/dev-auth/authority`, {
+      method: 'POST',
+      body: new URLSearchParams(form),
+    });
+    assert.equal(response.status, 400);
+  }
+  const response = await fetch(`${baseUrl}/dev-auth/authority`, {
+    method: 'POST',
+    body: new URLSearchParams({ tenant: 'acme', persona: 'acme-aaron', action: 'disable' }),
+  });
+  assert.equal(response.status, 200);
 });

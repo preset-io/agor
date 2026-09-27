@@ -93,6 +93,11 @@ identity:
     provider: external_launch
     provisioning: jit
 external_launch:
+  authority:
+    cell_id: ha-dev
+    tenant_ids: [acme, globex]
+    public_key: |
+      __AGOR_HA_AUTHORITY_PUBLIC_KEY__
   enabled: true
   exchange_url: http://dev-launcher:4000/exchange
   issuer: http://dev-launcher:4000

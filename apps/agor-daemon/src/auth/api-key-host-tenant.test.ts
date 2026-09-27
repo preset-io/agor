@@ -1,9 +1,32 @@
 import type { AgorConfig, ResolvedExternalLaunchProvider } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { describe, expect, it } from 'vitest';
-import { createApiKeyHostTenantResolver, hasPersonalApiKeyHeader } from './api-key-host-tenant.js';
+import {
+  createApiKeyHostTenantResolver,
+  hasPersonalApiKeyAuthentication,
+  hasPersonalApiKeyHeader,
+} from './api-key-host-tenant.js';
 
 const db = {} as TenantScopeAwareDatabase;
+
+describe('hasPersonalApiKeyAuthentication', () => {
+  it('recognizes body-only key exchange without treating it as verified identity', () => {
+    expect(
+      hasPersonalApiKeyAuthentication({ strategy: 'api-key', apiKey: 'agor_sk_synthetic' })
+    ).toBe(true);
+  });
+  it.each([
+    undefined,
+    null,
+    {},
+    [],
+    { strategy: 'jwt', apiKey: 'agor_sk_synthetic' },
+    { strategy: 'api-key', apiKey: 42 },
+    { strategy: 'api-key', apiKey: 'not-a-key' },
+  ])('ignores malformed or other authentication: %j', (data) => {
+    expect(hasPersonalApiKeyAuthentication(data)).toBe(false);
+  });
+});
 const hosted: Pick<AgorConfig, 'multi_tenancy' | 'external_launch'> = {
   multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
 };

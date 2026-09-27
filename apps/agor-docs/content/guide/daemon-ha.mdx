@@ -155,6 +155,20 @@ Agor's existing external-launch exchange; Agor then JIT-provisions the tenant-sc
 issues its normal access/refresh JWTs. Use a normal and incognito window (or two browser profiles)
 to keep two personas active simultaneously because the Agor tokens are stored per browser origin.
 
+Before issuing a launch assertion, the sidecar synchronizes the persona through
+the runtime's signed authority endpoint and requires an exact revision/epoch
+acknowledgment. Its generated RSA private key and persona state live in a
+launcher-only volume; daemons mount only the public-key volume. Restart preserves
+disabled state and epochs; nuking the stack removes them. This is a development
+simulation, not the production Cloud delivery/reconciliation implementation.
+
+For revocation QA, POST form fields `tenant`, `persona`, and `action` to
+`/dev-auth/authority`. Actions are `disable`, `enable`, and `revoke` (invalidate
+existing logins without disabling the account). Only the picker's fixed personas
+are accepted. A successful response means the runtime acknowledged the update;
+failure returns 503 and never issues a login. These controls, like the picker,
+are unauthenticated: **never expose this disposable sidecar as a production issuer**.
+
 The development issuer also signs `public_base_url` from trusted fixture configuration,
 snapshotted together with `iat` when the launch code is created. Optional
 `AGOR_HA_ACME_ORIGIN` and `AGOR_HA_GLOBEX_ORIGIN` select each tenant's origin;

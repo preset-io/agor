@@ -2,16 +2,22 @@ import type { BranchID, SessionSdkHomeScope, Task, UserID, UUID } from '@agor/co
 import { TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
+import { resolveExternalUserAuthorityBinding } from '../../config/identity-authority';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
-import { tasks as tasksTable } from '../schema';
+import { select, update } from '../database-wrapper';
+import { tasks as tasksTable, users as usersTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
+import {
+  ExternalUserAuthorityRepository,
+  externalAuthorityIdentityKey,
+} from './external-user-authority';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository, type TaskRuntimeAuthorityScope } from './tasks';
+import { UserExternalIdentitiesRepository } from './user-external-identities';
 import { UsersRepository } from './users';
 
 let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
@@ -162,6 +168,49 @@ async function expectDeniedWithoutHeartbeatRefresh(
 
 describe('Task runtime heartbeat authority (SQLite)', () => {
   dbTest(
+    'external lifecycle rejects an unsynchronized principal without changing local lifecycle',
+    async ({ db }) => {
+      const seed = await seedRuntime(db);
+      const binding = resolveExternalUserAuthorityBinding({
+        identity: { user_lifecycle: 'external' },
+        external_launch: { issuer: 'https://cloud.example.test' },
+      });
+      const identity = {
+        provider: binding!.provider,
+        issuer: binding!.issuer,
+        subject: 'legacy-task-user',
+      };
+      await new UserExternalIdentitiesRepository(db).bind(seed.actorId, {
+        ...identity,
+        key: externalAuthorityIdentityKey(identity.provider, identity.issuer, identity.subject),
+        last_login_at: new Date().toISOString(),
+      });
+      await expectDeniedWithoutHeartbeatRefresh(
+        { ...seed, tasks: new TaskRepository(db, binding) },
+        'principal_unavailable'
+      );
+      expect((await new UsersRepository(db).findById(seed.actorId))?.access_disabled).toBe(false);
+      expect(
+        await seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
+      ).toMatchObject({ outcome: 'continued' });
+      // Single-writer fixture: synchronize the same bound identity, not a new user.
+      await new ExternalUserAuthorityRepository(db).apply({
+        ...identity,
+        active: true,
+        role: 'member',
+        revision: '1',
+        login_epoch: '1',
+      });
+      expect(
+        await new TaskRepository(db, binding).reportRuntimeTelemetry(
+          seed.task.task_id,
+          seed.authority
+        )
+      ).toMatchObject({ outcome: 'continued' });
+    }
+  );
+
+  dbTest(
     'credential authorization is read-only and refuses revoked, stopping and wrong-actor tasks',
     async ({ db }) => {
       const seed = await seedRuntime(db);
@@ -269,6 +318,18 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
       })
     ).rejects.toThrow('Authorization to launch this task is unavailable');
   });
+
+  dbTest(
+    'denies an administratively disabled principal through the existing heartbeat predicate',
+    async ({ db }) => {
+      const seed = await seedRuntime(db);
+      await update(db, usersTable)
+        .set({ access_disabled: true })
+        .where(eq(usersTable.user_id, seed.actorId))
+        .run();
+      await expectDeniedWithoutHeartbeatRefresh(seed, 'principal_unavailable');
+    }
+  );
 
   dbTest('denies a removed/deactivated principal without refreshing liveness', async ({ db }) => {
     const seed = await seedRuntime(db);

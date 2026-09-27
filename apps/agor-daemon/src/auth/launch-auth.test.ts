@@ -13,11 +13,15 @@ import {
   BoardRepository,
   createDatabase,
   eq,
+  executeRaw,
+  externalAuthorityIdentityKey,
+  externalUserAuthority,
   hash,
   initializeDatabase,
   insert,
   runWithTenantDatabaseScope,
   select,
+  sql,
   TenantPublicRoutingRepository,
   update,
   userExternalIdentities,
@@ -29,6 +33,7 @@ import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
 
+let fixtureClaims: jwt.JwtPayload = {};
 const ASSERTION_SECRET = 'test-launch-assertion-secret';
 const RUNTIME_JWT_SECRET = 'test-runtime-jwt-secret';
 
@@ -60,7 +65,15 @@ function externalAuthorityConfig(): AgorConfig {
       local_auth: 'disabled',
       external: { provider: 'external_launch', provisioning: 'jit' },
     },
-    external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
+    external_launch: {
+      ...baseConfig().external_launch,
+      allow_admin_roles: true,
+      authority: {
+        public_key: 'not-used-by-launch-verifier',
+        cell_id: 'test',
+        tenant_ids: ['default'],
+      },
+    },
     execution: { allow_superadmin: true },
   };
 }
@@ -73,6 +86,8 @@ function signClaims(overrides: Record<string, unknown> = {}) {
       name: 'Launch User',
       role: 'member',
       instance_id: 'instance-1',
+      authority_revision: '1',
+      login_epoch: '1',
       ...overrides,
     },
     ASSERTION_SECRET,
@@ -86,6 +101,7 @@ function signClaims(overrides: Record<string, unknown> = {}) {
 }
 
 function mockExchange(assertion: string, status = 200) {
+  fixtureClaims = jwt.decode(assertion) as jwt.JwtPayload;
   const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
     Response.json({ assertion }, { status })
   );
@@ -146,7 +162,7 @@ describe('one-time launch auth service', () => {
     onAuthorizationInvalidated?: (tenantId: string) => void
   ) {
     const { settings } = resolveExternalLaunchSettings(config);
-    return createLaunchAuthService({
+    const launch = createLaunchAuthService({
       db,
       config,
       provider: settings,
@@ -156,7 +172,76 @@ describe('one-time launch auth service', () => {
       usersService,
       onAuthorizationInvalidated,
     });
+    return {
+      async create(...args: Parameters<typeof launch.create>) {
+        // These profile/JIT tests start with a synchronized authority snapshot.
+        // Ordering, delivery, and signature negatives live in external-authority.test.ts.
+        if (
+          config.identity?.user_lifecycle === 'external' &&
+          ['member', 'viewer', 'admin', 'superadmin'].includes(fixtureClaims.role)
+        ) {
+          const state = {
+            provider: settings.providerId || fixtureClaims.iss!,
+            issuer: fixtureClaims.iss!,
+            subject: fixtureClaims.sub!,
+            revision: '1',
+            login_epoch: '1',
+            active: true,
+            role: fixtureClaims.role,
+          };
+          const identity_key = externalAuthorityIdentityKey(
+            state.provider,
+            state.issuer,
+            state.subject
+          );
+          await insert(db, externalUserAuthority)
+            .values({ identity_key, ...state })
+            .onConflictDoUpdate({ target: externalUserAuthority.identity_key, set: state })
+            .run();
+        }
+        return launch.create(...args);
+      },
+    };
   }
+
+  it('0113 upgrade preserves a locally managed launch binding and its fresh launch', async () => {
+    mockExchange(signClaims());
+    const first = await service().create({ launchCode: 'before-upgrade' });
+    // Reconstruct the immediately preceding shape in this disposable fixture,
+    // retaining its existing launch identity and administrator.
+    await executeRaw(db, sql.raw('DROP TABLE external_user_authority'));
+    await executeRaw(db, sql.raw('ALTER TABLE users DROP COLUMN access_disabled'));
+    const migration = readFileSync(
+      new URL(
+        '../../../../packages/core/drizzle/sqlite/0116_user_access_authority.sql',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    for (const statement of migration.split('--> statement-breakpoint')) {
+      await executeRaw(db, sql.raw(statement));
+    }
+    expect(
+      (await select(db).from(users).where(eq(users.user_id, first.user.user_id)).one())
+        ?.access_disabled
+    ).toBe(false);
+    const reopened = await service().create({ launchCode: 'after-upgrade' });
+    expect(reopened.user.user_id).toBe(first.user.user_id);
+    expect(reopened.accessToken).toBeTruthy();
+    const externalConfig = externalAuthorityConfig();
+    // No test-fixture auto-synchronization: an enabled legacy local row cannot
+    // authenticate after switching to external lifecycle without Cloud authority.
+    const external = createLaunchAuthService({
+      db,
+      config: externalConfig,
+      provider: resolveExternalLaunchSettings(externalConfig).settings,
+      jwtSecret: RUNTIME_JWT_SECRET,
+      accessTokenTtl: '15m',
+      refreshTokenTtl: '30d',
+      usersService: makeUsersService(db),
+    });
+    await expect(external.create({ launchCode: 'unsynchronized' })).rejects.toThrow(/authority/);
+  });
 
   it('projects a verified public URL tenant-wide and preserves it for legacy launches', async () => {
     const issuedAt = Math.floor(Date.now() / 1000) - 10;
@@ -427,7 +512,15 @@ execution:
       signClaims({ sub: 'role-user-admin', email: 'role-admin@example.test', role: 'admin' })
     );
     const allowedResult = await service({
-      external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
+      external_launch: {
+        ...baseConfig().external_launch,
+        allow_admin_roles: true,
+        authority: {
+          public_key: 'not-used-by-launch-verifier',
+          cell_id: 'test',
+          tenant_ids: ['default'],
+        },
+      },
     }).create({ launchCode: 'admin-role' });
     expect(allowedResult.user.role).toBe('admin');
   });

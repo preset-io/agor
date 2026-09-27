@@ -1,3 +1,5 @@
+import type { DeepReadonly } from '../types';
+import type { ExternalUserAuthorityState } from '../types/user';
 import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
@@ -101,4 +103,13 @@ export function assertValidEffectiveIdentityConfig(config: AgorConfig): void {
       'execution.bootstrap_superadmin_users is incompatible with claim-authoritative roles'
     );
   }
+}
+
+/** Missing external verifier identity must deny, never imply local lifecycle. */
+export function resolveExternalUserAuthorityBinding(
+  config: DeepReadonly<AgorConfig>
+): Pick<ExternalUserAuthorityState, 'provider' | 'issuer'> | undefined {
+  if (config.identity?.user_lifecycle !== AgorUserLifecycleAuthority.EXTERNAL) return undefined;
+  const issuer = config.external_launch?.issuer ?? '';
+  return { issuer, provider: config.external_launch?.provider_id || issuer };
 }

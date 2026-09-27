@@ -80,6 +80,17 @@ export function hasPersonalApiKeyHeader(headers: Record<string, unknown> | undef
   });
 }
 
+/** Routing hint only; the strategy must still verify the key inside tenant scope. */
+export function hasPersonalApiKeyAuthentication(data: unknown): boolean {
+  if (!data || typeof data !== 'object') return false;
+  const authentication = data as { strategy?: unknown; apiKey?: unknown };
+  return (
+    authentication.strategy === 'api-key' &&
+    typeof authentication.apiKey === 'string' &&
+    authentication.apiKey.startsWith(PERSONAL_API_KEY_PREFIX)
+  );
+}
+
 export type ApiKeyHostTenantResolver = (
   headers: Record<string, unknown> | undefined
 ) => Promise<TenantContext>;

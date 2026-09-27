@@ -498,11 +498,15 @@ dbTest(
     const server = (await app.listen(0)) as Server;
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
-    const accessToken = jwt.sign({ sub: bearer.user_id, type: 'access' }, JWT_SECRET, {
-      issuer: 'agor',
-      audience: 'https://agor.dev',
-      expiresIn: '15m',
-    });
+    const accessToken = jwt.sign(
+      { sub: bearer.user_id, type: 'access', auth_format: 1 },
+      JWT_SECRET,
+      {
+        issuer: 'agor',
+        audience: 'https://agor.dev',
+        expiresIn: '15m',
+      }
+    );
     const headers = { authorization: `Bearer ${accessToken}` };
 
     try {

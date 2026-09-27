@@ -6,12 +6,12 @@ import { generateId } from '../lib/ids';
 import { TaskStatus } from '../types/task';
 import type { Database } from './client';
 import { executeRaw, rawRows } from './database-wrapper';
+import { seedHistoricalUser } from './historical-user.test-support';
 import { BoardRepository } from './repositories/boards';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import { TaskRepository } from './repositories/tasks';
-import { UsersRepository } from './repositories/users';
 
 export const SESSION_RECENCY_MIGRATION = '0113_session_recency_not_null';
 
@@ -50,7 +50,7 @@ export async function stageFailingSessionRecencyMigration(
 
 /** Seed the actual prior schema, including a nullable historical row and children. */
 export async function seedHistoricalSessionRecency(db: Database) {
-  const owner = await new UsersRepository(db).create({ email: `${generateId()}@example.invalid` });
+  const owner = await seedHistoricalUser(db, { email: `${generateId()}@example.invalid` });
   const board = await new BoardRepository(db).create({
     name: 'Recency',
     created_by: owner.user_id,

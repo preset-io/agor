@@ -22,6 +22,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { DrizzleService } from '../src/adapters/drizzle.js';
 import { RuntimeJWTStrategy } from '../src/auth/runtime-jwt-strategy.js';
+import { installUserAuthorityCheck } from '../src/auth/user-authority.js';
 import { setupMCPRoutes } from '../src/mcp/server.js';
 import { type RegisterHooksContext, registerHooks } from '../src/register-hooks.js';
 import { BoardObjectsService } from '../src/services/board-objects.js';
@@ -81,6 +82,7 @@ export async function boardMetadataTestApp(
     app.use('tasks', new TasksService(db, app), { methods: [...TASKS_SERVICE_TRANSPORT_METHODS] });
   }
   app.use('users', createUsersService(db, app, config));
+  installUserAuthorityCheck(app, db);
   const authentication = new AuthenticationService(app);
   authentication.register(
     'jwt',
@@ -134,7 +136,12 @@ export async function boardMetadataTestApp(
     url: `http://127.0.0.1:${address.port}`,
     headers(userId: UserID, tenantId?: string) {
       const token = jwt.sign(
-        { sub: userId, type: 'access', ...(tenantId ? { tenant_id: tenantId } : {}) },
+        {
+          sub: userId,
+          type: 'access',
+          auth_format: 1,
+          ...(tenantId ? { tenant_id: tenantId } : {}),
+        },
         JWT_SECRET,
         {
           issuer: 'agor',

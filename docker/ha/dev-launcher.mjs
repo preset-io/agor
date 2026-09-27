@@ -15,6 +15,7 @@
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { createDevAuthority } from './dev-authority.mjs';
 
 export const HA_DEV_PERSONAS = Object.freeze([
   Object.freeze({
@@ -261,6 +262,27 @@ export function createDevLauncher(options) {
         return response.end(renderPicker(publicOrigin, url.searchParams.get('return_to')));
       }
 
+      // Like the picker, these controls are unauthenticated, fixed-persona,
+      // development-only. Never expose this sidecar as a production issuer.
+      if (request.method === 'POST' && url.pathname === '/dev-auth/authority') {
+        const form = new URLSearchParams(await readBody(request));
+        const persona = PERSONAS_BY_ID.get(form.get('persona'));
+        const action = form.get('action');
+        if (
+          !persona ||
+          persona.tenantId !== form.get('tenant') ||
+          !['disable', 'enable', 'revoke'].includes(action)
+        ) {
+          return json(response, 400, { error: 'Invalid development authority command' });
+        }
+        try {
+          const state = await options.authority.synchronize(persona, action);
+          return json(response, 200, state);
+        } catch {
+          return json(response, 503, { error: 'Authority synchronization unavailable' });
+        }
+      }
+
       if (request.method === 'POST' && url.pathname === '/dev-auth/select') {
         const form = new URLSearchParams(await readBody(request));
         const persona = PERSONAS_BY_ID.get(form.get('persona'));
@@ -302,6 +324,14 @@ export function createDevLauncher(options) {
 
         const issuedAt = record.issuedAt;
         const persona = record.persona;
+        let authority;
+        try {
+          authority = await options.authority.synchronize(persona);
+        } catch {
+          return json(response, 503, { error: 'Authority synchronization unavailable' });
+        }
+        if (!authority.active)
+          return json(response, 401, { error: 'Development persona disabled' });
         const assertion = signHs256(
           {
             iss: issuer,
@@ -318,6 +348,8 @@ export function createDevLauncher(options) {
             email_verified: true,
             name: persona.name,
             role: persona.role,
+            authority_revision: authority.revision,
+            login_epoch: authority.login_epoch,
           },
           sharedSecret
         );
@@ -335,7 +367,15 @@ export function createDevLauncher(options) {
 
 export function startDevLauncherFromEnvironment(env = process.env) {
   const port = Number.parseInt(env.PORT ?? '4000', 10);
+  const issuer = env.AGOR_EXTERNAL_LAUNCH_ISSUER ?? 'http://dev-launcher:4000';
+  const authority = createDevAuthority({
+    directory: '/var/lib/agor-dev-authority',
+    publicDirectory: '/run/agor-dev-authority',
+    issuer,
+    endpoint: 'http://daemon-a:3030/auth/external-authority',
+  });
   const launcher = createDevLauncher({
+    authority,
     publicOrigin: env.AGOR_HA_PUBLIC_ORIGIN ?? 'http://localhost:3030',
     tenantOrigins: {
       acme: env.AGOR_HA_ACME_ORIGIN || undefined,

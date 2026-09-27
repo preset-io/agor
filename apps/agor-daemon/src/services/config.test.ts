@@ -34,7 +34,13 @@ const dbMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock('@agor/core/config', () => configMocks);
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...configMocks,
+    resolveExternalUserAuthorityBinding: actual.resolveExternalUserAuthorityBinding,
+  };
+});
 vi.mock('@agor/core/db', () => dbMocks);
 vi.mock('./credential-home-identity.js', () => homeMocks);
 

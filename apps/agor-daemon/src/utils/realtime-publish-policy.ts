@@ -259,6 +259,10 @@ export const REALTIME_PUBLISH_POLICY = {
   authentication: { audience: 'none', why: 'Issues the caller a JWT.' },
   'authentication/refresh': { audience: 'none', why: 'Issues the caller a JWT.' },
   'authentication/impersonate': { audience: 'none', why: 'Issues a JWT for another identity.' },
+  'auth/external-authority': {
+    audience: 'none',
+    why: 'Verified administrative authority synchronization.',
+  },
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },

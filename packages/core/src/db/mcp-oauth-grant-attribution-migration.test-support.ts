@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
+import { seedHistoricalUser } from './historical-user.test-support';
 import { MCPServerRepository } from './repositories/mcp-servers';
-import { UsersRepository } from './repositories/users';
 import { getCurrentTenantId } from './tenant-context';
 
 /** Real current-main journal prefix; deliberately never seed new schema columns. */
@@ -46,7 +46,7 @@ export async function stageFailingAttributionMigration(
 }
 
 export async function seedHistoricalGrants(db: Database) {
-  const user = await new UsersRepository(db).create({
+  const user = await seedHistoricalUser(db, {
     email: `${crypto.randomUUID()}@example.test`,
   });
   const server = await new MCPServerRepository(db).create({

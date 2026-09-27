@@ -51,6 +51,13 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
         'test-attempt', 'synthetic-sealed-access', 'synthetic-sealed-refresh', CURRENT_TIMESTAMP
       )`
     );
+    await executeRaw(
+      scoped,
+      sql`INSERT INTO external_user_authority
+      (tenant_id, identity_key, provider, issuer, subject, revision, login_epoch, active, role)
+      VALUES (${tenantId}, 'same-key-across-tenants', 'external_launch',
+        'https://issuer.example.test', 'subject', '1', '1', false, 'member')`
+    );
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
@@ -329,6 +336,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
     expect(typeof result.schemaVersion).toBe('string');
     expect(result.schemaVersion.length).toBeGreaterThan(0);
     expect(result.rowCounts.user_provider_oauth_grants).toBe(1);
+    expect(result.rowCounts.external_user_authority).toBe(1);
     expect(result.rowCounts.sessions).toBeGreaterThanOrEqual(1);
     expect(result.rowCounts.repos).toBeGreaterThanOrEqual(1);
     expect(result.rowCounts.branches).toBeGreaterThanOrEqual(1);
@@ -345,6 +353,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
         await executeRaw(scoped, sql`SELECT tenant_id FROM user_provider_oauth_grants`)
       );
       expect(rows).toEqual([{ tenant_id: tenantB }]);
+      expect(
+        rowsOf(await executeRaw(scoped, sql`SELECT tenant_id, active FROM external_user_authority`))
+      ).toEqual([{ tenant_id: tenantB, active: false }]);
     });
 
     // Second run deletes nothing yet still reports success.
@@ -431,11 +442,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('deleteTenantData (PostgreS
   });
 
   it.each(
-    ['user_provider_oauth_grants', 'kb_import_receipts'].flatMap((tableName) =>
-      [
-        "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
-        "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
-      ].map((predicate) => ({ tableName, predicate }))
+    ['user_provider_oauth_grants', 'kb_import_receipts', 'external_user_authority'].flatMap(
+      (tableName) =>
+        [
+          "tenant_id = NULLIF(current_setting('agor.tenant_id', true), '')",
+          "COALESCE(current_setting('agor.system_scope', true), '') = '' AND tenant_id = COALESCE(NULLIF(current_setting('agor.tenant_id', true), ''), 'default')",
+        ].map((predicate) => ({ tableName, predicate }))
     )
   )('rejects a weakened $tableName policy: $predicate', async ({ tableName, predicate }) => {
     const policy = sql.identifier(`tenant_isolation_${tableName}`);

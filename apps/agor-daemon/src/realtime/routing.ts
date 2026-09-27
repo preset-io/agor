@@ -58,6 +58,8 @@ export const HA_AUTHORIZATION_INVALIDATION_EVENT = 'agor:authorization-invalidat
 export interface RealtimeAuthorizationInvalidation {
   tenantId?: unknown;
   disconnectSockets?: boolean;
+  /** User-access changes do not retire independent machine/terminal processes. */
+  userId?: string;
 }
 
 /** Internal exact executor-token revocation signal. */

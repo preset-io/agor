@@ -1169,9 +1169,14 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (context.path === 'users') {
     if (context.method === 'create') return 'none';
     if (context.method === 'remove') return 'evict';
-    return ['password', 'role', 'tokens_valid_after', 'must_change_password'].some((field) =>
-      Object.hasOwn(data, field)
-    )
+    return [
+      'password',
+      'role',
+      'tokens_valid_after',
+      'must_change_password',
+      'access_disabled',
+      'revoke_logins',
+    ].some((field) => Object.hasOwn(data, field))
       ? 'evict'
       : 'none';
   }
@@ -1770,6 +1775,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         app.emit('realtime:authorization-invalidated', {
           tenantId: requireCurrentTenantId(),
           disconnectSockets: mode === 'evict',
+          ...(context.path === 'users' &&
+          typeof context.id === 'string' &&
+          context.data &&
+          ('access_disabled' in context.data || 'revoke_logins' in context.data)
+            ? { userId: context.id }
+            : {}),
         });
       },
       () => console.warn('[realtime] Failed to schedule authorization eviction')
@@ -3031,28 +3042,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // ============================================================================
 
   /**
-   * The users service deliberately serves two unauthenticated callers — internal
-   * calls (no `provider`) and the Feathers local-auth email lookup during login —
-   * so it cannot take a blanket `requireAuth` on `all` the way other services do.
-   *
-   * But with no authenticate hook at all, `params.user` was never populated on the
-   * REST transport, so every downstream guard that reads it (the `find` hook,
-   * `authorizeUsersGet`, the role checks) rejected a perfectly valid Bearer token
-   * with "Authentication required". Socket.IO connections carry `params.user` from
-   * the authenticated connection, which is why this only ever failed over REST and
-   * only for the CLI — the UI never exercises this path.
-   *
-   * So: authenticate when the caller actually presented credentials, and leave both
-   * intentional unauthenticated paths exactly as they were.
+   * Internal authentication lookups carry unforgeable server markers and must
+   * not recurse through authentication. A socket's cached user projection is
+   * identity only: every actual external users operation requires fresh authority.
    */
   const authenticateUsersRequestWhenCredentialed = async (
     context: HookContext
   ): Promise<HookContext> => {
     const params = context.params as AuthenticatedParams;
     if (!params.provider) return context;
-    if (params.user) return context;
-    if (isLocalAuthenticationLookup(params) || isAuthenticationUserLookup(params)) return context;
-    if (!params.authentication) return context;
+    if (
+      (context.method === 'find' || context.method === 'get') &&
+      (isLocalAuthenticationLookup(params) || isAuthenticationUserLookup(params))
+    )
+      return context;
+    if (!params.authentication && !params.user) return context;
     return requireAuth(context);
   };
 

@@ -14,6 +14,7 @@ import {
   type ApiKeyName,
   hasExactUserExecutorCredentialHome,
   resolveApiKey,
+  resolveExternalUserAuthorityBinding,
 } from '@agor/core/config';
 import {
   runWithTenantDatabaseScope,
@@ -215,7 +216,10 @@ export class ConfigService {
       }
       const assertTask = async () => {
         await runWithTenantDatabaseScope(this.db, authority.tenantId, (db) =>
-          new TaskRepository(db).assertRuntimeCredentialAuthority(taskId, {
+          new TaskRepository(
+            db,
+            resolveExternalUserAuthorityBinding(this.config)
+          ).assertRuntimeCredentialAuthority(taskId, {
             token_fingerprint: authority.tokenFingerprint,
             principal_user_id: authority.userId,
             session_id: authority.sessionId,

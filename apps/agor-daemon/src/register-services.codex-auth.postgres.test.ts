@@ -281,7 +281,7 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           method = 'POST'
         ) => {
           const token = jwt.sign(
-            { sub: caller.user_id, type: 'access', tenant_id: tenant },
+            { sub: caller.user_id, type: 'access', auth_format: 1, tenant_id: tenant },
             secret,
             { issuer: 'agor', audience: 'https://agor.dev', expiresIn: '15m' }
           );

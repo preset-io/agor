@@ -1066,6 +1066,7 @@ export const users = sqliteTable(
 
     // Monotonic local-credential generation copied into interactive JWTs.
     credential_generation: integer('credential_generation').notNull().default(0),
+    access_disabled: t.bool('access_disabled').notNull().default(false),
 
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
@@ -1202,6 +1203,18 @@ export const users = sqliteTable(
  * Database-enforced binding between one trusted external subject and its local
  * user projection. SQLite is single-tenant, so identity_key is globally unique.
  */
+/** Durable external authority, including pre-JIT disabled subjects. */
+export const externalUserAuthority = sqliteTable('external_user_authority', {
+  identity_key: text('identity_key').primaryKey(),
+  provider: text('provider').notNull(),
+  issuer: text('issuer').notNull(),
+  subject: text('subject').notNull(),
+  revision: text('revision').notNull(),
+  login_epoch: text('login_epoch').notNull(),
+  active: t.bool('active').notNull(),
+  role: text('role').notNull(),
+});
+
 export const userExternalIdentities = sqliteTable(
   'user_external_identities',
   {

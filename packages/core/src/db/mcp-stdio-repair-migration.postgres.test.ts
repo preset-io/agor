@@ -122,20 +122,16 @@ async function seedFixture(db: Database, fixture: Fixture): Promise<void> {
   ];
 
   await runWithTenantDatabaseScope(db, fixture.tenantId, async (scoped) => {
-    await insert(scoped, pg.users)
-      .values({
-        tenant_id: fixture.tenantId,
-        user_id: fixture.userId,
-        created_at: now,
-        email: `stdio-repair-${fixture.tenantId}@example.invalid`,
-        password: 'not-a-real-password-hash',
-        role: 'member',
-        onboarding_completed: true,
-        must_change_password: false,
-        credential_generation: 0,
-        data: {},
-      })
-      .run();
+    // Explicit historical columns: current users metadata includes newer migrations.
+    await executeRaw(
+      scoped,
+      sql`INSERT INTO users
+      (tenant_id, user_id, created_at, email, password, role, onboarding_completed,
+       must_change_password, credential_generation, data)
+      VALUES (${fixture.tenantId}, ${fixture.userId}, ${now.toISOString()},
+        ${`stdio-repair-${fixture.tenantId}@example.invalid`}, 'not-a-real-password-hash',
+        'member', true, false, 0, '{}')`
+    );
     await insert(scoped, pg.mcpServers).values(servers).run();
 
     for (const server of servers) {

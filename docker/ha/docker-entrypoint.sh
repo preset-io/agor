@@ -13,8 +13,15 @@ case "$public_origin" in
   http://*|https://*) ;;
   *) echo "AGOR_HA_PUBLIC_ORIGIN must be an http(s) URL" >&2; exit 1 ;;
 esac
+test -s /run/agor-dev-authority/public.pem
 escaped_public_origin="$(printf '%s' "$public_origin" | sed 's/[\\&|]/\\&/g')"
-sed "s|__AGOR_HA_PUBLIC_ORIGIN__|$escaped_public_origin|g" /etc/agor/ha-config.yaml >"$config_tmp"
+awk '
+  /__AGOR_HA_AUTHORITY_PUBLIC_KEY__/ {
+    while ((getline line < "/run/agor-dev-authority/public.pem") > 0) print "      " line;
+    next
+  }
+  { print }
+' /etc/agor/ha-config.yaml | sed "s|__AGOR_HA_PUBLIC_ORIGIN__|$escaped_public_origin|g" >"$config_tmp"
 if grep -q '__AGOR_HA_PUBLIC_ORIGIN__' "$config_tmp"; then
   echo "Failed to materialize HA public origin" >&2
   exit 1

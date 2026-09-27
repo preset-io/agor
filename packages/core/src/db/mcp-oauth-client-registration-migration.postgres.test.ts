@@ -11,9 +11,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
 import { createDatabase, type Database } from './client';
 import { executeRaw, isPostgresDatabase, rawRows } from './database-wrapper';
+import { seedHistoricalUser } from './historical-user.test-support';
 import { checkMigrationStatus, classifyMigrationWatermark, runMigrations } from './migrate';
 import { MCPServerRepository } from './repositories/mcp-servers';
-import { UsersRepository } from './repositories/users';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -225,7 +225,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const legacyRegistrationId = generateId();
       await runWithTenantDatabaseScope(db, 'old-head-reconciliation', async (scoped) => {
-        const owner = await new UsersRepository(scoped).create({
+        const owner = await seedHistoricalUser(scoped, {
           email: `${generateId()}@example.test`,
           name: 'Old head migration owner',
           role: 'admin',
@@ -345,7 +345,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         )
       )[0]?.relation_oid;
       await runWithTenantDatabaseScope(db, 'final-preservation', async (scoped) => {
-        const owner = await new UsersRepository(scoped).create({
+        const owner = await seedHistoricalUser(scoped, {
           email: `${generateId()}@example.test`,
           name: 'Final preservation owner',
           role: 'admin',
@@ -397,6 +397,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`ALTER TABLE branches DROP COLUMN cleanup_protected`);
       // Rewind 0112's schema too: replaying its ledger must recreate the table.
       await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
+      await executeRaw(db, sql`DROP TABLE external_user_authority`);
+      await executeRaw(db, sql`ALTER TABLE users DROP COLUMN access_disabled`);
 
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);

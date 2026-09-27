@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { installUserAuthorityCheck } from './user-authority.js';
 /**
  * PostgreSQL/HA coverage for externally projected first-user ownership.
  */
@@ -129,6 +131,43 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         usersService: usersService(db),
       });
     }
+
+    it('0113 upgrade preserves local launch users while unsynchronized external authority denies', async () => {
+      const tenantId = `upgrade-${generateId()}`;
+      const assertion = signClaims({
+        subject: 'legacy-local',
+        email: `${generateId()}@example.test`,
+        tenantId,
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => Response.json({ assertion }))
+      );
+      const first = await service(dbA).create({ launchCode: 'before-upgrade' });
+      await executeRaw(rawA, sql.raw('DROP TABLE external_user_authority'));
+      await executeRaw(rawA, sql.raw('ALTER TABLE users DROP COLUMN access_disabled'));
+      const migration = readFileSync(
+        new URL(
+          '../../../../packages/core/drizzle/postgres/0117_user_access_authority.sql',
+          import.meta.url
+        ),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        await executeRaw(rawA, sql.raw(statement));
+      }
+      const reopened = await service(dbB).create({ launchCode: 'after-upgrade' });
+      expect(reopened.user.user_id).toBe(first.user.user_id);
+      const local = installUserAuthorityCheck({}, dbA);
+      await expect(local(tenantId, first.user.user_id)).resolves.toMatchObject({
+        role: first.user.role,
+      });
+      const external = installUserAuthorityCheck({}, dbB, {
+        provider: config().external_launch!.issuer!,
+        issuer: config().external_launch!.issuer!,
+      });
+      await expect(external(tenantId, first.user.user_id)).rejects.toMatchObject({ code: 401 });
+    });
 
     it('keeps first-user projection and immutable default-board ownership in one fence', async () => {
       const tenantId = `launch-owner-${generateId()}`;

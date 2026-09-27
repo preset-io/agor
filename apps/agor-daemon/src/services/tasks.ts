@@ -1,3 +1,4 @@
+import { resolveExternalUserAuthorityBinding } from '@agor/core/config';
 /**
  * Tasks Service
  *
@@ -226,7 +227,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     app: Application,
     private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
   ) {
-    const taskRepo = new TaskRepository(db);
+    const taskRepo = new TaskRepository(
+      db,
+      resolveExternalUserAuthorityBinding(app.get?.('config') ?? {})
+    );
     super(taskRepo, {
       id: 'task_id',
       resourceType: 'Task',

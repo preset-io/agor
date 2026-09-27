@@ -46,7 +46,7 @@ const authenticationConfig = {
 };
 
 function accessToken(userId: UUID): string {
-  return jwt.sign({ sub: userId, type: 'access' }, JWT_SECRET, {
+  return jwt.sign({ sub: userId, type: 'access', auth_format: 1 }, JWT_SECRET, {
     issuer: 'agor',
     audience: 'https://agor.dev',
     expiresIn: '15m',

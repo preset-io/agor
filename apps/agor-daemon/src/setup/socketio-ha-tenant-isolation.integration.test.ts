@@ -20,7 +20,7 @@ import {
 } from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import {
   issueRuntimeToken,
@@ -32,6 +32,21 @@ import {
   RealtimeAccessCache,
 } from '../utils/realtime-access-cache.js';
 import { configureChannels, createSocketIOConfig, type SocketIOOptions } from './socketio.js';
+
+// This adapter-isolation fixture uses in-memory users. Keep its authority lookup
+// tenant-bound; the companion PostgreSQL suite proves durable revocation.
+vi.mock('../auth/user-authority.js', () => ({
+  getUserAuthorityCheck:
+    (app: {
+      service(path: string): { get(id: string, params: TestParams): Promise<AuthenticationUser> };
+    }) =>
+    async (tenantId: string, userId: UserID) => {
+      const user = await app
+        .service('users')
+        .get(userId, { tenant: { tenant_id: tenantId } as TenantContext });
+      return { role: user.role };
+    },
+}));
 
 const redisUrl = process.env.AGOR_TEST_REDIS_URL;
 const JWT_SECRET = 'disposable-redis-socket-tenant-test-secret';

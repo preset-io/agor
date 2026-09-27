@@ -159,6 +159,41 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     await (peerDb as Database & { $client: { end: () => Promise<void> } }).$client.end();
   });
 
+  it('external lifecycle refuses unsynchronized Task authority while local lifecycle remains usable', async () => {
+    const seed = await seedTenant(db, 'external-cutover');
+    const { task, authority } = await runWithTenantDatabaseScope(
+      db,
+      seed.tenantId,
+      async (scoped) => {
+        const task = await new TaskRepository(scoped).create(
+          taskInput(seed, TaskStatus.DISPATCHING)
+        );
+        const authority = await authorizeRuntime(scoped, seed, task, new Date());
+        return { task, authority };
+      }
+    );
+    await runWithTenantDatabaseScope(peerDb, seed.tenantId, async (scoped) => {
+      const external = new TaskRepository(scoped, {
+        issuer: 'https://cloud.example.test',
+        provider: 'https://cloud.example.test',
+      });
+      const before = await external.findById(task.task_id);
+      expect(await external.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+        outcome: 'authorization_revoked',
+        reason: 'principal_unavailable',
+      });
+      expect((await external.findById(task.task_id))?.last_executor_heartbeat_at).toBe(
+        before?.last_executor_heartbeat_at
+      );
+      await expect(
+        external.assertRuntimeCredentialAuthority(task.task_id, authority)
+      ).rejects.toThrow();
+      expect(
+        await new TaskRepository(scoped).reportRuntimeTelemetry(task.task_id, authority)
+      ).toMatchObject({ outcome: 'continued' });
+    });
+  });
+
   it('lets a second daemon accept heartbeats without changing the Task or its queue', async () => {
     const seed = await seedTenant(db, 'heartbeat-handoff');
     const { active, queued, authority } = await runWithTenantDatabaseScope(

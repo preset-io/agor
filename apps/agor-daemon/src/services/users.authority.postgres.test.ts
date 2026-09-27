@@ -1,3 +1,11 @@
+import {
+  ExternalUserAuthorityRepository,
+  runWithTenantDatabaseTransaction,
+  UserApiKeysRepository,
+} from '@agor/core/db';
+import { BrowserAuthorityLease } from '../auth/browser-authority-lease.js';
+import { installUserAuthorityCheck } from '../auth/user-authority.js';
+import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 /**
  * Production-shaped role-authority coverage. The shared PostgreSQL runner
  * supplies a disposable non-superuser, NOBYPASSRLS role.
@@ -93,6 +101,121 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         tenant: { tenant_id: tenantId, source: 'auth_claim' },
       };
     }
+
+    it('two independent replicas observe disable and source-key deletion without invalidation delivery', async () => {
+      const tenantId = `revocation-${generateId()}`;
+      const foreignTenant = `foreign-${generateId()}`;
+      const admin = await seed(tenantId, 'admin', 'revoker');
+      const user = await seed(tenantId, 'member', 'revoked');
+      const unrelated = await seed(tenantId, 'member', 'unrelated');
+      const peerRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      const peer = createTenantScopedDatabaseProxy(peerRaw, {
+        requireScope: true,
+        label: 'revocation-peer',
+      });
+      const checkA = installUserAuthorityCheck({}, db);
+      const checkB = installUserAuthorityCheck({}, peer);
+      const payload = {
+        type: 'access',
+        sub: user.user_id,
+        auth_format: 1,
+        auth_credential_generation: 0,
+      };
+      const service = new UsersService(db);
+      try {
+        await checkA(tenantId, user.user_id, payload);
+        await checkB(tenantId, user.user_id, payload);
+        await expect(checkB(foreignTenant, user.user_id, payload)).rejects.toThrow(/revoked/);
+        const key = await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new UserApiKeysRepository(scoped).create(user.user_id, 'lineage')
+        );
+        await checkB(tenantId, user.user_id, { ...payload, source_api_key_id: key.key.id });
+        await expect(
+          checkB(tenantId, unrelated.user_id, {
+            ...payload,
+            sub: unrelated.user_id,
+            source_api_key_id: key.key.id,
+          })
+        ).rejects.toThrow(/revoked/);
+        await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new UserApiKeysRepository(scoped).delete(key.key.id, user.user_id)
+        );
+        await expect(
+          checkB(tenantId, user.user_id, { ...payload, source_api_key_id: key.key.id })
+        ).rejects.toThrow(/revoked/);
+        await checkB(tenantId, user.user_id, payload);
+        let now = 0;
+        const lease = new BrowserAuthorityLease(now, () => now);
+        // No Redis/message/invalidation connection exists between these replica handles.
+        await runWithTenantDatabaseScope(db, tenantId, () =>
+          service.patch(user.user_id, { access_disabled: true }, params(admin, tenantId))
+        );
+        await expect(checkB(tenantId, user.user_id, payload)).rejects.toThrow(/disabled/);
+        now = 30_000;
+        expect(
+          await lease.renew(async () => {
+            await checkB(tenantId, user.user_id, payload);
+          })
+        ).toBe(false);
+        await checkB(tenantId, unrelated.user_id);
+        await runWithTenantDatabaseScope(db, tenantId, () =>
+          service.patch(user.user_id, { access_disabled: false }, params(admin, tenantId))
+        );
+        await expect(checkB(tenantId, user.user_id, payload)).rejects.toThrow(/expired/);
+        await checkB(tenantId, user.user_id);
+      } finally {
+        await (peerRaw as Database & { $client: { end(): Promise<void> } }).$client.end();
+      }
+      await expect(checkB(tenantId, user.user_id)).rejects.toThrow();
+    });
+
+    it('external authority tombstones and revisions are RLS-isolated and durable across replica reads', async () => {
+      const tenantId = `external-${generateId()}`;
+      const foreignTenant = `external-other-${generateId()}`;
+      const state = {
+        provider: 'cloud',
+        issuer: 'https://issuer.example.test',
+        subject: 'same-subject',
+        revision: '9007199254740993',
+        login_epoch: '7',
+        active: false,
+        role: 'member' as const,
+      };
+      await runWithTenantDatabaseTransaction(db, tenantId, async (scoped) => {
+        await lockTenantAuthorizationFence(scoped);
+        await new ExternalUserAuthorityRepository(scoped).apply(state);
+      });
+      await runWithTenantDatabaseScope(db, foreignTenant, async (scoped) => {
+        expect(
+          await new ExternalUserAuthorityRepository(scoped).find(
+            state.provider,
+            state.issuer,
+            state.subject
+          )
+        ).toBeFalsy();
+      });
+      await runWithTenantDatabaseTransaction(db, tenantId, async (scoped) => {
+        await lockTenantAuthorizationFence(scoped);
+        expect(
+          (
+            await new ExternalUserAuthorityRepository(scoped).apply({
+              ...state,
+              revision: '9007199254740992',
+              active: true,
+            })
+          ).outcome
+        ).toBe('superseded');
+      });
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        expect(
+          await new ExternalUserAuthorityRepository(scoped).find(
+            state.provider,
+            state.issuer,
+            state.subject
+          )
+        ).toMatchObject({ active: false, revision: state.revision });
+      });
+    });
 
     it('enforces hierarchy inside a tenant and hides cross-tenant targets', async () => {
       const tenantA = `users-authority-a-${generateId()}`;

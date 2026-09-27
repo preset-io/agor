@@ -17,7 +17,7 @@ same runtime access and refresh tokens used by normal login.
    subject.
 5. The daemon verifies issuer, audience, expiration, subject, and the configured
    instance ID; then it maps or creates a local user by `(provider, issuer,
-   subject)`.
+subject)`.
 6. The daemon returns normal runtime auth tokens. The UI stores those tokens and
    removes `launch_code` from the URL with `replaceState`.
 
@@ -81,9 +81,10 @@ identity:
 ```
 
 With this profile, verified launches may still create a missing local user and
-synchronize JWT-owned email, name, avatar, execution-home key, and role. Those
-fields update when the next external launch succeeds; the daemon does not call
-the provider on every request. User and administrator calls through REST,
+synchronize JWT-owned email, name, avatar, execution-home key, and role.
+Profile fields update when the next external launch succeeds; lifecycle and
+role changes also arrive through authority synchronization. The daemon does not
+call the provider on every request. User and administrator calls through REST,
 Socket.IO, CLI, and MCP cannot create or delete users or edit those fields.
 Agor-owned preferences, onboarding state, AI-provider credentials and defaults,
 environment variables, personal API keys, and MCP selections/OAuth grants stay
@@ -101,9 +102,11 @@ require `external_launch.allow_admin_roles`; a `superadmin` claim also requires
 being silently downgraded.
 
 Omitting `identity` preserves normal local user, role, and password authority.
-The current contract does not synchronize external deactivation or revoke
-already-issued Agor credentials: the external provider can prevent a new
-launch, while cleanup and revocation remain a separate lifecycle concern.
+Launch-only authentication does not synchronize external deactivation: the
+provider can prevent a new launch, but that alone does not revoke existing Agor
+credentials. Externally managed lifecycle requires the configured authority
+synchronization described under **Administrative access revocation** below; verified
+updates enforce deactivation and login revocation independently of a new launch.
 
 Before enabling this profile, apply the external-identity migration and upgrade
 every daemon replica. The migration fails closed if legacy external bindings or
@@ -276,4 +279,38 @@ changed by this claim. Knowledge reader links need no `mode=edit` query; both
 - Configure exactly one assertion verification method (`jwks_url`, `public_key`,
   or dev-only `dev_shared_secret`).
 - Local users are mapped by stable external identity `(provider, issuer,
-  subject)`. A matching email alone never merges identities.
+subject)`. A matching email alone never merges identities.
+
+## Administrative access revocation
+
+When user lifecycle is externally managed, launch assertions are credentials,
+not membership updates. The external provider must first synchronize authority
+through the separately signed `POST /auth/external-authority` channel. Launch
+assertions must carry `authority_revision` and `login_epoch` matching the active
+stored projection. Missing or stale authority denies launch; an old code cannot
+re-enable an account. Ordinary runtime user editing cannot change external
+lifecycle status or roles.
+
+Configure `external_launch.authority.public_key` (a dedicated RSA public key),
+`cell_id`, and `tenant_ids` (the provisioned workspace allowlist). Administrative
+updates use RS256 with audience `agor-authority:<cell_id>`, not the launch
+audience. Deploying this runtime without the companion's durable synchronization
+does **not** provide end-to-end Cloud revocation.
+
+For locally managed users, administrators can **Disable access** or **Enable
+access** in User Management. **Sign out all** invalidates the user's existing
+runtime logins but permits fresh primary authentication; it does not delete API
+keys. Deleting an API key also invalidates access/refresh tokens derived from it.
+Re-enabling access never restores old logins.
+
+Fresh authenticated operations check current authority. Passive browser access,
+including terminal input/output, expires within 60 seconds of the runtime
+authority commit even if invalidation publication is missed. Reconnecting or
+reattaching requires current authority. Already executing commands, detached
+shells, independent service credentials, and provider work are not terminated.
+
+This change requires coordinated cutover: drain old replicas/connections,
+initialize external authority, and require fresh login. Legacy ordinary
+access/refresh tokens without the new format marker are rejected server-side.
+Mixed-version admission and rollback to readers that ignore disabled state are
+not supported security configurations.

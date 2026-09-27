@@ -1,6 +1,7 @@
 import { type ResolvedMultiTenancyConfig, resolveTenantContext } from '@agor/core/config';
 import type { TenantContext, User, UserID } from '@agor/core/types';
 import jwt, { type SignOptions } from 'jsonwebtoken';
+import { AUTH_FORMAT_CLAIM, AUTH_FORMAT_VERSION } from './token-invalidation.js';
 
 export const RUNTIME_JWT_ISSUER = 'agor';
 export const RUNTIME_JWT_AUDIENCE = 'https://agor.dev';
@@ -87,7 +88,11 @@ export function issueRuntimeToken(
   expiresIn: SignOptions['expiresIn'],
   options: Pick<SignOptions, 'audience'> = {}
 ): string {
-  return jwt.sign(payload, jwtSecret, {
+  const claims =
+    payload.type === 'access' || payload.type === 'refresh'
+      ? { ...payload, [AUTH_FORMAT_CLAIM]: AUTH_FORMAT_VERSION }
+      : payload;
+  return jwt.sign(claims, jwtSecret, {
     expiresIn,
     issuer: RUNTIME_JWT_ISSUER,
     audience: options.audience ?? RUNTIME_JWT_AUDIENCE,
@@ -103,12 +108,22 @@ export function issueRuntimeTokenPair(
 ): RuntimeTokenPair {
   return {
     accessToken: issueRuntimeToken(
-      { sub: user.user_id, type: 'access', ...extraClaims },
+      {
+        sub: user.user_id,
+        type: 'access',
+        ...extraClaims,
+        [AUTH_FORMAT_CLAIM]: AUTH_FORMAT_VERSION,
+      },
       jwtSecret,
       accessTokenTtl
     ),
     refreshToken: issueRuntimeToken(
-      { sub: user.user_id, type: 'refresh', ...extraClaims },
+      {
+        sub: user.user_id,
+        type: 'refresh',
+        ...extraClaims,
+        [AUTH_FORMAT_CLAIM]: AUTH_FORMAT_VERSION,
+      },
       jwtSecret,
       refreshTokenTtl
     ),

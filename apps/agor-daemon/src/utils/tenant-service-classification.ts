@@ -120,6 +120,10 @@ export interface TenantServiceClassification {
  * place to be wrong. This table is for services registered outside both.
  */
 export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassification> = {
+  'auth/external-authority': {
+    scopeClass: 'identity-only',
+    why: 'Verifies dedicated authority claims and authorized tenant routing, then opens its own short tenant transaction under the authorization fence.',
+  },
   // --------------------------------------------------------------------------
   // The two Slack lanes' browser preflights. Registered with a bare `app.use`
   // plus a `requireAuth` hook, so nothing upstream arms a scope: each opens one

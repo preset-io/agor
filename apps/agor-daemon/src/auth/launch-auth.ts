@@ -1,5 +1,5 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
-import { createHash, createPublicKey, randomBytes } from 'node:crypto';
+import { createPublicKey, randomBytes } from 'node:crypto';
 import {
   type AgorConfig,
   AgorRoleAuthority,
@@ -11,7 +11,9 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  ExternalUserAuthorityRepository,
   eq,
+  externalAuthorityIdentityKey,
   generateId,
   hash,
   insert,
@@ -20,6 +22,7 @@ import {
   runWithTenantDatabaseTransaction,
   seedInitialDataInTransaction,
   select,
+  sql,
   TenantPublicRoutingRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -124,10 +127,6 @@ function assertConfigured(settings: ResolvedExternalLaunchProvider): void {
   }
 }
 
-function identityKey(provider: string, issuer: string, subject: string): string {
-  return createHash('sha256').update(`${provider}\0${issuer}\0${subject}`).digest('hex');
-}
-
 function sanitizeEmailLocalPart(value: string): string {
   return (
     value
@@ -138,7 +137,7 @@ function sanitizeEmailLocalPart(value: string): string {
 }
 
 function derivedEmail(provider: string, issuer: string, subject: string): string {
-  const digest = identityKey(provider, issuer, subject).slice(0, 16);
+  const digest = externalAuthorityIdentityKey(provider, issuer, subject).slice(0, 16);
   return `launch-${digest}@external-launch.local`;
 }
 
@@ -283,7 +282,7 @@ async function projectLaunchUser(
   const settings = options.provider;
   const identityAuthority = resolveIdentityAuthority(config);
   const provider = claims.provider || settings.providerId || issuer;
-  const key = identityKey(provider, issuer, subject);
+  const key = externalAuthorityIdentityKey(provider, issuer, subject);
   const now = new Date();
   const nowIso = now.toISOString();
   const email = normalizeLaunchEmail(claims.email);
@@ -319,6 +318,26 @@ async function projectLaunchUser(
   // current row so a launch assertion cannot interleave a stale authorization
   // decision on another replica.
   await lockTenantAuthorizationFence(db);
+  if (identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL) {
+    mapRole(
+      claims.role,
+      settings,
+      config.execution?.allow_superadmin,
+      ROLES.MEMBER,
+      identityAuthority.roleAuthority
+    );
+    if (!config.external_launch?.authority)
+      throw new NotAuthenticated('External authority synchronization required');
+    const authority = await new ExternalUserAuthorityRepository(db).find(provider, issuer, subject);
+    if (
+      !authority?.active ||
+      authority.revision !== claims.authority_revision ||
+      authority.login_epoch !== claims.login_epoch ||
+      authority.role !== claims.role
+    ) {
+      throw new NotAuthenticated('External authority is not ready for this launch');
+    }
+  }
 
   const identityRepository = new UserExternalIdentitiesRepository(db);
   await identityRepository.lockProvisioningKey(`identity:${key}`);
@@ -328,6 +347,12 @@ async function projectLaunchUser(
     (await findUserByExternalIdentity(db, identityRepository, key)) ??
     (await findUserByTrustedEmail(db, email, key, settings, claims));
   if (existing) {
+    if (
+      existing.access_disabled &&
+      identityAuthority.userLifecycle !== AgorUserLifecycleAuthority.EXTERNAL
+    ) {
+      throw new NotAuthenticated('User access is disabled');
+    }
     const role = mapRole(
       claims.role,
       settings,
@@ -366,6 +391,13 @@ async function projectLaunchUser(
         name: name ?? existing.name,
         role,
         unix_username: nextUnixUsername,
+        ...(identityAuthority.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL &&
+        existing.access_disabled
+          ? {
+              access_disabled: false,
+              credential_generation: sql`${users.credential_generation} + 1`,
+            }
+          : {}),
         // Once identity authority is external there is no authoritative local
         // password-write path. Clear stale seed/manual flags while projecting
         // the linked account so the user cannot be trapped behind an

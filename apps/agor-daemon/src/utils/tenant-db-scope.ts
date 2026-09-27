@@ -22,6 +22,7 @@ import type { HookContext, TenantContext, TenantID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import {
   createApiKeyHostTenantResolver,
+  hasPersonalApiKeyAuthentication,
   hasPersonalApiKeyHeader,
 } from '../auth/api-key-host-tenant.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
@@ -232,7 +233,10 @@ export function createTenantDatabaseScopeAroundHook(options: TenantDatabaseScope
         isMissingTenantContextError(error) &&
         resolveApiKeyHostTenant &&
         context.params.provider &&
-        hasPersonalApiKeyHeader(paramsWithConnectionTenant.headers)
+        (hasPersonalApiKeyHeader(paramsWithConnectionTenant.headers) ||
+          (context.path === 'authentication' &&
+            context.method === 'create' &&
+            hasPersonalApiKeyAuthentication(context.data)))
       ) {
         return resolveApiKeyHostTenant(paramsWithConnectionTenant.headers);
       }

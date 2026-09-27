@@ -51,6 +51,7 @@ export * from './pending-migrations';
 // Repositories
 export * from './repositories';
 export * from './repositories/branch-deletion';
+export * from './repositories/external-user-authority';
 export * from './sanitize-error';
 export * from './schema';
 export { type DatabaseDialect, detectDialectFromUrl, getDatabaseDialect } from './schema-factory';

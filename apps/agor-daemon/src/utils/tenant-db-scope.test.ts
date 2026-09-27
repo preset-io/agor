@@ -546,9 +546,19 @@ describe('personal API-key Host routing in the tenant scope hook', () => {
   } as never;
 
   it.each([
-    ['conflicting trusted tenant headers', { 'x-agor-tenant-id': ['tenant-a', 'tenant-b'] }],
-    ['a comma-joined trusted tenant header', { 'x-agor-tenant-id': 'tenant-a,tenant-b' }],
-  ])('never falls back to Host routing for %s', async (_label, tenantHeaders) => {
+    ['conflicting trusted tenant headers', { 'x-agor-tenant-id': ['tenant-a', 'tenant-b'] }, false],
+    [
+      'body-only exchange with conflicting headers',
+      { 'x-agor-tenant-id': ['tenant-a', 'tenant-b'] },
+      true,
+    ],
+    ['a comma-joined trusted tenant header', { 'x-agor-tenant-id': 'tenant-a,tenant-b' }, false],
+    [
+      'body-only exchange with comma-joined header',
+      { 'x-agor-tenant-id': 'tenant-a,tenant-b' },
+      true,
+    ],
+  ])('never falls back to Host routing for %s', async (_label, tenantHeaders, body) => {
     const { db } = makePgDb();
     const hook = createTenantDatabaseScopeAroundHook({
       db: db as never,
@@ -557,12 +567,14 @@ describe('personal API-key Host routing in the tenant scope hook', () => {
     });
     const next = vi.fn(async () => undefined);
     const context = {
-      method: 'find',
+      path: body ? 'authentication' : 'boards',
+      method: body ? 'create' : 'find',
+      ...(body ? { data: { strategy: 'api-key', apiKey: 'agor_sk_synthetic' } } : {}),
       params: {
         provider: 'rest',
         headers: {
           host: 'ws-a.cloud.test',
-          authorization: 'Bearer agor_sk_personal-key',
+          ...(body ? {} : { authorization: 'Bearer agor_sk_personal-key' }),
           ...tenantHeaders,
         },
       },

@@ -1,7 +1,7 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
-import { resolveMultiTenancyConfig } from '@agor/core/config';
+import { resolveExternalUserAuthorityBinding, resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
 import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import { Server as SdkServer } from '@modelcontextprotocol/server';
@@ -10,6 +10,7 @@ import express from 'express';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { installUserAuthorityCheck } from '../auth/user-authority.js';
 import { createUsersService } from '../services/users.js';
 import { buildRegistry, coerceJsonRecord, setupMCPRoutes } from './server.js';
 import { initMcpTokens, MCP_TOKEN_AUDIENCE, MCP_TOKEN_ISSUER } from './tokens.js';
@@ -529,7 +530,8 @@ describe('POST /mcp with personal API keys', () => {
     fn: (baseUrl: string) => Promise<void>,
     config: Parameters<typeof setupMCPRoutes>[3] = { multi_tenancy: undefined },
     toolSearchEnabled = false,
-    serverVersion = 'test-product-version'
+    serverVersion = 'test-product-version',
+    authorityDb?: Parameters<typeof installUserAuthorityCheck>[1]
   ) {
     const webApp = express();
     webApp.use(express.json());
@@ -540,6 +542,8 @@ describe('POST /mcp with personal API keys', () => {
       return svc;
     };
 
+    if (authorityDb)
+      installUserAuthorityCheck(webApp, authorityDb, resolveExternalUserAuthorityBinding(config));
     setupMCPRoutes(webApp as never, testSqliteDb(), toolSearchEnabled, config, { serverVersion });
 
     const httpServer = webApp.listen(0);
@@ -716,6 +720,101 @@ describe('POST /mcp with personal API keys', () => {
       });
     });
   });
+
+  it.each(['api-key', 'internal-session'])(
+    'denies a disabled user at the shared MCP boundary (%s)',
+    async (family) => {
+      await mockPersonalApiKeyUser();
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      const token =
+        family === 'api-key'
+          ? 'agor_sk_valid'
+          : jwt.sign(
+              {
+                sub: 'disabled-user-session',
+                uid: 'user-1',
+                tid: 'default',
+                aud: MCP_TOKEN_AUDIENCE,
+                iss: MCP_TOKEN_ISSUER,
+                jti: 'disabled-user-test',
+              },
+              'mcp-server-test-secret',
+              { algorithm: 'HS256', expiresIn: 60 }
+            );
+      await withMcpServer(
+        {
+          users: {
+            get: async () => ({
+              user_id: 'user-1',
+              email: 'disabled@example.test',
+              role: 'member',
+              access_disabled: true,
+            }),
+          },
+        },
+        async (baseUrl) => {
+          const response = await fetch(`${baseUrl}/mcp`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+          });
+          expect(response.status).toBe(401);
+          expect(await response.json()).toMatchObject({
+            error: { message: 'User access is disabled' },
+          });
+        }
+      );
+    }
+  );
+
+  dbTest(
+    'external lifecycle denies unsynchronized legacy API keys and internal MCP credentials',
+    async ({ db }) => {
+      const users = createUsersService(db);
+      const user = await users.create({
+        email: 'unsynchronized-mcp@example.test',
+        password: 'test-password-1234',
+        role: 'admin',
+      });
+      expect(user.access_disabled).toBe(false);
+      await mockPersonalApiKeyUser(user.user_id);
+      initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+      vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+      const internal = jwt.sign(
+        {
+          sub: 'legacy-session',
+          uid: user.user_id,
+          tid: 'default',
+          aud: MCP_TOKEN_AUDIENCE,
+          iss: MCP_TOKEN_ISSUER,
+          jti: 'unsynchronized-test',
+        },
+        'mcp-server-test-secret',
+        { algorithm: 'HS256', expiresIn: 60 }
+      );
+      await withMcpServer(
+        { users },
+        async (baseUrl) => {
+          for (const token of ['agor_sk_valid', internal]) {
+            const response = await fetch(`${baseUrl}/mcp`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+            });
+            expect(response.status).toBe(401);
+          }
+        },
+        {
+          identity: { user_lifecycle: 'external' },
+          external_launch: { issuer: 'https://cloud.example.test' },
+        },
+        false,
+        'test-product-version',
+        db as never
+      );
+    }
+  );
 
   dbTest(
     'rejects a session token whose user was deleted after token validation',

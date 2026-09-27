@@ -17,7 +17,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
-import { eq, like, sql } from 'drizzle-orm';
+import { and, eq, like, sql } from 'drizzle-orm';
 import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-vars';
 import { generateId, shortId } from '../../lib/ids';
 import { isValidExecutionHomeKey } from '../../types/user';
@@ -193,7 +193,7 @@ export class UsersRepository
     userId: UserID | string
   ): Promise<{ user_id: UserID; role: string } | null> {
     try {
-      const where = eq(users.user_id, userId);
+      const where = and(eq(users.user_id, userId), eq(users.access_disabled, false))!;
       await lockRowForUpdate(this.db, this.db, users, where);
       const row = await select(this.db, { user_id: users.user_id, role: users.role })
         .from(users)
@@ -234,6 +234,7 @@ export class UsersRepository
       onboarding_completed: row.onboarding_completed,
       must_change_password: row.must_change_password,
       credential_generation: row.credential_generation,
+      access_disabled: row.access_disabled,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       avatar_url: row.data.avatar_url ?? row.data.avatar,
       avatar: row.data.avatar,
@@ -482,6 +483,7 @@ export class UsersRepository
       Object.hasOwn(updates as object, 'password') ||
       Object.hasOwn(updates as object, 'password_hash') ||
       Object.hasOwn(updates as object, 'passwordHash') ||
+      Object.hasOwn(updates as object, 'access_disabled') ||
       Object.hasOwn(updates as object, 'credential_generation') ||
       Object.hasOwn(updates as object, 'tokens_valid_after')
     ) {

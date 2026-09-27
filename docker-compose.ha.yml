@@ -51,6 +51,7 @@ x-daemon-common: &daemon-common
     # mount also preserves absolute paths in already-rendered HA projects.
     - agor-ha-user-home:/home/agor
     - agor-ha-home:/home/agor/.agor
+    - agor-ha-authority-public:/run/agor-dev-authority:ro
   restart: unless-stopped
   healthcheck:
     test:
@@ -80,6 +81,9 @@ services:
       AGOR_EXTERNAL_LAUNCH_SHARED_SECRET: ${AGOR_EXTERNAL_LAUNCH_SHARED_SECRET:-agor-ha-dev-launch-secret-000000000000000000000000}
     volumes:
       - ./docker/ha/dev-launcher.mjs:/opt/agor-ha-dev-launcher/dev-launcher.mjs:ro
+      - ./docker/ha/dev-authority.mjs:/opt/agor-ha-dev-launcher/dev-authority.mjs:ro
+      - agor-ha-authority-state:/var/lib/agor-dev-authority
+      - agor-ha-authority-public:/run/agor-dev-authority
     healthcheck:
       test:
         [
@@ -134,6 +138,8 @@ services:
     healthcheck:
       disable: true
     depends_on:
+      dev-launcher:
+        condition: service_healthy
       postgres:
         condition: service_healthy
 
@@ -198,3 +204,5 @@ volumes:
   agor-ha-user-home:
   agor-ha-home:
   agor-ha-postgres:
+  agor-ha-authority-state:
+  agor-ha-authority-public:
