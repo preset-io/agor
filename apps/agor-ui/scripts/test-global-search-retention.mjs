@@ -34,9 +34,7 @@ async function payloadCount(cdp) {
   return count;
 }
 
-test('GlobalSearch releases obsolete payloads across two mounted cycles', {
-  timeout: 120_000,
-}, async () => {
+async function withFixture(fixtureName, run) {
   const outDir = await mkdtemp(path.join(tmpdir(), 'agor-search-retention-'));
   let browser;
   let server;
@@ -53,7 +51,7 @@ test('GlobalSearch releases obsolete payloads across two mounted cycles', {
         rolldownOptions: {
           input: path.resolve(
             import.meta.dirname,
-            '../src/components/GlobalSearch/GlobalSearch.retention.fixture.tsx'
+            `../src/components/GlobalSearch/${fixtureName}.fixture.tsx`
           ),
           output: { entryFileNames: 'fixture.js' },
         },
@@ -84,8 +82,24 @@ test('GlobalSearch releases obsolete payloads across two mounted cycles', {
       new URL(route.request().url()).origin === origin ? route.continue() : route.abort()
     );
     await page.goto(origin);
-    await page.waitForFunction(() => !!window.searchRetentionFixture);
     const cdp = await page.context().newCDPSession(page);
+    await run(page, cdp);
+  } finally {
+    await browser?.close();
+    server?.closeAllConnections();
+    if (server?.listening) await new Promise((resolve) => server.close(resolve));
+    await rm(outDir, { recursive: true, force: true });
+  }
+}
+
+// The first callback is born with the payload-bearing map. An inline stable
+// wrapper sharing the publication effect's scope would retain that callback,
+// even after ref.current is replaced. Both payload and object collection count.
+test('GlobalSearch releases obsolete payloads across two mounted cycles', {
+  timeout: 120_000,
+}, async () => {
+  await withFixture('GlobalSearch.retention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.searchRetentionFixture);
     for (let cycle = 1; cycle <= 2; cycle++) {
       await page.evaluate((n) => window.searchRetentionFixture.populate(n), cycle);
       await page.waitForTimeout(300);
@@ -117,10 +131,51 @@ test('GlobalSearch releases obsolete payloads across two mounted cycles', {
       );
     }
     await page.evaluate(() => window.searchRetentionFixture.unmount());
-  } finally {
-    await browser?.close();
-    server?.closeAllConnections();
-    if (server?.listening) await new Promise((resolve) => server.close(resolve));
-    await rm(outDir, { recursive: true, force: true });
-  }
+  });
+});
+
+test('GlobalSearch Enter uses committed callbacks across a suspended transition', {
+  timeout: 120_000,
+}, async () => {
+  await withFixture('GlobalSearch.concurrent', async (page) => {
+    await page.getByRole('button', { name: 'Open search' }).click();
+    const input = page.getByRole('combobox', { name: 'Global search' });
+    await input.fill('deploy');
+    // Highlighting proves debounce committed; the same title also exists in recents.
+    await page
+      .getByRole('option', { name: /deploy A/ })
+      .locator('mark')
+      .waitFor();
+    // Emulate a data update without an outside mousedown closing the popover.
+    await page
+      .getByRole('button', { name: 'Suspend replacement' })
+      .evaluate((button) => button.click());
+    await page.waitForFunction(() => window.searchConcurrentFixture.attempted());
+    assert.equal(await page.getByTestId('committed-version').innerText(), '0');
+    assert.equal(await page.getByTestId('fallback').count(), 0);
+    assert.equal(await page.getByRole('option', { name: /deploy A/ }).count(), 1);
+    assert.equal(await page.getByRole('option', { name: /deploy B/ }).count(), 0);
+    await input.press('Enter');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="location"]')?.textContent !== '/'
+    );
+    assert.match(await page.getByTestId('location').innerText(), /^\/s\/11111111/);
+
+    // Once B really commits, the same mounted search must use B, not stale A.
+    await page.evaluate(() => window.searchConcurrentFixture.release());
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="committed-version"]')?.textContent === '1'
+    );
+    await page.getByRole('button', { name: 'Open search' }).click();
+    await input.fill('deploy');
+    await page
+      .getByRole('option', { name: /deploy B/ })
+      .locator('mark')
+      .waitFor();
+    await input.press('Enter');
+    await page.waitForFunction(() =>
+      document.querySelector('[data-testid="location"]')?.textContent?.startsWith('/s/22222222')
+    );
+    assert.match(await page.getByTestId('location').innerText(), /^\/s\/22222222/);
+  });
 });

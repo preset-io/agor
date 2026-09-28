@@ -57,9 +57,5 @@ export const fixture = {
   },
 };
 
-declare global {
-  interface Window {
-    searchRetentionFixture: typeof fixture;
-  }
-}
-window.searchRetentionFixture = fixture;
+// Keep the test driver local to this entry point, not in the app's Window type.
+Object.assign(window, { searchRetentionFixture: fixture });

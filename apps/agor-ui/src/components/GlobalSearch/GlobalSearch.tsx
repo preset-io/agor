@@ -35,6 +35,8 @@ function useSearchCallback<T extends (...args: never[]) => unknown>(callback: T)
   const ref = useRef(callback);
   // Publish only committed renders, before even child layout effects can invoke
   // a handler. Render-time writes leak suspended work; layout effects are too late.
+  // Keep this local rather than using useStableCallback's layout-time wrapper.
+  // Capture this render's callback directly, never via a render-written pending ref.
   useInsertionEffect(() => {
     ref.current = callback;
   }, [callback]);
