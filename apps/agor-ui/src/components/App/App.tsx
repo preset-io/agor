@@ -76,6 +76,7 @@ import {
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
+import { TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -88,6 +89,7 @@ import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
+import { TeammatesDirectory } from '../HomePage/TeammatesDirectory';
 import { NewSessionButton } from '../NewSessionButton';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
@@ -404,7 +406,9 @@ export const App: React.FC<AppProps> = ({
   }>();
   // Settings owns the address bar, not the surface behind its modal.
   // Preserve the Home/board background recorded by useSettingsRoute.
-  const isRootHomePath = getShellSurfacePath(location) === '/';
+  const shellSurfacePath = getShellSurfacePath(location);
+  const isTeammatesPath = shellSurfacePath === TEAMMATES_ROUTE_PATH;
+  const isRootHomePath = shellSurfacePath === '/' || isTeammatesPath;
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
@@ -1593,7 +1597,15 @@ export const App: React.FC<AppProps> = ({
                   minSize={CANVAS_MIN_SIZE_PERCENT}
                 >
                   <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
-                    {isHomeSurface ? (
+                    {isTeammatesPath ? (
+                      <TeammatesDirectory
+                        client={client}
+                        currentUser={user}
+                        checkAccess={canCreateSessions}
+                        onOpenBoard={handleHomeBoardClick}
+                        onBack={handleHomeClick}
+                      />
+                    ) : isHomeSurface ? (
                       <HomePage
                         client={client}
                         currentUser={user}

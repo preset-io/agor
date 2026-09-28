@@ -24,6 +24,12 @@ describe('uiRoutes', () => {
 });
 
 describe('responsiveRoutePath', () => {
+  it('keeps the teammates directory across the shell breakpoint', () => {
+    const none = { boards: [], sessions: [] };
+    expect(responsiveRoutePath('/teammates', 'mobile', none)).toBe('/m/teammates');
+    expect(responsiveRoutePath('/m/teammates', 'desktop', none)).toBe('/teammates');
+  });
+
   const entities = {
     boards: [{ board_id: '01a012d8-1b9b-7909-b6f4-2024dfc7c51e', slug: 'default' }],
     sessions: [{ session_id: '01a012d8-4f50-7c32-9daa-6e3f70819b2c' }],

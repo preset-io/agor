@@ -44,6 +44,7 @@ import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/available
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { type HomeLocationState, HomePage } from '../HomePage';
+import { TeammatesDirectory } from '../HomePage/TeammatesDirectory';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { mobilePageStyle } from './constants';
 import { MobileBoardPage } from './MobileBoardPage';
@@ -428,6 +429,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onOpenSettings={onOpenWorkspaceSettings}
                 onAllBoards={openBoardList}
                 onSeeAllSessions={openSessionList}
+              />
+            )}
+          />
+          <Route
+            path="teammates"
+            element={withHeader(
+              'AI teammates',
+              <TeammatesDirectory
+                client={client}
+                currentUser={user}
+                checkAccess={canCreateSessions}
+                onOpenBoard={openHomeBoard}
               />
             )}
           />

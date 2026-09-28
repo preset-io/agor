@@ -19,6 +19,9 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
   return `${getRouterBasename(baseUrl)}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/** Directory of AI teammates shared with the caller; `/m` prefixes it on mobile. */
+export const TEAMMATES_ROUTE_PATH = '/teammates';
+
 type ResponsiveRouteEntities = {
   boards: Iterable<{ board_id: string; slug?: string }>;
   sessions: Iterable<{ session_id: string }>;
@@ -30,6 +33,9 @@ export function responsiveRoutePath(
   target: 'mobile' | 'desktop',
   entities: ResponsiveRouteEntities
 ): string {
+  if (pathname === TEAMMATES_ROUTE_PATH || pathname === `/m${TEAMMATES_ROUTE_PATH}`) {
+    return target === 'mobile' ? `/m${TEAMMATES_ROUTE_PATH}` : TEAMMATES_ROUTE_PATH;
+  }
   if (target === 'mobile') {
     const boardToken = pathname.match(/^\/b\/([^/]+)\/?$/)?.[1];
     if (boardToken) {

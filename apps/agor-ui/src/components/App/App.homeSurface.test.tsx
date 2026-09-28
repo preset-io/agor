@@ -296,6 +296,14 @@ describe('Settings opens as an overlay, not a navigation', () => {
     expect(screen.queryByTestId('settings-modal')).toBeNull();
   });
 
+  it('renders the teammates directory at /teammates without canonicalizing to Home', async () => {
+    renderApp('/teammates');
+    await settle();
+    expect(currentPath).toBe('/teammates');
+    expect(screen.getByRole('heading', { name: 'AI teammates' })).toBeTruthy();
+    expect(screen.queryByTestId('session-canvas')).toBeNull();
+  });
+
   it('keeps the board canvas rendered behind the settings modal', async () => {
     renderApp('/b/alpha/');
     await settle();

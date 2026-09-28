@@ -2,7 +2,7 @@ import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, App as AntApp, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
@@ -28,6 +28,7 @@ import {
   OPEN_GLOBAL_SEARCH_EVENT,
   requestShellPicker,
 } from '../../utils/shellEvents';
+import { TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab, type MyWorkView } from './HomeMyWork';
@@ -165,6 +166,7 @@ export const HomePage = memo(function HomePage({
 }: HomePageProps) {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
+  const navigate = useNavigate();
   const location = useLocation();
   const isMobile = useIsMobileViewport();
   const { connected, connecting } = useConnectionState();
@@ -316,6 +318,10 @@ export const HomePage = memo(function HomePage({
     () => (onSeeAllSessions ?? (() => requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'sessions')))(),
     [onSeeAllSessions]
   );
+  const openTeammates = useCallback(
+    () => navigate(isMobile ? `/m${TEAMMATES_ROUTE_PATH}` : TEAMMATES_ROUTE_PATH),
+    [navigate, isMobile]
+  );
 
   const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
   const onboarding = !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
@@ -442,6 +448,7 @@ export const HomePage = memo(function HomePage({
               currentUser={currentUser}
               checkAccess={!!onCreateSession}
               onOpenBoard={onBoardClick}
+              onSeeAll={openTeammates}
             />
             <HomeKnowledgeSection client={client} connected={connected} />
           </Flex>
