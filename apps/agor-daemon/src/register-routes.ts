@@ -5210,6 +5210,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const session = await authorizeAndLoadSessionForMcpConfig(id, params, {
           allowExecutorProjection: true,
         });
+        if (params.query?.available === true || params.query?.available === 'true') {
+          // Configuration choices are not administrative inventory. Even admins
+          // may attach private rows only to their owner's sessions, and a shared
+          // session must not offer credentials belonging to a different caller.
+          await authorizeAndLoadSessionForMcpConfig(id, params);
+          const candidates = await sessionMCPServersService.listAvailableServers(
+            session,
+            params.user?.user_id as UserID | undefined
+          );
+          return candidates.map(redactMCPServerSecrets);
+        }
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
         const includeGlobal =

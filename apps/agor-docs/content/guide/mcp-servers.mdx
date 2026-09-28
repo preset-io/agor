@@ -60,6 +60,23 @@ requires client approval that Agor cannot complete. A listed entry is not a
 guarantee that every provider account can connect; follow the readiness guidance
 and provider requirements shown before connecting.
 
+## Deleting a saved server
+
+In **My Servers → Settings → Remove server**, the confirmation shows the total
+number of sessions still attached, including disabled attachments. Choose
+**Delete and detach** to remove the server, its saved connection, and those
+attachments together. Cancel changes nothing. If the attachment count changes
+before deletion, review the refreshed count and confirm again. Counts do not
+reveal names or details of sessions you cannot view.
+
+Future turns no longer resolve the deleted server. The existing runtime
+revocation mechanism interrupts mediated tool access where enabled; deletion
+cannot recall credentials already handed to a direct, unmediated running agent.
+Saved branch/user defaults remain unchanged, as described above.
+
+The session picker offers only shared servers and private servers usable by
+both you and the session owner. Administrative inventory remains separate.
+
 ## Authentication
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:

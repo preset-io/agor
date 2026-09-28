@@ -4321,23 +4321,14 @@ export async function registerMCPServices(
   );
   app.use(
     '/mcp-marketplace/remove-unattached',
-    new MCPMarketplaceRemoveServerService(db, (userIds, params, serverId) => {
-      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds);
-      scheduleMcpRuntimeHint(
-        db,
-        params.tenant?.tenant_id,
-        'marketplace_server_removed',
-        () =>
-          (
-            app as unknown as {
-              signalMcpServerAuthorityChange?: (
-                serverId: string,
-                params: AuthenticatedParams
-              ) => Promise<void>;
-            }
-          ).signalMcpServerAuthorityChange?.(serverId, params) ?? Promise.resolve()
-      );
-    }),
+    new MCPMarketplaceRemoveServerService(
+      db,
+      (userIds, params) => emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds),
+      (operationDb, serverId, params) =>
+        runWithMCPServerMutationDatabase(operationDb, () =>
+          app.service('mcp-servers').remove(serverId, params)
+        )
+    ),
     { methods: ['create'] }
   );
   app.use(
@@ -4370,10 +4361,9 @@ export async function registerMCPServices(
     }),
     { methods: ['create'] }
   );
-  // Action replies are private acknowledgements. These services mutate through
-  // repository transactions, so they explicitly emit the user-targeted empty
-  // Marketplace freshness hint rather than pretending the ordinary MCP CRUD
-  // service emitted a lifecycle event.
+  // Action replies are private acknowledgements. The user-targeted empty
+  // Marketplace hint also covers repository-only tool changes; removal now
+  // emits the ordinary, redacted MCP lifecycle event after its transaction commits.
   for (const path of [
     'mcp-marketplace/remove-unattached',
     'mcp-marketplace/tool-permission',

@@ -5,6 +5,7 @@ import type {
   BoardEntityObject,
   Branch,
   GatewayChannel,
+  MCPServer,
   Session,
   SessionRelationship,
   TenantAgenticToolSettings,
@@ -17,6 +18,7 @@ import {
   runHydration,
 } from './agorHydration';
 import { EMPTY_MAPS } from './agorMaps';
+import { mcpServerRemoved } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 
 // Reset the singleton before each test so cases don't bleed into each other.
@@ -412,4 +414,19 @@ describe('agorStore agentic tool-settings fetch lifecycle races', () => {
     expect(agorStore.getState().agenticToolSettingsByName.size).toBe(0);
     expect(agorStore.getState().agenticToolSettingsHydrated).toBe(false);
   });
+});
+
+it('server removal evicts picker inventory and cascaded session references immediately', () => {
+  const server = { mcp_server_id: 'deleted' } as MCPServer;
+  agorStore.setState({
+    mcpServerById: new Map([['deleted', server]]),
+    sessionMcpServerIds: new Map([
+      ['one', ['deleted']],
+      ['two', ['deleted', 'retained']],
+    ]),
+  });
+  mcpServerRemoved(server);
+  mcpServerRemoved(server); // socket echo is harmless
+  expect(agorStore.getState().mcpServerById.size).toBe(0);
+  expect(agorStore.getState().sessionMcpServerIds).toEqual(new Map([['two', ['retained']]]));
 });

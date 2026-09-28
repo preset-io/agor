@@ -1,9 +1,11 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { message } from 'antd';
+import { ConfigProvider, message } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MyServersTab } from './MyServersTab';
+import { marketplaceCredentialPresentation } from './marketplacePresentation';
+import { ServerSettingsDrawer } from './ServerSettingsDrawer';
 
 const overview: MCPMarketplaceOverview = {
   servers: [
@@ -107,12 +109,12 @@ async function confirmServerRemoval(title: string): Promise<void> {
   // The drawer renders before the asynchronous member-policy request settles.
   await waitFor(() => expect(remove).toBeEnabled());
   fireEvent.click(remove);
-  const prompt = await screen.findByText(`Remove ${title}?`);
+  const prompt = await screen.findByText(`Delete ${title}?`);
   let confirm: HTMLButtonElement | undefined;
   await waitFor(() => {
     const popover = prompt.closest('.ant-popover');
     confirm = Array.from(popover?.querySelectorAll<HTMLButtonElement>('button') ?? []).find(
-      (button) => button.textContent?.trim() === 'Remove'
+      (button) => button.textContent?.trim() === 'Delete and detach'
     );
     expect(confirm).toBeDefined();
   });
@@ -121,6 +123,68 @@ async function confirmServerRemoval(title: string): Promise<void> {
 }
 
 describe('Marketplace server inventory and settings', () => {
+  it('warns with the attachment count, cancels without writes, and sends explicit confirmed deletion', async () => {
+    const value = { ...overview, servers: [{ ...overview.servers[0], session_count: 2 }] };
+    const { create, service } = renderTab(value);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
+    await waitFor(() => expect(remove).toBeEnabled());
+    fireEvent.click(remove);
+    await waitFor(() =>
+      expect(screen.getByText(/2 sessions are attached to this server/)).toBeVisible()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(create).not.toHaveBeenCalled();
+    await confirmServerRemoval('GitHub');
+    await waitFor(() => expect(service).toHaveBeenCalledWith('mcp-marketplace/remove-unattached'));
+    expect(create).toHaveBeenCalledWith({
+      mcp_server_id: 'server-1',
+      detach: true,
+      expected_session_count: 2,
+    });
+  });
+
+  it('dismisses an open deletion confirmation when its attachment count changes', async () => {
+    const onRemove = vi.fn();
+    const props = {
+      server: { ...overview.servers[0], session_count: 2 },
+      connection: marketplaceCredentialPresentation(undefined),
+      attachments: [],
+      cursorAttached: false,
+      canRefresh: true,
+      canChangeTools: true,
+      canReconnect: true,
+      canRemove: true,
+      busy: new Set<string>(),
+      onClose: vi.fn(),
+      onAfterOpenChange: vi.fn(),
+      onRefreshTools: vi.fn(),
+      onToggleTool: vi.fn(),
+      onRemove,
+    };
+    const view = render(<ServerSettingsDrawer {...props} />, {
+      wrapper: ({ children }) => (
+        <ConfigProvider theme={{ token: { motion: false } }}>{children}</ConfigProvider>
+      ),
+    });
+    const trigger = await screen.findByRole('button', { name: 'Remove GitHub server' });
+    await waitFor(() => expect(trigger).toBeVisible());
+    fireEvent.click(trigger);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete and detach' })).toBeVisible()
+    );
+    view.rerender(
+      <ServerSettingsDrawer {...props} server={{ ...props.server, session_count: 3 }} />
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Delete and detach' })).not.toBeInTheDocument()
+    );
+    expect(onRemove).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove GitHub server' }));
+    await waitFor(() => expect(screen.getByText(/3 sessions are attached/)).toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: 'Delete and detach' }));
+    expect(onRemove).toHaveBeenCalledWith({ ...props.server, session_count: 3 });
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it('renders a production empty state with a catalog route action', () => {
@@ -406,7 +470,7 @@ describe('Marketplace server inventory and settings', () => {
     expect(drawer).not.toHaveTextContent('••••1234');
     fireEvent.click(within(drawer).getByRole('button', { name: 'Reconnect GitHub account' }));
     await waitFor(() => expect(service).toHaveBeenCalledWith('mcp-servers/oauth-start'));
-    expect(within(drawer).getByRole('button', { name: 'Remove GitHub server' })).toBeDisabled();
+    expect(within(drawer).getByRole('button', { name: 'Remove GitHub server' })).toBeEnabled();
   });
 
   it('renders one deterministic drawer switch for a duplicate legacy tool identity', async () => {

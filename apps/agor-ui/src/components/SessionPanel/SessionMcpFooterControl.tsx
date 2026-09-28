@@ -69,6 +69,40 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
   const editMutationAllowed = isAdmin && callerAuthorityReady;
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  const [availableServers, setAvailableServers] = React.useState<MCPServer[]>([]);
+  const [loadingServers, setLoadingServers] = React.useState(false);
+  const [serversError, setServersError] = React.useState<'forbidden' | 'unavailable' | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identity generation and inventory changes invalidate this authoritative projection.
+  React.useEffect(() => {
+    if (!open || !client || !callerAuthorityReady) {
+      setAvailableServers([]);
+      return;
+    }
+    let active = true;
+    setLoadingServers(true);
+    setServersError(null);
+    void client
+      .service(`sessions/${sessionId}/mcp-servers`)
+      .find({ query: { available: true } })
+      .then((result) => {
+        if (active)
+          setAvailableServers((Array.isArray(result) ? result : result.data) as MCPServer[]);
+      })
+      .catch((error: { code?: number }) => {
+        if (active) {
+          setAvailableServers([]);
+          setServersError(error.code === 403 ? 'forbidden' : 'unavailable');
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingServers(false);
+      });
+    return () => {
+      active = false;
+    };
+    // Re-read on inventory changes as well as every open; never use the admin
+    // inventory itself as the available choices for a session.
+  }, [open, client, callerAuthorityReady, currentUserId, authGeneration, sessionId, mcpServerById]);
   const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
   const [editModalOpen, setEditModalOpen] = React.useState(false);
   const operationGuard = useAuthorityOperationGuard(
@@ -238,21 +272,27 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
 
         <MCPServerSelect
           onBrowseCatalog={catalog ? handleBrowseCatalog : undefined}
-          mcpServers={Array.from(mcpServerById.values())}
+          mcpServers={availableServers}
           placeholder="Attach MCP servers…"
           value={sessionMcpServerIds}
           onChange={handleChange}
-          loading={saving}
-          disabled={!client || saving}
+          loading={saving || loadingServers}
+          disabled={!callerAuthorityReady || saving || loadingServers || !!serversError}
           style={{ width: '100%' }}
           getPopupContainer={(trigger) =>
             popupRef.current ?? trigger.parentElement ?? document.body
           }
         />
+        {serversError && (
+          <Typography.Text type="danger">
+            {serversError === 'forbidden'
+              ? 'Only the session owner or an administrator can change attached MCP servers.'
+              : 'Could not load available servers. Close and reopen to retry.'}
+          </Typography.Text>
+        )}
         {catalog && (
           <Typography.Text type="secondary">
-            Catalog Connect creates a new session. Select an existing server above to attach it
-            here.
+            Catalog Connect adds a server to My Servers. Select it above to attach it here.
           </Typography.Text>
         )}
       </Space>

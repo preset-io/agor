@@ -89,10 +89,17 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
 }) => {
   const { token } = theme.useToken();
   const titleId = useId();
-  const [removeConfirm, setRemoveConfirm] = useState(false);
+  const [removeConfirm, setRemoveConfirm] = useState<{ serverId: string; count: number } | null>(
+    null
+  );
+  const confirmationCurrent =
+    !!removeConfirm &&
+    !!server &&
+    removeConfirm.serverId === server.mcp_server_id &&
+    removeConfirm.count === server.session_count;
   useEffect(() => {
-    if (!server || !canRemove) setRemoveConfirm(false);
-  }, [canRemove, server]);
+    if (!confirmationCurrent || !canRemove) setRemoveConfirm(null);
+  }, [canRemove, confirmationCurrent]);
   const discoveringTools = Boolean(server && busy.has(`discover:${server.mcp_server_id}`));
   const toolMutationActive = Boolean(
     server && Array.from(busy).some((key) => key.startsWith(`tool:${server.mcp_server_id}:`))
@@ -322,7 +329,11 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                 ))}
               </Space>
             ) : (
-              <Text type="secondary">No sessions are attached.</Text>
+              <Text type="secondary">
+                {server.session_count > 0
+                  ? 'No visible session attachments.'
+                  : 'No sessions are attached.'}
+              </Text>
             )}
           </Flex>
 
@@ -340,24 +351,32 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
               Remove server
             </Title>
             <Text type="secondary">
-              A server can be removed only after it is detached from every session.
+              Deleting a server also detaches it from all sessions and removes its saved connection.
             </Text>
             <Popconfirm
-              open={removeConfirm && canRemove}
-              title={`Remove ${marketplaceServerTitle(server)}?`}
-              description="Agor checks attachments again before removing the server and its saved connection."
-              okText="Remove"
+              open={confirmationCurrent && canRemove}
+              title={`Delete ${marketplaceServerTitle(server)}?`}
+              description={`${server.session_count} ${server.session_count === 1 ? 'session is' : 'sessions are'} attached to this server (including disabled attachments). Delete and detach it from all of them? Future turns omit this server; active tool calls may be interrupted. Saved defaults are not changed.`}
+              okText="Delete and detach"
               okButtonProps={{ danger: true }}
-              disabled={server.session_count > 0 || !canRemove}
-              onOpenChange={(next) => setRemoveConfirm(next && canRemove)}
-              onConfirm={() => onRemove(server)}
+              disabled={!canRemove}
+              onOpenChange={(next) =>
+                setRemoveConfirm(
+                  next && canRemove
+                    ? { serverId: server.mcp_server_id, count: server.session_count }
+                    : null
+                )
+              }
+              onConfirm={() => {
+                if (confirmationCurrent) onRemove(server);
+              }}
             >
               <Button
                 aria-label={`Remove ${marketplaceServerTitle(server)} server`}
                 title={`Remove ${marketplaceServerTitle(server)} server`}
                 danger
                 icon={<DeleteOutlined />}
-                disabled={server.session_count > 0 || !canRemove}
+                disabled={!canRemove}
                 loading={busy.has(`remove:${server.mcp_server_id}`)}
               >
                 Remove server

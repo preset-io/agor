@@ -145,7 +145,7 @@ describe('MCPMarketplaceRepository', () => {
       expect(result.servers.map((server) => server.name)).toEqual(['alice-private']);
       expect(result.attachments).toHaveLength(1);
       expect(result.attachments[0].session_id).toBe(aliceSession.session_id);
-      expect(result.servers[0].session_count).toBe(1);
+      expect(result.servers[0].session_count).toBe(2);
       expect(result.servers[0].transport).toBe('http');
       expect(result.credentials).toMatchObject([
         {

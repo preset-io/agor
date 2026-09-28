@@ -226,6 +226,27 @@ function deferred() {
   return { promise, resolve };
 }
 
+it('does not resurrect deletion from an in-flight OAuth realtime refetch', async () => {
+  const { client, emit, emitIo, onFetch, fetchCount } = makeMockClient({
+    'mcp-servers:get': { mcp_server_id: 'server-1', name: 'stale' } as never,
+    'mcp-servers/oauth-status': { authenticated_server_ids: ['server-1'] } as never,
+  });
+  const { result, unmount } = renderHook(() => useAgorData(client));
+  try {
+    await waitForInitialLoad(result);
+    const held = deferred();
+    onFetch('mcp-servers', 'get', () => held.promise);
+    act(() => emitIo('oauth:completed', { success: true, mcp_server_id: 'server-1' }));
+    await waitFor(() => expect(fetchCount('mcp-servers', 'get')).toBe(1));
+    act(() => emit('mcp-servers', 'removed', { mcp_server_id: 'server-1' }));
+    held.resolve();
+    await flush();
+    expect(agorStore.getState().mcpServerById.has('server-1')).toBe(false);
+    expect(agorStore.getState().userAuthenticatedMcpServerIds.has('server-1')).toBe(false);
+  } finally {
+    unmount();
+  }
+});
 it('does not rescan OAuth grants on an idle 60-second timer', async () => {
   const { client, fetchCount } = makeMockClient();
   const { result, unmount } = renderHook(() => useAgorData(client));

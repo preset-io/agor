@@ -851,6 +851,16 @@ export class MCPServerRepository
     }
   }
 
+  /** Attachment count only; callers authorize server management before disclosing it. */
+  async countSessionAttachments(id: string): Promise<number> {
+    const fullId = await this.resolveId(id);
+    const row = await select(this.db, { count: sql<number>`count(*)` })
+      .from(sessionMcpServers)
+      .where(eq(sessionMcpServers.mcp_server_id, fullId))
+      .one();
+    return Number(row?.count ?? 0);
+  }
+
   /**
    * Delete MCP server by ID
    */

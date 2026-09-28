@@ -32,10 +32,21 @@ vi.mock('@/utils/message', () => ({
 }));
 
 vi.mock('../MCPServerSelect', () => ({
-  MCPServerSelect: ({ onChange }: { onChange: (ids: string[]) => void }) => (
-    <button type="button" onClick={() => onChange(['replacement-server'])}>
-      replace-session-mcp
-    </button>
+  MCPServerSelect: ({
+    onChange,
+    mcpServers,
+  }: {
+    onChange: (ids: string[]) => void;
+    mcpServers: MCPServer[];
+  }) => (
+    <div>
+      <span data-testid="available-servers">
+        {mcpServers.map((server) => server.name).join(',')}
+      </span>
+      <button type="button" onClick={() => onChange(['replacement-server'])}>
+        replace-session-mcp
+      </button>
+    </div>
   ),
 }));
 
@@ -58,8 +69,13 @@ const server = {
 } as MCPServer;
 
 const patchServer = vi.fn();
+const findServers = vi.fn();
 const client = {
-  service: vi.fn(() => ({ patch: patchServer, create: vi.fn() })),
+  service: vi.fn(() => ({
+    patch: patchServer,
+    create: vi.fn(),
+    find: findServers,
+  })),
   io: { on: vi.fn(), off: vi.fn() },
 } as unknown as AgorClient;
 
@@ -71,6 +87,59 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.connecting = false;
     connectionState.authGeneration = 1;
     vi.clearAllMocks();
+    findServers.mockResolvedValue([server]);
+  });
+
+  it('explains a permanent session-configuration denial rather than suggesting retry', async () => {
+    findServers.mockRejectedValue({ code: 403 });
+    render(
+      <SessionMcpFooterControl
+        client={client}
+        currentUserId="user-a"
+        sessionId="session-id"
+        sessionMcpServerIds={[]}
+        mcpServerById={new Map()}
+        userAuthenticatedMcpServerIds={new Set()}
+      />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^MCP servers\./ }));
+    expect(
+      await screen.findByText(
+        'Only the session owner or an administrator can change attached MCP servers.'
+      )
+    ).toBeVisible();
+    expect(screen.getByTestId('available-servers')).toBeEmptyDOMElement();
+  });
+  it('uses only the authoritative session choices and refreshes them when inventory changes', async () => {
+    const foreign = { ...server, mcp_server_id: 'foreign', name: 'private-other' } as MCPServer;
+    const props = {
+      client,
+      currentUserId: 'user-a',
+      sessionId: 'session-id',
+      sessionMcpServerIds: [],
+      mcpServerById: new Map([
+        [server.mcp_server_id, server],
+        [foreign.mcp_server_id, foreign],
+      ]),
+      userAuthenticatedMcpServerIds: new Set<string>(),
+    };
+    const view = render(<SessionMcpFooterControl {...props} />, { wrapper: Wrapper });
+    fireEvent.click(screen.getByRole('button', { name: /^MCP servers\./ }));
+    await waitFor(() =>
+      expect(screen.getByTestId('available-servers')).toHaveTextContent('portal-server')
+    );
+    expect(screen.getByTestId('available-servers')).not.toHaveTextContent('private-other');
+    expect(client.service).toHaveBeenCalledWith('sessions/session-id/mcp-servers');
+    expect(findServers).toHaveBeenCalledWith({ query: { available: true } });
+    findServers.mockResolvedValue([]);
+    view.rerender(
+      <SessionMcpFooterControl
+        {...props}
+        mcpServerById={new Map([[foreign.mcp_server_id, foreign]])}
+      />
+    );
+    await waitFor(() => expect(screen.getByTestId('available-servers')).toBeEmptyDOMElement());
   });
 
   it('drops the attachment-save continuation when admin A is replaced by admin B', async () => {
