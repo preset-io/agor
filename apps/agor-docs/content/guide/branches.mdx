@@ -577,6 +577,47 @@ it does not orchestrate the long-running workflow or automatically retry it. A d
 replacement can interrupt individual API requests, and a deployment that also kills
 executor processes can leave an unknown outcome requiring reconciliation.
 
+### Deletion recovery
+
+Use **Delete completely** again (or `agor branch rm <id>`) with the same Manager
+and writable-files permission required for the original deletion. Acceptance
+only starts an asynchronous retry; wait until the branch disappears for completion.
+Files and committed database batches removed by earlier attempts are not restored.
+
+- **Settled failure:** retry starts a new invocation and rechecks required storage
+  before deleting any remaining database rows. If a database-only request timed
+  out or lost its response, the live executor can acknowledge that its storage
+  work stopped. The daemon drains/fences old database requests under the branch
+  transaction lock before permitting retry. This does not assume they rolled back.
+- **Dispatch never claimed:** after it is marked failed, retry atomically replaces
+  the dispatch. A late old executor cannot claim it or begin removal.
+- **No settlement acknowledgement:** retry is blocked and starts no replacement.
+  This includes legacy claimed invocations, a worker killed before acknowledging,
+  lost claim responses, and exhausted settlement delivery. Process exit, a stale
+  heartbeat, or user confirmation cannot supply the missing evidence.
+- **Upload deletion request has an unknown outcome:** retry remains blocked.
+  That request can continue outside the database transaction, including on another
+  daemon. Neither a worker exit nor a database lock proves the storage request
+  stopped. This release does not provide a remote-storage containment/reconciliation
+  mechanism for that condition.
+
+There is **no supported online force-unlock** for the last two conditions without
+new settlement evidence from the original worker. Do not clear maintenance JSON,
+change the generation manually, or invoke internal settlement methods. Restarting
+the daemon does not produce evidence. A legacy incident that already lost its
+worker is not repaired by upgrading: leave it fenced and escalate for a separately
+reviewed, topology-specific offline recovery procedure that contains every old
+executor **and** daemon/provider storage request. Journal exit records alone are
+insufficient. Mixed daemon/executor releases are not supported; the new settlement
+action is deliberately rejected by older daemons rather than silently unlocking.
+
+For diagnostics, correlate `[branch.delete]` events by `branch_id`, `operation_id`,
+`generation`, and `invocation_id`. Request failures include the action, safe category,
+HTTP status when received, elapsed time, and acknowledged page count. Daemon logs
+distinguish PostgreSQL serialization/deadlock transaction aborts from unknown errors;
+an HTTP 500 or timeout alone never proves rollback. Completed phase summaries report
+progress without logging every page. Logs omit tokens, payloads, raw errors, and paths.
+
 ---
 
 ## Branch-level features

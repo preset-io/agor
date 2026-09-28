@@ -58,6 +58,13 @@ test('an unacknowledged dispatch cannot start after reconciliation marks it fail
   await maintenance.fail(claim, 'Dispatch outcome unknown');
   await expect(maintenance.claimExecution(claim, invocation)).rejects.toThrow('no longer active');
   await expect(maintenance.heartbeatExecution(claim, invocation)).rejects.toThrow('not claimed');
+  const retry = await maintenance.claim(branch.branch_id, 'delete');
+  expect(retry.acquired).toBe(true);
+  expect(retry.claim.generation).toBe(claim.generation + 1);
+  await expect(maintenance.claimExecution(claim, invocation)).rejects.toThrow('ownership changed');
+  await expect(maintenance.beginExecution(claim)).rejects.toThrow('ownership changed');
+  await expect(maintenance.markStaleDeletion(claim, 1)).rejects.toThrow('ownership changed');
+  expect((await maintenance.claim(branch.branch_id, 'delete')).acquired).toBe(false);
 });
 
 test('known unfinished tasks prevent claiming maintenance without changing branch state', async ({

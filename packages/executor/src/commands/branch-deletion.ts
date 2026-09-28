@@ -29,7 +29,7 @@ export interface BranchDeletionOperations {
   deleteDataBatch(): Promise<{ remaining: boolean }>;
   /** Recheck required storage/data and delete the branch LAST in one short transaction. */
   finalize(): Promise<void>;
-  /** Records failure, but never releases an unresolved invocation. */
+  /** Drain/fence DB requests only after worker storage settles; unknown storage stays fenced. */
   reportFailure(
     failure: Exclude<BranchDeletionExecutionResult, { outcome: 'deleted' }>
   ): Promise<void>;
@@ -150,12 +150,17 @@ export async function handleBranchDelete(
     generation: p.generation,
     execution_id: p.executionId,
   };
-  let reportOutcomeUnknown = false;
+  let storageRequestUnknown = false;
   let sessionToken = payload.sessionToken;
+  const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
+  const pages: Partial<Record<BranchDeletionAction, number>> = {};
   const report = async (
     action: BranchDeletionAction,
     stage?: BranchDeletionStage
   ): Promise<{ remaining: boolean }> => {
+    const started = performance.now();
+    let status: number | undefined;
+    let category = 'transport';
     try {
       const response = await fetch(
         `${payload.daemonUrl.replace(/\/$/, '')}/${BRANCH_DELETION_REPORT_SERVICE}`,
@@ -170,8 +175,12 @@ export async function handleBranchDelete(
           body: JSON.stringify({ ...scope, action, ...(stage ? { stage } : {}) }),
         }
       );
+      status = response.status;
+      category = 'http_rejected';
       if (!response.ok) throw new Error(`Deletion ${action} rejected (HTTP ${response.status})`);
+      category = 'malformed_response';
       const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
+      if (!result || typeof result !== 'object') throw new Error('Invalid deletion response');
       if (
         action === 'heartbeat' &&
         typeof result.sessionToken === 'string' &&
@@ -183,11 +192,24 @@ export async function handleBranchDelete(
       const page = action === 'quiesce' || action === 'upload' || action === 'data';
       if (page && typeof result.remaining !== 'boolean')
         throw new Error('Invalid deletion progress response');
+      if (action === 'settled' && !('ok' in result && result.ok === true))
+        throw new Error('Invalid settlement response');
+      if (page) pages[action] = (pages[action] ?? 0) + 1;
+      if ((page && !result.remaining) || action === 'settled' || action === 'finalize')
+        console.info(
+          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+        );
       return { remaining: result.remaining ?? false };
     } catch (error) {
-      // Transport failure does not cancel a daemon storage step. Never release
-      // its invocation while that request may still be deleting bytes.
-      reportOutcomeUnknown = true;
+      // HTTP errors are not rollback/containment proof. Only upload spans
+      // daemon-side external I/O. DB-only uncertainty can be drained by the
+      // settlement transaction, but an unknown upload MUST keep ownership.
+      if (action === 'upload') storageRequestUnknown = true;
+      if (category === 'transport' && error instanceof Error && error.name === 'TimeoutError')
+        category = 'timeout';
+      console.error(
+        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+      );
       throw error;
     }
   };
@@ -201,7 +223,9 @@ export async function handleBranchDelete(
       const code = ['ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'ENOTDIR', 'EIO'].includes(errno ?? '')
         ? errno
         : 'verification_failed';
-      console.error(`[branch.delete] event=storage_failed step=${step} code=${code}`);
+      console.error(
+        `[branch.delete] event=storage_failed ${correlation} step=${step} code=${code}`
+      );
       throw error;
     }
   };
@@ -213,7 +237,7 @@ export async function handleBranchDelete(
       await report('heartbeat');
     },
     removeStorage: async () => {
-      while ((await storageStep('quiesce', () => report('quiesce'))).remaining) {
+      while ((await report('quiesce')).remaining) {
         /* disable a bounded page of durable producers */
       }
 
@@ -242,18 +266,34 @@ export async function handleBranchDelete(
         deleteBranchDirectory(p.branchHome, p.tenantDataRoot)
       );
       // Storage adapters retain lookup rows until their bytes are removed.
-      while ((await storageStep('remove_upload', () => report('upload'))).remaining) {
+      while ((await report('upload')).remaining) {
         /* one immutable upload per request */
       }
-      await storageStep('verify_storage', () => report('storage'));
+      await report('storage');
     },
     deleteDataBatch: () => report('data'),
     finalize: async () => {
       await report('finalize');
     },
     reportFailure: async (failure) => {
-      if (reportOutcomeUnknown) throw new Error('A daemon step has an unknown outcome');
-      await report('failed', failure.stage);
+      if (storageRequestUnknown) {
+        console.error(
+          `[branch.delete] event=recovery_blocked ${correlation} category=storage_request_unsettled`
+        );
+        throw new Error('Daemon storage settlement cannot be established');
+      }
+      // Distinct from legacy "failed": older daemons must reject rather than
+      // accepting an acknowledgement with the new DB-drain semantics.
+      // Retry this acknowledgement only, never destructive steps. Exact CAS
+      // makes a delayed acknowledgement harmless after a user starts a retry.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await report('settled', failure.stage);
+          return;
+        } catch (error) {
+          if (attempt === 2) throw error;
+        }
+      }
     },
   });
   return result.outcome === 'deleted'

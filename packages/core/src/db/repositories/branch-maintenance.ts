@@ -129,7 +129,16 @@ export class BranchMaintenanceRepository {
       if (row.data.maintenance) {
         if (row.data.maintenance.kind !== kind)
           throw new RepositoryError('Branch maintenance is already in progress');
-        return { claim: row.data.maintenance, acquired: false };
+        const prior = row.data.maintenance;
+        // Failed, never-claimed dispatches are safely replaceable under this
+        // same lock: a delayed claim/beginExecution carries the old generation.
+        // Missing execution_id alone is NOT evidence about historical effects.
+        const unclaimedDeletion =
+          kind === 'delete' &&
+          row.deletion_status === 'deletion_failed' &&
+          prior.execution_id &&
+          prior.execution_claimed_at === undefined;
+        if (!unclaimedDeletion) return { claim: prior, acquired: false };
       }
       if (row.deletion_status && kind !== 'delete')
         throw new RepositoryError('Branch deletion cannot be cancelled');
@@ -367,7 +376,9 @@ export class BranchMaintenanceRepository {
         .set({
           deletion_status: 'deletion_failed',
           deletion_error: current.execution_id
-            ? 'Deletion executor stopped reporting; its outcome is unknown. Reconciliation is required before retry.'
+            ? current.execution_claimed_at
+              ? 'Deletion executor stopped reporting without a settlement acknowledgement. Retry is blocked: process exit and heartbeat age do not prove storage requests stopped. See the branch deletion recovery guide.'
+              : 'Deletion dispatch was never claimed. Retry permanent deletion to fence the old dispatch and start a new invocation.'
             : 'Deletion was interrupted before executor admission. Retry permanent deletion to continue.',
           // No invocation was ever admitted: there can be no late claimant.
           ...(!current.execution_id ? { data: { ...row.data, maintenance: undefined } } : {}),

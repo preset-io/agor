@@ -47,6 +47,9 @@ export const BRANCH_DELETION_ACTIONS = [
   'data',
   'finalize',
   'failed',
+  // Worker-owned storage has stopped; daemon DB-only requests may be unknown.
+  // A distinct action makes old daemons reject this stronger settlement protocol.
+  'settled',
 ] as const;
 export type BranchDeletionAction = (typeof BRANCH_DELETION_ACTIONS)[number];
 

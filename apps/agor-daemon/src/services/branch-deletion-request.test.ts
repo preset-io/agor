@@ -1,6 +1,13 @@
-import { BranchRepository, runWithTenantContext } from '@agor/core/db';
+import {
+  BranchDeletionRepository,
+  BranchMaintenanceRepository,
+  BranchRepository,
+  createTenantScopedDatabaseProxy,
+  runWithTenantContext,
+  UsersRepository,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { AuthenticatedParams, TenantID } from '@agor/core/types';
+import type { AuthenticatedParams, TenantID, UUID } from '@agor/core/types';
 import { expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { ownedDbTest as test } from '../../../../packages/core/src/db/test-helpers';
@@ -22,11 +29,14 @@ test('public local deletion admits one executor and returns deleting', async ({ 
     sessionTokenService: { generateCommandToken: vi.fn(async () => 'fixture-command-token') },
     service: () => ({ emit }),
   } as unknown as Application;
-  const service = new BranchesService(db, app);
-  vi.spyOn(service, 'get').mockImplementation(
-    async () => (await new BranchRepository(db).findById(branch.branch_id))! as never
+  const service = new BranchesService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
   );
-  vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+  vi.spyOn(
+    service as unknown as { resolveEnvironmentExecutorContext(): Promise<unknown> },
+    'resolveEnvironmentExecutorContext'
+  ).mockResolvedValue({
     env: {},
     branchFsAccess: 'write',
     sandboxMounts: {},
@@ -56,6 +66,45 @@ test('public local deletion admits one executor and returns deleting', async ({ 
     });
     expect(await new BranchRepository(db).findById(branch.branch_id)).not.toBeNull();
     expect(emit.mock.calls.some((call) => call[0] === 'removed')).toBe(false);
+    const maintenance = new BranchMaintenanceRepository(db);
+    const { claim } = await maintenance.claim(branch.branch_id, 'delete');
+    const execution = (payload.params as { executionId: UUID }).executionId;
+    await maintenance.claimExecution(claim, execution);
+    await maintenance.fail(claim, 'Fixture unknown outcome');
+    await expect(service.remove(branch.branch_id, params)).rejects.toThrow('recovery is blocked');
+    expect(spawnExecutor).toHaveBeenCalledOnce();
+    const outsider = await new UsersRepository(db).create({
+      email: 'outsider@example.invalid',
+      role: 'member',
+    });
+    await expect(service.remove(branch.branch_id, { ...params, user: outsider })).rejects.toThrow();
+    expect(spawnExecutor).toHaveBeenCalledOnce();
+    // Worker attestation plus the actual transaction barrier makes retry usable.
+    await new BranchDeletionRepository(db).failSettled(
+      claim,
+      execution,
+      'Stopped; retry available'
+    );
+    const prefetched = {
+      ...params,
+      _agorPrefetchedRecord: {
+        id: branch.branch_id,
+        idField: 'branch_id',
+        record: await new BranchRepository(db).findById(branch.branch_id),
+      },
+    };
+    const retries = await Promise.all([
+      service.remove(branch.branch_id, prefetched),
+      service.remove(branch.branch_id, prefetched),
+    ]);
+    expect(retries.every((item) => item.deletion_status === 'deleting')).toBe(true);
+    expect(spawnExecutor).toHaveBeenCalledTimes(2);
+    await expect(maintenance.claimExecution(claim, execution)).rejects.toThrow('ownership changed');
+    // A never-claimed replacement can also recover, with no process-exit inference.
+    const pending = await maintenance.claim(branch.branch_id, 'delete');
+    await maintenance.fail(pending.claim, 'Dispatch never connected');
+    expect((await service.remove(branch.branch_id, params)).deletion_status).toBe('deleting');
+    expect(spawnExecutor).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -74,11 +123,17 @@ test('capability-gated delegated deletion dispatches with mount verification', a
     sessionTokenService: { generateCommandToken: vi.fn(async () => 'fixture-command-token') },
     service: () => ({ emit: vi.fn() }),
   } as unknown as Application;
-  const service = new BranchesService(db, app);
+  const service = new BranchesService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
   vi.spyOn(service, 'get').mockImplementation(
     async () => (await new BranchRepository(db).findById(branch.branch_id))! as never
   );
-  vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+  vi.spyOn(
+    service as unknown as { resolveEnvironmentExecutorContext(): Promise<unknown> },
+    'resolveEnvironmentExecutorContext'
+  ).mockResolvedValue({
     env: {},
     branchFsAccess: 'write',
     sandboxMounts: {},
@@ -108,7 +163,10 @@ test('delegated deletion without a storage capability leaves the branch unchange
       execution: { unix_user_mode: 'delegated', executor_command_template: 'launcher' },
     }),
   } as unknown as Application;
-  const service = new BranchesService(db, app);
+  const service = new BranchesService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
   const params = {
     provider: 'rest',
     user,

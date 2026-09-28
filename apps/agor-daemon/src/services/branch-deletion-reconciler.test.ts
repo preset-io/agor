@@ -1,4 +1,8 @@
-import { BranchMaintenanceRepository, BranchRepository } from '@agor/core/db';
+import {
+  BranchMaintenanceRepository,
+  BranchRepository,
+  createTenantScopedDatabaseProxy,
+} from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { expect, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../../packages/core/src/db/repositories/environment-commands.test-support';
@@ -18,7 +22,7 @@ test('existing-loop observer marks stale deletion failed but cannot dispatch or 
     await maintenance.claimExecution(claim, invocation);
     const emit = vi.fn();
     const observer = new BranchDeletionReconciler(
-      db,
+      createTenantScopedDatabaseProxy(db, { requireScope: true }),
       { service: () => ({ emit }) } as unknown as Application,
       'default'
     );
