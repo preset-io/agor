@@ -39,14 +39,19 @@ import {
   Typography,
   theme,
 } from 'antd';
+import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { isSafeExternalUrl } from '@/utils/safeExternalUrl';
 import { sortSessions } from '@/utils/sessionSearch';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
+
+const NO_BOARDS: never[] = [];
+
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
 
@@ -116,6 +121,11 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     ? boardId
     : resolveBoardFromUrlPure(boardId, boardById);
   const board = resolvedBoardId ? boardById.get(resolvedBoardId) : undefined;
+  const { trackBoardVisit } = useRecentBoards(NO_BOARDS, '');
+  const visitedBoardId = board?.board_id;
+  useEffect(() => {
+    if (visitedBoardId) trackBoardVisit(visitedBoardId);
+  }, [visitedBoardId, trackBoardVisit]);
 
   const boardSwitcher = {
     boards: Array.from(boardById.values())

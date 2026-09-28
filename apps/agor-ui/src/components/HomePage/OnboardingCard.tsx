@@ -1,7 +1,8 @@
 import { CheckOutlined } from '@ant-design/icons';
 import { Button, Progress, Typography, theme } from 'antd';
 import type React from 'react';
-import { glassCardStyle } from './homeStyles';
+import { glassCardStyle } from '../GlassSurface/glassStyles';
+import { HomeLink } from './HomeSection';
 
 const { Text } = Typography;
 
@@ -30,7 +31,6 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
         border: `1px solid ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         padding: '16px 20px',
-        marginBottom: 24,
         ...glassCardStyle(token, 0.3),
       }}
     >
@@ -73,7 +73,7 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
                 alignItems: 'center',
                 justifyContent: 'center',
                 background: step.done ? token.colorPrimary : 'transparent',
-                border: step.done ? 'none' : `1.5px solid ${token.colorBorderSecondary}`,
+                border: step.done ? 'none' : `1.5px solid ${token.colorBorder}`,
               }}
             >
               {step.done && (
@@ -94,16 +94,14 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
             </Text>
 
             {/* CTA (only when not done) */}
-            {!step.done && (
-              <Button
-                type="link"
-                size="small"
+            {!step.done && (step.onClick || step.href) && (
+              <HomeLink
                 href={step.onClick ? undefined : step.href}
                 onClick={step.onClick}
                 style={{ padding: 0, fontSize: 12, height: 'auto' }}
               >
                 {step.cta}
-              </Button>
+              </HomeLink>
             )}
           </div>
         ))}

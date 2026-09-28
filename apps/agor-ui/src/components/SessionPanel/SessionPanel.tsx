@@ -37,7 +37,6 @@ import {
 import type { InputRef, MenuProps } from 'antd';
 import {
   Alert,
-  App,
   Badge,
   Button,
   Dropdown,
@@ -54,8 +53,8 @@ import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
-import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -364,8 +363,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
     : undefined;
-  const { modal } = App.useApp();
-  const { showSuccess, showInfo, showError, showWarning } = useThemedMessage();
+  const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -390,7 +388,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     availableAgents,
   } = useAppActions();
 
-  const { archiveSession } = useSessionActions(client);
+  const confirmArchive = useConfirmArchiveSession(client);
 
   // Click-to-edit session title, inline in the header — see render below.
   // Draft is seeded from the *explicit* title only (not the description
@@ -937,24 +935,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       return;
     }
 
-    modal.confirm({
-      title: 'Archive session and same-branch children?',
-      content:
-        'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
-      okText: 'Archive',
-      cancelText: 'Cancel',
-      onOk: async () => {
-        const archived = await archiveSession(session.session_id);
-        if (archived?.reconciliation === 'refresh-required') {
-          showWarning(ARCHIVE_REFRESH_WARNING);
-        } else if (archived) {
-          showSuccess('Session and same-branch children archived');
-          onClose();
-        } else {
-          showError('Failed to archive session');
-        }
-      },
-    });
+    confirmArchive(session.session_id, { onArchived: onClose });
   };
 
   const hasBranchActions = !!branch;

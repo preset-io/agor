@@ -151,6 +151,8 @@ function seedStore() {
       [BRANCH_B, [session2]],
     ]),
     userById: new Map([[user.user_id, user]]),
+    sessionsHydrated: true,
+    branchesHydrated: true,
   } as never);
 }
 
@@ -241,7 +243,7 @@ async function settle() {
   });
 }
 
-const homeIsShowing = () => !!screen.queryByText(/Hi, Tester/);
+const homeIsShowing = () => !!screen.queryByText(/Good (morning|afternoon|evening), Tester/);
 const canvasBoardName = () =>
   screen.queryByTestId('session-canvas')?.getAttribute('data-board') ?? null;
 const openSessionId = () =>

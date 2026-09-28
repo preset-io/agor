@@ -3,6 +3,7 @@ import { Button, Input, type InputRef, Tooltip, theme } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { OPEN_GLOBAL_SEARCH_EVENT } from '../../utils/shellEvents';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
 import {
@@ -118,6 +119,15 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      setActiveChip((e as CustomEvent<ChipFilter | undefined>).detail ?? 'all');
+      setOpen(true);
+    };
+    window.addEventListener(OPEN_GLOBAL_SEARCH_EVENT, handler);
+    return () => window.removeEventListener(OPEN_GLOBAL_SEARCH_EVENT, handler);
   }, []);
 
   // Focus the input whenever the popover opens — covers both icon click

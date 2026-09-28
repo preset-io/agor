@@ -482,6 +482,8 @@ export interface UserPreferences {
   mainBoardId?: string;
   /** Whether to render Slack-synced avatar_url when available. Undefined defaults to true. */
   use_slack_avatar?: boolean;
+  /** Home "My work" layout. Undefined defaults to list. */
+  homeWorkView?: 'list' | 'board';
   // Future preferences can be added here
   [key: string]: unknown;
 }

@@ -25,7 +25,7 @@ vi.mock('../SessionPanel', () => ({
   },
 }));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
-vi.mock('./MobileHomePage', () => ({ MobileHomePage: () => <h1>Home</h1> }));
+vi.mock('../HomePage', () => ({ HomePage: () => <h1>Home</h1> }));
 vi.mock('./MobileCommentsPage', () => ({ MobileCommentsPage: () => null }));
 vi.mock('./MobileSearchPage', () => ({ MobileSearchPage: () => null }));
 vi.mock('./MobileSessionsPage', () => ({ MobileSessionsPage: () => null }));

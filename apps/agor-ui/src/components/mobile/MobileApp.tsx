@@ -8,17 +8,20 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
-import { useAgorStore } from '../../store/agorStore';
+import { useRecentBoards } from '../../hooks/useRecentBoards';
+import { useStableCallback } from '../../hooks/useStableCallback';
+import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
   makeUnreadCommentCountSelector,
   selectArtifactById,
@@ -40,10 +43,12 @@ import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { type HomeLocationState, HomePage } from '../HomePage';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
+import { mobilePageStyle } from './constants';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
-import { MobileHomePage } from './MobileHomePage';
+import { MobileHeader } from './MobileHeader';
 import { MobileMarketplacePage } from './MobileMarketplacePage';
 import { MobileMoreSheet } from './MobileMoreSheet';
 import { MobileSearchPage } from './MobileSearchPage';
@@ -52,6 +57,8 @@ import { type MobileTab, MobileTabBar } from './MobileTabBar';
 import { SessionPage } from './SessionPage';
 import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
+
+const NO_BOARDS: never[] = [];
 
 interface MobileAppProps {
   client: AgorClient | null;
@@ -233,9 +240,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     return count;
   }, [sessionById, user?.user_id]);
 
-  const commentsBadge = useAgorStore(
+  const boardCommentsBadge = useAgorStore(
     useMemo(() => makeUnreadCommentCountSelector(effectiveBoardId), [effectiveBoardId])
   );
+  const commentsBadge = useCommentsForYou(client, user).length;
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
@@ -317,12 +325,49 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  // The top-bar bell opens the current board's comments/mentions (a full-screen
-  // sub-view). No board yet -> the More sheet, which lists boards.
-  const openComments = useCallback(() => {
+  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '');
+  const openHomeBoard = useCallback(
+    (boardId: string) => navigate(`/m/board/${boardId}`),
+    [navigate]
+  );
+  const openHomeSession = useCallback(
+    (sessionId: string) => navigate(`/m/session/${sessionId}`),
+    [navigate]
+  );
+  const openHomeBranch = useCallback(
+    (branchId: string) => {
+      const boardId = agorStore.getState().branchById.get(branchId)?.board_id;
+      if (boardId) openHomeBoard(boardId);
+    },
+    [openHomeBoard]
+  );
+  const openBoardList = useCallback(() => setMoreOpen(true), []);
+  const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
+  const createSession = useStableCallback(onCreateSession);
+
+  // The bell opens comments for you across boards (Home › Needs you); on a board
+  // page it opens that board's comments.
+  const openComments = useCallback(
+    () => navigate('/m', { state: { needsFilter: 'comments' } satisfies HomeLocationState }),
+    [navigate]
+  );
+  const openBoardComments = useCallback(() => {
     if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
-    else setMoreOpen(true);
   }, [effectiveBoardId, navigate]);
+
+  const canCreateSessions = hasMinimumRole(user?.role, ROLES.MEMBER);
+
+  const withHeader = (title: string, page: React.ReactNode) => (
+    <div style={mobilePageStyle}>
+      <MobileHeader
+        title={title}
+        onSearch={() => navigate('/m/search')}
+        commentsBadge={commentsBadge}
+        onOpenComments={openComments}
+      />
+      <div style={{ flex: 1, minHeight: 0 }}>{page}</div>
+    </div>
+  );
 
   return (
     // The shell root is pinned to exactly the viewport and clips horizontally,
@@ -370,28 +415,21 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <Routes>
           <Route
             index
-            element={
-              <MobileHomePage
-                sessionById={sessionById}
-                branchById={branchById}
-                boardById={boardById}
+            element={withHeader(
+              'Home',
+              <HomePage
+                client={client}
                 currentUser={user}
-                onAsk={() => void askPrimaryAssistant()}
-                askPending={creatingSession}
-                primaryTeammateName={primaryTeammateName}
-                primaryTeammateEmoji={
-                  primaryBranch ? getTeammateConfig(primaryBranch)?.emoji : undefined
-                }
-                assistantSessionCount={
-                  primaryBranch ? (sessionsByBranch.get(primaryBranch.branch_id)?.length ?? 0) : 0
-                }
-                onOpenAssistantSessions={
-                  primaryBranch ? () => navigate('/m/sessions?scope=assistant') : undefined
-                }
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
+                recentBoardIds={recentBoardIds}
+                onBoardClick={openHomeBoard}
+                onBranchClick={openHomeBranch}
+                onSessionClick={openHomeSession}
+                onCreateSession={canCreateSessions ? createSession : undefined}
+                onOpenSettings={onOpenWorkspaceSettings}
+                onAllBoards={openBoardList}
+                onSeeAllSessions={openSessionList}
               />
-            }
+            )}
           />
           <Route
             path="sessions"
@@ -459,8 +497,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
                 onGiveFirstTask={() => void askPrimaryAssistant()}
                 firstTaskAssistantName={primaryTeammateName}
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
+                commentsBadge={boardCommentsBadge}
+                onOpenComments={openBoardComments}
               />
             }
           />

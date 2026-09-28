@@ -25,18 +25,16 @@
   min-width: 0;
 }
 
-/* Status dot pulse for homepage session indicators. The halo is a pseudo
+/* Status dot pulse for session indicators. The halo is a pseudo
    element animated with transform/opacity only, so the loop runs entirely on
    the compositor. Animating box-shadow instead (the previous approach) forces
    a main-thread style recalc + paint every frame, which kept the idle home
    page ~50% busy. `background: inherit` picks up the dot's inline status
    color, so the halo always matches the dot. */
-.status-dot-run,
-.status-dot-wait {
+.status-dot-run {
   position: relative;
 }
-.status-dot-run::after,
-.status-dot-wait::after {
+.status-dot-run::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -103,8 +101,7 @@
 /* At reduced-motion the pulse halo is purely decorative and a static spinner
    still reads as "loading", so drop both loops. */
 @media (prefers-reduced-motion: reduce) {
-  .status-dot-run::after,
-  .status-dot-wait::after {
+  .status-dot-run::after {
     animation: none;
   }
   .ant-spin .ant-spin-dot-spin,
@@ -235,4 +232,32 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+
+/* Home rows, secondary links and group headers: hover, keyboard focus and
+   hover-revealed actions are pseudo-class states, not per-row React state. */
+.agor-home-pressable:hover,
+.agor-home-pressable:has(> [data-home-row]:focus-visible) {
+  background: var(--ant-control-item-bg-hover);
+}
+
+.agor-home-pressable > [data-home-row]:focus-visible {
+  outline: 2px solid var(--ant-color-primary);
+  outline-offset: -2px;
+}
+
+.agor-home-link.ant-btn:not(:hover, :focus-visible) {
+  color: var(--ant-color-text-secondary);
+}
+
+@media (hover: hover) {
+  .agor-home-pressable:not(:hover, :focus-within) .agor-home-reveal {
+    opacity: 0;
+  }
+
+  /* Row actions take the time's place on hover or focus instead of reserving a gutter. */
+  .agor-home-pressable:not(:hover, :focus-within) .agor-home-actions,
+  .agor-home-pressable:is(:hover, :focus-within):has(.agor-home-actions) .agor-home-time {
+    display: none;
+  }
 }

@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig, hasMinimumRole } from '@agor-live/client';
+import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -1409,6 +1409,7 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
   const stableOnCreateSession = useStableCallback(onCreateSession);
+  const canCreateSessions = !!onCreateSession && hasMinimumRole(user?.role, ROLES.MEMBER);
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1595,12 +1596,12 @@ export const App: React.FC<AppProps> = ({
                     {isHomeSurface ? (
                       <HomePage
                         client={client}
-                        connected={connected}
+                        currentUser={user}
                         recentBoardIds={recentBoardIds}
-                        currentUserId={user?.user_id}
                         onBoardClick={handleHomeBoardClick}
                         onBranchClick={handleHomeBranchClick}
                         onSessionClick={handleSessionClick}
+                        onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
                         onOpenCreateDialog={handleHomeOpenCreateDialog}
                         onOpenSettings={openSettings}
                       />
