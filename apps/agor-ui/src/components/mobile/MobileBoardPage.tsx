@@ -224,22 +224,26 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
         <Flex vertical gap={token.marginSM}>
           {primary && <Text strong>Primary teammate</Text>}
           {!primary && (
-            <Flex gap={token.marginXS}>
+            // Wrap the action row: each button keeps a readable basis and grows to
+            // fill, so all three sit on one line where they fit (>=430) and wrap to
+            // a second line at narrow widths (360/390) instead of clipping the last
+            // one. minHeight keeps every action a comfortable touch target.
+            <Flex gap={token.marginXS} wrap>
               <Button
-                style={{ flex: 1 }}
+                style={{ flex: '1 1 104px', minHeight: MOBILE_TOUCH_TARGET }}
                 icon={<SettingOutlined />}
                 onClick={() => onOpenBranch(branch.branch_id, 'general')}
               >
                 Manage
               </Button>
               <Button
-                style={{ flex: 1 }}
+                style={{ flex: '1 1 104px', minHeight: MOBILE_TOUCH_TARGET }}
                 onClick={() => onOpenBranch(branch.branch_id, 'environment')}
               >
                 Environment
               </Button>
               <Button
-                style={{ flex: 1 }}
+                style={{ flex: '1 1 104px', minHeight: MOBILE_TOUCH_TARGET }}
                 icon={<CalendarOutlined />}
                 onClick={() => onOpenBranch(branch.branch_id, 'schedule')}
               >

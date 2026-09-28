@@ -22,7 +22,7 @@ import {
 } from '@codesandbox/sandpack-react';
 import { Alert, Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArtifactConsoleReporter,
   ArtifactRuntimeBridge,
@@ -57,6 +57,8 @@ interface ArtifactFullscreenNavbarProps {
   title: string;
   loading: boolean;
   currentUser?: User | null;
+  /** When true, the left control is an in-app Back to the mobile shell. */
+  onBackToShell?: () => void;
   onReload: () => void;
   onTrustClick: () => void;
   onHideNavbar: () => void;
@@ -70,6 +72,7 @@ function ArtifactFullscreenNavbar({
   title,
   loading,
   currentUser,
+  onBackToShell,
   onReload,
   onTrustClick,
   onHideNavbar,
@@ -91,14 +94,20 @@ function ArtifactFullscreenNavbar({
       }}
     >
       <Space size={12} style={{ minWidth: 0, flex: 1, overflow: 'hidden' }}>
-        <Button
-          type="text"
-          icon={<ArrowLeftOutlined />}
-          href={artifact?.url ?? undefined}
-          disabled={!artifact?.url}
-        >
-          Board
-        </Button>
+        {onBackToShell ? (
+          <Button type="text" icon={<ArrowLeftOutlined />} onClick={onBackToShell}>
+            Back
+          </Button>
+        ) : (
+          <Button
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            href={artifact?.url ?? undefined}
+            disabled={!artifact?.url}
+          >
+            Board
+          </Button>
+        )}
         <BrandLogo level={5} />
         <div
           style={{
@@ -178,7 +187,15 @@ export function ArtifactFullscreenPage({
 }: ArtifactFullscreenPageProps) {
   const { token } = theme.useToken();
   const { artifactShortId } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Opened from the mobile shell (?from=m): the left control returns into /m via
+  // history rather than the desktop board link, which has no /m equivalent.
+  const cameFromMobileShell = searchParams.get('from') === 'm';
+  const onBackToShell = useCallback(() => {
+    if (window.history.length > 1) navigate(-1);
+    else navigate('/m');
+  }, [navigate]);
   const showNavbar =
     searchParams.get('show_navbar') !== 'false' &&
     searchParams.get('chrome') !== '0' &&
@@ -374,6 +391,7 @@ export function ArtifactFullscreenPage({
           title={title}
           loading={loading}
           currentUser={currentUser}
+          onBackToShell={cameFromMobileShell ? onBackToShell : undefined}
           onReload={fetchArtifact}
           onTrustClick={() => setConsentOpen(true)}
           onHideNavbar={hideNavbar}

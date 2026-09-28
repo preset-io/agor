@@ -56,16 +56,17 @@ function setup(
 }
 
 describe('mobile session exit versus history', () => {
-  it('closes a nested session to its own board, not its parent or previously viewed board', async () => {
+  it('returns to the previous surface via history Back, not a board exit', async () => {
     const router = setup(['/m/board/a', '/m/session/parent', '/m/session/child']);
     fireEvent.click(screen.getByRole('button', { name: 'Close child' }));
-    expect(router.state.location.pathname).toBe('/m/board/b');
-    expect(router.state.historyAction).toBe('REPLACE');
-    // Browser Back remains intentional history navigation; it is NOT X.
-    await act(() => router.navigate(-1));
+    // The leading control is a real Back: it lands on the previously viewed
+    // session, not the closed session's owning board. History is not replaced.
+    expect(router.state.location.pathname).toBe('/m/session/parent');
+    expect(router.state.historyAction).toBe('POP');
     expect(screen.getByRole('button', { name: 'Close parent' })).toBeInTheDocument();
-    await act(() => router.navigate(1));
-    expect(router.state.location.pathname).toBe('/m/board/b');
+    // Backing out once more reaches the board the user started on.
+    await act(() => router.navigate(-1));
+    expect(router.state.location.pathname).toBe('/m/board/a');
   });
 
   it('closes an initial direct short URL using the joined board before branch hydration', () => {
@@ -79,9 +80,11 @@ describe('mobile session exit versus history', () => {
   });
 
   it.each([undefined, null, 'removed'])(
-    'uses home when the current board is %s, not a stale joined board',
+    'falls back to home on a cold link when the current board is %s, not a stale joined board',
     (boardId) => {
-      const router = setup(['/m/board/a', '/m/session/child'], {
+      // A cold deep-link (single history entry) has no in-app Back target, so the
+      // fallback is used; it must resolve to Home, not a stale/inaccessible board.
+      const router = setup(['/m/session/child'], {
         branchById: new Map([['branch-b', { branch_id: 'branch-b', board_id: boardId } as Branch]]),
         sessionById: new Map([
           ['child', { ...sessions.get('child'), branch_board_id: 'a' } as Session],
