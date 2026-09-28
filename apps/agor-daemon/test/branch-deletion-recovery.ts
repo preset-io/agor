@@ -1,3 +1,4 @@
+import * as fs from 'node:fs/promises';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -27,7 +28,7 @@ import {
   type TenantID,
   type UploadReadInput,
 } from '@agor/core/types';
-import { expect } from 'vitest';
+import { expect, type MockInstance, vi } from 'vitest';
 import { seedEnvironmentCommandBranch } from '../../../packages/core/src/db/repositories/environment-commands.test-support';
 import { handleBranchDelete } from '../../../packages/executor/src/commands/branch-deletion';
 import {
@@ -40,6 +41,11 @@ import {
   configureUploadStagingStore,
   resetUploadStagingStoreForTests,
 } from '../src/utils/upload-staging';
+
+// Keep real filesystem behavior except for the explicitly selected rm below.
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('node:fs/promises')>()),
+}));
 
 /** Real HTTP requests, guarded DB scopes and real disposable filesystem removal. */
 export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' | 'postgresql') {
@@ -65,6 +71,11 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
   let releaseUpload!: () => void;
   let dropUploadResponse!: () => void;
   let pendingUpload: Promise<unknown> | undefined;
+  let releaseSibling: (() => void) | undefined;
+  let pendingSibling: Promise<void> | undefined;
+  let removalSpy: MockInstance<typeof fs.rm> | undefined;
+  const realRm = fs.rm;
+  const actions: string[] = [];
   const storage = new (class extends LocalUploadStagingStore {
     override async delete(input: UploadReadInput) {
       if (fault === 'upload_unknown') {
@@ -81,6 +92,7 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
     const chunks: Buffer[] = [];
     for await (const chunk of request) chunks.push(Buffer.from(chunk));
     const input = JSON.parse(Buffer.concat(chunks).toString());
+    actions.push(input.action);
     if (fault === 'upload_unknown' && input.action === 'upload') {
       dropUploadResponse = () => response.destroy();
       pendingUpload = runWithTenantContext(tenant, () => service.create(input, params));
@@ -117,6 +129,8 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       'lost_data_response',
       'lost_settlement',
       'upload_unknown',
+      'workspace_unsettled',
+      'sdk_home_unsettled',
     ] as const) {
       const { branch, user } = await scoped(seedEnvironmentCommandBranch);
       const workspace = join(root, 'worktrees', branch.branch_id);
@@ -266,7 +280,31 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
             );
           }
         });
-      fault = scenario === 'lost_settlement' ? 'lost_response' : scenario;
+      const unsettledRemoval =
+        scenario === 'workspace_unsettled' || scenario === 'sdk_home_unsettled';
+      fault = unsettledRemoval
+        ? 'none'
+        : scenario === 'lost_settlement'
+          ? 'lost_response'
+          : scenario;
+      let siblingRemoved = false;
+      const removalTarget = scenario === 'workspace_unsettled' ? workspace : home;
+      const sibling = join(removalTarget, 'pending-sibling.txt');
+      if (unsettledRemoval) {
+        await writeFile(sibling, 'pending destructive operation');
+        removalSpy = vi.spyOn(fs, 'rm').mockImplementation(async (path, options) => {
+          if (path !== removalTarget) return realRm(path, options);
+          // Model recursive rm's first-error rejection with another destructive
+          // child still pending. The only real mutation is this disposable file.
+          pendingSibling = new Promise<void>((resolve) => {
+            releaseSibling = resolve;
+          }).then(async () => {
+            await realRm(sibling);
+            siblingRemoved = true;
+          });
+          throw Object.assign(new Error('fixture first-child failure'), { code: 'EACCES' });
+        });
+      }
       // Force a storage-local validation failure so the settlement response can
       // be lost without losing any daemon-side storage request.
       if (scenario === 'lost_settlement') {
@@ -274,6 +312,7 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
         await rm(join(root, 'worktrees'), { recursive: true });
         fault = 'lost_settlement';
       }
+      actions.length = 0;
       expect((await run(first)).success).toBe(false);
       if (scenario === 'rollback')
         await scoped(async (tx) => {
@@ -298,6 +337,30 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
           .one()
       );
       expect(after).not.toBeNull();
+      if (unsettledRemoval) {
+        expect(pendingSibling).toBeDefined();
+        expect(siblingRemoved).toBe(false);
+        expect(await stat(sibling)).toBeDefined();
+        if (scenario === 'sdk_home_unsettled')
+          await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+        else expect(await stat(home)).toBeDefined();
+        expect.soft([...new Set(actions)], scenario).toEqual(['claim', 'quiesce']);
+        expect.soft(after!.data.maintenance?.execution_id, scenario).toBe(first.invocation);
+        expect.soft((await admission()).acquired, scenario).toBe(false);
+        releaseSibling!();
+        await pendingSibling;
+        expect(siblingRemoved).toBe(true);
+        await expect(stat(sibling)).rejects.toMatchObject({ code: 'ENOENT' });
+        // Late completion is not a settlement acknowledgement either.
+        expect.soft(actions, scenario).not.toContain('settled');
+        expect.soft(await admission(), scenario).toMatchObject({
+          acquired: false,
+          invocation: first.invocation,
+          claim: { generation: first.claim.generation },
+        });
+        removalSpy!.mockRestore();
+        continue;
+      }
       if (scenario === 'upload_unknown') {
         expect(after!.data.maintenance?.execution_id).toBe(first.invocation);
         expect((await admission()).acquired).toBe(false);
@@ -336,6 +399,9 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
     }
     expect(failures).toBeGreaterThan(0);
   } finally {
+    releaseSibling?.();
+    await pendingSibling;
+    removalSpy?.mockRestore();
     releaseUpload?.();
     await pendingUpload;
     resetUploadStagingStoreForTests();

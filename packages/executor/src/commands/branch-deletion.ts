@@ -151,6 +151,7 @@ export async function handleBranchDelete(
     execution_id: p.executionId,
   };
   let storageRequestUnknown = false;
+  let filesystemRemovalUnsettled: 'workspace' | 'sdk_home' | undefined;
   let sessionToken = payload.sessionToken;
   const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
   const pages: Partial<Record<BranchDeletionAction, number>> = {};
@@ -261,10 +262,18 @@ export async function handleBranchDelete(
         // tenant root must still exist; symlinked descendants remain forbidden.
         await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
       });
+      // These owners may start Git subprocesses or concurrent recursive fs.rm
+      // children. Rejection does not prove drainage (Node can reject rm on the
+      // first child error while siblings still mutate). Mark BEFORE entry and
+      // clear only on success, never in finally or based on an errno/exit code.
+      // Validation failures inside these calls conservatively stay fenced too.
+      filesystemRemovalUnsettled = 'workspace';
       await storageStep('remove_workspace', () => removeBranchWorkspace(p));
+      filesystemRemovalUnsettled = 'sdk_home';
       await storageStep('remove_sdk_home', () =>
         deleteBranchDirectory(p.branchHome, p.tenantDataRoot)
       );
+      filesystemRemovalUnsettled = undefined;
       // Storage adapters retain lookup rows until their bytes are removed.
       while ((await report('upload')).remaining) {
         /* one immutable upload per request */
@@ -276,6 +285,12 @@ export async function handleBranchDelete(
       await report('finalize');
     },
     reportFailure: async (failure) => {
+      if (filesystemRemovalUnsettled) {
+        console.error(
+          `[branch.delete] event=recovery_blocked ${correlation} category=filesystem_removal_unsettled step=${filesystemRemovalUnsettled}`
+        );
+        throw new Error('Filesystem removal drainage cannot be established');
+      }
       if (storageRequestUnknown) {
         console.error(
           `[branch.delete] event=recovery_blocked ${correlation} category=storage_request_unsettled`

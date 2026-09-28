@@ -39,6 +39,10 @@ executors. Its short claimed transactions must not contain filesystem/network
 work. Invocation uncertainty retains ownership; elapsed time is not settlement.
 The deletion executor's `settled` acknowledgement is narrower than process
 containment: direct storage work has stopped and every upload RPC was acknowledged.
+The executor tracks entry into workspace/SDK-home removal and permits settlement
+only on successful return. Recursive `fs.rm` can reject before sibling removals
+drain; a rejected removal (including Git or validation inside that call) stays
+fenced. Separate pre-removal validation/quiesce failures can still settle.
 Only DB-only requests may still be unknown. `failSettled` drains/fences them under
 the same Branch lock before clearing ownership. It does not infer rollback. An
 unknown upload or a claimed legacy invocation without this evidence stays blocked;

@@ -591,6 +591,12 @@ Files and committed database batches removed by earlier attempts are not restore
   transaction lock before permitting retry. This does not assume they rolled back.
 - **Dispatch never claimed:** after it is marked failed, retry atomically replaces
   the dispatch. A late old executor cannot claim it or begin removal.
+- **Workspace or SDK-home removal rejected:** retry remains blocked. Recursive
+  filesystem removal can reject on one child while sibling removals remain in
+  flight. The executor therefore retains ownership after any rejection from a
+  started removal call, including Git errors and validation inside that call.
+  Successful removal still permits recovery from a later database-only failure;
+  failures during the separate pre-removal validation/quiesce phase can also settle.
 - **No settlement acknowledgement:** retry is blocked and starts no replacement.
   This includes legacy claimed invocations, a worker killed before acknowledging,
   lost claim responses, and exhausted settlement delivery. Process exit, a stale
@@ -601,7 +607,7 @@ Files and committed database batches removed by earlier attempts are not restore
   stopped. This release does not provide a remote-storage containment/reconciliation
   mechanism for that condition.
 
-There is **no supported online force-unlock** for the last two conditions without
+There is **no supported online force-unlock** for these unsettled conditions without
 new settlement evidence from the original worker. Do not clear maintenance JSON,
 change the generation manually, or invoke internal settlement methods. Restarting
 the daemon does not produce evidence. A legacy incident that already lost its
