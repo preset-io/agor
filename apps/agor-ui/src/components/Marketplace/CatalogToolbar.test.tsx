@@ -61,6 +61,10 @@ describe('Marketplace catalog toolbar', () => {
       />
     );
 
+    const capability = selectInput('Filter by capability').closest('.ant-select') as HTMLElement;
+    expect(within(capability).getByText('Capability')).toBeVisible();
+    expect(within(capability).getByText('Any')).toBeVisible();
+
     openSelect('Filter by capability');
     const input = selectInput('Filter by capability');
     expect(document.querySelector('.ant-select-item-group')).toHaveTextContent('Building software');

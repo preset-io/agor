@@ -11,7 +11,7 @@
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { SearchOutlined } from '@ant-design/icons';
-import { Card, Flex, Grid, Input, Select, Typography, theme } from 'antd';
+import { Flex, Grid, Input, Select, Typography, theme } from 'antd';
 import { memo } from 'react';
 import {
   ALL_CATEGORIES,
@@ -65,58 +65,58 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   const selectStyles = { prefix: { color: token.colorTextSecondary } };
 
   return (
-    <Card size="small" styles={{ body: { padding: token.padding } }}>
-      <Flex vertical gap={token.paddingXS}>
-        <Flex wrap gap={token.paddingSM} align="center">
-          <Input
-            allowClear
-            prefix={<SearchOutlined />}
-            placeholder="Search MCP servers…"
-            aria-label="Search MCP servers"
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            style={compact ? full : { flex: '1 1 240px', maxWidth: 360 }}
-          />
-          <Select<CategoryFilter>
-            prefix="Category"
-            aria-label="Filter by category"
-            value={category ?? ALL_CATEGORIES}
-            onChange={(value) =>
-              onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
-            }
-            options={CATEGORY_OPTIONS}
-            styles={selectStyles}
-            style={filterStyle}
-          />
-          <Select
-            allowClear
-            showSearch
-            optionFilterProp="label"
-            placeholder="Capability"
-            aria-label="Filter by capability"
-            value={capability ?? undefined}
-            onChange={(value?: string) => onCapabilityChange(value || undefined)}
-            options={CAPABILITY_OPTIONS}
-            popupMatchSelectWidth={false}
-            style={filterStyle}
-          />
-          <Select<MCPCatalogSort>
-            prefix="Sort"
-            value={sort}
-            onChange={onSortChange}
-            aria-label="Sort servers"
-            options={SORT_OPTIONS}
-            styles={selectStyles}
-            style={compact ? full : { width: 150, marginInlineStart: 'auto' }}
-          />
-        </Flex>
-        {matchSummary && (
-          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-            {matchSummary.matched} of {matchSummary.total} servers match
-          </Text>
-        )}
+    <Flex vertical gap={token.paddingXS}>
+      <Flex wrap gap={token.paddingSM} align="center">
+        <Input
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="Search MCP servers…"
+          aria-label="Search MCP servers"
+          value={search}
+          onChange={(event) => onSearchChange(event.target.value)}
+          style={compact ? full : { flex: '1 1 240px', maxWidth: 360 }}
+        />
+        <Select<CategoryFilter>
+          prefix="Category"
+          aria-label="Filter by category"
+          value={category ?? ALL_CATEGORIES}
+          onChange={(value) =>
+            onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
+          }
+          options={CATEGORY_OPTIONS}
+          styles={selectStyles}
+          style={filterStyle}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          prefix="Capability"
+          placeholder="Any"
+          aria-label="Filter by capability"
+          value={capability ?? undefined}
+          onChange={(value?: string) => onCapabilityChange(value || undefined)}
+          options={CAPABILITY_OPTIONS}
+          popupMatchSelectWidth={false}
+          styles={selectStyles}
+          style={filterStyle}
+        />
+        <Select<MCPCatalogSort>
+          prefix="Sort"
+          value={sort}
+          onChange={onSortChange}
+          aria-label="Sort servers"
+          options={SORT_OPTIONS}
+          styles={selectStyles}
+          style={compact ? full : { width: 150, marginInlineStart: 'auto' }}
+        />
       </Flex>
-    </Card>
+      {matchSummary && (
+        <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+          {matchSummary.matched} of {matchSummary.total} servers match
+        </Text>
+      )}
+    </Flex>
   );
 };
 

@@ -95,13 +95,14 @@ function useSettledFlag(active: boolean, delayMs: number): boolean {
 }
 
 const DISCONNECT_NOTICE_DELAY_MS = 2000;
+const GRID_GUTTER = 16;
 
 const CatalogGrid = memo<{
   entries: MCPCatalogEntry[];
   onOpen: (entry: MCPCatalogEntry) => void;
 }>(({ entries, onOpen }) => (
   // Keep the half-gutters inside the scroll container, not outside its width.
-  <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
+  <Row gutter={[GRID_GUTTER, GRID_GUTTER]} style={{ marginInline: 0 }}>
     {entries.map((entry) => (
       <Col key={entry.name} {...GRID_SPANS}>
         <CatalogCard entry={entry} onOpen={onOpen} />
@@ -834,17 +835,20 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   return (
     <Flex vertical gap={token.margin}>
-      <CatalogToolbar
-        search={filters.search}
-        category={filters.category}
-        capability={filters.capability}
-        sort={filters.sort}
-        onSearchChange={onSearchChange}
-        onCategoryChange={onCategoryChange}
-        onCapabilityChange={onCapabilityChange}
-        onSortChange={onSortChange}
-        matchSummary={matchSummary}
-      />
+      {/* Inset by the grid's half-gutter so the toolbar lines up with the cards. */}
+      <div style={{ paddingInline: GRID_GUTTER / 2 }}>
+        <CatalogToolbar
+          search={filters.search}
+          category={filters.category}
+          capability={filters.capability}
+          sort={filters.sort}
+          onSearchChange={onSearchChange}
+          onCategoryChange={onCategoryChange}
+          onCapabilityChange={onCapabilityChange}
+          onSortChange={onSortChange}
+          matchSummary={matchSummary}
+        />
+      </div>
 
       {showDisconnected && (
         <Alert
@@ -871,7 +875,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         />
       ) : status === 'loading' ? (
         showDisconnected ? null : (
-          <Row gutter={[16, 16]} style={{ marginInline: 0 }}>
+          <Row gutter={[GRID_GUTTER, GRID_GUTTER]} style={{ marginInline: 0 }}>
             {Array.from({ length: 6 }, (_, index) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: fixed-length placeholder grid
               <Col key={index} {...GRID_SPANS}>
