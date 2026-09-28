@@ -8,7 +8,6 @@ interface AppHeaderGlobalSearchProps {
   currentUserId?: string;
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
-  onSettingsClick?: () => void;
 }
 
 /**
@@ -25,7 +24,6 @@ export const AppHeaderGlobalSearch = memo(function AppHeaderGlobalSearch({
   currentUserId,
   branchById,
   boardById,
-  onSettingsClick,
 }: AppHeaderGlobalSearchProps) {
   const sessionById = useAgorStore(selectSessionById);
   const artifactById = useAgorStore(selectArtifactById);
@@ -39,7 +37,6 @@ export const AppHeaderGlobalSearch = memo(function AppHeaderGlobalSearch({
       artifactById={artifactById}
       boardById={boardById}
       mcpServerById={mcpServerById}
-      onSettingsClick={onSettingsClick}
     />
   );
 });

@@ -79,7 +79,10 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
   return (
     <Flex vertical gap={token.paddingLG} style={{ maxWidth: 720 }}>
       <div>
-        <Typography.Title level={3} style={{ marginTop: 0, marginBottom: token.marginXXS }}>
+        <Typography.Title
+          level={4}
+          style={{ marginTop: 0, marginBottom: token.marginXXS, fontWeight: 500 }}
+        >
           Workspace Preferences
         </Typography.Title>
         <Typography.Text type="secondary">Workspace-wide product settings.</Typography.Text>

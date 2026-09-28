@@ -188,11 +188,11 @@ const READ_ONLY_RESTRICTION =
  */
 export function explainAddRestriction({ role, policy }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add MCP servers. An admin can add one, or change the policy.`;
+  return `This workspace's MCP policy, "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}", does not let you add MCP servers. An admin can add one, or change the policy.`;
 }
 
 /** Why changing or removing this particular server is refused. */
 export function explainManageRestriction({ role, policy }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you change this server. An admin can change it, or change the policy.`;
+  return `This workspace's MCP policy, "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}", does not let you change this server. An admin can change it, or change the policy.`;
 }

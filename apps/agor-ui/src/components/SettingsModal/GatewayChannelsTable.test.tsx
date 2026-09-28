@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
 // The real branch/user pickers are antd v6 `Select`s; opening their dropdowns in
 // jsdom is pathologically slow. Replace them with trivial native inputs so the
@@ -98,7 +99,9 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
 function renderWithProviders(ui: React.ReactElement) {
   return render(
     <MemoryRouter>
-      <AntdApp>{ui}</AntdApp>
+      <AntdApp>
+        <StandaloneSettingsDrillProvider>{ui}</StandaloneSettingsDrillProvider>
+      </AntdApp>
     </MemoryRouter>
   );
 }

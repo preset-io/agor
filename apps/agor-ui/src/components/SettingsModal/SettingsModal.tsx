@@ -11,19 +11,34 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   Repo,
-  Session,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { ArrowLeftOutlined, CloseOutlined, RightOutlined, UserOutlined } from '@ant-design/icons';
+import {
+  ApiOutlined,
+  AppstoreOutlined,
+  BranchesOutlined,
+  CloseOutlined,
+  ClusterOutlined,
+  ControlOutlined,
+  CreditCardOutlined,
+  ExperimentOutlined,
+  ExportOutlined,
+  FolderOutlined,
+  InfoCircleOutlined,
+  MessageOutlined,
+  RobotOutlined,
+  TeamOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Typography, theme } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
+import { Button, Layout, Menu, Modal, Tag, theme } from 'antd';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
-import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -39,21 +54,27 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
-import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import type { AgenticToolOption } from '../../types';
 import { BranchModal } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
+import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection } from './AgenticToolsSection';
+import { AllCardsPanel } from './AllCardsPanel';
 import { ArtifactsTable } from './ArtifactsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
-import { CardsTable } from './CardsTable';
+import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
-import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
-import { buildSettingsNav, settingsSectionMobileLabel } from './settingsNavigation';
-import { TeammatesTable } from './TeammatesTable';
+import {
+  type DrillController,
+  type DrillTarget,
+  SettingsDrillProvider,
+  useDirtyLeaveGuard,
+} from './SettingsDrill';
+import { type TeammateCreateProgress, TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
 import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
 
@@ -118,7 +139,11 @@ export interface SettingsModalProps {
   onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onCreateTeammate?: () => void;
+  onCreateTeammate?: (
+    result: TeammateTabResult,
+    progress?: TeammateCreateProgress
+  ) => Promise<void>;
+  availableAgents?: AgenticToolOption[];
   branchStorageConfig?: BranchStorageConfig;
 }
 
@@ -127,7 +152,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onClose,
   client,
   currentUser,
-  activeTab = 'boards',
+  activeTab = 'users',
   onTabChange,
   onCreateBoard,
   onUpdateBoard,
@@ -147,14 +172,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   onCreateUser,
   onUpdateUser,
   onDeleteUser,
-  onCreateMCPServer,
-  onDeleteMCPServer,
   onCreateGatewayChannel,
   onUpdateGatewayChannel,
   onDeleteGatewayChannel,
   onUpdateArtifact,
   onDeleteArtifact,
   onCreateTeammate,
+  availableAgents,
   branchStorageConfig,
 }) => {
   // Entity maps come straight from the store rather than through App props:
@@ -178,43 +202,133 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
   );
 
-  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
-  const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [branchSessions, setBranchSessions] = useState<Session[]>([]);
-  const [branchModalOpen, setBranchModalOpen] = useState(false);
-
-  const handleBranchRowClick = (branch: Branch) => {
-    // Snapshot the data when opening modal
-    setSelectedBranch(branch);
-    setSelectedRepo(repoById.get(branch.repo_id) || null);
-    setBranchSessions(sessionsByBranch.get(branch.branch_id) || []);
-    setBranchModalOpen(true);
-  };
-
-  const handleBranchModalClose = () => {
-    setBranchModalOpen(false);
-    // Clear after modal closes
-    setSelectedBranch(null);
-    setSelectedRepo(null);
-    setBranchSessions([]);
-  };
-
-  // Wrapper to close modal after archive/delete
-  const handleArchiveOrDeleteBranchWithClose = async (
-    branchId: string,
-    options: BranchArchiveOrDeleteOptions
-  ) => {
-    await onArchiveOrDeleteBranch?.(branchId, options);
-    handleBranchModalClose();
-  };
-
   const { token } = theme.useToken();
-  const screens = Grid.useBreakpoint();
-  const compact = !screens.md;
-  const reducedMotion = usePrefersReducedMotion();
+  // MCP config lives in the MCP Marketplace, which is now a modal (opened via
+  // this context) rather than the old /marketplace route.
+  const catalog = useMCPCatalogModal();
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
-  // Role gate — Agentic Tools and Gateway Channels are global admin-managed
+  // Drill-in navigation: the Content pane swaps between a section's list view
+  // and its detail/edit view in place, instead of stacking a second Modal. One
+  // piece of state owned here decides list-vs-editor; the active editor
+  // publishes a controller so the shared footer can drive Save/Cancel.
+  const [drill, setDrill] = useState<DrillTarget | null>(null);
+  const [controller, setControllerState] = useState<DrillController | null>(null);
+  // Mirror the controller into a ref so the leave-guard can read the latest
+  // dirty flag without depending on it (keeps the guard identity stable).
+  const controllerRef = useRef<DrillController | null>(null);
+  const setController = useCallback((next: DrillController | null) => {
+    controllerRef.current = next;
+    setControllerState(next);
+  }, []);
+  const getDirty = useCallback(() => controllerRef.current?.dirty ?? false, []);
+  const confirmLeaveIfDirty = useDirtyLeaveGuard(getDirty);
+
+  const openDrill = useCallback((target: DrillTarget) => setDrill(target), []);
+  const closeDrill = useCallback(() => {
+    setDrill(null);
+    setController(null);
+  }, [setController]);
+
+  // Branches and Teammates edit the same entity (a branch) via the shared
+  // BranchModal, now rendered in-place (embedded) as the section's drill-in
+  // instead of a stacked modal. The record is resolved live from the store so
+  // it stays fresh while open.
+  const branchDrill =
+    drill?.mode === 'edit' && (drill.kind === 'branches' || drill.kind === 'teammates')
+      ? (branchById.get(drill.recordId ?? '') ?? null)
+      : null;
+
+  const handleArchiveOrDeleteBranchFromDrill = useCallback(
+    async (branchId: string, options: BranchArchiveOrDeleteOptions) => {
+      await onArchiveOrDeleteBranch?.(branchId, options);
+      closeDrill();
+    },
+    [onArchiveOrDeleteBranch, closeDrill]
+  );
+
+  // Any external section change (deep link, prop-controlled tab) abandons an
+  // open drill-in; leaving the section is the same as backing out of it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset keyed on section change only
+  useEffect(() => {
+    setDrill(null);
+    setController(null);
+  }, [activeTab]);
+
+  const handleNavClick = useCallback(
+    (key: string) => {
+      // MCP server configuration lives in the MCP Marketplace, opened as a modal
+      // (its own context) rather than a Settings section. This entry points to it.
+      if (key === 'mcp-marketplace') {
+        const openIt = () => {
+          catalog?.openCatalog();
+          onClose();
+        };
+        if (drill) {
+          void confirmLeaveIfDirty().then((ok) => ok && openIt());
+        } else {
+          openIt();
+        }
+        return;
+      }
+      if (!settingsSectionKeys.has(key)) return;
+      if (key === activeTab) return;
+      const go = () => {
+        closeDrill();
+        onTabChange?.(key as SettingsSection);
+      };
+      if (drill) {
+        void confirmLeaveIfDirty().then((ok) => ok && go());
+      } else {
+        go();
+      }
+    },
+    [
+      activeTab,
+      catalog,
+      closeDrill,
+      confirmLeaveIfDirty,
+      drill,
+      onClose,
+      onTabChange,
+      settingsSectionKeys,
+    ]
+  );
+
+  const handleModalClose = useCallback(() => {
+    if (drill) {
+      void confirmLeaveIfDirty().then((ok) => {
+        if (ok) {
+          closeDrill();
+          onClose();
+        }
+      });
+    } else {
+      onClose();
+    }
+  }, [closeDrill, confirmLeaveIfDirty, drill, onClose]);
+
+  const drillFooter =
+    controller && !controller.ownsFooter
+      ? [
+          <Button key="cancel" onClick={controller.onBack} disabled={controller.saving}>
+            Cancel
+          </Button>,
+          controller.onSave ? (
+            <Button
+              key="save"
+              type="primary"
+              loading={controller.saving}
+              disabled={controller.saveDisabled}
+              onClick={() => void controller.onSave?.()}
+            >
+              {controller.saveLabel ?? 'Save'}
+            </Button>
+          ) : null,
+        ]
+      : null;
+
+  // Role gate — MCP Servers and Gateway Channels are global admin-managed
   // configuration (credentials, webhook URLs, env vars). The daemon enforces
   // ADMIN role on writes for both services (see register-hooks.ts); hiding
   // the menu entries here avoids showing members a tab where every action
@@ -226,28 +340,22 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
-  // The Users tab follows the MCP Servers pattern rather than the Agentic Tools
-  // one: the daemon deliberately serves the roster to members
-  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so seeing who is
-  // on the team is not something to take away. UsersTable separately exposes
-  // only the mutations the current role has authority to perform.
-  //
-  // Viewers rank below MEMBER, so the listing itself would 403 for them; they
-  // get no entry at all.
+  // The daemon serves the user roster to members
+  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so Users stays
+  // visible to them; UsersTable exposes only the mutations their role can
+  // perform. Viewers rank below MEMBER and get no Users entry at all.
   const canListUsers = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
 
   // One answer for "may this role open this section", read by both the menu and
-  // the content below. Every gated section is routable via useSettingsRoute, so
-  // gating only the menu leaves the pane reachable by URL with nothing selected
-  // in the sidebar — which is what `groups`, `gateway` and `agentic-tools`
-  // already did. Deriving both from this set is what stops the two from
-  // drifting apart again the next time a section is gated.
+  // renderContent, so a URL-routable section can't be reached with nothing
+  // selected in the sidebar.
   const canSeeSection = useCallback(
     (section: string): boolean => {
       switch (section) {
         case 'agentic-tools':
         case 'gateway':
         case 'groups':
+        case 'workspace-preferences':
           return isAdmin;
         case 'users':
           return canListUsers;
@@ -258,100 +366,139 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, canListUsers]
   );
 
-  // One nav model feeds the desktop sidebar and the mobile index, so they cannot drift apart
-  const settingsNav = useMemo(
-    () =>
-      buildSettingsNav({
-        isAdmin,
-        canSeeSection,
-        counts: {
-          boards: boardById.size,
-          repos: repoById.size,
-          branches: branchById.size,
-          cards: cardById.size,
-          artifacts: artifactById.size,
-          mcp: mcpServerById.size,
-          gateway: gatewayChannelById.size,
-          users: userById.size,
-        },
-      }),
-    [
-      canSeeSection,
-      isAdmin,
-      boardById.size,
-      repoById.size,
-      branchById.size,
-      cardById.size,
-      artifactById.size,
-      mcpServerById.size,
-      gatewayChannelById.size,
-      userById.size,
-    ]
-  );
+  // Menu items for left sidebar navigation. People leads (access first), then
+  // Resources, then Integrations, then Admin.
 
-  // Menu items for left sidebar navigation
   const menuItems: MenuProps['items'] = useMemo(
-    () =>
-      settingsNav.map((group) => ({
-        key: group.key,
-        label: group.title,
+    () => [
+      // People leads: who has access is the first thing an admin checks. Users
+      // is visible to any member (the daemon serves the roster to them); Groups
+      // is admin-only.
+      ...(canListUsers || isAdmin
+        ? [
+            {
+              key: 'people',
+              label: 'People',
+              type: 'group' as const,
+              children: [
+                ...(canListUsers ? [{ key: 'users', label: 'Users', icon: <TeamOutlined /> }] : []),
+                ...(isAdmin ? [{ key: 'groups', label: 'Groups', icon: <ClusterOutlined /> }] : []),
+              ],
+            },
+          ]
+        : []),
+      {
+        key: 'resources',
+        label: 'Resources',
         type: 'group' as const,
-        children: group.rows.map((row) => ({
-          key: row.section,
-          icon: row.icon,
-          label: row.beta ? (
-            <span>
-              {row.label}{' '}
-              <span
-                style={{
-                  fontSize: 10,
-                  fontWeight: 600,
-                  padding: '0 4px',
-                  borderRadius: 3,
-                  background: token.colorWarningBg,
-                  color: token.colorWarningText,
-                  border: `1px solid ${token.colorWarningBorder}`,
-                  marginLeft: 4,
-                }}
-              >
-                Beta
-              </span>
-            </span>
-          ) : (
-            row.label
-          ),
-        })),
-      })),
-    [settingsNav, token]
+        children: [
+          { key: 'boards', label: 'Boards', icon: <AppstoreOutlined /> },
+          { key: 'repos', label: 'Repositories', icon: <FolderOutlined /> },
+          { key: 'branches', label: 'Branches', icon: <BranchesOutlined /> },
+          { key: 'teammates', label: 'Teammates', icon: <RobotOutlined /> },
+          { key: 'artifacts', label: 'Artifacts', icon: <ExperimentOutlined /> },
+          ...(isAdmin
+            ? [{ key: 'workspace-preferences', label: 'Preferences', icon: <ControlOutlined /> }]
+            : []),
+        ],
+      },
+      {
+        key: 'cards-group',
+        label: (
+          <span>
+            Cards{' '}
+            <Tag
+              color="warning"
+              style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
+            >
+              Beta
+            </Tag>
+          </span>
+        ),
+        type: 'group' as const,
+        children: [
+          { key: 'card-types', label: 'Card Types', icon: <CreditCardOutlined /> },
+          { key: 'cards', label: 'All Cards', icon: <AppstoreOutlined /> },
+        ],
+      },
+      // Integrations (admin-only): Agentic Tools, the MCP Marketplace pointer,
+      // and Gateway Channels. MCP servers are configured in the Marketplace modal
+      // now, so this points out to it rather than leaving a dead end where the
+      // MCP Servers table used to be.
+      ...(isAdmin
+        ? [
+            {
+              key: 'integrations',
+              label: (
+                <span>
+                  Integrations{' '}
+                  <Tag style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}>
+                    Admin
+                  </Tag>
+                </span>
+              ),
+              type: 'group' as const,
+              children: [
+                ...(canSeeSection('agentic-tools')
+                  ? [
+                      {
+                        key: 'agentic-tools',
+                        label: 'Agentic Tools',
+                        icon: <ThunderboltOutlined />,
+                      },
+                    ]
+                  : []),
+                {
+                  key: 'mcp-marketplace',
+                  label: (
+                    <span>
+                      MCP Marketplace{' '}
+                      <ExportOutlined
+                        style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }}
+                      />
+                    </span>
+                  ),
+                  icon: <ApiOutlined />,
+                },
+                ...(canSeeSection('gateway')
+                  ? [{ key: 'gateway', label: 'Gateway Channels', icon: <MessageOutlined /> }]
+                  : []),
+              ],
+            },
+          ]
+        : []),
+      {
+        key: 'system',
+        label: 'System',
+        type: 'group' as const,
+        children: [{ key: 'about', label: 'About', icon: <InfoCircleOutlined /> }],
+      },
+    ],
+    [canSeeSection, canListUsers, isAdmin, token]
   );
 
-  // Mobile drill state: null = the grouped index. A deep-link opener (e.g. the
-  // "Create teammate" flow) seeds straight into its section; the generic entry
-  // (default 'boards') opens on the index. The desktop Modal path ignores this.
-  const [mobileSection, setMobileSection] = useState<SettingsSection | null>(() =>
-    activeTab &&
-    activeTab !== 'boards' &&
-    (SETTINGS_SECTIONS as readonly string[]).includes(activeTab)
-      ? (activeTab as SettingsSection)
-      : null
-  );
-
-  const drillIntoSection = useCallback(
-    (section: SettingsSection) => {
-      setMobileSection(section);
-      onTabChange?.(section);
-    },
-    [onTabChange]
-  );
-
-  // Shared iOS-style grouped-list card wrapper for the mobile index.
-  const settingsGroupCardStyle: React.CSSProperties = {
-    marginTop: token.marginXS,
-    border: `1px solid ${token.colorBorderSecondary}`,
-    borderRadius: token.borderRadiusLG,
-    background: token.colorBgContainer,
-    overflow: 'hidden',
-  };
+  // The shared BranchModal, rendered in-place as the drill-in for both the
+  // Branches and Teammates sections (embedded → no stacked modal).
+  const branchEditor = branchDrill ? (
+    <BranchModal
+      embedded
+      open
+      onClose={closeDrill}
+      branch={branchDrill}
+      repo={repoById.get(branchDrill.repo_id) ?? null}
+      sessions={sessionsByBranch.get(branchDrill.branch_id) ?? []}
+      boardObjects={boardObjects}
+      client={client}
+      currentUser={currentUser}
+      onUpdateBranch={onUpdateBranch}
+      onUpdateRepo={onUpdateRepo}
+      onArchiveOrDelete={handleArchiveOrDeleteBranchFromDrill}
+      onOpenSettings={() => {
+        closeDrill();
+        onTabChange?.('repos');
+      }}
+    />
+  ) : null;
 
   // Render content based on active section
   const renderContent = () => {
@@ -378,10 +525,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       case 'repos':
         return (
           <ReposTable
-            canConfigureCleanup={isAdmin}
             repoById={repoById}
-            identityKey={settingsAuthority.identityKey}
-            operationScope={settingsAuthority.operationScope}
+            canConfigureCleanup={isAdmin}
             onCreate={onCreateRepo}
             onCreateLocal={onCreateLocalRepo}
             onUpdate={onUpdateRepo}
@@ -390,53 +535,65 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'branches':
         return (
-          <BranchesTable
-            currentUser={currentUser}
-            client={client}
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onUnarchive={onUnarchiveBranch}
-            onCreate={onCreateBranch}
-            onRowClick={handleBranchRowClick}
-            onStartEnvironment={onStartEnvironment}
-            onStopEnvironment={onStopEnvironment}
-            onClose={onClose}
-            branchStorageConfig={branchStorageConfig}
-          />
+          branchEditor ?? (
+            <BranchesTable
+              client={client}
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              sessionsByBranch={sessionsByBranch}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onUnarchive={onUnarchiveBranch}
+              onCreate={onCreateBranch}
+              onRowClick={(branch) =>
+                openDrill({ kind: 'branches', mode: 'edit', recordId: branch.branch_id })
+              }
+              onStartEnvironment={onStartEnvironment}
+              onStopEnvironment={onStopEnvironment}
+              onClose={onClose}
+              branchStorageConfig={branchStorageConfig}
+            />
+          )
         );
       case 'teammates':
         return (
-          <TeammatesTable
-            client={client}
-            currentUser={currentUser}
-            branchById={branchById}
-            repoById={repoById}
-            boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
-            userById={userById}
-            onArchiveOrDelete={onArchiveOrDeleteBranch}
-            onRowClick={handleBranchRowClick}
-            onCreateTeammate={onCreateTeammate ?? onCreateTeammate}
-            onClose={onClose}
-          />
+          branchEditor ?? (
+            <TeammatesTable
+              branchById={branchById}
+              repoById={repoById}
+              boardById={boardById}
+              sessionsByBranch={sessionsByBranch}
+              userById={userById}
+              onArchiveOrDelete={onArchiveOrDeleteBranch}
+              onRowClick={(branch) =>
+                openDrill({ kind: 'teammates', mode: 'edit', recordId: branch.branch_id })
+              }
+              onCreateTeammate={onCreateTeammate}
+              availableAgents={availableAgents}
+              onCreateRepo={onCreateRepo}
+              mcpServerById={mcpServerById}
+              currentUser={currentUser}
+              client={client}
+              onClose={onClose}
+            />
+          )
         );
+      case 'card-types':
+        return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':
         return (
-          <CardsTable
+          <AllCardsPanel
             client={client}
             cardById={cardById}
             cardTypeById={cardTypeById}
             boardById={boardById}
             boardObjects={boardObjects}
+            onClose={onClose}
           />
         );
       case 'artifacts':
         return (
           <ArtifactsTable
-            userById={userById}
             artifactById={artifactById}
             branchById={branchById}
             boardById={boardById}
@@ -447,17 +604,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         );
       case 'workspace-preferences':
         return <WorkspacePreferencesTab client={client} currentUser={currentUser} />;
-      case 'mcp':
-        return (
-          <MCPServersTable
-            mcpServerById={mcpServerById}
-            client={client}
-            userById={userById}
-            currentUser={currentUser}
-            onCreate={onCreateMCPServer}
-            onDelete={onDeleteMCPServer}
-          />
-        );
       case 'agentic-tools':
         return (
           <AgenticToolsSection
@@ -508,214 +654,17 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     }
   };
 
-  if (compact) {
-    return (
-      <Drawer
-        title={null}
-        aria-label="Workspace settings"
-        closable={false}
-        placement="bottom"
-        // Full-bleed so the settings surface covers the app header instead of
-        // leaving a stale title peeking above it.
-        height="100dvh"
-        {...reducedMotionSurface(reducedMotion)}
-        open={open}
-        onClose={onClose}
-        styles={{ body: { padding: 0, overflow: 'hidden' } }}
-      >
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
-          <Flex
-            align="center"
-            gap={token.marginXS}
-            style={{
-              padding: `${token.paddingSM}px ${token.paddingSM}px`,
-              borderBottom: `1px solid ${token.colorBorderSecondary}`,
-              background: token.colorBgElevated,
-              flex: '0 0 auto',
-            }}
-          >
-            {mobileSection ? (
-              <Button
-                type="text"
-                icon={<ArrowLeftOutlined />}
-                aria-label="Back"
-                onClick={() => setMobileSection(null)}
-                style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
-              />
-            ) : (
-              <div style={{ width: MOBILE_TOUCH_TARGET }} />
-            )}
-            <Typography.Title
-              level={5}
-              ellipsis
-              style={{ margin: 0, flex: 1, minWidth: 0, textAlign: 'center' }}
-            >
-              {mobileSection ? settingsSectionMobileLabel(mobileSection) : 'Settings'}
-            </Typography.Title>
-            <Button
-              type="text"
-              icon={<CloseOutlined />}
-              aria-label="Close settings"
-              onClick={onClose}
-              style={{ minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }}
-            />
-          </Flex>
-          <Content
-            style={{
-              padding: mobileSection
-                ? `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`
-                : 0,
-              overflowY: 'auto',
-              overflowX: 'hidden',
-              minWidth: 0,
-              width: '100%',
-              maxWidth: '100%',
-              boxSizing: 'border-box',
-            }}
-          >
-            {mobileSection ? (
-              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
-            ) : (
-              <Flex
-                vertical
-                gap={token.marginLG}
-                style={{
-                  padding: `${token.paddingMD}px ${token.padding}px ${token.paddingXL}px`,
-                }}
-              >
-                {/* Account identity summary (read-only). */}
-                {currentUser && (
-                  <div>
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: token.fontSizeSM,
-                        paddingInlineStart: token.paddingXS,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.4,
-                      }}
-                    >
-                      Account
-                    </Typography.Text>
-                    <div style={settingsGroupCardStyle}>
-                      <Flex align="center" gap={token.margin} style={{ padding: token.padding }}>
-                        <UserOutlined
-                          style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
-                        />
-                        <Flex vertical style={{ flex: 1, minWidth: 0 }}>
-                          <Typography.Text strong ellipsis>
-                            {currentUser.name || currentUser.email || 'You'}
-                          </Typography.Text>
-                          <Typography.Text
-                            type="secondary"
-                            ellipsis
-                            style={{ fontSize: token.fontSizeSM }}
-                          >
-                            {[currentUser.email, currentUser.role].filter(Boolean).join(' · ')}
-                          </Typography.Text>
-                        </Flex>
-                      </Flex>
-                    </div>
-                  </div>
-                )}
-
-                {settingsNav.map((group) => (
-                  <div key={group.key}>
-                    <Typography.Text
-                      type="secondary"
-                      style={{
-                        fontSize: token.fontSizeSM,
-                        paddingInlineStart: token.paddingXS,
-                        textTransform: 'uppercase',
-                        letterSpacing: 0.4,
-                      }}
-                    >
-                      {group.mobileTitle ?? group.title}
-                    </Typography.Text>
-                    <div style={settingsGroupCardStyle}>
-                      {group.rows.map((row, index) => (
-                        <button
-                          key={row.section}
-                          type="button"
-                          aria-label={row.mobileLabel ?? row.label}
-                          onClick={() => drillIntoSection(row.section)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: token.margin,
-                            width: '100%',
-                            minHeight: MOBILE_TOUCH_TARGET,
-                            padding: `${token.paddingXS}px ${token.padding}px`,
-                            cursor: 'pointer',
-                            background: 'none',
-                            border: 'none',
-                            borderTop:
-                              index === 0 ? undefined : `1px solid ${token.colorBorderSecondary}`,
-                            font: 'inherit',
-                            color: 'inherit',
-                            textAlign: 'left',
-                          }}
-                        >
-                          <span
-                            style={{ fontSize: token.fontSizeLG, color: token.colorTextSecondary }}
-                          >
-                            {row.icon}
-                          </span>
-                          <Typography.Text ellipsis style={{ flex: 1, minWidth: 0 }}>
-                            {row.mobileLabel ?? row.label}
-                          </Typography.Text>
-                          {row.count !== undefined && (
-                            <Typography.Text
-                              type="secondary"
-                              style={{ fontSize: token.fontSizeSM }}
-                            >
-                              {row.count}
-                            </Typography.Text>
-                          )}
-                          <RightOutlined
-                            aria-hidden
-                            style={{ color: token.colorTextTertiary, fontSize: token.fontSizeSM }}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </Flex>
-            )}
-          </Content>
-        </Layout>
-        <BranchModal
-          open={branchModalOpen}
-          onClose={handleBranchModalClose}
-          branch={selectedBranch}
-          repo={selectedRepo}
-          sessions={branchSessions}
-          boardObjects={boardObjects}
-          client={client}
-          currentUser={currentUser}
-          onUpdateBranch={onUpdateBranch}
-          onUpdateRepo={onUpdateRepo}
-          onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-          onOpenSettings={() => {
-            handleBranchModalClose();
-            onTabChange?.('repos');
-          }}
-          presentation="bottom-sheet"
-        />
-      </Drawer>
-    );
-  }
-
   return (
     <Modal
-      title={null}
+      // The header bar is hidden (styles.header) but the dialog still needs an
+      // accessible name; `title` becomes rc-dialog's aria-labelledby target.
+      title="Workspace Settings"
       open={open}
-      onCancel={onClose}
-      footer={null}
+      onCancel={handleModalClose}
+      footer={drillFooter}
       closable
-      width={compact ? 'calc(100vw - 16px)' : 1200}
-      style={{ top: compact ? 8 : 40 }}
+      width={1200}
+      style={{ top: 40 }}
       styles={{
         wrapper: {
           padding: 0,
@@ -723,7 +672,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         container: {
           padding: 0,
-          borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
+          borderRadius: token.borderRadiusLG,
           overflow: 'hidden',
         },
         header: {
@@ -731,80 +680,63 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         body: {
           padding: 0,
-          height: compact ? 'calc(100dvh - 16px)' : 'calc(100vh - 200px)',
-          minHeight: compact ? 0 : 500,
-          maxHeight: compact ? 'none' : 800,
+          height: 'calc(100vh - 200px)',
+          minHeight: 500,
+          maxHeight: 800,
+        },
+        footer: {
+          margin: 0,
+          padding: '12px 24px',
+          background: token.colorBgContainer,
+          borderTop: `1px solid ${token.colorBorderSecondary}`,
         },
       }}
       closeIcon={<CloseOutlined />}
     >
-      <Layout
-        style={{
-          height: '100%',
-          background: token.colorBgContainer,
-          flexDirection: compact ? 'column' : 'row',
-        }}
+      <SettingsDrillProvider
+        drill={drill}
+        openDrill={openDrill}
+        closeDrill={closeDrill}
+        confirmLeaveIfDirty={confirmLeaveIfDirty}
+        controller={controller}
+        setController={setController}
       >
-        <Sider
-          width={compact ? '100%' : 240}
-          style={{
-            background: token.colorBgElevated,
-            borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
-            borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
-            overflow: 'auto',
-            maxHeight: compact ? 230 : undefined,
-            flex: compact ? '0 0 auto' : undefined,
-            padding: compact ? '12px 0' : '20px 0',
-          }}
-        >
-          <div
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <Sider
+            width={240}
             style={{
-              padding: compact ? '0 12px 10px' : '0 24px 16px',
-              fontWeight: 600,
-              fontSize: compact ? 15 : 18,
-              color: token.colorText,
+              background: token.colorBgElevated,
+              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              overflow: 'auto',
+              padding: '20px 0',
             }}
           >
-            Settings
-          </div>
-          <Menu
-            mode="inline"
-            selectedKeys={[activeTab]}
-            onClick={({ key }) => {
-              if (settingsSectionKeys.has(key)) {
-                onTabChange?.(key as SettingsSection);
-              }
-            }}
-            items={menuItems}
-            style={{
-              border: 'none',
-              background: 'transparent',
-            }}
-          />
-        </Sider>
-        <Content
-          style={{ padding: compact ? '40px 12px 20px' : '40px 32px 32px', overflow: 'auto' }}
-        >
-          {renderContent()}
-        </Content>
-      </Layout>
-      <BranchModal
-        open={branchModalOpen}
-        onClose={handleBranchModalClose}
-        branch={selectedBranch}
-        repo={selectedRepo}
-        sessions={branchSessions}
-        boardObjects={boardObjects}
-        client={client}
-        currentUser={currentUser}
-        onUpdateBranch={onUpdateBranch}
-        onUpdateRepo={onUpdateRepo}
-        onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-        onOpenSettings={() => {
-          handleBranchModalClose();
-          onTabChange?.('repos');
-        }}
-      />
+            {/* Text-only label: at the 240px Sider width the icon + text wrapped
+                to two lines, so the leading icon was dropped. This header is the
+                only chrome that never scrolls away inside a drill-in, so the
+                distinct wording — "Workspace Settings" vs "User Settings" — is
+                what now marks the surface at a glance. Mirrored in UserSettingsModal. */}
+            <div style={{ padding: '0 24px 16px' }}>
+              <span style={{ fontWeight: 600, fontSize: 18, color: token.colorText }}>
+                Workspace Settings
+              </span>
+            </div>
+            <Menu
+              mode="inline"
+              selectedKeys={[activeTab]}
+              onClick={({ key }) => handleNavClick(key)}
+              items={menuItems}
+              style={{
+                border: 'none',
+                background: 'transparent',
+              }}
+            />
+          </Sider>
+          <Content style={{ padding: '40px 32px 32px', overflow: 'auto' }}>
+            {renderContent()}
+          </Content>
+        </Layout>
+      </SettingsDrillProvider>
     </Modal>
   );
 };

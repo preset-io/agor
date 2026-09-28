@@ -320,7 +320,6 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           currentUserId={currentUserId}
           branchById={branchById}
           boardById={boardById}
-          onSettingsClick={onSettingsClick}
         />
         <Tooltip title="Knowledge Base">
           <Button

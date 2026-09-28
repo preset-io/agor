@@ -3,27 +3,46 @@ import type {
   Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  CreateRepoRequest,
+  MCPServer,
   Repo,
   Session,
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Space, Tooltip, Typography, theme } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
-import { filterBySettingsSearch } from '@/utils/settingsSearch';
+import {
+  Alert,
+  Button,
+  Empty,
+  Input,
+  Popover,
+  Space,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import type { AgenticToolOption } from '../../types';
+import { useThemedMessage } from '../../utils/message';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
+import { TeammateTab, type TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
+import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
-import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
-import { ResponsiveTable } from './ResponsiveTable';
+import { UserAvatar } from '../metadata/UserAvatar';
+import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
-import { SettingsIdentity } from './SettingsIdentity';
+import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
+
+/** Progress reporter passed to the teammate submit handler (mirrors CreateDialog). */
+export interface TeammateCreateProgress {
+  onStatusChange?: (status: string) => void;
+}
 
 interface TeammatesTableProps {
-  client?: AgorClient | null;
-  currentUser?: User | null;
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
@@ -31,15 +50,23 @@ interface TeammatesTableProps {
   userById: Map<string, User>;
   onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onRowClick?: (branch: Branch) => void;
-  onCreateTeammate?: () => void;
+  /** Creates the teammate from the drill-in form; must NOT close Settings. */
+  onCreateTeammate?: (
+    result: TeammateTabResult,
+    progress?: TeammateCreateProgress
+  ) => Promise<void>;
+  // Deps for the in-place "New teammate" drill-in (mirrors CreateDialog's TeammateTab).
+  availableAgents?: AgenticToolOption[];
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
+  mcpServerById?: Map<string, MCPServer>;
+  currentUser?: User | null;
+  client?: AgorClient | null;
   /** Close the parent Settings modal so the canvas isn't obscured by
    *  it after recenter. Wired by SettingsModal. */
   onClose?: () => void;
 }
 
 export const TeammatesTable: React.FC<TeammatesTableProps> = ({
-  client,
-  currentUser,
   branchById,
   repoById,
   boardById,
@@ -48,8 +75,33 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   onArchiveOrDelete,
   onRowClick,
   onCreateTeammate,
+  availableAgents = [],
+  onCreateRepo,
+  mcpServerById,
+  currentUser,
+  client,
   onClose,
 }) => {
+  const { showError } = useThemedMessage();
+  const { drill, openDrill, closeDrill } = useSettingsDrill();
+  const isCreating = drill?.kind === 'teammates' && drill.mode === 'create';
+  const teammateFormRef = useRef<(() => Promise<TeammateTabResult | null>) | null>(null);
+  const [teammateValid, setTeammateValid] = useState(false);
+  const [creatingTeammate, setCreatingTeammate] = useState(false);
+
+  const handleCreateTeammateSubmit = useCallback(async () => {
+    const result = await teammateFormRef.current?.();
+    if (!result) return; // invalid — TeammateTab surfaces field errors
+    setCreatingTeammate(true);
+    try {
+      await onCreateTeammate?.(result);
+      closeDrill();
+    } catch (error) {
+      showError(error instanceof Error ? error.message : 'Failed to create AI teammate');
+    } finally {
+      setCreatingTeammate(false);
+    }
+  }, [onCreateTeammate, closeDrill, showError]);
   // Teammates ARE branches (just branches flagged via
   // `custom_context.teammate`), so navigation reuses the `/w/<short>/`
   // URL via `goToBranch` — no separate `/teammate/<short>/` route.
@@ -75,87 +127,125 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   const teammates = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
     const teammateBranches = Array.from(branchById.values())
       .filter((w) => !w.archived && isTeammate(w))
       .sort((a, b) => {
         const nameA = getTeammateConfig(a)?.displayName ?? a.name;
         const nameB = getTeammateConfig(b)?.displayName ?? b.name;
-        return (
-          nameA.localeCompare(nameB, undefined, { sensitivity: 'base' }) ||
-          a.branch_id.localeCompare(b.branch_id)
-        );
+        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
       });
 
-    return filterBySettingsSearch(teammateBranches, searchTerm, [
-      (branch) => [getTeammateConfig(branch)?.displayName, branch.name, branch.notes],
-      (branch) => {
-        const owner = userById.get(branch.primary_owner_user_id ?? '');
-        const creator = userById.get(branch.created_by);
-        return [owner?.name, owner?.email, creator?.name, creator?.email];
-      },
-      (branch) => {
-        const repo = repoById.get(branch.repo_id);
-        return [repo?.name, repo?.slug];
-      },
-      (branch) => boardById.get(branch.board_id ?? '')?.name,
-    ]);
-  }, [branchById, repoById, userById, boardById, searchTerm]);
+    if (!term) return teammateBranches;
+
+    return teammateBranches.filter((w) => {
+      const config = getTeammateConfig(w);
+      const repo = repoById.get(w.repo_id);
+      const creator = userById.get(w.created_by);
+      const haystacks = [
+        config?.displayName,
+        w.name,
+        w.notes,
+        creator?.name,
+        creator?.email,
+        repo?.name,
+        repo?.slug,
+      ];
+      return haystacks.some((v) => v?.toLowerCase().includes(term));
+    });
+  }, [branchById, repoById, userById, searchTerm]);
 
   const columns = [
     {
       title: 'Teammate',
       key: 'teammate',
+      width: 220,
       render: (_: unknown, record: Branch) => {
         const config = getTeammateConfig(record);
-        const repo = repoById.get(record.repo_id);
         return (
-          <SettingsIdentity
-            name={config?.displayName ?? record.name}
-            query={searchTerm}
-            icon={config?.emoji || <RobotOutlined />}
-            description={
-              record.notes?.trim() ? (
-                <MarkdownRenderer content={record.notes} showControls={false} />
-              ) : undefined
-            }
-            metadata={
-              <Typography.Text
-                type="secondary"
-                ellipsis={{ tooltip: repo?.name || record.name }}
-                style={{ display: 'block', fontSize: token.fontSizeSM }}
+          <Space>
+            {config?.emoji ? (
+              <span style={{ fontSize: 18 }}>{config.emoji}</span>
+            ) : (
+              <RobotOutlined style={{ color: token.colorInfo }} />
+            )}
+            <Typography.Link
+              ellipsis
+              title={config?.displayName ?? record.name}
+              onClick={() => onRowClick?.(record)}
+            >
+              <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
+            </Typography.Link>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Description',
+      key: 'description',
+      render: (_: unknown, record: Branch) => {
+        const notes = (record.notes ?? '').trim();
+        if (!notes) {
+          return (
+            <Typography.Text type="secondary" italic style={{ fontSize: 12 }}>
+              No description
+            </Typography.Text>
+          );
+        }
+        const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
+        // Cell shows plain first-line ellipsis; popover renders full markdown.
+        // MarkdownRenderer's `inline` is currently a no-op (Streamdown still
+        // emits block nodes), so plain text is the honest preview here.
+        return (
+          <Popover
+            content={
+              <div
+                className="markdown-compact"
+                style={{
+                  maxWidth: 480,
+                  maxHeight: 400,
+                  overflowY: 'auto',
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
               >
-                {repo?.name || record.name}
-              </Typography.Text>
+                <MarkdownRenderer content={notes} showControls={false} />
+              </div>
             }
-          />
+            trigger="hover"
+            placement="topLeft"
+            mouseEnterDelay={0.3}
+          >
+            <Typography.Text
+              type="secondary"
+              ellipsis
+              style={{
+                display: 'block',
+                maxWidth: 480,
+                fontSize: 12,
+                cursor: 'help',
+              }}
+            >
+              <HighlightMatch text={firstLine} query={searchTerm} />
+            </Typography.Text>
+          </Popover>
         );
       },
     },
     {
-      title: 'Primary owner',
-      key: 'owner',
-      width: 140,
+      title: 'Creator',
+      key: 'creator',
+      width: 160,
       render: (_: unknown, record: Branch) => {
-        const owner = userById.get(record.primary_owner_user_id ?? '');
-        const name = owner?.name || owner?.email || 'Unavailable user';
-        return (
-          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
-            {name}
-          </Typography.Text>
-        );
-      },
-    },
-    {
-      title: 'Board',
-      key: 'board',
-      width: 120,
-      render: (_: unknown, record: Branch) => {
-        const name = boardById.get(record.board_id ?? '')?.name || '—';
-        return (
-          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
-            {name}
-          </Typography.Text>
-        );
+        const user = userById.get(record.created_by);
+        if (!user || record.created_by === 'anonymous') {
+          return (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              {record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown User'}
+            </Typography.Text>
+          );
+        }
+        return <UserAvatar user={user} showName size="small" />;
       },
     },
     {
@@ -170,7 +260,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
                 type="text"
                 size="small"
                 icon={<AimOutlined />}
-                aria-label="Center map on teammate"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleRecenter(record);
@@ -183,7 +272,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
               type="text"
               size="small"
               icon={<EditOutlined />}
-              aria-label="Edit teammate"
               onClick={(e) => {
                 e.stopPropagation();
                 onRowClick?.(record);
@@ -202,32 +290,62 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
     },
   ];
 
+  // "New teammate" opens in place (drill-in) instead of closing Settings.
+  if (isCreating) {
+    return (
+      <DrillInFrame
+        title="New AI teammate"
+        saveLabel="Create teammate"
+        saving={creatingTeammate}
+        saveDisabled={!teammateValid}
+        onSave={handleCreateTeammateSubmit}
+      >
+        <div style={{ maxWidth: 640 }}>
+          <Alert
+            type="info"
+            showIcon
+            description="Teammates are persistent AI companions backed by a framework repo."
+            style={{ marginBottom: 16 }}
+          />
+          <TeammateTab
+            repoById={repoById}
+            onValidityChange={setTeammateValid}
+            formRef={teammateFormRef}
+            onCreateRepo={onCreateRepo}
+            availableAgents={availableAgents}
+            mcpServerById={mcpServerById}
+            currentUser={currentUser}
+            client={client}
+          />
+        </div>
+      </DrillInFrame>
+    );
+  }
+
   return (
     <div>
-      <ResponsiveSettingsHeader
+      <ListPanelHeader
+        title="Teammates"
         description="Teammates are persistent AI companions backed by a framework repo. They maintain memory, orchestrate work across branches, and run on scheduled heartbeats."
-        actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
-            <Input
-              allowClear
-              placeholder="Search teammates..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                width: compact ? '100%' : token.sizeUnit * 40,
-                flex: compact ? '1 1 100%' : undefined,
-              }}
-            />
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={onCreateTeammate}
-              disabled={!onCreateTeammate}
-            >
-              Create AI teammate
-            </Button>
-          </Space>
-        )}
+        search={
+          <Input
+            allowClear
+            placeholder="Search teammates..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            style={{ maxWidth: token.sizeUnit * 40 }}
+          />
+        }
+        actions={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => openDrill({ kind: 'teammates', mode: 'create' })}
+            disabled={!onCreateTeammate}
+          >
+            Create AI teammate
+          </Button>
+        }
       />
 
       {teammates.length === 0 && !searchTerm && (
@@ -251,27 +369,18 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
       )}
 
       {(teammates.length > 0 || searchTerm) && (
-        <ResponsiveTable
-          primaryColumnKey="teammate"
+        <Table
           dataSource={teammates}
           columns={columns}
-          tableLayout="fixed"
-          key={searchTerm}
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"
-          onRow={(record) => ({
-            onClick: () => onRowClick?.(record),
-            style: { cursor: onRowClick ? 'pointer' : 'default' },
-          })}
         />
       )}
 
       {/* Archive/Delete Modal */}
       {selectedBranch && (
         <ArchiveDeleteBranchModal
-          client={client}
-          currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
           sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}

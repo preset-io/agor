@@ -222,7 +222,7 @@ const CONNECT_STATUSES = {
     readiness: 'unchecked',
     label: 'Not checked yet',
     detail:
-      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
+      'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it, and stops there if it does.',
   },
   declaredOpen: {
     readiness: 'unchecked',

@@ -13,7 +13,7 @@ export interface HomePageProps {
     tab: 'teammate' | 'branch' | 'board' | 'repository',
     boardId?: string
   ) => void;
-  onOpenSettings: (section: 'repos' | 'mcp' | 'users') => void;
+  onOpenSettings: (section: 'repos' | 'users') => void;
 }
 
 export interface KnowledgeDocument

@@ -3,6 +3,7 @@ import type { MenuProps } from 'antd';
 import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
   type AgorState,
@@ -63,6 +64,7 @@ const HomeOnboarding: React.FC<{
   onOpenSettings: HomePageProps['onOpenSettings'];
   onDismiss: () => void;
 }> = ({ currentUserId, onNewSession, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+  const navigate = useNavigate();
   // Booleans with shallow equality: entity patches only re-render this gate
   // when a step actually flips (e.g. first repo connected). `sessionById`
   // keeps archived sessions around for deep links, so `hasSessions` must
@@ -108,7 +110,8 @@ const HomeOnboarding: React.FC<{
         label: 'Configure MCP tools',
         done: hasMcp,
         cta: 'Set up →',
-        onClick: () => onOpenSettings('mcp'),
+        // MCP tools are set up in the MCP Marketplace, not Settings.
+        onClick: () => navigate('/marketplace'),
       },
       {
         id: 'invite',
@@ -127,6 +130,7 @@ const HomeOnboarding: React.FC<{
     onOpenCreateDialog,
     onOpenSettings,
     onNewSession,
+    navigate,
   ]);
 
   if (steps.every((s) => s.done)) return null;

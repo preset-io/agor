@@ -120,10 +120,13 @@ describe('SettingsModal navigation gating', () => {
   it('keeps the admin-only integrations gated the way they already were', () => {
     renderNav('member');
 
+    // MCP server config moved out of Settings into the MCP Marketplace, and the
+    // whole Integrations group (Agentic Tools, the MCP Marketplace pointer,
+    // Gateway Channels) is admin-only, so a member sees none of it.
     expect(menuLabels()).not.toContain('Agentic Tools');
     expect(menuLabels()).not.toContain('Gateway Channels');
-    // MCP Servers stays: members may read the policy that constrains them.
-    expect(menuLabels()).toContain('MCP Servers');
+    expect(menuLabels()).not.toContain('MCP Servers');
+    expect(menuLabels()).not.toContain('MCP Marketplace');
   });
 });
 

@@ -17,12 +17,22 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { BranchesTable } from './BranchesTable';
+import { StandaloneSettingsDrillProvider } from './SettingsDrill';
 
-/** BranchesTable uses useAppNavigation → useNavigate under the hood,
- *  so the test wraps in a Router. It needs no data-context provider
- *  (table reads navigation maps from its props). */
+/** BranchesTable uses useAppNavigation → useNavigate under the hood (Router),
+ *  and now opens "Create Branch" as a drill-in, so it also needs the drill
+ *  context to own the open/close state. The provider instance must stay stable
+ *  across rerender so the open create-drill survives the Map-churn rerender. */
+function wrap(ui: React.ReactElement) {
+  return (
+    <MemoryRouter>
+      <StandaloneSettingsDrillProvider>{ui}</StandaloneSettingsDrillProvider>
+    </MemoryRouter>
+  );
+}
+
 function renderWithProviders(ui: React.ReactElement) {
-  return render(<MemoryRouter>{ui}</MemoryRouter>);
+  return render(wrap(ui));
 }
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
@@ -70,7 +80,7 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     // Simulate a `repos.patched` WebSocket event by handing the table NEW
     // Map references for repoById and boardById. Same data, different refs.
     rerender(
-      <MemoryRouter>
+      wrap(
         <BranchesTable
           client={null}
           branchById={branchById}
@@ -78,7 +88,7 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
           boardById={new Map<string, Board>()}
           sessionsByBranch={sessionsByBranch as Map<string, never[]>}
         />
-      </MemoryRouter>
+      )
     );
 
     expect((screen.getByLabelText(/Source Branch/i) as HTMLInputElement).value).toBe(
