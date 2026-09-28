@@ -22,6 +22,9 @@ const testHome = mkdtempSync(path.join(os.tmpdir(), 'agor-test-home-'));
 process.env.HOME = testHome;
 process.env.USERPROFILE = testHome;
 
+// AGOR_HOME relocates every Agor-owned path, so a value inherited from the
+// developer's shell would point the suite back at a real deployment.
+delete process.env.AGOR_HOME;
 delete process.env.AGOR_DATA_HOME;
 delete process.env.AGOR_OUTER_SANDBOX;
 

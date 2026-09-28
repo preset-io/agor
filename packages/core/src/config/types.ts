@@ -389,7 +389,7 @@ export interface AgorDatabaseSettings {
 
   /** SQLite configuration */
   sqlite?: {
-    /** Database file path (default: '~/.agor/agor.db') */
+    /** Database file path (default: `<agor home>/agor.db`) */
     path?: string;
 
     /** Enable WAL mode (default: true) */
@@ -1156,7 +1156,7 @@ export interface AgorPathSettings {
    * When set, repos and branches are stored here instead of under agor_home.
    * Useful for k8s deployments where branches need to be on shared storage (EFS).
    *
-   * Default: same as agor_home (~/.agor)
+   * Default: same as the Agor home (`AGOR_HOME`, else `~/.agor`)
    *
    * Environment variable: AGOR_DATA_HOME (takes precedence over config)
    *
@@ -1385,7 +1385,7 @@ export interface AgorMultiTenancySettings {
 
   /**
    * Parent directory for tenant data. Absolute paths and paths relative to
-   * `~/.agor` are supported. Defaults to `~/.agor/tenants`.
+   * `~/.agor` are supported. Defaults to `<agor home>/tenants`.
    */
   tenants_base_folder?: string;
 
@@ -1405,7 +1405,7 @@ export interface AgorMultiTenancySettings {
 /** Canonical upload storage and lifecycle settings. */
 export interface AgorUploadSettings {
   /**
-   * Base local directory or S3 URI. Defaults to `~/.agor`.
+   * Base local directory or S3 URI. Defaults to the Agor home (`AGOR_HOME`, else `~/.agor`).
    * Agor manages the tenant and feature namespaces below this base.
    * Credentials are resolved out-of-band and must not be embedded in this URI.
    */

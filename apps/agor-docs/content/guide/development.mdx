@@ -330,9 +330,9 @@ See the **[Architecture Guide](/guide/architecture#technology-stack)** for the c
 
 **Watch Mode:**
 
-- User runs `pnpm dev` in daemon (watches core + daemon)
-- **DO NOT** run builds unless explicitly asked or you see compilation errors
-- **DO NOT** start background processes
+- Run `pnpm dev` in the daemon directory to watch core and daemon changes.
+- Watch mode handles recompilation during development; you do not need a separate build after each edit.
+- Run the validation commands above before submitting a contribution.
 
 **Type Reuse:**
 
@@ -444,6 +444,19 @@ pnpm dev
 lsof -ti:3030 | xargs kill -9
 cd apps/agor-daemon && pnpm dev
 ```
+
+## Contributing to the MCP catalog
+
+The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
+
+Set `hidden: true` to withdraw an entry from discovery and new installs by name;
+omit it or set it to `false` and redeploy to offer the entry again. Hidden
+entries remain validated and retain the policy checks needed by saved connections.
+Hiding is not credential revocation.
+
+Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
+
+The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret.
 
 ## What to Contribute
 

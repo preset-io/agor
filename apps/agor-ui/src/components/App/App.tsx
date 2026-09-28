@@ -69,7 +69,6 @@ import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
-import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
@@ -901,19 +900,12 @@ export const App: React.FC<AppProps> = ({
   // `handleQuickStartSession` reads.
   const chooseAgenticTool = useCallback(
     async (branchId: string, tool: AgenticToolName, replacingSessionId?: string) => {
-      // Read the branch at call time instead of subscribing — `branchById` gets
-      // a new identity on every branch event (env heartbeats, git-state), which
-      // would otherwise churn this callback's identity and re-render every
-      // AppActions consumer on a live board.
-      const branch = agorStore.getState().branchById.get(branchId as Branch['branch_id']);
-      const mcpServerIds = resolveQuickStartMcpServerIds(user, branch);
-
       const outcome = await onCreateSession?.(
         {
           branch_id: branchId,
           agent: tool,
           agenticToolPresetId: getUserDefaultConfigurationSource(user, tool),
-          mcpServerIds,
+          // Omit MCP selection: quick start inherits authoritative defaults.
         },
         currentBoardId
       );

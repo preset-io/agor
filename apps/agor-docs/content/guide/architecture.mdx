@@ -9,6 +9,8 @@ Agor is a **multi-client agent orchestration platform** with real-time collabora
 
 ## System Architecture
 
+<a id="current-architecture-executor-isolation" />
+
 ### Current architecture (execution substrates)
 
 The daemon owns trusted state and authorization. Executors contain agent SDKs
@@ -50,26 +52,13 @@ Key properties:
 - Agor does not create host accounts, POSIX branch groups, or sudo-impersonate
   executor processes.
 
-### Legacy Architecture (Unified Process Model)
-
-Prior to executor isolation, Agor ran all SDK operations directly within the daemon process. This simplified architecture had Agent SDKs as direct dependencies of the daemon, with tools executing in the same process as database operations and service logic.
-
-**Why we moved away:**
-
-- Security concerns with untrusted SDK code having database access
-- Difficulty isolating credentials and API keys
-- No process-level separation between trusted daemon and untrusted execution
-- All sessions shared the same execution environment
-
-The unified model is no longer used in current Agor releases.
-
 ## Technology Stack
 
 ### Backend
 
 - **[FeathersJS](https://feathersjs.com/)** - Unified REST + WebSocket API framework
 - **[Drizzle ORM](https://orm.drizzle.team/)** - Type-safe database layer with LibSQL support
-- **[LibSQL](https://github.com/tursodatabase/libsql)** - Local SQLite-compatible database (future: cloud sync via Turso)
+- **[LibSQL](https://github.com/tursodatabase/libsql)** - Local SQLite-compatible database
 - **[simple-git](https://github.com/steveukx/simple-git)** - Git operations for branch management
 
 ### Frontend
@@ -198,27 +187,10 @@ Looking for a deeper dive into what agents can do with those tools? See the [Ago
 
 ### Automatic Session Integration
 
-Every Agor session automatically gets MCP configured with **zero user configuration**:
-
-1. **Token Generation** - When a session is created, a unique 64-character hex token is generated and stored in `session.data.mcp_token`
-2. **Auto-Injection** - The token is automatically injected into the agent's MCP configuration:
-   ```typescript
-   mcpServers: {
-     agor: {
-       type: 'http',
-       url: 'http://localhost:3030/mcp',
-       headers: { Authorization: 'Bearer cd5fc175...' }
-     }
-   }
-   ```
-   The daemon requires the token in the `Authorization: Bearer` header. Query-string tokens are rejected so secrets don't leak into access logs.
-3. **Immediate Availability** - The agent can use MCP tools without any setup
-
-**Benefits:**
-
-- No manual MCP server installation or configuration
-- Session-scoped security (agents can't access other sessions' private data)
-- Consistent experience across all agentic tools (Claude Code, Codex, Gemini)
+Agor configures its MCP server automatically for agents running in sessions, using
+short-lived credentials scoped to the authenticated caller. Normal tenant and
+resource permissions still apply. Tokens must use the `Authorization: Bearer`
+header; query-string tokens are rejected to keep them out of access logs.
 
 ### Self-Aware Agent Capabilities
 
@@ -265,22 +237,10 @@ This enables **autonomous multi-agent workflows** where a parent agent can deleg
 
 ### Usage Modes
 
-**Internal (Session-Scoped Tokens)**
-
-- **Authentication:** Session-specific tokens (64-char hex, 24h expiration)
-- **Scope:** Full access to own session + read access to other sessions/boards/branches
-- **Use Case:** Agents running within Agor sessions (primary mode)
-- **Security:** Token is scoped to the user who created the session
-
-**External (Future: API Tokens)**
-
-- **Authentication:** Admin API tokens (not yet implemented)
-- **Scope:** Full CRUD access across all resources
-- **Use Cases:**
-  - External monitoring dashboards
-  - CI/CD integration (trigger sessions, check status)
-  - Cross-tool orchestration (e.g., GitHub Actions → Agor)
-  - Custom tooling and automation
+- **Internal agents:** Agor supplies session credentials automatically.
+- **External clients:** Configure authentication and the `/mcp` endpoint using the
+  [MCP connection guide](/guide/internal-mcp). Access remains subject to the
+  authenticated user’s tenant and resource permissions.
 
 ### Architecture: Same Daemon Instance
 
@@ -314,86 +274,9 @@ $ agor session list | grep running | wc -l
 ← { total: 3, data: [...] }
 ```
 
-### Available Tools (14 Total)
-
-**Session Tools:**
-| Tool | Description | Example |
-|------|-------------|---------|
-| `agor_sessions_list` | List sessions with filters | `{ status: 'running', boardId: '...' }` |
-| `agor_sessions_get` | Get specific session details | `{ sessionId: '01933e4a...' }` |
-| `agor_sessions_get_current` | Get current session (introspection) | `{}` |
-| `agor_sessions_spawn` | Spawn child session & execute prompt | `{ prompt: 'Implement feature X', title: 'Feature X' }` |
-
-**Branch Tools:**
-| Tool | Description | Example |
-|------|-------------|---------|
-| `agor_branches_get` | Get branch details | `{ branchId: '...' }` |
-| `agor_branches_list` | List branches, including zone metadata and optional zone filtering | `{ limit: 10, zoneId: 'zone-review' }` |
-| `agor_branches_create` | Create a branch with optional issue/PR links | `{ repoId: '019a...', branchName: 'feat-x', issueUrl: 'https://...' }` |
-| `agor_branches_update` | Update branch metadata (issue/PR URLs, notes, attention state) | `{ branchId: '019a...', pullRequestUrl: 'https://...', notes: 'Ready for review', needsAttention: false }` |
-| `agor_branches_set_zone` | Pin a branch to a board zone, or clear its zone pin with `zoneId: null` | `{ branchId: '019a...', zoneId: null }` |
-
-**Board Tools:**
-| Tool | Description | Example |
-|------|-------------|---------|
-| `agor_boards_get` | Get board metadata/canvas objects; filter to zones or paginated active entities for large boards (`includeArchived: true` opts archived branch entities back in) | `{ boardId: '...', objectTypes: ['zone'], includeEntities: true, entityZoneId: 'zone-review', entitiesLimit: 25 }` |
-| `agor_boards_list` | List all boards | `{}` |
-
-**Task Tools:**
-| Tool | Description | Example |
-|------|-------------|---------|
-| `agor_tasks_list` | List tasks or pending queue in dispatch order | `{ sessionId: '...', status: 'queued' }` |
-| `agor_tasks_cancel_queued` | Atomically remove selected queued tasks | `{ sessionId: '...', taskIds: [...] }` |
-| `agor_tasks_reorder_queued` | Reorder the exact pending queue with stale-order protection | `{ sessionId: '...', expectedTaskIds: [...], taskIds: [...] }` |
-| `agor_tasks_get` | Get specific task | `{ taskId: '...' }` |
-
-**User Tools:**
-| Tool | Description | Example |
-|------|-------------|---------|
-| `agor_users_list` | List users with pagination, compact rows, and optional search | `{ search: 'reed', limit: 10 }` |
-| `agor_users_find` | Find users by name, email, or execution home key before admin updates | `{ email: 'reed@preset.io' }` |
-| `agor_users_get` | Get user by ID | `{ userId: '...' }` |
-| `agor_users_get_current` | Get current authenticated user | `{}` |
-| `agor_users_update_current` | Update own profile | `{ name: 'Alice', emoji: '🚀' }` |
-
-### Example Agent Workflow
-
-```
-User: "What other sessions are running on this board?"
-
-Agent thinking:
-→ agor_sessions_get_current()
-← { session_id: "019a1...", board_id: "019a2...", status: "running" }
-
-→ agor_sessions_list({ boardId: "019a2...", status: "running" })
-← { total: 3, data: [
-    { session_id: "019a3...", agentic_tool: "claude-code", title: "Schema design" },
-    { session_id: "019a4...", agentic_tool: "claude-code", title: "API implementation" }
-  ]}
-
-Agent: "There are 2 other sessions running on this board:
-       - Session 019a3... (Claude Code, schema design)
-       - Session 019a4... (Claude Code, API implementation)"
-```
-
-### Service Layer Integration
-
-MCP tools route through **FeathersJS services** (not direct ORM) for:
-
-- ✅ Consistent business logic
-- ✅ Hook execution (validation, auth)
-- ✅ Future RBAC support
-- ✅ Cross-database compatibility
-
-### Future: Additional Write Operations
-
-Planned tools for expanded orchestration capabilities:
-
-- `agor_sessions_fork` - Fork session at decision point (preserve history)
-- `agor_boards_create` - Create new board for organizing sessions
-- `agor_branches_clone` - Clone an existing branch configuration (branch, metadata) for rapid duplication
-
-**Note:** `agor_sessions_spawn` is already live and enables autonomous multi-agent delegation!
+For tool discovery, parameters, and orchestration examples, use the
+[Agor MCP Server guide](/guide/internal-mcp). MCP operations use the same service
+validation and authorization as other Agor clients.
 
 ## Data Architecture
 
@@ -447,7 +330,7 @@ Three authentication strategies (all require credentials; there is no anonymous 
 2. **JWT** - Token validation for user, service, terminal, and task-executor credentials
 3. **API Key** - Long-lived `agor_sk_…` tokens for scripts and CI
 
-On a fresh install with zero users, the daemon auto-creates an admin user on first start (`ensureFirstRunAdmin`), writing the generated password to `~/.agor/admin-credentials` (mode 0600) and printing it once to the daemon log.
+On a fresh install with zero users, the daemon auto-creates an admin user on first start, writing the generated password to `~/.agor/admin-credentials` (mode 0600) and printing it once to the daemon log.
 
 **Executor-session JWT details:**
 

@@ -6,6 +6,7 @@
  */
 
 import { defineConfig } from 'drizzle-kit';
+import { agorHomePath } from './dist/config/agor-home.js';
 import { expandPath } from './dist/utils/path.js';
 
 export default defineConfig({
@@ -13,6 +14,8 @@ export default defineConfig({
   out: './drizzle/sqlite',
   dialect: 'sqlite',
   dbCredentials: {
-    url: expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db'),
+    url: process.env.AGOR_DB_PATH
+      ? expandPath(process.env.AGOR_DB_PATH)
+      : `file:${agorHomePath('agor.db')}`,
   },
 });

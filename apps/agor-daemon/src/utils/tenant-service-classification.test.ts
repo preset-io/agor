@@ -160,6 +160,6 @@ describe('unclassified service baseline', () => {
     // `scripts/check-multitenancy-boundaries.test.mjs`, against this very file;
     // it is not repeated here because the script is not part of the daemon's
     // TypeScript program. What stays here is the ceiling.
-    expect(UNCLASSIFIED_SERVICE_BASELINE.length).toBeLessThanOrEqual(57);
+    expect(UNCLASSIFIED_SERVICE_BASELINE.length).toBeLessThanOrEqual(56);
   });
 });

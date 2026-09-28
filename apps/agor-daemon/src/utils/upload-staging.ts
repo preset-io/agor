@@ -1,5 +1,10 @@
 import { join } from 'node:path';
-import { type AgorConfig, expandHomePath, getManagedStorageSegments } from '@agor/core/config';
+import {
+  type AgorConfig,
+  expandHomePath,
+  getAgorHome,
+  getManagedStorageSegments,
+} from '@agor/core/config';
 import type { UploadStagingStore } from '@agor/core/types';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
 import { MetadataUploadStagingStore } from './metadata-upload-staging-store.js';
@@ -38,7 +43,7 @@ export function configureUploadStagingStoreFromConfig(
   s3Factory?: S3UploadStagingStoreFactory,
   db?: ConstructorParameters<typeof MetadataUploadStagingStore>[0]
 ): void {
-  const location = config.uploads?.location ?? '~/.agor';
+  const location = config.uploads?.location ?? getAgorHome();
   const maxBytes = (config.uploads?.max_file_size_mb ?? 50) * 1024 * 1024;
   configureUploadLimits(maxBytes);
   const ttlMs = (config.uploads?.max_age_days ?? 30) * 24 * 60 * 60 * 1000;

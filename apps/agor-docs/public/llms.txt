@@ -11,9 +11,6 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 ## Core Documentation
 
 - [Getting Started](https://agor.live/guide/getting-started): Install Agor and follow the onboarding wizard — your first AI teammate takes it from there
-- [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, authentication options, and custom config locations
-- [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, typed TypeScript client, data flow
-- [SDK Comparison](https://agor.live/guide/sdk-comparison): Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations
 
 ## Core Primitives
 
@@ -21,12 +18,14 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 - [Sessions & Trees](https://agor.live/guide/sessions): AI conversations that fork, spawn subsessions, and ask side questions (BTW)
 - [Boards & Zones](https://agor.live/guide/boards): 2D spatial canvases for organizing branches, with templated zone triggers
 
-## Features
+## Using Agor
+
+- [Sharing & Permissions](https://agor.live/guide/permissions): Board and branch roles, ownership transfer, and shared-session boundaries
+- [MCP Catalog & Connections](https://agor.live/guide/mcp-servers): Connect tools, manage personal authorization, and recover connections
 
 - [Features Overview](https://agor.live/guide/features-overview): Map of all major features
 - [Teammates](https://agor.live/guide/teammates): Persistent AI teammates with memory, skills, orchestration, and scheduled heartbeats
 - [Knowledge](https://agor.live/guide/knowledge): Built-in knowledge base for shared context, searchable memory, and a doc graph humans and agents use together
-- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server — anything a user can do, an agent can do too
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Per-prompt token/$ accounting, context viz, tool blocks, queueing, autocomplete, Streamdown
 - [In-Conversation Widgets](https://agor.live/guide/in-conversation-widgets): Inline interactive UI in the transcript that captures user input without it entering the LLM's context
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Live cursors, facepile, spatial comments, attention pulse, shared terminals
@@ -41,13 +40,27 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 - [API Reference](https://agor.live/api-reference): Interactive REST API documentation with Swagger UI
 - [WebSocket Events](https://agor.live/api-reference/websockets): Real-time Socket.io event reference for sessions, tasks, messages, and presence
 - [TypeScript Client](https://agor.live/guide/typescript-client): Drive Agor from TypeScript/JavaScript with @agor-live/client — REST, real-time Socket.IO, and a reactive session API
-- [One-Time Launch Auth](https://agor.live/guide/one-time-launch-auth): Launch-code handoff so trusted external apps can open authenticated Agor sessions
 
-## Deployment
+## Operating Agor
+
+- [Operator Overview](https://agor.live/guide/operating): Installation, security, maintenance, and upgrade entry points
+- [Deployment Configuration](https://agor.live/guide/config-yaml): Deployment-owned settings and telemetry
+- [MCP Administration](https://agor.live/guide/mcp-administration): Tenant security modes, OAuth client recovery, and shared-grant migrations
+- [Daemon High Availability](https://agor.live/guide/daemon-ha): Supported multi-daemon topology and rollout requirements
+- [Multi-Tenant Filesystem](https://agor.live/guide/multi-tenant-filesystem): Tenant storage layout
+- [Tenant Data Portability](https://agor.live/guide/tenant-data-portability): Export, import, and verification
+- [Extended Installation](https://agor.live/guide/extended-install): Docker, source builds, authentication options, and custom config locations
+- [One-Time Launch Auth](https://agor.live/guide/one-time-launch-auth): Launch-code handoff so trusted external apps can open authenticated Agor sessions
 
 - [Execution Isolation](https://agor.live/guide/multiplayer-unix-isolation): RBAC with fail-closed local sandboxing or delegated execution for shared environments
 - [Containerized Execution](https://agor.live/guide/containerized-execution): Running Agor executors in Kubernetes, Docker, or containerized environments
+
+## Developing & Reference
+
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor — development environment setup and codebase structure
+- [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, typed TypeScript client, data flow
+- [SDK Comparison](https://agor.live/guide/sdk-comparison): Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server — anything a user can do, an agent can do too
 
 ## Other
 

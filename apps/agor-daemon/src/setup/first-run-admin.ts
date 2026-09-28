@@ -15,10 +15,9 @@
  */
 
 import { close, open, unlink, write } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { type AgorConfig, RETIRED_CONFIG_KEYS } from '@agor/core/config';
+import { type AgorConfig, getAgorHome, RETIRED_CONFIG_KEYS } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
   ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV,
@@ -39,7 +38,7 @@ const unlinkP = promisify(unlink);
 
 const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials';
 /** Where the generated admin password is persisted on first run. */
-export function getAdminCredentialsPath(baseDir: string = join(homedir(), '.agor')): string {
+export function getAdminCredentialsPath(baseDir: string = getAgorHome()): string {
   return join(baseDir, ADMIN_CREDENTIALS_FILENAME);
 }
 

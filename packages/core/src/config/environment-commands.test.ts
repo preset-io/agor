@@ -13,7 +13,7 @@ const hybrid: AgorConfig = {
     unix_user_mode: 'delegated',
     executor_command_template: 'launcher',
     managed_envs_execution_mode: 'hybrid',
-    environment_command_job_deadline_ms: 365000,
+    environment_command_job_deadline_ms: 485000,
   },
 };
 describe('environment execution capability matrix', () => {
@@ -50,9 +50,10 @@ describe('environment execution capability matrix', () => {
     { unix_user_mode: 'simple' as const },
     { executor_command_template: '' },
     { environment_command_job_deadline_ms: undefined },
-    { environment_command_job_deadline_ms: 366000 },
+    { environment_command_job_deadline_ms: 486000 },
     { environment_command_job_deadline_ms: 1000 },
     { session_token_expiration_ms: 300000 },
+    { session_token_expiration_ms: 544999 },
   ])('rejects missing actual execution/deadline prerequisites: %j', (execution) => {
     expect(() =>
       assertAsyncEnvironmentCommandConfig({
@@ -60,6 +61,14 @@ describe('environment execution capability matrix', () => {
         execution: { ...hybrid.execution, ...execution },
       })
     ).toThrow();
+  });
+  it('accepts a token covering admission, cold startup, execution and reporting', () => {
+    expect(() =>
+      assertAsyncEnvironmentCommandConfig({
+        ...hybrid,
+        execution: { ...hybrid.execution, session_token_expiration_ms: 545000 },
+      })
+    ).not.toThrow();
   });
   it('rejects HA local shell even with a launcher string', () => {
     expect(() =>

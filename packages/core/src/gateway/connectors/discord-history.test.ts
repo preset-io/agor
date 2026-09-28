@@ -1,6 +1,11 @@
+import { RateLimitError } from '@discordjs/rest';
 import { describe, expect, it, vi } from 'vitest';
 import type { DiscordGatewayConfig } from '../../types/gateway';
-import { DiscordHistoryError, fetchDiscordProviderHistory } from './discord-history';
+import {
+  DiscordHistoryError,
+  fetchDiscordChannelHistory,
+  fetchDiscordProviderHistory,
+} from './discord-history';
 
 const threadId = '111111111111111111';
 const lower = 9_000_000_000_000_000_000n;
@@ -142,6 +147,27 @@ describe('Discord bounded history', () => {
     expect(bootstrap.messages[0].providerMessageId).toBe(id(1n));
   });
 
+  it('includes a forwarded message in catch-up with its snapshot text', async () => {
+    const result = await fetchDiscordProviderHistory(
+      pagedRest([
+        [
+          message(id(1n), {
+            content: '',
+            message_snapshots: [{ message: { content: 'forwarded body' } }],
+          }),
+        ],
+      ]),
+      config,
+      {
+        threadId,
+        afterProviderCursor: cursor,
+        throughProviderCursor: live,
+        triggerProviderCursor: live,
+      }
+    );
+    expect(result.messages.map((item) => item.text)).toContain('forwarded body');
+  });
+
   it('fails closed for redacted human content but counts valid contentless rich history', async () => {
     await expect(
       fetchDiscordProviderHistory(pagedRest([[message(id(1n), { content: '' })]]), config, {
@@ -275,5 +301,272 @@ describe('Discord bounded history', () => {
         }
       )
     ).rejects.toMatchObject({ kind: 'request_timeout' });
+  });
+});
+
+describe('Discord channel history for agents', () => {
+  const channelId = '333333333333333333';
+  const at = (offset: number) => id(BigInt(offset));
+
+  function channelMessage(offset: number, patch: Record<string, unknown> = {}) {
+    return { ...message(at(offset), patch), channel_id: channelId };
+  }
+
+  /** Fake Discord REST honoring before/after/limit semantics, newest-first pages. */
+  function channelRest(messages: Array<Record<string, unknown>>) {
+    const sorted = [...messages].sort((a, b) =>
+      BigInt(a.id as string) < BigInt(b.id as string) ? -1 : 1
+    );
+    const get = vi.fn(async (route: string) => {
+      const parsed = new URL(`https://discord.invalid${route}`);
+      expect(parsed.pathname).toBe(`/channels/${channelId}/messages`);
+      const limit = Number(parsed.searchParams.get('limit'));
+      const before = parsed.searchParams.get('before');
+      const after = parsed.searchParams.get('after');
+      if (before && after) throw new Error('fake Discord REST rejected mixed pagination bounds');
+      let page: Array<Record<string, unknown>>;
+      if (after) {
+        page = sorted.filter((item) => BigInt(item.id as string) > BigInt(after)).slice(0, limit);
+      } else {
+        const older = before
+          ? sorted.filter((item) => BigInt(item.id as string) < BigInt(before))
+          : sorted;
+        page = older.slice(Math.max(0, older.length - limit));
+      }
+      return [...page].reverse();
+    });
+    return { get };
+  }
+
+  const range = (from: number, to: number, patch: Record<string, unknown> = {}) =>
+    Array.from({ length: to - from + 1 }, (_, index) => channelMessage(from + index, patch));
+
+  it('returns the newest messages in chronological order with a continuation cursor', async () => {
+    const rest = channelRest(range(1, 120));
+    const result = await fetchDiscordChannelHistory(rest, config, { channelId });
+
+    expect(result.messages.map((item) => item.id)).toEqual(range(71, 120).map((item) => item.id));
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toEqual({ before: at(71) });
+
+    const next = await fetchDiscordChannelHistory(rest, config, {
+      channelId,
+      before: at(71),
+      limit: 200,
+    });
+    expect(next.messages.map((item) => item.id)).toEqual(range(1, 70).map((item) => item.id));
+    expect(next.has_more).toBe(false);
+    expect(next.next_cursor).toBeNull();
+  });
+
+  it('pages forward from an after cursor without gaps', async () => {
+    const rest = channelRest(range(1, 150));
+    const first = await fetchDiscordChannelHistory(rest, config, {
+      channelId,
+      after: at(10),
+      limit: 100,
+    });
+    expect(first.messages[0]?.id).toBe(at(11));
+    expect(first.messages.at(-1)?.id).toBe(at(110));
+    expect(first.has_more).toBe(true);
+    expect(first.next_cursor).toEqual({ after: at(110) });
+
+    const second = await fetchDiscordChannelHistory(rest, config, {
+      channelId,
+      after: at(110),
+      limit: 100,
+    });
+    expect(second.messages.map((item) => item.id)).toEqual(range(111, 150).map((item) => item.id));
+    expect(second.has_more).toBe(false);
+  });
+
+  it('needs one more request to prove an exactly full final page is the end', async () => {
+    const rest = channelRest(range(1, 100));
+    const result = await fetchDiscordChannelHistory(rest, config, { channelId, limit: 200 });
+
+    expect(result.messages).toHaveLength(100);
+    expect(result.has_more).toBe(false);
+    expect(rest.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('omits bots by default and returns a partial page when the page budget runs out', async () => {
+    const messages = [
+      channelMessage(1),
+      ...range(2, 251, { author: { bot: true }, content: 'bot noise' }),
+    ];
+    const rest = channelRest(messages);
+    const limited = { catch_up: { ...config.catch_up!, max_pages: 2 } };
+
+    const result = await fetchDiscordChannelHistory(rest, limited, { channelId });
+    expect(result.messages).toEqual([]);
+    expect(result.has_more).toBe(true);
+    expect(result.next_cursor).toEqual({ before: at(52) });
+    expect(rest.get).toHaveBeenCalledTimes(2);
+
+    const continued = await fetchDiscordChannelHistory(rest, limited, {
+      channelId,
+      before: at(52),
+    });
+    expect(continued.messages.map((item) => item.id)).toEqual([at(1)]);
+    expect(continued.has_more).toBe(false);
+
+    const withBots = await fetchDiscordChannelHistory(rest, config, {
+      channelId,
+      limit: 3,
+      includeBotMessages: true,
+    });
+    expect(withBots.messages.map((item) => item.is_bot)).toEqual([true, true, true]);
+  });
+
+  it('does not report more when only filtered messages remain after the limit', async () => {
+    const rest = channelRest([
+      ...range(1, 2, { author: { bot: true }, content: 'bot noise' }),
+      channelMessage(3),
+      channelMessage(4),
+    ]);
+    const result = await fetchDiscordChannelHistory(rest, config, { channelId, limit: 2 });
+    expect(result.messages.map((item) => item.id)).toEqual([at(3), at(4)]);
+    expect(result.has_more).toBe(false);
+    expect(result.next_cursor).toBeNull();
+  });
+
+  it('stops at the byte budget and truncates only a single oversized message', async () => {
+    const rest = channelRest([
+      channelMessage(1, { content: 'a'.repeat(40) }),
+      channelMessage(2, { content: 'b'.repeat(40) }),
+      channelMessage(3, { content: 'c'.repeat(40) }),
+    ]);
+    const small = { catch_up: { ...config.catch_up!, max_prompt_bytes: 100 } };
+
+    const budgeted = await fetchDiscordChannelHistory(rest, small, { channelId });
+    expect(budgeted.messages.map((item) => item.id)).toEqual([at(2), at(3)]);
+    expect(budgeted.has_more).toBe(true);
+    expect(budgeted.next_cursor).toEqual({ before: at(2) });
+
+    const tiny = { catch_up: { ...config.catch_up!, max_prompt_bytes: 10 } };
+    const truncated = await fetchDiscordChannelHistory(rest, tiny, { channelId });
+    expect(truncated.messages).toHaveLength(1);
+    expect(truncated.messages[0]).toMatchObject({ id: at(3), text: 'c'.repeat(10) });
+    expect(truncated.messages[0]?.text_truncated).toBe(true);
+    expect(truncated.has_more).toBe(true);
+  });
+
+  it('reports attachment metadata and started threads without provider URLs', async () => {
+    const rest = channelRest([
+      channelMessage(1, {
+        attachments: [
+          {
+            id: '444444444444444444',
+            filename: 'plan.png',
+            content_type: 'image/png',
+            size: 1234,
+            url: 'https://cdn.discordapp.com/attachments/signed',
+          },
+        ],
+        thread: { id: '555555555555555555' },
+      }),
+    ]);
+    const result = await fetchDiscordChannelHistory(rest, config, { channelId });
+    expect(result.messages[0]).toMatchObject({
+      attachments: [{ filename: 'plan.png', content_type: 'image/png', size: 1234 }],
+      thread_id: '555555555555555555',
+    });
+    expect(JSON.stringify(result)).not.toContain('cdn.discordapp.com');
+  });
+
+  it('fails closed when Message Content is missing or a page ignores its cursor', async () => {
+    const redacted = channelRest([channelMessage(1, { content: '' })]);
+    await expect(fetchDiscordChannelHistory(redacted, config, { channelId })).rejects.toMatchObject(
+      { kind: 'incomplete_coverage' }
+    );
+
+    const ignoresCursor = { get: vi.fn(async () => [channelMessage(5)]) };
+    await expect(
+      fetchDiscordChannelHistory(ignoresCursor, config, { channelId, before: at(5) })
+    ).rejects.toMatchObject({ kind: 'incomplete_coverage' });
+  });
+
+  it('reads a forward from its snapshot and flags it', async () => {
+    const forward = channelMessage(1, {
+      content: '',
+      message_reference: { type: 1, channel_id: '444444444444444444', message_id: at(0) },
+      message_snapshots: [
+        {
+          message: {
+            content: 'original text',
+            attachments: [{ filename: 'notes.txt', content_type: 'text/plain', size: 3 }],
+          },
+        },
+      ],
+    });
+    const result = await fetchDiscordChannelHistory(channelRest([forward]), config, { channelId });
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        text: 'original text',
+        is_forwarded: true,
+        attachments: [{ filename: 'notes.txt', content_type: 'text/plain', size: 3 }],
+      }),
+    ]);
+
+    const emptyForward = channelMessage(2, {
+      content: '',
+      message_snapshots: [{ message: { content: '' } }],
+    });
+    await expect(
+      fetchDiscordChannelHistory(channelRest([emptyForward]), config, { channelId })
+    ).rejects.toMatchObject({ kind: 'incomplete_coverage' });
+  });
+
+  it('treats a rejected @discordjs/rest RateLimitError as budgeted rate limiting', async () => {
+    const rateLimited = () =>
+      new RateLimitError({
+        timeToReset: 1,
+        limit: 1,
+        method: 'GET',
+        hash: 'hash',
+        url: 'https://discord.com/api/v10/channels/1/messages',
+        route: '/channels/:id/messages',
+        majorParameter: channelId,
+        global: false,
+        retryAfter: 1,
+        sublimitTimeout: 0,
+        scope: 'user',
+      });
+    const pages = [rateLimited(), [channelMessage(1)]];
+    const retried = {
+      get: vi.fn(async () => {
+        const next = pages.shift();
+        if (next instanceof Error) throw next;
+        return next;
+      }),
+    };
+    const result = await fetchDiscordChannelHistory(retried, config, { channelId });
+    expect(result.messages.map((item) => item.id)).toEqual([at(1)]);
+    expect(retried.get).toHaveBeenCalledTimes(2);
+
+    const noRetries = { catch_up: { ...config.catch_up!, rate_limit_max_retries: 0 } };
+    const limited = {
+      get: vi.fn(async () => {
+        throw rateLimited();
+      }),
+    };
+    await expect(
+      fetchDiscordChannelHistory(limited, noRetries, { channelId })
+    ).rejects.toMatchObject({ kind: 'rate_limit' });
+  });
+
+  it('rejects invalid requests before calling Discord', async () => {
+    const rest = channelRest([]);
+    for (const request of [
+      { channelId, before: at(1), after: at(2) },
+      { channelId, limit: 0 },
+      { channelId, limit: 201 },
+      { channelId: 'not-a-snowflake' },
+    ]) {
+      await expect(fetchDiscordChannelHistory(rest, config, request)).rejects.toBeInstanceOf(
+        DiscordHistoryError
+      );
+    }
+    expect(rest.get).not.toHaveBeenCalled();
   });
 });

@@ -293,7 +293,7 @@ visible and tenant-scoped:
 | Thread mode            | Explicit `public_thread_per_summon`; read-only compatibility for current existing-thread encodings may be retained during migration                                       |
 | Catch-up bounds        | Maximum pages, messages, prompt bytes/characters, request time, and bounded rate-limit retry policy; values must be validated and have safe ceilings                      |
 | File capability        | Explicit `files` capability, disabled by default for the inbound core. Attachment staging is not part of this design slice                                                |
-| Agent-tool capability  | Explicit per-channel `agent_tools` allowlist, empty or least-privilege by default; a provider read/write tool must not appear merely because the bot can read Discord     |
+| Agent-tool capability  | Explicit per-channel `agent_tools` toggles, all off by default; a provider tool must not appear merely because the bot can read Discord                                   |
 | Proactive outbound     | `outbound_enabled` and an allowed `channel:<snowflake>` target remain branch-bound and text-only for compatibility; proactive sends do not silently create summon threads |
 
 Configuration changes stop and restart the affected transport with fresh
@@ -468,7 +468,9 @@ This design does not add:
 
 - progress messages, typing, presence, or other live status surfaces;
 - attachment ingestion, attachment persistence, or a durable file mirror;
-- a mapped-thread history RPC or shared conversation-history store for agents;
+- a shared conversation-history store for agents (the gated live-read tool in
+  [Agent channel-history capability](#agent-channel-history-capability) is not
+  a store: it reads Discord on demand and keeps no provider-history mirror);
 - automatic application, guild, role, permission, or channel mutation;
 - repair, replay, or cursor-edit APIs;
 - DMs at launch;
@@ -478,6 +480,96 @@ This design does not add:
 - autonomous Tasks for mentions missed while the listener was unavailable;
 - a Discord transcript in the Agor database, S3, logs, or any other durable
   storage.
+
+## Agent channel-history capability
+
+Channel-history reads are an explicit, per-gateway opt-in, separate from summon
+catch-up. For setup and usage, see the [Message Gateway guide](../../apps/agor-docs/content/guide/message-gateway.mdx#agent-channel-history).
+
+### Accepted behavior
+
+- **SC-01 Off by default.** A Discord row whose `agent_tools` is absent, `[]`,
+  or `{ channel_history: false }` rejects the tool with an error that names the
+  capability and how an admin enables it. No Discord request is made.
+- **SC-02 Enable.** An admin enables the capability with
+  `agent_tools: { channel_history: true }` through Settings → Gateway Channels,
+  `agor_gateway_channels_create`/`_update`, or the `channelHistory` option of
+  `agor_gateway_discord_setup`. The stored value round-trips through edit
+  without being reset.
+- **SC-03 Default target.** Called from a session created by a Discord summon
+  with no explicit channel, the tool reads the allowlisted parent channel of
+  that session's thread.
+- **SC-04 Explicit target.** `discordChannelId` may name an allowlisted parent
+  channel or a public thread whose parent is allowlisted. Any other channel
+  (not allowlisted, private thread, thread under a non-allowlisted parent,
+  another guild, a DM) is refused. A caller without a Discord gateway source
+  must pass `gatewayChannelId` and `discordChannelId`.
+- **SC-05 Result.** The tool returns up to `limit` matching messages (default
+  50, maximum 200) in chronological order. With no cursor or with `before`, it
+  returns the newest matches older than the cursor. With `after`, it returns
+  the oldest matches newer than the cursor. Cursors are exclusive message IDs;
+  `before` and `after` cannot be combined. Bot and system messages are omitted
+  unless `includeBotMessages` is true; `limit` counts returned messages, not
+  scanned ones. Each message carries its ID, ISO time,
+  author ID and display label, text, bot/mention/forwarded flags, attachment metadata
+  (filename, content type, size; no URLs), and the ID of a thread it started,
+  if any. The result carries the untrusted-content warning, the gateway channel
+  and target branch, the read channel ID, `has_more`, and the cursor for the
+  next call in the same direction. A `markdown` format returns the same content
+  as a transcript.
+- **SC-05a Bounded reads.** Each call scans at most the row's
+  `catch_up.max_pages` Discord pages and returns at most
+  `catch_up.max_prompt_bytes` of message text, within the row's timeout and
+  rate-limit budget. When a page or byte budget stops the read before `limit`
+  matches are found, the tool returns what it collected with `has_more: true`
+  and a next cursor from the last scanned message, so the caller can continue.
+  `has_more` is false only when Discord returned a short page in the read
+  direction. If the first matching message alone exceeds the byte budget, its
+  text is cut to the budget and marked truncated so paging still progresses.
+  The timeout and rate-limit budget cover the whole call: parent resolution,
+  access checks, and every page share one deadline and one retry and delay
+  count, whereas catch-up counts rate-limit retries per request. A timeout or
+  exhausted rate-limit budget is an error, not a partial result. The tool
+  never advances a catch-up cursor or admits a Task.
+- **SC-06 Access.** A session may use the tool only through a gateway channel
+  whose target branch is the session's branch, including scheduled or
+  manually created sessions on that branch. A caller with no session context
+  needs admin role or `all` branch permission. A disabled row or a non-Discord
+  gateway channel is refused.
+- **SC-07 Provider failure.** Before reading, the tool confirms that the bot's
+  effective permissions on the target include View Channel and Read Message
+  History, because Discord returns an empty list rather than an error when
+  Read Message History is missing. A missing permission, unknown channel,
+  timeout, or rate limit beyond the row's catch-up budget returns a clear,
+  content-free error; an empty channel with both permissions returns an empty
+  result. If Discord returns empty content for an ordinary user message with no
+  supported rich payload (an attachment, embed, component, sticker, or poll),
+  meaning Message Content is unavailable, the read fails rather
+  than returning silently blank messages. A forwarded message has empty
+  content of its own; it is read from its first `message_snapshots` entry, so
+  its text and attachments are the forwarded message's and it is flagged
+  `is_forwarded`. Only a forward whose snapshot is also empty with no
+  supported rich payload fails.
+
+### Applicable non-negotiable constraints
+
+- **Credential boundary.** The bot token never appears in tool input, output,
+  errors, logs, or session context.
+- **Tenant boundary.** Gateway channel, branch, and session resolution use the
+  caller's trusted tenant scope; another tenant's `gatewayChannelId` is
+  indistinguishable from a missing one.
+- **Read boundary.** Reads are limited to the row's `allowed_channel_ids` and
+  public threads under them (SC-04). A denial does not reveal the
+  target's branch, name, or content.
+- **No provider-history mirror.** The tool writes no Discord messages to its
+  own storage, caches, or logs. Tool results enter the calling session's record
+  like any other tool result, including messages from people who never mentioned
+  the bot.
+- **Untrusted content.** Output is labeled as untrusted external content.
+- **Compatibility.** Existing rows with `agent_tools: []` or no `agent_tools`
+  keep validating and mean all capabilities off. Unknown capability keys,
+  non-boolean values, and non-empty arrays are rejected. Channel-history reads
+  do not change listener, catch-up cursor, or delivery state.
 
 ## Public implementation references
 

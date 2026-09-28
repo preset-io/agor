@@ -11,6 +11,7 @@ export default defineConfig({
     conditions: ['source'],
     alias: {
       '@agor/core/client': path.join(coreSrc, 'client/index.ts'),
+      '@agor/core/config/agor-home': path.join(coreSrc, 'config/agor-home.ts'),
     },
   },
   test: {

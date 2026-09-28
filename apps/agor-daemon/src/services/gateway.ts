@@ -5140,7 +5140,10 @@ export class GatewayService {
     } else {
       // New thread → create session via FeathersJS service
       const sessionsService = this.app.service('sessions') as unknown as {
-        create: (data: Partial<Session>, params?: SessionParams) => Promise<Session>;
+        create: (
+          data: import('@agor/core/types').CreateSessionInput,
+          params?: SessionParams
+        ) => Promise<Session>;
         get: (id: SessionID, params?: Record<string, unknown>) => Promise<Session>;
         setMCPServers: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
       };
@@ -5236,7 +5239,7 @@ export class GatewayService {
         `gateway user ${user.user_id}`
       );
 
-      const sessionInput: Partial<Session> = {
+      const sessionInput: import('@agor/core/types').CreateSessionInput = {
         ...(outboundAdmission?.sessionId
           ? { session_id: outboundAdmission.sessionId }
           : data.idempotency_session_id
@@ -5273,7 +5276,11 @@ export class GatewayService {
       }
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
       try {
-        session = await sessionsService.create(sessionInput, { _agenticConfigResolved: true });
+        // Channel MCP inheritance is applied below, not branch defaults.
+        session = await sessionsService.create(
+          { ...sessionInput, mcpServerIds: [] },
+          { _agenticConfigResolved: true }
+        );
       } catch (error) {
         const stableSessionId = outboundAdmission?.sessionId ?? data.idempotency_session_id;
         if (!stableSessionId || !isDatabaseUniqueConstraintError(error)) {

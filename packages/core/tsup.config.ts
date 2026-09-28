@@ -21,6 +21,7 @@ export default defineConfig({
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
     'codex/credential-file': 'src/codex/credential-file.ts', // Node-only race-safe Codex credential I/O
     'config/index': 'src/config/index.ts',
+    'config/agor-home': 'src/config/agor-home.ts', // Leaf state-home resolver (AGOR_HOME)
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
     'permissions/index': 'src/permissions/index.ts',

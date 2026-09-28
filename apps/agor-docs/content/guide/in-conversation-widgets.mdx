@@ -17,7 +17,7 @@ Widgets are a primitive, and three types ship on it:
 | `oauth`         | `agor_widgets_request_oauth`         | A **Connect** button that runs the real browser sign-in for an MCP server |
 | `gateway_token` | `agor_widgets_request_gateway_token` | An admin-only form for a gateway channel's platform credentials           |
 
-They share one lifecycle, one security contract, and one auto-resume path. Further types (confirmations, MCP-server picker, file picker) would use the same plumbing.
+All three retain their status in the transcript and resume the agent after successful completion.
 
 ---
 
@@ -46,7 +46,7 @@ The agent calls the MCP tool `agor_widgets_request_env_vars`:
 
 The scope (Session / Global) is the user's choice in the form — the agent does not set it.
 
-The tool returns within milliseconds. The agent ends its turn voluntarily. **No HTTP timeout, no executor pause, no daemon-side await.**
+The tool returns the request immediately. The agent can finish its turn while you complete the form; submission queues a follow-up.
 
 ### What you see
 
@@ -162,23 +162,14 @@ Admin-only, and narrower: when you are wiring up a Slack, Discord, GitHub, or Te
 
 ## Security guarantees
 
-The widget primitive has one hard requirement: **submitted values never enter the LLM's context.** Triple-checked:
+**Submitted credentials do not enter the agent’s context.** Enter them in the
+widget, never in chat. The browser submits directly to the daemon; OAuth sign-in
+stores the provider grant through Agor’s callback. Tool responses, transcript
+state, realtime updates, and auto-resume prompts contain sanitized status and
+metadata, not secret values.
 
-| Path                              | Carries values?                                                                                                                      |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Agent → MCP tool call             | **No**, input schema only accepts names + reason + variable_metadata                                                                 |
-| Widget message row                | **No**, the row stores params (names, reason, ...) and lifecycle state                                                               |
-| MCP tool return value             | **No**, returns `{ widget_id, status }` only                                                                                         |
-| Browser → daemon submit           | **Yes**, direct HTTP, authenticated, never traverses the agent                                                                       |
-| Browser → provider (`oauth`)      | **No value ever reaches the browser** — the provider redirects to Agor's own callback, which exchanges the code and stores the grant |
-| Daemon → users service            | **Yes**, encrypted at the boundary, never logged                                                                                     |
-| Auto-resume prompt to agent       | **No**, built from sanitized `result_meta` (just names + scope)                                                                      |
-| `widget:resolved` WebSocket event | **No**, same sanitized payload                                                                                                       |
-| Transcript reload                 | **No**, the row never held values                                                                                                    |
-
-The disclaimer text on the form (_"Type values here, never paste them into chat"_) is there for one specific reason: if the agent goes off-script and asks you to type a value into chat instead of into the widget, **don't**. The widget is the only path that preserves the no-LLM-context guarantee.
-
-For the full security analysis, see `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
+Variable names and scope remain visible in the transcript. If even a variable
+name is sensitive, use Settings instead.
 
 ---
 
@@ -211,5 +202,3 @@ Three reasons:
 1. **Secrets stay out of the model.** The values flow directly to the daemon's encrypted store. The agent never sees them.
 2. **No flow-breaking context switch.** You don't have to leave the conversation to go set up Settings → Env Vars.
 3. **Async-friendly.** The widget is durable. Submit it now, submit it in an hour, submit it tomorrow. The session picks up wherever it was, on whatever device. Slack and gateway sessions work the same way.
-
-This is the v1 instance of a broader primitive. Future widgets (confirmations, OAuth-connect, MCP-server picker) use the same machinery and the same security guarantees.

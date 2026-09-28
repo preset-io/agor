@@ -7,6 +7,7 @@ import {
   createDatabase,
   getDatabaseInstanceDialect,
   pendingOfflineCutoverMigrations,
+  resolveDefaultDatabaseUrl,
 } from '@agor/core/db';
 import { expandPath } from '@agor/core/utils/path';
 import { Command, Flags } from '@oclif/core';
@@ -47,7 +48,10 @@ export default class DbMigrate extends Command {
       // Determine database URL (same logic as daemon)
       // Priority: DATABASE_URL > AGOR_DB_PATH > default SQLite path
       const dbUrl =
-        process.env.DATABASE_URL || expandPath(process.env.AGOR_DB_PATH || 'file:~/.agor/agor.db');
+        process.env.DATABASE_URL ||
+        (process.env.AGOR_DB_PATH
+          ? expandPath(process.env.AGOR_DB_PATH)
+          : resolveDefaultDatabaseUrl());
       this.log(chalk.bold('🔍 Checking database migration status...'));
       this.log('');
 

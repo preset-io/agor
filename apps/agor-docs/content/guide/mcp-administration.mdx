@@ -1,0 +1,150 @@
+---
+title: MCP Administration
+description: Manage tenant MCP security modes, diagnose restricted connections, recover OAuth clients, and plan shared-grant upgrades.
+---
+
+# MCP Administration
+
+For deployment operators and tenant administrators. To connect a tool or manage
+personal authorization, use [MCP Catalog & Connections](/guide/mcp-servers).
+Catalog contribution guidance lives in the [Development Guide](/guide/development#contributing-to-the-mcp-catalog).
+
+## MCP connection security
+
+These controls apply to external [MCP connections](/guide/mcp-servers), not Agor's
+own MCP server. The security mode is a
+**per-tenant setting managed through the authenticated API**, not a `config.yaml`
+key. Settings does not expose these controls.
+
+- `GET /mcp-egress/status`: members can inspect their tenant's mode and visible
+  connection diagnostics.
+- `PATCH /mcp-egress/status`: administrators can change the tenant's mode.
+
+### Choosing a mode
+
+| Mode | Credential handling and restrictions |
+| --- | --- |
+| `off` | Agents connect directly and receive reusable credentials. No gateway admission guarantee. |
+| `observe` | Direct connections remain, with secret-free observation logs. No gateway admission guarantee. |
+| `compatibility` | Eligible connections use task-scoped access through the daemon. Ineligible servers are omitted, not given raw credentials. |
+| `enforced` | Mediates the same supported connections and fails closed on raw-secret projection. Requires attestation that pre-gateway executors were terminated. |
+
+For mediated connections, Agor rechecks task, principal, tenant, attachment,
+branch access, server configuration, referenced environment credentials, and
+OAuth grant authority before each outbound hop, including credential refresh.
+**No request hop is admitted after a relevant mutation commits; a request
+admitted before that commit may complete.** This cannot retract an action already
+observed by the provider. Local cancellation is best-effort, not a fleet-wide
+revocation guarantee. A routine token refresh that preserves the grant's binding
+and generation does not invalidate it; disconnect, grant replacement, deletion
+of its consenting account, or loss of access prevents the next admission.
+
+### Supported connections and limits
+
+- **Bounded Streamable HTTP:** `POST` and `DELETE`, with JSON or JSON-only SSE
+  responses ending within 30 seconds and 16 MiB. GET, other methods, redirects,
+  legacy SSE endpoint handoff, WebSocket, and unbounded/non-JSON streaming are
+  refused.
+- **stdio and `ask` approval:** unavailable in both mediated modes. An `ask`
+  rule reports `approval_not_mediated`; interactive approval remains available
+  only through direct modes. `deny` is checked before mediated dispatch.
+- **Environment templates:** absolute `user.env.KEY` references and registered
+  static helpers, including nested/default fallbacks, are supported. `@root`,
+  `this`, relative paths, blocks, partials, dynamic/unknown helpers, and `lookup`
+  are not. An unsupported template reports `template_configuration`; if it
+  might reference user environment data, all user-defined environment keys are
+  scrubbed from that executor while unrelated servers remain available.
+- **Remote/delegated executors:** no raw-secret fallback. A server is unavailable
+  if the integration cannot consume the mediated HTTP connection.
+- **Capacity:** concurrent reservations/calls are bounded to 32 per process,
+  16 per tenant, 4 per task, and 8 per server. `429 egress_capacity_exceeded`
+  calls for bounded backoff, not an unbounded retry loop. Recovery never replays
+  provider operations. Recovery rate limits are process-local; HA nodes do not
+  share one aggregate budget.
+
+Providers remain credential recipients. Response filtering reduces accidental
+reflection but does not contain a malicious provider or guarantee removal of
+short or low-complexity secrets. See [connection recovery and trust](/guide/mcp-servers#connection-restrictions-and-recovery).
+
+### Diagnostics
+
+The status response includes supported/refused transports, process-local
+in-flight requests and credential reservations, and their oldest age. It lists
+up to 100 visible excluded servers with recovery actions and indicates when the
+list is truncated. Admission availability remains unknown without an independent
+probe. Members can inspect these diagnostics but cannot change the mode.
+
+`GET /health` reports mode, database health, and local active-request counts/age.
+Monitor `mcp_egress.proxy_ms`, stable secret-free rejection reasons in logs, and
+database latency. Local metrics do not establish fleet-wide availability. An
+unavailable durable authority check fails closed; a daemon crash cannot undo
+provider work already dispatched. Provider bodies, URLs, and errors are not logged.
+
+### Enabling mediation and rolling back
+
+1. Start at `off`, then use `observe` to inventory direct clients and transports.
+2. Enable `compatibility` and verify that required servers work and that excluded
+   transports, templates, missing grants, and `ask` rules show actionable status.
+3. Terminate every executor created before mediation, independently verify that
+   termination, then attest and enable `enforced`.
+
+Enabling mediation requires no additional schema migration. Changing an MCP
+connection does not invalidate the provider conversation handle or unrelated tasks.
+
+**Downgrading to `observe` or `off` restores direct credential exposure.** An
+administrator may do so even with local requests active, but must explicitly
+acknowledge raw-secret egress; the change is audited. It is an availability escape
+hatch, not a revocation operation. Pending reconnect notices become next-turn
+notices. Rolling back to a binary without gateway support also restores direct
+credentials even if the saved mode says `enforced`; treat it as the same security
+downgrade, not a way to retain enforcement on an older binary.
+
+## Recovering a provider-deleted OAuth client (administrators)
+
+If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
+
+On **PostgreSQL deployments**, an authenticated administrator in the server's tenant can explicitly reset it through the daemon REST API:
+
+```http
+POST /mcp-servers/oauth-client-registration-reset
+Authorization: Bearer <Agor administrator access token>
+Content-Type: application/json
+
+{"mcp_server_id":"<saved MCP server UUID>"}
+```
+
+Use your existing authenticated API client and the saved server's `mcp_server_id` from **Settings → MCP Servers** or `GET /mcp-servers`; this is an **Agor** credential, not a provider token. Do not paste credentials into chat or logs. A successful response is `{"success":true}`. Missing authentication, non-admin callers, and servers in another tenant are refused.
+
+**Coordinate this reset with affected users:** it advances the server's configuration epoch and atomically retires the current DCR material, pending sign-in attempts, and **all users' Agor-stored OAuth grants for that server**. It does not delete the server or revoke tokens at the provider. Close old sign-in windows, reload any open settings form, then reconnect/sign in again to register a fresh client. Configured/static client IDs must instead be repaired in the server configuration; reset does not replace them. SQLite intentionally uses process-local DCR and rejects this durable reset endpoint.
+
+DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
+
+## Upgrade: shared-grant attribution (`0105`, both databases)
+
+1. Inventory affected shared OAuth servers in each tenant and identify a current
+   administrator in that tenant to own reauthorization.
+2. Quiesce OAuth exchanges and refreshes: stop new sign-ins and OAuth-using work,
+   let in-flight exchanges/refreshes settle, close outstanding sign-in windows,
+   and stop **all** daemons against the database.
+3. Take and verify a database backup, then run `agor db migrate --offline-cutover`
+   with the new binary.
+4. Start only the new binaries and have the identified administrators authorize
+   their shared servers again. Verify fresh authentication status and **Save & Test
+   Connection** for each affected server before resuming OAuth-using work.
+
+The migration preserves per-user grants, including tokens, configuration
+bindings, refresh state and timestamps. It cannot know historical shared
+consenters and does **not** guess from ownership: all historical shared grant
+rows are removed. Server definitions, configured clients and per-user grants
+are retained. This is local retirement, not a provider revocation request.
+
+The migration is transactional; a failed migration rolls back, and a bounded
+PostgreSQL lock timeout can be retried after stopping competing workers. A
+successful migration's deleted shared grants cannot be recovered by a schema
+rollback. Older binaries cannot supply the new required attribution and must
+not run against the upgraded schema. Returning to an older binary requires a
+coordinated offline restoration of a pre-upgrade backup, which also restores
+its old credential-retention behavior and may reintroduce retired credentials.
+Restoring a backup cannot undo provider-side authorization-code consumption or
+token rotation; prefer a forward fix and fresh consent.
+

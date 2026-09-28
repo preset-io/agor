@@ -13,9 +13,8 @@
  *   AGOR_DB_DIALECT - Should be 'postgresql'
  */
 
-import os from 'node:os';
 import path from 'node:path';
-import { getConfigPath } from '@agor/core/config';
+import { agorHomePath, getConfigPath } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
@@ -172,8 +171,8 @@ async function main() {
     },
   ];
 
-  const repoPath = path.join(os.homedir(), '.agor', 'repos', 'agor');
-  const branchesPath = path.join(os.homedir(), '.agor', 'branches');
+  const repoPath = agorHomePath('repos', 'agor');
+  const branchesPath = agorHomePath('branches');
 
   for (const testBranch of testBranches) {
     try {

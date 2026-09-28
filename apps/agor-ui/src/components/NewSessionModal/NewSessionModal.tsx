@@ -8,6 +8,7 @@ import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessi
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
+import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import type { AgenticFormValues } from '../AgenticToolConfigForm';
 import {
@@ -126,7 +127,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
       // overwrite the user's default on a later create.
       saveAsDefault: false,
       // Saved agent config, and MCP inheritance: branch config > user defaults
-      ...getNewSessionDefaultValues(currentUser, primaryTool, branch),
+      ...getNewSessionDefaultValues(currentUser, primaryTool),
     });
   }, [open, form]);
 
@@ -264,6 +265,10 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           currentUser={currentUser}
           client={client}
           branchId={branchId}
+          inheritedMcpServerIds={resolveSessionMcpServerIds(
+            currentUser?.default_mcp_server_ids,
+            branch
+          )}
           validateModelSelection
           enableSaveAsDefault
           onConfigValidityChange={handleConfigValidity}

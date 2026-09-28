@@ -115,6 +115,7 @@ describe('GatewayChannelsTable Discord manual connection test', () => {
       user_id: 'user-1',
       name: 'Ada Lovelace',
       email: 'ada@example.com',
+      role: 'admin',
     } as unknown as User;
     const channel = makeDiscordChannel();
 

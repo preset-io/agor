@@ -567,60 +567,28 @@ daemon:
   public_url: http://agor-daemon.agor.svc.cluster.local:3030
 ```
 
-At startup, the daemon calls `configureDaemonUrl()` which sets this URL globally. All subsequent executor payloads automatically include the correct `daemonUrl`.
+The daemon includes the configured `daemonUrl` in executor payloads.
 
 ---
 
 ## High Availability
 
-### Current status
+<a id="current-status" />
+<a id="shared-filesystem-simplifies-ha" />
+<a id="what-still-needs-redis" />
 
-Agor has an explicit constrained active-active daemon mode using PostgreSQL, Redis realtime fanout,
-and sticky Engine.IO ingress. See [Daemon high availability](/guide/daemon-ha) for the supported
-surface and runnable Compose smoke topology.
+Containerized executors do not require multiple daemon replicas. For active-active
+daemons, follow [Daemon High Availability](/guide/daemon-ha) for configuration,
+support limits, and rollout instructions. PostgreSQL, Redis realtime fanout, and
+sticky Engine.IO ingress are required; SQLite on shared storage is not supported.
+Redis distributes notifications, not durable task locks or tenant authority.
 
-### Shared Filesystem Simplifies HA
-
-With shared storage (EFS/NFS) for both `AGOR_DATA_HOME` and `/home`, the daemon becomes largely stateless:
-
-- **Executors**: Make fresh connections to daemon - no sticky sessions needed
-- **Database**: SQLite on shared storage, or use Turso/LibSQL for distributed access
-- **Filesystem state**: Consistent across all replicas via shared mount
-
-### What Still Needs Redis
-
-FeathersJS uses Socket.io for real-time UI updates. With multiple daemon replicas:
-
-- **UI WebSocket connections**: Long-lived, need event broadcasting across replicas
-- **Redis adapter**: Required so events from one replica reach all connected clients
-
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   Browser   │     │   Browser   │     │   Browser   │
-└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
-       │                   │                   │
-       ▼                   ▼                   ▼
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Daemon-1   │◄───►│    Redis    │◄───►│  Daemon-2   │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                                       │
-       └──────────────┬────────────────────────┘
-                      ▼
-              ┌─────────────┐
-              │  EFS / NFS  │  (shared storage)
-              └─────────────┘
-```
-
-The external Cloud shape does not mount tenant workspaces into daemon pods. It declares
-`persistent-per-user` home and `persistent-per-branch` workspace guarantees, uses clone-only branch
-storage when the base repository is unavailable, and keeps Engine.IO affinity at ingress.
-
-**References:**
-
-- [FeathersJS Scaling Guide](https://feathersjs.com/guides/advanced/scaling)
-- [Socket.io Redis Adapter](https://socket.io/docs/v4/redis-adapter/)
-
-For most deployments, a single daemon replica is sufficient. Scale horizontally by running multiple executor pods instead.
+In `shared-local`, workspace files must be consistent across replicas. External
+execution instead requires persistent per-user homes and per-branch workspaces;
+daemon pods do not need tenant workspace mounts. If the base repository is
+unavailable, use clone-only branch storage. See the
+[executor storage contract](/guide/daemon-ha#executor-storage-contract) before
+choosing a topology.
 
 ---
 

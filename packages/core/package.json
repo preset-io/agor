@@ -94,6 +94,12 @@
       "import": "./dist/config/index.js",
       "require": "./dist/config/index.cjs"
     },
+    "./config/agor-home": {
+      "source": "./src/config/agor-home.ts",
+      "types": "./dist/config/agor-home.d.ts",
+      "import": "./dist/config/agor-home.js",
+      "require": "./dist/config/agor-home.cjs"
+    },
     "./config/node": {
       "source": "./src/config/agor-yml.ts",
       "types": "./dist/config/agor-yml.d.ts",

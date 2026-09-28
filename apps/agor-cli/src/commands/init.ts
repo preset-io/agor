@@ -16,6 +16,7 @@ import {
   assertSecurePassword,
   createInitialConfig,
   ensureAgorHome,
+  getAgorHome,
   getConfigPath,
   getDaemonUrl,
   getDefaultConfig,
@@ -378,7 +379,7 @@ export default class Init extends Command {
     this.log(`${chalk.green('✓')} Git ${git.version} is executable (${git.binary})`);
 
     // Determine base directory early
-    const baseDir = join(homedir(), '.agor');
+    const baseDir = getAgorHome();
     if (await this.pathExists(join(baseDir, 'config.yaml'))) {
       await assertLocalContextUnlockedWhenIdentified(await loadConfig());
     }

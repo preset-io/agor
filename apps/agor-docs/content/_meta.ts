@@ -40,6 +40,17 @@ export default {
       layout: 'full',
     },
   },
+  // Contact / "Talk to us" landing page. A standalone destination that renders
+  // the same HubSpot scheduler as "Book a demo" inline; hidden from the sidebar
+  // and rendered full-bleed like the homepage via `theme.layout: 'full'`.
+  contact: {
+    title: 'Contact',
+    type: 'page',
+    display: 'hidden',
+    theme: {
+      layout: 'full',
+    },
+  },
   // Navbar links are separate from the content folders so Docs and Blog can
   // also remain in the shared root sidebar on every content surface.
   'docs-navbar': { title: 'Docs', type: 'page', href: '/guide' },

@@ -1,6 +1,7 @@
 # Operator configuration (`config.yaml`)
 
-Agor reads `~/.agor/config.yaml` as **deployment-owned, immutable runtime input**. `agor init`
+Agor reads `~/.agor/config.yaml` as **deployment-owned, immutable runtime input**. Set
+[`AGOR_HOME`](#the-agor-home-agor_home) to relocate that directory. `agor init`
 creates it once with mode `0600`. After initialization Agor does not silently rewrite it, preserving
 comments, formatting, key order, YAML anchors, read-only ConfigMaps, and infrastructure-as-code
 ownership.
@@ -146,9 +147,42 @@ change it; the packaged daemon refuses to start while both policy sources are ab
 is never exposed for mutation through API, UI, or MCP. Headless deployments should use an explicit
 YAML list, including `[]` when a tool-free deployment is intentional.
 
+## The Agor home (`AGOR_HOME`)
+
+Agor keeps its state in one directory: `config.yaml`, the standalone SQLite database,
+`admin-credentials`, logs, the managed agentic-tool tree, and runtime files. That directory
+defaults to `~/.agor` and is relocated wholesale by the `AGOR_HOME` environment variable:
+
+```bash
+AGOR_HOME=/srv/agor-staging agor daemon start
+```
+
+The value names the state directory itself, not its parent: `AGOR_HOME=/app/agor`
+uses `/app/agor/config.yaml`, not `/app/agor/.agor/config.yaml`.
+In sandbox execution, this state root is hidden independently of the git-data root,
+including when it is outside the operating-system home or reached through a symlink.
+Only explicitly authorized runtime paths, such as the read-only managed tool tree,
+are re-exposed.
+
+Resolution is `AGOR_HOME`, else `<home directory>/.agor`. A value may be absolute or start with
+`~`, and is resolved to an absolute path; a relative value resolves against the process working
+directory. A value that is empty or only whitespace is treated as **unset** rather than as `/`, so
+an `AGOR_HOME=` line in an env file cannot redirect Agor's state to the filesystem root.
+
+Every Agor-owned path derives from this root, so they always move together — there is no
+configuration in which `config.yaml` is read from one home and the database from another. Set
+`AGOR_HOME` to run a second, throwaway daemon without it reading or writing the state of the
+deployment already installed under `~/.agor`.
+
+`AGOR_DATA_HOME` (or `paths.data_home`) still separates the *git data* — `repos/` and `worktrees/` —
+from the daemon's operating files, and defaults to `AGOR_HOME`. `AGOR_DB_PATH`, `DATABASE_URL`, and
+`database.sqlite.path` still override the database location specifically; a `~` in any of those is
+the operating-system home, not the Agor home.
+
 ## Environment precedence
 
-Supported environment overrides still win over YAML. Important examples are `PORT`,
+Supported environment overrides still win over YAML. Important examples are `AGOR_HOME`,
+`AGOR_DATA_HOME`, `PORT`,
 `DAEMON_HOST`, `DAEMON_URL`, `AGOR_JWT_SECRET`, `AGOR_MASTER_SECRET`, `AGOR_TELEMETRY`,
 `AGOR_UNIX_USER_MODE`, `AGOR_SANDBOX_HOME_MODE`, and
 `AGOR_SANDBOX_SDK_HOME_MODE`. They are
@@ -317,6 +351,17 @@ stamps the stable operational defaults needed for a working deployment, but deli
 materialize every optional long-tail field. Leaving those absent preserves their documented
 default-following semantics across upgrades.
 
+<a id="choosing-a-mode" />
+<a id="supported-connections-and-limits" />
+<a id="diagnostics" />
+<a id="enabling-mediation-and-rolling-back" />
+
+## MCP connection security
+
+MCP security modes are **tenant-owned API settings**, not `config.yaml` keys.
+See [MCP Administration](/guide/mcp-administration#mcp-connection-security) for
+mode selection, diagnostics, supported connections, and safe rollout or rollback.
+
 ## Operator-configured analytics
 
 Analytics is disabled by default. It sends curated analytics events to the configured
@@ -401,9 +446,9 @@ Rollout checklist (operator work, not performed automatically):
 - Keep historical tables. A rename does not consolidate them; if needed, separately
   authorize a historical UNION/view with aligned columns/types and deduplication.
   See Segment's [historical data FAQ](https://www.twilio.com/docs/segment/connections/storage/warehouses/faq).
-- Validate destination delivery and schema after the separately authorized rollout.
-  No warehouse migration, backfill, live destination configuration, or dashboard edit
-  is included in this change.
+- Validate destination delivery and schema after rollout. Agor does not migrate
+  warehouse data, backfill historical events, configure live destinations, or update
+  dashboards for you.
 
 These transports use best-effort in-memory batches, not a persisted event outbox;
 failed HTTP batches are not retried. This rename does not change those guarantees

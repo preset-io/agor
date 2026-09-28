@@ -11,6 +11,7 @@ import { Bubble } from '@ant-design/x';
 import { Button, theme } from 'antd';
 import type React from 'react';
 import { useId, useState } from 'react';
+import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
 import { AgorAvatar } from '../AgorAvatar';
 import { ToolIcon } from '../ToolIcon';
 
@@ -41,7 +42,7 @@ export const SystemMessage: React.FC<SystemMessageProps> = ({
   const resolvedAvatar =
     avatar ??
     (agenticTool ? (
-      <ToolIcon tool={agenticTool} size={32} />
+      <ToolIcon tool={agenticTool} size={IDENTITY_AVATAR_SIZE} />
     ) : (
       <AgorAvatar icon={<RobotOutlined />} style={{ backgroundColor: token.colorBgContainer }} />
     ));

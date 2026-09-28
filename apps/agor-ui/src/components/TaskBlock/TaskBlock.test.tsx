@@ -9,9 +9,10 @@
  */
 
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
-import type { Message, Task } from '@agor-live/client';
+import type { Message, Task, WidgetType } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { registerWidgetComponent } from '../MessageBlock/WidgetBlock';
 
 import {
   type Block,
@@ -86,6 +87,57 @@ function blockId(block: Block): string {
 }
 
 describe('groupMessagesIntoBlocks — widget_request ordering', () => {
+  it('renders the widget after the answer, footer, and outcome', () => {
+    registerWidgetComponent('review_widget' as WidgetType, () => (
+      <button type="button">Complete widget</button>
+    ));
+    const task = {
+      task_id: 'task-1',
+      session_id: 'sess-1',
+      created_by: '',
+      full_prompt: '',
+      status: 'completed',
+      created_at: '2026-07-01T12:00:00.000Z',
+      git_state: { ref_at_start: 'main', sha_at_start: 'synthetic' },
+      computed_context_window: 22,
+      normalized_sdk_response: {
+        contextWindowLimit: 100,
+        tokenUsage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+      },
+    } as unknown as Task;
+    const widgetRequestMessage = {
+      ...widgetRequest(1, 'w1'),
+      metadata: {
+        widget: {
+          widget_id: 'w1',
+          widget_type: 'review_widget',
+          schema_version: 1,
+          params: {},
+          status: 'pending',
+          requested_at: task.created_at,
+        },
+      },
+    } as unknown as Message;
+    const { container } = render(
+      <TaskBlock
+        task={task}
+        isLatestTask
+        taskMessages={[
+          userMessage(0, 'u0'),
+          widgetRequestMessage,
+          assistantText(2, 'a2', 'Closing text'),
+        ]}
+        taskMessagesLoaded
+        onLoadTaskMessages={vi.fn()}
+      />
+    );
+    const answer = screen.getByText('Closing text');
+    const footer = screen.getByTestId('turn-usage-label');
+    const widget = screen.getByRole('button', { name: 'Complete widget' });
+    expect(answer.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(footer.compareDocumentPosition(widget) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.lastElementChild?.lastElementChild).toContainElement(widget);
+  });
   it('moves a widget_request block to the end even when its index sorts mid-turn', () => {
     // Widget (index 1) fired BEFORE the agent's closing text (index 2).
     const messages = [

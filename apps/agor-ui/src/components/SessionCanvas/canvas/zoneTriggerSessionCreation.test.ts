@@ -29,3 +29,16 @@ describe('createZoneTriggerSession', () => {
     );
   });
 });
+
+it.each([[[]], [undefined]])(
+  'preserves an empty or omitted MCP override %j',
+  async (mcpServerIds) => {
+    const create = vi.fn(async () => ({ session_id: 'session-1' }) as Session);
+    await createZoneTriggerSession({ service: () => ({ create }) } as unknown as AgorClient, {
+      branchId: 'branch-1',
+      zoneName: 'Review',
+      mcpServerIds,
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ mcpServerIds }));
+  }
+);

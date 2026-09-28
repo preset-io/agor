@@ -1487,6 +1487,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             sessionId?: string;
             queued?: boolean;
             queue_position?: number;
+            mcp_defaults_skipped?: number;
             note: string;
           }
         | undefined;
@@ -1577,10 +1578,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           });
           const agenticTool = newSession.agentic_tool;
           console.log(`✅ Auto-created session ${shortId(newSession.session_id)} (${agenticTool})`);
+          const mcpWarningNote = newSession.mcp_defaults_skipped
+            ? ` Warning: ${newSession.mcp_defaults_skipped} unavailable default MCP server(s) were skipped. Review branch MCP Servers or your user defaults.`
+            : '';
           promptResult = {
             taskId: task.task_id,
             sessionId: newSession.session_id,
-            note: `always_new trigger: created session ${shortId(newSession.session_id)} (${agenticTool}) and sent prompt`,
+            note: `always_new trigger: created session ${shortId(newSession.session_id)} (${agenticTool}) and sent prompt${mcpWarningNote}`,
+            ...(newSession.mcp_defaults_skipped && {
+              mcp_defaults_skipped: newSession.mcp_defaults_skipped,
+            }),
           };
           console.log(`✅ Zone trigger executed: task ${shortId(task.task_id)}`);
         } catch (error) {

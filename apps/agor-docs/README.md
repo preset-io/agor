@@ -59,18 +59,26 @@ required by their destination.
 
 ## Structure
 
+```text
+content/              # Published MDX, including unlisted pages
+├── guide/            # Getting started, using, operating, developing/reference
+├── blog/             # Historical posts and case studies
+└── api-reference/    # Public API documentation
+app/                  # App Router routes and static page enumeration
+lib/docsNavigation.ts # Shared guide navigation, imported by guide/_meta.ts
+public/               # Static assets, OpenAPI schema, and LLM documentation indexes
 ```
-pages/
-├── index.mdx          # Landing page (symlink to README.md)
-├── guide/             # User guides
-│   ├── getting-started.mdx
-│   ├── docker.mdx
-│   └── development.mdx
-├── cli/               # CLI reference (auto-generated in Phase 2)
-│   └── index.mdx
-└── api/               # API reference (auto-generated in Phase 2)
-    └── index.mdx
-```
+
+The catch-all route recursively publishes MDX from `content/`; hiding a page in
+navigation does not unpublish it. The homepage has its own route.
+
+Organize guide navigation by reader task: **Getting started**, **Using Agor**,
+**Operating Agor**, and **Developing & Reference**. Keep everyday workflow and
+permission guidance accessible to users; put deployment configuration, migrations,
+and administrative recovery under Operating Agor. Contributor internals belong
+in development/reference, not feature introductions. Prefer stable URLs and
+leave a linked compatibility heading or anchor when moving an existing section.
+Update `public/llms.txt` and `public/llms-full.txt` when adding reader entry points.
 
 ## Page metadata and social previews
 
@@ -96,51 +104,32 @@ them into absolute `og:image` and `twitter:image` URLs using `NEXT_PUBLIC_SITE_U
 `/screenshots/board-hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
 dimensions.
 
-## Phase 1 (Complete)
+## Validate and build
 
-- ✅ Nextra setup with dark mode
-- ✅ Agor brand colors (#2e9a92 teal)
-- ✅ Landing page from README.md
-- ✅ Basic navigation structure
-- ✅ Guide pages (Getting Started, Docker, Development)
-- ✅ Auto-generated CLI docs from oclif
-- ✅ Auto-generated API docs from FeathersJS services
-
-## Phase 2 (Next)
-
-- [ ] Add more guide content
-- [ ] Improve CLI doc parsing
-- [ ] Add code examples to API docs
-- [ ] Deploy to docs.agor.dev
-
-## Generate Documentation
-
-Auto-generate CLI and API docs:
+From the repository root:
 
 ```bash
-# From root
-pnpm docs:generate
-
-# Or from docs directory
-pnpm generate        # Generate both CLI and API docs
-pnpm generate:cli    # Generate CLI docs only
-pnpm generate:api    # Generate API docs only
+pnpm --filter @agor/docs typecheck
+pnpm --filter @agor/docs validate:brand-assets
+pnpm --filter @agor/docs validate:social-metadata
+pnpm docs:build
 ```
 
-## Build
+The build compiles MDX, exports the site to `apps/agor-docs/out/`, and generates
+sitemap and Pagefind search assets. It does not regenerate API or CLI documentation.
+The legacy root `docs:generate` alias has no matching docs-package script.
 
-```bash
-pnpm docs:build      # Auto-generates docs then builds
-```
-
-Output: `.next/` directory
+For an analytics export check, set a test `NEXT_PUBLIC_GA_ID` during both the build
+and `pnpm --filter @agor/docs validate:analytics`. Do not send test traffic to the
+production analytics property. Check internal links and fragments in the exported
+HTML, especially when moving headings or changing navigation.
 
 ## Deployment
 
 Docs are automatically deployed to GitHub Pages on every push to `main` that changes:
 
 - `apps/agor-docs/**`
-- `apps/agor-cli/src/commands/**` (CLI docs are auto-generated)
+- `apps/agor-cli/src/commands/**` (also triggers the workflow)
 
 **GitHub Pages Setup (one-time):**
 

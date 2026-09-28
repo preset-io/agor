@@ -43,7 +43,7 @@ function clientFor(
     create: (data) => service.create(data, { user }),
   };
 }
-describe.skipIf(process.platform !== 'linux')('Knowledge CLI workflow', () => {
+describe.skipIf(process.platform === 'win32')('Knowledge CLI workflow', () => {
   dbTest(
     'plans without writes, exports hashes, resumes without body fetch, imports privately and detects edits',
     async ({ db }) => {
@@ -190,7 +190,7 @@ describe.skipIf(process.platform !== 'linux')('Knowledge CLI workflow', () => {
   });
 });
 
-describe.skipIf(process.platform !== 'linux')('Knowledge interrupted transfer', () => {
+describe.skipIf(process.platform === 'win32')('Knowledge interrupted transfer', () => {
   dbTest(
     'recovers a committed create whose acknowledgement was lost, and rejects corrupt bundles before writing',
     async ({ db }) => {

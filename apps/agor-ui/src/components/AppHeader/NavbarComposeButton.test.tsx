@@ -4,7 +4,7 @@ import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionCreationResult } from '../../domain/sessionCreation';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
 const goToSession = vi.hoisted(() => vi.fn());
@@ -184,8 +184,8 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
 
 const primaryBranch = makeBranch();
 const pickedBranch = makeBranch({
-  branch_id: 'branch-picked',
-  board_id: 'board-primary',
+  branch_id: 'branch-picked' as Branch['branch_id'],
+  board_id: 'board-primary' as Branch['board_id'],
   mcp_server_ids: ['picked-mcp'],
 });
 
@@ -203,13 +203,14 @@ function renderCompose(opts: {
   authenticationGeneration?: number;
   isAuthenticationGenerationCurrent?: (generation: number) => boolean;
   disabled?: boolean;
-  onCreateSession?: (config: unknown, boardId: string) => Promise<SessionCreationResult | null>;
+  onCreateSession?: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<SessionCreationResult | null>;
 }) {
-  const onCreateSession =
-    opts.onCreateSession ??
-    vi.fn().mockResolvedValue({
-      sessionId: 'session-new',
-    });
+  const onCreateSession = vi.fn(
+    opts.onCreateSession ?? (async () => ({ sessionId: 'session-new' }))
+  );
   const client = makeClient(opts.primary);
   const renderElement = (renderOpts: typeof opts) => (
     <MemoryRouter initialEntries={[renderOpts.pathname ?? '/b/x/']}>
@@ -220,7 +221,7 @@ function renderCompose(opts: {
           authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
           isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
           currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
-          onCreateSession={onCreateSession as never}
+          onCreateSession={onCreateSession}
           disabled={renderOpts.disabled}
         />
       </AntApp>
@@ -373,7 +374,7 @@ describe('NavbarComposeButton', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
-    expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['branch-mcp'] });
+    expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: undefined });
   });
 
   it('gives both send buttons an explanatory tooltip', async () => {
@@ -545,7 +546,7 @@ describe('NavbarComposeButton', () => {
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({
       branch_id: 'branch-picked',
       initialPrompt: 'keep me',
-      mcpServerIds: ['picked-mcp'],
+      mcpServerIds: undefined,
     });
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
   });

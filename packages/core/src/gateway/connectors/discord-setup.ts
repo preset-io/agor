@@ -112,6 +112,8 @@ export interface DiscordSetupDecisions {
   userMap?: Record<string, string>;
   /** Opt in to bounded PNG/JPEG ingestion for live Discord messages. */
   files?: boolean;
+  /** Opt in to agent reads of allowlisted channel history. */
+  channelHistory?: boolean;
   outboundEnabled?: boolean;
   defaultOutboundTarget?: string | null;
   catchUp?: Record<string, unknown>;
@@ -176,6 +178,7 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     align_discord_users: decisions.alignUsers ?? false,
     ...(decisions.userMap ? { user_map: decisions.userMap } : {}),
     files: decisions.files ?? false,
+    agent_tools: { channel_history: decisions.channelHistory ?? false },
     outbound_enabled: decisions.outboundEnabled ?? false,
     default_outbound_target: decisions.defaultOutboundTarget ?? null,
     catch_up: { ...DEFAULT_DISCORD_CATCH_UP, ...(decisions.catchUp ?? {}) },

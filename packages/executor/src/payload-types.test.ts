@@ -343,7 +343,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
           claimDeadline: '2026-01-01T00:00:00.000Z',
           commandDeadline: '2026-01-01T00:05:00.000Z',
           resultDeadline: '2026-01-01T00:06:00.000Z',
-          externalJobDeadlineMs: 365000,
+          externalJobDeadlineMs: 485000,
         },
       },
     };
@@ -368,7 +368,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
             claimDeadline: '2026-01-01T00:00:00.000Z',
             commandDeadline: '2026-01-01T00:05:00.000Z',
             resultDeadline: '2026-01-01T00:06:00.000Z',
-            externalJobDeadlineMs: 365000,
+            externalJobDeadlineMs: 485000,
           },
         },
       })

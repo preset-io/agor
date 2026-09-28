@@ -51,7 +51,7 @@ The external launcher is responsible for identity, credentials, storage, contain
 
 The launcher command receives a curated minimal process environment. The authenticated executor payload (including the task's resolved user environment) is delivered over stdin, not argv. Give the launcher its own workload identity in the delegated substrate; do not depend on inheriting daemon database, JWT, master-key, or provider credentials.
 
-> `strict` and `insulated` were removed in 0.25. Upgrade through the latest 0.24.x release and migrate to `sandbox` before upgrading a legacy installation.
+> `strict` and `insulated` were removed in 0.25. Use the documented [offline 0.24.7 → 0.25.1 cutover](/guide/multiplayer-unix-isolation#migrating-from-024) for legacy installations; there is no published 0.24 bridge release.
 
 ## Board and branch permissions (RBAC)
 

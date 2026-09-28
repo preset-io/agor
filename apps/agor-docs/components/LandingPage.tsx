@@ -799,6 +799,13 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
               >
                 {variant ? variant.ctaLabel : 'Sign up for Agor Cloud'}
               </button>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                onClick={() => setIsDemoFormOpen(true)}
+              >
+                Book a demo
+              </button>
               <Link href="/guide/getting-started" className={styles.secondaryButton}>
                 Install locally
               </Link>

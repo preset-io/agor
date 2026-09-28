@@ -21,6 +21,7 @@ import {
   BRANCH_CLEANUP_COMMAND,
   BRANCH_CLEANUP_COMMAND_MAX_LENGTH,
   BRANCH_DELETION_COMMAND,
+  ENVIRONMENT_COMMAND_BUDGET as ENV_BUDGET,
 } from '@agor/core/types';
 import { z } from 'zod';
 
@@ -682,7 +683,11 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
         claimDeadline: z.string().datetime(),
         commandDeadline: z.string().datetime(),
         resultDeadline: z.string().datetime(),
-        externalJobDeadlineMs: z.number().int().min(305000).max(365000),
+        externalJobDeadlineMs: z
+          .number()
+          .int()
+          .min(ENV_BUDGET.commandMs + ENV_BUDGET.cleanupMs)
+          .max(ENV_BUDGET.claimMs + ENV_BUDGET.commandMs + ENV_BUDGET.cleanupMs),
       }),
 
       /** Shell start command. Required for start. */

@@ -3932,7 +3932,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  // Long route: `.agor.yml` is read by an executor, so tenant identity is armed
+  // without a request-long transaction and the service opens a short unit per
+  // database access (see ReposService.importFromAgorYml).
+  registerLongAuthenticatedRoute(
     app,
     '/repos/:id/import-agor-yml',
     {

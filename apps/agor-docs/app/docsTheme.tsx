@@ -1,6 +1,7 @@
 import { DiscordIcon } from 'nextra/icons';
 import { Footer, Navbar } from 'nextra-theme-docs';
 import { NavbarCloudCTA } from '../components/NavbarCloudCTA';
+import { NavbarTalkToUs } from '../components/NavbarTalkToUs';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 
@@ -34,6 +35,7 @@ export const navbar = (
     chatIcon={<DiscordIcon width="24" role="img" aria-label="Discord" />}
   >
     <NavbarCloudCTA />
+    <NavbarTalkToUs />
   </Navbar>
 );
 

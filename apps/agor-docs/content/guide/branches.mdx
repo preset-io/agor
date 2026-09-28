@@ -345,8 +345,8 @@ A new operation or status change shows a fresh notification.
 `last_cleanup_succeeded_at` records command success, not bytes reclaimed.
 
 Stop environments and finish/cancel outstanding tasks before requesting maintenance.
-One durable Branch-row claim excludes competing work; duplicate active requests
-are rejected, not dispatched again. Built-in cleanup is bounded to five minutes;
+Only one maintenance operation can run for a branch at a time; duplicate active
+requests are rejected, not dispatched again. Built-in cleanup is bounded to five minutes;
 stdout/stderr are drained without retaining file listings or secrets. Unknown or
 lost results stay fenced for operator reconciliation and are never automatically
 retried. After six minutes without a final report, reads display an unknown outcome.
@@ -357,7 +357,7 @@ verified success. Preserve and explicit workspace deletion retain conversation d
 and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
 Permanent deletion remains the separate full-resource workflow.
 
-V1 checks known task, upload and environment activity. Terminal closure is best-effort;
+Agor checks known task, upload and environment activity. Terminal closure is best-effort;
 detached/unmanaged processes are **not proven stopped**. Archive Clean and explicit
 workspace removal reject delegated/external executors when they would change files.
 Branch `updated_at` is metadata activity, not evidence of filesystem inactivity.
@@ -498,14 +498,14 @@ branch storage**, retain caller-private credentials/homes, and provide suitable
 filesystem ownership/access. Agor does not chown or copy creator credentials. If the
 substrate only exposes creator-owned storage, coordinate its access policy before
 recovery; fail closed rather than silently creating a different caller's workspace.
-Local handler/routing tests do not certify an operator's external substrate.
+Verify these requirements against your external substrate before recovery.
 
 Primary protection also remains for standalone Clean. The canonical `localHome`
 marker identifies modern personal homes, but its absence (or a Git repo backing a
 teammate) does not prove legacy ignored files are disposable build output. The
 current policy cannot safely make that distinction: even `git clean -fdX` can remove
-ignored personal databases and memory. No new protection flag or inferred path/type
-heuristic is added. Non-primary repo branches retain normal policy-controlled Clean;
+ignored personal databases and memory. Non-primary repo branches retain normal
+policy-controlled Clean;
 for a primary teammate, keep it active and use a separately reviewed, target-specific
 build-output cleanup rather than retiring it just to reclaim build space. Retirement
 never runs Clean and never silently disables or replaces a primary.

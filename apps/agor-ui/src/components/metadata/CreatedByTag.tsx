@@ -1,4 +1,5 @@
 import type { User } from '@agor-live/client';
+import type { CSSProperties } from 'react';
 import { Tag } from '../Tag';
 import { UserAvatar } from './UserAvatar';
 
@@ -7,6 +8,8 @@ export interface CreatedByTagProps {
   currentUserId?: string; // logged-in user's ID
   userById: Map<string, User>; // all users for lookup
   prefix?: string; // e.g., "Created by" or "Prompted by"
+  /** Merged over the tag's own styling; used where the tag renders chrome-free. */
+  style?: CSSProperties;
 }
 
 /**
@@ -20,6 +23,7 @@ export const CreatedByTag: React.FC<CreatedByTagProps> = ({
   currentUserId,
   userById,
   prefix = 'Created by',
+  style,
 }) => {
   // Don't show tag if current user created it
   if (createdBy === currentUserId) {
@@ -32,14 +36,14 @@ export const CreatedByTag: React.FC<CreatedByTagProps> = ({
   // If user not found or is anonymous, show minimal tag
   if (!user || createdBy === 'anonymous') {
     return (
-      <Tag color="default" style={{ fontSize: 11 }}>
+      <Tag color="default" style={{ fontSize: 11, ...style }}>
         {createdBy === 'anonymous' ? 'Anonymous' : 'Unknown User'}
       </Tag>
     );
   }
 
   return (
-    <Tag color="blue" style={{ fontSize: 11 }}>
+    <Tag color="blue" style={{ fontSize: 11, ...style }}>
       <UserAvatar user={user} showName={true} size="small" />
     </Tag>
   );

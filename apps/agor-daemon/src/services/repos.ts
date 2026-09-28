@@ -45,6 +45,7 @@ import {
   Conflict,
   Forbidden,
   NotAuthenticated,
+  NotFound,
 } from '@agor/core/feathers';
 import { redactGitUrlCredentials, stripGitUrlCredentials } from '@agor/core/git/pure';
 import type {
@@ -73,6 +74,7 @@ import { DrizzleService } from '../adapters/drizzle';
 import type { BranchesServiceImpl } from '../declarations.js';
 import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
+import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -1529,27 +1531,45 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       | UserID
       | undefined;
     if (!userId) throw new NotAuthenticated('Authentication required');
-    const branchFsAccess = await ensureBranchWorkspaceAccess(
-      new BranchRepository(this.db),
-      branch,
-      userId,
-      (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.role as
-        | UserRole
-        | undefined,
-      command === 'branch.agor-yml.export' ? 'session' : 'view',
-      command === 'branch.agor-yml.export' ? 'write' : 'read',
-      this.app.get('config').execution?.allow_superadmin === true
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
+    // Long routes (export) carry tenant identity without a database scope, so
+    // prepare the launch in one short tenant unit and run the executor outside it.
+    const { branchFsAccess, delegatedHomeKey, sandboxMounts } = await this.withTenantDatabase(
+      serviceParams,
+      async () => ({
+        branchFsAccess: await ensureBranchWorkspaceAccess(
+          new BranchRepository(this.db),
+          branch,
+          userId,
+          (serviceParams as Partial<AuthenticatedParams> | undefined)?.user?.role as
+            | UserRole
+            | undefined,
+          command === 'branch.agor-yml.export' ? 'session' : 'view',
+          command === 'branch.agor-yml.export' ? 'write' : 'read',
+          this.app.get('config').execution?.allow_superadmin === true
+        ),
+        delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
+          this.db,
+          userId,
+          this.app.get('config')
+        ),
+        // The caller is the execution principal for this stateless request, so
+        // a per-user sandbox mounts the caller's home store (not the owner's).
+        sandboxMounts: await resolveBranchExecutorSandboxMounts({
+          config: this.app.get('config'),
+          tenantId,
+          executionUserId: userId,
+          branch,
+          db: this.db,
+        }),
+      })
     );
     const sessionToken = await issueExecutorCommandToken(
       this.app,
       command,
       userId,
       branch.branch_id
-    );
-    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-      this.db,
-      userId,
-      this.app.get('config')
     );
 
     const payload = {
@@ -1562,6 +1582,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
         ...params,
         cwd: branch.path,
         principalBranchAccess: branchFsAccess,
+        ...sandboxMounts,
       },
     };
     const options = {
@@ -1574,8 +1595,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       },
     };
     if (command !== 'branch.agor-yml.export') return requestExecutor(payload, options);
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
     const scoped = <T>(work: (repository: BranchMaintenanceRepository) => Promise<T>) =>
       withFreshTenantWrite(this.db, tenantId, () => work(new BranchMaintenanceRepository(this.db)));
     const admitted = await scoped((repository) =>
@@ -1618,6 +1637,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
    * caller must name which branch's working copy to read. This is a
    * one-shot manual import — the repo is NOT re-ingested automatically on
    * subsequent operations.
+   *
+   * Registered as a long (identity-only) route, like its export sibling: the
+   * file is read by an executor process, so no tenant transaction may be held
+   * across that spawn. The repo read, the branch authorization (through the
+   * branches service, which arms its own scope) and the launch preparation in
+   * runAgorYmlExecutorCommand each open their own short unit; the executor
+   * carries the tenant only in its command token; the write runs in a fresh
+   * unit after the executor returns.
    */
   async importFromAgorYml(
     id: string,
@@ -1632,7 +1659,11 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (!data?.branch_id) {
       throw new Error('branch_id is required to import .agor.yml');
     }
-    const repo = await this.get(id, params);
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('Trusted tenant context is required');
+
+    const repo = await this.withTenantDatabase(params, () => this.get(id, params));
     const branch = await this.getAuthorizedAgorYmlBranch(repo, data.branch_id, params);
 
     const importResult = await this.runAgorYmlExecutorCommand(
@@ -1659,22 +1690,27 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       throw new Error('.agor.yml not found or has no environment configuration');
     }
 
-    // Preserve any existing DB-only template_overrides across import — the
-    // file never contains them, so a naive replace would otherwise wipe them.
-    const replacement: RepoEnvironment = repo.environment?.template_overrides
-      ? { ...environment, template_overrides: repo.environment.template_overrides }
-      : environment;
-
-    // Imports and YAML Save share the repository's complete-configuration
-    // replacement contract, removing deleted variants and fields atomically.
-    const updated = await this.repoRepo.setEnvironment(id, replacement);
+    // Fresh unit after the spawn: re-read the row, and re-assert the write gate
+    // in case a tenant freeze began while the executor ran. Preserve any
+    // existing DB-only template_overrides across import — the file never
+    // contains them, so a naive replace would otherwise wipe them. Imports and
+    // YAML Save share the repository's complete-configuration replacement
+    // contract, removing deleted variants and fields atomically.
+    const updated = await withFreshTenantWrite(this.db, tenantId, async () => {
+      const current = await this.repoRepo.findById(repo.repo_id);
+      if (!current) throw new NotFound(`Repository ${repo.repo_id} no longer exists`);
+      const replacement: RepoEnvironment = current.environment?.template_overrides
+        ? { ...environment, template_overrides: current.environment.template_overrides }
+        : environment;
+      return this.repoRepo.setEnvironment(current.repo_id, replacement);
+    });
 
     emitServiceEvent(this.app, {
       path: 'repos',
       event: 'patched',
       data: updated,
       params,
-      id,
+      id: updated.repo_id,
     });
     return updated;
   }

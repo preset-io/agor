@@ -1,8 +1,8 @@
 import { readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { agorHomePath } from './config/agor-home';
 
 export const AGENTIC_TOOL_INTEGRATIONS = {
   'claude-code': {
@@ -47,7 +47,7 @@ export function isInstallableAgenticTool(value: string): value is InstallableAge
 }
 
 export function getAgenticToolsRoot(): string {
-  return process.env.AGOR_AGENTIC_TOOLS_DIR ?? join(homedir(), '.agor', 'agentic-tools');
+  return process.env.AGOR_AGENTIC_TOOLS_DIR ?? agorHomePath('agentic-tools');
 }
 
 export const AGENTIC_TOOL_SELECTION_MANIFEST = 'selection.json';
