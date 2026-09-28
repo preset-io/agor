@@ -1,7 +1,7 @@
 import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Input, type InputRef, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useInsertionEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
@@ -26,11 +26,19 @@ interface GlobalSearchProps extends GlobalSearchEntityMaps {
 }
 
 // Third-party controls may retain their first handler. The stable wrapper's
-// scope contains only a ref, never the original entity-bearing render closure.
+// separate scope contains only a ref, not the callback captured by the effect.
+function createSearchCallback<T extends (...args: never[]) => unknown>(ref: React.RefObject<T>): T {
+  return ((...args: never[]) => ref.current(...args)) as T;
+}
+
 function useSearchCallback<T extends (...args: never[]) => unknown>(callback: T): T {
   const ref = useRef(callback);
-  ref.current = callback;
-  return useCallback(((...args: never[]) => ref.current(...args)) as T, []);
+  // Publish only committed renders, before even child layout effects can invoke
+  // a handler. Render-time writes leak suspended work; layout effects are too late.
+  useInsertionEffect(() => {
+    ref.current = callback;
+  }, [callback]);
+  return useMemo(() => createSearchCallback(ref), []);
 }
 
 /** Keep native listeners and stable close state outside entity-bearing render scopes. */

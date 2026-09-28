@@ -1,12 +1,14 @@
 import type { Session } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { type ComponentProps, Suspense, startTransition, useLayoutEffect, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GlobalSearch } from './GlobalSearch';
 
-const { goToBoard, goToSession, recentsState } = vi.hoisted(() => ({
+const { goToBoard, goToSession, recentsState, layoutSubmit } = vi.hoisted(() => ({
   goToBoard: vi.fn(),
   goToSession: vi.fn(),
+  layoutSubmit: { current: undefined as (() => void) | undefined },
   recentsState: {
     session: [] as unknown[],
     branch: [] as unknown[],
@@ -30,6 +32,23 @@ vi.mock('./useRecents', () => ({
   useRecents: () => recentsState,
 }));
 
+// Exercise a control invoking its committed handler from a descendant layout
+// effect, before GlobalSearch's own layout effects would run.
+vi.mock('./SearchChipRow', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./SearchChipRow')>();
+  return {
+    ...original,
+    SearchChipRow: (props: ComponentProps<typeof original.SearchChipRow>) => {
+      useLayoutEffect(() => {
+        const submit = layoutSubmit.current;
+        layoutSubmit.current = undefined;
+        submit?.();
+      });
+      return <original.SearchChipRow {...props} />;
+    },
+  };
+});
+
 const emptyMaps = {
   sessionById: new Map(),
   branchById: new Map(),
@@ -51,6 +70,7 @@ describe('GlobalSearch', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     goToBoard.mockClear();
     goToSession.mockClear();
+    layoutSubmit.current = undefined;
     recentsState.board = [];
     // jsdom doesn't implement scrollIntoView; the keyboard-cursor effect calls
     // it whenever visibleRows is non-empty.
@@ -175,6 +195,72 @@ describe('GlobalSearch', () => {
     expect(remove.mock.calls.some(([event]) => event === 'keydown')).toBe(true);
     remove.mockRestore();
   });
+
+  it.each(['suspended', 'committed', 'layout'] as const)(
+    'Enter uses only the committed map during a %s replacement',
+    async (phase) => {
+      const sessions = ['first', 'second'].map(
+        (id) =>
+          ({
+            session_id: id,
+            title: `deploy ${id}`,
+            archived: false,
+            created_by: 'me',
+            last_updated: '2026-09-28T00:00:00.000Z',
+          }) as Session
+      );
+      const maps = sessions.map((session) => new Map([[session.session_id, session]]));
+      const attempted = vi.fn();
+      const pending = new Promise<void>(() => {});
+      function Gate({ version }: { version: number }) {
+        if (version === 1 && phase === 'suspended') {
+          attempted();
+          throw pending;
+        }
+        return <output data-testid="committed-version">{version}</output>;
+      }
+      function Harness() {
+        const [version, setVersion] = useState(0);
+        return (
+          <MemoryRouter>
+            <button type="button" onClick={() => startTransition(() => setVersion(1))}>
+              Replace map
+            </button>
+            <Suspense fallback={<p>Suspended replacement</p>}>
+              <GlobalSearch {...emptyMaps} currentUserId="me" sessionById={maps[version]} />
+              <Gate version={version} />
+            </Suspense>
+          </MemoryRouter>
+        );
+      }
+      render(<Harness />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open search' }));
+      const input = screen.getByRole('combobox', { name: 'Global search' });
+      fireEvent.change(input, { target: { value: 'deploy' } });
+      await act(() => vi.advanceTimersByTimeAsync(250));
+      expect(screen.getByRole('option', { name: /deploy first/ })).not.toBeNull();
+      const submit = () => fireEvent.keyDown(input, { key: 'Enter', keyCode: 13 });
+      if (phase === 'layout') layoutSubmit.current = submit;
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Replace map' }));
+      });
+      if (phase === 'suspended') {
+        expect(attempted).toHaveBeenCalled();
+        expect(screen.getByTestId('committed-version').textContent).toBe('0');
+        expect(screen.queryByText('Suspended replacement')).toBeNull();
+        expect(screen.getByRole('option', { name: /deploy first/ })).not.toBeNull();
+        expect(screen.queryByRole('option', { name: /deploy second/ })).toBeNull();
+      } else if (phase === 'committed') {
+        expect(screen.getByTestId('committed-version').textContent).toBe('1');
+        expect(screen.getByRole('option', { name: /deploy second/ })).not.toBeNull();
+      }
+      if (phase !== 'layout') submit();
+      expect(goToSession).toHaveBeenCalledExactlyOnceWith(
+        phase === 'suspended' ? 'first' : 'second'
+      );
+      expect(screen.queryByRole('combobox')).toBeNull();
+    }
+  );
 
   it('Close button closes the popover', async () => {
     renderSearch();
