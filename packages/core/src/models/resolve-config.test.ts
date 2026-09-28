@@ -123,7 +123,7 @@ describe('getDefaultModelForTool', () => {
   it('returns the static default for tools that have one', () => {
     expect(getDefaultModelForTool('claude-code')).toBe('claude-sonnet-5');
     expect(getDefaultModelForTool('codex')).toBe('gpt-6-astra');
-    expect(getDefaultModelForTool('gemini')).toBe('gemini-2.0-flash');
+    expect(getDefaultModelForTool('gemini')).toBe('gemini-3.8-flash');
     expect(getDefaultModelForTool('copilot')).toBe('claude-sonnet-4.6');
   });
 
