@@ -333,6 +333,9 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       onCancel={handleCancel}
       destroyOnHidden
       width={720}
+      // Cap the fixed width to the viewport so the shared dialog stays usable on
+      // narrow (mobile) screens; desktop is unaffected (720 < viewport).
+      style={{ maxWidth: 'calc(100vw - 16px)' }}
       closable={!isSubmitting}
       maskClosable={false}
       keyboard={!isSubmitting}

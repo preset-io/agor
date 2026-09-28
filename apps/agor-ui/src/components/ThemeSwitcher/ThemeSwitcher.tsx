@@ -30,6 +30,12 @@ export function buildThemeMenuItems(
       onClick: () => setThemeMode('light'),
     },
     {
+      key: 'system',
+      label: 'System',
+      icon: themeMode === 'system' ? themeCheckIcon : themeBlankIcon,
+      onClick: () => setThemeMode('system'),
+    },
+    {
       key: 'custom',
       label: 'Custom',
       icon: themeMode === 'custom' ? themeCheckIcon : themeBlankIcon,

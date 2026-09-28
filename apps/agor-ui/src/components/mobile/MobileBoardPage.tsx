@@ -64,6 +64,8 @@ interface MobileBoardPageProps {
   onOpenBranch: (branchId: string, tab: 'general' | 'environment' | 'schedule') => void;
   /** Start a new session on a branch (opens the agent picker). */
   onNewSession: (branchId: string) => void;
+  /** Board-level action: create a new branch (opens the shared CreateDialog). */
+  onNewBranch: () => void;
   /** Empty-board CTA: hand the board's assistant its first task (Ask primary). */
   onGiveFirstTask: () => void;
   /** Display name of the assistant used in the empty-board CTA. */
@@ -104,6 +106,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   artifactById,
   onOpenBranch,
   onNewSession,
+  onNewBranch,
   onGiveFirstTask,
   firstTaskAssistantName,
   commentsBadge,
@@ -306,6 +309,16 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
               {board.description}
             </Paragraph>
           )}
+
+          <Button
+            block
+            type="dashed"
+            icon={<PlusOutlined />}
+            onClick={onNewBranch}
+            style={{ minHeight: MOBILE_TOUCH_TARGET }}
+          >
+            New branch
+          </Button>
 
           {isEmpty && (
             <Card>
