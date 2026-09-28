@@ -56,7 +56,8 @@ overrides:
   protobufjs@<7.6.5: '>=7.6.5 <8'
   protobufjs@>=8.0.0 <8.0.1: '>=8.0.1 <9'
   qs: '>=6.14.2 <7'
-  rollup: 4.63.3
+  # Match the reviewed direct pin; retain the workspace-wide security override.
+  rollup: 4.63.4
   shell-quote: '>=1.8.5 <2'
   # Next 15.5.24 supports this fixed AVIF decoder release.
   next>sharp: '>=0.35.4 <0.36'
@@ -67,7 +68,7 @@ overrides:
   systeminformation: '>=5.31.7 <6'
   tar@<7.5.21: '>=7.5.21 <8'
   # Keep Vite's optional tsx peer aligned with the workspace's reviewed runner.
-  tsx: 4.23.13
+  tsx: 4.23.15
   undici: '>=7.28.0 <8'
   vite: '>=8.3.0 <9'
   ws: '>=8.21.0 <9'

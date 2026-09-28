@@ -1,3 +1,5 @@
+import { createSocket } from 'node:dgram';
+import { once } from 'node:events';
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -46,6 +48,31 @@ const workIdentity: DistributedWorkIdentity = { instanceId: 'daemon-a', bootId: 
 const deploymentId = '019c1234-5678-7123-8123-123456789abc';
 
 describe('StatsD daemon metrics', () => {
+  it('sends sanitized metrics through the real optional hot-shots UDP client', async () => {
+    const receiver = createSocket('udp4');
+    receiver.bind(0, '127.0.0.1');
+    await once(receiver, 'listening');
+    const metrics = createDaemonMetrics(
+      { enabled: true, host: '127.0.0.1', port: receiver.address().port },
+      { workIdentity, deploymentMode: 'standalone', deploymentId }
+    );
+    try {
+      expect(metrics.enabled).toBe(true);
+      const received = once(receiver, 'message', { signal: AbortSignal.timeout(2000) });
+      metrics.increment('dependency_smoke', 2, { outcome: 'success', token: 'must-not-leak' });
+      await metrics.flush();
+      const [packet] = await received;
+      const wire = packet.toString();
+      expect(wire).toContain('agor.daemon.dependency_smoke:2|c');
+      expect(wire).toContain('outcome:success');
+      expect(wire).toContain(`deployment_id:${deploymentId}`);
+      expect(wire).not.toContain('must-not-leak');
+    } finally {
+      await metrics.close();
+      receiver.close();
+    }
+  });
+
   it('uses one cheap no-op and never constructs a client while disabled', async () => {
     const factory = vi.fn(() => new FakeStatsDClient());
     const metrics = createDaemonMetrics(
