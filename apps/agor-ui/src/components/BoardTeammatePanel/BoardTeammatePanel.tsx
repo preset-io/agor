@@ -13,7 +13,6 @@ import {
   Badge,
   Button,
   Empty,
-  Modal,
   Select,
   Skeleton,
   Space,
@@ -128,13 +127,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
-  const [primaryAction, setPrimaryAction] = useState<'clear' | 'replace' | null>(null);
-  const [changingPrimary, setChangingPrimary] = useState(false);
-  const primaryId = board?.primary_teammate_id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: cancel stale confirmation when realtime designation or board identity changes.
-  useEffect(() => {
-    setPrimaryAction(null);
-  }, [board?.board_id, primaryId]);
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -206,17 +198,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   }, [primaryTeammateBranch?.primary_owner_user_id, primaryTeammateBranch?.created_by, userById]);
 
   const teammateOptions = useMemo(() => {
+    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
+
     return Array.from(branchById.values())
-      .filter(
-        (branch) =>
-          isTeammate(branch) &&
-          !branch.archived &&
-          branch.branch_id !== primaryId &&
-          // Replacing an existing designation is atomic only for this board's
-          // teammates. Cross-board movement retains its own authorization flow;
-          // clear first to use the existing empty-board assignment workflow.
-          (!primaryId || branch.board_id === board?.board_id)
-      )
+      .filter((branch) => isTeammate(branch) && !branch.archived)
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -234,7 +219,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryId, board?.board_id, repoById]);
+  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -269,34 +254,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       );
     } finally {
       setAssigningTeammate(false);
-    }
-  };
-
-  const handleChangePrimary = async () => {
-    if (!board || !client || !canEditBoard || !primaryAction || changingPrimary) return;
-    if (primaryAction === 'replace' && !selectedTeammateId) return;
-    setChangingPrimary(true);
-    try {
-      if (primaryAction === 'clear') {
-        await client.service('boards').clearPrimaryTeammate(board.board_id);
-      } else {
-        await client.service('boards').setPrimaryTeammate({
-          boardId: board.board_id,
-          branchId: selectedTeammateId!,
-        });
-      }
-      setPrimaryAction(null);
-      showSuccess(
-        primaryAction === 'clear'
-          ? 'Board primary teammate cleared'
-          : 'Board primary teammate replaced'
-      );
-    } catch (error) {
-      showError(
-        `Failed to ${primaryAction} board primary teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setChangingPrimary(false);
     }
   };
 
@@ -497,52 +454,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         overflow: 'hidden',
       }}
     >
-      <Modal
-        open={canEditBoard && primaryAction !== null}
-        title={
-          primaryAction === 'clear'
-            ? 'Clear board primary teammate?'
-            : 'Replace board primary teammate'
-        }
-        okText={primaryAction === 'clear' ? 'Clear primary' : 'Replace primary'}
-        onOk={handleChangePrimary}
-        onCancel={() => {
-          if (!changingPrimary) setPrimaryAction(null);
-        }}
-        confirmLoading={changingPrimary}
-        cancelButtonProps={{ disabled: changingPrimary }}
-        okButtonProps={{
-          disabled: changingPrimary || (primaryAction === 'replace' && !selectedTeammateId),
-        }}
-        closable={!changingPrimary}
-        mask={{ closable: !changingPrimary }}
-        keyboard={!changingPrimary}
-        destroyOnHidden
-      >
-        <Typography.Paragraph>
-          This changes only the board's primary designation. It does not retire the teammate or
-          change personal primary assistants.
-        </Typography.Paragraph>
-        {primaryAction === 'replace' && (
-          <Space orientation="vertical" style={{ width: '100%' }}>
-            <Select
-              aria-label="Replacement teammate"
-              placeholder="Select a replacement"
-              showSearch
-              optionFilterProp="searchText"
-              options={teammateOptions}
-              value={selectedTeammateId}
-              onChange={setSelectedTeammateId}
-              disabled={changingPrimary || teammateOptions.length === 0}
-              style={{ width: '100%' }}
-            />
-            <Typography.Text type="secondary">
-              Choose a teammate on this board. To move one from another board, clear the primary
-              first, then assign it.
-            </Typography.Text>
-          </Space>
-        )}
-      </Modal>
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
@@ -550,36 +461,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'teammate',
             label: 'Teammate',
-            children: (
-              <div
-                style={{
-                  height: '100%',
-                  overflow: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                {primaryId && canEditBoard && (
-                  <Space wrap style={{ padding: token.paddingSM, flexShrink: 0 }}>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('replace')}
-                      disabled={changingPrimary}
-                    >
-                      Replace primary teammate
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('clear')}
-                      disabled={changingPrimary}
-                    >
-                      Clear primary teammate
-                    </Button>
-                  </Space>
-                )}
-                <div style={{ flex: 1, minHeight: 0 }}>{teammateContent}</div>
-              </div>
-            ),
+            children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
           {
             key: 'all-sessions',
