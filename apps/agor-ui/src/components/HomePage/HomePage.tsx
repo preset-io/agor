@@ -4,6 +4,7 @@ import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, 
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import { useIdleReady } from '../../hooks/useIdleReady';
 import {
   type AgorState,
   agorStore,
@@ -145,6 +146,8 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
   // modal); board patches are rare.
   const boardById = useAgorStore(selectBoardById);
   const branchById = useAgorStore(selectBranchById);
+
+  const railReady = useIdleReady();
 
   const [onboardingHidden, setOnboardingHidden] = useState(
     () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
@@ -442,12 +445,16 @@ export const HomePage = memo(function HomePage(props: HomePageProps) {
                   gap: 32,
                 }}
               >
-                <HomeActivitySection
-                  onBoardClick={props.onBoardClick}
-                  onBranchClick={props.onBranchClick}
-                  onSessionClick={props.onSessionClick}
-                />
-                <HomeKnowledgeSection client={props.client} connected={props.connected} />
+                {railReady && (
+                  <>
+                    <HomeActivitySection
+                      onBoardClick={props.onBoardClick}
+                      onBranchClick={props.onBranchClick}
+                      onSessionClick={props.onSessionClick}
+                    />
+                    <HomeKnowledgeSection client={props.client} connected={props.connected} />
+                  </>
+                )}
               </div>
             </aside>
           )}

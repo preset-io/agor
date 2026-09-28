@@ -51,3 +51,6 @@ export function getSessionStatusTone(status: StatusInput): StatusTone {
       return 'default';
   }
 }
+
+export const isSessionFailed = (session: Pick<Session, 'status'>): boolean =>
+  session.status === 'failed';

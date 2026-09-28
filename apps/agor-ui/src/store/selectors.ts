@@ -11,8 +11,18 @@
  * one board's bucket: a patch to another board's objects leaves this board's
  * array reference untouched, so the subscription doesn't fire.
  */
-import type { Board, BoardEntityObject, Branch, Repo, Session } from '@agor-live/client';
-import { SessionStatus } from '@agor-live/client';
+import type {
+  Board,
+  BoardComment,
+  BoardEntityObject,
+  Branch,
+  Repo,
+  Session,
+} from '@agor-live/client';
+import { getTeammateConfig, isGatewaySession, SessionStatus } from '@agor-live/client';
+import { getTimeMs } from '../utils/entityTime';
+import { isSessionFailed } from '../utils/sessionStatus';
+import { getSessionDisplayTitle } from '../utils/sessionTitle';
 import type { AgorState } from './agorStore';
 
 export const selectSessionById = (s: AgorState) => s.sessionById;
@@ -161,16 +171,22 @@ export function makeCommentMentionSelector(
   return (s) => {
     if (!boardId || !userName) return false;
     for (const c of s.commentById.values()) {
-      if (c.board_id !== boardId || c.resolved) continue;
-      if (c.content.includes(`@${userName}`) || c.content.includes(`@"${userName}"`)) return true;
       if (
-        userEmail &&
-        (c.content.includes(`@${userEmail}`) || c.content.includes(`@"${userEmail}"`))
+        c.board_id === boardId &&
+        !c.resolved &&
+        commentMentionsUser(c.content, userName, userEmail)
       )
         return true;
     }
     return false;
   };
+}
+
+/** Whether comment text @-mentions the user by display name or email, bare or quoted. */
+export function commentMentionsUser(content: string, userName?: string, userEmail?: string) {
+  return [userName, userEmail].some(
+    (handle) => handle && (content.includes(`@${handle}`) || content.includes(`@"${handle}"`))
+  );
 }
 
 const NO_BOARD_ACTIVITY = Object.freeze({ hasRunning: false, hasReady: false });
@@ -202,5 +218,406 @@ export function makeBoardSessionActivitySelector(
     }
     if (!hasRunning && !hasReady) return NO_BOARD_ACTIVITY;
     return { hasRunning, hasReady };
+  };
+}
+
+/** Started by the person, not by a schedule or by another agent session. */
+export const isSessionStartedByUser = (session: Session): boolean =>
+  !session.scheduled_from_branch &&
+  !session.genealogy?.parent_session_id &&
+  !session.remote_relationships?.as_target?.length;
+
+/** A finished run the person started and hasn't opened yet. */
+export const isUnreadResult = (session: Session): boolean =>
+  !!session.ready_for_prompt && isSessionStartedByUser(session) && !isGatewaySession(session);
+
+const HOME_FAILED_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface HomeSessionNeed {
+  key: string;
+  reason: 'permission' | 'failed' | 'finished';
+  at: number;
+  session: Session;
+  /** Older finished runs on the same branch, newest first; the row stands for all of them. */
+  earlier?: Session[];
+}
+
+export interface HomeCommentNeed {
+  key: string;
+  reason: 'mention' | 'reply' | 'comment';
+  at: number;
+  boardId: string;
+  thread: BoardComment;
+  comment: BoardComment;
+  threadSize: number;
+}
+
+export type HomeNeed = HomeSessionNeed | HomeCommentNeed;
+
+interface HomeBuckets {
+  /** Session needs only; comments come from `makeCommentsForYouSelector`. */
+  needs: HomeSessionNeed[];
+  needsCount: number;
+  /** `needsCount` per reason, so Home can say what a collapsed list hides. */
+  needsByReason: Readonly<Record<HomeSessionNeed['reason'], number>>;
+  recent: Session[];
+  /** Everything `recent` would list without the cap. */
+  recentCount: number;
+  running: Session[];
+  runningCount: number;
+  /** Finished-unopened runs, counted singly (Needs you groups them per branch). */
+  unreadCount: number;
+  /** Boards of the caller's latest sessions, most recent first. */
+  boardIds: string[];
+  hasSessions: boolean;
+}
+
+export interface HomeBucketsOptions {
+  userId?: string;
+  now: number;
+  needsLimit: number;
+  recentLimit: number;
+  boardsLimit?: number;
+  query?: string;
+  onlyStartedByMe?: boolean;
+  /** Failed sessions the user already opened (id → epoch ms when opened). */
+  openedFailures?: Readonly<Record<string, number>>;
+}
+
+const NEED_RANK: Record<HomeNeed['reason'], number> = {
+  permission: 0,
+  mention: 1,
+  reply: 1,
+  comment: 1,
+  failed: 2,
+  finished: 3,
+};
+
+/** Needs you order: permission, comments, failures, finished; newest first within each. */
+export const compareHomeNeeds = (a: HomeNeed, b: HomeNeed) =>
+  NEED_RANK[a.reason] - NEED_RANK[b.reason] || b.at - a.at;
+const needBefore = (a: HomeNeed, b: HomeNeed) => compareHomeNeeds(a, b) < 0;
+const updatedAt = (session: Session) => getTimeMs(session, 'last_updated');
+const updatedBefore = (a: Session, b: Session) => updatedAt(a) > updatedAt(b);
+const isFailure = (session: Session) =>
+  isSessionFailed(session) || session.status === SessionStatus.TIMED_OUT;
+/** Finished cleanly: completed, awaiting the next prompt, or idle after running a task. */
+const succeeded = (session: Session) =>
+  session.status === SessionStatus.COMPLETED ||
+  (session.status === SessionStatus.IDLE &&
+    (session.ready_for_prompt || session.tasks?.length > 0));
+
+/** Insert into a list kept sorted by `before` and capped at `k`. */
+function insertTopK<T>(list: T[], item: T, k: number, before: (a: T, b: T) => boolean) {
+  if (k <= 0 || (list.length === k && !before(item, list[k - 1]))) return;
+  let i = Math.min(list.length, k - 1);
+  while (i > 0 && before(item, list[i - 1])) {
+    list[i] = list[i - 1];
+    i--;
+  }
+  list[i] = item;
+}
+
+const sameItems = <T>(a: readonly T[], b: readonly T[]) =>
+  a.length === b.length && a.every((item, i) => Object.is(item, b[i]));
+
+function matchesQuery(session: Session, query: string, s: AgorState): boolean {
+  const branch = s.branchById.get(session.branch_id);
+  const boardId = session.branch_board_id ?? branch?.board_id;
+  return [
+    session.title,
+    session.description,
+    branch?.name,
+    branch && getTeammateConfig(branch)?.displayName,
+    boardId && s.boardById.get(boardId)?.name,
+  ].some((text) => text?.toLowerCase().includes(query));
+}
+
+/** The same person's newer run on the branch succeeded, so the failure no longer needs them. */
+function supersededFailure(session: Session, s: AgorState) {
+  const failedAt = updatedAt(session);
+  return (s.sessionsByBranch.get(session.branch_id) ?? []).some(
+    (other) =>
+      !other.archived &&
+      other.created_by === session.created_by &&
+      succeeded(other) &&
+      updatedAt(other) > failedAt
+  );
+}
+
+/**
+ * Home's session needs and My work in one pass over the caller's sessions.
+ * Returns capped preview slices plus counts; slices keep their identity while
+ * their members do, so subscribe with `shallow` and a patch to anything
+ * outside the previews re-renders nothing.
+ */
+export function makeHomeBucketsSelector(
+  options: HomeBucketsOptions
+): (s: AgorState) => HomeBuckets {
+  const {
+    userId,
+    now,
+    needsLimit,
+    recentLimit,
+    boardsLimit = 0,
+    onlyStartedByMe,
+    openedFailures = {},
+  } = options;
+  const query = options.query?.trim().toLowerCase() ?? '';
+  const itemCache = new Map<string, HomeSessionNeed>();
+  let prev: HomeBuckets | null = null;
+
+  const sessionNeed = (
+    session: Session,
+    reason: HomeSessionNeed['reason'],
+    earlier?: Session[]
+  ) => {
+    const cached = itemCache.get(session.session_id);
+    if (
+      cached?.session === session &&
+      cached.reason === reason &&
+      sameItems(cached.earlier ?? [], earlier ?? [])
+    )
+      return cached;
+    const item = {
+      key: `session:${session.session_id}`,
+      reason,
+      at: updatedAt(session),
+      session,
+      earlier,
+    };
+    itemCache.set(session.session_id, item);
+    return item;
+  };
+
+  return (s) => {
+    const needs: HomeSessionNeed[] = [];
+    const recent: Session[] = [];
+    const running: Session[] = [];
+    let needsCount = 0;
+    const needsByReason = { permission: 0, failed: 0, finished: 0 };
+    let runningCount = 0;
+    let unreadCount = 0;
+    let recentCount = 0;
+    let hasSessions = false;
+    const boardAt = new Map<string, number>();
+    const passes = (session: Session) =>
+      (!onlyStartedByMe || isSessionStartedByUser(session)) &&
+      (!query || matchesQuery(session, query, s));
+    const addRecent = (session: Session) => {
+      if (!passes(session)) return;
+      recentCount++;
+      insertTopK(recent, session, recentLimit, updatedBefore);
+    };
+    const addNeed = (session: Session, reason: HomeSessionNeed['reason'], earlier?: Session[]) => {
+      needsCount++;
+      needsByReason[reason]++;
+      insertTopK(needs, sessionNeed(session, reason, earlier), needsLimit, needBefore);
+    };
+
+    const failedByBranch = new Map<string, Session>();
+    const finishedByBranch = new Map<string, Session[]>();
+    for (const session of userId ? s.sessionById.values() : []) {
+      if (session.archived || session.created_by !== userId) continue;
+      hasSessions = true;
+      const boardId = session.branch_board_id ?? s.branchById.get(session.branch_id)?.board_id;
+      if (boardsLimit && boardId && updatedAt(session) > (boardAt.get(boardId) ?? 0))
+        boardAt.set(boardId, updatedAt(session));
+      if (session.status === SessionStatus.RUNNING) {
+        runningCount++;
+        if (passes(session)) insertTopK(running, session, recentLimit, updatedBefore);
+      }
+      if (session.status === SessionStatus.AWAITING_PERMISSION) {
+        addNeed(session, 'permission');
+      } else if (
+        isFailure(session) &&
+        updatedAt(session) >= now - HOME_FAILED_WINDOW_MS &&
+        updatedAt(session) > (openedFailures[session.session_id] ?? 0) &&
+        !supersededFailure(session, s)
+      ) {
+        const shown = failedByBranch.get(session.branch_id);
+        if (shown && !updatedBefore(session, shown)) {
+          addRecent(session);
+        } else {
+          failedByBranch.set(session.branch_id, session);
+          if (shown) addRecent(shown);
+        }
+      } else if (isUnreadResult(session)) {
+        unreadCount++;
+        const finished = finishedByBranch.get(session.branch_id);
+        if (finished) finished.push(session);
+        else finishedByBranch.set(session.branch_id, [session]);
+      } else {
+        addRecent(session);
+      }
+    }
+    for (const session of failedByBranch.values()) addNeed(session, 'failed');
+    for (const finished of finishedByBranch.values()) {
+      const [latest, ...earlier] = finished.sort((a, b) => updatedAt(b) - updatedAt(a));
+      addNeed(latest, 'finished', earlier.length ? earlier : undefined);
+    }
+    const boardIds = [...boardAt]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, boardsLimit)
+      .map(([id]) => id);
+
+    const next: HomeBuckets = {
+      needs: prev && sameItems(prev.needs, needs) ? prev.needs : needs,
+      needsCount,
+      needsByReason:
+        prev &&
+        (Object.keys(needsByReason) as HomeSessionNeed['reason'][]).every(
+          (k) => prev?.needsByReason[k] === needsByReason[k]
+        )
+          ? prev.needsByReason
+          : needsByReason,
+      recent: prev && sameItems(prev.recent, recent) ? prev.recent : recent,
+      recentCount,
+      running: prev && sameItems(prev.running, running) ? prev.running : running,
+      runningCount,
+      unreadCount,
+      boardIds: prev && sameItems(prev.boardIds, boardIds) ? prev.boardIds : boardIds,
+      hasSessions,
+    };
+    if (prev && (Object.keys(next) as (keyof HomeBuckets)[]).every((k) => prev?.[k] === next[k]))
+      return prev;
+    prev = next;
+    return next;
+  };
+}
+
+/**
+ * Unresolved threads that need the caller: @mentions, replies after they
+ * posted, and new comments on their sessions or branches. One row per thread,
+ * newest first; a thread leaves once the caller replied last. Recomputed only
+ * when comments, branches or session hydration change, never per session patch.
+ */
+export function makeCommentsForYouSelector({
+  userId,
+  userName,
+  userEmail,
+}: {
+  userId?: string;
+  userName?: string;
+  userEmail?: string;
+}): (s: AgorState) => HomeCommentNeed[] {
+  let source: unknown[] = [];
+  let result: HomeCommentNeed[] = [];
+  let byKey = new Map<string, HomeCommentNeed>();
+  return (s) => {
+    const inputs = [s.commentById, s.branchById, s.sessionsHydrated];
+    if (inputs.every((input, i) => input === source[i])) return result;
+    source = inputs;
+    const next: HomeCommentNeed[] = [];
+    if (!userId) {
+      result = next;
+      return result;
+    }
+
+    const threads = new Map<string, BoardComment[]>();
+    for (const c of s.commentById.values()) {
+      const rootId = c.parent_comment_id ?? c.comment_id;
+      const thread = threads.get(rootId);
+      if (thread) thread.push(c);
+      else threads.set(rootId, [c]);
+    }
+    for (const [rootId, comments] of threads) {
+      const root = s.commentById.get(rootId);
+      if (!root || root.resolved) continue;
+      let last = root;
+      let lastOther: BoardComment | undefined;
+      let participated = false;
+      let mentioned = false;
+      for (const c of comments) {
+        if (getTimeMs(c, 'created_at') >= getTimeMs(last, 'created_at')) last = c;
+        if (c.created_by === userId) {
+          participated = true;
+          continue;
+        }
+        if (!lastOther || getTimeMs(c, 'created_at') >= getTimeMs(lastOther, 'created_at'))
+          lastOther = c;
+        mentioned ||=
+          !!c.mentions?.includes(userId as BoardComment['created_by']) ||
+          commentMentionsUser(c.content, userName, userEmail);
+      }
+      if (!lastOther || last.created_by === userId) continue;
+      const branch = root.branch_id ? s.branchById.get(root.branch_id) : undefined;
+      const onMine =
+        (root.session_id && s.sessionById.get(root.session_id)?.created_by === userId) ||
+        (branch && (branch.primary_owner_user_id ?? branch.created_by) === userId);
+      const reason = mentioned ? 'mention' : participated ? 'reply' : onMine ? 'comment' : null;
+      if (!reason) continue;
+      const key = `comment:${rootId}`;
+      const prev = byKey.get(key);
+      next.push(
+        prev?.thread === root &&
+          prev.comment === lastOther &&
+          prev.reason === reason &&
+          prev.threadSize === comments.length
+          ? prev
+          : {
+              key,
+              reason,
+              at: getTimeMs(lastOther, 'created_at'),
+              boardId: root.board_id,
+              thread: root,
+              comment: lastOther,
+              threadSize: comments.length,
+            }
+      );
+    }
+    next.sort((a, b) => b.at - a.at);
+    byKey = new Map(next.map((item) => [item.key, item]));
+    if (!sameItems(result, next)) result = next;
+    return result;
+  };
+}
+
+/** The caller's most recently updated session on one branch (Home's "Continue …" link). */
+export function makeLatestOwnSessionSelector(
+  branchId: string | undefined,
+  userId: string | undefined
+): (s: AgorState) => { sessionId: string; title: string } | undefined {
+  return (s) => {
+    let latest: Session | undefined;
+    for (const session of (branchId && s.sessionsByBranch.get(branchId)) || []) {
+      if (session.archived || session.created_by !== userId) continue;
+      if (!latest || updatedBefore(session, latest)) latest = session;
+    }
+    return latest
+      ? {
+          sessionId: latest.session_id,
+          title: getSessionDisplayTitle(latest, { includeAgentFallback: true }),
+        }
+      : undefined;
+  };
+}
+
+/**
+ * The caller's own teammates, or teammates someone else owns whose home board
+ * the server returned to the caller. Board lists are scoped by the live board
+ * policy, so a board in the store is one the caller can see; superadmins
+ * bypass that scoping and must be checked against the policy separately.
+ */
+export function makeTeammatesSelector(
+  userId: string | undefined,
+  whose: 'own' | 'shared'
+): (s: AgorState) => Branch[] {
+  let source: [AgorState['branchById'], AgorState['boardById']] | null = null;
+  let result: Branch[] = [];
+  return (s) => {
+    if (source?.[0] === s.branchById && source[1] === s.boardById) return result;
+    source = [s.branchById, s.boardById];
+    result = [];
+    for (const branch of userId ? s.branchById.values() : []) {
+      if (branch.archived || !getTeammateConfig(branch)) continue;
+      const own = (branch.primary_owner_user_id ?? branch.created_by) === userId;
+      const board = branch.board_id ? s.boardById.get(branch.board_id) : undefined;
+      if (whose === 'own' ? !own : own || !board || board.archived) continue;
+      result.push(branch);
+    }
+    const name = (b: Branch) => getTeammateConfig(b)?.displayName ?? b.name;
+    result.sort((a, b) => name(a).localeCompare(name(b)));
+    return result;
   };
 }
