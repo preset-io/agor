@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, Branch, User } from '@agor-live/client';
-import { DEFAULT_AGENTIC_TOOL_NAME, getTeammateConfig } from '@agor-live/client';
+import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
@@ -15,13 +15,11 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
-import { useAppNavigation } from '../../hooks/useAppNavigation';
-import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
+import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import {
   buildNewSessionConfig,
@@ -31,14 +29,17 @@ import {
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import {
+  ComposeSendButtons,
+  type ComposeSendMode,
+  usePrimaryAssistantSend,
+} from '../PrimaryAssistantCompose';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 
 const HINT_DISMISSED_KEY = 'agor:compose-hint-dismissed';
-
-type SendMode = 'open' | 'background';
 
 export interface NavbarComposeButtonProps {
   client: AgorClient | null;
@@ -52,14 +53,6 @@ export interface NavbarComposeButtonProps {
     boardId: string
   ) => Promise<SessionCreationResult | null>;
   disabled?: boolean;
-}
-
-function teammateName(branch: Branch): string {
-  return getTeammateConfig(branch)?.displayName ?? branch.name;
-}
-
-function teammateEmoji(branch: Branch): string | undefined {
-  return getTeammateConfig(branch)?.emoji;
 }
 
 /**
@@ -81,11 +74,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
   const [form] = Form.useForm();
-  const navigation = useAppNavigation();
-  const sessionCreationGuard = useIdentityGuardedAsync([
-    currentUser?.user_id,
-    authenticationGeneration,
-  ]);
 
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
@@ -94,8 +82,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const [open, setOpen] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_AGENTIC_TOOL_NAME);
   const [prompt, setPrompt] = useState('');
-  const [pendingSend, setPendingSend] = useState<SendMode | null>(null);
-  const [submitting, setSubmitting] = useState<SendMode | null>(null);
   const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
     valid: true,
   });
@@ -120,11 +106,41 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   // made elsewhere. The preference is optional; null asks for a target only
   // when the caller actually uses quick compose.
   const {
-    branch: primaryBranch,
-    setBranch: setPrimaryBranch,
+    primaryBranch,
+    setPrimaryBranch,
     resolving,
-    failed: resolveFailed,
-  } = usePrimaryTeammate(client, currentUser?.user_id, authenticationGeneration, open);
+    resolveFailed,
+    pendingSend,
+    clearPendingSend,
+    submitting,
+    send,
+    pick,
+  } = usePrimaryAssistantSend({
+    client,
+    currentUser,
+    authenticationGeneration,
+    isAuthenticationGenerationCurrent,
+    currentBoardId,
+    onCreateSession,
+    refreshKey: open,
+    buildConfig: (branch: Branch): NewSessionConfig =>
+      buildNewSessionConfig({
+        user: currentUser,
+        tool: selectedAgent as AgenticToolName,
+        branch,
+        values: form.getFieldsValue(true),
+        initialPrompt: prompt,
+        attachmentFiles: attachments.map((attachment) => attachment.file),
+      }),
+    validate: async () =>
+      !disabled &&
+      configValidity.valid &&
+      form.validateFields().then(
+        () => true,
+        () => false
+      ),
+    onSent: () => closeAndReset(),
+  });
 
   // Seed the chip-row form from the user's default on open. Only keyed on `open`
   // so a live user refresh can't wipe edits made while the popover is up.
@@ -151,7 +167,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const closeAndReset = () => {
     setOpen(false);
     setPrompt('');
-    setPendingSend(null);
+    clearPendingSend();
     setPrimaryBranch(null);
     clearAttachments();
   };
@@ -162,72 +178,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     );
   }, []);
 
-  const buildConfig = (branch: Branch): NewSessionConfig =>
-    buildNewSessionConfig({
-      user: currentUser,
-      tool: selectedAgent as AgenticToolName,
-      branch,
-      values: form.getFieldsValue(true),
-      initialPrompt: prompt,
-      attachmentFiles: attachments.map((attachment) => attachment.file),
-    });
-
-  const doSend = async (mode: SendMode, branch: Branch) => {
-    if (!onCreateSession) return;
-    const operationAuthenticationGeneration = authenticationGeneration;
-    setSubmitting(mode);
-    try {
-      const outcome = await sessionCreationGuard.run(() =>
-        onCreateSession(buildConfig(branch), branch.board_id ?? currentBoardId ?? '')
-      );
-      if (!outcome) return; // onCreateSession already surfaced the failure
-      if (
-        isAuthenticationGenerationCurrent &&
-        !isAuthenticationGenerationCurrent(operationAuthenticationGeneration)
-      ) {
-        return;
-      }
-      const { sessionId } = outcome;
-      finishSuccessfulSend(mode, branch, sessionId);
-    } finally {
-      setSubmitting(null);
-    }
-  };
-
-  const finishSuccessfulSend = (mode: SendMode, branch: Branch, sessionId: string) => {
-    if (mode === 'background') {
-      message.success(`Sent to ${teammateName(branch)} in the background`);
-      closeAndReset();
-      return;
-    }
-
-    closeAndReset();
-    navigation.goToSession(sessionId);
-  };
-
-  const runSend = async (mode: SendMode, branch = primaryBranch) => {
+  const runSend = (mode: ComposeSendMode) => {
     if (disabled || resolveFailed || !configValidity.valid) return;
-    if (!branch) {
-      // Arm synchronously so a fast picker selection cannot outrun validation.
-      // The picked branch path validates immediately before creating.
-      setPendingSend(mode);
-      return;
-    }
-    try {
-      await form.validateFields();
-    } catch {
-      return;
-    }
-    await doSend(mode, branch);
-  };
-
-  const handlePicked = (branch: Branch) => {
-    setPrimaryBranch(branch);
-    if (pendingSend) {
-      const mode = pendingSend;
-      setPendingSend(null);
-      void runSend(mode, branch);
-    }
+    void send(mode);
   };
 
   const sendDisabled =
@@ -239,11 +192,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     (!prompt.trim() && attachments.length === 0);
 
   const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || '🤖';
-  const boardPhrase = primaryBranch
-    ? `${teammateName(primaryBranch)}'s board`
-    : "your primary assistant's board";
-  const openTooltip = `Creates the session and takes you there now, on ${boardPhrase}.`;
-  const backgroundTooltip = `Creates the session in the background, on ${boardPhrase} — check on it anytime.`;
 
   const content = (
     <div style={{ width: 450, maxWidth: '90vw' }}>
@@ -256,7 +204,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             ) : (
               <RobotOutlined style={{ marginInlineEnd: token.marginXXS }} />
             )}
-            {teammateName(primaryBranch)}, your primary assistant
+            {teammateLabel(primaryBranch)}, your primary assistant
           </>
         ) : (
           'Ask your primary assistant'
@@ -313,7 +261,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
                 authenticationGeneration={authenticationGeneration}
                 compact
                 disabled={disabled}
-                onPicked={handlePicked}
+                onPicked={pick}
               />
             </div>
           )}
@@ -384,25 +332,12 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             </Typography.Text>
           )}
           <Flex justify="flex-end" gap={token.marginXS}>
-            <Tooltip title={backgroundTooltip}>
-              <Button
-                onClick={() => void runSend('background')}
-                loading={submitting === 'background'}
-                disabled={sendDisabled}
-              >
-                Send in Background
-              </Button>
-            </Tooltip>
-            <Tooltip title={openTooltip}>
-              <Button
-                type="primary"
-                onClick={() => void runSend('open')}
-                loading={submitting === 'open'}
-                disabled={sendDisabled}
-              >
-                Send &amp; Open
-              </Button>
-            </Tooltip>
+            <ComposeSendButtons
+              branch={primaryBranch}
+              submitting={submitting}
+              disabled={sendDisabled}
+              onSend={runSend}
+            />
           </Flex>
         </Form>
       )}
