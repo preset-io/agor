@@ -21,7 +21,7 @@ function selectOption(label: string): void {
 }
 
 describe('Marketplace catalog toolbar', () => {
-  it('publishes category choices from the Segmented control and resets to All', () => {
+  it('publishes category choices from the Category select and resets to All', () => {
     const onCategoryChange = vi.fn();
     const props = {
       category: 'observability' as const,
@@ -35,13 +35,15 @@ describe('Marketplace catalog toolbar', () => {
     };
     render(<CatalogToolbar {...props} />);
 
-    expect(screen.getByText('Observability').closest('label')).toHaveClass(
-      'ant-segmented-item-selected'
-    );
-    fireEvent.click(screen.getByText('Dev tools').closest('label')!);
+    const select = selectInput('Filter by category').closest('.ant-select') as HTMLElement;
+    expect(within(select).getByText('Category')).toBeVisible();
+    expect(within(select).getByText('Observability')).toBeVisible();
+    openSelect('Filter by category');
+    selectOption('Dev tools');
     expect(onCategoryChange).toHaveBeenLastCalledWith('dev-tools');
 
-    fireEvent.click(screen.getByText('All').closest('label')!);
+    openSelect('Filter by category');
+    selectOption('All');
     expect(onCategoryChange).toHaveBeenLastCalledWith(undefined);
   });
 
@@ -89,11 +91,12 @@ describe('Marketplace catalog toolbar', () => {
       />
     );
 
-    const sort = selectInput('Sort servers');
-    expect(sort.parentElement).toHaveTextContent('Sort: Curated');
+    const sort = selectInput('Sort servers').closest('.ant-select') as HTMLElement;
+    expect(within(sort).getByText('Sort')).toBeVisible();
+    expect(within(sort).getByText('Curated')).toBeVisible();
     expect(screen.getByText('3 of 52 servers match')).toBeVisible();
     openSelect('Sort servers');
-    selectOption('Sort: A–Z');
+    selectOption('A–Z');
 
     expect(onSortChange.mock.calls.at(-1)?.[0]).toBe('name');
   });
@@ -127,11 +130,12 @@ describe('Marketplace catalog toolbar', () => {
     );
     expect(onCapabilityChange).toHaveBeenLastCalledWith(undefined);
 
-    fireEvent.click(screen.getByText('All').closest('label')!);
+    openSelect('Filter by category');
+    selectOption('All');
     expect(onCategoryChange).toHaveBeenLastCalledWith(undefined);
 
     openSelect('Sort servers');
-    selectOption('Sort: Curated');
+    selectOption('Curated');
     expect(onSortChange.mock.calls.at(-1)?.[0]).toBe('popularity');
   });
 });

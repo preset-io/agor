@@ -11,7 +11,7 @@
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { SearchOutlined } from '@ant-design/icons';
-import { Card, Col, Input, Row, Segmented, Select, Space, Typography, theme } from 'antd';
+import { Card, Flex, Grid, Input, Select, Typography, theme } from 'antd';
 import { memo } from 'react';
 import {
   ALL_CATEGORIES,
@@ -58,74 +58,64 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   matchSummary,
 }) => {
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const compact = screens.xs === true && screens.md !== true;
+  const full = { width: '100%' };
+  const filterStyle = compact ? full : { flex: '1 1 180px', maxWidth: 220 };
+  const selectStyles = { prefix: { color: token.colorTextSecondary } };
 
   return (
     <Card size="small" styles={{ body: { padding: token.padding } }}>
-      <Space orientation="vertical" size={token.paddingSM} style={{ width: '100%' }}>
-        <Input
-          size="large"
-          allowClear
-          prefix={<SearchOutlined />}
-          placeholder="Search MCP servers…"
-          aria-label="Search MCP servers"
-          value={search}
-          onChange={(event) => onSearchChange(event.target.value)}
-        />
-        <div
-          style={{
-            overflowX: 'auto',
-            overflowY: 'hidden',
-            maxWidth: '100%',
-            scrollbarWidth: 'none',
-            msOverflowStyle: 'none',
-            WebkitOverflowScrolling: 'touch',
-          }}
-        >
-          <Segmented<CategoryFilter>
-            options={CATEGORY_OPTIONS}
+      <Flex vertical gap={token.paddingXS}>
+        <Flex wrap gap={token.paddingSM} align="center">
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="Search MCP servers…"
+            aria-label="Search MCP servers"
+            value={search}
+            onChange={(event) => onSearchChange(event.target.value)}
+            style={compact ? full : { flex: '1 1 240px', maxWidth: 360 }}
+          />
+          <Select<CategoryFilter>
+            prefix="Category"
+            aria-label="Filter by category"
             value={category ?? ALL_CATEGORIES}
             onChange={(value) =>
               onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
             }
+            options={CATEGORY_OPTIONS}
+            styles={selectStyles}
+            style={filterStyle}
           />
-        </div>
-        <Row gutter={[token.paddingSM, token.paddingSM]} align="middle">
-          <Col flex="auto" style={{ minWidth: 220 }}>
-            <Select
-              allowClear
-              showSearch
-              optionFilterProp="label"
-              style={{ width: '100%' }}
-              placeholder="Filter by capability (e.g. Issues, Logs, Databases)"
-              aria-label="Filter by capability"
-              value={capability ?? undefined}
-              onChange={(value?: string) => onCapabilityChange(value || undefined)}
-              options={CAPABILITY_OPTIONS}
-            />
-          </Col>
-          {/* The "Hide key-only" switch stood here. It hid the entries the
-              marketplace could not install, which since the API-key field is
-              none of them: `CONNECTABLE_AUTH_TYPES` now names every stated auth
-              type, so the switch removed nothing from any catalog the loader
-              would serve. A control that provably cannot change the result set
-              is worse than no control — it reads as a filter that is broken.
-              What it used to distinguish, the card still says per entry. */}
-          <Col flex="none">
-            <Select<MCPCatalogSort>
-              value={sort}
-              onChange={onSortChange}
-              aria-label="Sort servers"
-              style={{ width: 200 }}
-              options={SORT_OPTIONS}
-            />
-          </Col>
-        </Row>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="Capability"
+            aria-label="Filter by capability"
+            value={capability ?? undefined}
+            onChange={(value?: string) => onCapabilityChange(value || undefined)}
+            options={CAPABILITY_OPTIONS}
+            popupMatchSelectWidth={false}
+            style={filterStyle}
+          />
+          <Select<MCPCatalogSort>
+            prefix="Sort"
+            value={sort}
+            onChange={onSortChange}
+            aria-label="Sort servers"
+            options={SORT_OPTIONS}
+            styles={selectStyles}
+            style={compact ? full : { width: 150, marginInlineStart: 'auto' }}
+          />
+        </Flex>
         {matchSummary && (
-          <Text type="secondary">
+          <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
             {matchSummary.matched} of {matchSummary.total} servers match
           </Text>
         )}
-      </Space>
+      </Flex>
     </Card>
   );
 };
