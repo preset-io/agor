@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CatalogToolbar } from './CatalogToolbar';
 
 function selectInput(label: string): HTMLElement {
@@ -141,5 +141,84 @@ describe('Marketplace catalog toolbar', () => {
     openSelect('Sort servers');
     selectOption('Curated');
     expect(onSortChange.mock.calls.at(-1)?.[0]).toBe('popularity');
+  });
+});
+
+describe('Marketplace catalog toolbar on a phone', () => {
+  beforeEach(() => {
+    vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) =>
+        ({
+          matches: query.includes('max-width: 575'),
+          media: query,
+          addListener: () => {},
+          removeListener: () => {},
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList
+    );
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  const baseProps = {
+    sort: 'popularity' as const,
+    search: '',
+    onSearchChange: vi.fn(),
+    onCategoryChange: vi.fn(),
+    onCapabilityChange: vi.fn(),
+    onSortChange: vi.fn(),
+    matchSummary: null,
+    resultCount: 3,
+  };
+
+  it('puts the filters behind a button that counts the active ones', () => {
+    const { rerender } = render(<CatalogToolbar {...baseProps} />);
+
+    expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeVisible();
+    expect(document.querySelector('input[aria-label="Filter by category"]')).toBeNull();
+    expect(document.querySelector('.ant-badge-count')).toBeNull();
+
+    rerender(
+      <CatalogToolbar {...baseProps} category="observability" capability="logs" sort="name" />
+    );
+    expect(screen.getByRole('button', { name: 'Filters, 3 active' })).toBeVisible();
+    expect(document.querySelector('.ant-badge-count')).toHaveTextContent('3');
+  });
+
+  it('opens the same filters in a bottom sheet and closes it on Show', async () => {
+    const onCategoryChange = vi.fn();
+    render(<CatalogToolbar {...baseProps} onCategoryChange={onCategoryChange} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    for (const label of ['Filter by category', 'Filter by capability', 'Sort servers']) {
+      expect(sheet.querySelector(`input[aria-label="${label}"]`)).not.toBeNull();
+    }
+    openSelect('Filter by category');
+    selectOption('Dev tools');
+    expect(onCategoryChange).toHaveBeenLastCalledWith('dev-tools');
+
+    // Text query: jsdom's CSS parser rejects the primary button's border shorthand.
+    fireEvent.click(within(sheet).getByText('Show 3 servers'));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Filters' })).toBeNull());
+  });
+
+  it('resets category, capability and sort from the sheet', async () => {
+    const props = {
+      ...baseProps,
+      onCategoryChange: vi.fn(),
+      onCapabilityChange: vi.fn(),
+      onSortChange: vi.fn(),
+    };
+    render(<CatalogToolbar {...props} category="search" capability="logs" sort="name" />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filters, 3 active' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Reset' }));
+
+    expect(props.onCategoryChange).toHaveBeenLastCalledWith(undefined);
+    expect(props.onCapabilityChange).toHaveBeenLastCalledWith(undefined);
+    expect(props.onSortChange).toHaveBeenLastCalledWith('popularity');
   });
 });

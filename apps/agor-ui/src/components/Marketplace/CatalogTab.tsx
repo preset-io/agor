@@ -847,6 +847,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           onCapabilityChange={onCapabilityChange}
           onSortChange={onSortChange}
           matchSummary={matchSummary}
+          resultCount={status === 'ready' ? matchCount : null}
         />
       </div>
 
