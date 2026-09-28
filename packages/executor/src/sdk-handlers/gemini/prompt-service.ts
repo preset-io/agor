@@ -245,9 +245,31 @@ export class GeminiPromptService {
           } catch (error) {
             // The SDK also runs local history, policy, and tool work while
             // advancing the generator. Keep only its explicit unauthorized
-            // error on the fixed auth path; provider HTTP errors otherwise
+            // error on the fixed auth path; main-turn provider HTTP errors
             // arrive through GeminiEventType.Error.
             if (error instanceof Gemini.UnauthorizedError) throw geminiError(error, model);
+            // The pinned SDK's BaseLlmClient wraps pre-turn utility calls
+            // (including auto-compression) in this exact plain-Error prefix.
+            // Classify only that plain wrapper, which has no status metadata.
+            // A local error with the same text and its own HTTP status must
+            // not be mistaken for a provider failure.
+            const sdkGenerationPrefix = 'Failed to generate content: ';
+            if (
+              error instanceof Error &&
+              Object.getPrototypeOf(error) === Error.prototype &&
+              !('status' in error) &&
+              !('code' in error) &&
+              error.message.startsWith(sdkGenerationPrefix)
+            ) {
+              const detail = error.message.slice(sdkGenerationPrefix.length);
+              // BaseLlmClient drops the 404 status when it wraps the SDK's
+              // ModelNotFoundError. This is that class's pinned provider text
+              // for generateContent, not a general "not found" heuristic.
+              if (/^Requested entity was not found\.?$/i.test(detail.trim())) {
+                throw geminiError({ status: 404 }, model);
+              }
+              throw geminiError({ message: detail }, model);
+            }
             throw new GeminiIntegrationError('Gemini integration error.');
           }
         };
@@ -348,12 +370,15 @@ export class GeminiPromptService {
         for (const call of completed) {
           const responseParts = call.response?.responseParts ?? [];
           parts.push(...responseParts);
+          // A successful read_file intentionally has an empty SDK display;
+          // its content is in responseParts. Keep the transcript non-empty.
+          const display = call.response?.resultDisplay;
           results.push({
             type: 'tool_result',
             tool_use_id: call.request.callId,
             content:
-              typeof call.response?.resultDisplay === 'string'
-                ? call.response.resultDisplay
+              typeof display === 'string' && display.length > 0
+                ? display
                 : JSON.stringify(responseParts),
             is_error: call.status !== 'success',
           });

@@ -259,6 +259,43 @@ describe('Gemini prompt boundary', () => {
     });
     expect(state.schedule.mock.calls[0][0][0]).not.toHaveProperty('isClientInitiated');
   });
+  it('persists successful read content when the SDK display is empty', async () => {
+    state.events = [
+      [
+        event('tool_call_request', {
+          callId: 'read',
+          name: 'read_file',
+          args: { file_path: 'a.txt' },
+        }),
+      ],
+      [event('content', 'read complete')],
+    ];
+    state.schedule.mockResolvedValue([
+      {
+        request: { callId: 'read' },
+        status: 'success',
+        response: {
+          resultDisplay: '',
+          responseParts: [
+            { functionResponse: { name: 'read_file', response: { output: 'VISIBLE_MARKER' } } },
+          ],
+        },
+      },
+    ]);
+    const result = await collect();
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        content: [
+          expect.objectContaining({
+            type: 'tool_result',
+            tool_use_id: 'read',
+            content: expect.stringContaining('VISIBLE_MARKER'),
+            is_error: false,
+          }),
+        ],
+      })
+    );
+  });
   it.each([
     ['loop_detected', 'detected a loop'],
     ['context_window_will_overflow', 'too large'],
@@ -318,6 +355,37 @@ describe('Gemini prompt boundary', () => {
   it('does not classify a local SDK-iteration Forbidden error as a rejected provider key', async () => {
     state.streamError = Object.assign(new Error('private local detail'), { status: 403 });
     await expect(collect()).rejects.toThrow('Gemini integration error.');
+  });
+  it('preserves a network category for the SDK auto-compression generation wrapper', async () => {
+    // The pinned SDK's BaseLlmClient throws this prefix before any Error event
+    // when its pre-turn compression generateContent request fails.
+    state.streamError = new Error('Failed to generate content: fetch failed PRIVATE_URL');
+    await expect(collect()).rejects.toMatchObject({ message: 'Could not reach the Gemini API.' });
+  });
+  it('preserves the pinned SDK model-not-found wrapper from auto-compression', async () => {
+    state.streamError = new Error('Failed to generate content: Requested entity was not found.');
+    await expect(collect()).rejects.toMatchObject({
+      message: "Model gemini-3.8-flash isn't available to this API key. Pick another Gemini model.",
+    });
+  });
+  it('does not infer model status from an unrelated local not-found error', async () => {
+    state.streamError = Object.assign(new Error('Requested entity was not found.'), {
+      status: 404,
+    });
+    await expect(collect()).rejects.toMatchObject({ message: 'Gemini integration error.' });
+  });
+  it('does not turn a local 403 inside the SDK generation wrapper into a key error', async () => {
+    state.streamError = Object.assign(new Error('Failed to generate content: local forbidden'), {
+      status: 403,
+    });
+    await expect(collect()).rejects.toMatchObject({ message: 'Gemini integration error.' });
+  });
+  it('does not infer provider model status from a local 403 with the SDK wrapper text', async () => {
+    state.streamError = Object.assign(
+      new Error('Failed to generate content: Requested entity was not found.'),
+      { status: 403 }
+    );
+    await expect(collect()).rejects.toMatchObject({ message: 'Gemini integration error.' });
   });
   it('keeps the SDK explicit unauthorized error classified as a rejected key', async () => {
     state.streamError = new Gemini.UnauthorizedError('private provider detail');
