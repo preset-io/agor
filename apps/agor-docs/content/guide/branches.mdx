@@ -589,6 +589,13 @@ Files and committed database batches removed by earlier attempts are not restore
   out or lost its response, the live executor can acknowledge that its storage
   work stopped. The daemon drains/fences old database requests under the branch
   transaction lock before permitting retry. This does not assume they rolled back.
+  Only this exact acknowledgement is retried across transient delivery failures:
+  up to 15 seconds, with per-request limits of 2 seconds (including the response
+  body) and backoff from 250 milliseconds to 1 second. Destructive steps are never
+  replayed by this delivery retry. Definitive authority/protocol/ownership rejection
+  stops delivery. A lost committed acknowledgement can already have released the
+  original claim; its replay is rejected, not reported as successful deletion, and
+  cannot release a replacement invocation. There is no claim receipt readback.
 - **Dispatch never claimed:** after it is marked failed, retry atomically replaces
   the dispatch. A late old executor cannot claim it or begin removal.
 - **Workspace or SDK-home removal rejected:** retry remains blocked. Recursive

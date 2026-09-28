@@ -5,7 +5,7 @@ import type {
   BranchDeletionExecutionResult,
   BranchDeletionStage,
 } from '@agor/core/types';
-import { BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
+import { BRANCH_DELETION_ACTION_EFFECTS, BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
   removeBranchWorkspace,
@@ -13,6 +13,19 @@ import {
 } from '@agor/git';
 import type { BranchDeletePayload, ExecutorResult } from '../payload-types.js';
 import type { CommandOptions } from './index.js';
+
+// Match termination-report.ts's bounded delivery conventions, not its
+// task-specific readback predicate. Only the settlement acknowledgement retries.
+const SETTLEMENT_RETRY_WINDOW_MS = 15_000;
+const SETTLEMENT_ATTEMPT_TIMEOUT_MS = 2_000;
+const SETTLEMENT_RETRY_BASE_MS = 250;
+const SETTLEMENT_RETRY_MAX_MS = 1_000;
+
+class DeletionRequestRejected extends Error {
+  constructor(readonly status: number) {
+    super('Deletion request rejected');
+  }
+}
 
 /**
  * Private boundary between the deletion command and its scoped daemon API /
@@ -157,7 +170,8 @@ export async function handleBranchDelete(
   const pages: Partial<Record<BranchDeletionAction, number>> = {};
   const report = async (
     action: BranchDeletionAction,
-    stage?: BranchDeletionStage
+    stage?: BranchDeletionStage,
+    signal = AbortSignal.timeout(30_000)
   ): Promise<{ remaining: boolean }> => {
     const started = performance.now();
     let status: number | undefined;
@@ -168,7 +182,7 @@ export async function handleBranchDelete(
         {
           method: 'POST',
           redirect: 'error',
-          signal: AbortSignal.timeout(30_000),
+          signal,
           headers: {
             Authorization: `Bearer ${sessionToken}`,
             'Content-Type': 'application/json',
@@ -178,7 +192,7 @@ export async function handleBranchDelete(
       );
       status = response.status;
       category = 'http_rejected';
-      if (!response.ok) throw new Error(`Deletion ${action} rejected (HTTP ${response.status})`);
+      if (!response.ok) throw new DeletionRequestRejected(response.status);
       category = 'malformed_response';
       const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
       if (!result || typeof result !== 'object') throw new Error('Invalid deletion response');
@@ -202,10 +216,10 @@ export async function handleBranchDelete(
         );
       return { remaining: result.remaining ?? false };
     } catch (error) {
-      // HTTP errors are not rollback/containment proof. Only upload spans
-      // daemon-side external I/O. DB-only uncertainty can be drained by the
-      // settlement transaction, but an unknown upload MUST keep ownership.
-      if (action === 'upload') storageRequestUnknown = true;
+      // HTTP errors are not rollback/containment proof. Only explicitly
+      // database-only effects can be drained by the settlement transaction.
+      // Unclassified effects conservatively retain ownership too.
+      if (BRANCH_DELETION_ACTION_EFFECTS[action] !== 'database') storageRequestUnknown = true;
       if (category === 'transport' && error instanceof Error && error.name === 'TimeoutError')
         category = 'timeout';
       console.error(
@@ -299,16 +313,64 @@ export async function handleBranchDelete(
       }
       // Distinct from legacy "failed": older daemons must reject rather than
       // accepting an acknowledgement with the new DB-drain semantics.
-      // Retry this acknowledgement only, never destructive steps. Exact CAS
-      // makes a delayed acknowledgement harmless after a user starts a retry.
-      for (let attempt = 0; ; attempt++) {
+      // Retry this acknowledgement only, never destructive steps. The same
+      // immutable scope and credential fence every attempt, including late
+      // requests after timeout or an authorized replacement. failSettled clears
+      // the claim, so there is NO exact durable receipt to read back: a replay
+      // rejected after a lost commit is not success (nor permission to unlock).
+      const deadline = Date.now() + SETTLEMENT_RETRY_WINDOW_MS;
+      let attempts = 0;
+      while (Date.now() < deadline) {
+        attempts++;
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeoutMs = Math.min(SETTLEMENT_ATTEMPT_TIMEOUT_MS, deadline - Date.now());
         try {
-          await report('settled', failure.stage);
+          // Bound the whole request, including response-body consumption.
+          // Abort transport as well; neither abort nor timeout proves rollback.
+          await Promise.race([
+            report('settled', failure.stage, controller.signal),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                const error = new DOMException('Settlement delivery timed out', 'TimeoutError');
+                controller.abort(error);
+                reject(error);
+              }, timeoutMs);
+            }),
+          ]);
           return;
         } catch (error) {
-          if (attempt === 2) throw error;
+          // Authority/protocol/ownership rejection cannot heal by replaying.
+          // 408/429 and server failures remain delivery uncertainty, not proof
+          // of rejection or commit. Do not inspect untrusted response text.
+          if (
+            error instanceof DeletionRequestRejected &&
+            error.status >= 400 &&
+            error.status < 500 &&
+            error.status !== 408 &&
+            error.status !== 429
+          )
+            throw error;
+        } finally {
+          clearTimeout(timer);
         }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.min(
+              SETTLEMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 2),
+              SETTLEMENT_RETRY_MAX_MS,
+              remainingMs
+            )
+          )
+        );
       }
+      console.error(
+        `[branch.delete] event=settlement_exhausted ${correlation} attempts=${attempts}`
+      );
+      throw new Error('Settlement delivery retry window exhausted; outcome unknown');
     },
   });
   return result.outcome === 'deleted'

@@ -14,7 +14,7 @@ import {
   type TenantScopeAwareDatabase,
   uploads,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import {
   type AuthenticatedParams,
   BRANCH_DELETION_ACTIONS,
@@ -92,11 +92,25 @@ export class BranchDeletionStepsService {
       // allowlisted database abort codes below identify a DB transaction abort;
       // even those say nothing about previous batches or external storage.
       const category = deletionErrorCategory(error);
-      const status = error instanceof Forbidden ? 403 : error instanceof BadRequest ? 400 : 500;
+      // Only the settlement replay uses this delivery distinction. A failed
+      // exact-claim precondition is definitive rejection, not a transient DB
+      // outage. It may follow a lost committed response; never report success
+      // based on an absent/replaced claim or relax the invocation check.
+      const settlementRejected =
+        data.action === 'settled' && category === 'ownership_or_precondition';
+      const status =
+        error instanceof Forbidden
+          ? 403
+          : error instanceof BadRequest
+            ? 400
+            : settlementRejected
+              ? 409
+              : 500;
       console.error(
         `[branch.delete] event=daemon_step_failed ${correlation} category=${category} http_status=${status} duration_ms=${Math.round(performance.now() - started)}`
       );
       if (error instanceof Forbidden || error instanceof BadRequest) throw error;
+      if (settlementRejected) throw new Conflict('Deletion settlement ownership no longer matches');
       throw new Error(
         `Deletion step failed (${category}); inspect daemon diagnostics. No retry was started.`
       );

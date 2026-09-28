@@ -112,9 +112,12 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       }
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify(result));
-    } catch {
+    } catch (error) {
       failures++;
-      response.writeHead(500, { 'Content-Type': 'application/json' });
+      const status = (error as { code?: number }).code;
+      response.writeHead(typeof status === 'number' ? status : 500, {
+        'Content-Type': 'application/json',
+      });
       response.end('{}');
     }
   });
@@ -128,6 +131,7 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       'lost_response',
       'lost_data_response',
       'lost_settlement',
+      'settlement_exhausted',
       'upload_unknown',
       'workspace_unsettled',
       'sdk_home_unsettled',
@@ -282,11 +286,12 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
         });
       const unsettledRemoval =
         scenario === 'workspace_unsettled' || scenario === 'sdk_home_unsettled';
-      fault = unsettledRemoval
-        ? 'none'
-        : scenario === 'lost_settlement'
-          ? 'lost_response'
-          : scenario;
+      fault =
+        unsettledRemoval || scenario === 'settlement_exhausted'
+          ? 'none'
+          : scenario === 'lost_settlement'
+            ? 'lost_response'
+            : scenario;
       let siblingRemoved = false;
       const removalTarget = scenario === 'workspace_unsettled' ? workspace : home;
       const sibling = join(removalTarget, 'pending-sibling.txt');
@@ -313,7 +318,49 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
         fault = 'lost_settlement';
       }
       actions.length = 0;
-      expect((await run(first)).success).toBe(false);
+      if (scenario === 'settlement_exhausted') {
+        // Real claim/storage and guarded DB, but no wall-clock outage wait.
+        // Start the fake clock only after filesystem/HTTP storage work drained.
+        const realFetch = globalThis.fetch;
+        let deliveryReady!: () => void;
+        const ready = new Promise<void>((resolve) => {
+          deliveryReady = resolve;
+        });
+        const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, request) => {
+          const body = JSON.parse(String(request?.body));
+          if (body.action === 'data') {
+            actions.push(body.action);
+            vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+            deliveryReady();
+            return new Response('{}', { status: 503 });
+          }
+          if (body.action === 'settled') {
+            actions.push(body.action);
+            expect(body).toMatchObject(input(first.invocation));
+            throw new Error('fixture delivery outage');
+          }
+          return realFetch(url, request);
+        });
+        try {
+          const pending = run(first);
+          await ready;
+          await vi.runAllTimersAsync();
+          expect((await pending).success).toBe(false);
+          expect(actions.filter((action) => action === 'settled').length).toBeGreaterThan(3);
+          expect(actions.filter((action) => action !== 'settled')).toEqual([
+            'claim',
+            ...actions.filter((action) => action === 'quiesce'),
+            'upload',
+            'storage',
+            'data',
+          ]);
+        } finally {
+          fetchSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      } else {
+        expect((await run(first)).success).toBe(false);
+      }
       if (scenario === 'rollback')
         await scoped(async (tx) => {
           await executeRaw(
@@ -337,6 +384,17 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
           .one()
       );
       expect(after).not.toBeNull();
+      if (scenario === 'settlement_exhausted') {
+        expect(after!.data.maintenance?.execution_id).toBe(first.invocation);
+        expect(await admission()).toMatchObject({
+          acquired: false,
+          invocation: first.invocation,
+          claim: { generation: first.claim.generation },
+        });
+        await expect(stat(workspace)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(stat(home)).rejects.toMatchObject({ code: 'ENOENT' });
+        continue;
+      }
       if (unsettledRemoval) {
         expect(pendingSibling).toBeDefined();
         expect(siblingRemoved).toBe(false);
@@ -388,9 +446,15 @@ export async function exerciseDeletionRecovery(raw: Database, dialect: 'sqlite' 
       expect(retry.claim.generation).toBe(first.claim.generation + 1);
       await runWithTenantContext(tenant, async () => {
         for (const action of ['quiesce', 'storage', 'data', 'settled', 'claim'])
-          await expect(
-            service.create({ ...input(first.invocation), action }, params)
-          ).rejects.toThrow();
+          if (action === 'settled') {
+            await expect(
+              service.create({ ...input(first.invocation), action }, params)
+            ).rejects.toMatchObject({ code: 409 });
+          } else {
+            await expect(
+              service.create({ ...input(first.invocation), action }, params)
+            ).rejects.toThrow();
+          }
       });
       authorize(retry.invocation);
       expect((await run(retry)).success).toBe(true);
