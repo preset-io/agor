@@ -144,19 +144,9 @@ describe('Marketplace catalog toolbar', () => {
   });
 });
 
-describe('Marketplace catalog toolbar on a phone', () => {
+describe('Marketplace catalog toolbar in a narrow container', () => {
   beforeEach(() => {
-    vi.spyOn(window, 'matchMedia').mockImplementation(
-      (query: string) =>
-        ({
-          matches: query.includes('max-width: 575'),
-          media: query,
-          addListener: () => {},
-          removeListener: () => {},
-          addEventListener: () => {},
-          removeEventListener: () => {},
-        }) as unknown as MediaQueryList
-    );
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(390);
   });
   afterEach(() => vi.restoreAllMocks());
 

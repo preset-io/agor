@@ -1,8 +1,9 @@
 /**
  * Search and every filter, in one toolbar directly under the page header
  * (REQ-CAT-2). Splitting them across regions makes the user hunt for the
- * control that is narrowing their results. On a phone the selects move into a
- * bottom sheet behind one Filters button.
+ * control that is narrowing their results. It is always one row: when the full
+ * row does not fit its container, the selects move into a bottom sheet behind
+ * one Filters button.
  *
  * The search box publishes every keystroke. It used to hold a draft and debounce
  * it, because each change was a request; now narrowing is a pass over an array
@@ -12,8 +13,8 @@
 
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { FilterOutlined, SearchOutlined } from '@ant-design/icons';
-import { Badge, Button, Drawer, Flex, Grid, Input, Select, Typography, theme } from 'antd';
-import { memo, useState } from 'react';
+import { Badge, Button, Drawer, Flex, Input, Select, Typography, theme } from 'antd';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import {
@@ -27,6 +28,10 @@ import {
 } from './catalogPresentation';
 
 const { Text } = Typography;
+
+const SEARCH_MIN = 240;
+const FILTER_MIN = 180;
+const SORT_WIDTH = 150;
 
 const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
   label: group.label,
@@ -65,14 +70,32 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   resultCount = null,
 }) => {
   const { token } = theme.useToken();
-  const screens = Grid.useBreakpoint();
-  const compact = screens.xs === true && screens.md !== true;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const measure = () => setWidth(root.clientWidth);
+    const observer = new ResizeObserver(measure);
+    observer.observe(root);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+  // Unmeasured (0) keeps the full row.
+  const compact =
+    width > 0 && width < SEARCH_MIN + 2 * FILTER_MIN + SORT_WIDTH + 3 * token.paddingSM;
   const reducedMotion = usePrefersReducedMotion();
   const [filtersOpen, setFiltersOpen] = useState(false);
   // Mount the sheet on demand: left mounted while closed, it broke the host modal's Escape.
   const [filtersMounted, setFiltersMounted] = useState(false);
+  useEffect(() => {
+    if (!compact) {
+      setFiltersOpen(false);
+      setFiltersMounted(false);
+    }
+  }, [compact]);
   const full = { width: '100%' };
-  const filterStyle = compact ? full : { flex: '1 1 180px', maxWidth: 220 };
+  const filterStyle = compact ? full : { flex: `1 1 ${FILTER_MIN}px`, maxWidth: 220 };
   const selectStyles = { prefix: { color: token.colorTextSecondary } };
   const activeFilters = Number(!!category) + Number(!!capability) + Number(sort !== DEFAULT_SORT);
 
@@ -84,7 +107,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
       aria-label="Search MCP servers"
       value={search}
       onChange={(event) => onSearchChange(event.target.value)}
-      style={compact ? { flex: 1, minWidth: 0 } : { flex: '1 1 240px', maxWidth: 360 }}
+      style={compact ? { flex: 1, minWidth: 0 } : { flex: `1 1 ${SEARCH_MIN}px`, maxWidth: 360 }}
     />
   );
   const selects = (
@@ -121,13 +144,13 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
         aria-label="Sort servers"
         options={SORT_OPTIONS}
         styles={selectStyles}
-        style={compact ? full : { width: 150, marginInlineStart: 'auto' }}
+        style={compact ? full : { width: SORT_WIDTH, marginInlineStart: 'auto' }}
       />
     </>
   );
 
   return (
-    <Flex vertical gap={token.paddingXS}>
+    <Flex ref={rootRef} vertical gap={token.paddingXS}>
       {compact ? (
         <Flex gap={token.paddingSM} align="center">
           {searchInput}
@@ -186,7 +209,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           )}
         </Flex>
       ) : (
-        <Flex wrap gap={token.paddingSM} align="center">
+        <Flex gap={token.paddingSM} align="center">
           {searchInput}
           {selects}
         </Flex>
