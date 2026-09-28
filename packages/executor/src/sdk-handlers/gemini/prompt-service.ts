@@ -200,7 +200,11 @@ export class GeminiPromptService {
         yield { type: 'stopped' };
         return;
       }
-      await config.refreshAuth(Gemini.AuthType.USE_GEMINI, this.apiKey);
+      try {
+        await config.refreshAuth(Gemini.AuthType.USE_GEMINI, this.apiKey);
+      } catch (error) {
+        throw geminiError(Gemini.classifyGoogleError(error), model);
+      }
       const client = config.getGeminiClient();
       let restored = false;
       if (conversation && file) {
@@ -235,7 +239,19 @@ export class GeminiPromptService {
         const pending: GeminiTypes.ToolCallRequestInfo[] = [];
         let lastUsage: GeminiTypes.GeminiFinishedEventValue['usageMetadata'];
         const stream = client.sendMessageStream(parts, controller.signal, promptId);
-        let next = await stream.next();
+        const nextEvent = async () => {
+          try {
+            return await stream.next();
+          } catch (error) {
+            // The SDK also runs local history, policy, and tool work while
+            // advancing the generator. Keep only its explicit unauthorized
+            // error on the fixed auth path; provider HTTP errors otherwise
+            // arrive through GeminiEventType.Error.
+            if (error instanceof Gemini.UnauthorizedError) throw geminiError(error, model);
+            throw new GeminiIntegrationError('Gemini integration error.');
+          }
+        };
+        let next = await nextEvent();
         while (!next.done) {
           const event = next.value;
           reportSdkActivity(onActivity, 'gemini', String(event.type));
@@ -286,7 +302,7 @@ export class GeminiPromptService {
               };
               break;
           }
-          next = await stream.next();
+          next = await nextEvent();
         }
         const response = next.value?.getDebugResponses().at(-1);
         reportedModel = response?.modelVersion ?? reportedModel;
@@ -314,15 +330,6 @@ export class GeminiPromptService {
             agor: { usage: { ...totals }, requestedModel, reportedModel, costEstimated: true },
           },
         };
-        if (taskId && this.tasksService) {
-          const task = await this.tasksService.get(taskId);
-          await this.tasksService.patch(taskId, {
-            metadata: {
-              ...task.metadata,
-              gemini: { requestedModel, reportedModel, costEstimated: true },
-            },
-          });
-        }
         if (!pending.length) return;
         const scheduler = new Gemini.Scheduler({
           context: config,
@@ -365,10 +372,11 @@ export class GeminiPromptService {
         yield { type: 'stopped' };
         return;
       }
-      throw geminiError(
-        error instanceof GeminiIntegrationError ? error : Gemini.classifyGoogleError(error),
-        model
-      );
+      // Local repository, policy, and tool failures can also carry HTTP 401/403.
+      // Only the explicit provider boundaries above may classify a credential.
+      throw error instanceof GeminiIntegrationError
+        ? error
+        : new GeminiIntegrationError('Gemini integration error.');
     } finally {
       try {
         await disposeGeminiRuntime(config, cleanup);

@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
   dispose: vi.fn(),
   resume: vi.fn(),
   reset: vi.fn(),
+  streamError: undefined as unknown,
   events: [] as SDK.ServerGeminiStreamEvent[][],
 }));
 vi.mock('../../config.js', () => ({ getDaemonUrl: vi.fn(async () => 'http://localhost:3030') }));
@@ -35,6 +36,9 @@ vi.mock('@agor/core/agentic-integrations', () => ({
     ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
     AuthType: { USE_GEMINI: 'gemini' },
     classifyGoogleError: (error: unknown) => error,
+    UnauthorizedError: class UnauthorizedError extends Error {
+      override name = 'UnauthorizedError';
+    },
     loadConversationRecord: vi.fn(async () => ({ messages: [] })),
     convertSessionToClientHistory: vi.fn(() => []),
     GeminiEventType: {
@@ -75,6 +79,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
           sendMessageStream: async function* (...args: unknown[]) {
             state.prompts(...args);
             for (const event of state.events.shift() ?? []) yield event;
+            if (state.streamError) throw state.streamError;
             return { getDebugResponses: () => [{ modelVersion: 'sdk-reported-model' }] };
           },
         };
@@ -94,6 +99,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
 
 import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
 import { findGeminiRecording } from './runtime.js';
+import { Gemini } from './sdk.js';
 
 let directory: string;
 let messages: MessagesRepository;
@@ -126,6 +132,7 @@ async function collect(
 beforeEach(async () => {
   vi.clearAllMocks();
   state.events = [];
+  state.streamError = undefined;
   vi.mocked(findGeminiRecording).mockResolvedValue(undefined);
   state.resume.mockResolvedValue(undefined);
   directory = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-unit-'));
@@ -271,6 +278,49 @@ describe('Gemini prompt boundary', () => {
   });
   it('does not reflect raw provider errors', async () => {
     state.events = [[event('error', { error: { status: 401, message: 'SECRET' } })]];
+    await expect(collect()).rejects.toThrow('Gemini rejected the API key.');
+  });
+  it('completes after model text without an executor-forbidden metadata patch', async () => {
+    state.events = [[event('content', 'READY'), event('finished', { usageMetadata: {} })]];
+    const tasksService = {
+      get: vi.fn(async () => ({ created_by: 'owner', metadata: {} })),
+      patch: vi.fn(async () => {
+        throw Object.assign(new Error('Task patch contains fields that are not executor-managed'), {
+          status: 403,
+        });
+      }),
+    };
+    const s = new GeminiPromptService(
+      messages,
+      sessions,
+      'fake-key',
+      branches,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      tasksService as never
+    );
+    const result = [];
+    for await (const item of s.promptSessionStreaming(id, 'hello', 'task-id' as never, 'autoEdit'))
+      result.push(item);
+    expect(result).toContainEqual(expect.objectContaining({ type: 'complete' }));
+    expect(tasksService.patch).not.toHaveBeenCalled();
+  });
+  it('does not classify a local Forbidden error as a rejected provider key', async () => {
+    vi.mocked(messages.getNextIndexBySessionId).mockRejectedValueOnce(
+      Object.assign(new Error('private repository detail'), { status: 403 })
+    );
+    await expect(collect()).rejects.toThrow('Gemini integration error.');
+  });
+  it('does not classify a local SDK-iteration Forbidden error as a rejected provider key', async () => {
+    state.streamError = Object.assign(new Error('private local detail'), { status: 403 });
+    await expect(collect()).rejects.toThrow('Gemini integration error.');
+  });
+  it('keeps the SDK explicit unauthorized error classified as a rejected key', async () => {
+    state.streamError = new Gemini.UnauthorizedError('private provider detail');
     await expect(collect()).rejects.toThrow('Gemini rejected the API key.');
   });
   it('stops during a tool without sending another turn', async () => {
