@@ -43,7 +43,7 @@ vi.mock('../MCPServerSelect', () => ({
       <span data-testid="available-servers">
         {mcpServers.map((server) => server.name).join(',')}
       </span>
-      <button type="button" onClick={() => onChange(['replacement-server'])}>
+      <button type="button" onClick={() => onChange([])}>
         replace-session-mcp
       </button>
     </div>
@@ -163,6 +163,9 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
       screen.getByRole('button', {
         name: 'MCP servers. 1 MCP server attached. Open to add or change MCP servers.',
       })
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('available-servers')).toHaveTextContent('portal-server')
     );
     fireEvent.click(screen.getByRole('button', { name: 'replace-session-mcp' }));
     await waitFor(() => expect(updateSessionMcpServers).toHaveBeenCalledOnce());

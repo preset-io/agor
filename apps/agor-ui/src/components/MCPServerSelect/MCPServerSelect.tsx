@@ -11,6 +11,8 @@ import { useMcpPopupLayout } from './useMcpPopupLayout';
 export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   ref?: Ref<RefSelectProps>;
   mcpServers: MCPServer[];
+  /** Readable display metadata only; never grants new attachment eligibility. */
+  selectedServers?: MCPServer[];
   value?: string[];
   onChange?: (value: string[]) => void;
   placeholder?: string;
@@ -36,10 +38,18 @@ export function buildMcpServerOptions(
    * the honest reading for a caller that has no store: `mcpServerNeedsAuth`
    * still clears any server carrying an unexpired access token.
    */
-  userAuthenticatedMcpServerIds: Set<string> = new Set()
+  userAuthenticatedMcpServerIds: Set<string> = new Set(),
+  selectedServers: MCPServer[] = []
 ) {
   const selected = new Set(selectedIds);
-  const options: Array<{ label: string; value: string; disabled: boolean }> = mcpServers
+  const eligibleIds = new Set(mcpServers.map((server) => server.mcp_server_id));
+  const displayServers = [
+    ...mcpServers,
+    ...selectedServers.filter(
+      (server) => selected.has(server.mcp_server_id) && !eligibleIds.has(server.mcp_server_id)
+    ),
+  ];
+  const options: Array<{ label: string; value: string; disabled: boolean }> = displayServers
     // Disabled servers cannot be newly attached, but must remain an option when
     // already selected. Otherwise Ant Select falls back to rendering the UUID.
     .filter((server) => server.enabled || selected.has(server.mcp_server_id))
@@ -67,7 +77,7 @@ export function buildMcpServerOptions(
       };
     });
 
-  const knownIds = new Set<string>(mcpServers.map((server) => server.mcp_server_id));
+  const knownIds = new Set<string>(displayServers.map((server) => server.mcp_server_id));
   for (const id of selectedIds) {
     if (!knownIds.has(id)) {
       options.push({
@@ -96,6 +106,7 @@ export function buildMcpServerOptions(
  */
 export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   mcpServers,
+  selectedServers,
   value,
   onChange,
   placeholder = 'Select MCP servers...',
@@ -133,7 +144,12 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
     !selectProps.builtinPlacements &&
     selectProps.popupMatchSelectWidth === undefined;
 
-  const options = buildMcpServerOptions(filteredServers, value, userAuthenticatedMcpServerIds);
+  const options = buildMcpServerOptions(
+    filteredServers,
+    value,
+    userAuthenticatedMcpServerIds,
+    selectedServers
+  );
 
   return (
     <Select
