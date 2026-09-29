@@ -151,4 +151,5 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
     const wrap = document.querySelector('.ant-modal-wrap');
     if (wrap) expect(wrap).not.toBeVisible();
   });
-});
+  // Five real-browser modal cycles take 22-31s on CI runners, past the 30s browser default.
+}, 60_000);
