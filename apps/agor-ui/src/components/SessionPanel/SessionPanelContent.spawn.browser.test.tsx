@@ -51,6 +51,9 @@ const parent = {
 
 afterEach(cleanup);
 
+// AntD can leave the spinner's leave motion (aria-label "loading") in the button after loading ends.
+const SPAWN_BUTTON = { name: /Spawn Session$/ };
+
 it('reopens a mounted SessionPanel spawn modal after success and retains a rejected draft', async () => {
   const create = vi
     .fn<(config: string | Partial<SpawnConfig>) => Promise<void>>()
@@ -95,7 +98,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   render(<Harness />);
   for (let attempt = 1; attempt <= 3; attempt++) {
     await click(screen.getByRole('button', { name: 'Open spawn' }));
-    const submit = await screen.findByRole('button', { name: 'Spawn Session' }, { timeout: 5000 });
+    const submit = await screen.findByRole('button', SPAWN_BUTTON, { timeout: 5000 });
     await waitFor(() => expect(submit).not.toHaveClass('ant-btn-loading'));
     await fill(screen.getByRole('textbox', { name: 'Child prompt' }), `Child ${attempt}`);
     await click(screen.getByText('Custom config'));
@@ -123,10 +126,10 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   await click(screen.getByText('Custom config'));
   await click(await screen.findByRole('switch'));
   await fill(screen.getByRole('textbox', { name: 'Extra instructions' }), 'Keep my settings');
-  await click(screen.getByRole('button', { name: 'Spawn Session' }));
+  await click(screen.getByRole('button', SPAWN_BUTTON));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'Spawn Session' })).not.toHaveClass('ant-btn-loading')
+    expect(screen.getByRole('button', SPAWN_BUTTON)).not.toHaveClass('ant-btn-loading')
   );
   expect(screen.getByRole('dialog')).toBeVisible();
   expect(screen.getByRole('textbox', { name: 'Child prompt' })).toHaveValue('Keep my draft');
@@ -134,7 +137,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
     'Keep my settings'
   );
   expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
-  await click(screen.getByRole('button', { name: 'Spawn Session' }));
+  await click(screen.getByRole('button', SPAWN_BUTTON));
   await waitFor(() => expect(create).toHaveBeenCalledTimes(5));
   expect(create).toHaveBeenLastCalledWith(
     expect.objectContaining({
