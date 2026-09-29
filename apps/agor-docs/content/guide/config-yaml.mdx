@@ -174,7 +174,7 @@ configuration in which `config.yaml` is read from one home and the database from
 `AGOR_HOME` to run a second, throwaway daemon without it reading or writing the state of the
 deployment already installed under `~/.agor`.
 
-`AGOR_DATA_HOME` (or `paths.data_home`) still separates the *git data* — `repos/` and `worktrees/` —
+`AGOR_DATA_HOME` (or `paths.data_home`) still separates the _git data_ — `repos/` and `worktrees/` —
 from the daemon's operating files, and defaults to `AGOR_HOME`. `AGOR_DB_PATH`, `DATABASE_URL`, and
 `database.sqlite.path` still override the database location specifically; a `~` in any of those is
 the operating-system home, not the Agor home.
@@ -398,7 +398,8 @@ restart the daemon to apply a change.
 App and extras are operator-owned deployment metadata, not tenant identity.
 Callers cannot override either reserved context field. `context.tenant_id` comes
 only from the trusted ambient runtime tenant scope; it is absent outside that
-scope, even if a caller supplies one. `context.deployment_id` is automatically snapshotted from the daemon's
+scope, even if a caller supplies one. `context.deployment_id` is automatically
+snapshotted from the daemon's
 `daemon.deployment_id` when analytics is initialized with the daemon config.
 It is present even outside tenant scope and cannot be supplied or overridden by
 an event caller. Analytics-only library configurations have no deployment ID;
@@ -406,8 +407,8 @@ none is invented. This UUID is distinct from a placement label such as
 `extras.deployment`. Cloud can continue supplying `cell_id`, environment and
 placement labels through operator-owned `extras`.
 
-Other caller context, event properties,
-`userId`, and `anonymousId` are preserved. Exact-name and simple `*`-glob exclusions
+Other caller context, event properties, `userId`, and `anonymousId` are preserved.
+Exact-name and simple `*`-glob exclusions
 run before delivery. Prototype-poison context keys are discarded before passing
 options to the analytics client.
 

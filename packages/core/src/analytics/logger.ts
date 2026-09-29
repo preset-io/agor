@@ -121,20 +121,18 @@ export async function createAnalyticsLogger(
   const resolved = resolveAnalyticsConfig(config);
   if (resolved.enabled !== true) return new NoopAnalyticsLogger();
 
+  // Deployment identity is process configuration, never caller context.
+  // Snapshot before plugin initialization yields, just like operator metadata.
+  const deploymentId = 'daemon' in config ? config.daemon?.deployment_id : undefined;
   const plugins = await resolveAnalyticsPlugins(resolved);
   const client = Analytics({
     ...(resolved.client ?? {}),
     plugins,
   });
 
-  // Deployment identity is process configuration, never caller analytics context.
-  // Snapshot it here; tenant identity is captured synchronously at track time,
+  // Tenant identity is captured synchronously at track time,
   // before the analytics package or HTTP transport can queue the event.
-  return new AnalyticsPackageLogger(
-    client,
-    resolved.filters?.exclude_events ?? [],
-    'daemon' in config ? config.daemon?.deployment_id : undefined
-  );
+  return new AnalyticsPackageLogger(client, resolved.filters?.exclude_events ?? [], deploymentId);
 }
 
 let globalAnalyticsLogger: AnalyticsLogger = new NoopAnalyticsLogger();
