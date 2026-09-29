@@ -40,6 +40,8 @@ Tight, code-pointer-heavy notes on internals.
 
 Step-by-step implementation guides referenced from code.
 
+- [`Publishing Agor`](../PUBLISH.md) — SDK/model changes, aligned releases, tag and approval steps, npm verification, and upgrades.
+
 - [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
 - [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
 - [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC and simple/sandbox/delegated execution.

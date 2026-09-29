@@ -43,6 +43,8 @@ recreating Agor.
 
 ## Documentation
 
+- **Maintainer release runbook**: [Publishing Agor](https://github.com/preset-io/agor/blob/main/PUBLISH.md)
+
 - **GitHub**: https://github.com/preset-io/agor
 - **Docs**: https://agor.live
 
