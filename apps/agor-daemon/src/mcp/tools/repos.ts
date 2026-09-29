@@ -241,4 +241,36 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       return textResult(updated);
     }
   );
+
+  server.registerTool(
+    'agor_repos_import_environment',
+    {
+      description:
+        "Import the source branch's .agor.yml into its repository's environment configuration (admin-only). " +
+        'Replaces all repo-wide variants and the default, removing definitions absent from the file; ' +
+        'preserves deployment-local template_overrides. Review the complete replacement before calling. ' +
+        'The branch must belong to the repo and the caller must have branch filesystem read access. ' +
+        'Does not render or start any branch. Call agor_environment_set afterward to select or re-render ' +
+        'the target branch variant, then agor_environment_start when ready. ' +
+        'See https://agor.live/guide/environment-configuration for the configuration and remote-provider workflow.',
+      annotations: { destructiveHint: true, idempotentHint: true },
+      inputSchema: z.object({
+        repoId: mcpRequiredId('repoId', 'Repository'),
+        branchId: mcpRequiredId('branchId', 'Source branch containing .agor.yml'),
+      }),
+    },
+    async (args) => {
+      const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      // Match the HTTP long route's write admission in a short unit. The service
+      // owns its read/write units and rechecks the gate after executor file I/O;
+      // never hold a database transaction across that executor round-trip.
+      await runWithMcpTenantDatabaseWrite(ctx, async () => undefined);
+      const updated = await reposService.importFromAgorYml(
+        args.repoId,
+        { branch_id: args.branchId },
+        ctx.baseServiceParams
+      );
+      return textResult(updated);
+    }
+  );
 }

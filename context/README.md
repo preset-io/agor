@@ -1,6 +1,6 @@
 # context/ — fast orientation for agents
 
-This folder is **not** Agor's documentation. The user-facing docs live in [`apps/agor-docs/pages/guide/`](../apps/agor-docs/pages/guide/) and on [agor.live](https://agor.live).
+This folder is **not** Agor's documentation. The user-facing docs live in [`apps/agor-docs/content/guide/`](../apps/agor-docs/content/guide/) and on [agor.live](https://agor.live).
 
 This folder is a small set of **agent-oriented cheat sheets** — tight pointers, file maps, gotchas, and design rationale that an LLM dropped into the repo would actually want to skim before opening code.
 
@@ -58,7 +58,7 @@ Step-by-step implementation guides referenced from code.
 
 Designs that are referenced from code or in flight. Anything here is either still being built or documents a security/behavior contract you'd want before touching the relevant code.
 
-- [`executor-isolation.md`](explorations/executor-isolation.md) — executor process / unix isolation architecture (referenced from `packages/executor/` and `apps/agor-docs/pages/guide/architecture.mdx`).
+- [`executor-isolation.md`](explorations/executor-isolation.md) — executor process / unix isolation architecture (referenced from `packages/executor/` and `apps/agor-docs/content/guide/architecture.mdx`).
 - [`executor-expansion.md`](explorations/executor-expansion.md) — referenced from `packages/core/src/config/`.
 - [`executor-implementation-plan.md`](explorations/executor-implementation-plan.md) — phased plan for executor work.
 - [`env-var-access.md`](explorations/env-var-access.md) — per-user / per-session env var access model (referenced from schemas, types, and migrations).
@@ -87,12 +87,12 @@ Assets used by docs in this folder.
 
 A previous version of this folder had ~95 files (concepts/, archives/, explorations/, projects/) totaling ~57k lines. Most was either:
 
-- duplicated by the user-facing guide pages in `apps/agor-docs/pages/guide/*.mdx`,
+- duplicated by the user-facing guide pages in `apps/agor-docs/content/guide/*.mdx`,
 - design exploration for features that have since shipped (the code is the source of truth),
 - or stale plans for features that never shipped.
 
 If you're looking for a topic and don't see it here, try (in order):
 
-1. The relevant guide page in `apps/agor-docs/pages/guide/`
+1. The relevant guide page in `apps/agor-docs/content/guide/`
 2. `git log --all --diff-filter=D -- 'context/**'` to find the deleted version
 3. The actual code under `packages/` or `apps/`
