@@ -80,4 +80,73 @@ describe('useCatalogReadiness request coalescing', () => {
     await act(async () => vi.advanceTimersByTimeAsync(1));
     expect(get).toHaveBeenCalledTimes(2);
   });
+
+  it.each([
+    ['sharing', { sharing: 'shared' as const }],
+    ['entry', { entryKey: 'com.notion/mcp' }],
+    ['account', { userId: 'bob' }],
+    ['authenticated tenant/generation', { authGeneration: 8 }],
+  ])('clears reuse authority and rejects late results after a %s change', async (_name, change) => {
+    vi.useFakeTimers();
+    const pending: ((value: MCPCatalogReadiness) => void)[] = [];
+    const get = vi.fn(() => new Promise<MCPCatalogReadiness>((resolve) => pending.push(resolve)));
+    const events = emitter();
+    const client = {
+      service: (path: string) => (path === 'mcp-catalog/readiness' ? { get } : events),
+      io: events,
+    } as unknown as AgorClient;
+    const initial = {
+      client,
+      entryKey: 'app.linear/linear',
+      sharing: 'private' as const,
+      ready: true,
+      authGeneration: 7,
+      userId: 'alice',
+    };
+    const rendered = renderHook((input) => useCatalogReadiness(input), {
+      initialProps: initial as Parameters<typeof useCatalogReadiness>[0],
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    await act(async () =>
+      pending[0]({
+        catalog_key: initial.entryKey,
+        state: 'installed_ready',
+        reusable_configuration: true,
+      })
+    );
+    expect(rendered.result.current.readiness?.reusable_configuration).toBe(true);
+    const next = { ...initial, ...change };
+    // Switch directly from populated reuse state, before any invalidation
+    // could mask a failure to clear the previous authority's eligibility.
+    rendered.rerender(next);
+    expect(rendered.result.current.readiness).toBeNull();
+    expect(rendered.result.current.loading).toBe(true);
+    rendered.rerender(initial);
+    act(() => events.emit('marketplace:invalidated'));
+    expect(rendered.result.current.readiness).toBeNull();
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    rendered.rerender(next);
+    expect(rendered.result.current.readiness).toBeNull();
+    expect(rendered.result.current.loading).toBe(true);
+    await act(async () => vi.advanceTimersByTimeAsync(100));
+    await act(async () =>
+      pending[2]({
+        catalog_key: next.entryKey,
+        state: 'oauth_required',
+      })
+    );
+    await act(async () =>
+      pending[1]({
+        catalog_key: initial.entryKey,
+        state: 'reusable_oauth',
+        reusable_configuration: true,
+      })
+    );
+    expect(rendered.result.current.readiness).toEqual({
+      catalog_key: next.entryKey,
+      state: 'oauth_required',
+    });
+    expect(rendered.result.current.loading).toBe(false);
+    rendered.unmount();
+  });
 });

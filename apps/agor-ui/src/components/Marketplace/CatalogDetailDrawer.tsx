@@ -220,6 +220,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
 
   const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
+  const oauthPresentation = {
+    readiness: 'sign-in' as const,
+    label: `Connect with ${title || 'provider'}`,
+    detail: 'Sign in with your own account in a separate secure window.',
+  };
   const readinessPresentation = (() => {
     switch (readiness?.state) {
       case 'no_auth':
@@ -239,11 +244,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         };
       }
       case 'oauth_required':
-        return {
-          readiness: 'sign-in' as const,
-          label: `Connect with ${title || 'provider'}`,
-          detail: 'Sign in with your own account in a separate secure window.',
-        };
+        return oauthPresentation;
       case 'installed_ready':
         return {
           readiness: 'ready' as const,
@@ -261,7 +262,9 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             : 'Reuse your existing connection in a new session without signing in again.',
         };
       default:
-        return connect;
+        // Sharing refreshes must clear readiness, not the current entry's
+        // provider copy. Derive it afresh; never retain a previous reuse grant.
+        return connect?.readiness === 'sign-in' ? oauthPresentation : connect;
     }
   })();
   const advisoryStatus = connect?.readiness === 'blocked' ? connect : readinessPresentation;
