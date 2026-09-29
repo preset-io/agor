@@ -4,6 +4,10 @@ import {
   BranchRepository,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  eq,
+  GatewayChannelRepository,
+  GatewayInboundEventRepository,
+  gatewayInboundEvents,
   generateId,
   getCurrentTenantDatabaseScope,
   MessagesRepository,
@@ -13,6 +17,7 @@ import {
   SessionRepository,
   TaskRepository,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import type {
@@ -26,11 +31,13 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
+import { withVerifiedHttpGatewayAuthority } from './services/gateway-authority.js';
 import { TasksService } from './services/tasks.js';
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const close of cleanup.splice(0)) close();
 });
 
@@ -150,6 +157,7 @@ async function fixture() {
       tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
     } as AuthenticatedParams) as Promise<Task>;
   return {
+    db,
     scoped,
     session,
     actor,
@@ -223,4 +231,140 @@ describe('registered prompt route launch handoff', () => {
       session_id: f.session.session_id,
     });
   });
+  it('preserves Teams authority through Feathers and checks it inside Task admission', async () => {
+    const f = await fixture();
+    const idempotencyTaskId = generateId() as TaskID;
+    const original = GatewayInboundEventRepository.prototype.assertTeamsTaskAdmission;
+    const fence = vi
+      .spyOn(GatewayInboundEventRepository.prototype, 'assertTeamsTaskAdmission')
+      .mockImplementation(async function (this: GatewayInboundEventRepository, authority) {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'tenant',
+          transactionActive: true,
+        });
+        return original.call(this, authority);
+      });
+    const data = withVerifiedHttpGatewayAuthority(
+      { prompt: 'stale Teams authority', idempotencyTaskId },
+      {
+        id: generateId(),
+        gateway_channel_id: generateId(),
+        processing_token: 'stale-worker',
+        provider_config_generation: 1,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'teams-tenant',
+        thread_id: 'teams-thread',
+      }
+    );
+    await expect(f.prompt(data)).rejects.toThrow('admission authority');
+    expect(fence).toHaveBeenCalledOnce();
+    expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
+    expect(f.executeTask).not.toHaveBeenCalled();
+  });
+  it.each(['disable', 'config-tuning', 'reclaim', 'unchanged'] as const)(
+    'checks real prompt admission after asynchronous %s preparation',
+    async (mutation) => {
+      vi.stubEnv('AGOR_MASTER_SECRET', 'disposable-teams-admission-secret');
+      const f = await fixture();
+      const { channel, claim } = await f.scoped(async () => {
+        const channels = new GatewayChannelRepository(f.db);
+        const channel = await channels.create({
+          name: 'Teams admission fixture',
+          created_by: f.actor.user_id,
+          target_branch_id: f.session.branch_id,
+          agor_user_id: f.actor.user_id,
+          channel_type: 'teams',
+          enabled: true,
+          provider_installation_id: 'teams-app',
+          config: {
+            app_id: 'teams-app',
+            app_password: 'disposable-secret',
+            microsoft_tenant_id: 'teams-tenant',
+            catch_up: { mode: 'off' },
+          },
+        });
+        const inbound = new GatewayInboundEventRepository(f.db);
+        const input = {
+          channelId: channel.id,
+          providerEventId: 'activity-1',
+          threadId: 'thread-1',
+          payload: { text: 'hello' },
+          providerConfigGeneration: channel.provider_config_generation,
+          verifiedAppId: 'teams-app',
+          verifiedTenantId: 'teams-tenant',
+          address: {
+            gatewayChannelId: channel.id,
+            threadId: 'thread-1',
+            conversationId: 'conversation-1',
+            rootMessageId: null,
+            address: { serviceUrl: 'https://smba.trafficmanager.net/teams/' },
+            verifiedAppId: 'teams-app',
+            verifiedTenantId: 'teams-tenant',
+            providerConfigGeneration: channel.provider_config_generation,
+          },
+        };
+        const admitted = await inbound.admitVerifiedHttp(input);
+        const claim = await inbound.claimQueued(admitted.event.id, 'worker-a', 30_000);
+        if (!claim) throw new Error('missing fixture claim');
+        return { channel, claim };
+      });
+      let reached!: () => void;
+      let resume!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const pause = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const original = f.sessionsRepository.findById.bind(f.sessionsRepository);
+      vi.spyOn(f.sessionsRepository, 'findById').mockImplementationOnce(async (...args) => {
+        const session = await original(...args);
+        reached();
+        await pause;
+        return session;
+      });
+      const idempotencyTaskId = generateId() as TaskID;
+      const work = f.prompt(
+        withVerifiedHttpGatewayAuthority({ prompt: 'Teams mention', idempotencyTaskId }, claim)
+      );
+      try {
+        await Promise.race([ready, work]);
+        await f.scoped(async () => {
+          if (mutation === 'reclaim') {
+            await update(f.db, gatewayInboundEvents)
+              .set({ processing_expires_at: new Date(0) })
+              .where(eq(gatewayInboundEvents.id, claim.id))
+              .run();
+            expect(
+              await new GatewayInboundEventRepository(f.db).claimQueued(
+                claim.id,
+                'worker-b',
+                30_000
+              )
+            ).toBeTruthy();
+          } else if (mutation !== 'unchanged') {
+            await new GatewayChannelRepository(f.db).update(
+              channel.id,
+              mutation === 'disable'
+                ? { enabled: false }
+                : { config: { ...channel.config, catch_up: { mode: 'off', max_messages: 10 } } }
+            );
+          }
+        });
+      } finally {
+        resume();
+      }
+      if (mutation === 'unchanged') {
+        await expect(work).resolves.toMatchObject({ task_id: idempotencyTaskId });
+        await vi.waitFor(() => expect(f.executeTask).toHaveBeenCalledOnce());
+        return;
+      }
+      await expect(work).rejects.toThrow('admission authority');
+      expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
+      expect(f.executeTask).not.toHaveBeenCalled();
+      expect(await f.scoped(() => f.sessionsRepository.countMessages(f.session.session_id))).toBe(
+        0
+      );
+    }
+  );
 });

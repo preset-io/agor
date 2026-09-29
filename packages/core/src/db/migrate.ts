@@ -133,6 +133,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0117_teams_gateway_ha',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+        summary:
+          'Stop all daemons. Disables existing Teams channels for reviewed opt-in. Old non-Teams inserts remain valid; drain Teams before rollback and never replay ambiguous deliveries',
+      }),
+    },
+  ],
+  [
     '0113_session_recency_not_null',
     {
       requiresOfflineCutover: false,

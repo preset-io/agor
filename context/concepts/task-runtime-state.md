@@ -115,6 +115,14 @@ compatibility/reconciliation. Direct admission has the same dispatch
 connection timeout/recovery contract: a crash after commit never silently
 requeues or replays a possibly launched prompt.
 
+Teams queue admission additionally checks the verified inbound event's processing
+token, lease, installation identity, and configuration generation inside that
+same transaction, immediately before inserting the Task. Channel and event locks
+hold through commit: revocation before admission refuses the Task; revocation
+after admission does not retroactively cancel it. Outbound delivery separately
+uses its durable effect-start marker as the revocation cutoff and never replays
+an ambiguous provider effect.
+
 ## The runtime facts stored on a task
 
 | Fact                         | What it answers                                                        | What it does not answer                  |

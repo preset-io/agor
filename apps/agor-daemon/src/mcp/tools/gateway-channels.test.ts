@@ -128,6 +128,27 @@ describe('gateway channel MCP agentic-tool schemas', () => {
       }).success
     ).toBe(false);
   });
+
+  it('does not expose cross-tenant worker activity through Teams status', async () => {
+    const app = makeFakeApp({});
+    app.get = (name: string) =>
+      name === 'teamsGatewayWorker'
+        ? { getStatus: () => ({ running: true, active_work: 73 }) }
+        : {};
+    const tools = await captureTools('admin', app);
+    const response = await tools.agor_gateway_teams_status.handler({});
+    const result = JSON.parse(response.content[0].text);
+    expect(result.status.running).toBe(true);
+    expect(result.status).not.toHaveProperty('active_work');
+  });
+
+  it('keeps Teams status diagnosis optional and strict', async () => {
+    const tools = await captureTools();
+    const schema = tools.agor_gateway_teams_status.cfg.inputSchema;
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ gatewayChannelId: 'teams-channel' }).success).toBe(true);
+    expect(schema.safeParse({ unexpected: true }).success).toBe(false);
+  });
 });
 
 async function captureTools(
@@ -395,6 +416,20 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(String(teamsDraft.error)).toContain('config.app_id is required for Teams');
     expect(String(teamsDraft.error)).not.toContain('config.app_password is required for Teams');
 
+    const teamsDraftWithInvalidMap = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Teams with invalid map',
+      targetBranchId: 'branch-1',
+      channelType: 'teams',
+      enabled: false,
+      config: {
+        app_id: 'teams-app',
+        microsoft_tenant_id: 'tenant-1',
+        user_map: { 'aad-object-1': 'user@example.com' },
+      },
+    });
+    expect(teamsDraftWithInvalidMap.success).toBe(false);
+    expect(String(teamsDraftWithInvalidMap.error)).toContain('full lowercase UUIDv7 Agor User IDs');
+
     const slackDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
       name: 'Draft Slack',
       targetBranchId: 'branch-1',
@@ -511,6 +546,37 @@ describe('agor_gateway_channels MCP tools', () => {
       config: { align_slack_users: true },
     });
     expect(aligned.success).toBe(true);
+  });
+
+  it('defaults Teams to disabled in both schema validation and the service payload', async () => {
+    const create = vi.fn(async (data: Record<string, unknown>) => ({
+      ...data,
+      id: 'teams-draft',
+      config: data.config,
+    }));
+    const tools = await captureTools('admin', makeFakeApp({ 'gateway-channels': { create } }));
+    const input = {
+      name: 'Teams draft',
+      channelType: 'teams',
+      targetBranchId: 'branch-1',
+      agorUserId: 'user-runner',
+      config: { app_id: 'teams-app', microsoft_tenant_id: 'tenant-1' },
+    };
+    expect(tools.agor_gateway_channels_create.cfg.inputSchema.safeParse(input).success).toBe(true);
+    expect(
+      tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+        ...input,
+        enabled: true,
+      }).success
+    ).toBe(false);
+    await tools.agor_gateway_channels_create.handler(input);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel_type: 'teams',
+        enabled: false,
+      }),
+      expect.anything()
+    );
   });
 
   it('creates through gateway-channels service and redacts returned secrets', async () => {

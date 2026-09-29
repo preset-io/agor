@@ -34,6 +34,7 @@ import {
   BoardRepository,
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  GatewayInboundEventRepository,
   generateId,
   getCurrentTenantId,
   getMCPEgressGatewayMode,
@@ -195,8 +196,10 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
+import { verifiedHttpGatewayAuthority } from './services/gateway-authority.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
@@ -946,6 +949,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   } = ctx;
 
   registerExecutorResponseRoutes(app);
+  registerTeamsGatewayIngressRoute({ app, db });
 
   // Health and launch auth share the exact startup-resolved provider. The
   // public DTO is immutable and contains no verification or exchange secrets.
@@ -2307,6 +2311,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 }
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
+                const teamsAuthority = verifiedHttpGatewayAuthority(data);
+                if (teamsAuthority) {
+                  await new GatewayInboundEventRepository(operationDb).assertTeamsTaskAdmission(
+                    teamsAuthority
+                  );
+                }
                 return new TaskRepository(operationDb).createPending({
                   task_id: data.idempotencyTaskId,
                   session_id: id as SessionID,

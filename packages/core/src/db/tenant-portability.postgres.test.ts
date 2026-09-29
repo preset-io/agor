@@ -777,6 +777,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'github_install_states',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'teams_conversation_addresses',
+      'teams_message_deliveries',
       'user_mcp_oauth_tokens',
       'user_provider_oauth_grants',
     ]);
@@ -814,6 +816,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'github_install_states'
     );
+
+    for (const table of ['teams_conversation_addresses', 'teams_message_deliveries']) {
+      expect(manifest.database.identity.tenantTables).not.toContain(table);
+      expect(manifest.database.tables.map((entry) => entry.name)).not.toContain(table);
+    }
 
     // A destination containing only non-portable authority is not empty. An
     // import must never retain that bearer policy beside newly restored rows.

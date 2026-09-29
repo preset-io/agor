@@ -66,6 +66,7 @@ import {
   sessions,
   shortId,
   TaskRepository,
+  TeamsMessageDeliveryRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
@@ -590,9 +591,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
-  const messagesService = createMessagesService(db, (tx, message) =>
-    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
-  ) as unknown as MessagesServiceImpl;
+  const teamsDeliveryRepository = new TeamsMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, async (tx, message) => {
+    await deliveryRepository.enqueueForMessageInTransaction(tx, message);
+    await teamsDeliveryRepository.enqueueForMessageInTransaction(tx, message);
+  }) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },

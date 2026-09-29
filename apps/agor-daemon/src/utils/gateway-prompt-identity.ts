@@ -17,14 +17,17 @@
  *
  * ALLOWLIST, not denylist. The question this module answers is "can we PROVE
  * the actor is real", so a platform Agor cannot prove that for — one with no
- * alignment switch, or one added to `ChannelType` since this was written — is
- * unaligned. The earlier polarity (a denylist of platforms known to have a
- * switch) reported Teams and Shortcut as aligned while `gateway.ts` was in
- * fact attributing their prompts to `channel.agor_user_id`.
+ * alignment switch or validated Teams user map — is unaligned. Teams maps
+ * immutable AAD object IDs to tenant-owned Agor User IDs and rejects every
+ * unmapped sender; an empty map instead uses the fixed channel account.
  */
 
 import type { ChannelType, GatewaySource, Session } from '@agor/core/types';
-import { GATEWAY_USER_ALIGNMENT_CONFIG_KEYS, getGatewaySource } from '@agor/core/types';
+import {
+  GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
+  getGatewaySource,
+  validateTeamsUserMap,
+} from '@agor/core/types';
 
 /**
  * Config key that proves per-user attribution, or `undefined` for a platform
@@ -82,10 +85,8 @@ export async function resolveGatewayPromptIdentity(
   if (!source) return { aligned: true };
 
   const configKey = gatewayAlignmentConfigKey(source.channel_type);
-  // No alignment switch exists for this platform, so `gateway.ts` runs every
-  // inbound message as the channel's "Post messages as" account. That is
-  // exactly the shared-account exposure this guard exists for.
-  if (!configKey) return { aligned: false, source };
+  // Unknown platforms fail closed. Teams has a map rather than a switch.
+  if (!configKey && source.channel_type !== 'teams') return { aligned: false, source };
 
   let channel: GatewayChannelIdentityRow | null | undefined;
   try {
@@ -93,7 +94,18 @@ export async function resolveGatewayPromptIdentity(
   } catch {
     channel = null;
   }
-  const aligned = channel?.config?.[configKey] === true;
+  // Teams has no boolean alignment switch: a nonempty validated map makes
+  // inbound routing reject every unmapped sender rather than use the owner.
+  if (source.channel_type === 'teams') {
+    const userMap = channel?.config?.user_map;
+    const aligned =
+      channel?.channel_type === 'teams' &&
+      userMap !== undefined &&
+      validateTeamsUserMap(userMap).ok &&
+      Object.keys(userMap as Record<string, unknown>).length > 0;
+    return aligned ? { aligned: true } : { aligned: false, source, configKey: 'user_map' };
+  }
+  const aligned = configKey !== undefined && channel?.config?.[configKey] === true;
   return aligned ? { aligned: true } : { aligned: false, source, configKey };
 }
 
@@ -112,9 +124,12 @@ export function gatewayIdentityRefusalMessage(
 ): string {
   const channel = verdict.source?.channel_name ?? 'this channel';
   const platform = verdict.source?.channel_type ?? 'this platform';
-  const remedy = verdict.configKey
-    ? `Ask an Agor admin to enable "${verdict.configKey}" on the channel, or ${action} from the Agor canvas instead.`
-    : `Agor cannot align ${platform} senders to Agor accounts, so there is no setting that makes this safe here — ${action} from the Agor canvas instead.`;
+  const remedy =
+    verdict.configKey === 'user_map'
+      ? `Ask an Agor admin to configure a nonempty Teams user_map with immutable Agor User IDs, or ${action} from the Agor canvas instead.`
+      : verdict.configKey
+        ? `Ask an Agor admin to enable "${verdict.configKey}" on the channel, or ${action} from the Agor canvas instead.`
+        : `Agor cannot align ${platform} senders to Agor accounts, so there is no setting that makes this safe here — ${action} from the Agor canvas instead.`;
   return (
     `Cannot ${action} from "${channel}": this gateway channel does not align platform users to ` +
     `Agor accounts, so every message here runs as the channel's "Post messages as" user. ` +
