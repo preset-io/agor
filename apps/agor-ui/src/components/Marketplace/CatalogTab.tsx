@@ -1,3 +1,4 @@
+import type { MCPCatalogSharing } from '@agor/core/types';
 /**
  * The Catalog: browse the MCP catalog, open an entry, connect it.
  *
@@ -151,6 +152,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const navigate = useNavigate();
   const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
   const [page, setPage] = useState(1);
+  const [sharing, setSharing] = useState<MCPCatalogSharing>('private');
   const [selected, setSelected] = useState<MCPCatalogEntry | null>(null);
   const drawerOpen = useRef(false);
   const drawerTrigger = useRef<HTMLElement | null>(null);
@@ -274,7 +276,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         ]
       : null
   );
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ownership consent resets at entry and caller boundaries
+  useEffect(() => {
+    setSharing('private');
+  }, [selected?.name, currentUser?.user_id]);
   const readiness = useCatalogReadiness({
+    sharing,
     client,
     entryKey: selected?.name,
     ready: connectionReady,
@@ -538,6 +545,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       try {
         const result = await client.service('mcp-catalog/connect').create({
           catalog_key: selected.name,
+          sharing,
           acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
         });
@@ -616,7 +624,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding]
+    [client, operationGuard, selected, onboarding, sharing]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -804,6 +812,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         connectCapability={connectCapability}
         policyPending={policyPending}
         policyPendingHint={policyPendingHint}
+        sharing={sharing}
+        onSharingChange={(value) => {
+          setSharing(value);
+          setConnectError(null);
+        }}
         readiness={readiness.readiness}
         readinessLoading={readiness.loading}
         readinessError={readiness.error}

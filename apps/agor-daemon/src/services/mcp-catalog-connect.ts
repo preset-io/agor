@@ -44,11 +44,13 @@ import type {
   MCPCatalogEntry,
   MCPCatalogProbedAuthType,
   MCPCatalogServerCandidate,
+  MCPCatalogSharing,
   MCPServer,
   MCPServerID,
   UserID,
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
+import { readCatalogSharing } from './mcp-catalog-access.js';
 import { hasLiveCallerOAuthGrant, selectCatalogCandidate } from './mcp-catalog-credential-match.js';
 import {
   catalogOAuthConfig,
@@ -341,10 +343,21 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
  */
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string },
-  bearerToken: string | undefined
+  bearerToken: string | undefined,
+  sharing: MCPCatalogSharing
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
+  if (
+    sharing === 'shared' &&
+    (bearerToken !== undefined ||
+      probed === 'credentials' ||
+      (probed === 'oauth' && entry.credentials?.oauth_challenge_compatible))
+  ) {
+    throw new CatalogConnectControlError(
+      'Credential-based Catalog installs must remain private. Shared installs support open access or per-user OAuth only.'
+    );
+  }
 
   // Some vendors publish a first-class bearer route while their unauthenticated
   // endpoint advertises an OAuth flow that Agor cannot safely enter (for
@@ -538,6 +551,10 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  authorizeCaller(
+    params: AuthenticatedParams,
+    sharing: MCPCatalogSharing
+  ): Promise<AuthenticatedParams>;
   /**
    * Opens one short tenant database unit for direct, internal service methods.
    * Connect is a long route and must not retain this scope across its remote
@@ -698,7 +715,8 @@ export function createMCPCatalogConnectService(
     entry: MCPCatalogEntry & { remote_url: string },
     prescribed: MCPAuth,
     userId: UserID,
-    params: AuthenticatedParams
+    params: AuthenticatedParams,
+    sharing: MCPCatalogSharing
   ): Promise<ExistingSelection | undefined> => {
     const candidates = await deps.listCandidates(userId, params);
     const selected = await selectCatalogCandidate(
@@ -707,7 +725,8 @@ export function createMCPCatalogConnectService(
       candidates,
       userId,
       Date.now(),
-      { isGrantAuthorized: (candidate) => deps.isGrantAuthorized(candidate, params) }
+      { isGrantAuthorized: (candidate) => deps.isGrantAuthorized(candidate, params) },
+      sharing
     );
     if (selected.live) {
       return {
@@ -943,26 +962,30 @@ export function createMCPCatalogConnectService(
         throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
       }
       const userId = authenticatedUserId as UserID;
+      const sharing = readCatalogSharing(data.sharing);
+      params = await deps.authorizeCaller(params, sharing);
       const bearerToken = readBearerToken(data.bearer_token, entry);
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
       // newer concurrent connect has selected it but before that request has
       // attached it. The same generation lock used for bearer fencing makes
       // that adoption authoritative without hydrating the row.
-      const operationGeneration = {
-        ownerUserId: userId,
-        catalogEntryName: entry.name,
-        value: await deps.runInTenantDatabaseScope(params, () =>
-          (service('mcp-servers') as unknown as MCPServersService).claimCatalogConnectGeneration(
-            userId,
-            entry.name
-          )
-        ),
-      };
+      const operationGeneration =
+        sharing === 'shared'
+          ? undefined
+          : {
+              ownerUserId: userId,
+              catalogEntryName: entry.name,
+              value: await deps.runInTenantDatabaseScope(params, () =>
+                (
+                  service('mcp-servers') as unknown as MCPServersService
+                ).claimCatalogConnectGeneration(userId, entry.name)
+              ),
+            };
       const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
-        auth = await resolveAuthRequirement(entry, bearerToken);
+        auth = await resolveAuthRequirement(entry, bearerToken, sharing);
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
@@ -973,7 +996,8 @@ export function createMCPCatalogConnectService(
         throw new BadRequest(safe.message, { category: safe.category });
       }
 
-      const existing = await findExistingInstall(entry, auth, userId, params);
+      params = await deps.authorizeCaller(params, sharing);
+      const existing = await findExistingInstall(entry, auth, userId, params, sharing);
 
       const createInput: CreateMCPServerInput = {
         name: catalogServerSlug(entry.name),
@@ -986,6 +1010,7 @@ export function createMCPCatalogConnectService(
         // defaults. It remains unattached until the caller explicitly starts
         // or configures a session with it.
         scope: 'session',
+        owner_user_id: sharing === 'shared' ? null : userId,
         // Not `user`: nobody typed this configuration. It came from the
         // catalog, and `catalog_entry_name` below records which entry — the
         // same pairing `imported` has with `import_path`.
@@ -1012,7 +1037,7 @@ export function createMCPCatalogConnectService(
           // concurrent connect may win between our targeted read and create;
           // recover its row rather than creating a second credential copy.
           if (!isDatabaseUniqueConstraintError(error)) throw error;
-          selection = await findExistingInstall(entry, auth, userId, params);
+          selection = await findExistingInstall(entry, auth, userId, params, sharing);
           if (!selection) throw error;
           mcpServer = selection.server;
         }
@@ -1025,6 +1050,19 @@ export function createMCPCatalogConnectService(
           !isCurrentCatalogInstall(mcpServer, entry, auth, {
             reconcileMissingCompatibilityMode: true,
           }));
+      // Shared Connect is create-or-read, never repair. No caller may reconcile
+      // auth drift, re-enable, or erase an installation another user adopted.
+      if (
+        sharing === 'shared' &&
+        (needsReconciliation ||
+          mcpServer.scope !== 'session' ||
+          selection?.candidate.has_row_secret ||
+          Object.keys(mcpServer.env ?? {}).length > 0)
+      ) {
+        throw new BadRequest(
+          'This shared installation has changed or is disabled. Review it in Settings before connecting.'
+        );
+      }
       const preservedCompatibilityOverride =
         selection?.kind === 'catalog_install' &&
         mcpServer.auth?.type === 'oauth' &&
@@ -1082,7 +1120,7 @@ export function createMCPCatalogConnectService(
               : undefined,
         };
       } catch (error) {
-        if (createdServer) {
+        if (createdServer && sharing === 'private') {
           try {
             // Atomic liveness/adoption check. A concurrent unique-conflict
             // loser may now be using this row; in that case compensation must

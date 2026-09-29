@@ -30,6 +30,7 @@ function peer(overrides: Partial<MCPServer> = {}): MCPServer {
   return {
     mcp_server_id: '00000000-0000-7000-8000-000000000001',
     name: 'example-manual',
+    owner_user_id: ALICE,
     transport: 'http',
     url: ENTRY.remote_url,
     scope: 'session',

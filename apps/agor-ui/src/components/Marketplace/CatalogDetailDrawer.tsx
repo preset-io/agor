@@ -13,6 +13,7 @@ import type {
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogReadiness,
+  MCPCatalogSharing,
 } from '@agor/core/types';
 import { getTeammateConfig } from '@agor-live/client';
 import {
@@ -29,6 +30,7 @@ import {
   Flex,
   Form,
   Input,
+  Radio,
   Select,
   Space,
   Tag,
@@ -40,6 +42,8 @@ import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
   canAddMcpServer,
+  canAddSharedMcpServer,
+  canUseExistingMcpServer,
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
@@ -108,6 +112,8 @@ export interface CatalogDetailDrawerProps {
   /** The policy read has not landed; fail closed without claiming a policy value. */
   policyPending: boolean;
   policyPendingHint: string;
+  sharing?: MCPCatalogSharing;
+  onSharingChange?: (sharing: MCPCatalogSharing) => void;
   readiness?: MCPCatalogReadiness | null;
   readinessLoading?: boolean;
   readinessError?: string | null;
@@ -160,6 +166,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   connectCapability,
   policyPending,
   policyPendingHint,
+  sharing = 'private',
+  onSharingChange,
   readiness,
   readinessLoading = false,
   readinessError = null,
@@ -346,13 +354,30 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // biome-ignore lint/correctness/useExhaustiveDependencies: both interaction boundaries clear a prior popup refusal
   useEffect(() => setPopupBlocked(false), [open, entryId]);
 
+  const canShare = canAddSharedMcpServer(connectCapability);
+  const reusable =
+    !readinessLoading &&
+    !readinessError &&
+    (readiness?.state === 'installed_ready' ||
+      readiness?.state === 'reusable_oauth' ||
+      readiness?.reusable_configuration === true);
   const policyRefusal = policyPending
     ? policyPendingHint
-    : canAddMcpServer(connectCapability)
+    : (
+          sharing === 'shared'
+            ? canShare
+            : canAddMcpServer(connectCapability) ||
+              (reusable && canUseExistingMcpServer(connectCapability))
+        )
       ? undefined
       : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !blockedReason && !policyRefusal && acknowledged && !connecting && (!needsApiKey || bearerToken)
+    !(sharing === 'shared' && needsApiKey) &&
+      !blockedReason &&
+      !policyRefusal &&
+      acknowledged &&
+      !connecting &&
+      (!needsApiKey || bearerToken)
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
@@ -740,6 +765,36 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
+
+              <Form layout="vertical">
+                <Form.Item
+                  label="Installation ownership"
+                  extra={
+                    sharing === 'shared'
+                      ? 'Shares configuration only. Each user signs in separately. Available to attach; not enabled globally.'
+                      : 'Only you can use this configuration. Available to attach to your sessions.'
+                  }
+                >
+                  <Radio.Group
+                    value={sharing}
+                    onChange={(event) => onSharingChange?.(event.target.value)}
+                    disabled={connecting}
+                  >
+                    <Radio value="private">Private</Radio>
+                    {canShare && (
+                      <Radio value="shared" disabled={needsApiKey}>
+                        Shared
+                      </Radio>
+                    )}
+                  </Radio.Group>
+                </Form.Item>
+                {needsApiKey && (
+                  <Text type="secondary">
+                    Bearer/API-key installations stay private because the credential is stored with
+                    the configuration.
+                  </Text>
+                )}
+              </Form>
 
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}

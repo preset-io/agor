@@ -55,6 +55,7 @@ import {
   allowedMcpScopes,
   allowedMcpTransports,
   canAddMcpServer,
+  canAddSharedMcpServer,
   canDeleteMcpServer,
   canEditMcpServer,
   explainAddRestriction,
@@ -258,7 +259,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   }, [mcpServerById, viewingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
+    if (!currentUser?.user_id) throw new Error('Authentication required');
+    if (values.ownership === 'shared' && !canAddSharedMcpServer(capability)) {
+      throw new Error(
+        'You can no longer create shared MCP servers. Choose Private or ask an admin.'
+      );
+    }
     const data: CreateMCPServerInput = {
+      owner_user_id: values.ownership === 'shared' ? null : currentUser.user_id,
       name: values.name as string,
       display_name: values.display_name as string | undefined,
       description: values.description as string | undefined,
@@ -748,6 +756,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}
             offeredScopes={offeredScopes}
+            allowSharedOwnership={canAddSharedMcpServer(capability)}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={createForm}

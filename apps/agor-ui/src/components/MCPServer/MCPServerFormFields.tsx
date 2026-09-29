@@ -49,7 +49,7 @@ const TRANSPORT_LABELS: Record<MCPTransport, string> = {
 const ALL_TRANSPORTS: MCPTransport[] = [...MCP_TRANSPORTS];
 
 const SCOPE_LABELS: Record<MCPScope, string> = {
-  global: 'Global (all sessions)',
+  global: 'Global (all eligible sessions)',
   session: 'Session',
 };
 
@@ -67,6 +67,7 @@ export interface MCPServerFormFieldsProps {
   offeredTransports?: MCPTransport[];
   /** The scopes this user may configure, on the same terms as the transports. */
   offeredScopes?: MCPScope[];
+  allowSharedOwnership?: boolean;
   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
@@ -110,6 +111,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onTransportChange,
   offeredTransports = ALL_TRANSPORTS,
   offeredScopes = ALL_SCOPES,
+  allowSharedOwnership = false,
   authType = 'none',
   onAuthTypeChange,
   form,
@@ -173,6 +175,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const watchedClientId = Form.useWatch('oauth_client_id', form);
   const watchedClientSecret = Form.useWatch('oauth_client_secret', form);
   const watchedOauthMode = Form.useWatch('oauth_mode', form);
+  const ownership = Form.useWatch('ownership', form);
   const watchedCompatibilityMode = Form.useWatch('oauth_compatibility_mode', form);
   const watchedDcrMode = Form.useWatch('oauth_dcr_mode', form);
   const watchedEnv = Form.useWatch('env', form);
@@ -418,6 +421,29 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
         </Col>
       </Row>
+      {isCreate && (
+        <Form.Item
+          label="Installation ownership"
+          name="ownership"
+          initialValue="private"
+          extra="Ownership controls who can use the configuration. Scope below controls automatic availability."
+        >
+          <Select
+            options={[
+              { value: 'private', label: 'Private (only you)' },
+              ...(allowSharedOwnership ? [{ value: 'shared', label: 'Shared (workspace)' }] : []),
+            ]}
+          />
+        </Form.Item>
+      )}
+      {ownership === 'shared' && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Shared configuration can share credentials"
+          description="Bearer tokens, custom headers, literal environment values, and shared OAuth grants can be used by everyone with access. Per-user OAuth requires each user to sign in separately; user environment references resolve for the acting user."
+        />
+      )}
       <Row gutter={16}>
         <Col span={12}>
           <Form.Item
@@ -940,10 +966,11 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     />
                   </Form.Item>
                   <Form.Item
-                    label="OAuth Mode"
+                    label="OAuth credential mode"
                     name="oauth_mode"
                     initialValue="per_user"
-                    tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
+                    tooltip="Separate from configuration ownership. Per User: each user signs in separately. Shared: one account is used by everyone with access to this server (admin-managed)."
+                    extra="This setting controls whose provider account is used, not who owns the server configuration."
                   >
                     <Select>
                       <Select.Option value="per_user">

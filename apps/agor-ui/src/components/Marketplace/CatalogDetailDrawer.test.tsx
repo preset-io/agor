@@ -50,7 +50,11 @@ const BRANCHES = [{ branch_id: 'branch-1', name: 'mkt-slice' }] as unknown as Br
 
 function renderDrawer(
   entry: MCPCatalogEntry,
-  options: { capability?: MCPServerCapabilityContext; policyPending?: boolean } = {}
+  options: {
+    capability?: MCPServerCapabilityContext;
+    policyPending?: boolean;
+    readiness?: import('@agor/core/types').MCPCatalogReadiness;
+  } = {}
 ) {
   const { capability = ALLOWED, policyPending = false } = options;
   const view = render(
@@ -68,6 +72,7 @@ function renderDrawer(
       connecting={false}
       connectError={null}
       connectCapability={capability}
+      readiness={options.readiness}
       policyPending={policyPending}
       policyPendingHint={POLICY_LOADING_HINT}
       onConnect={vi.fn()}
@@ -754,5 +759,51 @@ describe('CatalogDetailDrawer API key', () => {
 
     expect(keyField()).toBeNull();
     expect(screen.queryByRole('button', { name: /Connect/ })).toBeNull();
+  });
+});
+
+describe('explicit ownership and no-write reuse', () => {
+  it('defaults admins to Private and offers Shared independently of scope', () => {
+    renderDrawer(DEEPWIKI);
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Shared' })).toBeEnabled();
+  });
+
+  it.each(['allow_private_only', 'use_existing_only'] as const)(
+    'does not offer Shared under %s',
+    (policy) => {
+      renderDrawer(DEEPWIKI, {
+        capability: { ...ALLOWED, role: 'member', isAdmin: false, policy },
+      });
+      expect(screen.queryByRole('radio', { name: 'Shared' })).toBeNull();
+    }
+  );
+
+  it.each(['installed_ready', 'reusable_oauth'] as const)(
+    'allows %s reuse under use_existing_only',
+    (state) => {
+      renderDrawer(DEEPWIKI, {
+        capability: {
+          ...ALLOWED,
+          role: 'member',
+          isAdmin: false,
+          canConfigure: false,
+          policy: 'use_existing_only',
+        },
+        readiness: { catalog_key: DEEPWIKI.name, state },
+      });
+      fireEvent.click(screen.getByRole('checkbox'));
+      expect(screen.getByRole('button', { name: 'Connect' })).toBeEnabled();
+    }
+  );
+
+  it('does not let readiness grant viewers a Connect capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: { ...ALLOWED, role: 'viewer', isAdmin: false, canConfigure: false },
+      readiness: { catalog_key: DEEPWIKI.name, state: 'installed_ready' },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+    expect(screen.queryByRole('radio', { name: 'Shared' })).toBeNull();
   });
 });

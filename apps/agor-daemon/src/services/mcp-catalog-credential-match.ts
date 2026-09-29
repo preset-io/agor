@@ -1,4 +1,9 @@
-import type { MCPAuth, MCPCatalogEntry, MCPCatalogServerCandidate } from '@agor/core/types';
+import type {
+  MCPAuth,
+  MCPCatalogEntry,
+  MCPCatalogServerCandidate,
+  MCPCatalogSharing,
+} from '@agor/core/types';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -102,21 +107,29 @@ export async function selectCatalogCandidate(
   candidates: MCPCatalogServerCandidate[],
   userId: string,
   now: number,
-  deps: CatalogCredentialMatcherDeps
+  deps: CatalogCredentialMatcherDeps,
+  sharing: MCPCatalogSharing = 'private'
 ): Promise<CatalogCandidateSelection> {
+  // Ownership is an explicit selection, never an opportunistic fallback.
+  candidates = candidates.filter(({ server }) =>
+    sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
+  );
   const catalogRows = candidates.filter(
     ({ server }) => server.source === 'catalog' && server.catalog_entry_name === entry.name
   );
   const currentCatalog = catalogRows.find(
     ({ server, has_row_secret }) =>
       server.enabled &&
+      (sharing !== 'shared' ||
+        (server.scope === 'session' &&
+          !has_row_secret &&
+          Object.keys(server.env ?? {}).length === 0)) &&
       isCurrentCatalogInstall(server, entry, prescribed, {
         reconcileMissingCompatibilityMode: true,
       }) &&
       (!has_row_secret || server.owner_user_id === userId)
   );
-  const ownedCatalog =
-    currentCatalog ?? catalogRows.find(({ server }) => server.owner_user_id === userId);
+  const ownedCatalog = currentCatalog ?? catalogRows[0];
   if (prescribed.type !== 'oauth') {
     return {
       currentCatalog,
@@ -126,7 +139,8 @@ export async function selectCatalogCandidate(
     };
   }
 
-  const compatibleOAuth = await compatibleCatalogOAuthPeers(entry, candidates);
+  const compatibleOAuth =
+    sharing === 'shared' ? [] : await compatibleCatalogOAuthPeers(entry, candidates);
   // A live current install wins. Crucially, a stale catalog row does not block
   // a live manual peer; this order is also what readiness reports.
   if (currentCatalog && (await hasLiveCallerOAuthGrant(currentCatalog, now, deps))) {

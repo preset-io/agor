@@ -1,3 +1,4 @@
+import { authorizeCatalogCaller } from './mcp-catalog-access.js';
 /**
  * What a marketplace install leaves in the database, driven end to end.
  *
@@ -169,6 +170,10 @@ async function buildDaemon(
 
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    authorizeCaller: (
+      params: AuthenticatedParams,
+      sharing: import('@agor/core/types').MCPCatalogSharing
+    ) => runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params, sharing)),
     runInTenantDatabaseScope,
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
@@ -176,9 +181,13 @@ async function buildDaemon(
     isGrantAuthorized: async () => false,
   };
 
-  const connectAs = (caller: User, callerRole: UserRole) =>
+  const connectAs = (
+    caller: User,
+    callerRole: UserRole,
+    sharing: import('@agor/core/types').MCPCatalogSharing = 'private'
+  ) =>
     createMCPCatalogConnectService(app, connectDeps).create(
-      CONNECT_REQUEST,
+      { ...CONNECT_REQUEST, sharing },
       paramsFor(caller, callerRole)
     );
   const connect = () => connectAs(user, role);
@@ -191,6 +200,9 @@ async function buildDaemon(
 
   return {
     app,
+    rawDb,
+    users,
+    serverRepository,
     params: paramsFor(user, role),
     user,
     connect,
@@ -200,6 +212,97 @@ async function buildDaemon(
     seedServer,
   };
 }
+
+describe('explicit shared Catalog installs', () => {
+  beforeEach(() => probeRemoteAuthType.mockReset().mockResolvedValue('none'));
+
+  it.each(['admin', 'member'] as const)(
+    'creates a separate session-scoped shared identity as %s',
+    async (role) => {
+      const daemon = await buildDaemon('allow_crud', role);
+      const privateInstall = await daemon.connect();
+      const shared = await daemon.connectAs(daemon.user, role, 'shared');
+      const bob = await daemon.addUser('second@agor.live', 'member');
+      const reused = await daemon.connectAs(bob, 'member', 'shared');
+      expect(shared.mcp_server.scope).toBe('session');
+      expect(shared.mcp_server.owner_user_id).toBeUndefined();
+      expect(shared.mcp_server.mcp_server_id).not.toBe(privateInstall.mcp_server.mcp_server_id);
+      expect(reused.mcp_server.mcp_server_id).toBe(shared.mcp_server.mcp_server_id);
+      const secondPrivate = await daemon.connectAs(bob, 'member');
+      expect(secondPrivate.mcp_server.owner_user_id).toBe(bob.user_id);
+      expect(await daemon.installedServers()).toHaveLength(3);
+    }
+  );
+
+  it.each([
+    ['allow_private_only', 'member'],
+    ['use_existing_only', 'member'],
+    ['allow_crud', 'viewer'],
+  ] as const)('refuses unauthorized shared input under %s / %s', async (policy, role) => {
+    const daemon = await buildDaemon(policy, role);
+    await expect(daemon.connectAs(daemon.user, role, 'shared')).rejects.toMatchObject({
+      code: 403,
+    });
+    expect(probeRemoteAuthType).not.toHaveBeenCalled();
+    expect(await daemon.installedServers()).toHaveLength(0);
+  });
+
+  it('rechecks current role and policy after the probe, not stale readiness', async () => {
+    const daemon = await buildDaemon('allow_crud');
+    probeRemoteAuthType.mockImplementationOnce(async () => {
+      await setMcpMemberPolicy(daemon.rawDb, 'allow_private_only', undefined, null);
+      return 'none';
+    });
+    await expect(daemon.connectAs(daemon.user, 'member', 'shared')).rejects.toMatchObject({
+      code: 403,
+    });
+    await setMcpMemberPolicy(daemon.rawDb, 'allow_crud', undefined, null);
+    probeRemoteAuthType.mockImplementationOnce(async () => {
+      await daemon.users.update(daemon.user.user_id, { role: 'viewer' });
+      return 'none';
+    });
+    await expect(daemon.connect()).rejects.toMatchObject({ code: 403 });
+    expect(await daemon.installedServers()).toHaveLength(0);
+  });
+
+  it('refuses credential drift before storing or verifying a bearer credential', async () => {
+    const daemon = await buildDaemon('allow_crud');
+    probeRemoteAuthType.mockResolvedValue('credentials');
+    await expect(daemon.connectAs(daemon.user, 'member', 'shared')).rejects.toThrow(/private/);
+    expect(await daemon.installedServers()).toHaveLength(0);
+  });
+
+  it('does not reconcile or re-enable a shared row another caller adopted', async () => {
+    const daemon = await buildDaemon('allow_crud');
+    const shared = await daemon.connectAs(daemon.user, 'member', 'shared');
+    await daemon.serverRepository.update(shared.mcp_server.mcp_server_id, { enabled: false });
+    const bob = await daemon.addUser('second@agor.live', 'member');
+    await expect(daemon.connectAs(bob, 'member', 'shared')).rejects.toThrow(/Settings/);
+    expect((await daemon.installedServers())[0].enabled).toBe(false);
+  });
+
+  it('deduplicates concurrent shared installs across users without private adoption fencing', async () => {
+    const daemon = await buildDaemon('allow_crud');
+    const bob = await daemon.addUser('second@agor.live', 'member');
+    const [a, b] = await Promise.all([
+      daemon.connectAs(daemon.user, 'member', 'shared'),
+      daemon.connectAs(bob, 'member', 'shared'),
+    ]);
+    expect(a.mcp_server.mcp_server_id).toBe(b.mcp_server.mcp_server_id);
+    expect(await daemon.installedServers()).toHaveLength(1);
+  });
+
+  it('allows unchanged private reuse after tightening, but refuses new installs', async () => {
+    const daemon = await buildDaemon('allow_private_only');
+    const installed = await daemon.connect();
+    await setMcpMemberPolicy(daemon.rawDb, 'use_existing_only', undefined, null);
+    const reused = await daemon.connect();
+    expect(reused.mcp_server.mcp_server_id).toBe(installed.mcp_server.mcp_server_id);
+    expect(reused.mcp_server.updated_at).toEqual(installed.mcp_server.updated_at);
+    const bob = await daemon.addUser('second@agor.live', 'member');
+    await expect(daemon.connectAs(bob, 'member')).rejects.toMatchObject({ code: 403 });
+  });
+});
 
 describe('marketplace install, as it lands in the database', () => {
   beforeEach(() => {
@@ -695,7 +798,8 @@ describe('credential reuse, against real grants', () => {
 
     await new MCPServerRepository(rawDb).create({
       mcp_server_id: SHARED_ROW,
-      name: 'deepwiki-shared',
+      name: 'deepwiki-private',
+      owner_user_id: alice.user_id,
       transport: 'http',
       url: RESOURCE,
       auth: { type: 'oauth', oauth_mode: 'per_user', oauth_compatibility_mode: 'strict' },
@@ -761,6 +865,10 @@ describe('credential reuse, against real grants', () => {
     // grant" is decided by the same key the production wiring uses.
     const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
+      authorizeCaller: (
+        params: AuthenticatedParams,
+        sharing: import('@agor/core/types').MCPCatalogSharing
+      ) => runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params, sharing)),
       runInTenantDatabaseScope,
       listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
       getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>

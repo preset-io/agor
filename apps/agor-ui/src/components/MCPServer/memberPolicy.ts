@@ -109,6 +109,16 @@ export function canAddMcpServer({
   return isAdmin || canConfigure;
 }
 
+/** Sharing configuration requires the existing shared-server write permission. */
+export function canAddSharedMcpServer(context: MCPServerCapabilityContext): boolean {
+  return canAddMcpServer(context) && (context.isAdmin || context.policy === 'allow_crud');
+}
+
+/** Reuse/sign-in is not a configuration write; the daemon repeats every check. */
+export function canUseExistingMcpServer(context: MCPServerCapabilityContext): boolean {
+  return context.connectionReady && isAtLeastMemberRole(context.role);
+}
+
 /**
  * The transports this user may configure. Members are held to remote ones, so
  * a form offers what the write will accept rather than a 403. Role alone

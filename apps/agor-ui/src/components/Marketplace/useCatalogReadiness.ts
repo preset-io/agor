@@ -1,4 +1,4 @@
-import type { MCPCatalogReadiness } from '@agor/core/types';
+import type { MCPCatalogReadiness, MCPCatalogSharing } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
@@ -6,19 +6,27 @@ import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 export function useCatalogReadiness(input: {
   client: AgorClient | null;
   entryKey?: string;
+  sharing?: MCPCatalogSharing;
   ready: boolean;
   authGeneration: number;
   userId?: string;
 }) {
-  const { client, entryKey, ready, authGeneration, userId } = input;
+  const { client, entryKey, ready, authGeneration, userId, sharing = 'private' } = input;
   const enabled = Boolean(client && ready && userId && entryKey);
   const authority = useMemo(
-    () => (enabled ? { userId: userId!, authGeneration, client, entryKey: entryKey! } : null),
-    [authGeneration, client, enabled, entryKey, userId]
+    () =>
+      enabled ? { userId: userId!, authGeneration, client, sharing, entryKey: entryKey! } : null,
+    [authGeneration, client, enabled, entryKey, userId, sharing]
   );
   const guard = useAuthorityOperationGuard(
     authority
-      ? [authority.userId, authority.authGeneration, authority.client, authority.entryKey]
+      ? [
+          authority.userId,
+          authority.authGeneration,
+          authority.client,
+          authority.entryKey,
+          authority.sharing,
+        ]
       : null
   );
   const [loaded, setLoaded] = useState<{
@@ -45,7 +53,9 @@ export function useCatalogReadiness(input: {
     const isCurrent = () => operation.isCurrent() && requestSequence.current === request;
     setLoaded({ authority, value: null, loading: true, error: null });
     try {
-      const next = await client.service('mcp-catalog/readiness').get(entryKey);
+      const next = await client
+        .service('mcp-catalog/readiness')
+        .get(entryKey, { query: { sharing } });
       if (!isCurrent()) return;
       setLoaded({ authority, value: next, loading: false, error: null });
     } catch (cause) {
@@ -57,7 +67,7 @@ export function useCatalogReadiness(input: {
         error: cause instanceof Error ? cause.message : 'Could not check connection readiness',
       });
     }
-  }, [authority, client, enabled, entryKey, guard]);
+  }, [authority, client, enabled, entryKey, guard, sharing]);
 
   useEffect(() => {
     requestSequence.current++;
