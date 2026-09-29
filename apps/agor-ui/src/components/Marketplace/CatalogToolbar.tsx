@@ -14,11 +14,13 @@
 import type { MCPCatalogCategory, MCPCatalogSort } from '@agor/core/types';
 import { FilterOutlined, SearchOutlined } from '@ant-design/icons';
 import { Badge, Button, Drawer, Flex, Input, Select, Typography, theme } from 'antd';
-import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
+import { useElementWidth } from '../../hooks/useElementWidth';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import {
   ALL_CATEGORIES,
+  ANY_CAPABILITY,
   CAPABILITY_GROUPS,
   CATEGORY_OPTIONS,
   type CategoryFilter,
@@ -26,6 +28,7 @@ import {
   DEFAULT_SORT,
   SORT_OPTIONS,
 } from './catalogPresentation';
+import { isFilterActive } from './useCatalogSearch';
 
 const { Text } = Typography;
 
@@ -33,13 +36,16 @@ const SEARCH_MIN = 240;
 const FILTER_MIN = 180;
 const SORT_WIDTH = 150;
 
-const CAPABILITY_OPTIONS = CAPABILITY_GROUPS.map((group) => ({
-  label: group.label,
-  options: group.capabilities.map((capability) => ({
-    label: capabilityLabel(capability),
-    value: capability,
+const CAPABILITY_OPTIONS = [
+  { label: 'Any', value: ANY_CAPABILITY },
+  ...CAPABILITY_GROUPS.map((group) => ({
+    label: group.label,
+    options: group.capabilities.map((capability) => ({
+      label: capabilityLabel(capability),
+      value: capability,
+    })),
   })),
-}));
+];
 
 export interface CatalogToolbarProps {
   category?: MCPCatalogCategory;
@@ -51,10 +57,8 @@ export interface CatalogToolbarProps {
   onCategoryChange: (value?: MCPCatalogCategory) => void;
   onCapabilityChange: (value?: string) => void;
   onSortChange: (value: MCPCatalogSort) => void;
-  /** `null` while the unfiltered catalog size is still unknown. */
+  /** `null` until the catalog has loaded. */
   matchSummary: { matched: number; total: number } | null;
-  /** Entries the current filters leave; `null` until the catalog has loaded. */
-  resultCount?: number | null;
 }
 
 const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
@@ -67,20 +71,10 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   onCapabilityChange,
   onSortChange,
   matchSummary,
-  resultCount = null,
 }) => {
   const { token } = theme.useToken();
   const rootRef = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    const measure = () => setWidth(root.clientWidth);
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    measure();
-    return () => observer.disconnect();
-  }, []);
+  const width = useElementWidth(rootRef);
   // Unmeasured (0) keeps the full row.
   const compact =
     width > 0 && width < SEARCH_MIN + 2 * FILTER_MIN + SORT_WIDTH + 3 * token.paddingSM;
@@ -97,7 +91,8 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   const full = { width: '100%' };
   const filterStyle = compact ? full : { flex: `1 1 ${FILTER_MIN}px`, maxWidth: 220 };
   const selectStyles = { prefix: { color: token.colorTextSecondary } };
-  const activeFilters = Number(!!category) + Number(!!capability) + Number(sort !== DEFAULT_SORT);
+  const activeFilters = Number(!!category) + Number(!!capability);
+  const resultCount = matchSummary?.matched ?? null;
 
   const searchInput = (
     <Input
@@ -124,14 +119,14 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
         style={filterStyle}
       />
       <Select
-        allowClear
         showSearch
         optionFilterProp="label"
         prefix="Capability"
-        placeholder="Any"
         aria-label="Filter by capability"
-        value={capability ?? undefined}
-        onChange={(value?: string) => onCapabilityChange(value || undefined)}
+        value={capability ?? ANY_CAPABILITY}
+        onChange={(value: string) =>
+          onCapabilityChange(value === ANY_CAPABILITY ? undefined : value)
+        }
         options={CAPABILITY_OPTIONS}
         popupMatchSelectWidth={false}
         styles={selectStyles}
@@ -154,7 +149,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
       {compact ? (
         <Flex gap={token.paddingSM} align="center">
           {searchInput}
-          <Badge count={activeFilters} size="small">
+          <Badge count={activeFilters} size="small" color={token.colorPrimary}>
             <Button
               icon={<FilterOutlined />}
               aria-label={activeFilters ? `Filters, ${activeFilters} active` : 'Filters'}
@@ -185,7 +180,7 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
                 <Flex justify="space-between" align="center">
                   <Button
                     type="text"
-                    disabled={activeFilters === 0}
+                    disabled={activeFilters === 0 && sort === DEFAULT_SORT}
                     onClick={() => {
                       onCategoryChange(undefined);
                       onCapabilityChange(undefined);
@@ -214,7 +209,8 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
           {selects}
         </Flex>
       )}
-      {matchSummary && (
+      {/* REQ-CAT-3: the count is a filtering aid, so it shows only while filtering. */}
+      {matchSummary && isFilterActive({ search, category, capability, sort }) && (
         <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
           {matchSummary.matched} of {matchSummary.total} servers match
         </Text>

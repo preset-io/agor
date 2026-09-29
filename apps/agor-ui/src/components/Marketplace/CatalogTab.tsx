@@ -512,14 +512,12 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     [restoreDrawerFocus]
   );
 
-  // `REQ-CAT-3`: the count is a filtering aid, so it appears only once
-  // filtering is happening.
   const matchSummary = useMemo(
     () =>
-      status === 'ready' && isFilterActive(filters) && catalogSize !== null
+      status === 'ready' && catalogSize !== null
         ? { matched: matchCount, total: catalogSize }
         : null,
-    [status, filters, catalogSize, matchCount]
+    [status, catalogSize, matchCount]
   );
 
   const handleConnect = useCallback(
@@ -847,7 +845,6 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           onCapabilityChange={onCapabilityChange}
           onSortChange={onSortChange}
           matchSummary={matchSummary}
-          resultCount={status === 'ready' ? matchCount : null}
         />
       </div>
 

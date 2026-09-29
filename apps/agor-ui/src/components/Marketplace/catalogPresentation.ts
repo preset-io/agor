@@ -28,6 +28,8 @@ export const ALL_CATEGORIES = 'all' as const;
 
 export type CategoryFilter = MCPCatalogCategory | typeof ALL_CATEGORIES;
 
+export const ANY_CAPABILITY = 'any' as const;
+
 export const CATEGORY_OPTIONS: Array<{ label: string; value: CategoryFilter }> = [
   { label: 'All', value: ALL_CATEGORIES },
   ...MCP_CATALOG_CATEGORIES.map((category) => ({

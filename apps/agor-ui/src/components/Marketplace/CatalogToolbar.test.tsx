@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { theme } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CatalogToolbar } from './CatalogToolbar';
 
@@ -83,10 +84,23 @@ describe('Marketplace catalog toolbar', () => {
 
   it('labels the default ordering Curated, changes sorting, and renders match context', () => {
     const onSortChange = vi.fn();
-    render(
+    const { rerender } = render(
       <CatalogToolbar
         sort="popularity"
         search=""
+        onSearchChange={vi.fn()}
+        onCategoryChange={vi.fn()}
+        onCapabilityChange={vi.fn()}
+        onSortChange={onSortChange}
+        matchSummary={{ matched: 3, total: 52 }}
+      />
+    );
+    // REQ-CAT-3: the count appears only once something narrows the catalog.
+    expect(screen.queryByText(/servers match/)).toBeNull();
+    rerender(
+      <CatalogToolbar
+        sort="popularity"
+        search="docs"
         onSearchChange={vi.fn()}
         onCategoryChange={vi.fn()}
         onCapabilityChange={vi.fn()}
@@ -127,11 +141,8 @@ describe('Marketplace catalog toolbar', () => {
     fireEvent.click(container.querySelector('.ant-input-clear-icon')!);
     expect(onSearchChange).toHaveBeenLastCalledWith('');
 
-    const capability = selectInput('Filter by capability');
-    fireEvent.mouseEnter(capability.closest('.ant-select')!);
-    fireEvent.click(
-      within(capability.closest('.ant-select')!).getByRole('button', { name: 'Clear' })
-    );
+    openSelect('Filter by capability');
+    selectOption('Any');
     expect(onCapabilityChange).toHaveBeenLastCalledWith(undefined);
 
     openSelect('Filter by category');
@@ -157,11 +168,10 @@ describe('Marketplace catalog toolbar in a narrow container', () => {
     onCategoryChange: vi.fn(),
     onCapabilityChange: vi.fn(),
     onSortChange: vi.fn(),
-    matchSummary: null,
-    resultCount: 3,
+    matchSummary: { matched: 3, total: 52 },
   };
 
-  it('puts the filters behind a button that counts the active ones', () => {
+  it('puts the filters behind a button that counts the active filters', () => {
     const { rerender } = render(<CatalogToolbar {...baseProps} />);
 
     expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toBeVisible();
@@ -172,8 +182,15 @@ describe('Marketplace catalog toolbar in a narrow container', () => {
     rerender(
       <CatalogToolbar {...baseProps} category="observability" capability="logs" sort="name" />
     );
-    expect(screen.getByRole('button', { name: 'Filters, 3 active' })).toBeVisible();
-    expect(document.querySelector('.ant-badge-count')).toHaveTextContent('3');
+    expect(screen.getByRole('button', { name: 'Filters, 2 active' })).toBeVisible();
+    const badge = document.querySelector('.ant-badge-count');
+    expect(badge).toHaveTextContent('2');
+    expect(badge).toHaveStyle({ backgroundColor: theme.getDesignToken().colorPrimary });
+
+    // Sort is an ordering, not a filter.
+    rerender(<CatalogToolbar {...baseProps} sort="name" />);
+    expect(screen.getByRole('button', { name: 'Filters' })).toBeVisible();
+    expect(document.querySelector('.ant-badge-count')).toBeNull();
   });
 
   it('opens the same filters in a bottom sheet and closes it on Show', async () => {
@@ -203,12 +220,23 @@ describe('Marketplace catalog toolbar in a narrow container', () => {
     };
     render(<CatalogToolbar {...props} category="search" capability="logs" sort="name" />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Filters, 3 active' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filters, 2 active' }));
     const sheet = await screen.findByRole('dialog', { name: 'Filters' });
     fireEvent.click(within(sheet).getByRole('button', { name: 'Reset' }));
 
     expect(props.onCategoryChange).toHaveBeenLastCalledWith(undefined);
     expect(props.onCapabilityChange).toHaveBeenLastCalledWith(undefined);
     expect(props.onSortChange).toHaveBeenLastCalledWith('popularity');
+  });
+
+  it('enables Reset for a non-default sort alone and disables it at the defaults', async () => {
+    const { rerender } = render(<CatalogToolbar {...baseProps} sort="name" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    const reset = within(sheet).getByText('Reset').closest('button');
+    expect(reset).toBeEnabled();
+
+    rerender(<CatalogToolbar {...baseProps} />);
+    expect(reset).toBeDisabled();
   });
 });
