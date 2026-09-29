@@ -32,15 +32,16 @@ it.each([undefined, '0.6s'])(
 
     await act(async () => userEvent.keyboard('{Escape}'));
     await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
-    // Closed state precedes the frame-scheduled exit motion; observe its result, not elapsed time.
-    await waitFor(() => expect(rawDetails).not.toBeVisible());
+    // aria-expanded changes before AntD finishes leaving (or its 1s motion deadline fires).
+    // Observe the hidden content rather than racing that animation with a fixed sleep.
+    await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
     expect(document.activeElement).toBe(trigger);
     await act(async () => userEvent.keyboard(' '));
     await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));
     await waitFor(() => expect(rawDetails).toBeVisible());
     await act(async () => userEvent.keyboard('{Escape}'));
     await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
-    await waitFor(() => expect(rawDetails).not.toBeVisible());
+    await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
     expect(trigger).toHaveFocus();
   }
 );
@@ -63,7 +64,7 @@ it('does not reopen from a stationary hover after keyboard dismissal', async () 
   expect(rawDetails).toHaveFocus();
   await act(async () => userEvent.keyboard('{Escape}'));
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
-  await waitFor(() => expect(rawDetails).not.toBeVisible());
+  await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
   expect(trigger).toHaveAttribute('aria-expanded', 'false');
   expect(trigger).toHaveFocus();
 });

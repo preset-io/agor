@@ -179,6 +179,7 @@ describe('concrete deletion command with disposable storage', () => {
             if (body.action === 'data' && malformedData) return new Response('{}');
             if (body.action === 'upload' && unknownUpload)
               throw new Error('fixture transport loss');
+            if (body.action === 'settled') return new Response(JSON.stringify({ ok: true }));
             return new Response(JSON.stringify({ remaining: false }), { status: 200 });
           })
         );
@@ -241,9 +242,11 @@ describe('concrete deletion command with disposable storage', () => {
           expect(result.success).toBe(false);
           expect((await stat(workspace)).isDirectory()).toBe(true);
           expect((await stat(neighbor)).isDirectory()).toBe(true);
-          expect(actions).toEqual(['claim', 'quiesce', 'failed']);
+          expect(actions).toEqual(['claim', 'quiesce', 'settled']);
           expect(log).toHaveBeenCalledWith(
-            `[branch.delete] event=storage_failed step=validate_sdk_home code=${unsafeHome === 'missing_root' ? 'ENOENT' : 'verification_failed'}`
+            expect.stringContaining(
+              `step=validate_sdk_home code=${unsafeHome === 'missing_root' ? 'ENOENT' : 'verification_failed'}`
+            )
           );
           expect(JSON.stringify(log.mock.calls)).not.toContain(root);
           return;
@@ -263,7 +266,7 @@ describe('concrete deletion command with disposable storage', () => {
           unknownUpload
             ? ['claim', 'quiesce', 'upload']
             : malformedData
-              ? ['claim', 'quiesce', 'upload', 'storage', 'data']
+              ? ['claim', 'quiesce', 'upload', 'storage', 'data', 'settled']
               : ['claim', 'quiesce', 'upload', 'storage', 'data', 'finalize']
         );
       } finally {

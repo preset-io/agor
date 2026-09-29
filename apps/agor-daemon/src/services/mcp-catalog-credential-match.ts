@@ -1,4 +1,9 @@
-import type { MCPAuth, MCPCatalogEntry, MCPCatalogServerCandidate } from '@agor/core/types';
+import type {
+  MCPAuth,
+  MCPCatalogEntry,
+  MCPCatalogServerCandidate,
+  MCPCatalogSharing,
+} from '@agor/core/types';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -84,6 +89,23 @@ export async function compatibleCatalogOAuthPeers(
     .sort((a, b) => (a.server.mcp_server_id < b.server.mcp_server_id ? -1 : 1));
 }
 
+/** Shared Catalog use is read-only and never admits embedded credentials. */
+export function isUsableSharedCatalogCandidate(
+  candidate: MCPCatalogServerCandidate,
+  entry: MCPCatalogEntry & { remote_url: string },
+  prescribed: MCPAuth
+): boolean {
+  const { server, has_row_secret } = candidate;
+  return (
+    !server.owner_user_id &&
+    server.enabled &&
+    server.scope === 'session' &&
+    !has_row_secret &&
+    Object.keys(server.env ?? {}).length === 0 &&
+    isCurrentCatalogInstall(server, entry, prescribed, { reconcileMissingCompatibilityMode: true })
+  );
+}
+
 export interface CatalogCandidateSelection {
   /** Current canonical catalog row, whether or not its grant is live. */
   currentCatalog?: MCPCatalogServerCandidate;
@@ -102,21 +124,28 @@ export async function selectCatalogCandidate(
   candidates: MCPCatalogServerCandidate[],
   userId: string,
   now: number,
-  deps: CatalogCredentialMatcherDeps
+  deps: CatalogCredentialMatcherDeps,
+  sharing: MCPCatalogSharing = 'private'
 ): Promise<CatalogCandidateSelection> {
+  // Ownership is an explicit selection, never an opportunistic fallback.
+  candidates = candidates.filter(({ server }) =>
+    sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
+  );
   const catalogRows = candidates.filter(
     ({ server }) => server.source === 'catalog' && server.catalog_entry_name === entry.name
   );
-  const currentCatalog = catalogRows.find(
-    ({ server, has_row_secret }) =>
+  const currentCatalog = catalogRows.find((candidate) => {
+    const { server, has_row_secret } = candidate;
+    if (sharing === 'shared') return isUsableSharedCatalogCandidate(candidate, entry, prescribed);
+    return (
       server.enabled &&
       isCurrentCatalogInstall(server, entry, prescribed, {
         reconcileMissingCompatibilityMode: true,
       }) &&
       (!has_row_secret || server.owner_user_id === userId)
-  );
-  const ownedCatalog =
-    currentCatalog ?? catalogRows.find(({ server }) => server.owner_user_id === userId);
+    );
+  });
+  const ownedCatalog = currentCatalog ?? catalogRows[0];
   if (prescribed.type !== 'oauth') {
     return {
       currentCatalog,
@@ -126,7 +155,12 @@ export async function selectCatalogCandidate(
     };
   }
 
-  const compatibleOAuth = await compatibleCatalogOAuthPeers(entry, candidates);
+  // Shared configuration cannot adopt another installation, but its caller's
+  // own expired grant may still be refreshed on this exact canonical row.
+  const compatibleOAuth = await compatibleCatalogOAuthPeers(
+    entry,
+    sharing === 'shared' ? (currentCatalog ? [currentCatalog] : []) : candidates
+  );
   // A live current install wins. Crucially, a stale catalog row does not block
   // a live manual peer; this order is also what readiness reports.
   if (currentCatalog && (await hasLiveCallerOAuthGrant(currentCatalog, now, deps))) {

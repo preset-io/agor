@@ -366,6 +366,7 @@ export class MCPServerRepository
     const normalizedAuth = (submittedAuth === null ? undefined : data.auth) as MCPAuth | undefined;
     const effective = {
       ...data,
+      owner_user_id: data.owner_user_id ?? undefined,
       headers,
       auth: normalizedAuth,
       source: data.source ?? 'user',
@@ -849,6 +850,16 @@ export class MCPServerRepository
         await waitForSQLiteBusyRetry('catalog credential update', attempt);
       }
     }
+  }
+
+  /** Attachment count only; callers authorize server management before disclosing it. */
+  async countSessionAttachments(id: string): Promise<number> {
+    const fullId = await this.resolveId(id);
+    const row = await select(this.db, { count: sql<number>`count(*)` })
+      .from(sessionMcpServers)
+      .where(eq(sessionMcpServers.mcp_server_id, fullId))
+      .one();
+    return Number(row?.count ?? 0);
   }
 
   /**

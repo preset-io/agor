@@ -2494,6 +2494,33 @@ describe('configureRealtimePublish default-deny allowlist', () => {
     return [...new Set(channels.flatMap((channel) => channel?.connections ?? []))];
   };
 
+  it('publishes private MCP deletion only to its owner and same-tenant admins', async () => {
+    const owner = { user: user('owner') };
+    const bob = { user: user('bob') };
+    const admin = { user: user('admin', ROLES.ADMIN) };
+    const foreignAdmin = { user: user('foreign-admin', ROLES.ADMIN) };
+    const app = makeApp(
+      [owner, bob, admin, foreignAdmin],
+      {},
+      {
+        'tenant:tenant-a': [owner, bob, admin],
+        'tenant:tenant-b': [foreignAdmin],
+      }
+    );
+    configureRealtimePublish({
+      app,
+      ...repos({ branch: branch('b1'), permissions: {} }),
+      multiTenancy: { mode: 'static', static_tenant_id: 'tenant-a' as never },
+    });
+    const context = { path: 'mcp-servers', method: 'remove', event: 'removed', params: {} };
+    expect(
+      delivered(await app.runPublish({ mcp_server_id: 'deleted', owner_user_id: 'owner' }, context))
+    ).toEqual([owner, admin]);
+    expect(
+      delivered(await app.runPublish({ mcp_server_id: 'deleted', owner_user_id: null }, context))
+    ).toEqual([owner, bob, admin]);
+    expect(delivered(await app.runPublish({ mcp_server_id: 'deleted' }, context))).toEqual([]);
+  });
   it('publishes an undeclared service to nobody', async () => {
     const app = allowlistApp([{ user: user('u1') }, { user: user('u2') }]);
     configureRealtimePublish({

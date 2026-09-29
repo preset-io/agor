@@ -13,7 +13,6 @@ import {
   Badge,
   Button,
   Empty,
-  Modal,
   Select,
   Skeleton,
   Space,
@@ -128,13 +127,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
-  const [primaryAction, setPrimaryAction] = useState<'clear' | 'replace' | null>(null);
-  const [changingPrimary, setChangingPrimary] = useState(false);
-  const primaryId = board?.primary_teammate_id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: cancel stale confirmation when realtime designation or board identity changes.
-  useEffect(() => {
-    setPrimaryAction(null);
-  }, [board?.board_id, primaryId]);
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -206,17 +198,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   }, [primaryTeammateBranch?.primary_owner_user_id, primaryTeammateBranch?.created_by, userById]);
 
   const teammateOptions = useMemo(() => {
+    if (primaryTeammateBranch || primaryTeammateInaccessible) return [];
+
     return Array.from(branchById.values())
-      .filter(
-        (branch) =>
-          isTeammate(branch) &&
-          !branch.archived &&
-          branch.branch_id !== primaryId &&
-          // Replacing an existing designation is atomic only for this board's
-          // teammates. Cross-board movement retains its own authorization flow;
-          // clear first to use the existing empty-board assignment workflow.
-          (!primaryId || branch.board_id === board?.board_id)
-      )
+      .filter((branch) => isTeammate(branch) && !branch.archived)
       .sort((a, b) => {
         const aConfig = getTeammateConfig(a);
         const bConfig = getTeammateConfig(b);
@@ -234,7 +219,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           repo,
         };
       });
-  }, [branchById, primaryId, board?.board_id, repoById]);
+  }, [branchById, primaryTeammateBranch, primaryTeammateInaccessible, repoById]);
   const [selectedTeammateId, setSelectedTeammateId] = useState<string | undefined>();
   const [assigningTeammate, setAssigningTeammate] = useState(false);
 
@@ -272,34 +257,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   };
 
-  const handleChangePrimary = async () => {
-    if (!board || !client || !canEditBoard || !primaryAction || changingPrimary) return;
-    if (primaryAction === 'replace' && !selectedTeammateId) return;
-    setChangingPrimary(true);
-    try {
-      if (primaryAction === 'clear') {
-        await client.service('boards').clearPrimaryTeammate(board.board_id);
-      } else {
-        await client.service('boards').setPrimaryTeammate({
-          boardId: board.board_id,
-          branchId: selectedTeammateId!,
-        });
-      }
-      setPrimaryAction(null);
-      showSuccess(
-        primaryAction === 'clear'
-          ? 'Board primary teammate cleared'
-          : 'Board primary teammate replaced'
-      );
-    } catch (error) {
-      showError(
-        `Failed to ${primaryAction} board primary teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
-    } finally {
-      setChangingPrimary(false);
-    }
-  };
-
   const teammateSessions = useMemo(
     () =>
       primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
@@ -333,11 +290,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: token.marginXS, minWidth: 0 }}
+            >
               <div
                 style={{
-                  width: 36,
-                  height: 36,
+                  width: token.fontSizeHeading3,
+                  height: token.fontSizeHeading3,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -345,24 +304,28 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 }}
               >
                 {isCreating ? (
-                  <Spin />
+                  <Spin size="small" />
                 ) : teammateConfig?.emoji ? (
-                  <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
+                  <span style={{ fontSize: token.fontSizeHeading3, lineHeight: 1 }}>
+                    {teammateConfig.emoji}
+                  </span>
                 ) : (
-                  <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />
+                  <RobotOutlined
+                    style={{ fontSize: token.fontSizeHeading3, color: token.colorInfo }}
+                  />
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <Typography.Title
-                  level={4}
-                  style={{ margin: 0, fontWeight: 600 }}
+                  level={5}
+                  style={{ margin: 0 }}
                   ellipsis={{
                     tooltip: teammateConfig?.displayName ?? primaryTeammateBranch.name,
                   }}
                 >
                   {teammateConfig?.displayName ?? primaryTeammateBranch.name}
                 </Typography.Title>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                   Primary teammate
                 </Typography.Text>
               </div>
@@ -497,52 +460,6 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         overflow: 'hidden',
       }}
     >
-      <Modal
-        open={canEditBoard && primaryAction !== null}
-        title={
-          primaryAction === 'clear'
-            ? 'Clear board primary teammate?'
-            : 'Replace board primary teammate'
-        }
-        okText={primaryAction === 'clear' ? 'Clear primary' : 'Replace primary'}
-        onOk={handleChangePrimary}
-        onCancel={() => {
-          if (!changingPrimary) setPrimaryAction(null);
-        }}
-        confirmLoading={changingPrimary}
-        cancelButtonProps={{ disabled: changingPrimary }}
-        okButtonProps={{
-          disabled: changingPrimary || (primaryAction === 'replace' && !selectedTeammateId),
-        }}
-        closable={!changingPrimary}
-        mask={{ closable: !changingPrimary }}
-        keyboard={!changingPrimary}
-        destroyOnHidden
-      >
-        <Typography.Paragraph>
-          This changes only the board's primary designation. It does not retire the teammate or
-          change personal primary assistants.
-        </Typography.Paragraph>
-        {primaryAction === 'replace' && (
-          <Space orientation="vertical" style={{ width: '100%' }}>
-            <Select
-              aria-label="Replacement teammate"
-              placeholder="Select a replacement"
-              showSearch
-              optionFilterProp="searchText"
-              options={teammateOptions}
-              value={selectedTeammateId}
-              onChange={setSelectedTeammateId}
-              disabled={changingPrimary || teammateOptions.length === 0}
-              style={{ width: '100%' }}
-            />
-            <Typography.Text type="secondary">
-              Choose a teammate on this board. To move one from another board, clear the primary
-              first, then assign it.
-            </Typography.Text>
-          </Space>
-        )}
-      </Modal>
       <Tabs
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
@@ -550,36 +467,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'teammate',
             label: 'Teammate',
-            children: (
-              <div
-                style={{
-                  height: '100%',
-                  overflow: 'auto',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                {primaryId && canEditBoard && (
-                  <Space wrap style={{ padding: token.paddingSM, flexShrink: 0 }}>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('replace')}
-                      disabled={changingPrimary}
-                    >
-                      Replace primary teammate
-                    </Button>
-                    <Button
-                      size="small"
-                      onClick={() => setPrimaryAction('clear')}
-                      disabled={changingPrimary}
-                    >
-                      Clear primary teammate
-                    </Button>
-                  </Space>
-                )}
-                <div style={{ flex: 1, minHeight: 0 }}>{teammateContent}</div>
-              </div>
-            ),
+            children: <div style={{ height: '100%', overflow: 'auto' }}>{teammateContent}</div>,
           },
           {
             key: 'all-sessions',
@@ -625,16 +513,30 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'comments',
             label: (
-              <Badge
-                count={unreadCommentsCount}
-                size="small"
-                offset={[8, 0]}
-                style={{
-                  backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
-                }}
-              >
-                <span>Comments</span>
-              </Badge>
+              <span style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+                Comments
+                {/* In-flow (so the tab measures it and the scrolling list never clips it),
+                    raised into the tab's top padding and tucked over the label's end. */}
+                <Badge
+                  count={unreadCommentsCount}
+                  size="small"
+                  styles={{
+                    root: {
+                      position: 'relative',
+                      top: -token.paddingXS,
+                      // An empty badge still has a root; do not subtract from
+                      // the measured label width after the unread count clears.
+                      marginInlineStart: unreadCommentsCount > 0 ? -token.marginXS : 0,
+                    },
+                    indicator: {
+                      paddingInline: token.paddingXXS,
+                      backgroundColor: hasUserMentions
+                        ? token.colorError
+                        : token.colorPrimaryBgHover,
+                    },
+                  }}
+                />
+              </span>
             ),
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)' }}>
@@ -660,22 +562,34 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             ),
           },
         ]}
+        rootClassName="agor-panel-tabs"
+        tabBarGutter={token.marginSM}
         style={{ height: '100%' }}
-        styles={{ body: { height: '100%' }, content: { height: '100%' } }}
-        tabBarStyle={{ margin: 0, padding: '0 12px' }}
+        styles={{
+          body: { height: '100%' },
+          content: { height: '100%' },
+          item: { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
+        }}
+        tabBarStyle={{ margin: 0 }}
+        // Insets live in the extra slots, not tab-bar padding: rc-tabs measures the bar
+        // minus its extras, so padding would hide overflow from its scroll/fade logic.
         tabBarExtraContent={{
-          right: onCollapse ? (
-            <Tooltip title="Collapse panel" placement="bottom">
-              <Button
-                type="text"
-                size="small"
-                aria-label="Collapse panel"
-                icon={<LeftOutlined style={{ fontSize: 11 }} />}
-                onClick={onCollapse}
-                style={{ marginRight: 4 }}
-              />
-            </Tooltip>
-          ) : undefined,
+          left: <div style={{ width: token.padding }} />,
+          right: (
+            <div style={{ paddingInlineEnd: token.paddingXXS }}>
+              {onCollapse && (
+                <Tooltip title="Collapse panel" placement="bottom">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Collapse panel"
+                    icon={<LeftOutlined style={{ fontSize: 11 }} />}
+                    onClick={onCollapse}
+                  />
+                </Tooltip>
+              )}
+            </div>
+          ),
         }}
       />
     </div>

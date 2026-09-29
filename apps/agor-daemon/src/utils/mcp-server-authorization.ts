@@ -104,7 +104,7 @@ export interface McpServerWriteRequest {
 
 export interface McpServerWriteDecision {
   /** The owner to persist, for a create the caller is not free to choose. */
-  owner_user_id?: UserID;
+  owner_user_id?: UserID | null;
   /** The scope to persist, for a create whose policy fixes it. */
   scope?: MCPScope;
   /** The catalog provenance to persist, which only the install path may name. */
@@ -150,28 +150,15 @@ export interface McpCatalogInstallParams {
  * hostile one, and silence would serve neither. Admins are refused too: this
  * is not an operator-maintained field.
  *
- * Ownership is decided here rather than left to {@link decidePolicyAndOwnership}
- * because an install is not an ordinary create. Connect writes a `session`-scoped
- * row from a fixed payload that names no owner, so under the ordinary rules two
- * callers end up with a shared server: `allow_crud` reads "no owner requested"
- * as opting into one, and an admin skips the ownership rules entirely. An
- * unowned row is usable by every user in the tenant (`isMCPServerUsableBy`),
- * which is the opposite of what installing from the marketplace asks for. So a
- * catalog install belongs to whoever installed it, under every policy and at
- * every role. Publishing a server the whole tenant may use is still available
- * — it is what `POST /mcp-servers` is for.
- *
- * The owner is read from the authenticated caller, not from the install params:
- * every authentication strategy hydrates `params.user` from the users table,
- * so its full canonical ID is trusted here. A member's request-supplied owner
- * remains untrusted and is policy-stamped or rejected below. Connect only ever
- * installs for its own caller, so no daemon-side caller can name someone else's
- * identity by mistake.
+ * Catalog ownership defaults to the authenticated caller, including for admins.
+ * Explicit null selects a shared configuration only after the ordinary write
+ * authorizer has approved it. Provenance never grants publishing permission.
+ * Connect additionally restricts shared auth and keeps every install session-scoped.
  */
 function resolveCatalogInstall(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
-): { entry_name: string; owner_user_id: UserID } | undefined {
+): { entry_name: string; owner_user_id: UserID | null } | undefined {
   // Internal daemon calls and service accounts are trusted by their route and
   // write the columns directly, the way any other server-side field is written.
   if (!params?.provider) return undefined;
@@ -191,7 +178,10 @@ function resolveCatalogInstall(
 
   const userId = params.user?.user_id as UserID | undefined;
   if (!userId) throw new NotAuthenticated('Authentication required');
-  return { entry_name: entryName, owner_user_id: userId };
+  return {
+    entry_name: entryName,
+    owner_user_id: request.data?.owner_user_id === null ? null : userId,
+  };
 }
 
 /** Admins keep `stdio`; see {@link mayMemberUseMCPTransport} for why members do not. */

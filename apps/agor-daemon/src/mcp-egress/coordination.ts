@@ -1,4 +1,5 @@
 import {
+  enqueueAfterTenantDatabaseCommit,
   getMCPEgressGatewayMode,
   MCPServerRepository,
   SessionRepository,
@@ -64,7 +65,10 @@ export function coordinateMCPServerMutationAfterWrite(
   const tenantId = context.params.tenant?.tenant_id;
   const serverId = (context.result as { mcp_server_id?: unknown } | undefined)?.mcp_server_id;
   if (tenantId && typeof serverId === 'string') {
-    gateway?.abortServer(tenantId, serverId, 'stale_capability');
+    const abort = () => {
+      gateway?.abortServer(tenantId, serverId, 'stale_capability');
+    };
+    if (!enqueueAfterTenantDatabaseCommit(abort)) abort();
   }
 }
 

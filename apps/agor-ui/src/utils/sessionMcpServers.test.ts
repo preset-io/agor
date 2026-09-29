@@ -1,7 +1,8 @@
 import type { AgorClient } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mcpServerRemoved } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
-import { sessionMcpCreated } from '../store/sessionMcpActions';
+import { sessionMcpCreated, sessionMcpPatched } from '../store/sessionMcpActions';
 import { updateSessionMcpServers } from './sessionMcpServers';
 
 describe('updateSessionMcpServers', () => {
@@ -31,5 +32,24 @@ describe('updateSessionMcpServers', () => {
     await updateSessionMcpServers(client, 'session-1', [], ['add-me']);
 
     expect(agorStore.getState().sessionMcpServerIds.get('session-1')).toEqual(['add-me']);
+  });
+  it('does not resurrect a deleted server from a delayed attachment acknowledgement or event', async () => {
+    let resolve!: () => void;
+    const create = vi.fn(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        })
+    );
+    const client = { service: () => ({ create, remove: vi.fn() }) } as unknown as AgorClient;
+    const pending = updateSessionMcpServers(client, 'session-1', [], ['deleted']);
+    mcpServerRemoved({ mcp_server_id: 'deleted' } as never);
+    resolve();
+    await pending;
+    sessionMcpCreated({ session_id: 'session-1', mcp_server_id: 'deleted' });
+    sessionMcpPatched({ session_id: 'session-1', mcp_server_ids: ['deleted', 'live'] });
+    expect(agorStore.getState().sessionMcpServerIds.get('session-1')).toEqual(['live']);
+    agorStore.getState().resetMaps();
+    expect(agorStore.getState().deletedMcpServerIds.size).toBe(0);
   });
 });

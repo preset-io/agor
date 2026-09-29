@@ -33,6 +33,19 @@ describe('buildMcpServerOptions', () => {
     expect(buildMcpServerOptions([disabled], [])).toEqual([]);
   });
 
+  it('uses readable metadata only for currently selected IDs, never as new choices', () => {
+    const privateServer = server({});
+    expect(
+      buildMcpServerOptions([], [privateServer.mcp_server_id], new Set(), [privateServer])
+    ).toEqual([
+      expect.objectContaining({
+        label: 'Friendly server (http)',
+        value: privateServer.mcp_server_id,
+      }),
+    ]);
+    expect(buildMcpServerOptions([], [], new Set(), [privateServer])).toEqual([]);
+  });
+
   // Connecting a marketplace entry writes the install before anybody signs in,
   // so an OAuth row with no grant is enabled and offered here looking exactly
   // like a working one. These pin that the picker says otherwise, using the

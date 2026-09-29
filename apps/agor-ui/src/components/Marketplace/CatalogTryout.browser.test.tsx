@@ -175,6 +175,7 @@ describe('recovered Catalog tryout flow in Chromium', () => {
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: entry.name,
       acknowledged_disclosure: entry.permission_disclosure,
+      sharing: 'private',
     });
     expect(api.start).not.toHaveBeenCalled();
     expect(api.candidates).not.toHaveBeenCalled();

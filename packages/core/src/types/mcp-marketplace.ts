@@ -32,7 +32,7 @@ export interface MCPMarketplaceServer {
   tools: MCPMarketplaceTool[];
   /** Last successful daemon capability discovery; absent means never discovered. */
   capabilities_discovered_at?: string;
-  /** Counted from the same visible attachment rows returned in `attachments`. */
+  /** All attachments to this owned server; hidden session metadata is never disclosed. */
   session_count: number;
   created_at: string;
   updated_at: string;
@@ -104,6 +104,10 @@ export interface MCPMarketplaceOverview {
 /** Narrow Marketplace mutation; no server configuration is accepted or returned. */
 export interface MCPMarketplaceRemoveServerData {
   mcp_server_id: MCPServerID;
+  /** Explicit confirmation; omission preserves unattached-only removal. */
+  detach?: boolean;
+  /** Count the user confirmed. Rechecked under the server lock. */
+  expected_session_count?: number;
 }
 
 export interface MCPMarketplaceRemoveServerResult {

@@ -108,9 +108,18 @@ for (const width of [1280, 390]) {
     );
     expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Retire teammate — keep files' })).toBeDisabled();
-    expect(
-      screen.getByRole('link', { name: 'Open board to replace primary' }).getAttribute('href')
-    ).toBe('/ui/b/fixture/');
+    expect(screen.getByRole('link', { name: 'Open board', exact: true })).toHaveAttribute(
+      'href',
+      '/ui/b/fixture/'
+    );
+    expect(screen.queryByRole('link', { name: 'Open board to replace primary' })).toBeNull();
+    await waitFor(() =>
+      expect(
+        screen.getByText(
+          "First clear this board's primary teammate. To choose a replacement afterward, open the board and use Assign in its Teammate panel. Nothing changes until you confirm."
+        )
+      ).toBeVisible()
+    );
     await click(screen.getByRole('button', { name: 'Clear board primary' }));
     expect(f.clear).not.toHaveBeenCalled();
     await waitFor(() =>
@@ -164,7 +173,7 @@ for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as co
     await screen.findByText(/Board details or permissions are unavailable/);
     expect(screen.queryByText('Branch permissions could not be loaded.')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Clear board primary' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Open board to replace primary' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open board', exact: true })).toBeNull();
     // Data can resolve before AntD's entrance animation makes the modal visible.
     await waitFor(() =>
       expect(

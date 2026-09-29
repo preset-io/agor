@@ -37,6 +37,17 @@ sticky admission fences; failure never authorizes resuming ordinary work.
 invocation identity on that same row. It does not authorize callers or supervise
 executors. Its short claimed transactions must not contain filesystem/network
 work. Invocation uncertainty retains ownership; elapsed time is not settlement.
+The deletion executor's `settled` acknowledgement is narrower than process
+containment: direct storage work has stopped and every upload RPC was acknowledged.
+The executor tracks entry into workspace/SDK-home removal and permits settlement
+only on successful return. Recursive `fs.rm` can reject before sibling removals
+drain; a rejected removal (including Git or validation inside that call) stays
+fenced. Separate pre-removal validation/quiesce failures can still settle.
+Only DB-only requests may still be unknown. `failSettled` drains/fences them under
+the same Branch lock before clearing ownership. It does not infer rollback. An
+unknown upload or a claimed legacy invocation without this evidence stays blocked;
+see the guide's **Deletion recovery** section. Failed, never-claimed dispatches
+can instead be replaced atomically, fencing any late old claim by generation.
 `db/branch-admission.ts` supplies the Branch-first lock for producer admission.
 Do not expose maintenance methods or internal claim JSON as generic CRUD.
 

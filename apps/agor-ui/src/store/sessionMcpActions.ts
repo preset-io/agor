@@ -11,6 +11,7 @@ import { type AgorState, agorStore } from './agorStore';
 const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
 
 export function sessionMcpCreated(relationship: { session_id: string; mcp_server_id: string }) {
+  if (agorStore.getState().deletedMcpServerIds.has(relationship.mcp_server_id)) return;
   bumpRevision('sessionMcp');
   setMap('sessionMcpServerIds', (prev) => {
     const sessionMcpIds = prev.get(relationship.session_id) || [];
@@ -41,7 +42,8 @@ export function sessionMcpPatched(selection: { session_id: string; mcp_server_id
   bumpRevision('sessionMcp');
   setMap('sessionMcpServerIds', (prev) => {
     const current = prev.get(selection.session_id) || [];
-    const selected = selection.mcp_server_ids;
+    const deleted = agorStore.getState().deletedMcpServerIds;
+    const selected = selection.mcp_server_ids.filter((id) => !deleted.has(id));
     if (current.length === selected.length && current.every((id, i) => id === selected[i])) {
       return prev;
     }

@@ -43,6 +43,8 @@ export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
+  /** Deletion fences for late MCP attachment responses/events in this authority lifetime. */
+  deletedMcpServerIds: Set<string>;
   loading: boolean;
   loadingStage: InitialLoadingStage;
   error: string | null;
@@ -153,6 +155,7 @@ function removeRelationshipsToDeletedSessions(
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
 const INITIAL_META: AgorMeta = {
+  deletedMcpServerIds: new Set(),
   loading: true,
   loadingStage: 'idle',
   error: null,
@@ -177,6 +180,7 @@ export const agorStore = createStore<AgorState>()(
     resetMaps: () =>
       set({
         ...EMPTY_MAPS,
+        deletedMcpServerIds: new Set(),
         agenticToolSettingsByName: new Map(),
         agenticToolSettingsHydrated: false,
       }),

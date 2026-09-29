@@ -5,7 +5,7 @@ import type {
   BranchDeletionExecutionResult,
   BranchDeletionStage,
 } from '@agor/core/types';
-import { BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
+import { BRANCH_DELETION_ACTION_EFFECTS, BRANCH_DELETION_REPORT_SERVICE } from '@agor/core/types';
 import {
   deleteBranchDirectory,
   removeBranchWorkspace,
@@ -13,6 +13,19 @@ import {
 } from '@agor/git';
 import type { BranchDeletePayload, ExecutorResult } from '../payload-types.js';
 import type { CommandOptions } from './index.js';
+
+// Match termination-report.ts's bounded delivery conventions, not its
+// task-specific readback predicate. Only the settlement acknowledgement retries.
+const SETTLEMENT_RETRY_WINDOW_MS = 15_000;
+const SETTLEMENT_ATTEMPT_TIMEOUT_MS = 2_000;
+const SETTLEMENT_RETRY_BASE_MS = 250;
+const SETTLEMENT_RETRY_MAX_MS = 1_000;
+
+class DeletionRequestRejected extends Error {
+  constructor(readonly status: number) {
+    super('Deletion request rejected');
+  }
+}
 
 /**
  * Private boundary between the deletion command and its scoped daemon API /
@@ -29,7 +42,7 @@ export interface BranchDeletionOperations {
   deleteDataBatch(): Promise<{ remaining: boolean }>;
   /** Recheck required storage/data and delete the branch LAST in one short transaction. */
   finalize(): Promise<void>;
-  /** Records failure, but never releases an unresolved invocation. */
+  /** Drain/fence DB requests only after worker storage settles; unknown storage stays fenced. */
   reportFailure(
     failure: Exclude<BranchDeletionExecutionResult, { outcome: 'deleted' }>
   ): Promise<void>;
@@ -150,19 +163,26 @@ export async function handleBranchDelete(
     generation: p.generation,
     execution_id: p.executionId,
   };
-  let reportOutcomeUnknown = false;
+  let storageRequestUnknown = false;
+  let filesystemRemovalUnsettled: 'workspace' | 'sdk_home' | undefined;
   let sessionToken = payload.sessionToken;
+  const correlation = `branch_id=${p.branchId} operation_id=${p.operationId} generation=${p.generation} invocation_id=${p.executionId}`;
+  const pages: Partial<Record<BranchDeletionAction, number>> = {};
   const report = async (
     action: BranchDeletionAction,
-    stage?: BranchDeletionStage
+    stage?: BranchDeletionStage,
+    signal = AbortSignal.timeout(30_000)
   ): Promise<{ remaining: boolean }> => {
+    const started = performance.now();
+    let status: number | undefined;
+    let category = 'transport';
     try {
       const response = await fetch(
         `${payload.daemonUrl.replace(/\/$/, '')}/${BRANCH_DELETION_REPORT_SERVICE}`,
         {
           method: 'POST',
           redirect: 'error',
-          signal: AbortSignal.timeout(30_000),
+          signal,
           headers: {
             Authorization: `Bearer ${sessionToken}`,
             'Content-Type': 'application/json',
@@ -170,8 +190,12 @@ export async function handleBranchDelete(
           body: JSON.stringify({ ...scope, action, ...(stage ? { stage } : {}) }),
         }
       );
-      if (!response.ok) throw new Error(`Deletion ${action} rejected (HTTP ${response.status})`);
+      status = response.status;
+      category = 'http_rejected';
+      if (!response.ok) throw new DeletionRequestRejected(response.status);
+      category = 'malformed_response';
       const result = (await response.json()) as { remaining?: boolean; sessionToken?: string };
+      if (!result || typeof result !== 'object') throw new Error('Invalid deletion response');
       if (
         action === 'heartbeat' &&
         typeof result.sessionToken === 'string' &&
@@ -183,11 +207,24 @@ export async function handleBranchDelete(
       const page = action === 'quiesce' || action === 'upload' || action === 'data';
       if (page && typeof result.remaining !== 'boolean')
         throw new Error('Invalid deletion progress response');
+      if (action === 'settled' && !('ok' in result && result.ok === true))
+        throw new Error('Invalid settlement response');
+      if (page) pages[action] = (pages[action] ?? 0) + 1;
+      if ((page && !result.remaining) || action === 'settled' || action === 'finalize')
+        console.info(
+          `[branch.delete] event=step_complete ${correlation} action=${action} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+        );
       return { remaining: result.remaining ?? false };
     } catch (error) {
-      // Transport failure does not cancel a daemon storage step. Never release
-      // its invocation while that request may still be deleting bytes.
-      reportOutcomeUnknown = true;
+      // HTTP errors are not rollback/containment proof. Only explicitly
+      // database-only effects can be drained by the settlement transaction.
+      // Unclassified effects conservatively retain ownership too.
+      if (BRANCH_DELETION_ACTION_EFFECTS[action] !== 'database') storageRequestUnknown = true;
+      if (category === 'transport' && error instanceof Error && error.name === 'TimeoutError')
+        category = 'timeout';
+      console.error(
+        `[branch.delete] event=request_failed ${correlation} action=${action} category=${category} http_status=${status ?? 'unknown'} duration_ms=${Math.round(performance.now() - started)} pages=${pages[action] ?? 0}`
+      );
       throw error;
     }
   };
@@ -201,7 +238,9 @@ export async function handleBranchDelete(
       const code = ['ENOENT', 'EACCES', 'EPERM', 'EBUSY', 'ENOTDIR', 'EIO'].includes(errno ?? '')
         ? errno
         : 'verification_failed';
-      console.error(`[branch.delete] event=storage_failed step=${step} code=${code}`);
+      console.error(
+        `[branch.delete] event=storage_failed ${correlation} step=${step} code=${code}`
+      );
       throw error;
     }
   };
@@ -213,7 +252,7 @@ export async function handleBranchDelete(
       await report('heartbeat');
     },
     removeStorage: async () => {
-      while ((await storageStep('quiesce', () => report('quiesce'))).remaining) {
+      while ((await report('quiesce')).remaining) {
         /* disable a bounded page of durable producers */
       }
 
@@ -237,23 +276,101 @@ export async function handleBranchDelete(
         // tenant root must still exist; symlinked descendants remain forbidden.
         await resolveManagedBranchDeletionPath(p.branchHome, p.tenantDataRoot);
       });
+      // These owners may start Git subprocesses or concurrent recursive fs.rm
+      // children. Rejection does not prove drainage (Node can reject rm on the
+      // first child error while siblings still mutate). Mark BEFORE entry and
+      // clear only on success, never in finally or based on an errno/exit code.
+      // Validation failures inside these calls conservatively stay fenced too.
+      filesystemRemovalUnsettled = 'workspace';
       await storageStep('remove_workspace', () => removeBranchWorkspace(p));
+      filesystemRemovalUnsettled = 'sdk_home';
       await storageStep('remove_sdk_home', () =>
         deleteBranchDirectory(p.branchHome, p.tenantDataRoot)
       );
+      filesystemRemovalUnsettled = undefined;
       // Storage adapters retain lookup rows until their bytes are removed.
-      while ((await storageStep('remove_upload', () => report('upload'))).remaining) {
+      while ((await report('upload')).remaining) {
         /* one immutable upload per request */
       }
-      await storageStep('verify_storage', () => report('storage'));
+      await report('storage');
     },
     deleteDataBatch: () => report('data'),
     finalize: async () => {
       await report('finalize');
     },
     reportFailure: async (failure) => {
-      if (reportOutcomeUnknown) throw new Error('A daemon step has an unknown outcome');
-      await report('failed', failure.stage);
+      if (filesystemRemovalUnsettled) {
+        console.error(
+          `[branch.delete] event=recovery_blocked ${correlation} category=filesystem_removal_unsettled step=${filesystemRemovalUnsettled}`
+        );
+        throw new Error('Filesystem removal drainage cannot be established');
+      }
+      if (storageRequestUnknown) {
+        console.error(
+          `[branch.delete] event=recovery_blocked ${correlation} category=storage_request_unsettled`
+        );
+        throw new Error('Daemon storage settlement cannot be established');
+      }
+      // Distinct from legacy "failed": older daemons must reject rather than
+      // accepting an acknowledgement with the new DB-drain semantics.
+      // Retry this acknowledgement only, never destructive steps. The same
+      // immutable scope and credential fence every attempt, including late
+      // requests after timeout or an authorized replacement. failSettled clears
+      // the claim, so there is NO exact durable receipt to read back: a replay
+      // rejected after a lost commit is not success (nor permission to unlock).
+      const deadline = Date.now() + SETTLEMENT_RETRY_WINDOW_MS;
+      let attempts = 0;
+      while (Date.now() < deadline) {
+        attempts++;
+        const controller = new AbortController();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeoutMs = Math.min(SETTLEMENT_ATTEMPT_TIMEOUT_MS, deadline - Date.now());
+        try {
+          // Bound the whole request, including response-body consumption.
+          // Abort transport as well; neither abort nor timeout proves rollback.
+          await Promise.race([
+            report('settled', failure.stage, controller.signal),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => {
+                const error = new DOMException('Settlement delivery timed out', 'TimeoutError');
+                controller.abort(error);
+                reject(error);
+              }, timeoutMs);
+            }),
+          ]);
+          return;
+        } catch (error) {
+          // Authority/protocol/ownership rejection cannot heal by replaying.
+          // 408/429 and server failures remain delivery uncertainty, not proof
+          // of rejection or commit. Do not inspect untrusted response text.
+          if (
+            error instanceof DeletionRequestRejected &&
+            error.status >= 400 &&
+            error.status < 500 &&
+            error.status !== 408 &&
+            error.status !== 429
+          )
+            throw error;
+        } finally {
+          clearTimeout(timer);
+        }
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) break;
+        await new Promise((resolve) =>
+          setTimeout(
+            resolve,
+            Math.min(
+              SETTLEMENT_RETRY_BASE_MS * 2 ** Math.min(attempts - 1, 2),
+              SETTLEMENT_RETRY_MAX_MS,
+              remainingMs
+            )
+          )
+        );
+      }
+      console.error(
+        `[branch.delete] event=settlement_exhausted ${correlation} attempts=${attempts}`
+      );
+      throw new Error('Settlement delivery retry window exhausted; outcome unknown');
     },
   });
   return result.outcome === 'deleted'

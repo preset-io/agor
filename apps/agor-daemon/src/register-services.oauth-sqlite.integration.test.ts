@@ -20,6 +20,7 @@ import {
   SessionRepository,
   setMCPEgressGatewayMode,
   setMCPSlackConnectCardEnabled,
+  setMcpMemberPolicy,
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
@@ -4813,6 +4814,102 @@ describe('SQLite saved-row OAuth authority', () => {
       clock.mockRestore();
     }
   });
+
+  it.each(['use_existing_only', 'allow_private_only'] as const)(
+    'lets a %s member acquire only their own grant on canonical shared Catalog configuration',
+    async (policy) => {
+      const provider = await createTestProvider();
+      providers.push(provider);
+      const harness = await createHarness(provider, 'per_user', { catalogPeer: true });
+      databases.push(harness.rawDb);
+      const entry = {
+        name: 'test/shared-member-grant',
+        title: 'Shared Member Grant',
+        transport: 'streamable-http',
+        remote_url: provider.savedMcpUrl,
+        has_remote: true,
+        auth_type: 'oauth',
+        oauth: { client_id: 'saved-client-id', compatibility_mode: 'strict' },
+        permission_disclosure: 'Local provider fixture only.',
+      } as MCPCatalogEntry;
+      // Controlled fixture: published configuration, not a claimed live Catalog
+      // provider E2E. Start/callback/token persistence below are the real lane.
+      await update(harness.rawDb, mcpServers)
+        .set({
+          owner_user_id: null,
+          scope: 'session',
+          source: 'catalog',
+          catalog_entry_name: entry.name,
+        })
+        .where(eq(mcpServers.mcp_server_id, harness.server.mcp_server_id))
+        .run();
+      vi.mocked(loadCatalog).mockResolvedValue([entry]);
+      await new UsersRepository(harness.rawDb).update(harness.user.user_id, { role: 'member' });
+      harness.liveSocket.feathers.user = { ...harness.user, role: 'member' };
+      await setMcpMemberPolicy(harness.rawDb, policy, undefined, null);
+      registerProductionHooksForHarness(harness);
+      harness.app.use('mcp-catalog', {
+        async get() {
+          return entry;
+        },
+      } as never);
+      const repository = new MCPServerRepository(harness.rawDb);
+      const before = await repository.findById(harness.server.mcp_server_id);
+      const connect = () =>
+        createRegisteredMCPCatalogConnectService(harness.app, harness.db).create(
+          {
+            catalog_key: entry.name,
+            sharing: 'shared',
+            acknowledged_disclosure: entry.permission_disclosure,
+          },
+          paramsFor(harness)
+        );
+      expect((await connect()).mcp_server.auth?.oauth_access_token).toBeUndefined();
+      await authorizeSavedServer(harness);
+      expect((await connect()).mcp_server.auth?.oauth_access_token).toBeTruthy();
+      const grants = new UserMCPOAuthTokenRepository(harness.rawDb);
+      expect(
+        await grants.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id)
+      ).toMatchObject({
+        oauth_access_token: 'sqlite-access-token',
+        grant_binding_version: 4,
+      });
+      expect(await grants.getToken(null, harness.server.mcp_server_id)).toBeNull();
+      expect(await repository.findById(harness.server.mcp_server_id)).toEqual(before);
+      await expect(
+        harness.app
+          .service('mcp-servers')
+          .patch(
+            harness.server.mcp_server_id,
+            { url: 'https://not-allowed.example/mcp' },
+            paramsFor(harness)
+          )
+      ).rejects.toMatchObject({ code: 403 });
+      // Bounded advisory check: allow_crud keeps its documented edit authority,
+      // but a binding change must retire every user's grant, not only the editor's.
+      const other = await new UsersRepository(harness.rawDb).create({
+        email: 'other-grant@example.test',
+        role: 'member',
+      });
+      await grants.saveToken(other.user_id, harness.server.mcp_server_id, {
+        accessToken: 'other-fixture-token',
+        resourceUri: provider.savedMcpUrl,
+      });
+      await setMcpMemberPolicy(harness.rawDb, 'allow_crud', undefined, null);
+      await harness.app
+        .service('mcp-servers')
+        .patch(
+          harness.server.mcp_server_id,
+          { url: 'https://changed.example/mcp' },
+          paramsFor(harness)
+        );
+      expect(
+        await grants.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id)
+      ).toBeNull();
+      expect(await grants.getToken(other.user_id, harness.server.mcp_server_id)).toBeNull();
+      await expect(connect()).rejects.toThrow(/Settings/);
+    }
+  );
 
   it('refuses catalog reuse after a current versioned SQLite grant binding drifts', async () => {
     const provider = await createTestProvider();

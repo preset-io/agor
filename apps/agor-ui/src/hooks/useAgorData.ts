@@ -437,12 +437,14 @@ export function useAgorData(
           const ids =
             (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
           agorStore.getState().applyMaps((prev) => {
-            if (!freshServer) {
-              return { ...prev, userAuthenticatedMcpServerIds: new Set(ids) };
+            const deleted = agorStore.getState().deletedMcpServerIds;
+            const authenticated = new Set(ids.filter((id) => !deleted.has(id)));
+            if (!freshServer || deleted.has(freshServer.mcp_server_id)) {
+              return { ...prev, userAuthenticatedMcpServerIds: authenticated };
             }
             const mcpServerById = new Map(prev.mcpServerById);
             mcpServerById.set(freshServer.mcp_server_id, freshServer);
-            return { ...prev, userAuthenticatedMcpServerIds: new Set(ids), mcpServerById };
+            return { ...prev, userAuthenticatedMcpServerIds: authenticated, mcpServerById };
           });
         }
       );

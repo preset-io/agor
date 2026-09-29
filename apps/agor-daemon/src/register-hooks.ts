@@ -2661,12 +2661,34 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       create: [redactMCPServerSecretFieldsForGatewayMode],
       patch: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
       update: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
-      // `remove` returns the deleted row: the adapter loads it in full before
-      // deleting so it can return it, and that same object becomes the
-      // `removed` payload broadcast to every authenticated connection in the
-      // tenant. Without this it is the one method that hands out raw `env`,
-      // `headers`, and `auth` — a delete is not an exemption from redaction.
-      remove: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
+      // Removal still returns a redacted row to the authorized caller. Its
+      // realtime eviction is a separate minimal, ownership-scoped payload.
+      remove: [
+        abortMcpInFlightAfterWrite,
+        redactMCPServerSecretFieldsForGatewayMode,
+        (context: HookContext) => {
+          // Catalog deletion joins a transaction. Never publish its removal
+          // before commit (or publish anything if that transaction rolls back).
+          const event = context.event;
+          if (event) {
+            context.event = null;
+            emitServiceEvent(app, {
+              path: 'mcp-servers',
+              event,
+              method: 'remove',
+              id: context.id,
+              // Ownership is the pre-delete audience snapshot. No private
+              // configuration is needed to evict a deleted row from clients.
+              data: {
+                mcp_server_id: (context.result as MCPServer).mcp_server_id,
+                owner_user_id: (context.result as MCPServer).owner_user_id ?? null,
+              },
+              params: context.params,
+            });
+          }
+          return context;
+        },
+      ],
     },
   });
 
