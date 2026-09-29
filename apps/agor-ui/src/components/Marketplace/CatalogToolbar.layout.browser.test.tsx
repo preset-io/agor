@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { CatalogTab } from './CatalogTab';
 import { MCPCatalogModal } from './MCPCatalogModal';
-import { catalogUser, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
+import { catalogEntry, catalogUser, makeCatalogClient } from './MCPCatalogModal.test-fixtures';
 
 beforeEach(() => {
   // Browser events run outside React's synthetic act environment.
@@ -16,6 +16,98 @@ configure({ asyncUtilTimeout: 10_000 });
 afterEach(cleanup);
 
 const NO_MOTION = { token: { motion: false } };
+
+it.each([1440, 390])(
+  'clears filters to All/Any and updates results without losing search or sort at %ipx',
+  async (width) => {
+    await page.viewport(width, 900);
+    const { client } = makeCatalogClient([
+      catalogEntry,
+      { ...catalogEntry, name: 'test/a', title: 'Keep A' },
+      { ...catalogEntry, name: 'test/b', title: 'Keep B', category: 'search' },
+      {
+        ...catalogEntry,
+        name: 'test/c',
+        title: 'Keep C',
+        category: 'search',
+        capabilities: ['logs'],
+      },
+    ]);
+    render(
+      <ConfigProvider theme={NO_MOTION}>
+        <MemoryRouter>
+          <CatalogTab
+            client={client}
+            connected
+            connecting={false}
+            authGeneration={1}
+            currentUser={catalogUser}
+          />
+        </MemoryRouter>
+      </ConfigProvider>
+    );
+    await screen.findByRole('button', { name: 'Open DeepWiki' });
+    await userEvent.fill(screen.getByRole('textbox', { name: 'Search MCP servers' }), 'keep');
+    if (width === 390) await userEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const select = (name: string) => screen.getByRole('combobox', { name });
+    const control = (name: string) => select(name).closest<HTMLElement>('.ant-select')!;
+    const choose = async (name: string, option: string) => {
+      await userEvent.click(select(name));
+      const popup = document
+        .getElementById(select(name).getAttribute('aria-controls')!)
+        ?.closest<HTMLElement>('.ant-select-dropdown');
+      if (!popup) throw new Error(`${name} popup not found`);
+      await userEvent.click(within(popup).getByText(option, { exact: true }));
+    };
+    const category = control('Filter by category');
+    const capability = control('Filter by capability');
+    expect(within(category).getByText('All')).toBeVisible();
+    expect(within(capability).getByText('Any')).toBeVisible();
+    expect(category.querySelector('.ant-select-clear')).toBeNull();
+    expect(capability.querySelector('.ant-select-clear')).toBeNull();
+    await choose('Sort servers', 'A–Z');
+    await choose('Filter by category', 'Dev tools');
+    await choose('Filter by capability', 'Docs');
+
+    const expectResults = async (count: number) => {
+      await screen.findByText(`${count} of 4 servers match`);
+      const cards = screen.getAllByRole('button', { name: /^Open Keep/ });
+      expect(cards.map((card) => card.getAttribute('aria-label'))).toEqual(
+        ['Open Keep A', 'Open Keep B', 'Open Keep C'].slice(0, count)
+      );
+      expect(screen.queryByRole('button', { name: 'Open DeepWiki' })).toBeNull();
+      expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toHaveValue('keep');
+      expect(control('Sort servers')).toHaveTextContent('A–Z');
+      if (width === 390) {
+        expect(
+          screen.getByRole('button', {
+            name: count === 1 ? 'Filters, 2 active' : count === 2 ? 'Filters, 1 active' : 'Filters',
+          })
+        ).toBeVisible();
+        expect(
+          screen.getByRole('button', {
+            name: `Show ${count} ${count === 1 ? 'server' : 'servers'}`,
+          })
+        ).toBeVisible();
+        if (count === 3) expect(document.querySelector('.ant-badge-count')).toBeNull();
+        else
+          expect(document.querySelector('.ant-badge-count')).toHaveTextContent(String(3 - count));
+      }
+    };
+    await expectResults(1);
+    await userEvent.hover(category);
+    await userEvent.click(category.querySelector<HTMLElement>('.ant-select-clear')!);
+    expect(within(category).getByText('All')).toBeVisible();
+    expect(category.querySelector('.ant-select-clear')).toBeNull();
+    expect(within(capability).getByText('Docs')).toBeVisible();
+    await expectResults(2);
+    await userEvent.hover(capability);
+    await userEvent.click(capability.querySelector<HTMLElement>('.ant-select-clear')!);
+    expect(within(capability).getByText('Any')).toBeVisible();
+    expect(capability.querySelector('.ant-select-clear')).toBeNull();
+    await expectResults(3);
+  }
+);
 
 /** The toolbar is one control row that never overflows; returns which of its two states it is in. */
 function expectOneControlRow(): 'full' | 'collapsed' {

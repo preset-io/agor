@@ -22,6 +22,54 @@ function selectOption(label: string): void {
 }
 
 describe('Marketplace catalog toolbar', () => {
+  it.each([1200, 390])(
+    'clears only the chosen filter and restores its default at %ipx',
+    async (width) => {
+      const widthSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(width);
+      const props = {
+        category: 'search' as const,
+        capability: 'web-search',
+        sort: 'name' as const,
+        search: 'documentation',
+        onSearchChange: vi.fn(),
+        onCategoryChange: vi.fn(),
+        onCapabilityChange: vi.fn(),
+        onSortChange: vi.fn(),
+        matchSummary: { matched: 1, total: 52 },
+      };
+      try {
+        const { rerender } = render(<CatalogToolbar {...props} />);
+        if (width === 390) {
+          fireEvent.click(screen.getByRole('button', { name: 'Filters, 2 active' }));
+          await screen.findByRole('dialog', { name: 'Filters' });
+        }
+        const category = selectInput('Filter by category').closest('.ant-select')!;
+        const capability = selectInput('Filter by capability').closest('.ant-select')!;
+        fireEvent.click(capability.querySelector('.ant-select-clear')!);
+        expect(props.onCapabilityChange).toHaveBeenCalledExactlyOnceWith(undefined);
+        expect(props.onCategoryChange).not.toHaveBeenCalled();
+        rerender(<CatalogToolbar {...props} capability={undefined} />);
+        expect(within(capability as HTMLElement).getByText('Any')).toBeVisible();
+        expect(capability.querySelector('.ant-select-clear')).toBeNull();
+        expect(within(category as HTMLElement).getByText('Search')).toBeVisible();
+
+        fireEvent.click(category.querySelector('.ant-select-clear')!);
+        expect(props.onCategoryChange).toHaveBeenCalledExactlyOnceWith(undefined);
+        rerender(<CatalogToolbar {...props} category={undefined} capability={undefined} />);
+        expect(within(category as HTMLElement).getByText('All')).toBeVisible();
+        expect(category.querySelector('.ant-select-clear')).toBeNull();
+        expect(props.onSearchChange).not.toHaveBeenCalled();
+        expect(props.onSortChange).not.toHaveBeenCalled();
+        expect(screen.getByRole('textbox', { name: 'Search MCP servers' })).toHaveValue(
+          'documentation'
+        );
+        expect(selectInput('Sort servers').closest('.ant-select')).toHaveTextContent('A–Z');
+      } finally {
+        widthSpy.mockRestore();
+      }
+    }
+  );
+
   it('publishes category choices from the Category select and resets to All', () => {
     const onCategoryChange = vi.fn();
     const props = {

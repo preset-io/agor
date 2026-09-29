@@ -130,25 +130,25 @@ const CatalogToolbarInner: React.FC<CatalogToolbarProps> = ({
   );
   const selects = (
     <>
-      <Select<CategoryFilter>
+      <Select<CategoryFilter | undefined>
         ref={compact ? categoryRef : undefined}
+        allowClear={!!category}
         prefix="Category"
         aria-label="Filter by category"
         value={category ?? ALL_CATEGORIES}
-        onChange={(value) =>
-          onCategoryChange(value === ALL_CATEGORIES ? undefined : (value as MCPCatalogCategory))
-        }
+        onChange={(value) => onCategoryChange(value === ALL_CATEGORIES ? undefined : value)}
         options={CATEGORY_OPTIONS}
         styles={selectStyles}
         style={filterStyle}
       />
       <Select
+        allowClear={!!capability}
         showSearch
         optionFilterProp="label"
         prefix="Capability"
         aria-label="Filter by capability"
         value={capability ?? ANY_CAPABILITY}
-        onChange={(value: string) =>
+        onChange={(value: string | undefined) =>
           onCapabilityChange(value === ANY_CAPABILITY ? undefined : value)
         }
         options={CAPABILITY_OPTIONS}
