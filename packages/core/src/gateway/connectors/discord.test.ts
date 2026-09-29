@@ -1141,6 +1141,25 @@ describe('Discord direct messages', () => {
     await connector.stopListening();
   });
 
+  it('rejects unlisted DM authors without a membership request when no role can admit them', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, allowed_role_ids: [], direct_messages_enabled: true },
+      h.transport
+    );
+    const receive = vi.fn();
+    await connector.startListening(receive);
+    h.rest.get.mockClear();
+    await deliver(h, connector, { ...dm, author: { id: '888888888888888888' } });
+    expect(receive).not.toHaveBeenCalled();
+    expect(h.rest.get).not.toHaveBeenCalled();
+    h.rest.get.mockResolvedValueOnce({ roles: [] });
+    await deliver(h, connector, dm, 2);
+    expect(receive).toHaveBeenCalledOnce();
+    expect(h.rest.get).toHaveBeenCalledOnce();
+    await connector.stopListening();
+  });
+
   it('fails closed on missing membership, roles and lookup errors without stopping the listener', async () => {
     const h = makeTransport();
     const connector = new DiscordConnector(
@@ -1313,6 +1332,28 @@ describe('Discord direct messages', () => {
       replyAliases: [],
       permalink: `https://discord.com/channels/@me/${dmChannel}/${dm.id}`,
     });
+  });
+
+  it('marks transient DM recipient-check failures retryable and definitive refusals terminal', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      { ...config, direct_messages_enabled: true },
+      h.transport
+    );
+    for (const failure of [{ status: 503 }, { status: 429 }, new Error('socket hang up')]) {
+      h.rest.get.mockRejectedValueOnce(failure);
+      const promise = connector.sendMessage({ threadId: dmKey, text: 'answer' });
+      await expect(promise).rejects.toMatchObject({
+        code: 'discord_dm_verification_unavailable',
+        retryable: true,
+      });
+    }
+    h.rest.get.mockRejectedValueOnce({ status: 403 });
+    await expect(connector.sendMessage({ threadId: dmKey, text: 'answer' })).rejects.toMatchObject({
+      code: 'discord_dm_channel_mismatch',
+      retryable: false,
+    });
+    expect(h.rest.post).not.toHaveBeenCalled();
   });
 
   it('reports the switch and rejects non-boolean config', async () => {

@@ -138,10 +138,16 @@ export class DiscordDirectMessageError extends Error {
       | 'discord_direct_messages_disabled'
       | 'discord_dm_channel_mismatch'
       | 'discord_dm_target_not_member'
-      | 'discord_dm_unreachable',
+      | 'discord_dm_unreachable'
+      | 'discord_dm_verification_unavailable',
     readonly status?: number
   ) {
     super(code);
+  }
+
+  /** Only a failed pre-send recipient check is safe to retry: no message POST was attempted. */
+  get retryable(): boolean {
+    return this.code === 'discord_dm_verification_unavailable';
   }
 }
 
@@ -1014,8 +1020,18 @@ export class DiscordConnector implements GatewayConnector {
       let dm: Record<string, unknown> | null;
       try {
         dm = await this.getProviderRecord(Routes.channel(parsed.channelId));
-      } catch {
-        throw new DiscordDirectMessageError('discord_dm_channel_mismatch');
+      } catch (error) {
+        const status = this.providerStatus(error);
+        // A definitive refusal proves the recipient cannot be verified; anything else is transient.
+        if (
+          status !== undefined &&
+          status >= 400 &&
+          status < 500 &&
+          ![408, 409, 425, 429].includes(status)
+        ) {
+          throw new DiscordDirectMessageError('discord_dm_channel_mismatch', status);
+        }
+        throw new DiscordDirectMessageError('discord_dm_verification_unavailable', status);
       }
       const recipients = dm?.recipients;
       if (
@@ -1301,7 +1317,17 @@ export class DiscordConnector implements GatewayConnector {
     const text = stripStructuredDiscordBotMention(rawContent, botUserId);
     if (!text) return { accepted: false };
 
+    const allowedUsers = Array.isArray(this.config.allowed_user_ids)
+      ? this.config.allowed_user_ids.filter((id): id is string => typeof id === 'string')
+      : [];
+    const allowedRoles = Array.isArray(this.config.allowed_role_ids)
+      ? this.config.allowed_role_ids.filter((id): id is string => typeof id === 'string')
+      : [];
     if (directMessage) {
+      // No role can admit an unlisted author, so skip the serialized member lookup.
+      if (!allowedUsers.includes(String(author.id)) && allowedRoles.length === 0) {
+        return { accepted: false };
+      }
       try {
         member = await this.lookupGuildMember(authorId);
       } catch (error) {
@@ -1310,13 +1336,6 @@ export class DiscordConnector implements GatewayConnector {
       }
       if (!member) return { accepted: false };
     }
-
-    const allowedUsers = Array.isArray(this.config.allowed_user_ids)
-      ? this.config.allowed_user_ids.filter((id): id is string => typeof id === 'string')
-      : [];
-    const allowedRoles = Array.isArray(this.config.allowed_role_ids)
-      ? this.config.allowed_role_ids.filter((id): id is string => typeof id === 'string')
-      : [];
     const roles = Array.isArray(member?.roles)
       ? member.roles.filter((id): id is string => typeof id === 'string')
       : [];

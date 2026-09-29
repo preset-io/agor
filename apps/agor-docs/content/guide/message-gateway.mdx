@@ -325,7 +325,9 @@ can cause older stored texts to appear again in the next new session.
 DMs never use Discord history as prompt context. Messages sent while the listener
 was down, DMs were disabled, or the sender was not allowed must be resent. Reply
 delivery may read the latest 100 messages to recover a send by nonce; those texts
-are discarded, not stored or used as context.
+are discarded, not stored or used as context. Each reply first confirms the DM
+recipient; if Discord cannot be reached for that check, delivery retries, while a
+recipient mismatch or refusal is not retried.
 
 As in channel sessions, assistant replies and prompts marked as coming from Agor
 are delivered to the DM, including UI/agent prompts and replies to callbacks or

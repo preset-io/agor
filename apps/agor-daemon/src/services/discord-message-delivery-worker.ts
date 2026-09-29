@@ -579,7 +579,15 @@ export class DiscordMessageDeliveryWorker {
           // Only an error explicitly proving non-acceptance may clear the
           // durable effect marker and permit another provider attempt.
           if (error instanceof DiscordDirectMessageError) {
-            throw new DeliveryControlError(error.code, 'dead_letter');
+            if (!error.retryable) throw new DeliveryControlError(error.code, 'dead_letter');
+            await this.deliveryRepo.clearChunkEffectMarker({
+              deliveryId: claim.delivery_id,
+              claimToken: currentClaim.claim_token,
+              claimGeneration: currentClaim.claim_generation,
+              chunkIndex,
+              now: this.now(),
+            });
+            throw new DeliveryControlError(error.code, 'retry');
           }
           if (providerStatus(error) === 429) {
             await this.deliveryRepo.clearChunkEffectMarker({
