@@ -4,7 +4,7 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
 import { useRef, useState } from 'react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { userEvent } from 'vitest/browser';
+import { page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -54,6 +54,13 @@ afterEach(cleanup);
 // AntD can leave the spinner's leave motion (aria-label "loading") in the button after loading ends.
 const SPAWN_BUTTON = { name: /Spawn Session$/ };
 
+async function submitSpawn() {
+  // Keep the live regex locator: an element click snapshots the spinner's changing name.
+  await act(async () => {
+    await page.getByRole('button', SPAWN_BUTTON).click();
+  });
+}
+
 it('reopens a mounted SessionPanel spawn modal after success and retains a rejected draft', async () => {
   const create = vi
     .fn<(config: string | Partial<SpawnConfig>) => Promise<void>>()
@@ -78,7 +85,6 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
             setScrollToBottom={vi.fn()}
             setScrollToTop={vi.fn()}
             queuedTasks={[]}
-            setQueuedTasks={vi.fn()}
             spawnModalOpen={open}
             setSpawnModalOpen={setOpen}
             onSpawnModalConfirm={async (config) => {
@@ -105,7 +111,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
     const network = await screen.findByRole('switch');
     expect(network).toHaveAttribute('aria-checked', 'true');
     if (attempt === 2) await click(network);
-    await click(submit);
+    await submitSpawn();
     await waitFor(() => expect(create).toHaveBeenCalledTimes(attempt));
     expect(create).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -126,7 +132,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   await click(screen.getByText('Custom config'));
   await click(await screen.findByRole('switch'));
   await fill(screen.getByRole('textbox', { name: 'Extra instructions' }), 'Keep my settings');
-  await click(screen.getByRole('button', SPAWN_BUTTON));
+  await submitSpawn();
   await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
   await waitFor(() =>
     expect(screen.getByRole('button', SPAWN_BUTTON)).not.toHaveClass('ant-btn-loading')
@@ -137,7 +143,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
     'Keep my settings'
   );
   expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
-  await click(screen.getByRole('button', SPAWN_BUTTON));
+  await submitSpawn();
   await waitFor(() => expect(create).toHaveBeenCalledTimes(5));
   expect(create).toHaveBeenLastCalledWith(
     expect.objectContaining({
