@@ -2350,6 +2350,51 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     expect(String(failure)).not.toContain('sign in again');
   });
 
+  it('surfaces the closed CodexErrorInfo when Codex forwards it (openai/codex#22570)', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const prose = "You've hit your usage limit. SENTINEL_USAGE_BODY https://SENTINEL.example.test";
+    mockStreamEvents = [
+      { type: 'error', message: prose, codex_error_info: 'usage_limit_exceeded' },
+      {
+        type: 'turn.failed',
+        error: { message: prose, codex_error_info: 'usage_limit_exceeded' },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const failure = await drain(service).catch((caught: unknown) => caught);
+      expect(String(failure)).toContain(
+        'Codex failed the turn: the Codex account reached its usage limit'
+      );
+      expect(failure).toMatchObject({ failureKind: 'usage_limit_exceeded' });
+      expect(String(failure)).not.toContain('SENTINEL');
+      const logs = JSON.stringify([...warn.mock.calls, ...error.mock.calls]);
+      expect(logs).toContain('event=turn_failed');
+      expect(logs).toContain('error_info=usage_limit_exceeded');
+      expect(logs).toContain('metadata=structured');
+      expect(logs).not.toContain('SENTINEL');
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('does not classify message-only usage-limit prose', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    mockStreamEvents = [
+      { type: 'turn.failed', error: { message: "You've hit your usage limit." } },
+    ];
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const failure = await drain(service).catch((caught: unknown) => caught);
+      expect(String(failure)).toContain('Codex failed the turn. Retry the prompt');
+      expect(JSON.stringify(error.mock.calls)).toContain('metadata=unavailable');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('reports missing local Codex authentication as configuration required', async () => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
     (service as any).apiKey = '';

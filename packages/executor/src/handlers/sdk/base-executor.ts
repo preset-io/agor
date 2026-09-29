@@ -27,7 +27,7 @@ import type {
 import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
-import { formatExecutorFailure } from '../../safe-executor-error.js';
+import { executorFailureLogFields, formatExecutorFailure } from '../../safe-executor-error.js';
 import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
@@ -742,7 +742,9 @@ export async function executeToolTask(params: {
   } catch (error) {
     if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
-    console.error(`[${toolName}] execution failed category=task_execution`);
+    console.error(
+      `[${toolName}] execution failed category=task_execution task_id=${taskId}${executorFailureLogFields(error)}`
+    );
 
     // Capture git SHA at task end (even for failed tasks)
     const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
