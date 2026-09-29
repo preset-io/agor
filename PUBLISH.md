@@ -120,6 +120,9 @@ records on npm before retrying; checking only `agor-live` can miss a partial rel
 - **No package at the release version was published:** use **Re-run all jobs** on
   the original **tag-triggered** workflow run to build and validate a fresh artifact
   set, then approve publication. Manual **Run workflow** still does not publish.
+  GitHub [allows reruns for 30 days after the initial run](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs);
+  after that window, or if the run is otherwise no longer rerunnable, prepare a new
+  aligned patch release and tag even if nothing was published, leaving the old tag intact.
 - **Any package at the release version was published:** do not rebuild that version
   or use **Re-run all jobs** to recover it. When the original workflow artifact is
   no longer available, prepare a new aligned patch release with a new tag; leave
