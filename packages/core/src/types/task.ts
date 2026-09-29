@@ -170,7 +170,6 @@ export interface ExecutorTerminationCompleteInput {
  *   tasks — the child session/task whose completion produced this prompt.
  */
 export interface TaskMetadata {
-  gemini?: { requestedModel: string; reportedModel?: string; costEstimated: true };
   is_agor_callback?: boolean;
   source?: PersistedMessageSource;
   queued_by_user_id?: string;

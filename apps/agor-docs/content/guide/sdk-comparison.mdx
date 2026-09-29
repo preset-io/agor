@@ -29,6 +29,9 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
 
 - **Accept edits** (the default): auto-approves reads, edits and permitted MCP tools;
   shell, background processes and web access need **Bypass permissions**.
+  A permitted MCP tool can request further work: for example, Agor's session
+  spawn tool can create a Bypass child when workspace policy permits it. Denying
+  the parent's built-in shell does not limit what an authorized child can do.
 - **Bypass permissions** uses the SDK's YOLO behavior for built-ins, shell, web,
   skills and loaded sub-agents. It is not a sandbox. Agor's MCP selection and
   per-tool restrictions still apply.
@@ -42,6 +45,10 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
 - Attachments and thinking display are not supported. Hooks and extensions are off.
 - Follow-ups use SDK conversation recordings in the session's SDK home, including
   across executors. If history cannot be restored, a notice explains the fresh start.
+  If multiple recordings match one session, Gemini stops instead of choosing one.
+  To preserve both and start fresh, set `AGOR_GEMINI_RESET_HISTORY_FOR` to the Agor
+  session ID in your environment variables and retry once. The matching recordings
+  move into a quarantine folder in the SDK home; remove the variable afterward.
 - The default model is `gemini-3.8-flash`. The picker also offers `gemini-3.7-flash`,
   `gemini-3.5-flash-lite` and the paid preview `gemini-3.1-pro-preview`. Stored 2.5
   selections remain usable when the API key has access. Retired Flash selections

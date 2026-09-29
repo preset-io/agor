@@ -327,8 +327,15 @@ export class GeminiTool implements ITool {
       metadata: buildAssistantMessageMetadata({ model: resolvedModel, tokenUsage }),
     };
 
-    await this.messagesService?.create(message);
-    await patchTaskModelIfKnown(this.tasksService, taskId, resolvedModel);
+    try {
+      await this.messagesService?.create(message);
+      await patchTaskModelIfKnown(this.tasksService, taskId, resolvedModel);
+    } catch (error) {
+      // The prompt generator is suspended during persistence, with SDK console
+      // output suppressed. Emit only a fixed category on the unaffected stream.
+      process.stderr.write('Gemini task failure stage=persistence category=local\n');
+      throw error;
+    }
 
     return message;
   }

@@ -69,7 +69,12 @@ export const GEMINI_MODELS = {
     outputPrice: 'Estimated',
     useCase: 'Complex coding tasks',
   },
-};
+} satisfies Partial<
+  Record<
+    GeminiModel,
+    { name: string; description: string; inputPrice: string; outputPrice: string; useCase: string }
+  >
+>;
 
 const DEFAULT_GEMINI_CONTEXT_LIMIT = 1_048_576;
 

@@ -301,7 +301,9 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   const effectiveValue =
     agentic_tool === 'cursor'
       ? 'bypassPermissions'
-      : value || getDefaultPermissionMode(agentic_tool);
+      : agentic_tool === 'gemini' && value === undefined
+        ? 'default'
+        : value || getDefaultPermissionMode(agentic_tool);
   // Fill Codex prop defaults from the resolved mode so the dropdown shows
   // the same values the executor will actually run with for a session
   // missing explicit sub-config.
@@ -374,8 +376,7 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   // show the two-part description and the raw mode value; tight toolbar
   // contexts (compact) collapse to an icon or plain label via `iconOnly`/`plain`.
   const effectiveFullWidth = fullWidth || !compact;
-  const manualUnavailable =
-    agentic_tool === 'gemini' && value !== undefined && isGeminiManualMode(value);
+  const manualUnavailable = agentic_tool === 'gemini' && isGeminiManualMode(value);
   const currentMode = modes.find((m) => m.mode === effectiveValue);
   return (
     <Flex vertical gap={4}>

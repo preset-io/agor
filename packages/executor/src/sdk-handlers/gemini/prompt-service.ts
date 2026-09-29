@@ -141,6 +141,7 @@ export class GeminiPromptService {
     let cleanup: (() => Promise<void>) | undefined;
     let config: GeminiTypes.Config | undefined;
     let model = DEFAULT_GEMINI_MODEL as string;
+    let stage = 'preflight';
     try {
       if (!this.apiKey) throw new GeminiIntegrationError(GEMINI_KEY_MESSAGE);
       if (isGeminiManualMode(permissionMode))
@@ -167,6 +168,9 @@ export class GeminiPromptService {
       }
       const requestedModel = session.model_config?.model ?? DEFAULT_GEMINI_MODEL;
       model = resolveGeminiInvocationModel(session);
+      // Query before any assistant notice is yielded and persisted by the caller.
+      stage = 'history';
+      const hadPriorHistory = (await this.messagesRepo.getNextIndexBySessionId(sessionId)) > 1;
       if (requestedModel !== model)
         yield {
           type: 'complete',
@@ -176,7 +180,9 @@ export class GeminiPromptService {
         yield { type: 'stopped' };
         return;
       }
+      stage = 'runtime';
       cleanup = await enterGeminiRuntime();
+      stage = 'configuration';
       const contextUserId = await resolveContextUserId({
         session,
         taskId,
@@ -190,7 +196,8 @@ export class GeminiPromptService {
         contextUserId
       );
       await config.storage.initialize();
-      const file = await findGeminiRecording(Gemini, config, config.getSessionId());
+      stage = 'recording';
+      const file = await findGeminiRecording(Gemini, config, config.getSessionId(), sessionId);
       const conversation = file
         ? await Gemini.loadConversationRecord(file).catch(() => undefined)
         : undefined;
@@ -201,11 +208,13 @@ export class GeminiPromptService {
         return;
       }
       try {
+        stage = 'authentication';
         await config.refreshAuth(Gemini.AuthType.USE_GEMINI, this.apiKey);
       } catch (error) {
         throw geminiError(Gemini.classifyGoogleError(error), model);
       }
       const client = config.getGeminiClient();
+      stage = 'recording';
       let restored = false;
       if (conversation && file) {
         const startup = client.getChatRecordingService();
@@ -222,15 +231,17 @@ export class GeminiPromptService {
         }
         if (startupFile !== file) await startup?.deleteCurrentSessionIfNotResumableAsync();
       }
-      if (!restored && (await this.messagesRepo.getNextIndexBySessionId(sessionId)) > 1) {
+      if (!restored && hadPriorHistory) {
         yield { type: 'complete', content: [{ type: 'text', text: GEMINI_HISTORY_NOTICE }] };
       }
+      stage = 'tool-configuration';
       await client.setTools();
       let parts: Part[] = [{ text: prompt }, { text: renderAgorSessionIdentity(sessionId) }];
       const promptId = `${sessionId}-${Date.now()}`;
       const totals: TokenUsage = {};
       let reportedModel: string | undefined;
       for (let round = 0; round < 50; round++) {
+        stage = 'generation';
         if (controller.signal.aborted) {
           yield { type: 'stopped' };
           return;
@@ -353,6 +364,7 @@ export class GeminiPromptService {
           },
         };
         if (!pending.length) return;
+        stage = 'tools';
         const scheduler = new Gemini.Scheduler({
           context: config,
           messageBus: config.getMessageBus(),
@@ -396,6 +408,16 @@ export class GeminiPromptService {
       if (controller.signal.aborted) {
         yield { type: 'stopped' };
         return;
+      }
+      // Console is suppressed while the SDK is active. Only fixed local stage
+      // and category labels leave this path; provider text never reaches logs.
+      if (
+        !(error instanceof GeminiIntegrationError) ||
+        error.message === 'Gemini integration error.'
+      ) {
+        process.stderr.write(
+          `Gemini task failure stage=${stage} category=${error instanceof GeminiIntegrationError ? 'integration' : 'local'}\n`
+        );
       }
       // Local repository, policy, and tool failures can also carry HTTP 401/403.
       // Only the explicit provider boundaries above may classify a credential.

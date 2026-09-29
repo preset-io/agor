@@ -12,6 +12,7 @@ export const GEMINI_KEY_MESSAGE =
 export const GEMINI_HISTORY_NOTICE =
   'Earlier Gemini conversation could not be restored; continuing without it.';
 export class GeminiIntegrationError extends Error {}
+export const GEMINI_RESET_HISTORY_FOR = 'AGOR_GEMINI_RESET_HISTORY_FOR';
 
 /** Only fixed messages leave this boundary; never propagate provider bodies. */
 export function geminiError(error: unknown, model: string): GeminiIntegrationError {
@@ -56,23 +57,58 @@ export function geminiSessionId(sessionId: string): string {
   return `${createHash('sha256').update(sessionId).digest('hex').slice(0, 16)}-${sessionId}`;
 }
 
-export async function findGeminiRecording(sdk: typeof SDK, config: SDK.Config, sessionId: string) {
+async function matchingGeminiRecordings(sdk: typeof SDK, config: SDK.Config, sessionId: string) {
   const directory = path.join(config.storage.getProjectTempDir(), 'chats');
+  let names: string[];
   try {
-    const matches: string[] = [];
-    for (const name of await fs.readdir(directory)) {
-      if (!/^session-.*\.jsonl?$/.test(name)) continue;
-      const file = path.join(directory, name);
+    names = await fs.readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw new GeminiIntegrationError('Gemini recordings could not be inspected.');
+  }
+  const matches: string[] = [];
+  for (const name of names) {
+    if (!/^session-.*\.jsonl?$/.test(name)) continue;
+    const file = path.join(directory, name);
+    let isFile: boolean;
+    try {
+      isFile = (await fs.lstat(file)).isFile();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw new GeminiIntegrationError('Gemini recordings could not be inspected.');
+    }
+    if (!isFile) continue;
+    try {
       const record = await sdk.loadConversationRecord(file, { metadataOnly: true });
       if (record?.sessionId === sessionId && record.hasResumableContent) matches.push(file);
+    } catch {
+      // A damaged record cannot be resumed; keep inspecting other candidates.
     }
-    const unique = matches.filter(
-      (file) => !file.endsWith('.json') || !matches.includes(`${file}l`)
-    );
-    return unique.length === 1 ? unique[0] : undefined;
-  } catch {
-    return undefined;
   }
+  return matches;
+}
+
+export async function findGeminiRecording(
+  sdk: typeof SDK,
+  config: SDK.Config,
+  sessionId: string,
+  agorSessionId = sessionId
+) {
+  const matches = await matchingGeminiRecordings(sdk, config, sessionId);
+  const unique = matches.filter((file) => !file.endsWith('.json') || !matches.includes(`${file}l`));
+  if (unique.length <= 1) return unique[0];
+  if (process.env[GEMINI_RESET_HISTORY_FOR] !== agorSessionId) {
+    throw new GeminiIntegrationError(
+      `Multiple Gemini recordings match this session. Set ${GEMINI_RESET_HISTORY_FOR} to this session ID for one turn to quarantine them and start fresh.`
+    );
+  }
+  const quarantine = await fs.mkdtemp(path.join(path.dirname(matches[0]), '.agor-quarantine-'));
+  try {
+    for (const file of matches) await fs.rename(file, path.join(quarantine, path.basename(file)));
+  } catch {
+    throw new GeminiIntegrationError('Gemini recordings could not be quarantined.');
+  }
+  return undefined;
 }
 
 // A negative PID lookup is meaningful only in the same boot and PID namespace.
@@ -99,7 +135,9 @@ async function processNamespace(): Promise<string | undefined> {
 
 /** Executors are task-scoped processes. Suppress SDK console output even on report-write failure. */
 export async function enterGeminiRuntime() {
-  const home = process.env.GEMINI_CLI_HOME;
+  // Delegated execution-home launchers supply the executor's HOME, while
+  // branch-scoped sessions can explicitly project GEMINI_CLI_HOME.
+  const home = process.env.GEMINI_CLI_HOME ?? process.env.HOME;
   if (!home || !path.isAbsolute(home))
     throw new GeminiIntegrationError('Gemini session has no SDK home; the task was not started.');
   for (const key of [...Object.values(PROVIDER_CREDENTIAL_FIELDS).flat(), 'GOOGLE_API_KEY']) {

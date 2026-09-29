@@ -347,10 +347,17 @@ describe('Gemini prompt boundary', () => {
     expect(tasksService.patch).not.toHaveBeenCalled();
   });
   it('does not classify a local Forbidden error as a rejected provider key', async () => {
+    const diagnostic = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     vi.mocked(messages.getNextIndexBySessionId).mockRejectedValueOnce(
       Object.assign(new Error('private repository detail'), { status: 403 })
     );
-    await expect(collect()).rejects.toThrow('Gemini integration error.');
+    try {
+      await expect(collect()).rejects.toThrow('Gemini integration error.');
+      expect(diagnostic).toHaveBeenCalledWith('Gemini task failure stage=history category=local\n');
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private repository detail');
+    } finally {
+      diagnostic.mockRestore();
+    }
   });
   it('does not classify a local SDK-iteration Forbidden error as a rejected provider key', async () => {
     state.streamError = Object.assign(new Error('private local detail'), { status: 403 });
@@ -405,6 +412,23 @@ describe('Gemini prompt boundary', () => {
     expect(JSON.stringify(await collect())).not.toContain('could not be restored');
     vi.mocked(messages.getNextIndexBySessionId).mockResolvedValue(3);
     expect(JSON.stringify(await collect())).toContain('could not be restored');
+  });
+  it('does not mistake a persisted retired-model notice for prior history', async () => {
+    let nextIndex = 1; // The current user turn is already stored.
+    vi.mocked(messages.getNextIndexBySessionId).mockImplementation(async () => nextIndex);
+    vi.mocked(sessions.findById).mockResolvedValue({
+      branch_id: 'branch',
+      created_by: 'owner',
+      model_config: { model: 'gemini-3-flash' },
+    } as Awaited<ReturnType<SessionRepository['findById']>>);
+    const events = [];
+    for await (const item of service().promptSessionStreaming(id, 'hello', undefined, 'autoEdit')) {
+      events.push(item);
+      if (item.type === 'complete') nextIndex++; // Caller persists assistant notices.
+    }
+    expect(JSON.stringify(events)).toContain('is retired; using');
+    expect(JSON.stringify(events)).not.toContain('could not be restored');
+    expect(messages.getNextIndexBySessionId).toHaveBeenCalledOnce();
   });
 });
 
