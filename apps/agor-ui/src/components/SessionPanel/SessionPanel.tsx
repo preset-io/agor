@@ -1592,7 +1592,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                     </Typography.Text>
                     <Tooltip title={`Created by ${creatorName}`}>
                       <Flex align="center" gap={token.marginXXS}>
-                        <UserIdentityAvatar user={creator} size={16} />
+                        <UserIdentityAvatar user={creator} size={16} style={{ flexShrink: 0 }} />
                         <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                           {creatorName}
                         </Typography.Text>

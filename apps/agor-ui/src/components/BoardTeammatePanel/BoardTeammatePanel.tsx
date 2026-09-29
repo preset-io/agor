@@ -642,7 +642,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                     root: {
                       position: 'relative',
                       top: -token.paddingXS,
-                      marginInlineStart: -token.marginXS,
+                      // An empty badge still has a root; do not subtract from
+                      // the measured label width after the unread count clears.
+                      marginInlineStart: unreadCommentsCount > 0 ? -token.marginXS : 0,
                     },
                     indicator: {
                       paddingInline: token.paddingXXS,
