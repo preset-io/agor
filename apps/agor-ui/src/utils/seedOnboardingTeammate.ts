@@ -303,10 +303,13 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       initialization,
     };
   } catch (error) {
+    const recovery = branch
+      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an admin to check template setup and Git access, then use Retry on that same teammate.'
+      : 'You can create one from the board anytime.';
     warn(
-      `Your board is ready, but we couldn't start your AI teammate: ${
+      `Your board is ready, but we couldn't start your AI teammate. ${recovery} Details: ${
         error instanceof Error ? error.message : String(error)
-      }. You can create one from the board anytime.`
+      }`
     );
     return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
   }

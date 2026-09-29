@@ -39,7 +39,21 @@ New teammates using the canonical public framework get independent, full-history
 clone homes with no `origin`. No Git token or private repository is needed to start.
 Home files survive only while installation storage survives; Knowledge is the
 primary memory and document store. Existing teammates and private/custom sources
-are unchanged. The Create dialog offers the same persona gallery as onboarding.
+retain their storage behavior. The Create dialog offers the same persona gallery as onboarding.
+
+For a private/custom template, Blank (with no explicit source ref) uses the
+registered repository’s default branch on its registered remote URL. Agor resolves
+the live commit and fetches it without resetting the registered checkout’s local
+branch or work. An unavailable remote or missing branch fails rather than using
+a stale local copy. Local-only repositories still use their local default.
+Explicit source refs retain their meaning: ambiguous bare names are rejected,
+and `refs/heads/<branch>` selects a local branch.
+
+If provisioning fails, ask an admin to check template availability, the starter
+branch, and your Git access. Open **Technical details** on the teammate’s board
+for the underlying error, then use **Retry** on that same teammate after repair;
+retry does not create another teammate. Agor does not infer default intent from
+an explicit `main`, including source refs saved by older versions.
 
 Private backup is optional after useful work: with your explicit authorization,
 an additional private remote can back up this isolated home without reassigning
