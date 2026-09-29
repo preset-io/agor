@@ -358,6 +358,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   useEffect(() => setPopupBlocked(false), [open, entryId]);
 
   const canShare = canAddSharedMcpServer(connectCapability);
+  const canUseShared =
+    !policyPending &&
+    !readinessLoading &&
+    !readinessError &&
+    readiness?.shared_configuration_available === true &&
+    canUseExistingMcpServer(connectCapability);
   const reusable =
     !readinessLoading &&
     !readinessError &&
@@ -368,12 +374,16 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     ? policyPendingHint
     : (
           sharing === 'shared'
-            ? canShare
+            ? canShare || canUseShared
             : canAddMcpServer(connectCapability) ||
               (reusable && canUseExistingMcpServer(connectCapability))
         )
       ? undefined
-      : explainAddRestriction(connectCapability);
+      : sharing === 'shared' && canUseExistingMcpServer(connectCapability)
+        ? readinessLoading
+          ? 'Checking whether an existing shared installation is available…'
+          : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
+        : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
     !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
@@ -784,9 +794,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     disabled={connecting}
                   >
                     <Radio value="private">Private</Radio>
-                    {canShare && (
-                      <Radio value="shared" disabled={needsApiKey}>
-                        Shared
+                    {(canShare || canUseShared || sharing === 'shared') && (
+                      <Radio
+                        value="shared"
+                        disabled={needsApiKey || policyPending || (!canShare && !canUseShared)}
+                      >
+                        {canShare ? 'Shared' : 'Use existing shared'}
                       </Radio>
                     )}
                   </Radio.Group>

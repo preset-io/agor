@@ -73,7 +73,10 @@ requirement, not just the catalog label, is checked before installation.
 
 Both choices are **session-scoped**: a shared install is available to attach,
 not automatically enabled in every session. Settings' ownership choice is
-independent of scope. Manual shared configurations can share embedded credentials;
+independent of scope. **Settings → MCP Servers** also defaults new configurations
+to **Private**. Private + Global applies only to the owner's sessions, not every
+user's sessions. This UI default does not change historical admin CLI/MCP/API
+creation defaults when ownership is omitted. Manual shared configurations can share embedded credentials;
 only per-user OAuth or user environment references isolate user credentials.
 Existing ownership cannot be changed by editing a server.
 
@@ -87,8 +90,12 @@ Settings. Private installs retain owner-specific reconciliation and credential
 rotation fencing. OAuth reconnect always acts on the signing-in user's grant;
 it never copies another user's grant or falls back to a shared OAuth credential.
 
-Members restricted to existing servers can still reuse a matching private
-installation or sign in to its per-user OAuth configuration. Advisory readiness
+Members restricted to existing servers (or to creating private servers) can
+explicitly choose **Use existing shared** when Catalog finds an eligible shared
+installation. This does not publish, repair, or re-enable configuration; members
+can sign in with their own per-user OAuth grant. Private remains a separate
+choice and never silently selects shared configuration. Members restricted to
+existing servers can also reuse their matching private installations. Advisory readiness
 does not grant permission to create or repair a server; the daemon checks again.
 
 Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:

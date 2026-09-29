@@ -213,10 +213,7 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     }) as unknown as AuthenticatedParams;
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
-    authorizeCaller: (
-      params: AuthenticatedParams,
-      sharing: import('@agor/core/types').MCPCatalogSharing
-    ) => authorizeCatalogCaller(rawDb, params, sharing),
+    authorizeCaller: (params: AuthenticatedParams) => authorizeCatalogCaller(rawDb, params),
     runInTenantDatabaseScope: <T>(
       _params: AuthenticatedParams,
       work: () => Promise<T>

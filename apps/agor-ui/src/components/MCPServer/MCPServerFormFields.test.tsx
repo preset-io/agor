@@ -57,6 +57,31 @@ describe('MCPServerFormFields OAuth start', () => {
     expect(screen.queryByText('Installation ownership')).not.toBeInTheDocument();
   });
 
+  it.each(['create', 'edit'] as const)('explains private/global reach in %s mode', (mode) => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ ownership: 'private', scope: 'global' }}>
+          <MCPServerFormFields
+            mode={mode}
+            savedOwnership="private"
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(
+      screen.getByText(
+        "Private + Global applies only to the owner's sessions, not everyone in the workspace."
+      )
+    ).toBeVisible();
+  });
+
   it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
     const Harness = () => {
       const [form] = Form.useForm();

@@ -478,6 +478,8 @@ export interface MCPCatalogReadiness {
   state: MCPCatalogReadinessState;
   /** Matching configuration can be used without creating/reconciling a row. */
   reusable_configuration?: boolean;
+  /** Eligible canonical shared configuration exists, independent of selected ownership/grant. Advisory only. */
+  shared_configuration_available?: boolean;
 }
 
 /**

@@ -753,8 +753,8 @@ export function createRegisteredMCPCatalogConnectService(
     return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
   };
   return createMCPCatalogConnectService(app, {
-    authorizeCaller: (params, sharing) =>
-      runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params, sharing)),
+    authorizeCaller: (params) =>
+      runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params)),
     runInTenantDatabaseScope,
     async listCandidates(userId, params) {
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);

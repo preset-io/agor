@@ -282,9 +282,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   }, [selected?.name, currentUser?.user_id]);
   const readiness = useCatalogReadiness({
     sharing,
+    capabilityKey: `${currentUser?.role}:${memberPolicy.policy}:${memberPolicy.canConfigure}`,
     client,
     entryKey: selected?.name,
-    ready: connectionReady,
+    ready: connectionReady && !policyPending,
     authGeneration,
     userId: currentUser?.user_id,
   });

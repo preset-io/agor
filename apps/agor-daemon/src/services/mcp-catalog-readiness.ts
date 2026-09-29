@@ -8,7 +8,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { readCatalogSharing } from './mcp-catalog-access.js';
-import { selectCatalogCandidate } from './mcp-catalog-credential-match.js';
+import {
+  isUsableSharedCatalogCandidate,
+  selectCatalogCandidate,
+} from './mcp-catalog-credential-match.js';
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 
 export interface MCPCatalogReadinessDeps {
@@ -45,7 +48,25 @@ export class MCPCatalogReadinessService {
       throw new BadRequest('This catalog entry has no Marketplace-connectable remote endpoint');
     }
     const remoteEntry = entry as MCPCatalogEntry & { remote_url: string };
-    const candidates = (await this.deps.listCandidates(userId, params)).filter(({ server }) =>
+    const inventory = await this.deps.listCandidates(userId, params);
+    // Configuration availability is independent of whose grant is live and of
+    // the selected ownership. This only offers an explicit use-existing choice;
+    // Connect still authorizes the current caller and row after probing.
+    const sharedConfiguration =
+      entry.auth_type !== 'credentials' &&
+      inventory.some((candidate) =>
+        isUsableSharedCatalogCandidate(
+          candidate,
+          remoteEntry,
+          entry.auth_type === 'oauth' || candidate.server.auth?.type === 'oauth'
+            ? catalogOAuthConfig(remoteEntry)
+            : { type: 'none' }
+        )
+      );
+    const sharedAvailability = sharedConfiguration
+      ? { shared_configuration_available: true as const }
+      : {};
+    const candidates = inventory.filter(({ server }) =>
       sharing === 'shared' ? !server.owner_user_id : server.owner_user_id === userId
     );
     const knownOAuthInstall = candidates.some(
@@ -75,18 +96,20 @@ export class MCPCatalogReadinessService {
       if (selection.live) {
         return {
           catalog_key: catalogKey,
+          ...sharedAvailability,
           state: selection.liveKind === 'catalog_install' ? 'installed_ready' : 'reusable_oauth',
         };
       }
       return {
         catalog_key: catalogKey,
+        ...sharedAvailability,
         state: 'oauth_required',
         ...(selection.currentCatalog ? { reusable_configuration: true } : {}),
       };
     }
 
     if (entry.auth_type === 'credentials') {
-      return { catalog_key: catalogKey, state: 'bearer_required' };
+      return { catalog_key: catalogKey, ...sharedAvailability, state: 'bearer_required' };
     }
     const selection = await selectCatalogCandidate(
       remoteEntry,
@@ -99,6 +122,7 @@ export class MCPCatalogReadinessService {
     );
     return {
       catalog_key: catalogKey,
+      ...sharedAvailability,
       state: selection.currentCatalog ? 'installed_ready' : 'no_auth',
     };
   }

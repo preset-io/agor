@@ -83,6 +83,7 @@ describe('useCatalogReadiness request coalescing', () => {
 
   it.each([
     ['sharing', { sharing: 'shared' as const }],
+    ['role/policy', { capabilityKey: 'member:use_existing_only:false' }],
     ['entry', { entryKey: 'com.notion/mcp' }],
     ['account', { userId: 'bob' }],
     ['authenticated tenant/generation', { authGeneration: 8 }],

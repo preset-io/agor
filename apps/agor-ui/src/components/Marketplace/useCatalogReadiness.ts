@@ -10,13 +10,25 @@ export function useCatalogReadiness(input: {
   ready: boolean;
   authGeneration: number;
   userId?: string;
+  /** Invalidate advisory authority immediately on role/policy changes. */
+  capabilityKey?: string;
 }) {
-  const { client, entryKey, ready, authGeneration, userId, sharing = 'private' } = input;
+  const {
+    client,
+    entryKey,
+    ready,
+    authGeneration,
+    userId,
+    sharing = 'private',
+    capabilityKey,
+  } = input;
   const enabled = Boolean(client && ready && userId && entryKey);
   const authority = useMemo(
     () =>
-      enabled ? { userId: userId!, authGeneration, client, sharing, entryKey: entryKey! } : null,
-    [authGeneration, client, enabled, entryKey, userId, sharing]
+      enabled
+        ? { userId: userId!, authGeneration, client, sharing, capabilityKey, entryKey: entryKey! }
+        : null,
+    [authGeneration, client, enabled, entryKey, userId, sharing, capabilityKey]
   );
   const guard = useAuthorityOperationGuard(
     authority
@@ -26,6 +38,7 @@ export function useCatalogReadiness(input: {
           authority.client,
           authority.entryKey,
           authority.sharing,
+          authority.capabilityKey,
         ]
       : null
   );

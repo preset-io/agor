@@ -124,6 +124,57 @@ describe('MCPCatalogReadinessService', () => {
     expect(built.isGrantAuthorized).toHaveBeenCalledOnce();
   });
 
+  it('offers shared configuration separately from private readiness, without requiring or exposing a grant', async () => {
+    const built = build([
+      peer({ owner_user_id: undefined, source: 'catalog', catalog_entry_name: ENTRY.name }),
+    ]);
+    built.isGrantAuthorized.mockResolvedValue(false);
+    await expect(built.service.get(ENTRY.name, PARAMS)).resolves.toEqual({
+      catalog_key: ENTRY.name,
+      state: 'oauth_required',
+      shared_configuration_available: true,
+    });
+    await expect(
+      built.service.get(ENTRY.name, { ...PARAMS, query: { sharing: 'shared' } })
+    ).resolves.toEqual({
+      catalog_key: ENTRY.name,
+      state: 'oauth_required',
+      shared_configuration_available: true,
+      reusable_configuration: true,
+    });
+  });
+
+  it.each([
+    { enabled: false },
+    { scope: 'global' as const },
+    { url: 'https://drift.example/mcp' },
+    { env: { KEY: 'fixture-env' } },
+    { headers: { Authorization: 'fixture-header' } },
+  ])('does not offer drifted or embedded shared configuration: %j', async (changes) => {
+    const built = build([
+      peer({
+        owner_user_id: undefined,
+        source: 'catalog',
+        catalog_entry_name: ENTRY.name,
+        ...changes,
+      }),
+    ]);
+    expect(
+      (await built.service.get(ENTRY.name, PARAMS)).shared_configuration_available
+    ).toBeUndefined();
+  });
+
+  it('does not offer a canonical shared candidate with row-level OAuth material', async () => {
+    const built = build([
+      peer({ owner_user_id: undefined, source: 'catalog', catalog_entry_name: ENTRY.name }),
+    ]);
+    const [candidate] = await built.listCandidates();
+    built.listCandidates.mockResolvedValue([{ ...candidate, has_row_secret: true }]);
+    expect(
+      (await built.service.get(ENTRY.name, PARAMS)).shared_configuration_available
+    ).toBeUndefined();
+  });
+
   it('is advisory across a credential race and never carries state into Connect', async () => {
     const servers = [peer()];
     const built = build(servers);

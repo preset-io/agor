@@ -51,7 +51,11 @@ import type {
 } from '@agor/core/types';
 import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
 import { readCatalogSharing } from './mcp-catalog-access.js';
-import { hasLiveCallerOAuthGrant, selectCatalogCandidate } from './mcp-catalog-credential-match.js';
+import {
+  hasLiveCallerOAuthGrant,
+  isUsableSharedCatalogCandidate,
+  selectCatalogCandidate,
+} from './mcp-catalog-credential-match.js';
 import {
   catalogOAuthConfig,
   catalogServerTransport,
@@ -714,15 +718,12 @@ export function createMCPCatalogConnectService(
    * there is one — the answer to "I signed into this vendor last week, why am I
    * signing in again".
    *
-   * Runs only when {@link findExistingInstall} found no install of the entry
-   * itself, so nothing above this changes. Where that predicate asks "is this
-   * row still what the catalog described", this one asks the different and
-   * looser question "is this row somewhere my existing credential already
-   * works" — looser because it must match a row nobody installed from this
-   * entry, or from any entry, which is exactly the case the requirement is
-   * about. `catalog_entry_name` is therefore not compared, on purpose: a
-   * hand-configured row in Settings holds a perfectly good Linear grant, and
-   * refusing to see it is how the user ends up consenting twice.
+   * Private requests may reuse only caller-owned credential peers, including
+   * hand-configured Settings rows matching the catalog's endpoint and credential
+   * policy. Merely being visible/attachable is not enough: shared manual rows
+   * and foreign private rows are excluded to preserve the requested identity.
+   * Shared requests consider only the exact canonical shared Catalog row.
+   * This also runs for an existing install whose caller grant needs refreshing.
    *
    * Nothing is copied. The grant stays on its own row under its own
    * `(user_id, mcp_server_id)` key, and reuse means the session is pointed at
@@ -927,6 +928,18 @@ export function createMCPCatalogConnectService(
       const sharing = readCatalogSharing(data.sharing);
       params = await deps.authorizeCaller(params, sharing);
       const bearerToken = readBearerToken(data.bearer_token, entry);
+      // Pin a pre-existing shared identity across the external probe. A deleted
+      // or replaced row is not permission to publish a replacement (even for
+      // a publisher), nor to adopt a different installation mid-request.
+      const initialShared =
+        sharing === 'shared'
+          ? (await deps.listCandidates(userId, params)).find(
+              ({ server }) =>
+                !server.owner_user_id &&
+                server.source === 'catalog' &&
+                server.catalog_entry_name === entry.name
+            )
+          : undefined;
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
       // newer concurrent connect has selected it but before that request has
@@ -960,6 +973,11 @@ export function createMCPCatalogConnectService(
 
       params = await deps.authorizeCaller(params, sharing);
       const existing = await findExistingInstall(entry, auth, userId, params, sharing);
+      if (initialShared && existing?.server.mcp_server_id !== initialShared.server.mcp_server_id) {
+        throw new BadRequest(
+          'The shared installation changed or is no longer available. Reopen Catalog before connecting.'
+        );
+      }
 
       const createInput: CreateMCPServerInput = {
         name: catalogServerSlug(entry.name),
@@ -1052,13 +1070,26 @@ export function createMCPCatalogConnectService(
             connectGeneration
           );
         }
-        const finalCandidate = createdServer
-          ? candidateFromExternalServer(mcpServer)
-          : !finalized && selection?.candidate
-            ? selection.candidate
-            : await deps.getCandidate(userId, mcpServer.mcp_server_id, params);
+        if (sharing === 'shared') params = await deps.authorizeCaller(params, sharing);
+        const finalCandidate =
+          sharing === 'shared'
+            ? await deps.getCandidate(userId, mcpServer.mcp_server_id, params)
+            : createdServer
+              ? candidateFromExternalServer(mcpServer)
+              : !finalized && selection?.candidate
+                ? selection.candidate
+                : await deps.getCandidate(userId, mcpServer.mcp_server_id, params);
         if (!finalCandidate) {
           throw new Error('Connected MCP server is no longer available');
+        }
+        if (sharing === 'shared') {
+          // Selection/refresh/create may yield. Re-read this exact row, never
+          // its cached projection, before reporting an authoritative reuse.
+          if (!isUsableSharedCatalogCandidate(finalCandidate, entry, auth)) {
+            throw new BadRequest(
+              'This shared installation has changed or is disabled. Review it in Settings before connecting.'
+            );
+          }
         }
         const installed = await presentConnectServer(finalCandidate, params, deps);
 

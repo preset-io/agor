@@ -451,6 +451,11 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
         <Col span={12}>
           <Form.Item
             label="Scope"
+            extra={
+              (isCreate ? ownership : savedOwnership) === 'private'
+                ? "Private + Global applies only to the owner's sessions, not everyone in the workspace."
+                : undefined
+            }
             name="scope"
             initialValue={isCreate ? 'session' : 'global'}
             tooltip={
