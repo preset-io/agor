@@ -36,7 +36,7 @@
     "@cursor/sdk": "1.0.31",
     "@google/gemini-cli-core": "0.61.0",
     "@google/genai": "^1.52.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "@types/diff": "^6.0.0",
     "@types/node": "^24.6.0",
     "typescript": "^6.0.3",
