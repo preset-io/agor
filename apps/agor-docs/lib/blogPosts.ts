@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'agor-cloud-open-beta',
+    title: 'Announcing Agor Cloud Open Beta',
+    description:
+      'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta makes shared AI workflows available without running the hosting infrastructure.',
+    author: 'Agor team',
+    date: '2026-10-06',
+    image: '/images/blog/agor-cloud-open-beta.webp',
+  },
+  {
     slug: 'meet-bug-basher',
     title: 'Meet Bug Basher: the AI agent that hunts bugs in Apache Superset',
     description:
