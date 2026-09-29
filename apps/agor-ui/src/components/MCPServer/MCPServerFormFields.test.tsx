@@ -34,6 +34,29 @@ const oauthButton = (name = 'Start OAuth Flow') => buttonLabeled(name);
 describe('MCPServerFormFields OAuth start', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('warns about credentials when editing immutable shared ownership', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="edit"
+            savedOwnership="shared"
+            transport="http"
+            authType="bearer"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.getByText('Shared configuration can share credentials')).toBeVisible();
+    expect(screen.queryByText('Installation ownership')).not.toBeInTheDocument();
+  });
+
   it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
     const Harness = () => {
       const [form] = Form.useForm();

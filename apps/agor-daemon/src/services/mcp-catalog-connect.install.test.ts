@@ -292,6 +292,37 @@ describe('explicit shared Catalog installs', () => {
     expect(await daemon.installedServers()).toHaveLength(1);
   });
 
+  it('retains a newly created shared installation adopted before its response fails', async () => {
+    const daemon = await buildDaemon('allow_crud');
+    const bob = await daemon.addUser('adopting-user@agor.live', 'member');
+    let adoptedId: string | undefined;
+    daemon.app.service('mcp-servers').hooks({
+      after: {
+        create: [
+          async (context) => {
+            const adopted = await daemon.connectAs(bob, 'member', 'shared');
+            adoptedId = adopted.mcp_server.mcp_server_id;
+            // Fail only response projection, after the durable row and B's reuse.
+            context.result.created_at = {
+              valueOf() {
+                throw new Error('response interrupted');
+              },
+            };
+          },
+        ],
+      },
+    });
+    await expect(daemon.connectAs(daemon.user, 'member', 'shared')).rejects.toThrow(
+      'response interrupted'
+    );
+    expect((await daemon.installedServers()).map((server) => server.mcp_server_id)).toEqual([
+      adoptedId,
+    ]);
+    expect((await daemon.connectAs(bob, 'member', 'shared')).mcp_server.mcp_server_id).toBe(
+      adoptedId
+    );
+  });
+
   it('allows unchanged private reuse after tightening, but refuses new installs', async () => {
     const daemon = await buildDaemon('allow_private_only');
     const installed = await daemon.connect();
@@ -750,15 +781,7 @@ function captureRegisteredMcpServerHooks(db: TenantScopeAwareDatabase) {
   return captured;
 }
 
-/**
- * CONNECT-3 across two users, with real grants in a real database.
- *
- * The row both users can see is deliberately unowned: an owned one would be
- * filtered out of Bob's `find` by `usableByUserId` before reuse ever looked at
- * it, so passing that would prove only that the ownership filter works. This
- * puts the row squarely inside Bob's reach and asks whether Alice's *credential*
- * on it can be borrowed.
- */
+/** Real caller-keyed grants cover private peer reuse and explicit shared installs. */
 describe('credential reuse, against real grants', () => {
   const OAUTH_ENTRY = {
     ...CURATED,
@@ -768,20 +791,13 @@ describe('credential reuse, against real grants', () => {
   const SHARED_ROW = '00000000-0000-7000-8000-0000000005ee' as MCPServer['mcp_server_id'];
   const RESOURCE = 'https://mcp.deepwiki.com/mcp';
 
-  /**
-   * Two members, one unowned OAuth row both can see, and a real grant on it
-   * belonging to exactly one of them.
-   *
-   * The row is deliberately unowned: an owned one would be filtered out of the
-   * other user's `find` by `usableByUserId` before reuse ever looked at it, so
-   * passing that would prove only that the ownership filter works. This puts
-   * the row squarely inside both users' reach and asks whether one's
-   * *credential* on it can be borrowed by the other.
-   */
-  async function buildTwoUserDaemon(grantResourceUri: string | undefined = RESOURCE) {
+  async function buildTwoUserDaemon(
+    grantResourceUri: string | undefined = RESOURCE,
+    sharing: 'private' | 'shared' = 'private'
+  ) {
     const { rawDb, db, runInTenantDatabaseScope } = await guardedConnectLaneDatabase();
     await runInTenantDatabaseScope(undefined, () =>
-      setMcpMemberPolicy(db, 'allow_private_only', undefined, null)
+      setMcpMemberPolicy(db, 'allow_crud', undefined, null)
     );
 
     const users = new UsersRepository(rawDb);
@@ -799,12 +815,13 @@ describe('credential reuse, against real grants', () => {
     await new MCPServerRepository(rawDb).create({
       mcp_server_id: SHARED_ROW,
       name: 'deepwiki-private',
-      owner_user_id: alice.user_id,
+      owner_user_id: sharing === 'private' ? alice.user_id : undefined,
       transport: 'http',
       url: RESOURCE,
       auth: { type: 'oauth', oauth_mode: 'per_user', oauth_compatibility_mode: 'strict' },
       scope: 'session',
-      source: 'user',
+      source: sharing === 'private' ? 'user' : 'catalog',
+      ...(sharing === 'shared' ? { catalog_entry_name: DEEPWIKI } : {}),
       enabled: true,
       created_at: new Date(),
       updated_at: new Date(),
@@ -888,19 +905,74 @@ describe('credential reuse, against real grants', () => {
     };
 
     const connectAs = (caller: User) =>
-      createMCPCatalogConnectService(app, deps).create(CONNECT_REQUEST, {
+      createMCPCatalogConnectService(app, deps).create({ ...CONNECT_REQUEST, sharing }, {
         provider: 'rest',
         authenticated: true,
         user: { user_id: caller.user_id, role: 'member' },
       } as unknown as AuthenticatedParams);
 
-    return { alice, bob, connectAs, rawDb };
+    return { alice, bob, connectAs, rawDb, app, tokens };
   }
 
   beforeEach(() => {
     probeRemoteAuthType.mockReset();
     probeRemoteAuthType.mockResolvedValue('oauth');
   });
+
+  it('shares the configuration, never another user’s grant', async () => {
+    const { alice, bob, connectAs, tokens } = await buildTwoUserDaemon(RESOURCE, 'shared');
+    const a = await connectAs(alice);
+    const b = await connectAs(bob);
+    expect(a.mcp_server.mcp_server_id).toBe(SHARED_ROW);
+    expect(a.mcp_server.auth?.oauth_access_token).toBeTruthy();
+    expect(b.mcp_server.mcp_server_id).toBe(SHARED_ROW);
+    expect(b.mcp_server.auth?.oauth_access_token).toBeUndefined();
+    expect(await tokens.getToken(bob.user_id, SHARED_ROW)).toBeNull();
+    await tokens.saveToken(bob.user_id, SHARED_ROW, {
+      accessToken: 'bob-own-fixture-grant',
+      resourceUri: RESOURCE,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    expect((await connectAs(bob)).mcp_server.auth?.oauth_access_token).toBeTruthy();
+    expect((await tokens.getToken(alice.user_id, SHARED_ROW))?.oauth_access_token).toBe(
+      'alice-grant-not-a-real-token'
+    );
+  });
+
+  it.each([true, false])(
+    'refreshes only the caller grant on the canonical shared row (success=%s)',
+    async (success) => {
+      const { alice, bob, connectAs, rawDb, app, tokens } = await buildTwoUserDaemon(
+        RESOURCE,
+        'shared'
+      );
+      await tokens.saveToken(alice.user_id, SHARED_ROW, {
+        accessToken: 'expired-fixture-grant',
+        refreshToken: 'fixture-refresh',
+        resourceUri: RESOURCE,
+        expiresAt: new Date(Date.now() - 60_000),
+      });
+      const before = await new MCPServerRepository(rawDb).findById(SHARED_ROW);
+      const refresh = vi
+        .spyOn(app.service('/mcp-servers/oauth-refresh'), 'create')
+        .mockImplementation(async (_data, params) => {
+          expect(params?.user?.user_id).toBe(alice.user_id);
+          if (success)
+            await tokens.saveToken(alice.user_id, SHARED_ROW, {
+              accessToken: 'refreshed-fixture-grant',
+              resourceUri: RESOURCE,
+              expiresAt: new Date(Date.now() + 60_000),
+            });
+          return { success };
+        });
+      const result = await connectAs(alice);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      expect(result.mcp_server.mcp_server_id).toBe(SHARED_ROW);
+      expect(Boolean(result.mcp_server.auth?.oauth_access_token)).toBe(success);
+      expect(await new MCPServerRepository(rawDb).findById(SHARED_ROW)).toEqual(before);
+      expect(await tokens.getToken(bob.user_id, SHARED_ROW)).toBeNull();
+    }
+  );
 
   it('reuses the grant for the user who holds it', async () => {
     // The positive control. Without it the negatives below would also pass if

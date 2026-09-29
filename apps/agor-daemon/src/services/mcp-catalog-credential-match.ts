@@ -139,8 +139,12 @@ export async function selectCatalogCandidate(
     };
   }
 
-  const compatibleOAuth =
-    sharing === 'shared' ? [] : await compatibleCatalogOAuthPeers(entry, candidates);
+  // Shared configuration cannot adopt another installation, but its caller's
+  // own expired grant may still be refreshed on this exact canonical row.
+  const compatibleOAuth = await compatibleCatalogOAuthPeers(
+    entry,
+    sharing === 'shared' ? (currentCatalog ? [currentCatalog] : []) : candidates
+  );
   // A live current install wins. Crucially, a stale catalog row does not block
   // a live manual peer; this order is also what readiness reports.
   if (currentCatalog && (await hasLiveCallerOAuthGrant(currentCatalog, now, deps))) {

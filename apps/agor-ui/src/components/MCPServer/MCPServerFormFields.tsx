@@ -68,6 +68,8 @@ export interface MCPServerFormFieldsProps {
   /** The scopes this user may configure, on the same terms as the transports. */
   offeredScopes?: MCPScope[];
   allowSharedOwnership?: boolean;
+  /** Immutable saved ownership; edit forms never submit an ownership change. */
+  savedOwnership?: 'private' | 'shared';
   authType?: 'none' | 'bearer' | 'jwt' | 'oauth';
   onAuthTypeChange?: (authType: 'none' | 'bearer' | 'jwt' | 'oauth') => void;
   form: FormInstance;
@@ -107,6 +109,7 @@ export interface MCPServerFormFieldsProps {
  */
 export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   mode,
+  savedOwnership,
   transport,
   onTransportChange,
   offeredTransports = ALL_TRANSPORTS,
@@ -436,7 +439,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           />
         </Form.Item>
       )}
-      {ownership === 'shared' && (
+      {(isCreate ? ownership : savedOwnership) === 'shared' && (
         <Alert
           type="warning"
           showIcon

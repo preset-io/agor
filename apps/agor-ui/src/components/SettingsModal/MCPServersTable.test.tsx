@@ -293,7 +293,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     // Selected and offered both render the label, so one match is the floor.
     await waitFor(() => expect(screen.getAllByText('Session').length).toBeGreaterThan(0));
-    expect(screen.queryByText('Global (all sessions)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Global (all eligible sessions)')).not.toBeInTheDocument();
   });
 
   it('offers an admin workspace-wide scope', async () => {
@@ -304,7 +304,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     const scope = await screen.findByLabelText('Scope');
     fireEvent.mouseDown(scope);
-    expect(await screen.findByText('Global (all sessions)')).toBeInTheDocument();
+    expect(await screen.findByText('Global (all eligible sessions)')).toBeInTheDocument();
   });
 
   it('offers an admin every transport', async () => {

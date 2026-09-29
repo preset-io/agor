@@ -666,50 +666,10 @@ export function createMCPCatalogConnectService(
   const service = (path: string) => app.service(path);
 
   /**
-   * An install of this entry the caller can already use, if there is one.
-   *
-   * Matched on the catalog name. Both sides carry it verbatim, and it is what
-   * the entry is unique on, so there is no second normalisation to keep in
-   * step and an install survives every edit to the entry except a rename.
-   *
-   * The name alone does not settle it, though: see
-   * {@link isCurrentCatalogInstall}. A row
-   * that no longer carries the entry's configuration is passed over rather
-   * than handed back, so a caller who has one of those and a real install gets
-   * the real one.
-   *
-   * A disabled row is passed over too, which is a different question with the
-   * same answer. Reusing one would attach a server the session resolves away
-   * (`enabledOnly`), reporting success while handing back an agent that never
-   * sees it; re-enabling it would let a connect flip a decision somebody else
-   * made deliberately about a possibly-shared row. Creating a fresh one grants
-   * nothing the caller's `mcp_member_policy` did not already grant, and leaves
-   * the disabled row exactly as its owner left it.
-   *
-   * And a row that keeps a credential in its own columns is reusable only by
-   * the user who owns it. This is the one rule the API-key install adds, and it
-   * is the whole of what stops the feature from being a credential leak between
-   * colleagues.
-   *
-   * The search is already narrowed by `usableByUserId`, which resolves to
-   * "shared rows, plus private rows owned by this user" — and every marketplace
-   * install is stamped private to its installer under every policy and at every
-   * role (`resolveCatalogInstall`), so on today's data a second user genuinely
-   * cannot see the first one's row. That is a conclusion drawn from three
-   * separate mechanisms holding at once, though, and the failure it prevents is
-   * silent: reuse handing B a row carrying A's key looks exactly like the
-   * feature working. `usableByUserId` widening, one internally-created unowned
-   * row carrying a `catalog_entry_name`, or a later policy that publishes an
-   * install would each turn a working marketplace into one that lends out
-   * credentials, with nothing failing to mark the moment.
-   *
-   * So the property is asserted here rather than inferred from over there. It
-   * costs an ownership comparison, it is expressed in terms of what the row
-   * carries rather than which entry it came from, and it applies to any future
-   * auth type that puts a secret in a column. Sharing stays available for the
-   * cases where it is sound — an unauthenticated server, or an OAuth one, whose
-   * grants are per-user in `user_mcp_oauth_tokens` and so are not the row's to
-   * lend.
+   * Match the explicitly selected owner/catalog identity. Private selection
+   * never borrows shared configuration or a foreign private credential. Shared
+   * selection accepts only the current canonical, secret-free session row;
+   * drifted identities are retained for a Settings-required refusal, not repair.
    */
   const findExistingInstall = async (
     entry: MCPCatalogEntry & { remote_url: string },
@@ -736,7 +696,9 @@ export function createMCPCatalogConnectService(
       };
     }
     const revived = await findReusableCredential(entry, selected.compatibleOAuth, userId, params);
-    if (revived) return revived;
+    if (revived) {
+      return sharing === 'shared' ? { ...revived, kind: 'catalog_install' } : revived;
+    }
     if (selected.ownedCatalog) {
       return {
         server: selected.ownedCatalog.server,
@@ -1019,9 +981,8 @@ export function createMCPCatalogConnectService(
 
       // Provenance is named on params rather than in the payload: the write
       // authorizer refuses a stamp that arrived from a request, so this is the
-      // one path that can produce one. Saying so is also what makes the row
-      // private to the caller — an install is theirs whatever the tenant's
-      // `mcp_member_policy` says. See `McpCatalogInstallParams`.
+      // one path that can produce one. Explicit shared ownership is separately
+      // authorized; omission remains private. See `McpCatalogInstallParams`.
       let selection = existing;
       let mcpServer = selection?.server;
       let createdServer = false;

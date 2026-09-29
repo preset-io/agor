@@ -266,7 +266,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     async function seedPeer(
       tenantId: string,
       user: User,
-      options: { fingerprintDrift?: boolean; compatibilityMode?: 'strict' | 'legacy' } = {}
+      options: {
+        fingerprintDrift?: boolean;
+        compatibilityMode?: 'strict' | 'legacy';
+        shared?: boolean;
+      } = {}
     ) {
       return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const server = await new MCPServerRepository(scoped).create({
@@ -274,7 +278,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           transport: 'http',
           url: RESOURCE,
           scope: 'session',
-          source: 'user',
+          source: options.shared ? 'catalog' : 'user',
+          owner_user_id: options.shared ? undefined : user.user_id,
+          ...(options.shared ? { catalog_entry_name: ENTRY.name } : {}),
           enabled: true,
           auth: {
             type: 'oauth',
@@ -371,7 +377,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       user: User,
       tenantId: string,
       entry: MCPCatalogEntry = ENTRY,
-      app = connectApp(entry)
+      app = connectApp(entry),
+      sharing: 'private' | 'shared' = 'private'
     ) {
       // Deliberately no ambient database scope here. This is the production
       // long-route shape: authenticated tenant identity is present, while each
@@ -379,7 +386,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // proxy. Wrapping this whole call would hide the regression this test
       // guards and would hold a PostgreSQL transaction across the remote probe.
       return createRegisteredMCPCatalogConnectService(app, db).create(
-        REQUEST,
+        { ...REQUEST, sharing },
         params(user, tenantId)
       );
     }
@@ -418,7 +425,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
         buildUser(scoped, 'same-tenant-user-b')
       );
-      const peer = await seedPeer(actor.tenantId, actor.user);
+      const peer = await seedPeer(actor.tenantId, actor.user, { shared: true });
       const app = connectApp();
 
       const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
@@ -434,16 +441,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       // Both calls use the same tenant scope, so tenant RLS cannot distinguish
       // these users. The production grant lookup must enforce the user key.
-      const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app);
+      const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app, 'shared');
       expect(actorResult).toMatchObject({
         reused_existing_server: true,
-        reuse_kind: 'credential_peer',
+        reuse_kind: 'catalog_install',
         mcp_server: { mcp_server_id: peer.mcp_server_id },
       });
 
-      const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app);
-      expect(otherResult.reused_existing_server).toBe(false);
-      expect(otherResult.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+      const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app, 'shared');
+      expect(otherResult.reused_existing_server).toBe(true);
+      expect(otherResult.mcp_server.auth?.oauth_access_token).toBeUndefined();
+      expect(otherResult.mcp_server.mcp_server_id).toBe(peer.mcp_server_id);
 
       await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
         const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
@@ -462,8 +470,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const local = await buildTenant('local');
       const foreignPeer = await seedPeer(foreign.tenantId, foreign.user);
 
-      const result = await connect(foreign.user, local.tenantId);
-      expect(result.reused_existing_server).toBe(false);
+      await expect(connect(foreign.user, local.tenantId)).rejects.toMatchObject({ code: 401 });
+      // A valid local caller still cannot discover or reuse the foreign row.
+      const result = await connect(local.user, local.tenantId);
       expect(result.mcp_server.mcp_server_id).not.toBe(foreignPeer.mcp_server_id);
     });
 
