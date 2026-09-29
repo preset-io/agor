@@ -205,6 +205,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
+  const [createdServerOwnership, setCreatedServerOwnership] = useState<'private' | 'shared'>();
   const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -318,11 +319,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         createdConfigVersion.current = (result as MCPServer).config_version ?? 1;
+        setCreatedServerOwnership((result as MCPServer).owner_user_id ? 'private' : 'shared');
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
-      const { name: _name, ...updates } = data;
+      const { name: _name, owner_user_id: _owner, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       const updated = await client.service('mcp-servers').patch(createdServerId, {
         ...updates,
@@ -354,6 +356,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setChosenTransport(null);
     setAuthType('none');
     setCreatedServerId(null);
+    setCreatedServerOwnership(undefined);
     bumpFormRevision();
   };
 
@@ -752,6 +755,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         >
           <MCPServerFormFields
             mode={createdServerId ? 'edit' : 'create'}
+            savedOwnership={createdServerOwnership}
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}

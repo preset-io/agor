@@ -407,6 +407,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
     }
 
+    it('keeps shared install identities tenant-local and distinct from private requests', async () => {
+      const a = await buildTenant('shared-a');
+      const b = await buildTenant('shared-b');
+      const [sharedA, sharedB] = await Promise.all([
+        connect(a.user, a.tenantId, ENTRY, connectApp(), 'shared'),
+        connect(b.user, b.tenantId, ENTRY, connectApp(), 'shared'),
+      ]);
+      expect(sharedA.mcp_server.mcp_server_id).not.toBe(sharedB.mcp_server.mcp_server_id);
+      for (const result of [sharedA, sharedB]) {
+        expect(result.mcp_server.owner_user_id).toBeUndefined();
+        expect(result.mcp_server.scope).toBe('session');
+        expect(result.mcp_server.auth?.oauth_access_token).toBeUndefined();
+      }
+      const privateA = await connect(a.user, a.tenantId);
+      expect(privateA.mcp_server.owner_user_id).toBe(a.user.user_id);
+      expect(privateA.mcp_server.mcp_server_id).not.toBe(sharedA.mcp_server.mcp_server_id);
+      await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+        expect(
+          await new MCPServerRepository(scoped).findById(sharedA.mcp_server.mcp_server_id)
+        ).toBeNull();
+      });
+    });
+
     it('reuses the authenticated caller credential peer and obeys probed OAuth policy', async () => {
       const actor = await buildTenant('positive');
       const peer = await seedPeer(actor.tenantId, actor.user);

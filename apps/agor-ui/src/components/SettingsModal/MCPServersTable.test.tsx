@@ -307,6 +307,22 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     expect(await screen.findByText('Global (all eligible sessions)')).toBeInTheDocument();
   });
 
+  it.each([
+    [ADMIN, 'allow_private_only', true],
+    [MEMBER, 'allow_crud', true],
+    [MEMBER, 'allow_private_only', false],
+  ] as const)(
+    'defaults ownership to private and permission-gates shared for %s under %s',
+    async (currentUser, policy, canShare) => {
+      const { find } = renderTable({ policy, currentUser });
+      await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+      await openCreateForm();
+      expect(screen.getByText('Private (only you)')).toBeInTheDocument();
+      fireEvent.mouseDown(await screen.findByLabelText('Installation ownership'));
+      expect(Boolean(screen.queryByText('Shared (workspace)'))).toBe(canShare);
+    }
+  );
+
   it('offers an admin every transport', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
