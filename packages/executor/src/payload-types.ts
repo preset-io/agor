@@ -750,6 +750,21 @@ export const EnvironmentLogsPayloadSchema = BasePayloadSchema.extend({
 
 export type EnvironmentLogsPayload = z.infer<typeof EnvironmentLogsPayloadSchema>;
 
+/** An exact source revision applied to an existing managed environment. */
+export const EnvironmentSyncPayloadSchema = BasePayloadSchema.extend({
+  command: z.literal('environment.sync'),
+  sessionToken: z.string(),
+  params: z.object({
+    branchId: z.string().uuid(),
+    branchPath: z.string(),
+    syncCommand: z.string().min(1),
+    desiredRevision: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/),
+    commandDeadline: z.string().datetime(),
+  }),
+});
+
+export type EnvironmentSyncPayload = z.infer<typeof EnvironmentSyncPayloadSchema>;
+
 // ═══════════════════════════════════════════════════════════
 // Git Repo Realign Origin Payload
 // ═══════════════════════════════════════════════════════════
@@ -985,6 +1000,7 @@ const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   BranchAgorYmlExportPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
+  EnvironmentSyncPayloadSchema,
   GitRepoRealignOriginPayloadSchema,
   GitRepoInspectPayloadSchema,
   GitManagedCredentialsReconcilePayloadSchema,
@@ -1067,6 +1083,7 @@ export function getSupportedCommands(): string[] {
     'branch.agor-yml.export',
     'environment.lifecycle',
     'environment.logs',
+    'environment.sync',
     'git.repo.realign-origin',
     'git.repo.delete',
     'zellij.attach',

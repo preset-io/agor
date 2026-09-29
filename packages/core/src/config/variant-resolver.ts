@@ -31,6 +31,7 @@ export interface YamlVariant {
   extends?: string;
   start?: string;
   stop?: string;
+  sync?: string;
   nuke?: string;
   logs?: string;
   health?: string;
@@ -79,6 +80,10 @@ export function toVariant(name: string, y: YamlVariant): RepoEnvironmentVariant 
   const variant: RepoEnvironmentVariant = {};
   if (typeof y.start === 'string') variant.start = y.start;
   if (typeof y.stop === 'string') variant.stop = y.stop;
+  if (y.sync !== undefined && typeof y.sync !== 'string') {
+    throw new Error(`.agor.yml: variant "${name}" sync command must be a string`);
+  }
+  if (y.sync) variant.sync = y.sync;
   if (y.description) variant.description = y.description;
   if (y.extends) variant.extends = y.extends;
   if (y.nuke) variant.nuke = y.nuke;
@@ -158,6 +163,7 @@ export function resolveVariant(
   if (variant.description ?? parent.description)
     merged.description = variant.description ?? parent.description;
   if (variant.nuke ?? parent.nuke) merged.nuke = variant.nuke ?? parent.nuke;
+  if (variant.sync ?? parent.sync) merged.sync = variant.sync ?? parent.sync;
   if (variant.logs ?? parent.logs) merged.logs = variant.logs ?? parent.logs;
   if (variant.health ?? parent.health) merged.health = variant.health ?? parent.health;
   if (variant.app ?? parent.app) merged.app = variant.app ?? parent.app;

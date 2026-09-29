@@ -8,6 +8,7 @@ import {
   BranchFilesReadPayloadSchema,
   EnvironmentLifecyclePayloadSchema,
   EnvironmentLogsPayloadSchema,
+  EnvironmentSyncPayloadSchema,
   ExecutorPayloadSchema,
   GitBranchAddPayloadSchema,
   GitBranchCleanPayloadSchema,
@@ -391,6 +392,30 @@ describe('EnvironmentLogsPayloadSchema', () => {
     const result = EnvironmentLogsPayloadSchema.parse(payload);
     expect(result.command).toBe('environment.logs');
     expect(result.params.logsCommand).toBe('docker compose logs --tail=100');
+  });
+});
+
+describe('EnvironmentSyncPayloadSchema', () => {
+  const payload = {
+    command: 'environment.sync',
+    sessionToken: 'jwt-token-here',
+    params: {
+      branchId: '550e8400-e29b-41d4-a716-446655440000',
+      branchPath: '/worktrees/branch',
+      syncCommand: 'apply-revision',
+      desiredRevision: 'a'.repeat(40),
+      commandDeadline: new Date(Date.now() + 60_000).toISOString(),
+    },
+  };
+
+  it('requires a full lowercase revision', () => {
+    expect(EnvironmentSyncPayloadSchema.parse(payload).params.desiredRevision).toBe('a'.repeat(40));
+    expect(() =>
+      EnvironmentSyncPayloadSchema.parse({
+        ...payload,
+        params: { ...payload.params, desiredRevision: 'abc' },
+      })
+    ).toThrow();
   });
 });
 
@@ -789,6 +814,6 @@ describe('getSupportedCommands', () => {
     expect(commands).toContain('claude.auth-file');
     expect(commands).toContain('branch.clean');
     expect(commands).toContain('branch.archive');
-    expect(commands.length).toBe(31);
+    expect(commands.length).toBe(32);
   });
 });

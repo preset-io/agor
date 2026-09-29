@@ -6,9 +6,30 @@ import { BranchRepository } from './branches';
 import { EnvironmentCommandRepository } from './environment-commands';
 import { seedEnvironmentCommandBranch } from './environment-commands.test-support';
 import { EnvironmentHealthRepository } from './environment-health';
+import { EnvironmentSyncRepository } from './environment-sync';
 
 afterEach(() => vi.useRealTimers());
 describe('shared environment command admission and transitions', () => {
+  dbTest('a lifecycle transition discards prior source Sync state', async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const running = await new BranchRepository(db).update(branch.branch_id, {
+      environment_instance: { status: 'running' },
+    });
+    const sync = new EnvironmentSyncRepository(db);
+    await sync.request({
+      branchId: branch.branch_id,
+      desiredRevision: 'a'.repeat(40),
+      requestedByUserId: user.user_id,
+      commandBudgetMs: 300_000,
+    });
+    const admitted = await new EnvironmentCommandRepository(db).admit({
+      branch: running,
+      action: 'stop',
+      attemptId: generateId(),
+      userId: user.user_id,
+    });
+    expect(admitted.source_sync).toBeUndefined();
+  });
   dbTest('allows a 90-second cold start without lengthening command execution', async ({ db }) => {
     const { branch, user } = await seedEnvironmentCommandBranch(db);
     vi.useFakeTimers({ toFake: ['Date'] });

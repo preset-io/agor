@@ -41,6 +41,71 @@ const SHA_PATTERN = /^[0-9a-fA-F]{40}$/;
 const HEALTH_PATH_PATTERN = /^\/[A-Za-z0-9._~%/-]*$/;
 const MAX_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024;
 const STATE_DIR_ENV_VAR = 'AGOR_CODESPACES_STATE_DIR';
+const REVISION_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const REMOTE_REVISION_PREFIX = 'AGOR_CODESPACE_REVISION=';
+
+// This script runs through `bash -s` in the already-validated Codespace. Its
+// positional arguments are shell-quoted by the local launcher. It refuses to
+// mutate a dirty, detached, or wrong-origin checkout, fetches the configured
+// ref, proves the requested object is its current tip, then restarts from
+// exactly that object while preserving the symbolic branch name. The bootstrap
+// independently proves whether its existing development image matches the
+// selected revision's image inputs before deciding whether to rebuild it.
+const REMOTE_SYNC_SCRIPT = `${[
+  'set -euo pipefail',
+  'workspace=$1',
+  'expected_repository=$2',
+  'expected_ref=$3',
+  'revision=$4',
+  'codespace_name=$5',
+  'fail() { printf "%s\\n" "$1" >&2; exit 70; }',
+  'cd -- "$workspace" || fail "Codespace workspace is missing"',
+  'actual_ref=$(git symbolic-ref --quiet --short HEAD) || fail "Codespace checkout is detached"',
+  '[ "$actual_ref" = "$expected_ref" ] || fail "Codespace checkout is on the wrong ref"',
+  'origin_url=$(git remote get-url origin) || fail "Codespace checkout has no origin"',
+  'origin_lower=$(printf "%s" "$origin_url" | tr "[:upper:]" "[:lower:]")',
+  'repository_lower=$(printf "%s" "$expected_repository" | tr "[:upper:]" "[:lower:]")',
+  'case "$origin_lower" in',
+  '  "https://github.com/$repository_lower"|"https://github.com/$repository_lower.git"|"git@github.com:$repository_lower"|"git@github.com:$repository_lower.git"|"ssh://git@github.com/$repository_lower"|"ssh://git@github.com/$repository_lower.git") ;;',
+  '  *) fail "Codespace checkout origin does not match the requested repository" ;;',
+  'esac',
+  '[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ] || fail "Codespace checkout is dirty; refusing to overwrite developer work"',
+  'git fetch --no-tags -- origin "$expected_ref"',
+  'git cat-file -e "$revision^{commit}" 2>/dev/null || fail "Requested revision is not available from GitHub"',
+  '[ "$(git rev-parse FETCH_HEAD)" = "$revision" ] || fail "Requested revision is not the current remote ref tip"',
+  // Compose down intentionally preserves named data, but it also strands every
+  // anonymous dependency volume. Remove the service first with -v, which
+  // deletes only its anonymous volumes, then remove the project network.
+  'docker compose -p agor-codespaces-sqlite rm -sfv agor-dev',
+  'docker compose -p agor-codespaces-sqlite down',
+  'git reset --hard "$revision"',
+  'env CODESPACE_NAME="$codespace_name" bash .devcontainer/agor-managed/start-agor-sqlite.sh',
+  '[ "$(git rev-parse HEAD)" = "$revision" ] || fail "Codespace HEAD changed during bootstrap"',
+  '[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ] || fail "Codespace checkout became dirty during bootstrap"',
+].join('\n')}\n`;
+
+const REMOTE_VERIFY_SCRIPT = `${[
+  'set -euo pipefail',
+  'workspace=$1',
+  'expected_repository=$2',
+  'expected_ref=$3',
+  'revision=$4',
+  'fail() { printf "%s\\n" "$1" >&2; exit 70; }',
+  'cd -- "$workspace" || fail "Codespace workspace is missing"',
+  'actual_ref=$(git symbolic-ref --quiet --short HEAD) || fail "Codespace checkout is detached"',
+  '[ "$actual_ref" = "$expected_ref" ] || fail "Codespace checkout is on the wrong ref"',
+  'origin_url=$(git remote get-url origin) || fail "Codespace checkout has no origin"',
+  'origin_lower=$(printf "%s" "$origin_url" | tr "[:upper:]" "[:lower:]")',
+  'repository_lower=$(printf "%s" "$expected_repository" | tr "[:upper:]" "[:lower:]")',
+  'case "$origin_lower" in',
+  '  "https://github.com/$repository_lower"|"https://github.com/$repository_lower.git"|"git@github.com:$repository_lower"|"git@github.com:$repository_lower.git"|"ssh://git@github.com/$repository_lower"|"ssh://git@github.com/$repository_lower.git") ;;',
+  '  *) fail "Codespace checkout origin does not match the requested repository" ;;',
+  'esac',
+  'actual_revision=$(git rev-parse HEAD)',
+  '[ "$actual_revision" = "$revision" ] || fail "Codespace HEAD does not match the requested revision"',
+  '[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ] || fail "Codespace checkout is dirty after bootstrap"',
+  `printf '${REMOTE_REVISION_PREFIX}%s\\n' "$actual_revision"`,
+].join('\n')}\n`;
 
 export class LauncherError extends Error {
   constructor(message, options = {}) {
@@ -374,6 +439,37 @@ export class GitHubCodespacesClient {
     });
   }
 
+  async syncWorkspace(name, repository, ref, revision, timeoutSeconds) {
+    assertResourceName(name);
+    const workspace = `/workspaces/${repository.split('/', 2)[1]}`;
+    const command = `bash -s -- ${[workspace, repository, ref, revision, name].map(shellQuote).join(' ')}`;
+    await this.runner(['gh', 'codespace', 'ssh', '-c', name, '--', command], {
+      inputText: REMOTE_SYNC_SCRIPT,
+      timeout: Math.max(this.callTimeout, timeoutSeconds),
+      check: true,
+    });
+  }
+
+  async verifyWorkspaceRevision(name, repository, ref, revision) {
+    assertResourceName(name);
+    const workspace = `/workspaces/${repository.split('/', 2)[1]}`;
+    const command = `bash -s -- ${[workspace, repository, ref, revision].map(shellQuote).join(' ')}`;
+    const result = await this.runner(['gh', 'codespace', 'ssh', '-c', name, '--', command], {
+      inputText: REMOTE_VERIFY_SCRIPT,
+      timeout: this.callTimeout,
+      check: true,
+    });
+    const matches = result.stdout
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith(REMOTE_REVISION_PREFIX));
+    if (matches.length !== 1)
+      throw new LauncherError('Codespace revision verification returned an invalid result');
+    const actual = matches[0].slice(REMOTE_REVISION_PREFIX.length);
+    if (!REVISION_PATTERN.test(actual))
+      throw new LauncherError('Codespace revision verification returned an invalid object ID');
+    return actual;
+  }
+
   async creationLogs(name) {
     const result = await this.runner(['gh', 'codespace', 'logs', '-c', name], {
       timeout: Math.max(this.callTimeout, 60),
@@ -408,10 +504,14 @@ export function markerFor(repository, binding) {
 }
 
 export function resourceName(resource) {
-  if (typeof resource?.name !== 'string' || !RESOURCE_NAME_PATTERN.test(resource.name)) {
+  assertResourceName(resource?.name);
+  return resource.name;
+}
+
+function assertResourceName(name) {
+  if (typeof name !== 'string' || !RESOURCE_NAME_PATTERN.test(name)) {
     throw new LauncherError('Codespace has an invalid resource name');
   }
-  return resource.name;
 }
 
 export function validateResource(resource, { owner, repository, repositoryId, ref, marker }) {
@@ -894,6 +994,34 @@ export class CodespaceController {
     }
   }
 
+  async sync(revision) {
+    if (!REVISION_PATTERN.test(revision))
+      throw new LauncherError('--revision must be a full lowercase Git SHA');
+    const discovery = await this.discover();
+    if (!discovery.resource) throw new LauncherError('no Codespace is bound to this branch');
+    const resource = await this.refetchAndValidate(
+      discovery.owner,
+      discovery.repositoryId,
+      discovery.resource
+    );
+    if (resource.state !== 'Available') {
+      throw new LauncherError(`Codespace is not available (state: ${resource.state})`);
+    }
+    const name = resourceName(resource);
+    await this.client.syncWorkspace(name, this.repository, this.ref, revision, this.waitSeconds);
+    await this.waitForPreview(name);
+    const appliedRevision = await this.client.verifyWorkspaceRevision(
+      name,
+      this.repository,
+      this.ref,
+      revision
+    );
+    if (appliedRevision !== revision)
+      throw new LauncherError('Codespace acknowledged the wrong revision');
+    await this.saveBinding(discovery.owner, resource);
+    return appliedRevision;
+  }
+
   async health() {
     const discovery = await this.discover();
     if (!discovery.resource) throw new LauncherError('no Codespace is bound to this branch');
@@ -1025,8 +1153,8 @@ export function parseArgs(argv) {
     return { help: true };
   }
   const [action, ...rest] = argv;
-  if (!['start', 'stop', 'nuke', 'health', 'logs'].includes(action)) {
-    throw new LauncherError('action must be one of: start, stop, nuke, health, logs');
+  if (!['start', 'stop', 'sync', 'nuke', 'health', 'logs'].includes(action)) {
+    throw new LauncherError('action must be one of: start, stop, sync, nuke, health, logs');
   }
   const values = {};
   for (let index = 0; index < rest.length; index += 2) {
@@ -1042,6 +1170,7 @@ export function parseArgs(argv) {
   const allowed = new Set([
     '--repository',
     '--ref',
+    '--revision',
     '--binding',
     '--devcontainer-path',
     '--idle-timeout-minutes',
@@ -1066,6 +1195,7 @@ export function parseArgs(argv) {
     action,
     repository: values['--repository'],
     ref: values['--ref'],
+    revision: values['--revision'],
     binding: values['--binding'],
     devcontainerPath:
       values['--devcontainer-path'] ?? '.devcontainer/agor-managed/devcontainer.json',
@@ -1092,6 +1222,12 @@ export function parseArgs(argv) {
   }
   if (!args.ref || containsControlCharacter(args.ref) || args.ref.length > 255) {
     throw new LauncherError('--ref must be a non-empty git ref no longer than 255 characters');
+  }
+  if (action === 'sync' && !REVISION_PATTERN.test(args.revision)) {
+    throw new LauncherError('--revision must be a full lowercase Git SHA');
+  }
+  if (action !== 'sync' && args.revision !== undefined) {
+    throw new LauncherError('--revision is only valid for sync');
   }
   if (!/^\.devcontainer\/[A-Za-z0-9_.-]+\/devcontainer\.json$/.test(args.devcontainerPath)) {
     throw new LauncherError('--devcontainer-path must name one .devcontainer subdirectory');
@@ -1156,6 +1292,11 @@ export async function main(argv = process.argv.slice(2)) {
       } else if (args.action === 'stop') {
         const resource = await controller.stop();
         process.stdout.write(resource ? 'Codespace stopped\n' : 'Codespace already absent\n');
+      } else if (args.action === 'sync') {
+        const appliedRevision = await controller.sync(args.revision);
+        process.stdout.write(
+          `${RESULT_PREFIX}${JSON.stringify({ applied_revision: appliedRevision })}\n`
+        );
       } else if (args.action === 'nuke') {
         process.stdout.write(
           (await controller.nuke()) ? 'Codespace deleted\n' : 'Codespace already absent\n'
@@ -1217,7 +1358,7 @@ function delay(milliseconds) {
 }
 
 function helpText() {
-  return `Usage: node agor-codespace-launcher.mjs <start|stop|nuke|health|logs> [options]\n\nRequired:\n  --repository OWNER/REPO\n  --ref REF\n  --binding UUID\n\nStart options:\n  --port-visibility preserve|private|org|public (default: preserve)\n\nThe launcher uses the authenticated official gh CLI and emits ${RESULT_PREFIX}{...} on Start.\n`;
+  return `Usage: node agor-codespace-launcher.mjs <start|stop|sync|nuke|health|logs> [options]\n\nRequired:\n  --repository OWNER/REPO\n  --ref REF\n  --binding UUID\n\nSync requires --revision FULL_LOWERCASE_GIT_SHA.\nStart options:\n  --port-visibility preserve|private|org|public (default: preserve)\n\nThe launcher uses the authenticated official gh CLI and emits ${RESULT_PREFIX}{...} on Start or Sync.\n`;
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;

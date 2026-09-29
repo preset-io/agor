@@ -237,13 +237,14 @@ environment:
       extends: <base-variant> # optional, single-level only
       start: '<shell command template>'
       stop: '<shell command template>'
+      sync: '<shell command template>' # optional exact-revision source update
       nuke: '<shell command template>' # optional
       logs: '<shell command template>' # optional
       health: '<url template>' # optional
       app: '<url template>' # optional
 ```
 
-`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+`start`, `stop`, `sync`, `nuke`, and `logs` are rendered lifecycle fields. In the
 default `hybrid` mode they can be shell commands or explicit `http://` /
 `https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
 always URL templates, not shell commands.
@@ -254,7 +255,30 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+`sync`, `nuke`, `logs`, `health`, and `app` are optional. Sync is currently
+available through the API and completed-task trigger, not a dedicated button.
+
+### Source Sync
+
+An opt-in `sync` command updates a **running** environment to one exact, full
+lowercase Git commit. Its template receives `{{sync.revision}}`; unlike Start
+and Stop, this command is rendered from the current variant when Sync is
+requested, because the revision is known only then. The command must emit one
+`AGOR_ENVIRONMENT_RESULT={"applied_revision":"<full commit SHA>"}` line on
+stdout (or the same JSON body for a webhook). Agor records success only when
+the acknowledged SHA equals the requested SHA. A completed task with a valid
+`sha_at_end` that differs from the task's starting SHA requests Sync for a
+running opt-in environment; failed, stopped, unchanged, or abbreviated
+task-end states do not. Uncommitted local edits are not part of that SHA.
+An authorized caller can also request it with
+`POST /branches/<branch-id>/sync` and JSON body
+`{"desired_revision":"<full commit SHA>"}`. The response reports the queued
+state; watch the branch's `environment_instance.source_sync` for the applied
+revision or an error.
+
+Sync does not make provider-specific safety decisions for you. A remote
+launcher should refuse a dirty checkout, confirm repository/branch identity,
+and verify the applied commit before acknowledging it.
 
 ### Runtime URLs from Start
 
@@ -657,7 +681,7 @@ Job, while the claim budget also covers cold-node scheduling and image pulls.
 | Bound                                           | Budget                                                             |
 | ----------------------------------------------- | ------------------------------------------------------------------ |
 | Local launcher admission                        | 30 seconds                                                         |
-| Executor claim, measured from durable admission | 180 seconds                                                         |
+| Executor claim, measured from durable admission | 180 seconds                                                        |
 | Command, measured from claim                    | At most 300 seconds, also capped by the admitted absolute deadline |
 | Owned process-group cleanup                     | TERM, then KILL after at most 5 seconds                            |
 | Result delivery grace                           | 30 seconds beyond the admitted command and cleanup deadline        |
@@ -949,6 +973,13 @@ environment:
         --repository {{shellQuote repo.github_slug}}
         --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
+      sync: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs sync
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+        --revision {{shellQuote sync.revision}}
+        --wait-seconds 1200
       nuke: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
         --repository {{shellQuote repo.github_slug}}
@@ -999,9 +1030,12 @@ for SSH and `/health`, reapplies port visibility, and returns fresh URLs. A
 deleted resource is recreated and a duplicate or identity drift fails closed.
 Once Agor records the environment as `running`, its Start control is disabled;
 Restart deliberately runs Stop then Start, retaining and resuming the same
-Codespace rather than creating a second one. Neither path pulls newer Git
-commits into an already-running workspace or rebuilds its devcontainer; source
-synchronization remains a separate explicit operation.
+Codespace rather than creating a second one. Neither lifecycle path pulls newer
+Git commits into an already-running workspace. The separate Sync action checks
+that the checkout is clean, that the requested commit is the current remote
+branch tip, and that the restarted app becomes healthy before acknowledging the
+revision. A completed task with a new full commit SHA can request this Sync
+automatically when its creator has environment-control rights.
 
 The managed devcontainer explicitly installs the
 [Dev Containers `sshd` feature](https://cli.github.com/manual/gh_codespace_ssh).
@@ -1034,6 +1068,9 @@ docker compose -p agor-codespaces-sqlite logs --tail=100 --follow
 The first Play builds Agor's development image inside the Codespace. Later
 starts of the same Codespace reuse its Docker layers unless dependency inputs
 changed.
+The managed bootstrap does not load the demo fixture seed, which would try to
+clone the public Agor repository even for a private workspace; the first user
+signs in with the generated administrator password above.
 The reference variant gives the cold path a bounded 20 minutes; missing-SSH
 configuration errors fail immediately rather than consuming that deadline.
 Standalone Agor lifecycle execution has a fixed 25-minute safety bound, leaving

@@ -35,6 +35,7 @@ import {
   EnvironmentCommandRepository,
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
+  EnvironmentSyncRepository,
   enqueueAfterTenantDatabaseCommit,
   generateId,
   getCurrentTenantId,
@@ -52,8 +53,11 @@ import {
   type EnvironmentLifecycleResult,
   isAllowedDynamicEnvironmentHealthUrl,
   validateEnvironmentLifecycleResult,
+  validateEnvironmentSourceRevision,
+  validateEnvironmentSyncResult,
 } from '@agor/core/environment/lifecycle-result';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
+import { environmentSyncCommandBudget } from '@agor/core/environment/sync-budget';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
   type ManagedEnvCommandType,
@@ -135,6 +139,7 @@ import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-ho
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
 import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
+import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams, SessionsService } from './sessions';
@@ -552,6 +557,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     commandType: ManagedEnvCommandType;
     triggeredBy?: { user_id?: string; email?: string };
     maxBytes?: number;
+    timeoutMs?: number;
   }): Promise<{ body: string; truncated: boolean; status: number; contentType: string | null }> {
     const {
       url,
@@ -559,6 +565,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       commandType,
       triggeredBy,
       maxBytes = ENVIRONMENT.LOGS_MAX_BYTES,
+      timeoutMs = ENVIRONMENT.LOGS_TIMEOUT_MS,
     } = options;
     const redactedUrl = redactManagedEnvWebhookUrlForAudit(url);
 
@@ -579,7 +586,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.LOGS_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       const response = await fetch(url, {
@@ -605,9 +612,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
-        throw new Error(
-          `Environment ${commandType} webhook timed out after ${ENVIRONMENT.LOGS_TIMEOUT_MS / 1000}s`
-        );
+        throw new Error(`Environment ${commandType} webhook timed out after ${timeoutMs / 1000}s`);
       }
       throw error;
     } finally {
@@ -659,7 +664,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async resolveEnvironmentExecutorContext(
     branch: Branch,
     params?: BranchParams,
-    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write'
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write',
+    executionUserIdOverride?: UserID
   ): Promise<{
     delegatedHomeKey?: string;
     env: Record<string, string>;
@@ -679,20 +685,24 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const config = this.app.get('config');
     return this.withTenantDatabase(params, async () => {
       const requestUser = (params as AuthenticatedParams | undefined)?.user;
-      const executionUserId = (requestUser?.user_id ??
+      const executionUserId = (executionUserIdOverride ??
+        requestUser?.user_id ??
         branch.primary_owner_user_id ??
         branch.created_by) as UserID;
+      const executionUserRole = executionUserIdOverride
+        ? (await new UsersRepository(this.db).findById(executionUserId))?.role
+        : requestUser?.role;
       // Environment control historically permits tenant admins even when they
       // do not have an explicit branch entry. Preserve that hierarchy, while
       // ordinary Managers remain constrained by the separate filesystem
       // dimension selected in the policy form.
-      const branchFsAccess = hasMinimumRole(requestUser?.role, ROLES.ADMIN)
+      const branchFsAccess = hasMinimumRole(executionUserRole, ROLES.ADMIN)
         ? 'write'
         : await ensureBranchWorkspaceAccess(
             this.branchRepo,
             branch,
             executionUserId,
-            requestUser?.role as UserRole | undefined,
+            executionUserRole as UserRole | undefined,
             'all',
             requiredFsAccess,
             config.execution?.allow_superadmin === true
@@ -2533,9 +2543,280 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     return branch;
   }
 
-  /**
-   * Custom method: Start environment
-   */
+  /** Apply one clean Git revision to an already-running managed environment. */
+  async syncEnvironment(
+    id: BranchID,
+    desiredRevision: string,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const revision = validateEnvironmentSourceRevision(desiredRevision);
+    const branch = await this.loadEnvironmentForAction(id, params, 'sync branch environments');
+    if (branch.environment_instance?.status !== 'running') {
+      throw new Conflict('Environment must be running before source can be synchronized');
+    }
+    await this.renderEnvironmentSyncCommand(branch, revision, params);
+    const config = this.app.get('config');
+    const commandBudgetMs = environmentSyncCommandBudget(usesAsyncEnvironmentCommands(config));
+    const actor = ((params as AuthenticatedParams | undefined)?.user?.user_id ??
+      branch.primary_owner_user_id ??
+      branch.created_by) as UserID;
+    return this.requestEnvironmentSync(branch, revision, actor, commandBudgetMs, params);
+  }
+
+  /** Trusted task-completion hook; the task creator must have environment-control rights. */
+  async syncEnvironmentAfterTask(
+    id: BranchID,
+    desiredRevision: string,
+    requestedByUserId: UserID,
+    params?: BranchParams
+  ): Promise<void> {
+    const revision = validateEnvironmentSourceRevision(desiredRevision);
+    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+    if (branch.environment_instance?.status !== 'running') return;
+    if (!(await this.canActorControlEnvironment(branch, requestedByUserId, params))) return;
+    try {
+      await this.renderEnvironmentSyncCommand(branch, revision, params);
+    } catch (error) {
+      if (
+        error instanceof BadRequest &&
+        /no sync command|no environment configuration/i.test(error.message)
+      )
+        return;
+      throw error;
+    }
+    const commandBudgetMs = environmentSyncCommandBudget(
+      usesAsyncEnvironmentCommands(this.app.get('config'))
+    );
+    await this.requestEnvironmentSync(branch, revision, requestedByUserId, commandBudgetMs, params);
+  }
+
+  private canActorControlEnvironment(
+    branch: Branch,
+    userId: UserID,
+    params?: BranchParams
+  ): Promise<boolean> {
+    return this.withTenantDatabase(params, async () => {
+      const user = await new UsersRepository(this.db).findById(userId);
+      if (!user) return false;
+      if (hasMinimumRole(user.role, ROLES.ADMIN)) return true;
+      return (await this.branchRepo.resolveUserPermission(branch, userId as UUID)) === 'all';
+    });
+  }
+
+  private async requestEnvironmentSync(
+    branch: Branch,
+    revision: string,
+    actor: UserID,
+    commandBudgetMs: number,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const id = branch.branch_id;
+    await this.withTenantDatabase(params, () =>
+      new EnvironmentSyncRepository(this.db).request({
+        branchId: id,
+        desiredRevision: revision,
+        requestedByUserId: actor,
+        commandBudgetMs,
+      })
+    );
+    await this.publishEnvironmentSyncState(id, params);
+    await this.reconcileEnvironmentSync(id, params);
+    return this.withTenantDatabase(params, () => this.get(id, params));
+  }
+
+  private async renderEnvironmentSyncCommand(
+    branch: Branch,
+    revision: string,
+    params?: BranchParams
+  ): Promise<string> {
+    const reposService = this.app.service('repos');
+    const repo = await this.withTenantDatabase(
+      params,
+      () => reposService.get(branch.repo_id, params) as Promise<Repo>
+    );
+    if (!repo.environment) throw new BadRequest('Repo has no environment configuration');
+    const snapshot = renderBranchSnapshot(
+      { slug: repo.slug, remote_url: repo.remote_url, environment: repo.environment },
+      {
+        branch_id: branch.branch_id,
+        branch_unique_id: branch.branch_unique_id,
+        name: branch.name,
+        ref: branch.ref,
+        path: branch.path,
+        custom_context: branch.custom_context,
+        host_ip_address: resolveHostIpAddress(this.app.get('config').daemon?.host_ip_address),
+        base_ref: branch.base_ref,
+        ref_type: branch.ref_type,
+        sync_revision: revision,
+      },
+      branch.environment_variant ?? undefined
+    );
+    if (!snapshot?.sync) throw new BadRequest('Environment variant has no sync command');
+    return snapshot.sync;
+  }
+
+  private async publishEnvironmentSyncState(
+    id: BranchID,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const current = await this.withTenantDatabase(params, () => this.get(id, params));
+    emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: current, params, id });
+    return current;
+  }
+
+  /** Internal worker admission; it is not exposed as a transport method. */
+  async reconcileEnvironmentSync(id: BranchID, params?: BranchParams): Promise<void> {
+    const identity = this.app.get('distributedWorkIdentity') ?? {
+      instanceId: `branches-service-${process.pid}`,
+      bootId: `branches-service-${process.pid}`,
+    };
+    const claim = await this.withTenantDatabase(params, () =>
+      new EnvironmentSyncRepository(this.db).claim({
+        branchId: id,
+        claimToken: generateId(),
+        identity,
+      })
+    );
+    if (claim.outcome !== 'claimed') return;
+    await this.publishEnvironmentSyncState(id, params);
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const workerParams = { tenant: tenantId ? { tenant_id: tenantId } : undefined } as BranchParams;
+    deferWithTenantContext(
+      workerParams,
+      () =>
+        this.runClaimedEnvironmentSync(id, claim.attempt, claim.lifecycle_timeout_ms, workerParams),
+      (error) => console.error(`[Environment.sync ${id}] Worker failed:`, error)
+    );
+  }
+
+  private async runClaimedEnvironmentSync(
+    id: BranchID,
+    attempt: NonNullable<
+      NonNullable<NonNullable<Branch['environment_instance']>['source_sync']>['active_attempt']
+    >,
+    commandBudgetMs: number,
+    params?: BranchParams
+  ): Promise<void> {
+    const repo = new EnvironmentSyncRepository(this.db);
+    let needsReconcile = false;
+    try {
+      const branch = await this.withTenantDatabase(params, () => this.get(id, params));
+      if (!attempt.requested_by_user_id) throw new Error('Sync attempt has no execution user');
+      if (
+        !(await this.canActorControlEnvironment(
+          branch,
+          attempt.requested_by_user_id as UserID,
+          params
+        ))
+      ) {
+        throw new Error('Sync execution user no longer has environment-control permission');
+      }
+      const syncCommand = await this.renderEnvironmentSyncCommand(branch, attempt.revision, params);
+      const execution = await this.resolveEnvironmentCommand(syncCommand, 'sync');
+      let appliedRevision: string;
+      if (execution.kind === 'webhook') {
+        const response = await this.executeEnvironmentWebhook({
+          url: execution.url,
+          branch,
+          commandType: 'sync',
+          triggeredBy: { user_id: attempt.requested_by_user_id },
+          maxBytes: MAX_ENVIRONMENT_RESULT_BYTES,
+          timeoutMs: commandBudgetMs,
+        });
+        if (response.truncated) throw new Error('Environment sync result was truncated');
+        appliedRevision = validateEnvironmentSyncResult(JSON.parse(response.body)).applied_revision;
+      } else {
+        const context = await this.resolveEnvironmentExecutorContext(
+          branch,
+          params,
+          'write',
+          attempt.requested_by_user_id as UserID | undefined
+        );
+        const credentialMs =
+          commandBudgetMs +
+          ENVIRONMENT_COMMAND_BUDGET.launchMs +
+          ENVIRONMENT_COMMAND_BUDGET.claimMs +
+          ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
+          ENVIRONMENT_COMMAND_BUDGET.reportMs;
+        const sessionToken = await this.withTenantDatabase(params, () =>
+          issueExecutorCommandToken(
+            this.app,
+            `environment.sync:${encodeURIComponent(attempt.token)}`,
+            context.executionUserId,
+            id,
+            credentialMs
+          )
+        );
+        const commandDeadline = new Date(
+          Math.min(Date.now() + commandBudgetMs, Date.parse(attempt.lease_expires_at) - 30_000)
+        ).toISOString();
+        const result = await requestExecutor(
+          {
+            command: 'environment.sync',
+            sessionToken,
+            daemonUrl: getDaemonUrl(),
+            env: context.env,
+            params: {
+              branchId: id,
+              branchPath: branch.path,
+              cwd: branch.path,
+              principalBranchAccess: context.branchFsAccess,
+              ...context.sandboxMounts,
+              syncCommand: execution.command,
+              desiredRevision: attempt.revision,
+              commandDeadline,
+            },
+          },
+          {
+            delegatedHomeKey: context.delegatedHomeKey,
+            preparedEnv: context.env,
+            logPrefix: `[Environment.sync ${id}]`,
+            templateVariables: {
+              branch_id: id,
+              user_id: context.executionUserId,
+              branch_fs_access: context.branchFsAccess,
+            },
+            timeoutMs:
+              commandBudgetMs +
+              ENVIRONMENT_COMMAND_BUDGET.cleanupMs +
+              ENVIRONMENT_COMMAND_BUDGET.reportMs,
+          }
+        );
+        if (!result.success) throw new Error(result.error?.message ?? 'Environment sync failed');
+        appliedRevision = validateEnvironmentSourceRevision(
+          (result.data as { appliedRevision?: unknown } | undefined)?.appliedRevision
+        );
+      }
+      if (appliedRevision !== attempt.revision) {
+        throw new Error('Environment acknowledged a different source revision');
+      }
+      const settled = await this.withTenantDatabase(params, () =>
+        repo.complete({
+          branchId: id,
+          claimToken: attempt.token,
+          appliedRevision,
+          environmentGeneration: attempt.environment_generation,
+        })
+      );
+      needsReconcile = settled.outcome === 'settled' && settled.needs_reconcile;
+    } catch (error) {
+      const settled = await this.withTenantDatabase(params, () =>
+        repo.fail({
+          branchId: id,
+          claimToken: attempt.token,
+          revision: attempt.revision,
+          environmentGeneration: attempt.environment_generation,
+          message: error instanceof Error ? error.message : String(error),
+        })
+      );
+      needsReconcile = settled.outcome === 'settled' && settled.needs_reconcile;
+    }
+    await this.publishEnvironmentSyncState(id, params);
+    if (needsReconcile) await this.reconcileEnvironmentSync(id, params);
+  }
+
+  /** Custom method: Start environment. */
+
   async startEnvironment(
     id: BranchID,
     params?: BranchParams,
@@ -2713,6 +2994,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
         },
       };
+    }
+
+    const sourceSync = branch.environment_instance?.source_sync;
+    if (
+      currentStatus === 'running' &&
+      sourceSync &&
+      sourceSync.desired_revision !== sourceSync.applied_revision
+    ) {
+      await this.reconcileEnvironmentSync(id, params);
+      branch = await this.withTenantDatabase(params, loadCurrent);
     }
 
     // Active observations leave the database while doing HTTP. A durable

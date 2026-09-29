@@ -38,6 +38,7 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
+import { validateEnvironmentSourceRevision } from '@agor/core/environment/lifecycle-result';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -60,6 +61,7 @@ import type {
   TaskID,
   TaskPendingDispatchStatus,
   TaskQueueMutationResult,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -833,6 +835,52 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           }
         );
+
+        // A completed task can name one exact commit. Reconcile only an
+        // already-running, opt-in environment; other variants are unaffected.
+        if (
+          status === TaskStatus.COMPLETED &&
+          task.git_state?.sha_at_end &&
+          task.git_state.sha_at_end !== task.git_state.sha_at_start
+        ) {
+          let revision: string | undefined;
+          try {
+            revision = validateEnvironmentSourceRevision(task.git_state.sha_at_end);
+          } catch {
+            // An abbreviated or unknown task-end SHA is not a deployable revision.
+          }
+          if (revision) {
+            const branchId = session.branch_id;
+            const desiredRevision = revision;
+            deferWithTenantContext(
+              params,
+              async () => {
+                const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+                const internalParams = {
+                  tenant: tenantId ? { tenant_id: tenantId } : undefined,
+                } as TaskParams;
+                const branches = this.app.service('branches') as unknown as {
+                  syncEnvironmentAfterTask: (
+                    id: BranchID,
+                    rev: string,
+                    requestedBy: UserID,
+                    p?: unknown
+                  ) => Promise<void>;
+                };
+                await branches.syncEnvironmentAfterTask(
+                  branchId as BranchID,
+                  desiredRevision,
+                  task.created_by as UserID,
+                  internalParams
+                );
+              },
+              (error) =>
+                console.warn(
+                  `[tasks.environment_sync] branch=${branchId} failed: ${error instanceof Error ? error.message : String(error)}`
+                )
+            );
+          }
+        }
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];

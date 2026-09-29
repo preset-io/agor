@@ -190,6 +190,12 @@
       "import": "./dist/environment/lifecycle-result.js",
       "require": "./dist/environment/lifecycle-result.cjs"
     },
+    "./environment/sync-budget": {
+      "source": "./src/environment/sync-budget.ts",
+      "types": "./dist/environment/sync-budget.d.ts",
+      "import": "./dist/environment/sync-budget.js",
+      "require": "./dist/environment/sync-budget.cjs"
+    },
     "./utils/pinned-fetch": {
       "source": "./src/utils/pinned-fetch.ts",
       "types": "./dist/utils/pinned-fetch.d.ts",

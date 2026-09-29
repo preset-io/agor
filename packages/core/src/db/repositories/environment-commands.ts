@@ -156,6 +156,9 @@ export class EnvironmentCommandRepository {
       delete next.last_health_check;
       delete next.last_command;
       delete next.last_error;
+      // A new lifecycle attempt may replace the remote resource. Its prior
+      // applied source revision and any in-flight Sync claim are no longer facts.
+      delete next.source_sync;
       if (input.action === 'start') {
         delete next.health_url;
         next.access_urls = row.app_url ? [{ name: 'App', url: row.app_url }] : [];

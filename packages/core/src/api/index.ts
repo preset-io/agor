@@ -786,6 +786,9 @@ export interface BranchesService extends AgorService<Branch> {
    */
   startEnvironment(id: string, params?: Params): Promise<Branch>;
 
+  /** Apply and acknowledge an exact Git revision in a running environment. */
+  syncEnvironment(id: string, desiredRevision: string, params?: Params): Promise<Branch>;
+
   /**
    * Stop branch environment
    */

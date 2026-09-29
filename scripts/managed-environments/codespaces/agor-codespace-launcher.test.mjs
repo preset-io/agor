@@ -72,6 +72,8 @@ class FakeClient {
     this.visibilityCalls = [];
     this.previewHealthy = true;
     this.reconcileCalls = [];
+    this.syncCalls = [];
+    this.verifiedRevision = undefined;
   }
 
   async viewer() {
@@ -132,6 +134,15 @@ class FakeClient {
   async reconcilePreview(name, repository, timeoutSeconds) {
     this.reconcileCalls.push({ name, repository, timeoutSeconds });
     this.previewHealthy = true;
+  }
+
+  async syncWorkspace(name, repository, ref, revision, timeoutSeconds) {
+    this.syncCalls.push({ name, repository, ref, revision, timeoutSeconds });
+    this.verifiedRevision = revision;
+  }
+
+  async verifyWorkspaceRevision() {
+    return this.verifiedRevision;
   }
 
   async creationLogs(name) {
@@ -199,6 +210,35 @@ test('a second start rediscovers instead of creating a duplicate', async (t) => 
   await instance.start();
   await instance.start();
   assert.equal(client.created, 0);
+});
+
+test('Sync applies and verifies only the exact requested revision', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource()]);
+  const revision = 'b'.repeat(40);
+  const applied = await controller(client, store).sync(revision);
+  assert.equal(applied, revision);
+  assert.equal(client.syncCalls.length, 1);
+  assert.equal(client.syncCalls[0].revision, revision);
+  assert.equal(client.created, 0);
+});
+
+test('Sync refuses stopped or mismatched resources before remote mutation', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource({ state: 'Shutdown' })]);
+  await assert.rejects(controller(client, store).sync('b'.repeat(40)), /not available/);
+  assert.equal(client.syncCalls.length, 0);
+  client.resources[0].state = 'Available';
+  client.resources[0].git_status.ref = 'other';
+  await assert.rejects(controller(client, store).sync('b'.repeat(40)), /ref/);
+  assert.equal(client.syncCalls.length, 0);
+});
+
+test('Sync rejects a false revision acknowledgement', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource()]);
+  client.verifyWorkspaceRevision = async () => 'c'.repeat(40);
+  await assert.rejects(controller(client, store).sync('b'.repeat(40)), /wrong revision/);
 });
 
 test('Start repairs an unhealthy rediscovered preview before polling again', async (t) => {
@@ -473,6 +513,13 @@ test('refs preserve shell-looking text but reject control characters', () => {
   assert.throws(() => parseArgs([...base, 'feature/bad\nref']), /--ref/);
 });
 
+test('Sync accepts only an exact lowercase Git revision', () => {
+  const base = ['sync', '--repository', REPOSITORY, '--ref', REF, '--binding', BINDING];
+  assert.equal(parseArgs([...base, '--revision', 'a'.repeat(40)]).revision, 'a'.repeat(40));
+  assert.throws(() => parseArgs([...base, '--revision', 'abc']), /--revision/);
+  assert.throws(() => parseArgs([...base, '--revision', 'A'.repeat(40)]), /--revision/);
+});
+
 test('preview readiness has a bounded timeout', async (t) => {
   const { store } = await fixture(t);
   const client = new FakeClient([resource()]);
@@ -617,6 +664,32 @@ test('the gh adapter reconciles the preview through one bounded SSH command', as
   assert.equal(calls[1].options.timeout, 5);
 });
 
+test('the gh adapter Sync script checks the checkout before reset and verifies afterward', async () => {
+  const calls = [];
+  const revision = 'b'.repeat(40);
+  const runner = async (argv, options) => {
+    calls.push({ argv, options });
+    return { returncode: 0, stdout: `AGOR_CODESPACE_REVISION=${revision}\n`, stderr: '' };
+  };
+  const client = new GitHubCodespacesClient({ runner, callTimeout: 17 });
+  await client.syncWorkspace('octocat-agor-new123', REPOSITORY, REF, revision, 120);
+  assert.equal(calls[0].options.timeout, 120);
+  assert.match(
+    calls[0].options.inputText,
+    /checkout is dirty; refusing to overwrite developer work/
+  );
+  assert.match(calls[0].options.inputText, /Requested revision is not the current remote ref tip/);
+  assert.match(calls[0].options.inputText, /git reset --hard/);
+  assert.ok(
+    calls[0].options.inputText.indexOf('checkout is dirty') <
+      calls[0].options.inputText.indexOf('git reset --hard')
+  );
+  assert.equal(
+    await client.verifyWorkspaceRevision('octocat-agor-new123', REPOSITORY, REF, revision),
+    revision
+  );
+});
+
 test('the gh adapter changes only the requested Codespace port visibility', async () => {
   const calls = [];
   const runner = async (argv, options) => {
@@ -695,6 +768,7 @@ test('the Codespaces bootstrap persists a non-default secret without logging it'
 if [ "$*" != "compose -p agor-codespaces-sqlite ps" ]; then
   [ "\${AGOR_ADMIN_PASSWORD:-}" != "admin" ] || exit 91
   [ "\${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "false" ] || exit 92
+  [ "\${SEED:-}" = "false" ] || exit 93
 fi
 printf '%s\\n' 'fake docker ok'
 `
@@ -718,4 +792,42 @@ printf '%s\\n' 'fake docker ok'
 
   await execFileAsync('bash', [script], { env });
   assert.equal((await readFile(passwordPath, 'utf8')).trim(), password);
+});
+
+test('overlapping Codespaces bootstraps serialize remote Compose work', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'agor-codespaces-overlap-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const binDirectory = join(directory, 'bin');
+  await mkdir(binDirectory);
+  const fakeDocker = join(binDirectory, 'docker');
+  await writeFile(
+    fakeDocker,
+    `#!/bin/sh
+case "$*" in
+  *" up -d --build")
+    mkdir "$HOME/in-compose" || exit 99
+    sleep 0.2
+    rmdir "$HOME/in-compose"
+    ;;
+esac
+exit 0
+`
+  );
+  await chmod(fakeDocker, 0o755);
+  const script = join(process.cwd(), '.devcontainer/agor-managed/start-agor-sqlite.sh');
+  const env = {
+    ...process.env,
+    HOME: directory,
+    PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
+    CODESPACE_NAME: 'agor-cs-test123',
+    GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'app.github.dev',
+  };
+  await Promise.all([
+    execFileAsync('bash', [script], { env }),
+    execFileAsync('bash', [script], { env }),
+  ]);
+  const password = (
+    await readFile(join(directory, '.agor-managed/bootstrap-admin-password'), 'utf8')
+  ).trim();
+  assert.match(password, /^[a-f0-9]{48}$/);
 });

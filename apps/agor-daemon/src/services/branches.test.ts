@@ -4,6 +4,7 @@ import {
   BranchRepository,
   CapabilityPolicyRepository,
   type Database,
+  EnvironmentHealthRepository,
   GroupRepository,
   generateId,
   KnowledgeNamespaceRepository,
@@ -398,6 +399,35 @@ function createFindHarness(opts: {
 
   return { service, repository, branchRepo };
 }
+
+describe('BranchesService source Sync recovery', () => {
+  it('reconciles pending source Sync during a standalone health pass', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: '018f0000-0000-7000-8000-000000000777' as BranchID,
+      repo_id: 'repo-1',
+      name: 'sync-recovery',
+      path: '/tmp/sync-recovery',
+      branch_unique_id: 777,
+      environment_instance: {
+        status: 'running',
+        source_sync: {
+          desired_revision: 'b'.repeat(40),
+          applied_revision: 'a'.repeat(40),
+          desired_at: new Date().toISOString(),
+        },
+      },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const reconcile = vi.spyOn(service, 'reconcileEnvironmentSync').mockResolvedValue();
+    vi.spyOn(EnvironmentHealthRepository.prototype, 'claim').mockResolvedValue({
+      outcome: 'not_due',
+      next_observation_at: new Date(Date.now() + 60_000).toISOString(),
+    });
+    await service.checkHealth(branch.branch_id);
+    expect(reconcile).toHaveBeenCalledWith(branch.branch_id, undefined);
+  });
+});
 
 describe('BranchesService environment start async behavior', () => {
   function createStartHarness() {
@@ -1960,6 +1990,14 @@ describe('BranchesService managed environment control authorization', () => {
     await expect(service.startEnvironment(branchId, paramsFor(otherId, 'member'))).rejects.toThrow(
       /'all' branch permission or admin access/
     );
+    expect(getSpy).not.toHaveBeenCalled();
+  });
+
+  it('denies non-owner members before requesting source Sync', async () => {
+    const { service, getSpy } = createAuthHarness('session');
+    await expect(
+      service.syncEnvironment(branchId, 'a'.repeat(40), paramsFor(otherId, 'member'))
+    ).rejects.toThrow(/'all' branch permission or admin access/);
     expect(getSpy).not.toHaveBeenCalled();
   });
 

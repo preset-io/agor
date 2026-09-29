@@ -28,7 +28,11 @@ import { handleBranchArchive, handleBranchClean } from './branch-cleanup.js';
 import { handleBranchDelete } from './branch-deletion.js';
 import { handleClaudeAuthFile } from './claude-auth-file.js';
 import { handleCodexAuthFile } from './codex-auth-file.js';
-import { handleEnvironmentLifecycle, handleEnvironmentLogs } from './environment.js';
+import {
+  handleEnvironmentLifecycle,
+  handleEnvironmentLogs,
+  handleEnvironmentSync,
+} from './environment.js';
 import {
   handleBranchFilesBrowse,
   handleBranchFilesRead,
@@ -269,6 +273,7 @@ registerCommand('branch.agor-yml.import', handleBranchAgorYmlImport);
 registerCommand('branch.agor-yml.export', handleBranchAgorYmlExport);
 registerCommand('environment.lifecycle', handleEnvironmentLifecycle);
 registerCommand('environment.logs', handleEnvironmentLogs);
+registerCommand('environment.sync', handleEnvironmentSync);
 registerCommand('git.repo.realign-origin', handleGitRepoRealignOrigin);
 registerCommand('git.repo.delete', handleGitRepoDelete);
 registerCommand('git.repo.inspect', handleGitRepoInspect);

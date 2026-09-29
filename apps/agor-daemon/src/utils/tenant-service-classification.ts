@@ -222,6 +222,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
     scopeClass: 'identity-only',
     why: 'Long route that crosses the executor spawn boundary: the authorization read, the repo lookup, the failed -> creating CAS and the dispatch each open their own short unit via reposService.withTenantDatabase, so no transaction is held across the spawn.',
   },
+  'branches/:id/sync': {
+    scopeClass: 'identity-only',
+    why: 'Long environment route: authorization, revision request, claim, dispatch and settlement use separate tenant-scoped database units; no transaction is held across executor work.',
+  },
 
   // --------------------------------------------------------------------------
   // Repository `.agor.yml` import. The file is read by an executor, so like

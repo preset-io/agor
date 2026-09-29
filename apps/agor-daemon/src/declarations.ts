@@ -42,6 +42,7 @@ import type {
   Task,
   TaskPendingDispatchStatus,
   TaskQueueMutationResult,
+  UserID,
 } from '@agor/core/types';
 import type { DaemonMetrics, DaemonOperationalMetrics } from './metrics/index.js';
 import type { EnvironmentHealthCheckOptions } from './services/branches.js';
@@ -363,6 +364,14 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     params?: FeathersParams
   ): Promise<import('@agor/core/types').BranchCleanAccepted>;
   startEnvironment(id: BranchID, params?: FeathersParams, confirmationOf?: string): Promise<Branch>;
+  syncEnvironment(id: BranchID, desiredRevision: string, params?: FeathersParams): Promise<Branch>;
+  reconcileEnvironmentSync(id: BranchID, params?: FeathersParams): Promise<void>;
+  syncEnvironmentAfterTask(
+    id: BranchID,
+    desiredRevision: string,
+    requestedByUserId: UserID,
+    params?: FeathersParams
+  ): Promise<void>;
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;

@@ -20,6 +20,25 @@ beforeAll(() => {
 });
 
 describe('renderBranchSnapshot', () => {
+  it('renders Sync only for an exact requested revision', () => {
+    const env: RepoEnvironment = {
+      version: 2,
+      default: 'dev',
+      variants: {
+        dev: { start: 'start', stop: 'stop', sync: 'sync --revision {{sync.revision}}' },
+      },
+    };
+    expect(renderBranchSnapshot({ slug: 'r', environment: env }, branch)?.sync).toBeUndefined();
+    expect(
+      renderBranchSnapshot(
+        { slug: 'r', environment: env },
+        {
+          ...branch,
+          sync_revision: 'a'.repeat(40),
+        }
+      )?.sync
+    ).toBe(`sync --revision ${'a'.repeat(40)}`);
+  });
   it('returns null when repo has no environment config', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r' }, branch);
     expect(snapshot).toBeNull();

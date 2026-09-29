@@ -57,6 +57,7 @@ describe('Command Registry', () => {
     expect(commands).toContain('branch.agor-yml.export');
     expect(commands).toContain('environment.lifecycle');
     expect(commands).toContain('environment.logs');
+    expect(commands).toContain('environment.sync');
     expect(commands).toContain('git.repo.realign-origin');
     expect(commands).toContain('git.repo.delete');
     expect(commands).toContain('zellij.attach');
@@ -146,6 +147,26 @@ describe('executeCommand - environment.logs', () => {
       command: 'environment.logs',
       branchId: payload.params.branchId,
     });
+  });
+});
+
+describe('executeCommand - environment.sync', () => {
+  it('is registered and supports dry-run validation', async () => {
+    const result = await executeCommand(
+      {
+        command: 'environment.sync',
+        sessionToken: 'jwt-token',
+        params: {
+          branchId: '550e8400-e29b-41d4-a716-446655440000',
+          branchPath: '/worktrees/branch',
+          syncCommand: 'apply-revision',
+          desiredRevision: 'a'.repeat(40),
+          commandDeadline: new Date(Date.now() + 60_000).toISOString(),
+        },
+      },
+      { dryRun: true }
+    );
+    expect(result).toMatchObject({ success: true, data: { command: 'environment.sync' } });
   });
 });
 

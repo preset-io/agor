@@ -27,6 +27,42 @@ credentials_dir="${HOME:?}/.agor-managed"
 admin_password_file="${credentials_dir}/bootstrap-admin-password"
 mkdir -p "$credentials_dir"
 chmod 700 "$credentials_dir"
+# GitHub's post-start hook and an explicit repair/Sync can overlap. Serialize
+# password and Compose work inside the Codespace, not just in the launcher.
+bootstrap_lock="${credentials_dir}/bootstrap.lock"
+bootstrap_lock_owner="${bootstrap_lock}/owner"
+bootstrap_lock_deadline=$((SECONDS + 1200))
+while ! mkdir "$bootstrap_lock" 2>/dev/null; do
+  existing_owner="$(tr -d '\r\n' <"$bootstrap_lock_owner" 2>/dev/null || true)"
+  if [[ "$existing_owner" =~ ^[0-9]+$ ]] && ! kill -0 "$existing_owner" 2>/dev/null; then
+    rm -f "$bootstrap_lock_owner"
+    rmdir "$bootstrap_lock" 2>/dev/null || true
+    continue
+  fi
+  if [[ ! "$existing_owner" =~ ^[0-9]+$ ]]; then
+    sleep 1
+    existing_owner="$(tr -d '\r\n' <"$bootstrap_lock_owner" 2>/dev/null || true)"
+    if [[ ! "$existing_owner" =~ ^[0-9]+$ ]]; then
+      rm -f "$bootstrap_lock_owner"
+      rmdir "$bootstrap_lock" 2>/dev/null || true
+      continue
+    fi
+  fi
+  if ((SECONDS >= bootstrap_lock_deadline)); then
+    echo "Timed out waiting for another Agor bootstrap" >&2
+    exit 1
+  fi
+  sleep 1
+done
+printf '%s\n' "$$" >"$bootstrap_lock_owner"
+release_bootstrap_lock() {
+  local exit_status=$?
+  trap - EXIT
+  rm -f "$bootstrap_lock_owner" || true
+  rmdir "$bootstrap_lock" 2>/dev/null || true
+  exit "$exit_status"
+}
+trap release_bootstrap_lock EXIT
 if [[ ! -s "$admin_password_file" ]]; then
   generated_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
   if [[ ! "$generated_password" =~ ^[a-f0-9]{48}$ ]]; then
@@ -60,7 +96,7 @@ env \
   AGOR_ADMIN_PASSWORD="$admin_password" \
   AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=false \
   AGOR_MIGRATION_OFFLINE_CUTOVER=true \
-  SEED=true \
+  SEED=false \
   docker compose -p agor-codespaces-sqlite up -d --build
 unset admin_password
 

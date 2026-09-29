@@ -4211,6 +4211,28 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
   registerLongAuthenticatedRoute(
     app,
+    '/branches/:id/sync',
+    {
+      async create(data: unknown, params: RouteParams) {
+        const id = params.route?.id;
+        if (!id) throw new Error('Branch ID required');
+        const input = z
+          .object({ desired_revision: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/) })
+          .strict()
+          .parse(data);
+        return branchesService.syncEnvironment(
+          id as import('@agor/core/types').BranchID,
+          input.desired_revision,
+          params
+        );
+      },
+    },
+    { create: { role: ROLES.VIEWER, action: 'sync branch environments' } },
+    requireAuth
+  );
+
+  registerLongAuthenticatedRoute(
+    app,
     '/branches/:id/stop',
     {
       async create(_data: unknown, params: RouteParams) {

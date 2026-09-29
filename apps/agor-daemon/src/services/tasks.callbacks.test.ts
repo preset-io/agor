@@ -167,6 +167,43 @@ function makeService(
 }
 
 describe('TasksService completion callbacks', () => {
+  it('requests exact source Sync only after a completed task changes its commit', async () => {
+    const branchId = '018f0000-0000-7000-8000-000000000501';
+    const syncEnvironmentAfterTask = vi.fn(async () => undefined);
+    const { service } = makeService({
+      task: {
+        git_state: {
+          ref_at_start: 'main',
+          sha_at_start: 'a'.repeat(40),
+          sha_at_end: 'b'.repeat(40),
+        },
+      },
+      childSession: { branch_id: branchId as Session['branch_id'], callback_config: undefined },
+    });
+    const originalService = service.app.service;
+    service.app.service = vi.fn((name: string) =>
+      name === 'branches'
+        ? { get: vi.fn(async () => ({ repo_id: undefined })), syncEnvironmentAfterTask }
+        : originalService(name)
+    );
+    const db = {
+      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+        callback({ execute: vi.fn(async () => []) })
+      ),
+    };
+    (service as unknown as { db: unknown }).db = db;
+    await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
+      service.patch(taskId, { status: TaskStatus.COMPLETED })
+    );
+    await vi.waitFor(() =>
+      expect(syncEnvironmentAfterTask).toHaveBeenCalledWith(
+        branchId,
+        'b'.repeat(40),
+        userId,
+        expect.objectContaining({ tenant: { tenant_id: 'tenant-1' } })
+      )
+    );
+  });
   it('retires the exact executor Task lease on ordinary and coordinator terminality', async () => {
     const { service, revokeTaskTokens } = makeService();
 

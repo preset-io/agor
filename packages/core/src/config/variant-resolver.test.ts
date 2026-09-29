@@ -17,6 +17,20 @@ import {
 } from './variant-resolver';
 
 describe('validateRepoEnvironment', () => {
+  it('preserves a Sync command and rejects a non-string one', () => {
+    const env = {
+      version: 2,
+      default: 'dev',
+      variants: { dev: { start: 'start', stop: 'stop', sync: 'sync {{sync.revision}}' } },
+    };
+    expect(validateRepoEnvironment(env).variants.dev.sync).toBe('sync {{sync.revision}}');
+    expect(() =>
+      validateRepoEnvironment({
+        ...env,
+        variants: { dev: { start: 'start', stop: 'stop', sync: 42 } },
+      })
+    ).toThrow(/sync command must be a string/);
+  });
   it('preserves template_overrides (DB-only field)', () => {
     // Regression: the UI Repo YAML editor lets admins edit the full
     // `repo.environment` object, which may carry `template_overrides`. The

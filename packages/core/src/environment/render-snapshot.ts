@@ -30,6 +30,7 @@ export interface RenderedEnvironmentSnapshot {
   variant: string;
   start: string;
   stop: string;
+  sync?: string;
   nuke?: string;
   logs?: string;
   health?: string;
@@ -64,6 +65,7 @@ export interface RenderBranchInput {
   host_ip_address?: string;
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
+  sync_revision?: string;
 }
 
 /**
@@ -161,6 +163,7 @@ export function renderBranchSnapshot(
     env.template_overrides as Record<string, unknown> | undefined
   );
   const context: Record<string, unknown> = { ...overridden, custom };
+  if (branch.sync_revision) context.sync = { revision: branch.sync_revision };
 
   const snapshot: RenderedEnvironmentSnapshot = {
     variant: chosen,
@@ -168,6 +171,9 @@ export function renderBranchSnapshot(
     stop: renderTemplate(resolved.stop, context),
   };
   if (resolved.nuke) snapshot.nuke = renderTemplate(resolved.nuke, context);
+  if (resolved.sync && branch.sync_revision) {
+    snapshot.sync = renderTemplate(resolved.sync, context);
+  }
   if (resolved.logs) snapshot.logs = renderTemplate(resolved.logs, context);
   if (resolved.health) snapshot.health = renderTemplate(resolved.health, context);
   if (resolved.app) snapshot.app = renderTemplate(resolved.app, context);

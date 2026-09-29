@@ -22,7 +22,7 @@ export class EnvironmentOutput {
 /** Kill the owned process group even when the shell exits before its descendants. */
 export async function runBoundedEnvironmentShell(options: {
   command: string;
-  action: 'start' | 'stop' | 'nuke' | 'logs';
+  action: 'start' | 'stop' | 'nuke' | 'logs' | 'sync';
   cwd: string;
   env?: Record<string, string>;
   deadline: number;

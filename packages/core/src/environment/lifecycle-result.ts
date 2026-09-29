@@ -13,6 +13,30 @@ export interface EnvironmentLifecycleResult {
   health?: string;
 }
 
+export interface EnvironmentSyncResult {
+  applied_revision: string;
+}
+
+/** Require a complete immutable Git object ID, never a branch name or short SHA. */
+export function validateEnvironmentSourceRevision(value: unknown): string {
+  if (typeof value !== 'string' || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value)) {
+    throw new Error('environment source revision must be a full lowercase Git object ID');
+  }
+  return value;
+}
+
+/** Sync results have a separate strict shape from Start's app/health result. */
+export function validateEnvironmentSyncResult(value: unknown): EnvironmentSyncResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('environment sync result must be a JSON object');
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 1 || !Object.hasOwn(record, 'applied_revision')) {
+    throw new Error('environment sync result must contain only applied_revision');
+  }
+  return { applied_revision: validateEnvironmentSourceRevision(record.applied_revision) };
+}
+
 const ENVIRONMENT_LIFECYCLE_RESULT_KEYS = new Set(['app', 'health']);
 
 function normalizeLifecycleUrl(value: unknown, field: 'app' | 'health'): string {

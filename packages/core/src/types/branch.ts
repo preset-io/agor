@@ -335,6 +335,7 @@ export interface Branch {
    * Each branch gets its own environment instance with unique ports.
    */
   environment_instance?: BranchEnvironmentInstance;
+  /** Server-managed lifecycle generation used to reject stale remote work. */
 
   // ===== Sessions =====
 
@@ -663,6 +664,30 @@ export interface BranchEnvironmentInstance {
    */
   health_url?: string;
 
+  /** Exact source revision requested for a remote environment and last acknowledged by it. */
+  source_sync?: {
+    desired_revision: string;
+    desired_at: string;
+    applied_revision?: string;
+    applied_at?: string;
+    requested_by_user_id?: string;
+    /** Frozen when desired_revision changes so the lease and executor share one bound. */
+    command_budget_ms?: number;
+    active_attempt?: {
+      token: string;
+      revision: string;
+      environment_generation: number;
+      started_at: string;
+      lease_expires_at: string;
+      instance_id: string;
+      boot_id: string;
+      requested_by_user_id?: string;
+    };
+    last_error?: { revision: string; timestamp: string; message: string };
+    failure_count?: number;
+    retry_not_before_at?: string;
+  };
+
   /**
    * Process logs (last N lines)
    *
@@ -686,7 +711,7 @@ export interface BranchEnvironmentInstance {
    * the health monitor still waits for the app to become reachable.
    */
   last_command?: {
-    action: 'start' | 'stop' | 'restart' | 'nuke';
+    action: 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
     status: 'succeeded' | 'failed' | 'unknown';
     attempt_id?: string;
     output_truncated?: boolean;
@@ -849,6 +874,9 @@ export interface RepoEnvironmentVariant {
    * declaration when `extends` supplies it. See {@link start}.
    */
   stop?: string;
+
+  /** Apply and acknowledge an exact pushed Git commit in a remote environment. */
+  sync?: string;
 
   /**
    * Destructive reset command (Handlebars template).

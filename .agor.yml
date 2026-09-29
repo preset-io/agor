@@ -130,6 +130,11 @@ environment:
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
         --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
+      sync: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs sync
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}} --revision {{shellQuote sync.revision}}
+        --wait-seconds 1200
       nuke: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
         --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}

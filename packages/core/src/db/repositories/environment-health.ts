@@ -168,13 +168,22 @@ export class EnvironmentHealthRepository {
           .from(branches)
           .where(eq(branches.branch_id, input.branchId))
           .one();
-        const status = (
+        const environment = (
           row?.data as { environment_instance?: BranchEnvironmentInstance } | undefined
-        )?.environment_instance?.status;
+        )?.environment_instance;
+        const status = environment?.status;
         if (!row || row.archived || (status !== 'starting' && status !== 'running')) {
           return { outcome: 'unavailable' };
         }
         const now = await this.mutationNow(txDb, input.branchId);
+        const syncAttempt = environment?.source_sync?.active_attempt;
+        if (
+          syncAttempt &&
+          syncAttempt.environment_generation === row.environment_generation &&
+          Date.parse(syncAttempt.lease_expires_at) > now.getTime()
+        ) {
+          return { outcome: 'not_due', next_observation_at: syncAttempt.lease_expires_at };
+        }
         if (
           row.environment_health_claim_token &&
           row.environment_health_claim_expires_at &&
@@ -359,6 +368,22 @@ export class EnvironmentHealthRepository {
           return { outcome: 'stale' };
         }
         const activeEnvironment = environment as BranchEnvironmentInstance;
+        const syncAttempt = activeEnvironment.source_sync?.active_attempt;
+        if (
+          input.observation.status === 'unhealthy' &&
+          syncAttempt &&
+          syncAttempt.environment_generation === row.environment_generation &&
+          Date.parse(syncAttempt.lease_expires_at) > now.getTime()
+        ) {
+          // Sync can restart the app. Do not turn expected downtime into a
+          // persistent red health observation while its lease remains valid.
+          return {
+            outcome: 'committed',
+            environmentStatus: status,
+            stateChanged: false,
+            mutated: false,
+          };
+        }
 
         const shouldRecord =
           status === 'running' ||

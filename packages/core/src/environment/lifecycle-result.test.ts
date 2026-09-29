@@ -3,7 +3,23 @@ import {
   decodeEnvironmentLifecycleResult,
   isAllowedDynamicEnvironmentHealthUrl,
   validateEnvironmentLifecycleResult,
+  validateEnvironmentSyncResult,
 } from './lifecycle-result';
+
+describe('validateEnvironmentSyncResult', () => {
+  it('accepts only a complete, lowercase applied Git revision', () => {
+    expect(validateEnvironmentSyncResult({ applied_revision: 'a'.repeat(40) })).toEqual({
+      applied_revision: 'a'.repeat(40),
+    });
+    expect(() => validateEnvironmentSyncResult({ applied_revision: 'abc' })).toThrow();
+    expect(() =>
+      validateEnvironmentSyncResult({
+        applied_revision: 'a'.repeat(40),
+        app: 'https://example.test',
+      })
+    ).toThrow();
+  });
+});
 
 describe('validateEnvironmentLifecycleResult', () => {
   it('accepts the tiny optional app/health schema', () => {

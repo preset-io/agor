@@ -389,6 +389,18 @@ export class DistributedHealthMonitor {
       if (rowTenantId && rowTenantId !== tenantId) {
         throw new Error(`Environment health tenant mismatch for branch ${branchId}`);
       }
+      const sourceSync = branch.environment_instance?.source_sync;
+      if (
+        branch.environment_instance?.status === 'running' &&
+        sourceSync &&
+        sourceSync.desired_revision !== sourceSync.applied_revision
+      ) {
+        await (
+          this.app.service('branches') as unknown as {
+            reconcileEnvironmentSync(id: BranchID, params?: unknown): Promise<void>;
+          }
+        ).reconcileEnvironmentSync(branchId, tenantParams(tenantId));
+      }
       const claimToken = this.generateClaimToken();
       const claimResult = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new EnvironmentHealthRepository(scopedDb).claim({

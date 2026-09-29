@@ -17,7 +17,7 @@ interface OutputSink {
  * records are suppressed from diagnostics even when split across chunks;
  * stderr is always ordinary output.
  */
-export class EnvironmentCommandOutputCapture {
+export class EnvironmentCommandOutputCapture<Result = EnvironmentLifecycleResult> {
   private readonly visible = new EnvironmentOutput();
   private stdoutPending = '';
   private stdoutVisibleContinuation = false;
@@ -29,6 +29,7 @@ export class EnvironmentCommandOutputCapture {
   constructor(
     private readonly options: {
       parseEnvironmentResult: boolean;
+      validateResult?: (value: unknown) => Result;
       stdout?: OutputSink;
       stderr?: OutputSink;
     }
@@ -98,7 +99,7 @@ export class EnvironmentCommandOutputCapture {
     this.emitVisible(chunk.toString(), this.options.stderr);
   }
 
-  finish(): { output: string; environmentResult?: EnvironmentLifecycleResult } {
+  finish(): { output: string; environmentResult?: Result } {
     if (this.finished) throw new Error('environment command output was already finalized');
     this.finished = true;
     if (this.stdoutPending) this.processStdoutLine(this.stdoutPending, false);
@@ -117,7 +118,9 @@ export class EnvironmentCommandOutputCapture {
     }
     return {
       output: this.text(),
-      environmentResult: validateEnvironmentLifecycleResult(decoded),
+      environmentResult: this.options.validateResult
+        ? this.options.validateResult(decoded)
+        : (validateEnvironmentLifecycleResult(decoded) as unknown as Result),
     };
   }
 

@@ -25,8 +25,7 @@ it('returns focus to the percentage when Escape closes the breakdown from raw SD
 
   await act(async () => userEvent.keyboard('{Escape}'));
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
-  await new Promise((resolve) => setTimeout(resolve, 400)); // Let the popover exit animation finish.
-  expect(rawDetails).not.toBeVisible();
+  await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 5_000 });
   expect(document.activeElement).toBe(trigger);
   await act(async () => userEvent.keyboard(' '));
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));

@@ -714,6 +714,26 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             }
           />
         )}
+        {environment?.source_sync && (
+          <Alert
+            type={environment.source_sync.last_error ? 'warning' : 'info'}
+            showIcon
+            title={
+              environment.source_sync.active_attempt
+                ? `Syncing source ${environment.source_sync.active_attempt.revision.slice(0, 12)}`
+                : environment.source_sync.applied_revision ===
+                    environment.source_sync.desired_revision
+                  ? `Applied source ${environment.source_sync.applied_revision.slice(0, 12)}`
+                  : `Source Sync pending for ${environment.source_sync.desired_revision.slice(0, 12)}`
+            }
+            description={
+              environment.source_sync.last_error?.message ??
+              (environment.source_sync.applied_revision !== environment.source_sync.desired_revision
+                ? 'The running environment has not acknowledged the requested commit yet.'
+                : undefined)
+            }
+          />
+        )}
         <EnvironmentAccessLinks environment={environment} appUrl={branch.app_url} />
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (

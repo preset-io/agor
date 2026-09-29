@@ -89,6 +89,7 @@ export function writeAgorYml(
     };
     if (v.description) entry.description = v.description;
     if (v.extends) entry.extends = v.extends;
+    if (v.sync) entry.sync = v.sync;
     if (v.nuke) entry.nuke = v.nuke;
     if (v.logs) entry.logs = v.logs;
     if (v.health) entry.health = v.health;
