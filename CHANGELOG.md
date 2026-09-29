@@ -35,11 +35,12 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## 0.26.8 (2026-09-29)
 
-Release preparation includes merged changes from `v0.26.7` (`fb272b8d`) through `d1d7704b`, plus the Claude model and runtime update below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.7...d1d7704ba25fd5d50fe3fe8982b1ed24933034f6). This entry does not imply publication or deployment.
+Release preparation includes merged changes from `v0.26.7` (`fb272b8d`) through `d1d7704b`, plus the Claude and Codex model and runtime updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.7...d1d7704ba25fd5d50fe3fe8982b1ed24933034f6). This entry does not imply publication or deployment.
 
 ### Features
 
 - **Claude Sonnet 5.5 is the new Claude default** — adds `claude-sonnet-5-5` with its native 1M context and uses it for new Claude sessions with no configured model. The pinned Claude Agent SDK moves to 0.3.284 (Claude Code 2.1.284); older runtimes cap the model at 200k context. Packaged installations must upgrade Agor and synchronize their managed integrations with `agor install --sync` before restarting. ([#2915](https://github.com/preset-io/agor/pull/2915))
+- **GPT-6.1 Sol for Codex** — adds `gpt-6.1-sol` with its 1.05M context and pricing, listed ahead of GPT-6 Sol; the Codex default stays GPT-6 Astra. The pinned Codex SDK and bundled CLI move to 0.159.0, because 0.156.1 rejects the model under ChatGPT sign-in. Packaged installations need their Codex integration synchronized with `agor install --sync` before restarting. ([#2915](https://github.com/preset-io/agor/pull/2915))
 - **Private and shared MCP installs** — Catalog installs are private by default, even for admins. Admins and members with CRUD authority can share a server's configuration for session-scoped use; the installer's credentials are never shared. ([#2913](https://github.com/preset-io/agor/pull/2913))
 - **Agents can read Discord channel history** — an opt-in `agent_tools.channel_history` capability for Discord gateway channels, with a bounded MCP tool limited to allowlisted channels and their public threads. ([#2872](https://github.com/preset-io/agor/pull/2872))
 - **A calmer interface** — borderless agent replies and grouped avatars in the transcript, compact board and session panel headers, and table-first settings lists for MCP servers, teammates, gateways, and artifacts. ([#2815](https://github.com/preset-io/agor/pull/2815), [#2904](https://github.com/preset-io/agor/pull/2904), [#2889](https://github.com/preset-io/agor/pull/2889))
