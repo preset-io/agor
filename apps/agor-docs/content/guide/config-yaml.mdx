@@ -398,7 +398,15 @@ restart the daemon to apply a change.
 App and extras are operator-owned deployment metadata, not tenant identity.
 Callers cannot override either reserved context field. `context.tenant_id` comes
 only from the trusted ambient runtime tenant scope; it is absent outside that
-scope, even if a caller supplies one. Other caller context, event properties,
+scope, even if a caller supplies one. `context.deployment_id` is automatically snapshotted from the daemon's
+`daemon.deployment_id` when analytics is initialized with the daemon config.
+It is present even outside tenant scope and cannot be supplied or overridden by
+an event caller. Analytics-only library configurations have no deployment ID;
+none is invented. This UUID is distinct from a placement label such as
+`extras.deployment`. Cloud can continue supplying `cell_id`, environment and
+placement labels through operator-owned `extras`.
+
+Other caller context, event properties,
 `userId`, and `anonymousId` are preserved. Exact-name and simple `*`-glob exclusions
 run before delivery. Prototype-poison context keys are discarded before passing
 options to the analytics client.
