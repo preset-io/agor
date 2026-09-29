@@ -23,6 +23,8 @@ For a new model, check all affected owners before preparing the release:
 | `packages/core/src/models/`                                 | Other tool registries and configuration resolution, when affected                                        |
 | `packages/agentic-tool-opencode/src/shared/known-models.ts` | Matching OpenCode provider catalog entries, when supported                                               |
 | `packages/executor/src/sdk-handlers/<tool>/`                | Runtime model mapping, context/effort behavior, and SDK integration                                      |
+| `packages/executor/src/handlers/sdk/opencode.ts`            | OpenCode runtime handler                                                                                 |
+| `packages/executor/src/handlers/sdk/cursor.ts`              | Cursor runtime handler                                                                                   |
 
 Verify model IDs, pricing, capacities, and availability from the provider's current
 documentation and the pinned runtime. Search for the previous model's ID/display
@@ -48,8 +50,9 @@ node scripts/sync-agor-live-deps.mjs --check
 
 1. Choose the next version with the maintainers. An SDK pin change needs a new
    aligned release version because published wrapper versions are immutable.
-2. From the repository root, run the release artifact builder when a build is
-   intended:
+2. Bump every aligned version before opening the release PR. Choose either the
+   release artifact builder from the repository root, which bumps versions and
+   then runs a full build:
 
    ```bash
    packages/agor-live/build.sh --bump patch
@@ -57,10 +60,19 @@ node scripts/sync-agor-live-deps.mjs --check
    # packages/agor-live/build.sh --version <version>
    ```
 
-   This updates `agor-live`, `@agor-live/client`, the CLI, all six integration
-   package versions, and their `AGOR_INTEGRATION_VERSION` constants, then builds
-   release tarballs. Review the version and lockfile diff. It does **not** publish
-   packages or create a release tag. A source watcher is not a release builder.
+   Or update the same 15 files by hand when a local build is not needed:
+
+   - `packages/agor-live/package.json`
+   - `packages/client/package.json`
+   - `apps/agor-cli/package.json`
+   - Each `packages/agor-{claude,codex,copilot,gemini,opencode,cursor}/package.json`
+   - Each matching `src/index.ts` file's `AGOR_INTEGRATION_VERSION` constant
+
+   Set every package's `version` and every integration constant to the same release
+   version and run `pnpm install` to refresh
+   the lockfile. Review the version and lockfile diff and run the alignment checks
+   above. Neither method publishes packages or creates a release tag; CI builds
+   the tarballs used for publication.
 
 3. Finalize a `CHANGELOG.md` section for the version, covering merged changes since
    the previous release tag. For model/SDK changes, name the supported models and
@@ -93,6 +105,31 @@ with integration wrappers and the client first and `agor-live` last. Stable vers
 use `latest`; SemVer prereleases use `next`. A manual **Run workflow** invocation
 is a **non-publishing preflight**, not a replacement for pushing a release tag.
 
+## Artifact retention and delayed recovery
+
+[agor-live-smoke.yml](.github/workflows/agor-live-smoke.yml) retains the
+`agor-live-release` artifact for **7 days after upload**. The protected publish job,
+publication retries, and verification against CI artifacts all download that set.
+Complete approval/publication and retries within the retention window. Save the
+validated archive before expiry if verification or investigation may happen later.
+Approval after expiry cannot make the missing artifact available.
+
+If the workflow artifact has expired, inspect all eight release-version package
+records on npm before retrying; checking only `agor-live` can miss a partial release:
+
+- **No package at the release version was published:** use **Re-run all jobs** on
+  the original **tag-triggered** workflow run to build and validate a fresh artifact
+  set, then approve publication. Manual **Run workflow** still does not publish.
+- **Any package at the release version was published:** do not rebuild that version
+  or use **Re-run all jobs** to recover it. When the original workflow artifact is
+  no longer available, prepare a new aligned patch release with a new tag; leave
+  already published versions intact. Do not assume rebuilding from the same tag
+  produces identical bytes.
+
+An independently saved archive preserves the originals for verification and
+investigation, but does not restore the workflow's expired download. Do not bypass
+the protected publishing path to recover a partial release.
+
 ## Verify npm before installation
 
 Require successful publication and registry verification for all eight packages:
@@ -102,7 +139,7 @@ Checking only `agor-live` is insufficient.
 For an independent read-only registry check, from the repo root:
 
 ```bash
-AGOR_RELEASE_VERSION=0.26.8 # Replace with the release being verified
+: "${AGOR_RELEASE_VERSION:?set the exact release version being verified}"
 node scripts/verify-npm-release.mjs "$AGOR_RELEASE_VERSION" latest --registry-only
 # Use next instead of latest for a prerelease.
 ```
@@ -118,7 +155,8 @@ variable can raise it to 1200 seconds. A timeout requires investigation and a
 read-only recheck, not an immediate new release or a forced republish.
 
 If publishing failed, inspect which packages exist and why the job failed before
-using **Re-run failed jobs**. Retrying re-enters publication: matching existing
+using **Re-run failed jobs** while the validated artifact remains available.
+Retrying re-enters publication: matching existing
 tarballs are skipped, but an existing version with different bytes is refused.
 Reuse the validated artifacts; do not rebuild different bytes under the same version.
 
@@ -133,7 +171,7 @@ deployment's stop/migrate/start procedure.
 After npm verification, run as the daemon's installation user:
 
 ```bash
-AGOR_RELEASE_VERSION=0.26.8 # Replace with the published release
+: "${AGOR_RELEASE_VERSION:?set the exact published release version to install}"
 npm install -g "agor-live@$AGOR_RELEASE_VERSION"
 agor install --sync
 agor doctor
