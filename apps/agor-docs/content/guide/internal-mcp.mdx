@@ -245,13 +245,9 @@ so do not blindly replay branch creation.
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
 
-`agor_repos_import_environment` imports a source branch's `.agor.yml` through the
-same admin-only service as the repository editor. It replaces repo-wide variants
-and the default, preserves deployment-local overrides, and leaves branch snapshots
-unchanged. After reviewing the replacement, import with `repoId` and `branchId`,
-then use `agor_environment_set` to select or re-render a target branch variant
-before Start. See the [agent configuration workflow](/guide/environment-configuration#agent-configuration-workflow)
-and [remote-provider references](/guide/environment-configuration#remote-development-environments).
+`agor_repos_import_environment` exposes the repository editor's admin-only
+`.agor.yml` import. For its replacement semantics and the import/render/lifecycle
+sequence, see the [agent configuration workflow](/guide/environment-configuration#agent-configuration-workflow).
 
 Environment MCP tools call the same branch environment service as the UI. If an
 operator sets `execution.managed_envs_execution_mode: webhook-only`, MCP
