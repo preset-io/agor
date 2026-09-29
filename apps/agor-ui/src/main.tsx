@@ -1,6 +1,7 @@
-import type { AgorClient } from '@agor-live/client';
+import { type AgorClient, preloadRestClientTransport } from '@agor-live/client';
 import { createRoot } from 'react-dom/client';
 import App from './App.tsx';
+import { prefetchAuthConfig } from './hooks/useAuthConfig';
 import './index.css';
 import { installClipboardPolyfill } from './utils/clipboard-polyfill';
 
@@ -28,6 +29,14 @@ if (import.meta.hot) {
     }
   });
 }
+
+// Sign-in needs the daemon's /health config and the REST transport module.
+// Request both before the first render queues the workspace's code chunks, so
+// on a slow link sign-in (and the socket behind it) isn't stuck in that queue.
+prefetchAuthConfig();
+void preloadRestClientTransport().catch(() => {
+  // createRestClient retries the import and surfaces the failure itself.
+});
 
 createRoot(document.getElementById('root')!).render(
   // Temporarily disable StrictMode to avoid double socket connections in dev

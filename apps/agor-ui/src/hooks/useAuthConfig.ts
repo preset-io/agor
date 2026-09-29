@@ -368,6 +368,14 @@ export function retryAuthConfig(): void {
   void fetchAuthConfigOnce();
 }
 
+/**
+ * Start the shared health read before React renders. Sign-in waits on it, and
+ * on a slow link it should not queue behind the workspace's code chunks.
+ */
+export function prefetchAuthConfig(): void {
+  void fetchAuthConfigOnce();
+}
+
 /** One shared health snapshot for the whole UI; consumers never refetch or drift. */
 export function useAuthConfig(): AuthConfigState {
   const state = useSyncExternalStore(

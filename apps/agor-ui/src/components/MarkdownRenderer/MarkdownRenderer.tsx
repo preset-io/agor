@@ -24,9 +24,12 @@ import { useThemedMessage } from '../../utils/message';
 import { isDarkTheme } from '../../utils/theme';
 import { openUploadBlob } from '../../utils/uploadBlob';
 import {
+  markdownNeedsMath,
   streamdownRemarkPlugins,
   streamdownRichContentPlugins,
   streamdownRichContentPluginsWithVegaLite,
+  useMathPlugin,
+  withMathPlugin,
 } from './richContentPlugins';
 import {
   createVegaLiteActivationBudget,
@@ -147,9 +150,15 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     : {};
 
   const mergedStyles = { ...style, ...compactStyles };
-  const plugins = enableVegaLite
-    ? streamdownRichContentPluginsWithVegaLite
-    : streamdownRichContentPlugins;
+  const math = useMathPlugin(markdownNeedsMath(rawText));
+  const plugins = useMemo(
+    () =>
+      withMathPlugin(
+        enableVegaLite ? streamdownRichContentPluginsWithVegaLite : streamdownRichContentPlugins,
+        math
+      ),
+    [enableVegaLite, math]
+  );
   const vegaLiteActivationBudget = useMemo(
     () => createVegaLiteActivationBudget(MAX_VEGA_LITE_CHARTS_PER_DOCUMENT, rawText),
     // A changed Markdown source receives a fresh budget. Streamdown may retain
@@ -181,7 +190,15 @@ const MarkdownRendererInner: React.FC<MarkdownRendererProps> = ({
     <Typography style={mergedStyles} className={compact ? 'markdown-compact' : undefined}>
       <VegaLiteActivationBudgetContext.Provider value={vegaLiteActivationBudget}>
         <Streamdown
-          key={isStreaming ? undefined : markdownContentKey(rawText, { headingAnchors })}
+          // Streamdown keeps its parsed blocks when only `plugins` changes, so
+          // remount once when on-demand math arrives for this document.
+          key={
+            isStreaming
+              ? math
+                ? 'math'
+                : undefined
+              : `${markdownContentKey(rawText, { headingAnchors })}${math ? ':math' : ''}`
+          }
           mode={isStreaming || isIncomplete ? 'streaming' : 'static'}
           parseIncompleteMarkdown={isStreaming || isIncomplete}
           className={inline ? 'inline-markdown' : 'markdown-content'}

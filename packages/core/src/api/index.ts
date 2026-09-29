@@ -1477,6 +1477,15 @@ export function getApiKeyFromEnv(): string | null {
  * @param url - Daemon URL
  * @param apiKey - Optional API key to use for authentication (sets Authorization header on all requests)
  */
+/**
+ * Begin loading the REST transport `createRestClient` imports on demand. The
+ * browser signs in over REST on every load, so starting this at boot keeps the
+ * sign-in request from waiting on a late, queued module fetch.
+ */
+export function preloadRestClientTransport(): Promise<void> {
+  return import('@feathersjs/rest-client').then(() => undefined);
+}
+
 export async function createRestClient(
   url: string = DEFAULT_DAEMON_URL,
   apiKey?: string

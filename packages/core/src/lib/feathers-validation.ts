@@ -136,6 +136,9 @@ export const sessionQuerySchema = createQuerySchema(
     // Session-only opt-out of exact totals; coerces REST boolean strings.
     $count: Type.Optional(CommonSchemas.boolean),
     include_usage: Type.Optional(CommonSchemas.boolean),
+    // List-only projection: omit bulky single-session custom_context keys
+    // (see LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS). Not a column filter.
+    lean: Type.Optional(CommonSchemas.boolean),
     session_id: Type.Optional(CommonSchemas.uuid),
     status: Type.Optional(CommonSchemas.sessionStatus),
     agentic_tool: Type.Optional(CommonSchemas.persistedAgenticTool),

@@ -1,5 +1,5 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: distinctive ConfigProvider colors verify theme-token propagation
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
 import { describe, expect, it } from 'vitest';
 import { InitialLoadingScreen } from './InitialLoadingScreen';
@@ -64,5 +64,13 @@ describe('InitialLoadingScreen', () => {
     expect(screen.getByText('Board objects')).toBeInTheDocument();
     expect(screen.getByText('Gateway channels')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide details' })).toBeInTheDocument();
+  });
+
+  it('covers the mounted workspace without taking input while it fades out', async () => {
+    render(<InitialLoadingScreen overlay phase="fading" />);
+    const overlay = screen.getByTestId('initial-loading-screen');
+    expect(overlay).toHaveStyle({ position: 'fixed', pointerEvents: 'none' });
+    // Mounts opaque, then transitions to transparent after it has painted.
+    await waitFor(() => expect(overlay).toHaveStyle({ opacity: '0' }));
   });
 });

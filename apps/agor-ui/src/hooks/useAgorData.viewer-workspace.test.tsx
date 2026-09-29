@@ -197,7 +197,16 @@ function transitionClient() {
                 if (failingServices.has(path)) throw new Error(`${path} resync failed`);
                 return [];
               }),
-      find: vi.fn(async () => {
+      find: vi.fn(async (params?: { query?: Record<string, unknown> }) => {
+        // A versioned full-set read (store/listSync) stands in for `findAll`:
+        // route it there so answers, failures and call counts still apply.
+        if (params?.query && '$sync' in params.query) {
+          const { $sync: _sync, $skip: _skip, ...query } = params.query;
+          const data = (await (value.findAll as (p: unknown) => Promise<unknown[]>)({
+            query,
+          })) as unknown[];
+          return { total: data.length, limit: data.length, skip: 0, data, $sync: { versions: '' } };
+        }
         if (failingServices.has(path)) throw new Error(`${path} resync failed`);
         return [];
       }),

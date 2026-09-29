@@ -159,6 +159,16 @@ sequenceDiagram
 - **Fail-closed routing** - Missing/conflicting tenant context has no global
   broadcast fallback; clients cannot select tenant rooms
 - **Optimistic UI** - React hooks listen to events and update state immediately
+- **Cheap reconnects** - Events are not replayed, so after a reconnect the UI
+  re-reads the workspace collections (sessions, branches, board placements,
+  cards, comments, boards). These are _versioned list reads_: the client sends
+  the versions of rows it already holds, and the daemon returns only rows that
+  changed, plus a small slot number for each unchanged one. A version is a hash
+  of the row exactly as the daemon would send it to that caller, after every
+  authorization and redaction step, so there are no clocks or per-row
+  timestamps involved. Rows that were deleted, archived or are no longer
+  visible drop out, exactly as in a full read. On a large workspace this turns
+  a ~200 KiB (compressed) resync into ~10 KiB.
 
 ## Core Services
 

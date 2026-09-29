@@ -25,6 +25,14 @@ import { agorStore } from '../store/agorStore';
 import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
+// The opened-transcript prefetch retains a real reactive session; the mock
+// client doesn't model one. Default: ready at once (no deferral). Tests below
+// drive `ready` explicitly to pin the ordering.
+const transcriptPrefetch = vi.hoisted(() => ({
+  prefetchOpenedTranscript: vi.fn(() => ({ ready: Promise.resolve(), release: vi.fn() })),
+}));
+vi.mock('../store/openedTranscriptPrefetch', () => transcriptPrefetch);
+
 const STANDALONE_AUTHORITY_SCOPE = '__standalone__:__standalone__:0';
 
 /**
@@ -51,6 +59,18 @@ type Listener = (payload: unknown) => void;
  * so a method-specific key (`sessions:findAll`, `sessions:find`) takes
  * precedence over the bare name when present. `name:get` seeds `get`.
  */
+/** Deterministic 12-character stand-in for the daemon's row version. */
+function fakeRowVersion(row: unknown): string {
+  const text = JSON.stringify(row);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < text.length; i += 1) {
+    h1 = Math.imul(h1 ^ text.charCodeAt(i), 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ text.charCodeAt(i), 0x5bd1e995) >>> 0;
+  }
+  return `${h1.toString(36).padStart(7, '0').slice(-6)}${h2.toString(36).padStart(7, '0').slice(-6)}`;
+}
+
 function makeMockClient(seed: Record<string, unknown[]> = {}) {
   const serviceListeners = new Map<string, Map<string, Listener[]>>();
   const ioListeners = new Map<string, Listener[]>();
@@ -64,6 +84,8 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
   const fetchArguments = new Map<string, unknown[]>();
+  // `$sync.known` sent by each versioned read, per service.
+  const versionedKnown = new Map<string, string[]>();
 
   const respond = async (name: string, method: 'findAll' | 'find') => {
     const key = `${name}:${method}`;
@@ -78,6 +100,31 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   };
 
   const recordAndRespond = (name: string, method: 'findAll' | 'find', args: unknown) => {
+    // A versioned full-set read (store/listSync) is a `find` carrying `$sync`.
+    // Model it as the full-set `findAll` it replaces: same seed, counters and
+    // gates, recorded with the caller's plain query, answered as a page of
+    // full rows.
+    const query = (args as { query?: Record<string, unknown> } | undefined)?.query;
+    if (method === 'find' && query && '$sync' in query) {
+      const { $sync: sync, $skip: _skip, ...plainQuery } = query;
+      const key = `${name}:findAll`;
+      fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), { query: plainQuery }]);
+      const known = String((sync as { known?: string } | undefined)?.known ?? '');
+      versionedKnown.set(name, [...(versionedKnown.get(name) ?? []), known]);
+      return respond(name, 'findAll').then((rows) => {
+        // Like the daemon: a row whose version the client sent comes back as
+        // that version's slot; every other row in full, with its version.
+        let versions = '';
+        const data = rows.map((row) => {
+          const version = fakeRowVersion(row);
+          const slot = known.indexOf(version);
+          if (slot >= 0 && slot % 12 === 0) return slot / 12;
+          versions += version;
+          return row;
+        });
+        return { total: rows.length, limit: rows.length, skip: 0, data, $sync: { versions } };
+      });
+    }
     const key = `${name}:${method}`;
     fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), args]);
     return respond(name, method);
@@ -151,6 +198,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
       fetchCounts.get(`${name}:${method}`) ?? 0,
     fetchArguments: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchArguments.get(`${name}:${method}`) ?? [],
+    versionedKnown: (name: string) => versionedKnown.get(name) ?? [],
   };
 }
 
@@ -663,6 +711,38 @@ describe('useAgorData — socket-event bailouts', () => {
     });
   });
 
+  it('resyncs on reconnect by sending held versions and reusing unchanged rows', async () => {
+    const kept = makeSession({ session_id: 's-1', branch_id: 'b-1', title: 'kept' });
+    const edited = makeSession({ session_id: 's-2', branch_id: 'b-1', title: 'before' });
+    const branch = makeBranch({ branch_id: 'b-1' });
+    const gone = makeBranch({ branch_id: 'b-2' });
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [kept, edited],
+      'sessions:findAll': [kept, edited],
+      'branches:findAll': [branch, gone],
+    };
+    const { client, emitIo, versionedKnown } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(agorStore.getState().branchById.has('b-2')).toBe(true));
+    const keptRow = agorStore.getState().sessionById.get('s-1');
+
+    // Missed while disconnected: one session edited, one branch gone.
+    seed['sessions:findAll'] = [kept, { ...edited, title: 'after' }];
+    seed['branches:findAll'] = [branch];
+    act(() => emitIo('connect'));
+
+    await waitFor(() => {
+      expect(agorStore.getState().sessionById.get('s-2')?.title).toBe('after');
+      expect(agorStore.getState().branchById.has('b-2')).toBe(false);
+    });
+    // The reconnect read told the daemon what it held, got the unchanged row
+    // back as a slot, and kept the very same object for it.
+    expect(versionedKnown('sessions').at(-1)).toHaveLength(2 * 12);
+    expect(versionedKnown('branches').at(-1)).toHaveLength(2 * 12);
+    expect(agorStore.getState().sessionById.get('s-1')).toBe(keptRow);
+  });
+
   it('dispatches `agor:artifact-patched` when the artifact actually changes', async () => {
     const artifact = {
       artifact_id: 'a-1',
@@ -850,6 +930,7 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     expect(fetchArguments('sessions', 'find')).toContainEqual({
       query: {
         archived: false,
+        lean: true,
         $limit: 50,
         $count: false,
         $sort: { updated_at: -1 },
@@ -857,6 +938,8 @@ describe('useAgorData — skip-apply-on-race hydration', () => {
     });
     for (const args of fetchArguments('sessions', 'findAll')) {
       expect((args as { query: Record<string, unknown> }).query.$count).toBeUndefined();
+      // Store-feeding session lists never carry the bulky single-session context.
+      expect((args as { query: Record<string, unknown> }).query.lean).toBe(true);
     }
 
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
@@ -1362,4 +1445,64 @@ describe('session MCP initialization events', () => {
       expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
     }
   );
+});
+
+describe('useAgorData — opened session transcript priority', () => {
+  const OPEN_ID = '01a0dc28-31f3-71d9-bee6-d301b0524806';
+  const OPEN_SHORT = '01a0dc28';
+
+  function deferredPrefetch() {
+    let resolve!: () => void;
+    const ready = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const release = vi.fn();
+    transcriptPrefetch.prefetchOpenedTranscript.mockReturnValueOnce({ ready, release });
+    return { resolve, release };
+  }
+
+  it('holds the global hydration until the opened transcript is ready', async () => {
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const prefetch = deferredPrefetch();
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: OPEN_SHORT }));
+    await waitForInitialLoad(result);
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenLastCalledWith(client, OPEN_ID);
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+    expect(fetchCount('boards', 'findAll')).toBe(1); // the gated lean list only
+
+    await act(async () => prefetch.resolve());
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+    expect(fetchCount('branches', 'findAll')).toBe(1);
+    expect(fetchCount('boards', 'findAll')).toBe(2);
+  });
+
+  it('skips the deferred hydration and releases the prefetch on unmount', async () => {
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const prefetch = deferredPrefetch();
+
+    const { result, unmount } = renderHook(() => useAgorData(client, { directSessionId: OPEN_ID }));
+    await waitForInitialLoad(result);
+    unmount();
+    expect(prefetch.release).toHaveBeenCalled();
+
+    await act(async () => prefetch.resolve());
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+  });
+
+  it('does not prefetch or defer without a session route', async () => {
+    transcriptPrefetch.prefetchOpenedTranscript.mockClear();
+    const { client, fetchCount } = makeMockClient({ sessions: [makeSession()] });
+
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).not.toHaveBeenCalled();
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+  });
 });
