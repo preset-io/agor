@@ -5,11 +5,12 @@ import {
   RepoRepository,
   SessionRelationshipRepository,
   SessionRepository,
+  TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, Session, SessionID, UUID } from '@agor/core/types';
-import { ROLES, SessionStatus } from '@agor/core/types';
+import { ROLES, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { type SessionParams, SessionsService } from './sessions';
@@ -117,6 +118,19 @@ async function getArchivedState(
   const session = await new SessionRepository(db).findById(sessionId);
   if (!session) throw new Error(`Session ${sessionId} not found`);
   return { archived: session.archived, archived_reason: session.archived_reason };
+}
+
+async function createTask(
+  db: any,
+  sessionId: SessionID,
+  status: TaskStatus = TaskStatus.RUNNING
+): Promise<void> {
+  await new TaskRepository(db).create({
+    session_id: sessionId,
+    full_prompt: 'work in flight',
+    status,
+    created_by: TEST_USER_ID,
+  });
 }
 
 describe('SessionsService archive routes', () => {
@@ -683,5 +697,155 @@ describe('SessionsService archive routes', () => {
     await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
       archived: true,
     });
+  });
+});
+
+describe('SessionsService archive refuses to hide unfinished work', () => {
+  dbTest('refuses to archive a session that still owns a running task', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const session = await createSession(db, branchId, { status: SessionStatus.RUNNING });
+    await createTask(db, session.session_id);
+
+    await expect(service.archive(session.session_id)).rejects.toThrow(
+      /while it has unfinished tasks\. Stop it first\./
+    );
+    await expect(getArchivedState(db, session.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+  });
+
+  dbTest('refuses the whole tree when only a descendant is unfinished', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+    const child = await createSession(db, branchId, {
+      status: SessionStatus.RUNNING,
+      genealogy: { parent_session_id: root.session_id, children: [] },
+    });
+    await createTask(db, child.session_id);
+
+    await expect(service.archive(root.session_id)).rejects.toThrow(
+      new RegExp(`session\\(s\\) in its tree have unfinished tasks.*${child.session_id}`)
+    );
+    // The refusal is all-or-nothing: an idle root is not hidden while a
+    // descendant it covers is still executing.
+    await expect(getArchivedState(db, root.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+    await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+  });
+
+  dbTest('scopes the guard to the sessions actually being archived', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const root = await createSession(db, branchId);
+    const child = await createSession(db, branchId, {
+      status: SessionStatus.RUNNING,
+      genealogy: { parent_session_id: root.session_id, children: [] },
+    });
+    await createTask(db, child.session_id);
+
+    const result = await service.archive(root.session_id, { includeChildren: false });
+
+    expect(result.count).toBe(1);
+    await expect(getArchivedState(db, child.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+  });
+
+  dbTest('is a known-activity proxy over Task status, not Session status', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    // A stale `running` projection with no unfinished Task must not strand the
+    // user; the runtime reconciler owns repairing that row.
+    const stale = await createSession(db, branchId, { status: SessionStatus.RUNNING });
+    await createTask(db, stale.session_id, TaskStatus.COMPLETED);
+
+    await expect(service.archive(stale.session_id)).resolves.toMatchObject({ count: 1 });
+  });
+
+  dbTest('queued work blocks archive just as running work does', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const session = await createSession(db, branchId);
+    await createTask(db, session.session_id, TaskStatus.QUEUED);
+
+    await expect(service.archive(session.session_id)).rejects.toThrow(/unfinished tasks/);
+  });
+
+  dbTest('archives as soon as the turn settles, and stays idempotent', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const taskRepo = new TaskRepository(db);
+    const branchId = await createBranch(db);
+    const session = await createSession(db, branchId, { status: SessionStatus.RUNNING });
+    await createTask(db, session.session_id);
+
+    await expect(service.archive(session.session_id)).rejects.toThrow(/unfinished tasks/);
+
+    // The turn settles exactly as the user retries.
+    const [task] = await taskRepo.findBySession(session.session_id);
+    await taskRepo.update(task.task_id, { status: TaskStatus.STOPPED });
+
+    await expect(service.archive(session.session_id)).resolves.toMatchObject({ count: 1 });
+
+    // A second archive plans no targets, so it neither rewrites the row nor
+    // re-evaluates the guard.
+    await expect(service.archive(session.session_id)).resolves.toMatchObject({ count: 0 });
+  });
+
+  dbTest('never blocks unarchive or restores', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const session = await createSession(db, branchId, {
+      archived: true,
+      archived_reason: 'manual',
+      status: SessionStatus.RUNNING,
+    });
+    await createTask(db, session.session_id);
+
+    await expect(service.unarchive(session.session_id)).resolves.toMatchObject({ count: 1 });
+  });
+
+  dbTest('leaves the BTW completion lifecycle alone', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    // BTW archive runs from the task terminal path itself; it is a lifecycle
+    // step rather than a user putting a workspace away.
+    const btw = await createSession(db, branchId, { fork_origin: 'btw' });
+    await createTask(db, btw.session_id);
+
+    await expect(service.archiveBtwSession(btw.session_id)).resolves.toMatchObject({ count: 1 });
+  });
+
+  dbTest('skips blocked roots in bulk archive instead of failing the batch', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const busy = await createSession(db, branchId, { status: SessionStatus.RUNNING });
+    const idle = await createSession(db, branchId);
+    await createTask(db, busy.session_id);
+
+    const preview = await service.archiveRootsInBranch(
+      branchId,
+      [busy.session_id, idle.session_id],
+      { dryRun: true }
+    );
+    expect(preview.authorizedSessionCount).toBe(1);
+    expect(preview.skipped).toMatchObject([{ session_id: busy.session_id }]);
+    expect(preview.skipped[0].error).toMatch(/unfinished tasks/);
+
+    const applied = await service.archiveRootsInBranch(
+      branchId,
+      [busy.session_id, idle.session_id],
+      {}
+    );
+    expect(applied.count).toBe(1);
+    expect(applied.skipped).toHaveLength(1);
+    await expect(getArchivedState(db, busy.session_id)).resolves.toMatchObject({
+      archived: false,
+    });
+    await expect(getArchivedState(db, idle.session_id)).resolves.toMatchObject({ archived: true });
   });
 });

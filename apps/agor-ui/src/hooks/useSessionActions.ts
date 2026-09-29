@@ -24,16 +24,24 @@ import { captureSessionPatchCommit } from '../store/realtimeBatch';
 export const ARCHIVE_REFRESH_WARNING =
   'Session and same-branch children archived; refresh required to update the session list.';
 
-type ArchiveSessionResult = {
-  session: Session;
-  reconciliation: 'confirmed' | 'refresh-required';
-};
+/**
+ * `failed` carries the daemon's own message because archive can be refused for
+ * a reason the user has to act on — most importantly a session that still owns
+ * unfinished tasks and has to be stopped first. A generic "failed" toast would
+ * hide the only instruction that resolves it.
+ */
+export type ArchiveSessionResult =
+  | {
+      session: Session;
+      reconciliation: 'confirmed' | 'refresh-required';
+    }
+  | { reconciliation: 'failed'; error: string };
 
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
   deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
+  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult>;
   unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
@@ -265,10 +273,10 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     }
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult | null> => {
+  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult> => {
     if (!client) {
       setError('Client not connected');
-      return null;
+      return { reconciliation: 'failed', error: 'Client not connected' };
     }
 
     try {
@@ -300,7 +308,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const message = err instanceof Error ? err.message : 'Failed to archive session';
       setError(message);
       console.error('Failed to archive session:', err);
-      return null;
+      return { reconciliation: 'failed', error: message };
     }
   };
 

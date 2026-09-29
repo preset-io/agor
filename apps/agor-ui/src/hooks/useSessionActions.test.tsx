@@ -55,7 +55,7 @@ describe('useSessionActions archive helpers', () => {
     });
 
     const { result } = renderHook(() => useSessionActions(client));
-    let returned: Awaited<ReturnType<typeof result.current.archiveSession>> = null;
+    let returned: Awaited<ReturnType<typeof result.current.archiveSession>> | null = null;
     await act(async () => {
       returned = await result.current.archiveSession('session-1' as Session['session_id']);
     });
@@ -295,7 +295,9 @@ describe('archive response reconciliation', () => {
     expectActive(sessions);
     await act(async () => {
       reject(new Error('Archive denied'));
-      expect(await request).toBeNull();
+      // The daemon's own refusal text reaches the caller so it can be shown;
+      // archive is refused for reasons the user must act on (stop first).
+      expect(await request).toEqual({ reconciliation: 'failed', error: 'Archive denied' });
     });
     expectActive(sessions);
     expect(result.current.error).toBe('Archive denied');

@@ -572,6 +572,12 @@ describe('SessionPanel mobile header', () => {
   });
 });
 
+// The daemon refuses to archive a session that still owns unfinished tasks.
+// The panel must show that sentence, because "stop it first" is the only
+// instruction that lets the user finish what they were trying to do.
+const ARCHIVE_REFUSED_MESSAGE =
+  'Cannot archive session 01930000-0000-7000-8000-000000000001 while it has unfinished tasks. Stop it first.';
+
 describe('SessionPanel archive feedback', () => {
   afterEach(() => {
     setRealtimeAuthorityScope(null);
@@ -586,7 +592,7 @@ describe('SessionPanel archive feedback', () => {
       agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps([session]) }));
       const archived = { ...session, archived: true };
       const create = vi.fn(async () => {
-        if (outcome === 'mutation-failure') throw new Error('Archive denied');
+        if (outcome === 'mutation-failure') throw new Error(ARCHIVE_REFUSED_MESSAGE);
         return { session: archived };
       });
       const get = vi.fn(async () => {
@@ -611,7 +617,7 @@ describe('SessionPanel archive feedback', () => {
         outcome === 'read-failure'
           ? 'Session and same-branch children archived; refresh required to update the session list.'
           : outcome === 'mutation-failure'
-            ? 'Failed to archive session'
+            ? ARCHIVE_REFUSED_MESSAGE
             : 'Session and same-branch children archived';
       expect(await screen.findByText(expected)).toBeVisible();
       expect(create).toHaveBeenCalledTimes(1);
@@ -619,7 +625,7 @@ describe('SessionPanel archive feedback', () => {
       if (outcome === 'confirmed') expect(onClose).toHaveBeenCalledTimes(1);
       else expect(onClose).not.toHaveBeenCalled();
       if (outcome === 'read-failure') {
-        expect(screen.queryByText('Failed to archive session')).not.toBeInTheDocument();
+        expect(screen.queryByText(ARCHIVE_REFUSED_MESSAGE)).not.toBeInTheDocument();
         expect(
           screen.queryByText('Session and same-branch children archived')
         ).not.toBeInTheDocument();
