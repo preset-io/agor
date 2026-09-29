@@ -32,16 +32,16 @@
   },
   "devDependencies": {
     "@cursor/sdk": "1.0.31",
-    "@google/gemini-cli-core": "0.59.0",
+    "@google/gemini-cli-core": "0.61.0",
     "@google/genai": "^1.52.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@modelcontextprotocol/sdk": "^1.30.1",
     "@types/diff": "^6.0.0",
     "@types/node": "^24.6.0",
     "typescript": "^6.0.3",
     "vitest": "^5.0.1",
     "@github/copilot-sdk": "^0.2.2",
-    "@anthropic-ai/claude-agent-sdk": "0.3.280",
-    "@openai/codex-sdk": "0.156.1"
+    "@anthropic-ai/claude-agent-sdk": "0.3.283",
+    "@openai/codex-sdk": "0.157.1"
   },
   "files": [
     "dist",
