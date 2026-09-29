@@ -22,7 +22,7 @@
     "check:pack": "npm pack --dry-run"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.31",
+    "@opencode-ai/sdk": "1.18.32",
     "opencode-ai": "1.18.31"
   },
   "devDependencies": {
