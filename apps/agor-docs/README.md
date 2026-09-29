@@ -51,7 +51,14 @@ the canonical SVG with:
 
 ```bash
 apps/agor-docs/scripts/generate-apple-touch-icon.sh
+pnpm --filter @agor/docs validate:brand-assets
 ```
+
+This stable Apple-touch URL is also a Google Search favicon candidate. Keep
+the complete badge and transparent outer corners; PNG header dimensions alone
+cannot detect missing artwork. Validation decodes and compares the raster to
+the canonical SVG. After a docs build, add `--export` to validate the actual
+homepage icon links and published asset bytes (also checked in docs PR CI).
 
 Screenshots, social-card images, generated video frames, and third-party tool
 logos are content assets rather than alternate Agor marks and keep the format
