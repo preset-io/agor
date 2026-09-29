@@ -82,6 +82,27 @@ describe('MCPServerFormFields OAuth start', () => {
     ).toBeVisible();
   });
 
+  it('does not mention Global when the offered scope is session-only', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ ownership: 'private', scope: 'session' }}>
+          <MCPServerFormFields
+            mode="create"
+            offeredScopes={['session']}
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="member:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.queryByText(/Private \+ Global/)).toBeNull();
+  });
+
   it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
     const Harness = () => {
       const [form] = Form.useForm();

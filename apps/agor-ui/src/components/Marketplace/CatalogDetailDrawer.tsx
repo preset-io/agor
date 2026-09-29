@@ -382,8 +382,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       : sharing === 'shared' && canUseExistingMcpServer(connectCapability)
         ? readinessLoading
           ? 'Checking whether an existing shared installation is available…'
-          : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
-        : explainAddRestriction(connectCapability);
+          : readinessError
+            ? 'Existing shared availability could not be verified. Reopen Catalog to try again.'
+            : 'No eligible shared installation is available. You cannot publish or repair shared configuration under the current policy. Choose Private if allowed, or ask an admin.'
+        : canUseShared
+          ? 'Choose Use existing shared to connect without adding a private server.'
+          : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
     !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
@@ -784,7 +788,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   label="Installation ownership"
                   extra={
                     sharing === 'shared'
-                      ? 'Shares configuration only. Each user signs in separately. Available to attach; not enabled globally.'
+                      ? 'Shared configuration only. Each user signs in separately. Available to attach; not enabled globally.'
                       : 'Only you can use this configuration. Available to attach to your sessions.'
                   }
                 >

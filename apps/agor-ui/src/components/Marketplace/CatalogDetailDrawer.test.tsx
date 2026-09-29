@@ -54,6 +54,8 @@ function renderDrawer(
     capability?: MCPServerCapabilityContext;
     policyPending?: boolean;
     readiness?: import('@agor/core/types').MCPCatalogReadiness;
+    sharing?: import('@agor/core/types').MCPCatalogSharing;
+    readinessError?: string;
   } = {}
 ) {
   const { capability = ALLOWED, policyPending = false } = options;
@@ -66,13 +68,15 @@ function renderDrawer(
       teammates={BRANCHES}
       teammatesLoading={false}
       teammatesError={null}
-      defaultTeammateId="branch-1"
+      defaultTeammateId={BRANCHES[0].branch_id}
       startingSession={false}
       startSessionError={null}
       connecting={false}
       connectError={null}
       connectCapability={capability}
       readiness={options.readiness}
+      sharing={options.sharing}
+      readinessError={options.readinessError}
       policyPending={policyPending}
       policyPendingHint={POLICY_LOADING_HINT}
       onConnect={vi.fn()}
@@ -88,7 +92,7 @@ function renderDrawer(
         teammates={BRANCHES}
         teammatesLoading={false}
         teammatesError={null}
-        defaultTeammateId="branch-1"
+        defaultTeammateId={BRANCHES[0].branch_id}
         startingSession={false}
         startSessionError={null}
         connecting={false}
@@ -126,7 +130,7 @@ describe('CatalogDetailDrawer connected state', () => {
       teammates: BRANCHES,
       teammatesLoading: false,
       teammatesError: null,
-      defaultTeammateId: 'branch-1',
+      defaultTeammateId: BRANCHES[0].branch_id,
       startingSession: false,
       startSessionError: null,
       connecting: false,
@@ -176,7 +180,7 @@ describe('CatalogDetailDrawer connected state', () => {
         teammates={BRANCHES}
         teammatesLoading={false}
         teammatesError={null}
-        defaultTeammateId="branch-1"
+        defaultTeammateId={BRANCHES[0].branch_id}
         startingSession={false}
         startSessionError={null}
         connecting={false}
@@ -263,7 +267,7 @@ describe('CatalogDetailDrawer OAuth activation', () => {
         teammates={BRANCHES}
         teammatesLoading={false}
         teammatesError={null}
-        defaultTeammateId="branch-1"
+        defaultTeammateId={BRANCHES[0].branch_id}
         startingSession={false}
         startSessionError={null}
         connecting={false}
@@ -372,6 +376,36 @@ describe('CatalogDetailDrawer connect capability', () => {
     expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
   });
 
+  it('points a use-only member toward an available shared installation from Private', () => {
+    renderDrawer(OAUTH_LINEAR, {
+      capability: RESTRICTED_MEMBER,
+      readiness: {
+        catalog_key: OAUTH_LINEAR.name,
+        state: 'oauth_required',
+        shared_configuration_available: true,
+      },
+    });
+    expect(
+      screen.getByText('Choose Use existing shared to connect without adding a private server.')
+    ).toBeVisible();
+    expect(screen.getByRole('radio', { name: 'Use existing shared' })).toBeEnabled();
+  });
+
+  it('reports unknown shared availability honestly after a readiness failure', () => {
+    renderDrawer(OAUTH_LINEAR, {
+      capability: RESTRICTED_MEMBER,
+      sharing: 'shared',
+      readinessError: 'Network unavailable',
+    });
+    expect(
+      screen.getByText(
+        'Existing shared availability could not be verified. Reopen Catalog to try again.'
+      )
+    ).toBeVisible();
+    expect(screen.queryByText(/No eligible shared installation is available/)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeDisabled();
+  });
+
   it('refuses a member when the workspace policy forbids new servers', () => {
     renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
     fireEvent.click(screen.getByRole('checkbox'));
@@ -468,10 +502,12 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     teammates: BRANCHES,
     teammatesLoading: false,
     teammatesError: null,
-    defaultTeammateId: 'branch-1',
+    defaultTeammateId: BRANCHES[0].branch_id,
     connecting: false,
     connectError: null,
     credentialRequirement,
+    startingSession: false,
+    startSessionError: null,
     connectCapability: { ...ALLOWED, userId: identityKey ?? undefined },
     policyPending: false,
     policyPendingHint: POLICY_LOADING_HINT,

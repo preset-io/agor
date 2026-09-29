@@ -452,7 +452,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Scope"
             extra={
-              (isCreate ? ownership : savedOwnership) === 'private'
+              (isCreate ? ownership : savedOwnership) === 'private' &&
+              offeredScopes.includes('global')
                 ? "Private + Global applies only to the owner's sessions, not everyone in the workspace."
                 : undefined
             }
