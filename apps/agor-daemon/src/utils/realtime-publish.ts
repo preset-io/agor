@@ -37,6 +37,7 @@ import {
   type UserID,
 } from '@agor/core/types';
 import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
+import { TENANT_RESTRICTION_OBSERVATION_MS } from '../auth/tenant-access.js';
 import {
   assertTenantCredentialEpochValue,
   readTenantCredentialEpoch,
@@ -928,6 +929,24 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     realtimeRelay,
   } = options;
 
+  // Per-tenant single-flight epoch read: a publication observes state at most one monitor tick old.
+  const epochReads = new Map<string, { until: number; epoch: Promise<string | undefined> }>();
+  const readPublicationEpoch = (database: TenantScopeAwareDatabase, tenantId: string) => {
+    const cached = epochReads.get(tenantId);
+    if (cached && Date.now() < cached.until) return cached.epoch;
+    const startedAt = Date.now();
+    const entry = {
+      until: Number.POSITIVE_INFINITY,
+      epoch: readTenantCredentialEpoch(database, tenantId),
+    };
+    const expire = () => {
+      entry.until = startedAt + TENANT_RESTRICTION_OBSERVATION_MS;
+    };
+    entry.epoch.then(expire, expire);
+    epochReads.set(tenantId, entry);
+    return entry.epoch;
+  };
+
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
     // Default-deny. Feathers routes EVERY service event that has no publisher
     // of its own through this handler, so an undeclared path is one nobody
@@ -972,7 +991,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       !(context.path === 'tasks' && context.event === 'termination_requested')
     ) {
       try {
-        const epoch = await readTenantCredentialEpoch(db, tenantId);
+        const epoch = await readPublicationEpoch(db, tenantId);
         credentialAdmitted = (connection: unknown) => {
           try {
             assertTenantCredentialEpochValue(
