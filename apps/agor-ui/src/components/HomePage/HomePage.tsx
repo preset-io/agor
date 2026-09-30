@@ -10,6 +10,7 @@ import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
@@ -210,7 +211,7 @@ export const HomePage = memo(function HomePage({
   const { connected, connecting } = useConnectionState();
   const mutationDisabled = useConnectionDisabled();
   const railReady = useIdleReady();
-  const confirmArchive = useConfirmArchiveSession(client);
+  const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
   const userId = currentUser?.user_id;
 
   const [needsFilter, setNeedsFilter] = useState<NeedsFilter>('all');
@@ -344,7 +345,7 @@ export const HomePage = memo(function HomePage({
     },
     [onBoardClick, onBranchClick, onSessionClick]
   );
-  // The row stands for its earlier failures too, so opening it marks every one seen.
+  // A group header stands for its earlier failures too, so opening it marks every one seen.
   const openFailure = useCallback(
     (need: HomeSessionNeed) => {
       const now = Date.now();

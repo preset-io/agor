@@ -127,18 +127,27 @@ describe('HomePage', () => {
     }
   });
 
-  it('marks a failure row’s earlier failures opened along with it', async () => {
+  it('groups failures per branch behind the latest, and opening the header marks them all opened', async () => {
     const at = { status: 'failed', created_at: recent(60) } as const;
     const failures = [
-      session('f1', { ...at, title: 'Broken run', last_updated: recent(1) }),
+      session('f1', { ...at, title: 'Broken run', last_updated: recent(1), tasks: ['t1'] }),
       session('f0', { ...at, title: 'Earlier broken run', last_updated: recent(10) }),
     ];
-    seed({ sessions: failures });
+    const client = {
+      service: (name: string) =>
+        name === 'tasks'
+          ? { get: async () => ({ error_message: 'Out of credits\ntrace' }) }
+          : { find: async () => [], getPrimaryTeammate: async () => null },
+    } as unknown as AgorClient;
+    seed({ sessions: failures, branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch] });
     const onSessionClick = vi.fn();
-    renderHome({ onSessionClick });
+    renderHome({ client, onSessionClick });
     const needs = screen.getByRole('region', { name: 'Needs you' });
+    expect(within(needs).getByText('2 failed on nightly')).toBeInTheDocument();
+    // The cause comes from the newest failure, as on a single failure row.
+    expect(await within(needs).findByText('Failed · Out of credits')).toBeInTheDocument();
     expect(within(needs).queryByText('Earlier broken run')).not.toBeInTheDocument();
-    fireEvent.click(within(needs).getByText('Broken run'));
+    fireEvent.click(within(needs).getByText('2 failed on nightly'));
     expect(onSessionClick).toHaveBeenCalledWith('f1');
     const opened = JSON.parse(localStorage.getItem(`agor:user:${ME}:home-opened-failures`) ?? '{}');
     expect(Object.keys(opened).sort()).toEqual(['f0', 'f1']);
@@ -146,7 +155,102 @@ describe('HomePage', () => {
 
     // Neither run comes back: each was recorded against its own last run.
     act(() => agorStore.setState(buildSessionMaps(failures)));
-    await waitFor(() => expect(within(needs).queryByText(/Broken run/i)).not.toBeInTheDocument());
+    await waitFor(() => expect(within(needs).queryByText(/failed on/)).not.toBeInTheDocument());
+  });
+
+  it('expands a failure group to each failure, and opening an older one records only it', async () => {
+    asDesktop();
+    const at = { status: 'failed', created_at: recent(60) } as const;
+    seed({
+      sessions: [
+        session('f1', { ...at, title: 'Broken run', last_updated: recent(1) }),
+        session('f0', { ...at, title: 'Earlier broken run', last_updated: recent(10) }),
+        session('p1', { status: 'awaiting_permission', branch_id: 'b-p1' }),
+        session('p2', { status: 'awaiting_permission', branch_id: 'b-p2' }),
+        session('d1', { ready_for_prompt: true, branch_id: 'b-d1' }),
+      ],
+      branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch],
+    });
+    const onSessionClick = vi.fn();
+    renderHome({ onSessionClick });
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    // The group is one need, so the collapsed counts stay per group.
+    expect(within(needs).getByRole('button', { name: '1 more · 1 finished' })).toBeInTheDocument();
+    fireEvent.click(within(needs).getByRole('button', { name: 'Show 2' }));
+    expect(within(needs).getByText('Broken run')).toBeInTheDocument();
+    // The header plus each expanded failure row.
+    expect(within(needs).getAllByText('Failed')).toHaveLength(3);
+    fireEvent.click(within(needs).getByText('Earlier broken run'));
+    expect(onSessionClick).toHaveBeenCalledWith('f0');
+    const opened = JSON.parse(localStorage.getItem(`agor:user:${ME}:home-opened-failures`) ?? '{}');
+    expect(Object.keys(opened)).toEqual(['f0']);
+    // The newest failure stays, now on its own.
+    await waitFor(() => expect(within(needs).queryByText(/failed on/)).not.toBeInTheDocument());
+    expect(within(needs).getByText('Broken run')).toBeInTheDocument();
+  });
+
+  it('offers no Archive on a collapsed failure group', async () => {
+    const at = { status: 'failed', created_at: recent(60) } as const;
+    seed({
+      sessions: [
+        session('f1', { ...at, title: 'Broken run', last_updated: recent(1) }),
+        session('f0', { ...at, title: 'Earlier broken run', last_updated: recent(10) }),
+      ],
+      branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch],
+    });
+    renderHome();
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    fireEvent.click(within(needs).getByRole('button', { name: 'More actions' }));
+    expect(await screen.findByText('Show all 2')).toBeInTheDocument();
+    expect(screen.queryByText(/Archive/)).not.toBeInTheDocument();
+  });
+
+  it('archives only the expanded failure row it is on, after the single-session confirm', async () => {
+    asDesktop();
+    const at = { status: 'failed', created_at: recent(60) } as const;
+    const failures = [
+      session('f1', { ...at, title: 'Broken run', last_updated: recent(1), tasks: ['t1'] }),
+      session('f0', { ...at, title: 'Earlier broken run', last_updated: recent(10) }),
+    ];
+    const archived: string[] = [];
+    let reads = 0;
+    const client = {
+      service: (name: string) => {
+        const match = /^sessions\/(.+)\/archive$/.exec(name);
+        if (match)
+          return {
+            create: async () => {
+              archived.push(match[1]);
+              return { session: { ...failures[0], session_id: match[1], archived: true } };
+            },
+          };
+        if (name === 'tasks')
+          return {
+            get: async () => {
+              reads++;
+              return { error_message: 'Out of credits' };
+            },
+          };
+        return { find: async () => [], getPrimaryTeammate: async () => null };
+      },
+    } as unknown as AgorClient;
+    seed({ sessions: failures, branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch] });
+    renderHome({ client });
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    expect(within(needs).queryByRole('button', { name: /Archive/ })).not.toBeInTheDocument();
+    fireEvent.click(within(needs).getByRole('button', { name: 'Show 2' }));
+    // The header and the newest expanded run share one read of its cause.
+    expect(await within(needs).findAllByText('Failed · Out of credits')).toHaveLength(2);
+    expect(reads).toBe(1);
+    const row = within(needs).getByText('Earlier broken run').closest('li') as HTMLElement;
+    fireEvent.click(within(row).getByRole('button', { name: /Archive/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(
+      within(dialog).getAllByText('Archive session and same-branch children?')[0]
+    ).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(archived).toEqual(['f0']));
   });
 
   it('keeps an opened failure out of Needs you through a rename, until the session runs again', async () => {

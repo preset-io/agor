@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { FlexProps, MenuProps } from 'antd';
 import { Button, Dropdown, Flex, Tooltip, Typography, theme } from 'antd';
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -20,6 +20,7 @@ import {
   makeBranchSelector,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { getTimeMs } from '../../utils/entityTime';
 import { pressableProps } from '../../utils/pressableProps';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
@@ -315,6 +316,8 @@ interface HomeSessionRowProps {
   reason?: HomeSessionNeed['reason'];
   /** Reads what a permission request asks or why a run failed; pass only for visible previews. */
   client?: AgorClient | null;
+  /** An already-read detail, so a failure group's header and newest run share one read. */
+  detail?: string;
   /** Replaces the session title (grouped rows). */
   title?: string;
   /** Grouped rows already show branch and board in their headers. */
@@ -333,6 +336,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   session,
   reason,
   client,
+  detail: sharedDetail,
   title = getSessionDisplayTitle(session, { includeAgentFallback: true }),
   showContext = true,
   showLogo = true,
@@ -347,7 +351,8 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   // Without hover (phones, touch tablets) every row action lives in the ⋯ menu.
   const canHover = useMediaQuery('(hover: hover)');
   const inMenu = compact || !canHover;
-  const detail = useNeedDetail(client, session, reason);
+  const readDetail = useNeedDetail(client, session, reason);
+  const detail = sharedDetail ?? readDetail;
   const reasonLabel =
     reason === 'failed' && session.status === 'timed_out'
       ? 'Timed out'
@@ -521,53 +526,143 @@ export const HomeCommentRow = memo(function HomeCommentRow({
   );
 });
 
-/** "N finished on {branch}": opens the latest run and expands to the rest. */
-export const HomeFinishedGroupRow = memo(function HomeFinishedGroupRow({
-  need,
-  onOpen,
-  onMarkRead,
-}: {
-  need: HomeSessionNeed & { earlier: Session[] };
-  onOpen: (sessionId: string) => void;
+interface HomeNeedRowProps {
+  need: HomeSessionNeed;
+  /** Reads what a permission request asks or why a run failed; pass only for visible previews. */
+  client?: AgorClient | null;
+  detail?: string;
+  showContext?: boolean;
+  indent?: number;
+  onOpenSession: (sessionId: string) => void;
+  /** Gets the whole need, so every run a failure row stands for is recorded as opened. */
+  onOpenFailure: (need: HomeSessionNeed) => void;
   onMarkRead: (sessionId: string) => void;
-}) {
+  /** Each failure row archives only its own session; omitted while changes can't be made. */
+  onArchive?: (sessionId: string) => void;
+}
+
+/** A Needs you session row; a branch's grouped finished or failed runs render as one group row. */
+export const HomeNeedRow = memo(function HomeNeedRow(props: HomeNeedRowProps) {
+  return props.need.earlier?.length ? (
+    <HomeNeedGroupRow {...props} />
+  ) : (
+    <HomeSingleNeedRow {...props} />
+  );
+});
+
+function HomeSingleNeedRow({
+  need,
+  client,
+  detail,
+  showContext,
+  indent,
+  onOpenSession,
+  onOpenFailure,
+  onMarkRead,
+  onArchive,
+}: HomeNeedRowProps) {
+  const failed = need.reason === 'failed';
+  const openFailure = useCallback(() => onOpenFailure(need), [onOpenFailure, need]);
+  return (
+    <HomeSessionRow
+      session={need.session}
+      reason={need.reason}
+      client={client}
+      detail={detail}
+      showContext={showContext}
+      indent={indent}
+      onOpen={failed ? openFailure : onOpenSession}
+      onMarkRead={need.reason === 'finished' ? onMarkRead : undefined}
+      onArchive={failed ? onArchive : undefined}
+    />
+  );
+}
+
+/**
+ * "N finished on {branch}" or "N failed on {branch}": opens the latest run, marks every
+ * finished run read, and expands to each run with its own actions (a failure's Archive included).
+ */
+function HomeNeedGroupRow({
+  need,
+  client,
+  onOpenSession,
+  onOpenFailure,
+  onMarkRead,
+  onArchive,
+}: HomeNeedRowProps) {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
-  const { session, earlier } = need;
+  const { session, reason } = need;
+  const failed = reason === 'failed';
   const branch = useAgorStore(
     useMemo(() => makeBranchSelector(session.branch_id), [session.branch_id])
   );
   const name = branch ? (getTeammateConfig(branch)?.displayName ?? branch.name) : 'this branch';
-  const all = [session, ...earlier];
+  // Each run as its own need, so opening one expanded failure records only that one.
+  const runs = useMemo(
+    () =>
+      [need.session, ...(need.earlier ?? [])].map(
+        (run): HomeSessionNeed => ({
+          key: `session:${run.session_id}`,
+          reason: need.reason,
+          at: getTimeMs(run, 'last_updated'),
+          session: run,
+        })
+      ),
+    [need]
+  );
+  const openGroup = useCallback(() => onOpenFailure(need), [onOpenFailure, need]);
+  const ids = runs.map((run) => run.session.session_id);
+  // Read once here: the header and the newest expanded run show the same cause.
+  const detail = useNeedDetail(client, session, reason);
   return (
     <>
       <HomeSessionRow
         session={session}
-        reason="finished"
-        title={`${all.length} finished on ${name}`}
-        onOpen={onOpen}
-        onMarkRead={() => {
-          for (const run of all) onMarkRead(run.session_id);
-        }}
-        expand={{ expanded, count: all.length, onToggle: () => setExpanded(!expanded) }}
+        reason={reason}
+        detail={detail}
+        title={`${runs.length} ${failed ? 'failed' : 'finished'} on ${name}`}
+        onOpen={failed ? openGroup : onOpenSession}
+        onMarkRead={
+          failed
+            ? undefined
+            : () => {
+                for (const id of ids) onMarkRead(id);
+              }
+        }
+        expand={{ expanded, count: runs.length, onToggle: () => setExpanded(!expanded) }}
       />
       {expanded && (
         <div style={{ borderTop: homeDivider(token) }}>
           <HomeList
-            items={all}
-            itemKey={(run) => run.session_id}
-            renderItem={(run) => (
-              <HomeSessionRow
-                session={run}
-                showContext={false}
-                indent={token.paddingLG}
-                onOpen={onOpen}
-                onMarkRead={onMarkRead}
-              />
-            )}
+            items={runs}
+            itemKey={(run) => run.key}
+            renderItem={(run) =>
+              failed ? (
+                <HomeNeedRow
+                  need={run}
+                  client={run.session === session ? undefined : client}
+                  detail={run.session === session ? detail : undefined}
+                  showContext={false}
+                  indent={token.paddingLG}
+                  onOpenSession={onOpenSession}
+                  onOpenFailure={onOpenFailure}
+                  onMarkRead={onMarkRead}
+                  onArchive={onArchive}
+                />
+              ) : (
+                <HomeSessionRow
+                  session={run.session}
+                  showContext={false}
+                  indent={token.paddingLG}
+                  onOpen={onOpenSession}
+                  onMarkRead={onMarkRead}
+                />
+              )
+            }
           />
         </div>
       )}
     </>
   );
-});
+}
