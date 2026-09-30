@@ -265,6 +265,26 @@ describe('per-request memoization', () => {
     });
   });
 
+  it('bounds request reuse on the monotonic clock, not the wall clock', async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValue(state());
+    await withTenantRestrictionRequest(async () => {
+      await readRequestTenantRestriction(db, 'a');
+      // A wall-clock step forward neither expires the shared read...
+      vi.setSystemTime(Date.now() + 60_000);
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledOnce();
+    });
+    await withTenantRestrictionRequest(async () => {
+      await readRequestTenantRestriction(db, 'a');
+      // ...nor does a step back keep it past one tick.
+      vi.setSystemTime(Date.now() - 3_600_000);
+      vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS);
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it('lets credential issuance reuse the read that admitted the request, within its tick only', async () => {
     vi.useFakeTimers();
     read.mockResolvedValue(state());

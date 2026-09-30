@@ -31,8 +31,8 @@ const requestReads = new AsyncLocalStorage<{
 /** Share one restriction read across a handshake/packet/request's admission checks; reuse never exceeds one tick. */
 export function withTenantRestrictionRequest<T>(work: () => T, reuse = false): T {
   const current = requestReads.getStore();
-  if (reuse && current && Date.now() < current.until) return work();
-  const until = Date.now() + TENANT_RESTRICTION_OBSERVATION_MS;
+  if (reuse && current && performance.now() < current.until) return work();
+  const until = performance.now() + TENANT_RESTRICTION_OBSERVATION_MS;
   return requestReads.run({ until, reads: new Map() }, work);
 }
 
@@ -47,7 +47,8 @@ export function endTenantRestrictionRequest(): void {
 /** Memoized within an open request scope only; uncached across requests. */
 export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
   const current = requestReads.getStore();
-  if (!current || Date.now() >= current.until) return readTenantRestrictionState(db, tenantId);
+  if (!current || performance.now() >= current.until)
+    return readTenantRestrictionState(db, tenantId);
   let read = current.reads.get(tenantId);
   if (!read) {
     read = readTenantRestrictionState(db, tenantId);
@@ -60,7 +61,7 @@ export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenant
 export const readAdmittedTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
   const current = requestReads.getStore();
   const until = Math.max(current?.until ?? 0, current?.admittedUntil ?? 0);
-  const read = current && Date.now() < until ? current.reads.get(tenantId) : undefined;
+  const read = current && performance.now() < until ? current.reads.get(tenantId) : undefined;
   return read ?? readTenantRestrictionState(db, tenantId);
 };
 
