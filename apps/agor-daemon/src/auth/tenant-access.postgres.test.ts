@@ -149,34 +149,25 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         return { user, branch, session, task, queued };
       });
 
-    it('keeps signed executor Socket.IO safety RPCs and reconnect while denying ordinary/foreign RPCs', async () => {
-      const tenantId = `socket-safety-${generateId()}`;
-      const seeded = await seedTenant(tenantId);
-      const jwtSecret = 'disposable-restricted-executor-socket-secret';
+    const multiTenancy = {
+      mode: 'required_from_auth',
+      static_tenant_id: 'unused' as never,
+      auth_claim: 'tenant_id',
+    } as const;
+    type FixtureApp = ReturnType<typeof feathersExpress>;
+    // Production admission wiring: signed JWT strategy, restricted hook, socket admission and monitor.
+    const startAdmissionApp = async (input: {
+      name: string;
+      jwtSecret: string;
+      rest?: boolean;
+      strategy?: (app: FixtureApp) => ConstructorParameters<typeof RuntimeJWTStrategy>[0];
+      services: (app: FixtureApp) => string[];
+    }) => {
       const app = feathersExpress(feathers());
+      const workIdentity = { instanceId: input.name, bootId: `${input.name}-boot` };
       app.set('config', {});
-      app.set('distributedWorkIdentity', {
-        instanceId: 'socket-safety',
-        bootId: 'socket-safety-boot',
-      });
-      const multiTenancy = {
-        mode: 'required_from_auth',
-        static_tenant_id: 'unused' as never,
-        auth_claim: 'tenant_id',
-      } as const;
-      const tokenService = new SessionTokenService(
-        { expiration_ms: 60_000, max_uses: -1 },
-        { db, startCleanupTimer: false }
-      );
-      tokenService.setJwtSecret(jwtSecret);
-      const token = await runWithTenantDatabaseScope(raw, tenantId, () =>
-        tokenService.generateToken(seeded.session.session_id, seeded.user.user_id, {
-          taskId: seeded.task.task_id,
-          branchId: seeded.branch.branch_id,
-        })
-      );
-      // Authentication adapter uses real tenant-scoped user persistence. The
-      // claimed boundary here is task safety RPC transport, not all user routes.
+      app.set('distributedWorkIdentity', workIdentity);
+      if (input.rest) app.configure(rest());
       app.use('users', {
         async get(id: string, params: { tenant?: { tenant_id: string } }) {
           if (!params.tenant?.tenant_id) throw new Error('Missing authenticated tenant');
@@ -186,7 +177,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         },
       });
       app.set('authentication', {
-        secret: jwtSecret,
+        secret: input.jwtSecret,
         entity: 'user',
         entityId: 'user_id',
         service: 'users',
@@ -200,24 +191,15 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const authentication = new AuthenticationService(app);
       authentication.register(
         'jwt',
-        new RuntimeJWTStrategy({
-          db,
-          multiTenancy,
-          sessionTokenService: tokenService,
-          executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
-        })
+        new RuntimeJWTStrategy({ db, multiTenancy, ...input.strategy?.(app) })
       );
       app.use('authentication', authentication);
-      app.use('tasks', new TasksService(db, app), {
-        methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
-      });
-      app.use('sessions', { get: (id: string) => new SessionRepository(db).findById(id) });
       const requireAccess = createTenantRestrictedAuthHook(
         authenticate('jwt') as never,
         multiTenancy,
         (id, context) => assertRuntimeTenantRequestAccess(db, id, context)
       );
-      for (const path of ['tasks', 'sessions'])
+      for (const path of input.services(app))
         app.service(path).hooks({
           around: {
             all: [
@@ -231,7 +213,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const socketConfig = createSocketIOConfig(app as never, {
         corsOrigin: '*',
         credentialsAllowed: false,
-        workIdentity: { instanceId: 'socket-safety', bootId: 'socket-safety-boot' },
+        workIdentity,
         multiTenancy,
         assertTenantAccess: (id, payload) =>
           assertRuntimeTenantAccess(db, id, { payload }, readRequestTenantRestriction),
@@ -239,15 +221,61 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       });
       app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
       configureChannels(app as never);
-      let server: HttpServer | undefined;
+      // Feathers types app.use as a service path; this is Express middleware.
+      if (input.rest)
+        (app as unknown as { use: (middleware: unknown) => void }).use(
+          errorHandler({ logger: false })
+        );
+      const server = await new Promise<HttpServer>((resolve) => {
+        const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
+      });
+      const address = server.address();
+      if (!address || typeof address === 'string') throw new Error('Missing fixture address');
+      return {
+        app,
+        origin: `http://127.0.0.1:${address.port}`,
+        close: () =>
+          new Promise<void>((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve()))
+          ),
+      };
+    };
+
+    it('keeps signed executor Socket.IO safety RPCs and reconnect while denying ordinary/foreign RPCs', async () => {
+      const tenantId = `socket-safety-${generateId()}`;
+      const seeded = await seedTenant(tenantId);
+      const jwtSecret = 'disposable-restricted-executor-socket-secret';
+      const tokenService = new SessionTokenService(
+        { expiration_ms: 60_000, max_uses: -1 },
+        { db, startCleanupTimer: false }
+      );
+      tokenService.setJwtSecret(jwtSecret);
+      const token = await runWithTenantDatabaseScope(raw, tenantId, () =>
+        tokenService.generateToken(seeded.session.session_id, seeded.user.user_id, {
+          taskId: seeded.task.task_id,
+          branchId: seeded.branch.branch_id,
+        })
+      );
+      // The claimed boundary here is task safety RPC transport, not all user routes.
+      const started = await startAdmissionApp({
+        name: 'socket-safety',
+        jwtSecret,
+        strategy: (app) => ({
+          sessionTokenService: tokenService,
+          executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+        }),
+        services: (app) => {
+          app.use('tasks', new TasksService(db, app), {
+            methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
+          });
+          app.use('sessions', { get: (id: string) => new SessionRepository(db).findById(id) });
+          return ['tasks', 'sessions'];
+        },
+      });
+      const { app } = started;
       let client: AgorClient | undefined;
       try {
-        server = await new Promise<HttpServer>((resolve) => {
-          const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
-        });
-        const address = server.address();
-        if (!address || typeof address === 'string') throw new Error('Missing fixture address');
-        client = createClient(`http://127.0.0.1:${address.port}`, false, {
+        client = createClient(started.origin, false, {
           reconnectionAttempts: 0,
           ackTimeout: 2_000,
         });
@@ -368,10 +396,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           .toBe(true);
       } finally {
         client?.io.close();
-        if (server)
-          await new Promise<void>((resolve, reject) =>
-            server!.close((error) => (error ? reject(error) : resolve()))
-          );
+        await started.close();
       }
     });
 
@@ -383,72 +408,15 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const tenantId = `browser-restricted-${generateId()}`;
       const seeded = await seedTenant(tenantId);
       const jwtSecret = 'disposable-restricted-browser-secret';
-      const app = feathersExpress(feathers());
-      app.set('config', {});
-      app.set('distributedWorkIdentity', {
-        instanceId: 'browser-restricted',
-        bootId: 'browser-restricted-boot',
-      });
-      const multiTenancy = {
-        mode: 'required_from_auth',
-        static_tenant_id: 'unused' as never,
-        auth_claim: 'tenant_id',
-      } as const;
-      app.configure(rest());
-      app.use('users', {
-        async get(id: string, params: { tenant?: { tenant_id: string } }) {
-          if (!params.tenant?.tenant_id) throw new Error('Missing authenticated tenant');
-          return runWithTenantDatabaseScope(db, params.tenant.tenant_id, (scoped) =>
-            new UsersRepository(scoped).findById(id as never)
-          );
+      const started = await startAdmissionApp({
+        name: 'browser-restricted',
+        jwtSecret,
+        rest: true,
+        services: (app) => {
+          app.use('sessions', { get: (id: string) => new SessionRepository(db).findById(id) });
+          return ['sessions'];
         },
       });
-      app.set('authentication', {
-        secret: jwtSecret,
-        entity: 'user',
-        entityId: 'user_id',
-        service: 'users',
-        authStrategies: ['jwt'],
-        jwtOptions: {
-          audience: RUNTIME_JWT_AUDIENCE,
-          issuer: RUNTIME_JWT_ISSUER,
-          algorithm: 'HS256',
-        },
-      });
-      const authentication = new AuthenticationService(app);
-      authentication.register('jwt', new RuntimeJWTStrategy({ db, multiTenancy }));
-      app.use('authentication', authentication);
-      app.use('sessions', { get: (id: string) => new SessionRepository(db).findById(id) });
-      const requireAccess = createTenantRestrictedAuthHook(
-        authenticate('jwt') as never,
-        multiTenancy,
-        (id, context) => assertRuntimeTenantRequestAccess(db, id, context)
-      );
-      app.service('sessions').hooks({
-        around: {
-          all: [
-            async (context: HookContext, next: () => Promise<void>) => {
-              await requireAccess(context);
-              await runWithTenantDatabaseScope(db, context.params.tenant!.tenant_id, next);
-            },
-          ],
-        },
-      });
-      const socketConfig = createSocketIOConfig(app as never, {
-        corsOrigin: '*',
-        credentialsAllowed: false,
-        workIdentity: { instanceId: 'browser-restricted', bootId: 'browser-restricted-boot' },
-        multiTenancy,
-        assertTenantAccess: (id, payload) =>
-          assertRuntimeTenantAccess(db, id, { payload }, readRequestTenantRestriction),
-        readTenantRestriction: (id) => readTenantRestrictionState(db, id),
-      });
-      app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
-      configureChannels(app as never);
-      // Feathers types app.use as a service path; this is Express middleware.
-      (app as unknown as { use: (middleware: unknown) => void }).use(
-        errorHandler({ logger: false })
-      );
 
       const mintToken = async () =>
         issueRuntimeTokenPair(seeded.user, jwtSecret, '1h', '1h', {
@@ -467,15 +435,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           action,
         });
 
-      let server: HttpServer | undefined;
       let client: AgorClient | undefined;
       try {
-        server = await new Promise<HttpServer>((resolve) => {
-          const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
-        });
-        const address = server.address();
-        if (!address || typeof address === 'string') throw new Error('Missing fixture address');
-        const origin = `http://127.0.0.1:${address.port}`;
+        const { origin } = started;
         const restSession = async (token: string) => {
           const response = await fetch(`${origin}/sessions/${seeded.session.session_id}`, {
             headers: { authorization: `Bearer ${token}` },
@@ -538,10 +500,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         expect((await restSession(reissued)).status).toBe(200);
       } finally {
         client?.io.close();
-        if (server)
-          await new Promise<void>((resolve, reject) =>
-            server!.close((error) => (error ? reject(error) : resolve()))
-          );
+        await started.close();
       }
     });
 
