@@ -2322,6 +2322,65 @@ describe('GatewayService durable listener delivery fences', () => {
     expect(complete).toHaveBeenCalledOnce();
   });
 
+  it('treats an occurrence within the clock-skew grace of the reactivation cutoff as before it', async () => {
+    const occurredAt = Date.parse('2026-01-01T00:00:10.000Z');
+    const resumeAfter = occurredAt - 2_000;
+    vi.spyOn(tenantAccess, 'isCurrentTenantEventAdmitted').mockImplementation(
+      async (_db, at) => at > resumeAfter
+    );
+    const service = new GatewayService(
+      { run: vi.fn() } as never,
+      { service: vi.fn(), get: vi.fn() } as never
+    );
+    const complete = vi.fn(async () => true);
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      inboundEventRepo: {
+        claim: vi.fn(async () => ({
+          outcome: 'claimed',
+          event: { id: '01927f9d-0000-7000-8000-000000000098' },
+        })),
+        complete,
+        recordDeliveryMetadata: vi.fn(async () => true),
+      },
+      channelRepo: { listenerClaimIsCurrent: vi.fn(async () => true) },
+    });
+    const create = vi.spyOn(service, 'create');
+    const channel = attachHiddenTenant(
+      { ...slackChannel, id: 'durable-channel' as never },
+      { tenant_id: 'tenant-durable' }
+    );
+    await (
+      service as unknown as {
+        handleListenerInboundMessage: (...args: unknown[]) => Promise<void>;
+      }
+    ).handleListenerInboundMessage(
+      channel,
+      'tenant-durable',
+      {
+        providerEventId: 'slack:event:Ev-skew',
+        threadId: 'C1-1.0',
+        text: 'hello',
+        userId: 'U1',
+        timestamp: String(occurredAt / 1000),
+        prepareDelivery: vi.fn(),
+      },
+      {
+        channel_id: channel.id,
+        claim_token: 'opaque-owner',
+        generation: 1,
+        claimed_at: '2026-01-01T00:00:00.000Z',
+        lease_expires_at: '2026-01-01T00:00:30.000Z',
+        instance_id: 'daemon-a',
+        boot_id: 'boot-a',
+        checkpoint: null,
+      }
+    );
+
+    expect(create).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
   it('does not acknowledge an occurrence still processing under a previous owner', async () => {
     const service = new GatewayService(
       { run: vi.fn() } as never,

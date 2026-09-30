@@ -277,6 +277,8 @@ const MCP_SLACK_REPAIR_BATCH = 50;
 /** Connect-lane pages one tenant visit may walk. Bounds what one page can hide. */
 const MCP_SLACK_CONNECT_REPAIR_PAGES = 4;
 const MCP_SLACK_REPAIR_HORIZON_MS = 24 * 60 * 60_000;
+/** Provider clocks are compared with the database cutoff; an occurrence this close to it is treated as before it. */
+const GATEWAY_OCCURRENCE_SKEW_GRACE_MS = 5_000;
 const MCP_SLACK_SWEEP_INTERVAL_MS = 30_000;
 const MCP_SLACK_SWEEP_TENANT_BUDGET = 10;
 
@@ -7065,7 +7067,10 @@ export class GatewayService {
             throw new Error('Gateway listener ownership lost before provider acknowledgement');
           }
           if (
-            !(await isCurrentTenantEventAdmitted(this.db, gatewayOccurrenceTime(msg.timestamp)))
+            !(await isCurrentTenantEventAdmitted(
+              this.db,
+              gatewayOccurrenceTime(msg.timestamp) - GATEWAY_OCCURRENCE_SKEW_GRACE_MS
+            ))
           ) {
             // Consume the delivery (retry dedup stays) without prompts, downloads, or provider threads.
             if (eventId && lease) {
