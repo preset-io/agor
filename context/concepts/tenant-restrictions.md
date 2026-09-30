@@ -238,8 +238,9 @@ retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or
 saturated read skips that tenant until the next tick with a rate-limited warning;
-each sweep reads the least recently verified tenants first, so the eight-read bound
-cannot starve one. RPCs stay closed meanwhile because each reads admission itself,
+each sweep reads the least recently verified tenants first, so while reads complete
+the eight-read bound cannot starve one (eight hung reads can, and the rule below then
+gates the starved tenants). RPCs stay closed meanwhile because each reads admission itself,
 but raw packets do not read, so a skip alone would let terminal input continue: a
 tenant is unverified once no successful read has verified it for 10 s, whatever
 kept the reads from succeeding (failure, timeout, saturation or an abandoned read).
