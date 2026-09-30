@@ -69,9 +69,9 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import {
+  isMCPServerNotUsableError,
   isMCPServerUsableBy,
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
-  MCPServerNotUsableError,
   mcpRuntimeProviderCapability,
 } from '@agor/core/mcp';
 import type {
@@ -197,6 +197,7 @@ import {
 } from './permissions/deliver-permission-decision.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
+import { authorizeCatalogCaller } from './services/mcp-catalog-access.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
@@ -752,6 +753,8 @@ export function createRegisteredMCPCatalogConnectService(
     return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
   };
   return createMCPCatalogConnectService(app, {
+    authorizeCaller: (params) =>
+      runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params)),
     runInTenantDatabaseScope,
     async listCandidates(userId, params) {
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
@@ -5376,7 +5379,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             params
           );
         } catch (error) {
-          if (error instanceof MCPServerNotUsableError) {
+          if (isMCPServerNotUsableError(error)) {
             throw new Forbidden('That MCP server is private to another user');
           }
           throw error;
@@ -5437,7 +5440,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             )
           );
         } catch (error) {
-          if (error instanceof MCPServerNotUsableError) {
+          if (isMCPServerNotUsableError(error)) {
             throw new Forbidden('That MCP server is private to another user');
           }
           throw error;
@@ -6564,7 +6567,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             try {
               await sessionMCPServersService.setServers(session.session_id, serverIds, params);
             } catch (error) {
-              if (error instanceof MCPServerNotUsableError) {
+              if (isMCPServerNotUsableError(error)) {
                 throw new Forbidden('An MCP server is private to another user');
               }
               throw error;

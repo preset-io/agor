@@ -73,7 +73,19 @@ dbTest(
     await writeFile(join(source, 'IDENTITY.md'), 'Disposable template persona');
     await git.add('.');
     await git.commit('template');
+    const firstSha = (await git.revparse('HEAD')).trim();
+    const remote = join(root, 'template.git');
+    await simpleGit().clone(source, remote, ['--bare']);
+    await git.addRemote('upstream', remote);
+    await writeFile(join(source, 'version'), 'remote update');
+    await git.add('.').commit('remote update');
     const sha = (await git.revparse('HEAD')).trim();
+    await git.push('upstream', 'main');
+    // Registered checkout is behind; fetching cannot reconcile its local branch.
+    const cache = join(root, 'registered-template');
+    await simpleGit().clone(remote, cache, ['--origin', 'upstream']);
+    await simpleGit(cache).raw(['update-ref', 'refs/heads/main', firstSha]);
+    await simpleGit(cache).fetch('upstream');
     // Only the public template URL is remapped; resolution and clone are real.
     // Production Git deliberately ignores inherited GIT_CONFIG_* overrides.
     transport.template = source;
@@ -126,14 +138,15 @@ dbTest(
       app.use('executor-git-environment', new ExecutorGitEnvironmentService(db));
     });
     try {
-      for (const kind of ['home', 'clone', 'worktree'] as const) {
+      for (const kind of ['implicit', 'home', 'clone', 'worktree'] as const) {
         const repo = await new RepoRepository(raw).create({
           name: `Disposable ${kind}`,
           slug: `fixture/${kind}`,
           repo_type: 'local',
-          local_path: source,
+          local_path: kind === 'implicit' ? cache : source,
           default_branch: 'main',
-          remote_url: kind === 'home' ? TEAMMATE_FRAMEWORK_REPO_URL : source,
+          remote_url:
+            kind === 'home' ? TEAMMATE_FRAMEWORK_REPO_URL : kind === 'implicit' ? remote : source,
         });
         const params = {
           user: owner,
@@ -146,11 +159,11 @@ dbTest(
               name: `fresh-${kind}`,
               ref: `fresh-${kind}`,
               createBranch: true,
-              sourceBranch: 'main',
+              ...(kind === 'implicit' ? {} : { sourceBranch: 'main' }),
               boardId: board.board_id,
               position: { x: 0, y: 0 },
-              storage_mode: kind === 'worktree' ? 'worktree' : 'clone',
-              ...(kind === 'home'
+              storage_mode: kind === 'worktree' || kind === 'implicit' ? 'worktree' : 'clone',
+              ...(kind === 'home' || kind === 'implicit'
                 ? {
                     custom_context: {
                       teammate: { kind: 'teammate', displayName: 'Disposable home' },
@@ -167,6 +180,7 @@ dbTest(
           .mocked(spawnExecutorFireAndForget)
           .mock.calls.at(-1)![0] as GitBranchAddPayload;
         const attempt = branch.provisioning_attempt_id!;
+        if (kind === 'implicit') expect(branch.base_ref).toBeUndefined();
         const provenance = { base_ref: 'refs/heads/main', base_sha: sha };
         const patch = (token: string, data: object) =>
           fetch(`${server.url}/branches/${branch.branch_id}`, {
@@ -190,7 +204,7 @@ dbTest(
               command === 'git.branch.add' ? attemptId : undefined
             )
           );
-        if (kind === 'home') {
+        if (kind === 'home' || kind === 'implicit') {
           const report = { ...provenance, provisioning_attempt_id: attempt };
           let before = await rows.findById(branch.branch_id);
           const userToken = server.headers(owner.user_id).authorization.slice(7);
@@ -247,7 +261,7 @@ dbTest(
             ],
           },
         });
-        if (kind === 'clone') {
+        if (kind === 'clone' || kind === 'implicit') {
           const rejected = await handleGitBranchAdd(
             {
               ...payload,
@@ -282,6 +296,11 @@ dbTest(
           expect(ready?.custom_context?.teammate).toMatchObject({ localHome: true });
           expect(await simpleGit(branch.path).getRemotes()).toEqual([]);
           expect(ready?.base_source?.remote_url).toBe(TEAMMATE_FRAMEWORK_REPO_URL);
+        }
+        if (kind === 'implicit') {
+          expect(ready?.base_source).toEqual({ name: 'main', remote_url: remote });
+          expect((await simpleGit(cache).revparse('main')).trim()).toBe(firstSha);
+          expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(sha);
         }
         // Retry after an interrupted terminal acknowledgement adopts the marked
         // checkout. The old signed token cannot spoof the replacement generation.

@@ -109,6 +109,16 @@ export function canAddMcpServer({
   return isAdmin || canConfigure;
 }
 
+/** Sharing configuration requires the existing shared-server write permission. */
+export function canAddSharedMcpServer(context: MCPServerCapabilityContext): boolean {
+  return canAddMcpServer(context) && (context.isAdmin || context.policy === 'allow_crud');
+}
+
+/** Reuse/sign-in is not a configuration write; the daemon repeats every check. */
+export function canUseExistingMcpServer(context: MCPServerCapabilityContext): boolean {
+  return context.connectionReady && isAtLeastMemberRole(context.role);
+}
+
 /**
  * The transports this user may configure. Members are held to remote ones, so
  * a form offers what the write will accept rather than a 403. Role alone
@@ -188,7 +198,7 @@ const READ_ONLY_RESTRICTION =
  */
 export function explainAddRestriction({ role, policy }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add MCP servers. An admin can add one, or change the policy.`;
+  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add or change MCP servers. An admin can configure one, or change the policy.`;
 }
 
 /** Why changing or removing this particular server is refused. */

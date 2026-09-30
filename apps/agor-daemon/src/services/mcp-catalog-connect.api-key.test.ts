@@ -1,3 +1,4 @@
+import { authorizeCatalogCaller } from './mcp-catalog-access.js';
 /**
  * Where a marketplace API key ends up, and who can read it back.
  *
@@ -212,6 +213,7 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     }) as unknown as AuthenticatedParams;
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    authorizeCaller: (params: AuthenticatedParams) => authorizeCatalogCaller(rawDb, params),
     runInTenantDatabaseScope: <T>(
       _params: AuthenticatedParams,
       work: () => Promise<T>

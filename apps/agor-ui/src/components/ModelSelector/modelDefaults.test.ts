@@ -56,6 +56,7 @@ describe('curateModelOptions (Claude)', () => {
 
     expect(ids).toContain('claude-opus-5-5');
     expect(ids).toContain('claude-opus-5');
+    expect(ids).toContain('claude-sonnet-5-5');
     expect(ids).toContain('claude-sonnet-5');
     expect(ids).toContain('claude-haiku-4-5');
     expect(ids).toContain('claude-fable-5');
@@ -64,6 +65,7 @@ describe('curateModelOptions (Claude)', () => {
     expect(ids).toContain('claude-sonnet-4-6');
     expect(ids).toContain('claude-opus-4-1');
     expect(ids).toContain('claude-opus-4-8[1m]');
+    expect(ids).not.toContain('claude-sonnet-5-5[1m]');
     expect(ids).not.toContain('claude-sonnet-5[1m]');
     expect(ids).not.toContain('claude-sonnet-4-5[1m]');
     expect(ids).toHaveLength(normalized.length);
@@ -111,6 +113,7 @@ describe('normalizeModelOption', () => {
 describe('getModelDisplayName', () => {
   it('resolves Claude ids to their friendly display name', () => {
     expect(getModelDisplayName('claude-code', 'claude-sonnet-5')).toBe('Claude Sonnet 5 · 1M');
+    expect(getModelDisplayName('claude-code', 'claude-sonnet-5-5')).toBe('Claude Sonnet 5.5 · 1M');
   });
 
   it('annotates the 1M context variant', () => {

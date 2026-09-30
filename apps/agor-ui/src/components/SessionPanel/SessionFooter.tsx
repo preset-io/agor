@@ -396,7 +396,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
 
       {/* Permissions */}
-      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+      <div
+        style={{
+          ...overflowRowStyle,
+          height: 'auto',
+          minHeight: overflowRowStyle.height,
+          alignItems: 'flex-start',
+          cursor: 'default',
+        }}
+      >
         <LockOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
         <Typography.Text
           style={{
@@ -415,6 +423,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           style={{
             pointerEvents: managedByPreset ? 'none' : undefined,
             opacity: managedByPreset ? 0.65 : undefined,
+            minWidth: 0,
+            flex: 2,
           }}
         >
           <PermissionModeSelector

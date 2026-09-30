@@ -212,7 +212,7 @@ export interface AppProps {
       ref: string;
       refType?: 'branch' | 'tag';
       createBranch: boolean;
-      sourceBranch: string;
+      sourceBranch?: string;
       sourceRemoteUrl?: string;
       pullLatest: boolean;
       issue_url?: string;

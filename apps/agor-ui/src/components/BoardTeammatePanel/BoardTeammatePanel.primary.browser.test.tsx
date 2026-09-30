@@ -196,8 +196,19 @@ it.each([
   'preserves $action for the primary teammate filesystem',
   async ({ status, title, action }) => {
     const api = mount();
-    await act(async () => branchPatched({ ...old, filesystem_status: status }));
+    await act(async () =>
+      branchPatched({ ...old, filesystem_status: status, error_message: 'Template fetch failed' })
+    );
     expect(await screen.findByText(title)).toBeVisible();
+    if (status === 'failed') {
+      expect(screen.getByText(/Ask a workspace admin to check/)).toBeVisible();
+      expect(screen.getByText(/no need to create another one/)).toBeVisible();
+      const details = screen.getByText('Technical details').closest('details')!;
+      expect(details).not.toHaveAttribute('open');
+      await click(screen.getByText('Technical details'));
+      expect(details).toHaveAttribute('open');
+      expect(details).toHaveTextContent('Template fetch failed');
+    }
     expectNoPrimaryActions();
     await click(screen.getByRole('button', { name: action }));
     await waitFor(() => expect(api.retryProvisioning).toHaveBeenCalledExactlyOnceWith({}));

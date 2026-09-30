@@ -20,6 +20,7 @@ export const DISCORD_METADATA_KEY = {
   roleIds: 'discord_role_ids',
   botUserId: 'discord_bot_user_id',
   isThread: 'discord_is_thread',
+  directMessage: 'discord_direct_message',
   parentChannelId: 'discord_parent_channel_id',
   replyToMessageId: 'discord_reply_to_message_id',
   hasMention: 'discord_has_mention',
@@ -45,6 +46,7 @@ type DiscordMetadataValues = Partial<{
   [DISCORD_METADATA_KEY.roleIds]: string[];
   [DISCORD_METADATA_KEY.botUserId]: string;
   [DISCORD_METADATA_KEY.isThread]: boolean;
+  [DISCORD_METADATA_KEY.directMessage]: boolean;
   [DISCORD_METADATA_KEY.parentChannelId]: string;
   [DISCORD_METADATA_KEY.replyToMessageId]: string;
   [DISCORD_METADATA_KEY.hasMention]: boolean;
@@ -126,6 +128,7 @@ export function parseDiscordAuthorityMetadata(value: unknown): DiscordAuthorityM
   }
 
   const booleanFields = [
+    DISCORD_METADATA_KEY.directMessage,
     DISCORD_METADATA_KEY.isThread,
     DISCORD_METADATA_KEY.hasMention,
     DISCORD_METADATA_KEY.threadAccessible,
@@ -223,6 +226,27 @@ export function buildDiscordInboundMetadata(input: {
   return metadata;
 }
 
+/** Authority for a live, membership-checked one-to-one DM. */
+export function buildDiscordDirectMessageMetadata(input: {
+  channelId: string;
+  messageId: string;
+  authorId: string;
+  roleIds: string[];
+  botUserId: string;
+}): DiscordAuthorityMetadata {
+  const metadata = {
+    [DISCORD_METADATA_KEY.channelId]: input.channelId,
+    [DISCORD_METADATA_KEY.messageId]: input.messageId,
+    [DISCORD_METADATA_KEY.authorId]: input.authorId,
+    [DISCORD_METADATA_KEY.roleIds]: input.roleIds,
+    [DISCORD_METADATA_KEY.botUserId]: input.botUserId,
+    [DISCORD_METADATA_KEY.isThread]: false,
+    [DISCORD_METADATA_KEY.directMessage]: true,
+  };
+  if (!parseDiscordAuthorityMetadata(metadata)) throw new Error('Invalid Discord DM authority');
+  return metadata;
+}
+
 /** Add the verified public-thread coordinates returned by the provider. */
 export function buildDiscordVerifiedThreadMetadata(
   coordinates: DiscordThreadCoordinates,
@@ -295,6 +319,7 @@ export function parseDiscordDeliveryNonce(value: unknown): DiscordDeliveryNonce 
 export type DiscordThreadKey = string & { readonly __brand: 'DiscordThreadKey' };
 
 export type ParsedDiscordThreadKey =
+  | { kind: 'direct_message'; channelId: string; userId: string }
   | {
       kind: 'message';
       channelId: string;
@@ -306,6 +331,15 @@ export type ParsedDiscordThreadKey =
       threadChannelId: string;
     }
   | { kind: 'provider_thread'; channelId: string };
+
+export function buildDiscordDirectMessageThreadKey(
+  channelId: string,
+  userId: string
+): DiscordThreadKey {
+  requireDiscordSnowflake(channelId, 'Discord DM channel ID');
+  requireDiscordSnowflake(userId, 'Discord DM user ID');
+  return `discord:dm:${channelId}:${userId}` as DiscordThreadKey;
+}
 
 export function buildDiscordMessageThreadKey(
   channelId: string,
@@ -329,6 +363,10 @@ export function buildDiscordLegacyThreadKey(
 
 export function parseDiscordThreadKey(value: unknown): ParsedDiscordThreadKey | null {
   if (typeof value !== 'string') return null;
+  const dm = /^discord:dm:(\d{17,20}):(\d{17,20})$/.exec(value);
+  if (dm && isDiscordSnowflake(dm[1]) && isDiscordSnowflake(dm[2])) {
+    return { kind: 'direct_message', channelId: dm[1], userId: dm[2] };
+  }
   const legacy = /^discord:thread:(\d{17,20}):(\d{17,20})$/.exec(value);
   if (legacy && isDiscordSnowflake(legacy[1]) && isDiscordSnowflake(legacy[2])) {
     return {
