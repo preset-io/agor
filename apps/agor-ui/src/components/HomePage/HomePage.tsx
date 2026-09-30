@@ -45,12 +45,21 @@ import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
-// Kept past the 7-day failure window: entries hold run starts, and a later patch can keep an old run's failure in view.
+// Longer than the 7-day failure window, since a later patch can keep an old failure in view.
 const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
-const NO_OPENED_FAILURES: Record<string, number> = {};
+/** Opened failure → the run it showed (server clock) and when it was opened; a bare number is the older click-time form. */
+type OpenedFailure = number | { run: number; at: number };
+const NO_OPENED_FAILURES: Record<string, OpenedFailure> = {};
+const openedField = (entry: unknown, field: 'run' | 'at'): number => {
+  if (typeof entry === 'number') return entry;
+  const value = entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[field] : 0;
+  return typeof value === 'number' ? value : 0;
+};
+const openedAt = (entry: OpenedFailure) => openedField(entry, 'at');
+const openedRun = (entry: OpenedFailure) => openedField(entry, 'run');
 
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
@@ -232,6 +241,13 @@ export const HomePage = memo(function HomePage({
     'home-opened-failures',
     NO_OPENED_FAILURES
   );
+  const openedRuns = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(openedFailures).map(([id, entry]) => [id, openedRun(entry)])
+      ),
+    [openedFailures]
+  );
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);
@@ -265,7 +281,7 @@ export const HomePage = memo(function HomePage({
           boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
           query: deferredQuery,
           onlyStartedByMe,
-          openedFailures,
+          openedFailures: openedRuns,
         }),
       [
         userId,
@@ -275,7 +291,7 @@ export const HomePage = memo(function HomePage({
         visitedBoardIds.length,
         deferredQuery,
         onlyStartedByMe,
-        openedFailures,
+        openedRuns,
       ]
     ),
     shallow
@@ -322,10 +338,11 @@ export const HomePage = memo(function HomePage({
       const cutoff = Date.now() - OPENED_FAILURES_WINDOW_MS;
       const session = agorStore.getState().sessionById.get(sessionId);
       // The run the person saw, on the server clock, so only a newer run brings the failure back.
-      const seenRun = session ? lastRunStartedAt(session) : Date.now();
+      const now = Date.now();
+      const run = session ? lastRunStartedAt(session) : now;
       setOpenedFailures((prev) => ({
-        ...Object.fromEntries(Object.entries(prev).filter(([, at]) => at > cutoff)),
-        [sessionId]: seenRun,
+        ...Object.fromEntries(Object.entries(prev).filter(([, entry]) => openedAt(entry) > cutoff)),
+        [sessionId]: { run, at: now },
       }));
       onSessionClick(sessionId);
     },

@@ -108,6 +108,19 @@ describe('HomePage', () => {
     expect(within(needs).getByRole('button', { name: '2 more · 2 comments' })).toBeInTheDocument();
   });
 
+  it('ignores malformed opened-failure entries instead of failing to render', () => {
+    localStorage.setItem(
+      `agor:user:${ME}:home-opened-failures`,
+      JSON.stringify({ f1: null, f2: 'oops', f3: [1] })
+    );
+    seed({
+      sessions: [session('f1', { status: 'failed', created_at: recent(60), title: 'Broken run' })],
+    });
+    renderHome();
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    expect(within(needs).getByText('Broken run')).toBeInTheDocument();
+  });
+
   it('keeps an opened failure out of Needs you through a rename, until the session runs again', async () => {
     const failed = session('f1', {
       status: 'failed',

@@ -1,5 +1,5 @@
 import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildSessionMaps, EMPTY_MAPS } from './agorMaps';
 import type { AgorState } from './agorStore';
 import {
@@ -305,6 +305,15 @@ describe('makeHomeBucketsSelector', () => {
     expect(reasons(state({ sessions: [scheduledFail] }))).toEqual(['failed:sf']);
     expect(reasons(state({ sessions: [scheduledFail, scheduledOk] }))).toEqual([]);
     expect(reasons(state({ sessions: [mineFail, scheduledOnMine] }))).toEqual(['failed:mf']);
+    const nightlyFail = { ...scheduledFail, schedule_id: 'nightly-deploy' } as Session;
+    const hourlyOk = { ...scheduledOk, schedule_id: 'hourly-lint' } as Session;
+    const nightlyOk = {
+      ...scheduledOk,
+      session_id: 'nok',
+      schedule_id: 'nightly-deploy',
+    } as Session;
+    expect(reasons(state({ sessions: [nightlyFail, hourlyOk] }))).toEqual(['failed:sf']);
+    expect(reasons(state({ sessions: [nightlyFail, hourlyOk, nightlyOk] }))).toEqual([]);
   });
 
   it('treats a fork cycle or a shared ancestor consistently when deciding who started a retry', () => {
@@ -333,9 +342,13 @@ describe('makeHomeBucketsSelector', () => {
       reasons(state({ sessions: [failed, spawned, fork('k1', 'sp', 1), fork('k2', 'k1', 1)] }))
     ).toEqual(['failed:f']);
     const root = session('r', { branch_id: 'b', created_at: hoursAgo(9) });
-    expect(
-      reasons(state({ sessions: [failed, root, fork('k3', 'r', 2), fork('k4', 'k3', 1)] }))
-    ).toEqual([]);
+    const shared = state({ sessions: [failed, root, fork('k3', 'r', 2), fork('k4', 'k3', 1)] });
+    const lookup = shared.sessionById.get.bind(shared.sessionById);
+    const get = vi.fn(lookup);
+    shared.sessionById.get = get;
+    expect(reasons(shared)).toEqual([]);
+    // k4's walk stops at k3's remembered answer instead of reaching the root again.
+    expect(get.mock.calls.filter(([id]) => id === 'r')).toHaveLength(1);
   });
 
   it('keeps an opened failure dismissed through later patches, until a new run', () => {
