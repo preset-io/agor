@@ -34,7 +34,7 @@ export type { Application as ExpressApplication } from '@feathersjs/express';
 export { default as feathersExpress, errorHandler, rest } from '@feathersjs/express';
 export type { Application, FeathersService, Service, ServiceMethods } from '@feathersjs/feathers';
 // Core Feathers
-export { feathers } from '@feathersjs/feathers';
+export { feathers, getServiceOptions } from '@feathersjs/feathers';
 // Schema validation
 export { validateQuery } from '@feathersjs/schema';
 // Socket.io Integration

@@ -188,8 +188,13 @@ task or command capabilities before exempting safety RPCs. Start/nuke and cleanu
 claims remain denied; ongoing authorized deletion cleanup may settle. No role,
 provider-less call, report-path name or customer flag is a generic exemption.
 
-Socket admission retains executor safety RPC transport only; service guards still
-authorize each operation. A bounded per-replica monitor (1 s tick) disconnects
+Per-packet socket admission reads only for Feathers service-call packets (and
+every executor-socket packet), sharing that read with the service hook; it retains
+executor safety RPC transport only, and service guards still authorize each
+operation. Raw terminal/presence/cursor packets do no read, and every packet on a
+socket dispatches in arrival order (a raw packet waits only behind an earlier
+pending admission). Raw traffic from a restricted tenant stops when the monitor
+retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or
 saturated read skips that tenant until the next tick with a rate-limited warning;

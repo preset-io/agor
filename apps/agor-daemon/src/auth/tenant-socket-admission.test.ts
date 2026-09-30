@@ -1,8 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import { ENVIRONMENT_COMMAND_REPORT_SERVICE, TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   admitTenantSocketPacket,
+  createOrderedTenantPacketGate,
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
@@ -47,6 +49,35 @@ describe('restricted socket transport', () => {
       assertAccess,
     });
     expect(assertAccess).toHaveBeenCalledWith('neighbor');
+  });
+});
+
+describe('ordered tenant packet gate', () => {
+  it('dispatches admitted packets inside their own read scope, after earlier packets', async () => {
+    const store = new AsyncLocalStorage<string>();
+    const releases: Array<() => void> = [];
+    const gate = createOrderedTenantPacketGate({
+      needsAdmission: (packet) => packet[0] === 'create',
+      admit: () => new Promise<void>((resolve) => releases.push(resolve)),
+      scope: (work) => store.run(`scope:${releases.length}`, work),
+    });
+    const dispatched: Array<[unknown, string | undefined]> = [];
+    const next = (label: unknown) => () => dispatched.push([label, store.getStore()]);
+    gate(['create', 'a'], next('a'));
+    gate(['create', 'b'], next('b'));
+    gate(['raw'], next('raw'));
+    releases[1]?.();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(dispatched).toEqual([]);
+    releases[0]?.();
+    await vi.waitFor(() => expect(dispatched).toHaveLength(3));
+    expect(dispatched).toEqual([
+      ['a', 'scope:0'],
+      ['b', 'scope:1'],
+      ['raw', undefined],
+    ]);
+    gate(['raw'], next('sync'));
+    expect(dispatched.at(-1)).toEqual(['sync', undefined]);
   });
 });
 

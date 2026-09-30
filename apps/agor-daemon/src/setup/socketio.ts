@@ -10,6 +10,7 @@ import {
 } from '../auth/tenant-credential-epoch.js';
 import {
   admitTenantSocketPacket,
+  createOrderedTenantPacketGate,
   missingSocketTenant,
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
@@ -38,7 +39,7 @@ import {
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, getServiceOptions } from '@agor/core/feathers';
 import {
   type Board,
   type BoardID,
@@ -986,13 +987,21 @@ export function createSocketIOConfig(
       }
       const assertTenantAccess = options.assertTenantAccess;
       if (assertTenantAccess) {
-        // Each packet opens its own read scope; the service hook and strategy reuse its one read.
-        socket.use((packet, next) =>
-          withTenantRestrictionRequest(() => {
+        // Feathers dispatches exactly these event names to services; everything else is raw realtime traffic.
+        const serviceMethods = new Set(
+          Object.keys(app.services).flatMap((path) => getServiceOptions(app.service(path)).methods)
+        );
+        const executorSocket = authority?.principal.kind === 'executor';
+        const gate = createOrderedTenantPacketGate({
+          // Raw terminal/presence packets do no read: the 1 s monitor retires a restricted tenant's sockets.
+          needsAdmission: (packet) => executorSocket || serviceMethods.has(packet[0] as string),
+          // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
+          scope: withTenantRestrictionRequest,
+          admit: async (packet) => {
             const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
             const tenantId = current?.tenant?.tenant_id;
-            if (!tenantId) return rejectTenantSocketPacket(packet, next);
-            void admitTenantSocketPacket({
+            if (!tenantId) throw missingSocketTenant();
+            await admitTenantSocketPacket({
               tenantId,
               executor: current.principal.kind === 'executor',
               packet,
@@ -1001,12 +1010,16 @@ export function createSocketIOConfig(
                   id,
                   getAuthenticatedConnectionCredentialPayload(feathersSocket.feathers)
                 ),
-            }).then(
-              () => next(),
-              () => rejectTenantSocketPacket(packet, next)
-            );
-          })
-        );
+            });
+          },
+        });
+        socket.use((packet, next) => {
+          // A retired or unscoped connection never dispatches, read or not.
+          if (!getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id) {
+            return rejectTenantSocketPacket(packet, next);
+          }
+          gate(packet, next);
+        });
       }
       activeConnections++;
       const recordClientDisconnect =

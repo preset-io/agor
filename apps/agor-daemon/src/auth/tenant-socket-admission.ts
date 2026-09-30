@@ -39,6 +39,50 @@ export async function admitTenantSocketPacket(input: {
   }
 }
 
+type PacketNext = (error?: Error) => void;
+
+/** Per-socket packet gate: only `needsAdmission` packets await a read, and every packet dispatches in arrival order. */
+export function createOrderedTenantPacketGate(input: {
+  needsAdmission: (packet: unknown[]) => boolean;
+  admit: (packet: unknown[]) => Promise<void>;
+  /** Wraps an admitted packet's read and dispatch so later checks in that call can share the read. */
+  scope?: <T>(work: () => T) => T;
+}): (packet: unknown[], next: PacketNext) => void {
+  let tail: Promise<void> = Promise.resolve();
+  let queued = 0;
+  const enqueue = (packet: unknown[], next: PacketNext, admitted: Promise<boolean>) => {
+    queued++;
+    // Registered in the caller's async context, so dispatch keeps the packet's shared read scope.
+    tail = tail
+      .then(() => admitted)
+      .then((ok) => {
+        queued--;
+        if (ok) next();
+        else rejectTenantSocketPacket(packet, next);
+      })
+      .catch(() => undefined);
+  };
+  return (packet, next) => {
+    if (!input.needsAdmission(packet)) {
+      // Raw realtime traffic never reads; it only waits behind an earlier admitted packet.
+      if (queued === 0) next();
+      else enqueue(packet, next, Promise.resolve(true));
+      return;
+    }
+    const run = input.scope ?? ((work) => work());
+    run(() =>
+      enqueue(
+        packet,
+        next,
+        input.admit(packet).then(
+          () => true,
+          () => false
+        )
+      )
+    );
+  };
+}
+
 /** Reject without dispatching; Socket.IO next(error) alone never settles an RPC ack. */
 export function rejectTenantSocketPacket(packet: unknown[], next: (error: Error) => void): void {
   // Never serialize a database/observation error or private restriction metadata.
