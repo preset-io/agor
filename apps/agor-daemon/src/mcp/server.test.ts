@@ -3,7 +3,7 @@ import { request as httpRequest } from 'node:http';
 import { promisify } from 'node:util';
 import { resolveMultiTenancyConfig } from '@agor/core/config';
 import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
-import { Forbidden, Unavailable } from '@agor/core/feathers';
+import { Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { DatadogTracer } from '@agor/core/tracing/datadog';
 import { Server as SdkServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
@@ -790,6 +790,55 @@ describe('POST /mcp with personal API keys', () => {
         expect(getSession).not.toHaveBeenCalled();
       }
     );
+  });
+
+  it('compares an issued session token generation at admission and answers a stale one 401', async () => {
+    initMcpTokens({ db: testSqliteDb(), multiTenancy: resolveMultiTenancyConfig({}) });
+    vi.spyOn(SessionRepository.prototype, 'exists').mockResolvedValue(true);
+    const admission = vi
+      .spyOn(tenantAccess, 'assertRuntimeTenantAccess')
+      .mockRejectedValue(new NotAuthenticated('Tenant credential cannot be verified'));
+    const now = Math.floor(Date.now() / 1000);
+    const epoch = 'b'.repeat(64);
+    const token = jwt.sign(
+      {
+        tenant_credential_epoch: epoch,
+        sub: 'session-generation',
+        uid: 'user-1',
+        tid: 'default',
+        aud: MCP_TOKEN_AUDIENCE,
+        iss: MCP_TOKEN_ISSUER,
+        iat: now,
+        exp: now + 60,
+        jti: 'generation-token-test',
+      },
+      'mcp-server-test-secret',
+      { algorithm: 'HS256' }
+    );
+    const getSession = vi.fn();
+    await withMcpServer(
+      {
+        users: { get: vi.fn(async () => ({ user_id: 'user-1', role: 'member' })) },
+        sessions: { get: getSession },
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/mcp`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json, text/event-stream',
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/list' }),
+        });
+        expect(response.status).toBe(401);
+        expect((await response.json()).error.message).toBe('Invalid or expired session token');
+      }
+    );
+    expect(admission).toHaveBeenCalledWith(expect.anything(), 'default', {
+      payload: expect.objectContaining({ tenant_credential_epoch: epoch }),
+    });
+    expect(getSession).not.toHaveBeenCalled();
   });
 
   it('accepts a valid personal API key session context from X-Agor-Session-Id', async () => {

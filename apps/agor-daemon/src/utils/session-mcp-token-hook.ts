@@ -1,6 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
+import { isTenantRestrictedRejection } from '../auth/tenant-access.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
@@ -46,7 +47,14 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     }
 
     const session = context.result as Session;
-    const mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    let mcpToken: string;
+    try {
+      mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+    } catch (error) {
+      // A closed tenant gets no MCP credential, but safety reads of the session still succeed.
+      if (isTenantRestrictedRejection(error)) return context;
+      throw error;
+    }
 
     context.result = { ...session, mcp_token: mcpToken };
     options.onAttached?.(session);

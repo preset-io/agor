@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
+import { resolveMultiTenancyConfig } from '@agor/core/config';
 import {
   applyTenantRestrictionIntent,
   BranchRepository,
@@ -12,6 +13,7 @@ import {
   type RawDatabase,
   RepoRepository,
   readTenantRestrictionState,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   TaskRepository,
@@ -24,6 +26,7 @@ import {
   errorHandler,
   feathers,
   feathersExpress,
+  NotAuthenticated,
   rest,
   socketio,
 } from '@agor/core/feathers';
@@ -39,6 +42,12 @@ import {
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  generateSessionToken,
+  initMcpTokens,
+  shutdownMcpTokens,
+  verifySessionToken,
+} from '../mcp/tokens.js';
 import { SessionTokenService } from '../services/session-token-service.js';
 import { TASKS_SERVICE_TRANSPORT_METHODS, TasksService } from '../services/tasks.js';
 import { TenantRestrictionReconciler } from '../services/tenant-restriction-reconciler.js';
@@ -48,6 +57,7 @@ import {
   requestExecutorTermination,
   type TerminationInput,
 } from '../termination-coordinator.js';
+import { createSessionMcpTokenHook } from '../utils/session-mcp-token-hook.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import { getOrCreateExecutorConnectionRevocationFence } from './executor-connection-admission.js';
 import { createIssueBrowserTokensHook } from './issue-browser-tokens-hook.js';
@@ -302,6 +312,53 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ),
       };
     };
+
+    it('binds MCP session tokens to the credential generation: reactivation retires a pre-suspension token', async () => {
+      const tenantId = `mcp-generation-${randomUUID()}`;
+      const neighborId = `mcp-generation-open-${randomUUID()}`;
+      const seeded = await seedTenant(tenantId);
+      const neighbor = await seedTenant(neighborId);
+      initMcpTokens({
+        db,
+        multiTenancy: resolveMultiTenancyConfig({
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        }),
+      });
+      const app = { settings: { authentication: { secret: 'mcp-generation-secret' } } } as never;
+      const mint = (tenant: string, data: typeof seeded) =>
+        runWithTenantContext(tenant, () =>
+          generateSessionToken(app, data.session.session_id, data.user.user_id)
+        );
+      const admit = (token: string, tenant: string) =>
+        assertRuntimeTenantAccess(db, tenant, verifySessionToken(app, token)!.credential);
+      try {
+        // Never-restricted tenants keep claimless tokens exactly as before.
+        const neighborToken = await mint(neighborId, neighbor);
+        expect(jwt.decode(neighborToken)).not.toHaveProperty('tenant_credential_epoch');
+        await intent(tenantId, 1, 'restrict');
+        const closedHook = await runWithTenantContext(tenantId, () =>
+          createSessionMcpTokenHook({ app, config: {} })({
+            params: { user: { user_id: seeded.user.user_id, role: 'member' } },
+            result: seeded.session,
+          } as never)
+        );
+        expect(closedHook.result).not.toHaveProperty('mcp_token');
+        await release(tenantId, 2);
+        const beforeSuspension = await mint(tenantId, seeded);
+        expect(jwt.decode(beforeSuspension)).toHaveProperty('tenant_credential_epoch');
+        await expect(admit(beforeSuspension, tenantId)).resolves.toBeUndefined();
+
+        await intent(tenantId, 3, 'restrict');
+        await release(tenantId, 4);
+        await expect(admit(beforeSuspension, tenantId)).rejects.toBeInstanceOf(NotAuthenticated);
+        const afterReactivation = await mint(tenantId, seeded);
+        expect(afterReactivation).not.toBe(beforeSuspension);
+        await expect(admit(afterReactivation, tenantId)).resolves.toBeUndefined();
+        await expect(admit(neighborToken, neighborId)).resolves.toBeUndefined();
+      } finally {
+        shutdownMcpTokens();
+      }
+    });
 
     it('keeps signed executor Socket.IO safety RPCs and reconnect while denying ordinary/foreign RPCs', async () => {
       const tenantId = `socket-safety-${generateId()}`;

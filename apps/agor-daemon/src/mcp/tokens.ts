@@ -12,6 +12,7 @@
  * - `iat`  — unix seconds, standard JWT "issued at"
  * - `exp`  — unix seconds, enforced by `jsonwebtoken.verify`
  * - `jti`  — per-issuance UUID (useful for log correlation)
+ * - tenant credential generation — only once the tenant has restriction history
  *
  * No revocation mechanics. Tokens are minted lazily and cached briefly per
  * `(tenant,session,user)` so high-frequency `session.get` calls don't perform
@@ -49,6 +50,10 @@ import {
   type UserID,
 } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
+import {
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from '../auth/tenant-credential-epoch.js';
 
 const DEBUG_MCP_TOKENS =
   process.env.AGOR_DEBUG_MCP_TOKENS === '1' || process.env.DEBUG?.includes('mcp-tokens');
@@ -82,6 +87,8 @@ export interface McpTokenContext {
   userId: UserID;
   tenantId: TenantID;
   jti: string;
+  /** Verified claims; the route compares its credential generation with current restriction state. */
+  credential: { payload: unknown };
 }
 
 export interface McpTokenInitOptions {
@@ -229,7 +236,9 @@ export async function generateSessionToken(
     s.lastCachePruneAtMs = nowMs;
   }
 
-  const cacheKey = `${tenantId}:${sessionId}:${userId}`;
+  // Bind the generation current at issuance; a closed tenant or failed read mints nothing.
+  const epoch = await readTenantCredentialEpoch(s.db, tenantId);
+  const cacheKey = `${tenantId}:${sessionId}:${userId}:${epoch ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.
   const refreshBufferMs = Math.min(5 * 60 * 1000, Math.max(30 * 1000, s.expirationMs * 0.1));
@@ -254,6 +263,7 @@ export async function generateSessionToken(
   const jti = generateId();
 
   const payload: McpTokenPayload = {
+    ...tenantCredentialEpochClaims(epoch),
     sub: sessionId,
     uid: userId,
     tid: tenantId,
@@ -367,7 +377,13 @@ export function verifySessionTokenDetailed(app: Application, token: string): Mcp
   }
 
   return {
-    context: { sessionId, userId, tenantId: tenantId.trim() as TenantID, jti: payload.jti },
+    context: {
+      sessionId,
+      userId,
+      tenantId: tenantId.trim() as TenantID,
+      jti: payload.jti,
+      credential: { payload },
+    },
   };
 }
 
