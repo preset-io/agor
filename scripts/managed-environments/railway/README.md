@@ -94,6 +94,15 @@ An already-running owned deployment is left alone, without a redeploy. App/healt
 URLs are reported after deployment admission; Agor's health observer establishes
 readiness. The application's runtime watch mode follows its pushed branch.
 
+Push dependency, startup-script, or database-migration changes, then **Stop/Start**
+the preview so its image and initialization can be refreshed. Watch-mode source
+updates alone do not apply those changes; Start on an already-running preview
+does not redeploy it. Stop retains the data volume; Nuke is not required.
+
+The default `simple` execution setup runs agents/terminals as the app's account
+and provides no filesystem isolation between users. Keep these previews limited
+to trusted users; app authentication does not make this safe for untrusted users.
+
 Railway service creation can briefly add empty instances of the **new** service
 in other project environments. The launcher verifies those instances have no
 source, deployments or volumes, then removes only those new empty instances
