@@ -258,7 +258,7 @@ describe('makeHomeBucketsSelector', () => {
     ).toEqual(['failed:f']);
   });
 
-  it('lists failures only for sessions the user started, and permission requests from any', () => {
+  it('lists failures for sessions the user started or scheduled, and permission requests from any', () => {
     const failure = (id: string, extra: Partial<Session>) =>
       session(id, { status: 'failed', ready_for_prompt: true, ...extra });
     const s = state({
@@ -274,12 +274,21 @@ describe('makeHomeBucketsSelector', () => {
         }),
       ],
     });
-    expect(reasons(s)).toEqual(['permission:child-perm', 'failed:mine']);
-    expect(
-      select(s)
-        .recent.map((r) => r.session_id)
-        .sort()
-    ).toEqual(['scheduled', 'spawned']);
+    expect(reasons(s).sort()).toEqual(['failed:mine', 'failed:scheduled', 'permission:child-perm']);
+    expect(select(s).recent.map((r) => r.session_id)).toEqual(['spawned']);
+  });
+
+  it('keeps an opened failure dismissed through later patches, until a new run', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      ...ranAt(3),
+      last_updated: hoursAgo(1),
+    });
+    const opened = { openedFailures: { f: Date.parse(hoursAgo(2)) } };
+    expect(reasons(state({ sessions: [failed] }), opened)).toEqual([]);
+    const reRan = { ...failed, ...ranAt(0.5) } as Session;
+    expect(reasons(state({ sessions: [reRan] }), opened)).toEqual(['failed:f']);
   });
 
   it('lets only a clean run the user started after the failure settled supersede it', () => {

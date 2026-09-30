@@ -154,20 +154,33 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
 /**
  * The person started this session and every fork ancestor: no spawn, schedule or
  * delegation in its lineage. An ancestor missing from the store counts as not.
+ * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
  */
-function startedByUserLineage(session: Session, s: AgorState): boolean {
-  let seen: Set<string> | undefined;
+function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, boolean>): boolean {
+  const path: string[] = [];
+  let result = false;
   for (let cur: Session | undefined = session; cur; ) {
-    if (!isSessionStartedByUser(cur)) return false;
+    const known = memo.get(cur.session_id);
+    if (known !== undefined) {
+      result = known;
+      break;
+    }
+    if (path.includes(cur.session_id) || !isSessionStartedByUser(cur)) break;
+    path.push(cur.session_id);
     const from = cur.genealogy?.forked_from_session_id;
-    if (!from) return true;
-    seen ??= new Set();
-    if (seen.has(from)) return false;
-    seen.add(from);
+    if (!from) {
+      result = true;
+      break;
+    }
     cur = s.sessionById.get(from);
   }
-  return false;
+  for (const id of path) memo.set(id, result);
+  return result;
 }
+
+/** Failures that need the person: sessions they started, including their scheduled runs, never spawned or delegated children. */
+const ownsFailure = (session: Session): boolean =>
+  !session.genealogy?.parent_session_id && !session.remote_relationships?.as_target?.length;
 
 /**
  * Home's session needs and My work in one pass over the caller's sessions.
@@ -245,6 +258,7 @@ export function makeHomeBucketsSelector(
     const failures: Session[] = [];
     // Newest clean run start per branch among the caller's user-started lineages.
     const cleanRunByBranch = new Map<string, number>();
+    const lineageMemo = new Map<string, boolean>();
     const failedByBranch = new Map<string, Session>();
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of userId ? s.sessionById.values() : []) {
@@ -261,7 +275,7 @@ export function makeHomeBucketsSelector(
           insertTopK(running, session, recentLimit, updatedBefore);
         }
       }
-      if (ranCleanly(session) && startedByUserLineage(session, s)) {
+      if (ranCleanly(session) && startedByUserLineage(session, s, lineageMemo)) {
         const runAt = lastRunStartedAt(session);
         if (runAt > (cleanRunByBranch.get(session.branch_id) ?? 0))
           cleanRunByBranch.set(session.branch_id, runAt);
@@ -270,9 +284,13 @@ export function makeHomeBucketsSelector(
         addNeed(session, 'permission');
       } else if (
         isFailure(session) &&
-        isSessionStartedByUser(session) &&
+        ownsFailure(session) &&
         updatedAt(session) >= now - HOME_FAILED_WINDOW_MS &&
-        updatedAt(session) > (openedFailures[session.session_id] ?? 0)
+        // Opening dismisses it until a new run, so renames and fork bookkeeping don't bring it back.
+        !(
+          lastRunStartedAt(session) <=
+          (openedFailures[session.session_id] ?? Number.NEGATIVE_INFINITY)
+        )
       ) {
         failures.push(session);
       } else if (isUnreadResult(session)) {
@@ -285,7 +303,7 @@ export function makeHomeBucketsSelector(
       }
     }
     for (const session of failures) {
-      // Superseded by a clean user-started run after the failure settled (a rename re-settles it).
+      // Superseded by a clean user-started run after the failure settled; any later patch (rename, fork) re-settles it, erring toward keeping it.
       if ((cleanRunByBranch.get(session.branch_id) ?? 0) > updatedAt(session)) {
         addRecent(session);
         continue;
