@@ -222,40 +222,36 @@ Per-packet socket admission reads only for Feathers service-call packets (and
 every executor-socket packet), sharing that read with the service hook; it retains
 executor safety RPC transport only, and service guards still authorize each
 operation. Executor safety RPCs do no packet read at all, since they pass whatever
-it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets do no read while their tenant is verified, and every packet on a
+it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets never read, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
 pending admission). An admission read still pending after 2 s rejects its packet
 with the same ambiguous `Forbidden`, so one stuck read never freezes the socket.
 While four such timed-out reads of one socket are still running, its further
 packets that need a read are refused at once without starting another, which
 bounds the database load a socket can hold; the cap is per socket, so a replica can
-hold up to four such reads for each connected socket. Raw packets that need a read (executor
-terminal frames, an unverified tenant's traffic) join the socket's raw-packet read
-already in flight; a settled or timed-out read is never joined by a later packet. A
+hold up to four such reads for each connected socket. Executor raw frames (such as
+terminal output) join the socket's raw-frame read already in flight; a settled or
+timed-out read is never joined by a later frame. A
 socket holding 1,000 queued packets is disconnected rather than dropping packets
 silently, and nothing queued behind it dispatches. Raw traffic from a restricted tenant stops when the monitor
-retires the socket. A bounded per-replica monitor (1 s tick) disconnects
+retires the socket, about one tick after a successful read shows the tenant closed. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
-closed tenant or a stale credential generation. A failed, slow (>2 s) or
-saturated read skips that tenant until the next tick with a rate-limited warning;
-each sweep reads the least recently verified tenants first, so while reads complete
-the eight-read bound cannot starve one (eight hung reads can, and the rule below then
-gates the starved tenants). RPCs stay closed meanwhile because each reads admission itself,
-but raw packets do not read, so a skip alone would let terminal input continue: a
-tenant is unverified once no successful read has verified it for 10 s, whatever
-kept the reads from succeeding (failure, timeout, saturation or an abandoned read).
-A read verifies the state as of its start, not its settlement, so a late or
-abandoned read never counts as fresher than its snapshot; the socket's handshake
-read starts the clock. The 10 s is judged as each packet arrives, so it holds when
-sweeps run slow or a replica has more tenants than eight reads cover (such a
-replica gates more tenants, never fewer). While unverified, every raw
-terminal/presence/cursor packet of its sockets passes the same per-packet admission
-read in arrival order and is refused when that read fails; a successful read
-started within the last 10 s ends it. Being unverifiable never disconnects a
-socket; only a positive observation retires it. A read still
-pending after 4 s is abandoned once so a fresh read can start; while that
-abandoned read is outstanding no further read replaces it, and abandoned reads
-count toward the eight-read bound. Ordinary publications and Redis relays recheck the generation through a
+closed tenant or a stale credential generation. It reads each tenant separately
+through a rolling pool of at most eight reads in flight, least recently read
+tenants first. A failed, slow (>2 s) or saturated read skips that tenant until
+the next tick with a rate-limited warning, and a sweep running far past its tick
+is warned about the same way. A read still pending after 4 s is abandoned once so
+a fresh read can start; while that abandoned read is outstanding no further read
+replaces it, and abandoned reads count toward the eight-read bound.
+
+When a replica cannot read the restriction (database outage or partition), its
+already-connected sockets keep their raw terminal/presence/cursor traffic until a
+read succeeds; being unverifiable never disconnects a socket. Service calls still
+fail closed per call, because each reads admission itself. Bounded partition
+freshness is deferred to v2 (D6): a strict stop during partitions would need
+renewable serving leases.
+
+Ordinary publications and Redis relays recheck the generation through a
 per-replica, per-tenant single-flight read reused for at most one tick (a failed
 read suppresses delivery for that tick; while a read stays pending past 2 s, that tenant's
 publications are suppressed until it settles, and after 4 s a fresh read replaces it once; no further read starts while that abandoned read is outstanding), so suspension or reactivation reaches
