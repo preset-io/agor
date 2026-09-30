@@ -139,6 +139,7 @@ describe('TeammatesDirectory', () => {
       [board('b-shared', 'Triages the board'), board('b-mine')]
     );
     renderDirectory();
+    expect(screen.getByRole('heading', { level: 4, name: 'AI teammates' })).toBeInTheDocument();
     expect(screen.getByText('Teammate shared')).toBeInTheDocument();
     expect(screen.getByText('Triages the board')).toBeInTheDocument();
     expect(screen.queryByText('Teammate went-private')).not.toBeInTheDocument();
@@ -175,7 +176,7 @@ describe('TeammatesDirectory', () => {
     expect(await screen.findByText('Teammate open')).toBeInTheDocument();
     expect(await screen.findByText('Teammate crew')).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.queryByRole('status', { name: 'Loading teammates' })).not.toBeInTheDocument()
+      expect(screen.getByRole('status')).not.toHaveTextContent('Loading teammates')
     );
     expect(screen.queryByText(/Loading more teammates/)).not.toBeInTheDocument();
     expect(screen.queryByText('Teammate private')).not.toBeInTheDocument();
@@ -192,11 +193,11 @@ describe('TeammatesDirectory', () => {
         })
     );
     renderDirectory({ client, currentUser: superadmin });
-    expect(screen.getByRole('status', { name: 'Loading teammates' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading teammates…');
     expect(screen.queryByText(/No teammates/)).not.toBeInTheDocument();
 
     act(() => agorStore.setState({ branchesHydrated: true } as never));
-    expect(screen.getByRole('status', { name: 'Loading teammates' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading teammates…');
     await waitFor(() => expect(grant).toBeDefined());
     await act(async () =>
       grant?.({
@@ -245,9 +246,12 @@ describe('TeammatesDirectory', () => {
     const reads = deferredReads();
     renderDirectory({ client: clientWith(reads.find), checkAccess: true });
     expect(reads.find).not.toHaveBeenCalled();
+    const live = screen.getByRole('status');
+    expect(live).toBeEmptyDOMElement();
+    expect(screen.getByRole('radiogroup', { name: 'Filter teammates' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByText('You can ask'));
-    expect(await screen.findByRole('status', { name: 'Checking access' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Checking access…'));
     expect(screen.queryByText('No teammates match.')).not.toBeInTheDocument();
     await waitFor(() => expect(reads.find).toHaveBeenCalledTimes(2));
 
@@ -257,6 +261,8 @@ describe('TeammatesDirectory', () => {
 
     await act(async () => reads.resolve('beta', answer('view')));
     await waitFor(() => expect(screen.queryByText(/Checking access/)).not.toBeInTheDocument());
+    // One live region throughout: only its text changed.
+    expect(screen.getByRole('status')).toBe(live);
     expect(screen.queryByText('Teammate beta')).not.toBeInTheDocument();
 
     // Back under "All", the answer already known marks the view-only teammate.
@@ -292,7 +298,7 @@ describe('TeammatesDirectory', () => {
     fireEvent.click(screen.getByText('You can ask'));
     expect(await screen.findByText(/Couldn’t check access for 2 teammates/)).toBeInTheDocument();
     expect(screen.queryByText(/No teammates|None you can ask/)).not.toBeInTheDocument();
-    expect(screen.queryByRole('status', { name: 'Checking access' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).not.toHaveTextContent('Checking access');
   });
 
   it('counts only pending checks that match the search', async () => {
@@ -485,7 +491,7 @@ describe('TeammatesDirectory', () => {
     // Beta answers first but waits for alpha, which comes before it.
     await act(async () => reads.resolve('beta', answer('session')));
     expect(screen.queryByText('Teammate beta')).not.toBeInTheDocument();
-    expect(screen.getByRole('status', { name: 'Checking access' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Checking access…');
 
     await act(async () => reads.resolve('alpha', answer('session')));
     expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
@@ -510,7 +516,7 @@ describe('TeammatesDirectory', () => {
     fireEvent.click(screen.getByText('All'));
     fireEvent.click(screen.getByText('You can ask'));
     expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
-    expect(await screen.findByRole('status', { name: 'Checking access' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Checking access…'));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
     await act(async () => reads.resolve('alpha', answer('session')));
     expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
@@ -534,7 +540,7 @@ describe('TeammatesDirectory', () => {
     renderDirectory({ client: clientWith(vi.fn(), policy), currentUser: superadmin });
     expect(await screen.findByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
     // Settled: no endless loading, and no empty state the notice already explains.
-    expect(screen.queryByRole('status', { name: 'Loading teammates' })).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).not.toHaveTextContent('Loading teammates');
     expect(screen.queryByText(/No teammates/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));

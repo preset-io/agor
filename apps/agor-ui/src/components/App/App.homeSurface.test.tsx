@@ -335,6 +335,19 @@ describe('Settings opens as an overlay, not a navigation', () => {
     await settle();
     expect(currentPath).toBe('/');
     expect(homeIsShowing()).toBe(true);
+    // It went back in history rather than pushing Home, so Forward returns to the directory.
+    fireEvent.click(screen.getByTestId('forward'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+  });
+
+  it('returns Home from a deep-linked teammates directory', async () => {
+    renderApp('/teammates');
+    await settle();
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
   });
 
   it('keeps the board canvas rendered behind the settings modal', async () => {

@@ -1372,6 +1372,7 @@ export const App: React.FC<AppProps> = ({
   // state (selection, panel, board) at call time without re-rendering the header.
   const handleHomeClick = useStableCallback(() => navigation.goHome());
   const handleSeeAllTeammates = useStableCallback(() => navigation.goToTeammates());
+  const handleTeammatesBack = useStableCallback(() => navigation.goBack());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
@@ -1587,7 +1588,7 @@ export const App: React.FC<AppProps> = ({
                         currentUser={user}
                         checkAccess={canCreateSessions}
                         onOpenBoard={handleHomeBoardClick}
-                        onBack={handleHomeClick}
+                        onBack={handleTeammatesBack}
                       />
                     ) : isHomeSurface ? (
                       <HomePage

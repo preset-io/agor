@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { getRouterBasename, isTeammatesRoute, responsiveRoutePath, uiRouteHref } from './uiRoutes';
+import {
+  getRouterBasename,
+  isMobileShellPath,
+  isTeammatesRoute,
+  responsiveRoutePath,
+  uiRouteHref,
+} from './uiRoutes';
 
 describe('uiRoutes', () => {
   it('supports a reverse-proxied Vite preview mounted at /ui', () => {
@@ -30,6 +36,17 @@ describe('isTeammatesRoute', () => {
     }
     for (const path of ['/', '/m', '/teammates/x', '/b/teammates', '/m/teammatesx']) {
       expect(isTeammatesRoute(path)).toBe(false);
+    }
+  });
+});
+
+describe('isMobileShellPath', () => {
+  it('matches /m and its descendants only', () => {
+    for (const path of ['/m', '/m/', '/m/teammates', '/m/board/b']) {
+      expect(isMobileShellPath(path)).toBe(true);
+    }
+    for (const path of ['/', '/mcp', '/teammates', '/b/m']) {
+      expect(isMobileShellPath(path)).toBe(false);
     }
   });
 });

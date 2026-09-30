@@ -350,7 +350,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
   const openBoardList = useCallback(() => setMoreOpen(true), []);
   const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
-  const openTeammates = useCallback(() => navigation.goToTeammates({ mobile: true }), [navigation]);
+  const openTeammates = useCallback(() => navigation.goToTeammates(), [navigation]);
   const createSession = useStableCallback(onCreateSession);
 
   // The bell opens comments for you across boards (Home › Needs you); on a board

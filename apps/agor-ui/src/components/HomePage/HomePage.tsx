@@ -40,7 +40,7 @@ import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './Home
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
 import { HomeTeammatesSection } from './HomeTeammates';
-import { HOME_MAIN_COLUMN_BASIS, HOME_RAIL_BASIS } from './homeLayout';
+import { HOME_MAIN_COLUMN_BASIS, HOME_PAGE_TITLE_LEVEL, HOME_RAIL_BASIS } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
@@ -401,7 +401,7 @@ export const HomePage = memo(function HomePage({
         />
       )}
       <div style={{ minWidth: 0 }}>
-        <Typography.Title level={4} style={{ margin: 0 }}>
+        <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
           Good {greeting()}, {firstName}
         </Typography.Title>
         {!hydrated ? (

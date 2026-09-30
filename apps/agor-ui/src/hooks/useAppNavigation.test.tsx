@@ -281,11 +281,30 @@ describe('useAppNavigation.goToBoard', () => {
 });
 
 describe('useAppNavigation.goToTeammates', () => {
-  it('pushes the directory for each shell', () => {
-    const { result } = renderHook(() => useTestNav({}), { wrapper: wrap('/') });
+  it('pushes the directory on the shell it is called from', () => {
+    const desktop = renderHook(() => useTestNav({}), { wrapper: wrap('/') });
+    act(() => desktop.result.current.nav.goToTeammates());
+    expect(desktop.result.current.pathname).toBe('/teammates');
+
+    const mobile = renderHook(() => useTestNav({}), { wrapper: wrap('/m') });
+    act(() => mobile.result.current.nav.goToTeammates());
+    expect(mobile.result.current.pathname).toBe('/m/teammates');
+  });
+});
+
+describe('useAppNavigation.goBack', () => {
+  it('pops an in-app entry, and goes Home on the current shell from a deep link', () => {
+    const { result } = renderHook(() => useTestNav({}), { wrapper: wrap('/b/alpha/') });
     act(() => result.current.nav.goToTeammates());
-    expect(result.current.pathname).toBe('/teammates');
-    act(() => result.current.nav.goToTeammates({ mobile: true }));
-    expect(result.current.pathname).toBe('/m/teammates');
+    act(() => result.current.nav.goBack());
+    expect(result.current.pathname).toBe('/b/alpha/');
+
+    const desktop = renderHook(() => useTestNav({}), { wrapper: wrap('/teammates') });
+    act(() => desktop.result.current.nav.goBack());
+    expect(desktop.result.current.pathname).toBe('/');
+
+    const mobile = renderHook(() => useTestNav({}), { wrapper: wrap('/m/teammates') });
+    act(() => mobile.result.current.nav.goBack());
+    expect(mobile.result.current.pathname).toBe('/m');
   });
 });

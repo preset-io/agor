@@ -30,7 +30,11 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { agorStore } from '../store/agorStore';
-import { MOBILE_TEAMMATES_ROUTE_PATH, TEAMMATES_ROUTE_PATH } from '../utils/uiRoutes';
+import {
+  isMobileShellPath,
+  MOBILE_TEAMMATES_ROUTE_PATH,
+  TEAMMATES_ROUTE_PATH,
+} from '../utils/uiRoutes';
 import { buildBoardPath } from './useUrlState';
 
 interface UseAppNavigationOptions {
@@ -69,8 +73,10 @@ export interface AppNavigation {
   goToBoard: (boardId: string, opts?: NavigationOpts) => void;
   /** Navigate to Home (`/`) with no board selected. */
   goHome: (opts?: NavigationOpts) => void;
-  /** Navigate to the teammates directory: `/teammates`, or `/m/teammates` with `mobile`. */
-  goToTeammates: (opts?: NavigationOpts & { mobile?: boolean }) => void;
+  /** Navigate to the teammates directory on the current shell: `/teammates` or `/m/teammates`. */
+  goToTeammates: (opts?: NavigationOpts) => void;
+  /** Back to the previous in-app entry; from the router's untouched initial entry, Home on the current shell. */
+  goBack: () => void;
 }
 
 /** Normalize a path to its trailing-slash canonical form so equality
@@ -109,6 +115,8 @@ export function useAppNavigation({
   boardByIdRef.current = boardById;
   const locationPathnameRef = useRef(location.pathname);
   locationPathnameRef.current = location.pathname;
+  const locationKeyRef = useRef(location.key);
+  locationKeyRef.current = location.key;
 
   /** Navigate to a target path (push by default, replace on opts).
    *  Returns `true` if the URL changed, `false` when target === current path. */
@@ -139,11 +147,17 @@ export function useAppNavigation({
   );
 
   const goToTeammates = useCallback(
-    (opts?: NavigationOpts & { mobile?: boolean }) => {
-      pushPath(opts?.mobile ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH, opts);
+    (opts?: NavigationOpts) => {
+      const mobile = isMobileShellPath(locationPathnameRef.current);
+      pushPath(mobile ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH, opts);
     },
     [pushPath]
   );
+
+  const goBack = useCallback(() => {
+    if (locationKeyRef.current !== 'default') navigate(-1);
+    else pushPath(isMobileShellPath(locationPathnameRef.current) ? '/m' : '/');
+  }, [navigate, pushPath]);
 
   const goToSession = useCallback(
     (sessionId: string, opts?: NavigationOpts) => {
@@ -214,7 +228,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates }),
-    [goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates]
+    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates, goBack }),
+    [goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates, goBack]
   );
 }

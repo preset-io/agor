@@ -188,6 +188,31 @@ describe('HomePage teammates', () => {
     expect(within(popup).queryByText(/Board primary/)).not.toBeInTheDocument();
   });
 
+  it('says the picker is still checking, not empty, while access reads are out', async () => {
+    seedTeammates();
+    const answers: (() => void)[] = [];
+    const pending = {
+      service: (name: string) =>
+        name === 'branches/:id/effective-access'
+          ? {
+              find: () =>
+                new Promise((resolve) =>
+                  answers.push(() => resolve({ can: 'view', is_owner: false, source: 'others' }))
+                ),
+            }
+          : { getPrimaryTeammate: async () => null, find: async () => [] },
+    } as unknown as AgorClient;
+    renderHome({ client: pending });
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick an assistant' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Ask' });
+    expect(within(sheet).getByText('Checking which teammates you can ask…')).toBeInTheDocument();
+    await waitFor(() => expect(answers).toHaveLength(3));
+    await act(async () => {
+      for (const answer of answers) answer();
+    });
+    expect(await within(sheet).findByText('No teammates you can ask')).toBeInTheDocument();
+  });
+
   it('asks to pick an assistant when there is no primary', async () => {
     seedTeammates();
     const none = {

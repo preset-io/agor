@@ -7,6 +7,9 @@ export const HOME_ROW_LEAD = 20;
 /** One line of row text at the base font size; row leads and trailing columns match it. */
 export const HOME_ROW_LINE = 22;
 
+/** Title of a Home-styled page (Home's greeting, the teammates directory); section titles sit one below. */
+export const HOME_PAGE_TITLE_LEVEL = 4;
+
 /** Between a row's title and meta lines; tighter than any spacing token. */
 export const HOME_ROW_LINE_GAP = 2;
 /** Row titles sit between regular and `fontWeightStrong`, so they lead without shouting. */

@@ -66,20 +66,32 @@ function AskTargetSelect({
   );
   const {
     teammates: shared,
+    settled: sharingSettled,
     failed: sharingFailed,
     retry: retrySharing,
+    retrying: sharingRetrying,
   } = useSharedTeammates(client, listed ? currentUser : null);
   const {
     access,
+    failedIds,
     failed: accessFailed,
     retry: retryAccess,
+    retrying: accessRetrying,
   } = useSessionAccess(
     listed ? client : null,
     currentUser,
     shared.map((b) => b.branch_id)
   );
-  const emptyText =
-    sharingFailed + accessFailed > 0
+  const checking =
+    !!client &&
+    listed &&
+    (!sharingSettled ||
+      sharingRetrying ||
+      accessRetrying ||
+      shared.some((b) => !(b.branch_id in access) && !failedIds.has(b.branch_id)));
+  const emptyText = checking
+    ? 'Checking which teammates you can ask…'
+    : sharingFailed + accessFailed > 0
       ? "Couldn't check access for some teammates. Reopen to try again"
       : 'No teammates you can ask';
   // Reads start on the first open; a later open retries the ones that failed.

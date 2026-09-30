@@ -5,9 +5,12 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { useSessionAccess } from '../../hooks/useSessionAccess';
 import { useSharedTeammates } from '../../hooks/useSharedTeammates';
 import { useAgorStore } from '../../store/agorStore';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { teammateLabel } from '../../utils/teammateLabels';
+// Home's layout primitives: the directory is a Home-styled page.
 import { HomeCard, HomeFrame, HomeLink } from '../HomePage/HomeSection';
-import { TeammateCard, teammateOwner, teammatePurpose } from '../HomePage/HomeTeammates';
+import { HOME_PAGE_TITLE_LEVEL } from '../HomePage/homeLayout';
+import { TeammateCard, teammateOwner, teammatePurpose } from '../TeammateCard';
 
 /** Case- and accent-insensitive form for search ("José" matches "jose"). */
 const fold = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -98,6 +101,16 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
         ? 'None you can ask yet.'
         : 'No teammates match.';
   const small = { fontSize: token.fontSizeSM };
+  const more = visible.length > 0;
+  const status = loading
+    ? more
+      ? 'Loading more teammates…'
+      : 'Loading teammates…'
+    : checking
+      ? more
+        ? `Checking access for ${pending} more…`
+        : 'Checking access…'
+      : '';
 
   return (
     <HomeFrame maxWidth={1000}>
@@ -111,8 +124,9 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
         </HomeLink>
       )}
       <div>
+        {/* On phones the shell header carries the page title. */}
         {onBack && (
-          <Typography.Title level={4} style={{ margin: 0 }}>
+          <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
             AI teammates
           </Typography.Title>
         )}
@@ -134,6 +148,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
             />
             {checkAccess && (
               <Segmented
+                aria-label="Filter teammates"
                 value={filter}
                 onChange={setFilter}
                 options={[
@@ -145,9 +160,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
           </Flex>
           {visible.length === 0 ? (
             loading || checking ? (
-              <div role="status" aria-label={loading ? 'Loading teammates' : 'Checking access'}>
-                <Skeleton active title={false} paragraph={{ rows: 3 }} />
-              </div>
+              <Skeleton active title={false} paragraph={{ rows: 3 }} />
             ) : (
               // The failure notice below explains an empty list better than any empty state.
               failed === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />
@@ -167,11 +180,6 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
               ))}
             </Row>
           )}
-          {visible.length > 0 && (loading || checking) && (
-            <Typography.Text type="secondary" role="status" style={small}>
-              {loading ? 'Loading more teammates…' : `Checking access for ${pending} more…`}
-            </Typography.Text>
-          )}
           {failed > 0 && (
             <Flex align="center" gap={token.marginXXS} wrap>
               <Typography.Text type="secondary" style={small}>
@@ -184,6 +192,18 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
             </Flex>
           )}
         </Flex>
+        {/* Always mounted, so screen readers announce each change; the skeleton says it alone on screen. */}
+        <Typography.Text
+          type="secondary"
+          role="status"
+          style={
+            more
+              ? { ...small, display: 'block', marginTop: status ? token.marginSM : 0 }
+              : VISUALLY_HIDDEN_STYLE
+          }
+        >
+          {status}
+        </Typography.Text>
       </HomeCard>
     </HomeFrame>
   );

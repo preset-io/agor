@@ -20,6 +20,10 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
   return `${getRouterBasename(baseUrl)}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/** Whether `pathname` belongs to the mobile shell (`/m` and below). */
+export const isMobileShellPath = (pathname: string): boolean =>
+  matchPath({ path: '/m', end: false }, pathname) !== null;
+
 /** Directory of AI teammates shared with the caller; `/m` prefixes it on mobile. */
 export const TEAMMATES_ROUTE_PATH = '/teammates';
 export const MOBILE_TEAMMATES_ROUTE_PATH = `/m${TEAMMATES_ROUTE_PATH}`;
