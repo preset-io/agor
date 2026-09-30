@@ -26,6 +26,7 @@ import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { HomeList, HomePressable } from './HomeRow';
 import { HomeCard, HomeLink, HomeSectionError, HomeSheet, useHomeCompact } from './HomeSection';
 import { useSessionAccess, useSharedTeammates } from './HomeTeammates';
+import { HOME_ASK_TARGET_MAX_WIDTH } from './homeLayout';
 
 // Starters for new users only; returning users get the placeholder.
 const NEW_USER_PROMPTS = [
@@ -138,7 +139,7 @@ function AskTargetSelect({
       onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
       labelRender={() => label}
       optionRender={({ data }) => <TeammateOptionLabel option={data} />}
-      style={{ flex: '0 0 auto', maxWidth: 200 }}
+      style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
     />
   );
 }

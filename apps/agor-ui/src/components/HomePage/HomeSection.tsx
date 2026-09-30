@@ -11,14 +11,15 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { createContext, useContext, useRef } from 'react';
+import { createContext, useContext, useMemo, useRef } from 'react';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { isDarkTheme } from '../../utils/theme';
 import { GlassPanel } from '../GlassSurface/GlassPanel';
-import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
+import { glassSurfaceStyle, pageGlassPanelProps } from '../GlassSurface/glassStyles';
+import { HOME_BOTTOM_PADDING, HOME_MAX_WIDTH, HOME_ROW_LEAD } from './homeLayout';
 
 const HomeDensity = createContext(false);
 
@@ -33,7 +34,7 @@ const NO_THEME = {};
 /** Scrolling page frame shared by Home and the teammates directory. */
 export const HomeFrame: React.FC<{ children: React.ReactNode; maxWidth?: number }> = ({
   children,
-  maxWidth = 1320,
+  maxWidth = HOME_MAX_WIDTH,
 }) => {
   const { token } = theme.useToken();
   // Correct on the first render, so the frame never swaps its tree after mount.
@@ -57,7 +58,7 @@ export const HomeFrame: React.FC<{ children: React.ReactNode; maxWidth?: number 
               margin: '0 auto',
               padding: compact
                 ? `${token.padding}px ${token.padding}px ${token.paddingXL}px`
-                : `${token.paddingLG}px ${token.paddingXL}px 80px`,
+                : `${token.paddingLG}px ${token.paddingXL}px ${HOME_BOTTOM_PADDING}px`,
             }}
           >
             {children}
@@ -68,10 +69,22 @@ export const HomeFrame: React.FC<{ children: React.ReactNode; maxWidth?: number 
   );
 };
 
-/** Secondary link: neutral text that takes the primary color on hover and focus. */
-export const HomeLink: React.FC<ButtonProps> = (props) => (
-  <Button color="default" variant="link" size="small" className="agor-home-link" {...props} />
-);
+/**
+ * Secondary link: secondary text that takes AntD's default-link hover color; keyboard focus
+ * shows AntD's focus ring. The neutral color is a component token, not a CSS override.
+ */
+export const HomeLink: React.FC<ButtonProps> = (props) => {
+  const { token } = theme.useToken();
+  const linkTheme = useMemo(
+    () => ({ components: { Button: { defaultColor: token.colorTextSecondary } } }),
+    [token.colorTextSecondary]
+  );
+  return (
+    <ConfigProvider theme={linkTheme}>
+      <Button color="default" variant="link" size="small" {...props} />
+    </ConfigProvider>
+  );
+};
 
 /**
  * Home's in-place "show more": a quiet link in the list's last row, aligned with row
@@ -99,7 +112,7 @@ export const HomeShowMore: React.FC<{
       ref={ref}
       style={{
         padding: `${token.paddingXXS}px ${token.paddingSM}px`,
-        paddingInlineStart: token.paddingSM + 20 + token.marginSM,
+        paddingInlineStart: token.paddingSM + HOME_ROW_LEAD + token.marginSM,
       }}
     >
       <HomeLink
@@ -159,10 +172,6 @@ export const HomeSheet: React.FC<{
   );
 };
 
-/** Home's glass: light surfaces need more fill and a visible edge against the light backdrop. */
-export const homeGlassAlpha = (token: ReturnType<typeof theme.useToken>['token']) =>
-  isDarkTheme(token) ? 0.3 : 0.65;
-
 /** Glass card every Home surface sits on. */
 export const HomeCard: React.FC<{ children: React.ReactNode; padded?: boolean }> = ({
   children,
@@ -172,12 +181,7 @@ export const HomeCard: React.FC<{ children: React.ReactNode; padded?: boolean }>
   return (
     <GlassPanel
       size="small"
-      surfaceAlpha={homeGlassAlpha(token)}
-      style={
-        isDarkTheme(token)
-          ? undefined
-          : { border: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}` }
-      }
+      {...pageGlassPanelProps(token)}
       styles={{ body: { padding: padded ? token.paddingSM : 0 } }}
     >
       {children}

@@ -6,6 +6,7 @@ import { makeBoardSessionActivitySelector } from '../../store/selectors';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
 import { glassCardStyle } from '../GlassSurface/glassStyles';
 import { HomeLink, useHomeCompact } from './HomeSection';
+import { HOME_BOARD_PILL_MAX_WIDTH } from './homeLayout';
 
 const RecentBoardPill: React.FC<{ board: Board; onClick: (boardId: string) => void }> = ({
   board,
@@ -29,7 +30,7 @@ const RecentBoardPill: React.FC<{ board: Board; onClick: (boardId: string) => vo
       onClick={() => onClick(board.board_id)}
       style={{
         ...glassCardStyle(token, 0.3),
-        maxWidth: isMobile ? 110 : 190,
+        maxWidth: HOME_BOARD_PILL_MAX_WIDTH[isMobile ? 'compact' : 'wide'],
       }}
     >
       <BoardTile

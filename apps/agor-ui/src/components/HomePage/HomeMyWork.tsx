@@ -34,6 +34,7 @@ import {
   HomeSkeleton,
   useHomeCompact,
 } from './HomeSection';
+import { HOME_ROW_LEAD, homeGroupIndent, homeNestedIndent } from './homeLayout';
 
 export const MY_WORK_PAGE = 20;
 
@@ -94,7 +95,7 @@ const BoardGroupHeader: React.FC<{ boardId?: string; onOpenBoard: (id: string) =
         )
       }
     >
-      <BoardTile emoji={board ? getBoardEmoji(board) : undefined} size={20} />
+      <BoardTile emoji={board ? getBoardEmoji(board) : undefined} size={HOME_ROW_LEAD} />
       <Typography.Text strong ellipsis style={{ flex: 1, minWidth: 0 }}>
         {board?.name ?? 'No board'}
       </Typography.Text>
@@ -323,7 +324,8 @@ export const HomeMyWork = memo(function HomeMyWork({
                         gap={token.marginXS}
                         style={{
                           padding: `${token.paddingXXS}px ${token.paddingSM}px`,
-                          paddingInlineStart: token.paddingSM + (compact ? 0 : 26),
+                          paddingInlineStart:
+                            token.paddingSM + (compact ? 0 : homeGroupIndent(token)),
                         }}
                       >
                         <HomeContext branchId={branchId} showBoard={false} />
@@ -342,7 +344,13 @@ export const HomeMyWork = memo(function HomeMyWork({
                           session={session}
                           showContext={false}
                           showLogo={showLogo}
-                          indent={compact ? token.paddingSM : redundant ? 26 : 40}
+                          indent={
+                            compact
+                              ? token.paddingSM
+                              : redundant
+                                ? homeGroupIndent(token)
+                                : homeNestedIndent(token)
+                          }
                           onOpen={onOpenSession}
                         />
                       )}

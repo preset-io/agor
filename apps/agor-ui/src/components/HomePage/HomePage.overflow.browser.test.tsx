@@ -161,6 +161,13 @@ const scrollingNodes = (root: HTMLElement) =>
         `${el.tagName.toLowerCase()}.${String(el.className).slice(0, 40)} ${el.scrollWidth}>${el.clientWidth}`
     );
 
+// Sub-pixel layout and font metrics vary by platform; measures match within a pixel.
+const PX = 1;
+const spread = (values: number[]) =>
+  values.length ? Math.max(...values) - Math.min(...values) : Number.POSITIVE_INFINITY;
+const near = (actual: number | undefined, expected: number) =>
+  Math.abs((actual ?? Number.NaN) - expected) <= PX;
+
 // Hit areas: a Segmented or affixed input is tapped on its outer box.
 const TAPPABLE =
   'button, [role="button"]:not(.ant-input-clear-icon), .ant-segmented, .ant-input-affix-wrapper, .ant-input-search';
@@ -181,27 +188,25 @@ describe('HomePage horizontal fit and touch targets', () => {
         expect(wide, `past the right edge at ${width}px:\n${wide.join('\n')}`).toEqual([]);
 
         const toolbar = viewport.querySelector<HTMLElement>('[data-home-toolbar]');
-        const tops = new Set(
-          Array.from(toolbar?.children ?? []).map((el) =>
-            Math.round(el.getBoundingClientRect().top)
-          )
+        const tops = Array.from(toolbar?.children ?? []).map(
+          (el) => el.getBoundingClientRect().top
         );
-        expect(tops.size, `My work toolbar wraps at ${width}px`).toBe(1);
+        expect(spread(tops), `My work toolbar wraps at ${width}px`).toBeLessThanOrEqual(PX);
         // View sits in the toolbar where it fits, and in the Filters sheet on phones.
         const view = toolbar?.querySelector<HTMLElement>('.ant-select');
         if (width < 768) expect(view, `View in the toolbar at ${width}px`).toBeNull();
-        else expect(view?.getBoundingClientRect().height).toBe(32);
+        else expect(near(view?.getBoundingClientRect().height, 32), `View height`).toBe(true);
 
         // Ask box toolbar: every control one height, 44px on phones and 32px otherwise.
         const ask = viewport.querySelector<HTMLElement>('[data-home-ask-toolbar]');
-        const askHeights = new Set(
-          Array.from(ask?.querySelectorAll<HTMLElement>('button, .ant-select') ?? []).map((el) =>
-            Math.round(el.getBoundingClientRect().height)
-          )
-        );
-        expect([...askHeights], `ask box control heights at ${width}px`).toEqual([
-          width < 768 ? MOBILE_TOUCH_TARGET : 32,
-        ]);
+        const askHeights = Array.from(
+          ask?.querySelectorAll<HTMLElement>('button, .ant-select') ?? []
+        ).map((el) => el.getBoundingClientRect().height);
+        const askTarget = width < 768 ? MOBILE_TOUCH_TARGET : 32;
+        expect(
+          askHeights.length > 0 && askHeights.every((h) => near(h, askTarget)),
+          `ask box control heights at ${width}px: ${askHeights.join(', ')}`
+        ).toBe(true);
 
         // The Needs you toggle: row-aligned, one line, and its count never truncates.
         const toggle = within(viewport).getByRole('button', { name: /^\d+ more · / });
@@ -211,17 +216,19 @@ describe('HomePage horizontal fit and touch targets', () => {
           .closest('section')
           ?.querySelector('[data-home-row] .ant-typography')
           ?.getBoundingClientRect().left;
-        expect(Math.abs(count.getBoundingClientRect().left - (rowText ?? 0))).toBeLessThan(1);
-        expect(toggle.getBoundingClientRect().height).toBe(width < 768 ? MOBILE_TOUCH_TARGET : 24);
+        expect(near(count.getBoundingClientRect().left, rowText ?? 0), 'toggle aligns').toBe(true);
+        const toggleHeight = toggle.getBoundingClientRect().height;
+        expect(
+          near(toggleHeight, width < 768 ? MOBILE_TOUCH_TARGET : 24),
+          `toggle height ${toggleHeight}`
+        ).toBe(true);
 
         // Every Needs you row kind shares one right-aligned time column.
         const needs = toggle.closest('section') as HTMLElement;
-        const rights = new Set(
-          Array.from(needs.querySelectorAll<HTMLElement>('.agor-home-time')).map((el) =>
-            Math.round(el.getBoundingClientRect().right)
-          )
+        const rights = Array.from(needs.querySelectorAll<HTMLElement>('.agor-home-time')).map(
+          (el) => el.getBoundingClientRect().right
         );
-        expect(rights.size, `Needs you times out of line at ${width}px`).toBe(1);
+        expect(spread(rights), `Needs you times out of line at ${width}px`).toBeLessThanOrEqual(PX);
 
         if (width < 768) {
           const small = Array.from(viewport.querySelectorAll<HTMLElement>(TAPPABLE))
@@ -239,5 +246,21 @@ describe('HomePage horizontal fit and touch targets', () => {
         }
       });
     }
+  }
+});
+
+describe('HomePage secondary links', () => {
+  for (const dark of [false, true]) {
+    it(`rest at the secondary text color from the theme (${dark ? 'dark' : 'light'})`, async () => {
+      const viewport = await renderHomeAt(1440, dark);
+      const token = theme.getDesignToken({
+        algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
+      });
+      const probe = document.createElement('span');
+      viewport.append(probe);
+      probe.style.color = token.colorTextSecondary;
+      const link = within(viewport).getByRole('button', { name: 'See all sessions' });
+      expect(getComputedStyle(link).color).toBe(getComputedStyle(probe).color);
+    });
   }
 });

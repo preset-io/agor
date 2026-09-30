@@ -94,6 +94,10 @@ Agor has one set of feature components. Make them responsive; do not fork them.
   surfaces keep their existing AntD `md` compact layout; a component nested inside one follows
   its container's breakpoint (`useMediaQuery(COMPACT_SETTINGS_MEDIA_QUERY)`) so the two switch
   together.
+- Home's density is intentionally independent of the shell: `HomeFrame` switches to touch-size
+  controls and collapsed labels below AntD `md` (768px), so between 768px and the shell
+  breakpoint the phone shell shows Home at desktop density. Content inside `HomeFrame` reads
+  `useHomeCompact()` rather than either breakpoint.
 - Shared components must not import from `components/mobile/`. Cross-shell constants such as
   `MOBILE_TOUCH_TARGET` live in `utils/`.
 
