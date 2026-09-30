@@ -1,4 +1,8 @@
-import type { OpenCodeCatalogModel, OpenCodeModelPair } from './opencode-models';
+import type {
+  OpenCodeCatalogModel,
+  OpenCodeModelPair,
+  OpenCodeUnsupportedReason,
+} from './opencode-models';
 
 export type OpenCodeProviderAuthPrompt =
   | {
@@ -89,6 +93,14 @@ export type OpenCodeCredentialIsolation = {
   boundary: 'logical';
 };
 
-export type OpenCodeProviderSettings = OpenCodeProviderDiscovery & {
-  isolation: OpenCodeCredentialIsolation;
-};
+/** Settings response for a deployment that cannot run OpenCode at all. */
+export interface OpenCodeUnsupportedSettings {
+  runtime: 'unsupported';
+  runtimeVersion: string;
+  unsupported: OpenCodeUnsupportedReason;
+  providers: [];
+}
+
+export type OpenCodeProviderSettings =
+  | (OpenCodeProviderDiscovery & { isolation: OpenCodeCredentialIsolation })
+  | OpenCodeUnsupportedSettings;

@@ -1,9 +1,8 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import type { AgorConfig, UnixUserMode } from '@agor/core/config';
-import { resolveMultiTenancyConfig } from '@agor/core/config';
-import { BadRequest } from '@agor/core/feathers';
+import type { UnixUserMode } from '@agor/core/config';
 import type { Session } from '@agor/core/types';
+import { type OpenCodeCapabilityConfig, requireOpenCodeSupported } from './capabilities.js';
 
 const SUBJECT_KEY_VERSION = 'agor-opencode-v1';
 
@@ -58,19 +57,7 @@ export function resolveOpenCodeTaskCredentialNamespace(input: {
  * durable home boundary in the current execution topology.
  */
 export function assertOpenCodeNativeAuthSupported(
-  config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>
+  config: OpenCodeCapabilityConfig
 ): OpenCodeNativeUnixUserMode {
-  if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
-    throw new BadRequest(
-      'OpenCode provider connection and execution are unavailable in hosted multi-tenant mode.'
-    );
-  }
-
-  const mode = config.execution?.unix_user_mode ?? 'simple';
-  if (mode === 'delegated') {
-    throw new BadRequest(
-      'OpenCode provider connection and execution are unavailable in delegated execution mode because the execution substrate does not provide a native-state home boundary.'
-    );
-  }
-  return mode;
+  return requireOpenCodeSupported(config).unixUserMode;
 }

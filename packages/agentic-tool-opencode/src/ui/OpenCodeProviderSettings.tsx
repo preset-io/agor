@@ -378,6 +378,19 @@ export function OpenCodeProviderSettings({
     );
   };
 
+  if (settings?.runtime === 'unsupported') {
+    // A permanent deployment limitation: no Retry and no provider form.
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title="OpenCode is not available in this workspace"
+        description={settings.unsupported.message}
+        data-testid="opencode-unsupported"
+      />
+    );
+  }
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>

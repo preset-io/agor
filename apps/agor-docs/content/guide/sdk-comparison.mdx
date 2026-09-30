@@ -792,6 +792,8 @@ OpenCode supports MCP servers via its REST API:
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
 - **Execution is local-only.** Agor must be able to contain the native writer process safely.
+  Hosted multi-tenant, delegated, and templated-executor deployments report OpenCode as
+  "not available" in settings, readiness, session creation, schedules, and prompts.
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
 
 ---

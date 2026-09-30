@@ -37,6 +37,7 @@ import type {
 } from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
+import { createDeploymentToolUnsupportedGate } from './integrations/opencode/deployment-capabilities.js';
 import {
   type DaemonMetrics,
   getDaemonMetrics,
@@ -846,6 +847,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
   const schedulerService = new SchedulerService(db, app, {
     deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    deploymentToolUnsupported: createDeploymentToolUnsupportedGate(config),
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',

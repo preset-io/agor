@@ -74,6 +74,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   Branch,
   MCPServerID,
   PersistedScheduleAgenticToolConfig,
@@ -291,6 +292,8 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
+  /** Same capability gate as interactive session creation, before admitting a row. */
+  deploymentToolUnsupported?: (tool: AgenticToolName) => BadRequest | undefined;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -327,6 +330,7 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
@@ -375,6 +379,7 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
+      deploymentToolUnsupported: config.deploymentToolUnsupported ?? (() => undefined),
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
@@ -895,6 +900,8 @@ export class SchedulerService {
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
     }
+    const unsupported = this.config.deploymentToolUnsupported(resolvedConfig.activeTool);
+    if (unsupported) throw unsupported;
     if (
       !(await this.withTenantDatabase(() =>
         isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)

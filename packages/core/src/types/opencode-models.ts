@@ -1,3 +1,14 @@
+/** Stable reasons a deployment cannot run OpenCode; the UI renders them as a permanent notice. */
+export type OpenCodeUnsupportedCode =
+  | 'hosted_tenancy'
+  | 'delegated_execution'
+  | 'templated_transport';
+
+export interface OpenCodeUnsupportedReason {
+  code: OpenCodeUnsupportedCode;
+  message: string;
+}
+
 export type OpenCodeModelStatus = 'alpha' | 'beta' | 'deprecated' | 'active';
 
 export interface OpenCodeModelPair {
@@ -25,4 +36,6 @@ export interface OpenCodeModelCatalog {
   runtimeVersion: string;
   suggestedSelection?: OpenCodeModelPair;
   providers: OpenCodeCatalogProvider[];
+  /** Present when this deployment cannot run OpenCode; providers is then empty. */
+  unsupported?: OpenCodeUnsupportedReason;
 }

@@ -10,6 +10,13 @@ import { resolveOpenCodeTaskCredentialNamespace } from './credential-namespace.j
 import { assertOpenCodeExecutionAllowed } from './execution-admission.js';
 
 export {
+  type OpenCodeCapabilities,
+  type OpenCodeCapabilityConfig,
+  OpenCodeUnsupportedError,
+  requireOpenCodeSupported,
+  resolveOpenCodeCapabilities,
+} from './capabilities.js';
+export {
   assertOpenCodeNativeAuthSupported,
   type OpenCodeCredentialNamespace,
   type OpenCodeNativeUnixUserMode,

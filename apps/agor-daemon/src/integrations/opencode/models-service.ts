@@ -1,3 +1,5 @@
+import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
@@ -84,6 +86,10 @@ export class OpenCodeModelsService {
   async find(params?: AuthenticatedParams): Promise<OpenCodeModelCatalog> {
     if (Object.keys(params?.query ?? {}).length > 0) {
       throw new BadRequest('OpenCode model catalog does not accept query parameters.');
+    }
+    const capabilities = resolveOpenCodeCapabilities(this.config);
+    if (capabilities.mode === 'unsupported') {
+      return { runtimeVersion: OPENCODE_VERSION, providers: [], unsupported: capabilities.reason };
     }
     return readModelCatalog(this.db, this.config, params);
   }

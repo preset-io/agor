@@ -269,31 +269,33 @@ describe('OpenCode provider auth service', () => {
     expect(seen.join(' ')).not.toContain('same-user');
   });
 
-  it('rejects hosted auth-resolved tenancy before executor or provider activity', async () => {
-    loadConfig.mockReturnValue({
-      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
-    } as never);
+  it.each([
+    [{ multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' } }, 'hosted_tenancy'],
+    [{ execution: { unix_user_mode: 'delegated' } }, 'delegated_execution'],
+    [{ execution: { executor_command_template: 'launch {task_id}' } }, 'templated_transport'],
+  ])(
+    'reports %o as unsupported settings and refuses mutations before executor activity',
+    async (config, code) => {
+      loadConfig.mockReturnValue(config as never);
 
-    await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(/hosted multi-tenant/i);
-    });
+      await runWithTenantContext('tenant-a', async () => {
+        await expect(service().find(params)).resolves.toMatchObject({
+          runtime: 'unsupported',
+          unsupported: { code },
+          providers: [],
+        });
+        await expect(
+          service().create({ providerId: 'kimi-for-coding', apiKey: 'secret' }, params)
+        ).rejects.toMatchObject({ data: { code } });
+        await expect(service().remove('kimi-for-coding', params)).rejects.toMatchObject({
+          data: { code },
+        });
+      });
 
-    expect(runCommand).not.toHaveBeenCalled();
-  });
-
-  it('rejects delegated mode before executor or provider activity', async () => {
-    loadConfig.mockReturnValue({
-      execution: { unix_user_mode: 'delegated' },
-    } as never);
-
-    await runWithTenantContext('tenant-a', async () => {
-      await expect(service().find(params)).rejects.toThrow(
-        /unavailable in delegated execution mode/i
-      );
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-  });
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(startOAuth).not.toHaveBeenCalled();
+    }
+  );
 
   it('serializes all mutations for one namespace while another tenant remains independent', async () => {
     let releaseFirst!: () => void;

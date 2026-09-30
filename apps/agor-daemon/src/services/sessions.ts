@@ -341,10 +341,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private deploymentAvailable: (tool: AgenticToolName) => boolean;
+  private deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
 
   private assertDeploymentToolConfigured(tool: AgenticToolName): void {
-    if (this.deploymentAvailable(tool)) return;
-    throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    if (!this.deploymentAvailable(tool)) {
+      throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    }
+    // An installed tool can still be unsupported by this deployment's topology;
+    // refuse with its structured reason instead of failing the first prompt.
+    const unsupported = this.deploymentToolUnsupported(tool);
+    if (unsupported) throw unsupported;
   }
 
   private assertSupportedModelConfig(
@@ -380,7 +386,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+    deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
   ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
@@ -396,6 +403,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     this.sessionRepo = sessionRepo;
     this.db = db;
     this.deploymentAvailable = deploymentAvailable;
+    this.deploymentToolUnsupported = deploymentToolUnsupported;
     this.app = app;
     // Custom service-to-service methods such as setMCPServers() can run with
     // tenant identity but without a request-scoped database transaction. Bind
@@ -2135,7 +2143,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
 ): SessionsService {
-  return new SessionsService(db, app, deploymentAvailable);
+  return new SessionsService(db, app, deploymentAvailable, deploymentToolUnsupported);
 }

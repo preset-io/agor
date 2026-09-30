@@ -1,3 +1,5 @@
+import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
@@ -155,6 +157,16 @@ export class OpenCodeAuthService {
   async find(
     params?: AuthenticatedParams & { query?: { branch_id?: unknown } }
   ): Promise<OpenCodeProviderSettings> {
+    const capabilities = resolveOpenCodeCapabilities(this.config);
+    if (capabilities.mode === 'unsupported') {
+      // A permanent deployment limitation, reported as data rather than an error to retry.
+      return {
+        runtime: 'unsupported',
+        runtimeVersion: OPENCODE_VERSION,
+        unsupported: capabilities.reason,
+        providers: [],
+      };
+    }
     const context = await resolveAuthenticatedOpenCodeSubjectContext(this.db, this.config, params);
     const directory = await resolveOpenCodeConfigurationDirectory({
       db: this.db,

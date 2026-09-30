@@ -1,0 +1,51 @@
+import type { AgorConfig } from '@agor/core/config';
+import { resolveMultiTenancyConfig } from '@agor/core/config';
+import { BadRequest } from '@agor/core/feathers';
+import type { OpenCodeUnsupportedCode, OpenCodeUnsupportedReason } from '@agor/core/types';
+
+/** The single owner of "can this deployment run OpenCode, and how"; every consumer reads it. */
+export type OpenCodeCapabilities =
+  | { mode: 'native-file'; unixUserMode: 'simple' | 'sandbox' }
+  | { mode: 'unsupported'; reason: OpenCodeUnsupportedReason };
+
+export type OpenCodeCapabilityConfig = Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
+
+const UNSUPPORTED_MESSAGES: Record<OpenCodeUnsupportedCode, string> = {
+  hosted_tenancy:
+    'OpenCode is unavailable in hosted multi-tenant mode: this workspace has no per-user home for its native state.',
+  delegated_execution:
+    'OpenCode is unavailable in delegated execution mode because the execution substrate does not provide a native-state home boundary.',
+  templated_transport: 'OpenCode requires a locally containable executor process.',
+};
+
+function unsupported(code: OpenCodeUnsupportedCode): OpenCodeCapabilities {
+  return { mode: 'unsupported', reason: { code, message: UNSUPPORTED_MESSAGES[code] } };
+}
+
+export function resolveOpenCodeCapabilities(
+  config: OpenCodeCapabilityConfig
+): OpenCodeCapabilities {
+  if (resolveMultiTenancyConfig(config).mode === 'required_from_auth') {
+    return unsupported('hosted_tenancy');
+  }
+  const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
+  if (unixUserMode === 'delegated') return unsupported('delegated_execution');
+  if (config.execution?.executor_command_template) return unsupported('templated_transport');
+  return { mode: 'native-file', unixUserMode };
+}
+
+export class OpenCodeUnsupportedError extends BadRequest {
+  constructor(readonly reason: OpenCodeUnsupportedReason) {
+    super(reason.message, { code: reason.code });
+    this.name = 'OpenCodeUnsupportedError';
+  }
+}
+
+/** Resolve a supported mode or throw the structured unsupported reason. */
+export function requireOpenCodeSupported(
+  config: OpenCodeCapabilityConfig
+): Exclude<OpenCodeCapabilities, { mode: 'unsupported' }> {
+  const capabilities = resolveOpenCodeCapabilities(config);
+  if (capabilities.mode === 'unsupported') throw new OpenCodeUnsupportedError(capabilities.reason);
+  return capabilities;
+}

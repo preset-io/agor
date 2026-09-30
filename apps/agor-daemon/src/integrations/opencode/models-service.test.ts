@@ -91,6 +91,15 @@ describe('OpenCode model catalog service', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
+  it('reports an unsupported deployment as data without starting an executor', async () => {
+    loadConfig.mockReturnValue({ multi_tenancy: { mode: 'required_from_auth' } } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result).toMatchObject({ providers: [], unsupported: { code: 'hosted_tenancy' } });
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
   it('requests the user-scoped known catalog without branch or credential data', async () => {
     const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
