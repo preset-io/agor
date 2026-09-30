@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  backOr,
   getRouterBasename,
   hasInAppHistory,
   isMobileShellPath,
@@ -126,5 +127,15 @@ describe('hasInAppHistory', () => {
     window.history.replaceState(null, '');
     expect(hasInAppHistory('default')).toBe(false);
     expect(hasInAppHistory('abc123')).toBe(true);
+  });
+});
+
+describe('backOr', () => {
+  it('steps back when it can pop, else replaces the entry with the fallback', () => {
+    const navigate = vi.fn();
+    backOr(navigate, true, '/');
+    expect(navigate).toHaveBeenLastCalledWith(-1);
+    backOr(navigate, false, '/m');
+    expect(navigate).toHaveBeenLastCalledWith('/m', { replace: true });
   });
 });
