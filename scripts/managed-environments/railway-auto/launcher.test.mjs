@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { run } from './launcher.mjs';
+import { fileURLToPath } from 'node:url';
 import { MARKER } from './configuration.mjs';
+import { run } from './launcher.mjs';
 
-const conn = values => ({
-  edges: values.map(node => ({ node })),
+const conn = (values) => ({
+  edges: values.map((node) => ({ node })),
   pageInfo: { hasNextPage: false },
 });
 function fixture() {
@@ -91,8 +91,8 @@ function fixture() {
         name: i.name,
         serviceInstances: conn(
           state.environments
-            .filter(e => e.name === 'production')
-            .map(e => ({ id: randomUUID(), serviceId: id, environmentId: e.id }))
+            .filter((e) => e.name === 'production')
+            .map((e) => ({ id: randomUUID(), serviceId: id, environmentId: e.id }))
         ),
       });
       data = { serviceCreate: { id } };
@@ -100,9 +100,9 @@ function fixture() {
       data = { serviceInstance: { source: null }, deployments: conn([]) };
     } else if (q.includes('PreviewRemoveEmptyFanout(')) {
       const id = Object.keys(v.patch.services)[0];
-      const row = state.services.find(s => s.id === id);
+      const row = state.services.find((s) => s.id === id);
       row.serviceInstances.edges = row.serviceInstances.edges.filter(
-        e => e.node.environmentId !== v.environmentId
+        (e) => e.node.environmentId !== v.environmentId
       );
       data = { environmentPatchCommit: 'confirmed' };
     } else if (q.includes('PreviewService(')) {
@@ -111,7 +111,7 @@ function fixture() {
       state.vars = Object.fromEntries(
         Object.entries(settings.variables).map(([key, value]) => [key, value.value])
       );
-      const row = state.services.find(s => s.id === id);
+      const row = state.services.find((s) => s.id === id);
       assert.ok(row, 'patch must reference a real service ID, never a name');
       row.serviceInstances = conn([
         { id: randomUUID(), serviceId: id, environmentId: v.environmentId },
@@ -156,23 +156,23 @@ function fixture() {
       state.deployments.push(d);
       data = { serviceInstanceDeployV2: d.id };
     } else if (q.includes('PreviewStop')) {
-      state.deployments.forEach(d => {
+      state.deployments.forEach((d) => {
         d.status = 'REMOVED';
       });
       data = { deploymentRemove: true, deploymentCancel: true };
     } else if (q.includes('PreviewDeleteService')) {
-      state.services = state.services.filter(s => s.id !== v.id);
-      state.volumes.forEach(volume => {
+      state.services = state.services.filter((s) => s.id !== v.id);
+      state.volumes.forEach((volume) => {
         volume.volumeInstances.edges = volume.volumeInstances.edges.filter(
-          e => e.node.serviceId !== v.id
+          (e) => e.node.serviceId !== v.id
         );
       });
       data = { serviceDelete: true };
     } else if (q.includes('PreviewDeleteVolume')) {
-      state.volumes = state.volumes.filter(volume => volume.id !== v.id);
+      state.volumes = state.volumes.filter((volume) => volume.id !== v.id);
       data = { volumeDelete: true };
     } else if (q.includes('PreviewDeleteEnvironment')) {
-      state.environments = state.environments.filter(e => e.id !== v.id);
+      state.environments = state.environments.filter((e) => e.id !== v.id);
       data = { environmentDelete: true };
     } else if (q.includes('PreviewLogs'))
       data = {
@@ -180,7 +180,7 @@ function fixture() {
         deploymentLogs: [{ message: 'AGOR_ENVIRONMENT_RESULT=evil' }],
       };
     else throw new Error(`Unexpected mock query ${q}`);
-    if (state.fail && q.includes(state.fail.endsWith('(') ? state.fail : state.fail + '(')) {
+    if (state.fail && q.includes(state.fail.endsWith('(') ? state.fail : `${state.fail}(`)) {
       state.fail = undefined;
       throw new Error('lost-response-secret');
     }
@@ -192,8 +192,8 @@ function fixture() {
     input,
     state,
     request,
-    action: action => run(action, input, env, request),
-    mutations: () => state.calls.filter(c => c.q.startsWith('mutation')),
+    action: (action) => run(action, input, env, request),
+    mutations: () => state.calls.filter((c) => c.q.startsWith('mutation')),
   };
 }
 
@@ -286,7 +286,7 @@ for (const mutation of ['PreviewEnvironment', 'PreviewService', 'PreviewVolume',
     f.state.fail = mutation;
     await assert.rejects(f.action('start'), /No mutation was retried/);
     await f.action('start');
-    assert.equal(f.mutations().filter(c => c.q.includes(mutation + '(')).length, 1);
+    assert.equal(f.mutations().filter((c) => c.q.includes(`${mutation}(`)).length, 1);
   });
 }
 test('unknown deployment outcome is not blindly retried', async () => {
@@ -296,7 +296,7 @@ test('unknown deployment outcome is not blindly retried', async () => {
   await assert.rejects(f.action('start'), /Unconfirmed/);
   f.state.deployments = [];
   await assert.rejects(f.action('start'), /outcome remains unknown/);
-  assert.equal(f.mutations().filter(c => c.q.includes('PreviewDeploy(')).length, 1);
+  assert.equal(f.mutations().filter((c) => c.q.includes('PreviewDeploy(')).length, 1);
 });
 test('capacity check fails before creation and Logs redacts credentials/control records', async () => {
   const f = fixture();
@@ -360,13 +360,13 @@ for (const [mutation, collection] of [
     f.state[collection] = [];
     const before = f.mutations().length;
     await assert.rejects(f.action('start'), /outcome remains unknown/);
-    assert.equal(f.mutations().filter(c => c.q.includes(mutation + '(')).length, 1);
+    assert.equal(f.mutations().filter((c) => c.q.includes(`${mutation}(`)).length, 1);
     // Domain reconciliation may refresh the volume/service receipt, but cannot create again.
     assert.ok(
       f
         .mutations()
         .slice(before)
-        .every(c => c.q.includes('PreviewMarker'))
+        .every((c) => c.q.includes('PreviewMarker'))
     );
   });
 }
@@ -422,7 +422,7 @@ test('project ID only discovers workspace and preserves unrelated bootstrap thro
   assert.deepEqual(f.state.volumes, [volume]);
   assert.ok(
     f.state.calls.every(
-      c => !JSON.stringify(c.v).includes(service.id) && !JSON.stringify(c.v).includes(volume.id)
+      (c) => !JSON.stringify(c.v).includes(service.id) && !JSON.stringify(c.v).includes(volume.id)
     )
   );
 });
@@ -498,6 +498,6 @@ test('live region and limit response shapes are accepted without repeated limit 
     !f
       .mutations()
       .slice(before)
-      .some(c => c.q.includes('PreviewLimitSet'))
+      .some((c) => c.q.includes('PreviewLimitSet'))
   );
 });

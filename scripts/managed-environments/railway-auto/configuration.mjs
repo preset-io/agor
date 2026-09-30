@@ -14,7 +14,7 @@ export function configuration(env, input) {
         typeof input.ref === 'string' &&
         input.ref.length > 0 &&
         input.ref.length <= 250 &&
-        [...input.ref].every(c => c.charCodeAt(0) > 32 && c.charCodeAt(0) !== 127),
+        [...input.ref].every((c) => c.charCodeAt(0) > 32 && c.charCodeAt(0) !== 127),
       'Invalid Agor branch UUID, repository or Git ref.'
     );
     return {
@@ -49,7 +49,7 @@ export function configuration(env, input) {
       typeof input.ref === 'string' &&
       input.ref.length > 0 &&
       input.ref.length <= 250 &&
-      [...input.ref].every(c => c.charCodeAt(0) > 32 && c.charCodeAt(0) !== 127),
+      [...input.ref].every((c) => c.charCodeAt(0) > 32 && c.charCodeAt(0) !== 127),
     'Branch UUID/ref is invalid or repository does not match the operator-authorized configuration.'
   );
   requireValue(

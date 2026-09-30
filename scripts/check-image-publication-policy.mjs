@@ -167,9 +167,19 @@ const railwaySourceBuildStarts = [
     /node scripts\/managed-environments\/railway\/launcher\.mjs start\b/g
   ),
 ].length;
+// Separate opt-in automatic launcher: same pushed-source contract, not an
+// exception for arbitrary scripts or published application images.
+const railwayAutoSourceBuildStarts = [
+  ...managedEnvironments.matchAll(
+    /node scripts\/managed-environments\/railway-auto\/launcher\.mjs start\b/g
+  ),
+].length;
 assert.equal(
   explicitStarts,
-  localWorktreeBuildStarts + codespacesWorktreeBuildStarts + railwaySourceBuildStarts,
+  localWorktreeBuildStarts +
+    codespacesWorktreeBuildStarts +
+    railwaySourceBuildStarts +
+    railwayAutoSourceBuildStarts,
   'every explicit managed-environment start must build local source or use a reviewed remote-source exception'
 );
 
@@ -190,6 +200,26 @@ if (railwaySourceBuildStarts > 0) {
     /\.clone\(repo, staging, \['--depth=1', '--single-branch', '--branch', branch\]\)/
   );
   assert.match(checkout, /\.fetch\('origin', branch, \['--depth=1', '--no-tags'\]\)/);
+}
+
+if (railwayAutoSourceBuildStarts > 0) {
+  assert.equal(railwayAutoSourceBuildStarts, 1, 'only one automatic Railway variant is reviewed');
+  assert.match(
+    managedEnvironments,
+    /railway-auto-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway-auto\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
+  );
+  const directory = path.join(root, 'scripts/managed-environments/railway-auto');
+  const launcher = await readFile(path.join(directory, 'launcher.mjs'), 'utf8');
+  const preview = await readFile(path.join(directory, 'preview.mjs'), 'utf8');
+  const configuration = await readFile(path.join(directory, 'configuration.mjs'), 'utf8');
+  assert.match(launcher, /api\.github\.com\/repos\/\$\{input.repository\}\/git\/ref\/heads\//);
+  assert.match(launcher, /preview\.start\(owned, sha\)/);
+  assert.match(preview, /serviceInstanceDeployV2\([^)]*commitSha:\$commitSha\)/);
+  assert.match(preview, /source: \{ repo: this.input.repository \}/);
+  assert.match(preview, /dockerfilePath: 'docker\/Dockerfile'/);
+  assert.match(configuration, /AGOR_RUNTIME_TARGET: 'runtime-build'/);
+  for (const source of [launcher, preview, configuration])
+    assert.doesNotMatch(source, imageReference);
 }
 
 if (codespacesWorktreeBuildStarts > 0) {

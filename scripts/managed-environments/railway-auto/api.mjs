@@ -2,7 +2,7 @@ export class PreviewError extends Error {}
 export const requireValue = (condition, message) => {
   if (!condition) throw new PreviewError(message);
 };
-export const uuid = value =>
+export const uuid = (value) =>
   typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value);
 export function nodes(connection) {
   requireValue(
@@ -11,9 +11,9 @@ export function nodes(connection) {
       connection.pageInfo?.hasNextPage === false,
     'Railway inventory is incomplete or exceeds 100 resources; refusing changes.'
   );
-  const result = connection.edges.map(edge => edge.node);
+  const result = connection.edges.map((edge) => edge.node);
   requireValue(
-    result.every(node => node && uuid(node.id)),
+    result.every((node) => node && uuid(node.id)),
     'Invalid Railway resource inventory.'
   );
   return result;
@@ -44,7 +44,7 @@ export class RailwayAPI {
       detail = `HTTP ${response.status}`;
       const body = await response.json();
       if (body?.errors?.length) {
-        const codes = body.errors.map(e => e.extensions?.code);
+        const codes = body.errors.map((e) => e.extensions?.code);
         const safeCodes = [
           'UNAUTHENTICATED',
           'FORBIDDEN',
@@ -52,19 +52,19 @@ export class RailwayAPI {
           'GRAPHQL_VALIDATION_FAILED',
           'INTERNAL_SERVER_ERROR',
         ];
-        const code = safeCodes.find(c => codes.includes(c));
-        const messages = body.errors.map(e =>
+        const code = safeCodes.find((c) => codes.includes(c));
+        const messages = body.errors.map((e) =>
           typeof e.message === 'string' ? e.message.toLowerCase() : ''
         );
-        const category = messages.some(m => /name/.test(m) && /length|characters|long/.test(m))
+        const category = messages.some((m) => /name/.test(m) && /length|characters|long/.test(m))
           ? 'name length validation'
-          : messages.some(m => /limit|quota/.test(m))
+          : messages.some((m) => /limit|quota/.test(m))
             ? 'provider limit or quota'
-            : messages.some(m => /permission|not authorized|forbidden/.test(m))
+            : messages.some((m) => /permission|not authorized|forbidden/.test(m))
               ? 'permission denied'
-              : messages.some(m => /credit|billing|payment|subscription/.test(m))
+              : messages.some((m) => /credit|billing|payment|subscription/.test(m))
                 ? 'billing or plan restriction'
-                : messages.some(m => /invalid|validation/.test(m))
+                : messages.some((m) => /invalid|validation/.test(m))
                   ? 'input validation'
                   : 'provider rejected request';
         detail += `; ${code ? `${code}; ` : ''}${category}`;

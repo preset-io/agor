@@ -16,7 +16,8 @@ const pending = new Set([
   'DEPLOYING',
   'NEEDS_APPROVAL',
 ]);
-const domainOK = value => typeof value === 'string' && /^[a-z0-9-]+\.up\.railway\.app$/.test(value);
+const domainOK = (value) =>
+  typeof value === 'string' && /^[a-z0-9-]+\.up\.railway\.app$/.test(value);
 const one = (items, message) => {
   requireValue(items.length <= 1, message);
   return items[0];
@@ -66,17 +67,17 @@ export class Preview {
     if (this.config.sharedProject) {
       const previousName = resourceName({ ...this.owner, version: 1 });
       requireValue(
-        !all.environments.some(e => e.name === previousName) &&
-          !all.services.some(s => s.name === previousName),
+        !all.environments.some((e) => e.name === previousName) &&
+          !all.services.some((s) => s.name === previousName),
         'An earlier long-name preview exists. Explicit migration is required; refusing to allocate duplicate data.'
       );
     }
-    const targetEnvironments = all.environments.filter(e => e.name === this.name);
+    const targetEnvironments = all.environments.filter((e) => e.name === this.name);
     requireValue(
       targetEnvironments.length <= 1,
       'Duplicate Railway environment identity; inspect manually.'
     );
-    const targetIds = new Set(targetEnvironments.map(e => e.id));
+    const targetIds = new Set(targetEnvironments.map((e) => e.id));
     const records = new Map();
     for (const service of all.services) {
       const instances = nodes(service.serviceInstances);
@@ -84,14 +85,14 @@ export class Preview {
       if (
         this.config.sharedProject &&
         service.name !== this.name &&
-        !instances.some(i => targetIds.has(i.environmentId))
+        !instances.some((i) => targetIds.has(i.environmentId))
       )
         continue;
       requireValue(
         instances.length === 1 && instances[0].serviceId === service.id,
         'Foreign/shared Railway service; use a dedicated preview project.'
       );
-      const environment = all.environments.find(e => e.id === instances[0].environmentId);
+      const environment = all.environments.find((e) => e.id === instances[0].environmentId);
       requireValue(environment, 'Service environment is missing from the complete inventory.');
       const vars = await this.variables({
         projectId: this.config.projectId,
@@ -111,7 +112,7 @@ export class Preview {
           (this.config.sharedProject
             ? ['workspaceId', 'projectId', 'repository']
             : ['tenantId', 'workspaceId', 'projectId', 'repository']
-          ).every(k => record[k] === this.owner[k]) &&
+          ).every((k) => record[k] === this.owner[k]) &&
           record.environmentId === environment.id &&
           resourceName(record) === environment.name &&
           service.name === environment.name &&
@@ -119,7 +120,7 @@ export class Preview {
         'Foreign or mismatched Railway ownership marker. Bootstrap/production resources cannot be adopted.'
       );
       requireValue(
-        all.services.filter(s => s.name === service.name).length === 1,
+        all.services.filter((s) => s.name === service.name).length === 1,
         'Duplicate Railway service identity; inspect manually.'
       );
       records.set(service.id, { record, vars, environment, service });
@@ -128,8 +129,8 @@ export class Preview {
       const attachments = nodes(volume.volumeInstances);
       if (
         this.config.sharedProject &&
-        !attachments.some(i => targetIds.has(i.environmentId) || records.has(i.serviceId)) &&
-        ![...records.values()].some(o => o.record.volumeId === volume.id)
+        !attachments.some((i) => targetIds.has(i.environmentId) || records.has(i.serviceId)) &&
+        ![...records.values()].some((o) => o.record.volumeId === volume.id)
       )
         continue;
       const attachment = attachments[0];
@@ -152,10 +153,10 @@ export class Preview {
         'Recorded volume is missing. Refusing to replace persistent data with an empty volume.'
       );
     const environment = one(
-      all.environments.filter(e => e.name === this.name),
+      all.environments.filter((e) => e.name === this.name),
       'Duplicate Railway environment identity; inspect manually.'
     );
-    const owned = [...records.values()].find(o => o.environment.id === environment?.id) ?? {
+    const owned = [...records.values()].find((o) => o.environment.id === environment?.id) ?? {
       environment,
     };
     requireValue(
@@ -168,7 +169,7 @@ export class Preview {
         environmentId: environment.id,
       });
       requireValue(
-        Object.keys(shared).every(k =>
+        Object.keys(shared).every((k) =>
           [
             'RAILWAY_PROJECT_ID',
             'RAILWAY_PROJECT_NAME',
@@ -195,7 +196,7 @@ export class Preview {
       );
       const domains = details.domains?.serviceDomains;
       requireValue(
-        Array.isArray(domains) && domains.every(d => domainOK(d.domain) && d.targetPort === 3030),
+        Array.isArray(domains) && domains.every((d) => domainOK(d.domain) && d.targetPort === 3030),
         'Invalid/foreign preview domain.'
       );
       owned.domain = one(
@@ -265,7 +266,7 @@ export class Preview {
   async ensure(owned, password) {
     if (!owned.environment) {
       requireValue(
-        owned.all.environments.filter(e => e.name.startsWith('agor-')).length <
+        owned.all.environments.filter((e) => e.name.startsWith('agor-')).length <
           this.config.maxPreviews,
         'Preview capacity reached. Stopped previews retain their slot and data.'
       );
@@ -303,7 +304,7 @@ export class Preview {
       // Current API fans empty instances out even without environmentId.
       // Remove ONLY empty instances of the row just returned by our creation.
       const inventory = await this.inventory();
-      const row = inventory.services.find(s => s.id === record.serviceId);
+      const row = inventory.services.find((s) => s.id === record.serviceId);
       requireValue(row?.name === this.name, 'New service row identity mismatch.');
       for (const instance of nodes(row.serviceInstances)) {
         if (instance.environmentId === owned.environment.id) continue;
@@ -322,8 +323,8 @@ export class Preview {
         requireValue(
           !state.serviceInstance.source &&
             nodes(state.deployments).length === 0 &&
-            !inventory.volumes.some(v =>
-              nodes(v.volumeInstances).some(i => i.serviceId === row.id)
+            !inventory.volumes.some((v) =>
+              nodes(v.volumeInstances).some((i) => i.serviceId === row.id)
             ),
           'New service fan-out is not empty; refusing cleanup.'
         );
@@ -468,7 +469,7 @@ export class Preview {
     const list = nodes(result.deployments);
     requireValue(
       list.every(
-        d =>
+        (d) =>
           terminal.has(d.status) ||
           pending.has(d.status) ||
           ['SUCCESS', 'SLEEPING', 'REMOVING'].includes(d.status)
@@ -478,7 +479,7 @@ export class Preview {
     return list;
   }
   async active(owned) {
-    return (await this.deployments(owned)).filter(d => !terminal.has(d.status));
+    return (await this.deployments(owned)).filter((d) => !terminal.has(d.status));
   }
   async running(owned) {
     const active = await this.active(owned);
@@ -548,10 +549,10 @@ export class Preview {
     );
     const after = await this.inventory();
     requireValue(
-      !after.services.some(s => s.id === owned.service.id),
+      !after.services.some((s) => s.id === owned.service.id),
       'Service deletion is still pending; inspect before cleanup.'
     );
-    const volume = after.volumes.find(v => v.id === owned.volume.id);
+    const volume = after.volumes.find((v) => v.id === owned.volume.id);
     if (volume) {
       const attachments = nodes(volume.volumeInstances);
       requireValue(
@@ -570,12 +571,12 @@ export class Preview {
     const last = await this.inventory();
     requireValue(
       !last.volumes.some(
-        v =>
+        (v) =>
           v.id === owned.volume.id ||
-          nodes(v.volumeInstances).some(i => i.environmentId === owned.environment.id)
+          nodes(v.volumeInstances).some((i) => i.environmentId === owned.environment.id)
       ) &&
-        !last.services.some(s =>
-          nodes(s.serviceInstances).some(i => i.environmentId === owned.environment.id)
+        !last.services.some((s) =>
+          nodes(s.serviceInstances).some((i) => i.environmentId === owned.environment.id)
         ),
       'Environment is no longer empty; refusing deletion.'
     );
@@ -589,7 +590,7 @@ export class Preview {
     );
     const final = await this.inventory();
     requireValue(
-      !final.environments.some(e => e.id === owned.environment.id),
+      !final.environments.some((e) => e.id === owned.environment.id),
       'Environment deletion is still pending; inspect Railway before retrying.'
     );
   }
@@ -600,6 +601,6 @@ export class Preview {
       'query PreviewLogs($id:String!){buildLogs(deploymentId:$id,limit:80){message}deploymentLogs(deploymentId:$id,limit:80){message}}',
       { id: deployment.id }
     );
-    return [...result.buildLogs, ...result.deploymentLogs].map(line => line.message).join('\n');
+    return [...result.buildLogs, ...result.deploymentLogs].map((line) => line.message).join('\n');
   }
 }

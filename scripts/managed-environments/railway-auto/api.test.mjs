@@ -21,7 +21,7 @@ test('reports operation and safe error category, never raw errors or secrets; no
     api.query(
       'mutation PreviewEnvironment($input:EnvironmentCreateInput!){environmentCreate(input:$input){id}}'
     ),
-    error => {
+    (error) => {
       assert.match(error.message, /PreviewEnvironment \(HTTP 200; name length validation\)/);
       assert.doesNotMatch(error.message, /synthetic-secret|untrusted-secret-code/);
       return true;

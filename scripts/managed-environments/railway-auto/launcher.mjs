@@ -1,5 +1,5 @@
-import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
+import { parseArgs } from 'node:util';
 import { PreviewError, RailwayAPI, requireValue } from './api.mjs';
 import { configuration } from './configuration.mjs';
 import { Preview } from './preview.mjs';
@@ -66,7 +66,7 @@ export async function run(action, input, env = process.env, request = fetch) {
   if (action === 'logs') {
     const logs = await preview.logs(owned);
     let safe = logs;
-    for (const value of Object.values(env).filter(v => typeof v === 'string' && v.length >= 12))
+    for (const value of Object.values(env).filter((v) => typeof v === 'string' && v.length >= 12))
       safe = safe.split(value).join('[REDACTED]');
     return {
       message: safe
@@ -104,7 +104,7 @@ export async function main(args = process.argv.slice(2)) {
   else console.log(result.message);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  main().catch(error => {
+  main().catch((error) => {
     console.error(
       error instanceof PreviewError
         ? error.message
