@@ -1,4 +1,4 @@
-import type { AgorClient, Branch, Session, Task } from '@agor-live/client';
+import type { AgorClient, Branch, Session, Task, User } from '@agor-live/client';
 import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -31,10 +31,6 @@ vi.mock('../ForkSpawnModal/ForkSpawnModal', () => ({
 
 vi.mock('../MCPServer', () => ({
   MCPServerPill: () => <span>MCP server</span>,
-}));
-
-vi.mock('../metadata', () => ({
-  CreatedByTag: () => <span>Created by test user</span>,
 }));
 
 vi.mock('../Pill', () => ({
@@ -291,6 +287,23 @@ describe('SessionPanel search control', () => {
       enabled: true,
       reactiveOptions: { taskHydration: 'lean' },
     });
+  });
+});
+
+describe('SessionPanel header status line', () => {
+  afterEach(() => {
+    agorStore.setState({ userById: new Map() });
+  });
+
+  it('shows sentence-case status and the creator as quiet text with a tooltip', async () => {
+    const creator = { user_id: 'user-2', name: 'Kasia', email: 'kasia@example.com' } as User;
+    agorStore.setState({ userById: new Map([[creator.user_id, creator]]) });
+    renderPanel({ activeSession: { ...session, created_by: creator.user_id } as Session });
+
+    expect(screen.getByText('Idle')).toBeInTheDocument();
+    expect(screen.queryByText(/Created by/)).toBeNull();
+    fireEvent.mouseEnter(screen.getByText('Kasia'));
+    expect(await screen.findByText('Created by Kasia')).toBeInTheDocument();
   });
 });
 

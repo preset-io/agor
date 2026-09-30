@@ -190,10 +190,9 @@ agor kb import ./team-docs-export --namespace migrated-docs --apply
 
 Import defaults to planning only; **`--apply` is required for writes**. Export writes
 by default and creates the output directory with mode `0700`. Existing output
-directories must be private and owned by the CLI user. This first directory adapter
-requires **Linux**, using an opened directory handle to prevent symlink/root-swap
-escapes. It does not write files on the daemon or require an Agor session, S3 or a
-background migration job.
+directories must be private and owned by the CLI user. Export and import run on Linux
+and macOS; on Windows, use WSL. The CLI does not write files
+on the daemon or require an Agor session, S3 or a background migration job.
 
 Typical progress looks like:
 

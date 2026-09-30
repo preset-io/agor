@@ -293,7 +293,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     // Selected and offered both render the label, so one match is the floor.
     await waitFor(() => expect(screen.getAllByText('Session').length).toBeGreaterThan(0));
-    expect(screen.queryByText('Global (all sessions)')).not.toBeInTheDocument();
+    expect(screen.queryByText('Global (all eligible sessions)')).not.toBeInTheDocument();
   });
 
   it('offers an admin workspace-wide scope', async () => {
@@ -304,8 +304,24 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     const scope = await screen.findByLabelText('Scope');
     fireEvent.mouseDown(scope);
-    expect(await screen.findByText('Global (all sessions)')).toBeInTheDocument();
+    expect(await screen.findByText('Global (all eligible sessions)')).toBeInTheDocument();
   });
+
+  it.each([
+    [ADMIN, 'allow_private_only', true],
+    [MEMBER, 'allow_crud', true],
+    [MEMBER, 'allow_private_only', false],
+  ] as const)(
+    'defaults ownership to private and permission-gates shared for %s under %s',
+    async (currentUser, policy, canShare) => {
+      const { find } = renderTable({ policy, currentUser });
+      await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+      await openCreateForm();
+      expect(screen.getByText('Private (only you)')).toBeInTheDocument();
+      fireEvent.mouseDown(await screen.findByLabelText('Installation ownership'));
+      expect(Boolean(screen.queryByText('Shared (workspace)'))).toBe(canShare);
+    }
+  );
 
   it('offers an admin every transport', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
@@ -850,7 +866,7 @@ describe('MCPServersTable ownership', () => {
 
     await waitFor(() => expect(find).toHaveBeenCalled());
 
-    expect(screen.getByText('Shared with workspace')).toBeInTheDocument();
+    expect(screen.getByText('Shared')).toBeInTheDocument();
   });
 
   it('names the owner of a private server', async () => {
@@ -863,7 +879,7 @@ describe('MCPServersTable ownership', () => {
     await waitFor(() => expect(find).toHaveBeenCalled());
 
     expect(screen.getByText('Bob Member')).toBeInTheDocument();
-    expect(screen.queryByText('Shared with workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText('Shared')).not.toBeInTheDocument();
   });
 
   it('marks the signed-in member as the owner of their own server', async () => {
@@ -960,7 +976,7 @@ describe('MCPServersTable unfinished installs', () => {
       servers: [makeServer({ tools: [{ name: 'search' }] } as Partial<MCPServer>)],
     });
 
-    expect(await screen.findByText('1 tools')).toBeVisible();
+    expect(await screen.findByText('1 tool')).toBeVisible();
     expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
   });
 });

@@ -88,7 +88,10 @@ describe('app-owned MCP Catalog', () => {
     const trigger = screen.getByRole('button', { name: /^MCP servers\./ });
     fireEvent.click(trigger);
     const disclosure = screen.getByRole('dialog', { name: 'Session MCP servers' });
-    fireEvent.change(within(disclosure).getByRole('combobox'), { target: { value: 'no-match' } });
+    const selector = within(disclosure).getByRole('combobox');
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(api.availableRead).toHaveBeenCalledWith({ query: { available: true } });
+    fireEvent.change(selector, { target: { value: 'no-match' } });
     fireEvent.click(
       await screen.findByRole('button', { name: 'Browse the MCP Catalog for all available MCPs' })
     );

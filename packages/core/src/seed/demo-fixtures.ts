@@ -28,8 +28,6 @@
  *   await loadDemoFixtures({ skipIfExists: true });
  */
 
-import os from 'node:os';
-import path from 'node:path';
 import type {
   Artifact,
   BoardID,
@@ -166,16 +164,16 @@ const SENTINEL_EMAIL = DEMO_USER_CREDENTIALS[0].email;
 async function resolveDatabase(options: DemoFixturesOptions): Promise<Database> {
   if (options.db) return options.db;
 
+  const { createDatabase, resolveDefaultDatabaseUrl } = await import('../db/client');
+
   let databaseUrl: string;
   const dialect = process.env.AGOR_DB_DIALECT;
   if (dialect === 'postgresql') {
     databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
   } else {
-    const dbPath = path.join(os.homedir(), '.agor', 'agor.db');
-    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+    databaseUrl = process.env.DATABASE_URL || resolveDefaultDatabaseUrl();
   }
 
-  const { createDatabase } = await import('../db/client');
   return createDatabase({ url: databaseUrl });
 }
 

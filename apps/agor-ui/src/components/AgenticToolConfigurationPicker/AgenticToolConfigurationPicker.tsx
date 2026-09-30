@@ -26,6 +26,7 @@ interface Props extends Omit<AgenticToolConfigFormProps, 'agenticTool' | 'client
   /** Subject-authorized model catalog. Explicit null disables inline model selection. */
   modelCatalogClient?: AgorClient | null;
   mcpServerById: Map<string, MCPServer>;
+  inheritedMcpServerIds?: string[];
   fieldName?: string;
   /**
    * How a reserved default/preset resolves — surfaced as a schedule-run note.
@@ -76,6 +77,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
   client,
   modelCatalogClient,
   mcpServerById,
+  inheritedMcpServerIds,
   fieldName = 'agenticToolPresetId',
   defaultResolution = 'save',
   currentUser,
@@ -264,6 +266,7 @@ export const AgenticToolConfigurationPicker: React.FC<Props> = ({
       {renderMcpField && (
         <SessionMcpServersField
           mcpServerById={mcpServerById}
+          inheritedMcpServerIds={inheritedMcpServerIds}
           showHelpText={formProps.showHelpText}
         />
       )}

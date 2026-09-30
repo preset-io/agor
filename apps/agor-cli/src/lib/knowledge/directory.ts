@@ -1,10 +1,19 @@
 import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { type FileHandle, link, lstat, mkdir, open, rename, unlink } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { lock } from 'proper-lockfile';
 
-/** Flat, manifest-addressed bundle files. Directory FD pins the root against swaps. */
+/** Fail fast where the private-directory checks (POSIX mode/uid) cannot work. */
+export function assertKnowledgeDirectorySupported(platform: NodeJS.Platform = process.platform) {
+  if (platform === 'win32')
+    throw new Error('Knowledge export/import is not supported on Windows yet; use WSL');
+}
+
+/**
+ * Flat, manifest-addressed bundle files. Names are allowlisted (server-derived keys
+ * cannot traverse), reads refuse symlinks/hardlinks, and documents never overwrite.
+ */
 export class KnowledgeDirectory {
   private constructor(
     private handle: FileHandle,
@@ -14,8 +23,7 @@ export class KnowledgeDirectory {
   private locked = false;
   private release: (() => Promise<void>) | undefined;
   static async open(path: string, writable = false): Promise<KnowledgeDirectory> {
-    if (process.platform !== 'linux')
-      throw new Error('Safe Knowledge directory transfers currently require Linux');
+    assertKnowledgeDirectorySupported();
     const absolute = resolve(path);
     if (writable)
       await mkdir(absolute, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
@@ -39,11 +47,11 @@ export class KnowledgeDirectory {
       )
     )
       throw new Error('Unsafe bundle filename');
-    return `/proc/self/fd/${this.handle.fd}/${name}`;
+    return join(this.path, name);
   }
   async lock() {
     if (!this.writable) throw new Error('Read-only bundle');
-    this.release = await lock(`/proc/self/fd/${this.handle.fd}`, {
+    this.release = await lock(this.path, {
       realpath: false,
       lockfilePath: this.entry('.lock'),
       stale: 30_000,

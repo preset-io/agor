@@ -307,7 +307,6 @@ export const APPROVED_UNCLASSIFIED_SERVICE_BASELINE = [
   'repos/clone',
   'repos/:id/branches',
   'repos/:id/branches/:name',
-  'repos/:id/import-agor-yml',
   'repos/:id/export-agor-yml',
   'artifacts/:id/payload',
   'artifacts/:id/console',

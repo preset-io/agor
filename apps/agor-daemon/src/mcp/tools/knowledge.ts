@@ -55,6 +55,7 @@ import {
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import { resolveMcpCallerSandboxMounts } from '../caller-sandbox-mounts.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -735,6 +736,7 @@ async function runBranchKnowledgeCommand(
     );
     return { branch, fsAccess };
   });
+  const sandboxMounts = await resolveMcpCallerSandboxMounts(ctx, workspace.branch);
   const result = await requestExecutor(
     {
       command,
@@ -744,6 +746,7 @@ async function runBranchKnowledgeCommand(
         ...params,
         cwd: workspace.branch.path,
         principalBranchAccess: workspace.fsAccess,
+        ...sandboxMounts,
       },
     },
     {

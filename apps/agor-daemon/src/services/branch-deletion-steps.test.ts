@@ -1,6 +1,7 @@
 import {
   BranchMaintenanceRepository,
   BranchRepository,
+  createTenantScopedDatabaseProxy,
   generateId,
   runWithTenantContext,
 } from '@agor/core/db';
@@ -29,7 +30,10 @@ test('deletion steps require exact authenticated command, tenant and invocation,
     get: () => ({ execution: {} }),
     service: () => ({ emit }),
   } as unknown as Application;
-  const service = new BranchDeletionStepsService(db, app);
+  const service = new BranchDeletionStepsService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
   const tenant = 'default' as TenantID;
   const params = {
     provider: 'rest',
@@ -68,7 +72,7 @@ test('deletion steps require exact authenticated command, tenant and invocation,
       })
     ).rejects.toThrow('tenant');
     await service.create(input, params);
-    await expect(service.create(input, params)).rejects.toThrow('already claimed');
+    await expect(service.create(input, params)).rejects.toThrow('ownership_or_precondition');
     await service.create({ ...input, action: 'heartbeat' }, params);
     expect(generateCommandToken).not.toHaveBeenCalled();
     const expiring = {
@@ -97,7 +101,9 @@ test('deletion steps require exact authenticated command, tenant and invocation,
       service.create({ ...input, action: 'heartbeat', generation: claim.generation + 1 }, expiring)
     ).rejects.toThrow();
     expect(generateCommandToken).toHaveBeenCalledTimes(1);
-    await expect(service.create({ ...input, action: 'data' }, params)).rejects.toThrow('storage');
+    await expect(service.create({ ...input, action: 'data' }, params)).rejects.toThrow(
+      'ownership_or_precondition'
+    );
     await expect(
       service.create({ ...input, action: 'storage', generation: claim.generation + 1 }, params)
     ).rejects.toThrow();

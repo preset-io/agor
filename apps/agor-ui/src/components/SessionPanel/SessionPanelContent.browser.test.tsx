@@ -181,7 +181,7 @@ afterEach(() => {
 it('bounds 30 queued tasks, independently scrolls to the last action, and keeps the header visible', async () => {
   render(<Harness count={30} />);
   await expectBounded();
-  const headerTop = screen.getByText('Queued Tasks (30)').getBoundingClientRect().top;
+  const headerTop = screen.getByText('Queued tasks (30)').getBoundingClientRect().top;
   const transcript = conversation();
   await expectBottom();
   const transcriptTop = transcript.scrollTop;
@@ -196,13 +196,13 @@ it('bounds 30 queued tasks, independently scrolls to the last action, and keeps 
     expect(last.bottom).toBeLessThanOrEqual(list.getBoundingClientRect().bottom + 1);
     expect(last.top).toBeGreaterThanOrEqual(list.getBoundingClientRect().top);
   });
-  expect(screen.getByText('Queued Tasks (30)').getBoundingClientRect().top).toBe(headerTop);
+  expect(screen.getByText('Queued tasks (30)').getBoundingClientRect().top).toBe(headerTop);
   expect(Math.abs(transcript.scrollTop - transcriptTop)).toBeLessThanOrEqual(3);
   await userEvent.click(screen.getByRole('button', { name: 'Copy queued task 30' }));
   expect(copyToClipboard).toHaveBeenCalledWith(tasks(30)[29].full_prompt);
   await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 30' }));
   expect(remove).toHaveBeenCalledWith('queued-29');
-  expect(screen.getByText('Queued Tasks (29)')).toBeVisible();
+  expect(screen.getByText('Queued tasks (29)')).toBeVisible();
   await page.screenshot({
     path: `.vitest/attachments/session-queue-${window.innerWidth}x${window.innerHeight}.png`,
   });
@@ -343,20 +343,23 @@ it('refreshes separator bounds on a constraint-only resize without remounting th
   expect(conversation()).toBe(transcript);
 });
 
-it('keeps failed-queue recovery and rollback actions reachable inside the bounded scroll area', async () => {
-  render(<Harness count={25} failed />);
-  await expectBounded();
-  await userEvent.click(screen.getByRole('button', { name: 'Resume queue' }));
-  expect(patch).toHaveBeenCalledWith(session.session_id, { ready_for_prompt: true });
-  await userEvent.click(await screen.findByRole('button', { name: 'Run next' }));
-  expect(patch).toHaveBeenCalledTimes(2);
-  remove.mockRejectedValueOnce(new Error('Try again'));
-  await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
-  await screen.findByText('Failed to remove queued task: Try again');
-  expect(find).not.toHaveBeenCalled();
-  expect(screen.getByText('Queued Tasks (25)')).toBeVisible();
-  expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
-});
+// Exercise each recovery entry point on a fresh failed queue. Resuming twice in
+// one fixture races the shared loading icon's exit motion and accessible name.
+it.each(['Resume queue', 'Run next'])(
+  'keeps failed-queue recovery via %s and rollback actions reachable inside the bounded scroll area',
+  async (recoveryAction) => {
+    render(<Harness count={25} failed />);
+    await expectBounded();
+    await userEvent.click(screen.getByRole('button', { name: recoveryAction }));
+    expect(patch).toHaveBeenCalledExactlyOnceWith(session.session_id, { ready_for_prompt: true });
+    remove.mockRejectedValueOnce(new Error('Try again'));
+    await userEvent.click(screen.getByRole('button', { name: 'Remove queued task 25' }));
+    await screen.findByText('Failed to remove queued task: Try again');
+    expect(find).not.toHaveBeenCalled();
+    expect(screen.getByText('Queued tasks (25)')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Remove queued task 25' })).toBeInTheDocument();
+  }
+);
 
 it.each([390, 220])(
   'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
@@ -387,7 +390,7 @@ it.each([390, 220])(
         </AppActionsProvider>
       </App>
     );
-    await screen.findByText('Queued Tasks (30)');
+    await screen.findByText('Queued tasks (30)');
     await waitFor(() => {
       expect(conversation().clientHeight).toBeGreaterThan(100);
       expect(queueList().clientHeight).toBeGreaterThan(25);

@@ -143,7 +143,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         effort: isInline
           ? undefined
           : ((values.effort as EffortLevel | undefined) ?? agentDefaults?.modelConfig?.effort),
-        mcpServerIds: values.mcpServerIds ?? currentUser?.default_mcp_server_ids,
+        mcpServerIds: values.mcpServerIds,
         permissionMode,
       };
 
@@ -221,6 +221,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
                             <AgenticToolConfigurationPicker
                               tool={selectedAgent}
                               mcpServerById={mcpServerById}
+                              inheritedMcpServerIds={currentUser?.default_mcp_server_ids}
                               showHelpText={false}
                               client={client ?? null}
                               currentUser={currentUser}

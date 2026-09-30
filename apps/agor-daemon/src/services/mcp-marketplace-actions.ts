@@ -3,6 +3,7 @@ import {
   resolveMcpMemberPolicyForUpdate,
   runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, Conflict, NotAuthenticated, NotFound } from '@agor/core/feathers';
@@ -43,11 +44,16 @@ function notifyMarketplaceMutation(
   }
 }
 
-/** Marketplace-only CAS removal. Ordinary MCP remove is deliberately bypassed. */
+/** Count-confirmed removal serialized with attachment through the parent row lock. */
 export class MCPMarketplaceRemoveServerService {
   constructor(
     private readonly db: TenantScopeAwareDatabase,
-    private readonly invalidate: MarketplaceMutationInvalidator = () => undefined
+    private readonly invalidate: MarketplaceMutationInvalidator = () => undefined,
+    private readonly removeServer: (
+      db: TenantScopedDatabase,
+      id: string,
+      params: AuthenticatedParams
+    ) => Promise<unknown> = (db, id) => new MCPServerRepository(db).delete(id)
   ) {}
 
   async create(
@@ -56,6 +62,15 @@ export class MCPMarketplaceRemoveServerService {
   ): Promise<MCPMarketplaceRemoveServerResult> {
     const userId = caller(params);
     if (!data?.mcp_server_id) throw new BadRequest('mcp_server_id is required');
+    if (data.detach !== undefined && typeof data.detach !== 'boolean') {
+      throw new BadRequest('detach must be boolean');
+    }
+    if (
+      data.detach &&
+      (!Number.isSafeInteger(data.expected_session_count) || data.expected_session_count! < 0)
+    ) {
+      throw new BadRequest('expected_session_count is required for delete and detach');
+    }
     const existing = await runWithTenantDatabaseTransaction(
       this.db,
       params?.tenant?.tenant_id,
@@ -76,11 +91,16 @@ export class MCPMarketplaceRemoveServerService {
           method: 'remove',
           existing: server,
         });
-        if (!(await repository.deleteIfUnattachedInCurrentTransaction(server.mcp_server_id))) {
+        const count = await repository.countSessionAttachments(server.mcp_server_id);
+        if (count !== (data.detach ? data.expected_session_count : 0)) {
           throw new Conflict(
-            'This server was attached to a session while removal was pending. Detach it and retry.'
+            'Session attachments changed. Review the current count and confirm deletion again.'
           );
         }
+        // The FK cascade removes links and grants in the same transaction. A
+        // concurrent attachment either precedes this lock/count or fails its FK
+        // after deletion; it cannot leave a dangling link or partially detach.
+        await this.removeServer(operationDb, server.mcp_server_id, currentParams);
         return server;
       }
     );

@@ -17,6 +17,11 @@ import { AppHeader } from '../AppHeader';
 import { SessionMcpFooterControl } from '../SessionPanel/SessionMcpFooterControl';
 import { MCPCatalogModalHost } from './MCPCatalogModalHost';
 
+// The picker reads authenticated permissions independently of the header's
+// user prop. Keep that API boundary aligned with the caller in this harness.
+const auth = vi.hoisted(() => ({ user: null as User | null }));
+vi.mock('../../hooks/useAuth', () => ({ useAuth: () => ({ user: auth.user }) }));
+
 export const catalogUser = {
   user_id: 'alice',
   email: 'alice@example.test',
@@ -96,6 +101,7 @@ export function makeCatalogClient(
     }),
   });
   const overviewRead = vi.fn(async () => catalogOverview);
+  const availableRead = vi.fn(async () => []);
   const connect = vi.fn(async () => ({
     mcp_server: { ...catalogOverview.servers[0], auth: { type: 'none' } },
     starter_prompt: catalogEntry.starter_prompt,
@@ -106,15 +112,17 @@ export function makeCatalogClient(
       services.set(name, {
         ...events(name),
         find:
-          name === 'mcp-marketplace'
-            ? overviewRead
-            : vi.fn(async () =>
-                name === 'mcp-catalog'
-                  ? { data: entries, total: entries.length, limit: entries.length, skip: 0 }
-                  : name === 'mcp-member-policy'
-                    ? policy
-                    : []
-              ),
+          name === 'sessions/current-session/mcp-servers'
+            ? availableRead
+            : name === 'mcp-marketplace'
+              ? overviewRead
+              : vi.fn(async () =>
+                  name === 'mcp-catalog'
+                    ? { data: entries, total: entries.length, limit: entries.length, skip: 0 }
+                    : name === 'mcp-member-policy'
+                      ? policy
+                      : []
+                ),
         findAll: vi.fn(async () => [{ branch_id: 'branch-1', name: 'Catalog QA' }]),
         get: vi.fn(async (key: string) => ({
           catalog_key: key,
@@ -154,6 +162,7 @@ export function makeCatalogClient(
   return {
     client: { service, io: events('socket') } as unknown as AgorClient,
     overviewRead,
+    availableRead,
     connect,
     listenerCount: () => [...listeners.values()].reduce((sum, set) => sum + set.size, 0),
     emit: (key: string) => {
@@ -178,6 +187,7 @@ export function CatalogHarness({
   path?: string;
   children?: ReactNode;
 }) {
+  auth.user = user;
   return (
     <ThemeProvider>
       <ConfigProvider>

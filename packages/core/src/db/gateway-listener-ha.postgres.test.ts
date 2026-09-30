@@ -192,112 +192,122 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     });
   });
 
-  it('deduplicates provider events, reclaims expiry, and rejects stale completion', async () => {
-    const tenantId = `gateway-event-${generateId()}` as TenantID;
-    const { channel } = await seedChannel(db, tenantId);
+  it.each(['slack', 'discord'] as const)(
+    'deduplicates %s events across listener handover',
+    async (channelType) => {
+      const providerEventId =
+        channelType === 'discord'
+          ? 'discord:222222222222222222:333333333333333333:444444444444444444'
+          : 'slack:event:Ev-1';
+      const threadId =
+        channelType === 'discord' ? 'discord:dm:333333333333333333:555555555555555555' : 'C1-1.0';
+      const tenantId = `gateway-event-${generateId()}` as TenantID;
+      const { channel } = await seedChannel(db, tenantId, { channelType });
 
-    await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-      const channels = new GatewayChannelRepository(scoped);
-      const events = new GatewayInboundEventRepository(scoped);
-      await channels.claimListener({
-        channelId: channel.id,
-        claimToken: 'old-owner',
-        leaseDurationMs: 30_000,
-        instanceId: 'daemon-old',
-        bootId: 'boot-old',
-      });
-      const first = await events.claim({
-        channelId: channel.id,
-        providerEventId: 'slack:event:Ev-1',
-        threadId: 'C1-1.0',
-        processingToken: 'old-owner',
-        leaseDurationMs: 120_000,
-        requireListenerClaim: true,
-      });
-      expect(first.outcome).toBe('claimed');
-      if (first.outcome !== 'claimed') throw new Error('Event was not claimed');
-      expect(
-        await events.recordDeliveryMetadata({
-          eventId: first.event.id,
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const channels = new GatewayChannelRepository(scoped);
+        const events = new GatewayInboundEventRepository(scoped);
+        await channels.claimListener({
           channelId: channel.id,
+          claimToken: 'old-owner',
+          leaseDurationMs: 30_000,
+          instanceId: 'daemon-old',
+          bootId: 'boot-old',
+        });
+        const first = await events.claim({
+          channelId: channel.id,
+          providerEventId,
+          threadId,
           processingToken: 'old-owner',
-          metadata: { processing_comment_id: 42 },
+          leaseDurationMs: 120_000,
           requireListenerClaim: true,
-        })
-      ).toBe(true);
-      const sameOwnerRetry = await events.claim({
-        channelId: channel.id,
-        providerEventId: 'slack:event:Ev-1',
-        threadId: 'C1-1.0',
-        processingToken: 'old-owner',
-        leaseDurationMs: 120_000,
-        requireListenerClaim: true,
-      });
-      expect(sameOwnerRetry.outcome).toBe('claimed');
-      if (sameOwnerRetry.outcome === 'claimed') {
-        expect(sameOwnerRetry.event.delivery_metadata).toEqual({ processing_comment_id: 42 });
-      }
-
-      await expireChannelLease(scoped, channel.id);
-      await channels.claimListener({
-        channelId: channel.id,
-        claimToken: 'new-owner',
-        leaseDurationMs: 300_000,
-        instanceId: 'daemon-new',
-        bootId: 'boot-new',
-      });
-      expect(
-        await events.complete({
-          eventId: first.event.id,
+        });
+        expect(first.outcome).toBe('claimed');
+        if (first.outcome !== 'claimed') throw new Error('Event was not claimed');
+        expect(
+          await events.recordDeliveryMetadata({
+            eventId: first.event.id,
+            channelId: channel.id,
+            processingToken: 'old-owner',
+            metadata: { processing_comment_id: 42 },
+            requireListenerClaim: true,
+          })
+        ).toBe(true);
+        const sameOwnerRetry = await events.claim({
           channelId: channel.id,
+          providerEventId,
+          threadId,
           processingToken: 'old-owner',
+          leaseDurationMs: 120_000,
           requireListenerClaim: true,
-        })
-      ).toBe(false);
+        });
+        expect(sameOwnerRetry.outcome).toBe('claimed');
+        if (sameOwnerRetry.outcome === 'claimed') {
+          expect(sameOwnerRetry.event.delivery_metadata).toEqual({ processing_comment_id: 42 });
+        }
 
-      expect(
-        await events.claim({
+        await expireChannelLease(scoped, channel.id);
+        await channels.claimListener({
           channelId: channel.id,
-          providerEventId: 'slack:event:Ev-1',
-          threadId: 'C1-1.0',
+          claimToken: 'new-owner',
+          leaseDurationMs: 300_000,
+          instanceId: 'daemon-new',
+          bootId: 'boot-new',
+        });
+        expect(
+          await events.complete({
+            eventId: first.event.id,
+            channelId: channel.id,
+            processingToken: 'old-owner',
+            requireListenerClaim: true,
+          })
+        ).toBe(false);
+
+        expect(
+          await events.claim({
+            channelId: channel.id,
+            providerEventId,
+            threadId,
+            processingToken: 'new-owner',
+            leaseDurationMs: 120_000,
+            requireListenerClaim: true,
+          })
+        ).toMatchObject({ outcome: 'in_progress_elsewhere' });
+
+        await expireInboundProcessing(scoped, first.event.id);
+        const reclaimed = await events.claim({
+          channelId: channel.id,
+          providerEventId,
+          threadId,
           processingToken: 'new-owner',
           leaseDurationMs: 120_000,
           requireListenerClaim: true,
-        })
-      ).toMatchObject({ outcome: 'in_progress_elsewhere' });
-
-      await expireInboundProcessing(scoped, first.event.id);
-      const reclaimed = await events.claim({
-        channelId: channel.id,
-        providerEventId: 'slack:event:Ev-1',
-        threadId: 'C1-1.0',
-        processingToken: 'new-owner',
-        leaseDurationMs: 120_000,
-        requireListenerClaim: true,
+        });
+        expect(reclaimed.outcome).toBe('claimed');
+        if (reclaimed.outcome !== 'claimed') throw new Error('Event was not reclaimed');
+        expect(reclaimed.event.delivery_metadata).toEqual({ processing_comment_id: 42 });
+        expect(
+          await events.complete({
+            eventId: reclaimed.event.id,
+            channelId: channel.id,
+            processingToken: 'new-owner',
+            requireListenerClaim: true,
+          })
+        ).toBe(true);
+        expect(
+          await events.claim({
+            channelId: channel.id,
+            providerEventId,
+            threadId,
+            processingToken: 'new-owner',
+            leaseDurationMs: 120_000,
+            requireListenerClaim: true,
+          })
+        ).toMatchObject({ outcome: 'completed_duplicate' });
+        if (channelType === 'discord') await channels.update(channel.id, { enabled: false });
       });
-      expect(reclaimed.outcome).toBe('claimed');
-      if (reclaimed.outcome !== 'claimed') throw new Error('Event was not reclaimed');
-      expect(reclaimed.event.delivery_metadata).toEqual({ processing_comment_id: 42 });
-      expect(
-        await events.complete({
-          eventId: reclaimed.event.id,
-          channelId: channel.id,
-          processingToken: 'new-owner',
-          requireListenerClaim: true,
-        })
-      ).toBe(true);
-      expect(
-        await events.claim({
-          channelId: channel.id,
-          providerEventId: 'slack:event:Ev-1',
-          threadId: 'C1-1.0',
-          processingToken: 'new-owner',
-          leaseDurationMs: 120_000,
-          requireListenerClaim: true,
-        })
-      ).toMatchObject({ outcome: 'completed_duplicate' });
-    });
-  });
+    }
+  );
 
   it('keeps discovery, claims, and event identities tenant-scoped', async () => {
     const tenantA = `gateway-a-${generateId()}` as TenantID;

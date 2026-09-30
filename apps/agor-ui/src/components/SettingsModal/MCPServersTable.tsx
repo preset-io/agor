@@ -15,7 +15,6 @@ import {
   EyeOutlined,
   PlusOutlined,
   TeamOutlined,
-  UserOutlined,
 } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
 import {
@@ -23,18 +22,14 @@ import {
   Badge,
   Button,
   Descriptions,
-  Flex,
   Form,
-  Grid,
   Input,
   Popconfirm,
   Space,
-  Table,
   Tabs,
   Tag,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '@/contexts/ConnectionContext';
@@ -60,6 +55,7 @@ import {
   allowedMcpScopes,
   allowedMcpTransports,
   canAddMcpServer,
+  canAddSharedMcpServer,
   canDeleteMcpServer,
   canEditMcpServer,
   explainAddRestriction,
@@ -71,7 +67,9 @@ import { useMCPServerDiscovery } from '../MCPServer/useMCPServerDiscovery';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
+import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { SettingsIdentity } from './SettingsIdentity';
 
 interface MCPServersTableProps {
   mcpServerById: Map<string, MCPServer>;
@@ -84,7 +82,7 @@ interface MCPServersTableProps {
 }
 
 /** How an unowned server reads: it is the workspace's, not nobody's. */
-const SHARED_OWNER_LABEL = 'Shared with workspace';
+const SHARED_OWNER_LABEL = 'Shared';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
 
 const getServerHealth = (
@@ -116,7 +114,7 @@ const getServerHealth = (
   if (toolCount > 0) {
     return {
       status: 'success' as const,
-      text: `${toolCount} tools`,
+      text: `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}`,
     };
   }
 
@@ -207,10 +205,9 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
+  const [createdServerOwnership, setCreatedServerOwnership] = useState<'private' | 'shared'>();
   const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
-  const screens = Grid.useBreakpoint();
-  const { token } = theme.useToken();
 
   const [formRevision, bumpFormRevision] = useFormRevision();
   const createOperationGuard = useAuthorityOperationGuard(
@@ -263,7 +260,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   }, [mcpServerById, viewingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
+    if (!currentUser?.user_id) throw new Error('Authentication required');
+    if (values.ownership === 'shared' && !canAddSharedMcpServer(capability)) {
+      throw new Error(
+        'You can no longer create shared MCP servers. Choose Private or ask an admin.'
+      );
+    }
     const data: CreateMCPServerInput = {
+      owner_user_id: values.ownership === 'shared' ? null : currentUser.user_id,
       name: values.name as string,
       display_name: values.display_name as string | undefined,
       description: values.description as string | undefined,
@@ -315,11 +319,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         createdConfigVersion.current = (result as MCPServer).config_version ?? 1;
+        setCreatedServerOwnership((result as MCPServer).owner_user_id ? 'private' : 'shared');
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
-      const { name: _name, ...updates } = data;
+      const { name: _name, owner_user_id: _owner, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       const updated = await client.service('mcp-servers').patch(createdServerId, {
         ...updates,
@@ -351,6 +356,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setChosenTransport(null);
     setAuthType('none');
     setCreatedServerId(null);
+    setCreatedServerOwnership(undefined);
     bumpFormRevision();
   };
 
@@ -469,163 +475,70 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const renderOwner = useCallback(
     (server: MCPServer) => {
       const owner = describeOwner(server);
-      return (
+      return owner.shared ? (
         <Tooltip title={owner.hint}>
-          <Tag
-            icon={owner.shared ? <TeamOutlined /> : <UserOutlined />}
-            color={owner.shared ? 'default' : 'geekblue'}
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              maxWidth: '100%',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <HighlightMatch text={owner.text} query={searchTerm} />
-          </Tag>
+          <Tag icon={<TeamOutlined />}>Shared</Tag>
         </Tooltip>
+      ) : (
+        <Typography.Text ellipsis={{ tooltip: owner.hint }} style={{ display: 'block' }}>
+          <HighlightMatch text={owner.text} query={searchTerm} />
+        </Typography.Text>
       );
     },
     [describeOwner, searchTerm]
   );
 
-  // At xl the 1200px Settings modal leaves about 896px after its navigation
-  // rail and padding. Below xl, the name column becomes a composed summary so
-  // every value remains visible while Actions keeps its own usable column.
-  const compactTable = !screens.xl;
   const columns = useMemo<TableColumnsType<MCPServer>>(
     () => [
       {
-        title: compactTable ? 'Server' : 'Name',
-        dataIndex: 'name',
+        title: 'Server',
         key: 'name',
-        width: compactTable ? undefined : 160,
-        render: (_: string, server: MCPServer) => {
-          const displayName = server.display_name || server.name;
-          const health = getServerHealth(server, userAuthenticatedMcpServerIds);
-          const scopeColors: Record<string, string> = {
-            global: 'purple',
-            repo: 'cyan',
-            session: 'magenta',
-          };
-          return (
-            <Flex vertical gap={compactTable ? token.marginXXS : 0} style={{ minWidth: 0 }}>
-              <Flex vertical style={{ minWidth: 0 }}>
-                <Typography.Text strong ellipsis={{ tooltip: displayName }}>
-                  <HighlightMatch text={displayName} query={searchTerm} />
-                </Typography.Text>
-                <Typography.Text
-                  type="secondary"
-                  ellipsis={{ tooltip: server.name }}
-                  style={{ fontSize: token.fontSizeSM }}
-                >
-                  <HighlightMatch text={server.name} query={searchTerm} />
-                </Typography.Text>
-              </Flex>
-              {compactTable && (
-                <>
-                  <Flex wrap gap={token.marginXXS} align="center">
-                    <Tag color={server.transport === 'stdio' ? 'blue' : 'green'}>
-                      {server.transport.toUpperCase()}
-                    </Tag>
-                    <Tag color={scopeColors[server.scope]}>{server.scope}</Tag>
-                    <Badge
-                      status={server.enabled ? 'success' : 'default'}
-                      text={server.enabled ? 'Enabled' : 'Disabled'}
-                    />
-                    <Badge status={health.status} text={health.text} />
-                  </Flex>
-                  <div style={{ minWidth: 0 }}>{renderOwner(server)}</div>
-                  <Flex gap={token.marginXXS} style={{ minWidth: 0 }}>
-                    <Typography.Text type="secondary" style={{ flex: '0 0 auto' }}>
-                      Source:
-                    </Typography.Text>
-                    <Typography.Text
-                      type="secondary"
-                      ellipsis={{ tooltip: server.source }}
-                      style={{ minWidth: 0 }}
-                    >
-                      <HighlightMatch text={server.source} query={searchTerm} />
-                    </Typography.Text>
-                  </Flex>
-                </>
-              )}
-            </Flex>
-          );
-        },
-      },
-      {
-        title: 'Transport',
-        dataIndex: 'transport',
-        key: 'transport',
-        width: 90,
-        responsive: ['xl'],
-        render: (transport: string) => (
-          <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
+        render: (_: unknown, server: MCPServer) => (
+          <SettingsIdentity
+            name={server.display_name || server.name}
+            query={searchTerm}
+            description={server.description}
+            metadata={
+              <>
+                <Tag>{server.transport.toUpperCase()}</Tag>
+                <Tag>{server.scope}</Tag>
+              </>
+            }
+          />
         ),
       },
       {
-        title: 'Scope',
-        dataIndex: 'scope',
-        key: 'scope',
-        width: 76,
-        responsive: ['xl'],
-        render: (scope: string) => {
-          const colors: Record<string, string> = {
-            global: 'purple',
-            repo: 'cyan',
-            session: 'magenta',
-          };
-          return <Tag color={colors[scope]}>{scope}</Tag>;
-        },
+        title: 'Owner',
+        key: 'owner',
+        width: 150,
+        render: (_: unknown, server: MCPServer) => renderOwner(server),
       },
       {
-        title: 'Status',
-        dataIndex: 'enabled',
+        title: 'Enabled',
         key: 'enabled',
-        width: 90,
-        responsive: ['xl'],
-        render: (enabled: boolean) => (
-          <Badge status={enabled ? 'success' : 'default'} text={enabled ? 'Enabled' : 'Disabled'} />
+        width: 94,
+        render: (_: unknown, server: MCPServer) => (
+          <Badge
+            status={server.enabled ? 'success' : 'default'}
+            text={server.enabled ? 'Enabled' : 'Disabled'}
+          />
         ),
       },
       {
-        title: 'Health',
+        title: 'Access / discovery',
         key: 'health',
-        width: 108,
-        responsive: ['xl'],
+        width: 128,
         render: (_: unknown, server: MCPServer) => {
           const health = getServerHealth(server, userAuthenticatedMcpServerIds);
           return <Badge status={health.status} text={health.text} />;
         },
       },
       {
-        title: 'Owner',
-        dataIndex: 'owner_user_id',
-        key: 'owner',
-        width: 145,
-        responsive: ['xl'],
-        render: (_: string | undefined, server: MCPServer) => renderOwner(server),
-      },
-      {
-        title: 'Source',
-        dataIndex: 'source',
-        key: 'source',
-        width: 80,
-        responsive: ['xl'],
-        render: (source: string) => (
-          <Typography.Text type="secondary" ellipsis={{ tooltip: source }}>
-            <HighlightMatch text={source} query={searchTerm} />
-          </Typography.Text>
-        ),
-      },
-      {
         title: 'Actions',
         key: 'actions',
         width: 96,
-        align: compactTable ? 'right' : undefined,
+        fixed: 'right',
+        align: 'right',
         render: (_: unknown, server: MCPServer) => {
           const editable = canEditMcpServer(server, capability);
           const deletable = canDeleteMcpServer(server, capability);
@@ -703,7 +616,6 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     ],
     [
       capability,
-      compactTable,
       handleDelete,
       handleEdit,
       handleView,
@@ -711,15 +623,16 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       policyPendingHint,
       renderOwner,
       searchTerm,
-      token.fontSizeSM,
-      token.marginXXS,
       userAuthenticatedMcpServerIds,
     ]
   );
 
   const servers = useMemo(() => {
-    const sorted = mapToSortedArray(mcpServerById, (a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    const sorted = mapToSortedArray(
+      mcpServerById,
+      (a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) ||
+        String(a.mcp_server_id).localeCompare(String(b.mcp_server_id))
     );
     return filterBySettingsSearch(sorted, searchTerm, [
       (server) => server.name,
@@ -731,7 +644,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       (server) => server.url,
       (server) => server.command,
       (server) => server.args,
-      (server) => server.enabled,
+      (server) => (server.enabled ? 'enabled' : 'disabled'),
       (server) => server.tools?.flatMap((tool) => [tool.name, tool.description]),
       (server) => describeOwner(server).text,
     ]);
@@ -742,13 +655,21 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       <ResponsiveSettingsHeader
         description="Configure Model Context Protocol servers for enhanced AI capabilities."
         actions={(compact) => (
-          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+          <Space
+            wrap
+            style={{ width: compact ? '100%' : undefined, maxWidth: '100%' }}
+            styles={{ item: { minWidth: 0, maxWidth: '100%' } }}
+          >
             <Input
               allowClear
               placeholder="Search name, owner, URL, command, tools, transport, or scope"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+              style={{
+                width: compact ? '100%' : 360,
+                maxWidth: '100%',
+                flex: compact ? '1 1 100%' : undefined,
+              }}
             />
             {canAdd ? (
               <Button
@@ -773,8 +694,10 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         )}
       />
 
-      {/* Plain Table: this one already collapses to a phone-width Server/Actions layout (see the layout browser test). */}
-      <Table
+      <ResponsiveTable
+        primaryColumnKey="name"
+        scroll={{ x: 660 }}
+        key={searchTerm}
         dataSource={servers}
         columns={columns}
         rowKey="mcp_server_id"
@@ -832,10 +755,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         >
           <MCPServerFormFields
             mode={createdServerId ? 'edit' : 'create'}
+            savedOwnership={createdServerOwnership}
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}
             offeredScopes={offeredScopes}
+            allowSharedOwnership={canAddSharedMcpServer(capability)}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={createForm}
@@ -906,13 +831,20 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
             <Descriptions.Item label="Scope">
               <Tag>{viewingServer.scope}</Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="Owner">
+            <Descriptions.Item label="Owner (not creator)">
               <Space orientation="vertical" size={0}>
                 <span>{describeOwner(viewingServer).text}</span>
                 <Typography.Text type="secondary">
                   {describeOwner(viewingServer).hint}
                 </Typography.Text>
               </Space>
+            </Descriptions.Item>
+            <Descriptions.Item label="Added by">Not recorded</Descriptions.Item>
+            <Descriptions.Item label="Authentication / discovery">
+              {getServerHealth(viewingServer, userAuthenticatedMcpServerIds).text}
+              <Typography.Paragraph type="secondary">
+                Discovered capabilities are not a live connectivity check.
+              </Typography.Paragraph>
             </Descriptions.Item>
             <Descriptions.Item label="Source">{viewingServer.source}</Descriptions.Item>
             <Descriptions.Item label="Status">

@@ -9,17 +9,17 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Popover, Space, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
-import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
-import { UserAvatar } from '../metadata/UserAvatar';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { SettingsIdentity } from './SettingsIdentity';
 
 interface TeammatesTableProps {
   client?: AgorClient | null;
@@ -75,121 +75,87 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   const teammates = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
     const teammateBranches = Array.from(branchById.values())
       .filter((w) => !w.archived && isTeammate(w))
       .sort((a, b) => {
         const nameA = getTeammateConfig(a)?.displayName ?? a.name;
         const nameB = getTeammateConfig(b)?.displayName ?? b.name;
-        return nameA.localeCompare(nameB, undefined, { sensitivity: 'base' });
+        return (
+          nameA.localeCompare(nameB, undefined, { sensitivity: 'base' }) ||
+          a.branch_id.localeCompare(b.branch_id)
+        );
       });
 
-    if (!term) return teammateBranches;
-
-    return teammateBranches.filter((w) => {
-      const config = getTeammateConfig(w);
-      const repo = repoById.get(w.repo_id);
-      const creator = userById.get(w.created_by);
-      const haystacks = [
-        config?.displayName,
-        w.name,
-        w.notes,
-        creator?.name,
-        creator?.email,
-        repo?.name,
-        repo?.slug,
-      ];
-      return haystacks.some((v) => v?.toLowerCase().includes(term));
-    });
-  }, [branchById, repoById, userById, searchTerm]);
+    return filterBySettingsSearch(teammateBranches, searchTerm, [
+      (branch) => [getTeammateConfig(branch)?.displayName, branch.name, branch.notes],
+      (branch) => {
+        const owner = userById.get(branch.primary_owner_user_id ?? '');
+        const creator = userById.get(branch.created_by);
+        return [owner?.name, owner?.email, creator?.name, creator?.email];
+      },
+      (branch) => {
+        const repo = repoById.get(branch.repo_id);
+        return [repo?.name, repo?.slug];
+      },
+      (branch) => boardById.get(branch.board_id ?? '')?.name,
+    ]);
+  }, [branchById, repoById, userById, boardById, searchTerm]);
 
   const columns = [
     {
       title: 'Teammate',
       key: 'teammate',
-      width: 220,
       render: (_: unknown, record: Branch) => {
         const config = getTeammateConfig(record);
+        const repo = repoById.get(record.repo_id);
         return (
-          <Space>
-            {config?.emoji ? (
-              <span style={{ fontSize: 18 }}>{config.emoji}</span>
-            ) : (
-              <RobotOutlined style={{ color: token.colorInfo }} />
-            )}
-            <Typography.Text strong>
-              <HighlightMatch text={config?.displayName ?? record.name} query={searchTerm} />
-            </Typography.Text>
-          </Space>
-        );
-      },
-    },
-    {
-      title: 'Description',
-      key: 'description',
-      render: (_: unknown, record: Branch) => {
-        const notes = (record.notes ?? '').trim();
-        if (!notes) {
-          return (
-            <Typography.Text type="secondary" italic style={{ fontSize: 12 }}>
-              No description
-            </Typography.Text>
-          );
-        }
-        const firstLine = notes.split('\n').find((l) => l.trim().length > 0) ?? notes;
-        // Cell shows plain first-line ellipsis; popover renders full markdown.
-        // MarkdownRenderer's `inline` is currently a no-op (Streamdown still
-        // emits block nodes), so plain text is the honest preview here.
-        return (
-          <Popover
-            content={
-              <div
-                className="markdown-compact"
-                style={{
-                  maxWidth: 480,
-                  maxHeight: 400,
-                  overflowY: 'auto',
-                  fontSize: 12,
-                  lineHeight: 1.5,
-                }}
-              >
-                <MarkdownRenderer content={notes} showControls={false} />
-              </div>
+          <SettingsIdentity
+            name={config?.displayName ?? record.name}
+            query={searchTerm}
+            icon={config?.emoji || <RobotOutlined />}
+            description={
+              record.notes?.trim() ? (
+                <MarkdownRenderer content={record.notes} showControls={false} />
+              ) : undefined
             }
-            trigger="hover"
-            placement="topLeft"
-            mouseEnterDelay={0.3}
-          >
-            <Typography.Text
-              type="secondary"
-              ellipsis
-              style={{
-                display: 'block',
-                maxWidth: 480,
-                fontSize: 12,
-                cursor: 'help',
-              }}
-            >
-              <HighlightMatch text={firstLine} query={searchTerm} />
-            </Typography.Text>
-          </Popover>
+            metadata={
+              <Typography.Text
+                type="secondary"
+                ellipsis={{ tooltip: repo?.name || record.name }}
+                style={{ display: 'block', fontSize: token.fontSizeSM }}
+              >
+                {repo?.name || record.name}
+              </Typography.Text>
+            }
+          />
         );
       },
     },
     {
-      title: 'Creator',
-      key: 'creator',
-      width: 160,
+      title: 'Primary owner',
+      key: 'owner',
+      width: 140,
       render: (_: unknown, record: Branch) => {
-        const user = userById.get(record.created_by);
-        if (!user || record.created_by === 'anonymous') {
-          return (
-            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {record.created_by === 'anonymous' ? 'Anonymous' : 'Unknown User'}
-            </Typography.Text>
-          );
-        }
-        return <UserAvatar user={user} showName size="small" />;
+        const owner = userById.get(record.primary_owner_user_id ?? '');
+        const name = owner?.name || owner?.email || 'Unavailable user';
+        return (
+          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
+            {name}
+          </Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Board',
+      key: 'board',
+      width: 120,
+      render: (_: unknown, record: Branch) => {
+        const name = boardById.get(record.board_id ?? '')?.name || '—';
+        return (
+          <Typography.Text ellipsis={{ tooltip: name }} style={{ display: 'block' }}>
+            {name}
+          </Typography.Text>
+        );
       },
     },
     {
@@ -204,6 +170,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
                 type="text"
                 size="small"
                 icon={<AimOutlined />}
+                aria-label="Center map on teammate"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleRecenter(record);
@@ -216,6 +183,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
               type="text"
               size="small"
               icon={<EditOutlined />}
+              aria-label="Edit teammate"
               onClick={(e) => {
                 e.stopPropagation();
                 onRowClick?.(record);
@@ -284,9 +252,11 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
       {(teammates.length > 0 || searchTerm) && (
         <ResponsiveTable
+          primaryColumnKey="teammate"
           dataSource={teammates}
           columns={columns}
-          scroll={{ x: 720 }}
+          tableLayout="fixed"
+          key={searchTerm}
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"

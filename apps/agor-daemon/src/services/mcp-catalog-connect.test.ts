@@ -46,6 +46,7 @@ function createMCPCatalogConnectService(
     has_row_secret: Boolean(value.auth?.type === 'bearer' && value.auth.token),
   });
   const fallback: MCPCatalogConnectDeps = {
+    authorizeCaller: async (params) => params,
     async runInTenantDatabaseScope(_params, work) {
       return work();
     },
@@ -109,6 +110,7 @@ function installOf(overrides: Record<string, unknown> = {}) {
 function authenticated(overrides: Record<string, unknown> = {}) {
   return {
     mcp_server_id: 'server-signed-in',
+    owner_user_id: ALICE,
     transport: 'http',
     url: 'https://mcp.linear.app/mcp',
     enabled: true,
@@ -355,6 +357,7 @@ function buildApp(
   };
   const deps: {
     readGrantResourceUri: ReturnType<typeof vi.fn>;
+    authorizeCaller: MCPCatalogConnectDeps['authorizeCaller'];
     runInTenantDatabaseScope: MCPCatalogConnectDeps['runInTenantDatabaseScope'];
     listCandidates: (
       userId: UserID,
@@ -374,6 +377,7 @@ function buildApp(
         (server) => server.mcp_server_id === serverId
       )?.url;
     }),
+    authorizeCaller: async (params: AuthenticatedParams) => params,
     runInTenantDatabaseScope: async (_params, work) => work(),
     listCandidates: async () => [],
     getCandidate: async () => undefined,
@@ -1252,7 +1256,7 @@ describe('mcp-catalog/connect — what a caller cannot reach', () => {
     expect(row.scope).toBe('session');
     const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
       .mock.calls[0]![0];
-    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput.owner_user_id).toBe(ALICE);
     expect(createInput).not.toHaveProperty('catalog_entry_name');
     expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row.source).toBe('catalog');
@@ -2212,7 +2216,7 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     expect(created.mcpServers).toHaveLength(0);
   });
 
-  it('leaves the unauthenticated and OAuth paths sharing rows as before', async () => {
+  it('does not silently reuse shared configuration for a private request', async () => {
     // The ownership rule is about what a row carries, not about who installed
     // it: an open server keeps no credential, and an OAuth grant lives in
     // `user_mcp_oauth_tokens` keyed by user, so neither is the row's to lend.
@@ -2221,8 +2225,8 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
 
     const result = await createMCPCatalogConnectService(app).create(request, params);
 
-    expect(result.reused_existing_server).toBe(true);
-    expect(created.mcpServers).toHaveLength(0);
+    expect(result.reused_existing_server).toBe(false);
+    expect(created.mcpServers).toHaveLength(1);
   });
 });
 
@@ -2301,7 +2305,7 @@ describe('mcp-catalog/connect — a key request from a caller that is not the ma
     expect(row.source).toBe('catalog');
     const createInput = (services['mcp-servers'] as { create: ReturnType<typeof vi.fn> }).create
       .mock.calls[0]![0];
-    expect(createInput).not.toHaveProperty('owner_user_id');
+    expect(createInput.owner_user_id).toBe(ALICE);
     expect(createInput).not.toHaveProperty('catalog_entry_name');
     expect(row).toMatchObject({ owner_user_id: ALICE, catalog_entry_name: LINEAR });
     expect(row).not.toHaveProperty('enabled');

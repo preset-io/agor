@@ -12,7 +12,6 @@
  */
 
 import { resolveExecutionSecurityMode } from '@agor/core/config';
-import { resolveSessionDefaults } from '@agor/core/sessions';
 import { renderTemplate } from '@agor/core/templates/handlebars-helpers';
 import { buildZoneTriggerContext } from '@agor/core/templates/zone-trigger-context';
 import type {
@@ -92,12 +91,6 @@ export async function fireAlwaysNewZoneTrigger(
     );
   }
 
-  const { mcp_server_ids: inheritedMcpIds } = resolveSessionDefaults({
-    agenticTool,
-    user,
-    branch,
-  });
-
   // In delegated mode, refuse to create a zone-triggered session for a user
   // without a unix_username — it would fail at prompt time (or silently share
   // an identity in hosted deployments).
@@ -120,20 +113,6 @@ export async function fireAlwaysNewZoneTrigger(
     },
     params
   );
-
-  // Best-effort MCP attach. The session is already created; one bad server
-  // shouldn't strand the session. Mirrors the legacy MCP-tool behaviour.
-  for (const mcpServerId of inheritedMcpIds) {
-    try {
-      await app
-        .service('/sessions/:id/mcp-servers')
-        .create({ mcpServerId }, { ...params, route: { id: newSession.session_id } });
-    } catch (error) {
-      console.warn(
-        `[fireAlwaysNewZoneTrigger] Skipped MCP server ${mcpServerId} for session ${newSession.session_id}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
-  }
 
   const task: Task = await app.service('/sessions/:id/prompt').create(
     {

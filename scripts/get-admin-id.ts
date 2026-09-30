@@ -5,12 +5,11 @@
  * Queries the database for the admin user's full UUID
  */
 
-import os from 'node:os';
-import path from 'node:path';
 import { loadConfig, resolveBootstrapTenantId } from '@agor/core/config';
 import {
   createDatabase,
   createTenantScopedDatabaseProxy,
+  resolveDefaultDatabaseUrl,
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
@@ -23,9 +22,7 @@ async function main() {
   if (dialect === 'postgresql') {
     databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
   } else {
-    const configPath = path.join(os.homedir(), '.agor');
-    const dbPath = path.join(configPath, 'agor.db');
-    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+    databaseUrl = process.env.DATABASE_URL || resolveDefaultDatabaseUrl();
   }
 
   try {

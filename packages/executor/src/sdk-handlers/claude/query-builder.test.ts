@@ -1035,7 +1035,7 @@ describe('setupQuery - Local Settings Support', () => {
     expect(mcpServers.jwtRemote.alwaysLoad).toBeUndefined();
   });
 
-  it.each(['claude-opus-5-5', 'claude-opus-5-5[1m]'])(
+  it.each(['claude-opus-5-5', 'claude-opus-5-5[1m]', 'claude-sonnet-5-5'])(
     'passes %s unchanged to the bundled SDK runtime',
     async (model) => {
       const deps = createMockDeps();

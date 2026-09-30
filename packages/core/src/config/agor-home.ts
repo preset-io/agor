@@ -1,9 +1,12 @@
 /**
  * Agor state-home creation policy.
  *
- * The default home contains deployment configuration, the standalone SQLite
- * database, daemon credentials, and runtime files. Agor-created homes are
- * therefore private to the process identity that initializes the deployment.
+ * The home contains deployment configuration, the standalone SQLite database,
+ * daemon credentials, and runtime files. Agor-created homes are therefore
+ * private to the process identity that initializes the deployment.
+ *
+ * `getAgorHome()` is the single source of truth for that location, including
+ * the `AGOR_HOME` override.
  */
 
 import {
@@ -22,14 +25,56 @@ import path from 'node:path';
 
 export const AGOR_HOME_MODE = 0o700;
 
-/** Get the default Agor state directory (`~/.agor`). */
+/** Environment variable that relocates the Agor state home wholesale. */
+export const AGOR_HOME_ENV = 'AGOR_HOME';
+
+/** Expand a leading `~` against the operating-system home directory. */
+function expandLeadingTilde(input: string): string {
+  if (input === '~') return os.homedir();
+  if (input.startsWith('~/')) return path.join(os.homedir(), input.slice(2));
+  if (process.platform === 'win32' && input.startsWith('~\\')) {
+    return path.join(os.homedir(), input.slice(2));
+  }
+  return input;
+}
+
+/**
+ * Get the Agor state directory.
+ *
+ * Resolution order:
+ * 1. `AGOR_HOME`, when set to a non-blank value.
+ * 2. `<os.homedir()>/.agor`.
+ *
+ * `AGOR_HOME` is surrounding-whitespace-trimmed, `~`-expanded against the
+ * operating-system home, and resolved to an absolute path (a relative value
+ * resolves against the process working directory). A value that is empty or
+ * only whitespace is treated as unset rather than as the filesystem root, so
+ * `AGOR_HOME=` in an env file cannot silently redirect Agor's entire state to
+ * `/`.
+ *
+ * This is the single root for Agor-owned state. Every derived path -
+ * `config.yaml`, the standalone SQLite database, repos/worktrees, logs,
+ * daemon credentials, and runtime files - resolves through this function (or
+ * through `getDataHome()`, which falls back to it), so setting `AGOR_HOME`
+ * moves all of them together. Resolution is read live from the environment on
+ * each call and is never cached.
+ */
 export function getAgorHome(): string {
+  const override = process.env[AGOR_HOME_ENV]?.trim();
+  if (override) {
+    return path.resolve(expandLeadingTilde(override));
+  }
   return path.join(os.homedir(), '.agor');
 }
 
-/** Get the default operator configuration path (`~/.agor/config.yaml`). */
+/** Join path segments onto the Agor state home. */
+export function agorHomePath(...segments: string[]): string {
+  return path.join(getAgorHome(), ...segments);
+}
+
+/** Get the operator configuration path (`<agor home>/config.yaml`). */
 export function getConfigPath(): string {
-  return path.join(getAgorHome(), 'config.yaml');
+  return agorHomePath('config.yaml');
 }
 
 function assertOpenedDirectoryMatchesPath(

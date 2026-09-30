@@ -17,7 +17,7 @@ vi.mock('@agor/core/types', async (original) => {
   };
 });
 
-describe.skipIf(process.platform !== 'linux')('import plan aggregate limits', () => {
+describe.skipIf(process.platform === 'win32')('import plan aggregate limits', () => {
   it('rejects quote-expanded aggregate requests before any write, including dry-run and resume', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'kb-transfer-limit-'));
     const progress = new KnowledgeProgress({ isTTY: false, write: () => true });

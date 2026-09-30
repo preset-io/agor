@@ -127,6 +127,7 @@ import {
   ensureCanControlBranchEnvironment,
   hasBranchPermission,
   isSuperAdmin,
+  withoutPrefetchedRecord,
 } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -2206,7 +2207,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       };
       if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
     }
-    const current = await this.withTenantDatabase(params, () => this.get(branch.branch_id, params));
+    // Authorization may have prefetched the old failed row. Return committed
+    // lifecycle truth, not that pre-admission snapshot, and avoid re-entering
+    // wrapped get hooks which can reintroduce the request's RBAC cache.
+    const current = await this.withTenantDatabase(params, () =>
+      this.getCanonicalBranch(branch.branch_id, withoutPrefetchedRecord(params))
+    );
+    if (!admission.acquired && current.deletion_status === 'deletion_failed') {
+      throw new Conflict(
+        'Deletion recovery is blocked: the prior invocation has no verified settlement. ' +
+          'No replacement was started. Process exit, elapsed time, and confirmation are not containment proof. ' +
+          'See the branch deletion recovery guide; legacy claimed invocations cannot be automatically recovered.'
+      );
+    }
     emitServiceEvent(this.app, {
       path: 'branches',
       event: 'patched',

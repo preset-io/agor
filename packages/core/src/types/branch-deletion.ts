@@ -47,8 +47,30 @@ export const BRANCH_DELETION_ACTIONS = [
   'data',
   'finalize',
   'failed',
+  // Worker-owned storage has stopped; daemon DB-only requests may be unknown.
+  // A distinct action makes old daemons reject this stronger settlement protocol.
+  'settled',
 ] as const;
 export type BranchDeletionAction = (typeof BRANCH_DELETION_ACTIONS)[number];
+
+/**
+ * Destructive-effect contract for uncertain RPC outcomes. Database-only work
+ * must remain inside the exact-invocation branch transaction fence. External
+ * IO can outlive that transaction and requires an acknowledged response.
+ * Adding an action requires an explicit classification; unknown effects must
+ * never default to database-only in consumers.
+ */
+export const BRANCH_DELETION_ACTION_EFFECTS = {
+  claim: 'database',
+  heartbeat: 'database',
+  quiesce: 'database',
+  upload: 'external_io',
+  storage: 'database',
+  data: 'database',
+  finalize: 'database',
+  failed: 'database',
+  settled: 'database',
+} as const satisfies Record<BranchDeletionAction, 'database' | 'external_io'>;
 
 export type BranchDeletionExecutionResult =
   | { outcome: 'deleted' }

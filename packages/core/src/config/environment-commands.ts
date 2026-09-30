@@ -28,7 +28,7 @@ export function assertAsyncEnvironmentCommandConfig(config: AgorConfig): void {
     deadline! > BUDGET.claimMs + BUDGET.commandMs + BUDGET.cleanupMs
   ) {
     throw new Error(
-      'HA hybrid environments require execution.environment_command_job_deadline_ms between 305000 and 365000, matching the external Job deadline INCLUDING termination grace'
+      'HA hybrid environments require execution.environment_command_job_deadline_ms between 305000 and 485000, matching the external Job deadline INCLUDING termination grace'
     );
   }
   if (
@@ -36,7 +36,7 @@ export function assertAsyncEnvironmentCommandConfig(config: AgorConfig): void {
     BUDGET.claimMs + BUDGET.commandMs + BUDGET.cleanupMs + BUDGET.reportMs + BUDGET.launchMs
   ) {
     throw new Error(
-      'Environment command credentials must outlive launch, claim, execution, cleanup, and report budgets (at least 405000ms)'
+      'Environment command credentials must outlive launch, claim, execution, cleanup, and report budgets (at least 545000ms)'
     );
   }
 }

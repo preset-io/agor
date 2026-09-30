@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { homedir } from 'node:os';
-import path from 'node:path';
 import type { AgorConfig } from '@agor/core/client';
+import { getConfigPath } from '@agor/core/config/agor-home';
 import * as yaml from 'js-yaml';
 
 const DEFAULT_DAEMON_PORT = 3030;
@@ -26,7 +25,7 @@ export function getDefaultConfig(): AgorConfig {
 }
 
 export function loadConfigSync(): AgorConfig {
-  const configPath = path.join(homedir(), '.agor', 'config.yaml');
+  const configPath = getConfigPath();
   let content: string;
   // Read and parse are caught separately: only a read failure can be the
   // sandbox mask, and blaming it for malformed YAML in a file we just read

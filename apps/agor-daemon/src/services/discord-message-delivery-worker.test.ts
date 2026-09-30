@@ -4,6 +4,7 @@ import {
   type DiscordMessageDeliveryDiscoveryRef,
 } from '@agor/core/db';
 import type { GatewayConnector, GatewaySendReceipt } from '@agor/core/gateway';
+import { DiscordDirectMessageError } from '@agor/core/gateway';
 import type {
   DiscordMessageDelivery,
   DiscordMessageDeliveryChunkReceipt,
@@ -810,4 +811,56 @@ describe('DiscordMessageDeliveryWorker', () => {
       task: { task_id: 'task-1', status: 'running' },
     });
   });
+});
+
+it('cancels queued DM deliveries when DMs are disabled', async () => {
+  const h = makeHarness();
+  h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+  await h.makeWorker().checkOnce();
+  expect(h.repository.row).toMatchObject({
+    status: 'canceled',
+    last_error_code: 'direct_messages_disabled',
+  });
+  expect(h.sendMessage).not.toHaveBeenCalled();
+  expect(h.recoverMessageByNonce).not.toHaveBeenCalled();
+});
+
+it.each(['discord_dm_channel_mismatch', 'discord_dm_unreachable'] as const)(
+  'dead-letters %s on its first attempt without recovery retry',
+  async (code) => {
+    const h = makeHarness({ channel: { config: { direct_messages_enabled: true } } });
+    h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+    h.sendMessage.mockRejectedValue(new DiscordDirectMessageError(code));
+    await h.makeWorker().checkOnce();
+    await h.makeWorker().checkOnce();
+    expect(h.repository.row).toMatchObject({
+      status: 'dead_letter',
+      last_error_code: code,
+      attempt_count: 1,
+    });
+    expect(h.sendMessage).toHaveBeenCalledOnce();
+    expect(h.recoverMessageByNonce).toHaveBeenCalledOnce();
+  }
+);
+
+it('retries a transient DM recipient check and delivers once', async () => {
+  const h = makeHarness({ channel: { config: { direct_messages_enabled: true } } });
+  h.mapping.thread_id = 'discord:dm:333333333333333333:444444444444444444';
+  h.sendMessage.mockRejectedValueOnce(
+    new DiscordDirectMessageError('discord_dm_verification_unavailable', 503)
+  );
+  await h.makeWorker().checkOnce();
+  expect(h.repository.row).toMatchObject({
+    status: 'pending',
+    last_error_code: 'discord_dm_verification_unavailable',
+    ambiguous_chunk_index: null,
+    effect_recovery_grace_until: null,
+  });
+
+  h.now = new Date(h.repository.row.next_attempt_at);
+  await h.makeWorker().checkOnce();
+  expect(h.repository.row).toMatchObject({ status: 'completed', attempt_count: 2 });
+  expect(h.repository.row.chunk_receipts).toHaveLength(1);
+  expect(h.sendMessage).toHaveBeenCalledTimes(2);
+  await expect(h.sendMessage.mock.results[1].value).resolves.toBeDefined();
 });

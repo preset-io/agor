@@ -1,8 +1,50 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { resolveOwnerHomeStore, validateFilesystemHomeOverride } from './sandbox-context';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  resolveOwnerHomeStore,
+  resolveSandboxProtectedDataRoots,
+  resolveSandboxStoragePaths,
+  validateFilesystemHomeOverride,
+} from './sandbox-context';
+
+describe('relocated daemon state protection', () => {
+  beforeEach(() => vi.stubEnv('AGOR_HOME', '/srv/agor-state'));
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([false, true])(
+    'protects state independently of data (tenant isolation: %s)',
+    (isolated) => {
+      const config = {
+        paths: { data_home: '/mnt/git-data' },
+        multi_tenancy: {
+          filesystem_isolation_enabled: isolated,
+          tenants_base_folder: '/mnt/tenant-data',
+        },
+      };
+      const expected = ['/srv/agor-state', '/mnt/git-data'];
+      if (isolated) expected.push('/mnt/tenant-data');
+      expect(resolveSandboxProtectedDataRoots(config)).toEqual(expected);
+      for (const tenantId of ['tenant-a', 'tenant-b']) {
+        expect(resolveSandboxStoragePaths(config, tenantId).protectedDataRoots).toEqual(expected);
+      }
+      // An explicit user-home bind must not re-expose the protected state root.
+      expect(() =>
+        resolveOwnerHomeStore({
+          config,
+          tenantId: 'tenant-a',
+          ownerUserId: 'user-a',
+          filesystemHome: '/srv/agor-state',
+        })
+      ).toThrow(/data root/i);
+    }
+  );
+
+  it('deduplicates the default shared state/data root', () => {
+    expect(resolveSandboxProtectedDataRoots({})).toEqual(['/srv/agor-state']);
+  });
+});
 
 describe('validateFilesystemHomeOverride', () => {
   const DATA = '/srv/agor/.agor';

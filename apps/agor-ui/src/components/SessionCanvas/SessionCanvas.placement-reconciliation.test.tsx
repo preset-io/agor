@@ -8,6 +8,7 @@ import type {
   Session,
 } from '@agor-live/client';
 import { act, render, screen } from '@testing-library/react';
+import { App } from 'antd';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
@@ -638,12 +639,14 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
       const patch = vi.fn((id: string) =>
         id === reviewingCardPlacement.object_id ? cardPending : Promise.resolve()
       );
-      const create = vi.fn().mockResolvedValue({});
+      const create = vi.fn().mockResolvedValue({ session: { mcp_defaults_skipped: 2 } });
       const client = { service: vi.fn(() => ({ patch, create })) } as unknown as AgorClient;
       const view = render(
-        <ConnectionProvider value={connected}>
-          <SessionCanvas board={triggerBoard} client={client} branches={[branch]} />
-        </ConnectionProvider>
+        <App>
+          <ConnectionProvider value={connected}>
+            <SessionCanvas board={triggerBoard} client={client} branches={[branch]} />
+          </ConnectionProvider>
+        </App>
       );
       await act(async () => {});
       // Put the card first, so its PATCH suspends before branch trigger handling.
@@ -666,13 +669,15 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
         // The old unpinned row remains cached and compares equal unless board
         // identity is explicitly checked. No zone frame can detect this.
         view.rerender(
-          <ConnectionProvider value={connected}>
-            <SessionCanvas
-              board={{ ...triggerBoard, board_id: 'board-other' } as Board}
-              client={client}
-              branches={[branch]}
-            />
-          </ConnectionProvider>
+          <App>
+            <ConnectionProvider value={connected}>
+              <SessionCanvas
+                board={{ ...triggerBoard, board_id: 'board-other' } as Board}
+                client={client}
+                branches={[branch]}
+              />
+            </ConnectionProvider>
+          </App>
         );
       } else if (change !== 'unchanged') {
         act(() =>
@@ -688,8 +693,12 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
       });
       if (change === 'unchanged') {
         expect(patch).toHaveBeenCalledTimes(2);
-        if (behavior === 'always_new') expect(create).toHaveBeenCalledTimes(1);
-        else expect(screen.getByTestId('zone-trigger-picker')).toBeTruthy();
+        if (behavior === 'always_new') {
+          expect(create).toHaveBeenCalledTimes(1);
+          expect(
+            screen.getByText(/2 unavailable default MCP server\(s\) were skipped/)
+          ).toBeTruthy();
+        } else expect(screen.getByTestId('zone-trigger-picker')).toBeTruthy();
       } else {
         expect(patch, change).toHaveBeenCalledTimes(1);
         expect(create, change).not.toHaveBeenCalled();

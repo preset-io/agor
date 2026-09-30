@@ -20,7 +20,7 @@ import type { Application } from '@agor/core/feathers';
 import { NotFound } from '@agor/core/feathers';
 import type { TenantID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionsService } from './sessions.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -159,20 +159,23 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       ]);
 
-      await expect(
-        runWithTenantDatabaseScope(db, tenantA, () =>
-          service.create(
-            {
-              branch_id: owner.branch.branch_id,
-              created_by: owner.user.user_id,
-              agentic_tool: 'claude-code',
-              status: SessionStatus.IDLE,
-              mcpServerIds: [foreignServer.mcp_server_id],
-            },
-            params
+      const foreignPrefix = foreignServer.mcp_server_id.replaceAll('-', '').slice(0, 31);
+      for (const foreignId of [foreignServer.mcp_server_id, foreignPrefix]) {
+        await expect(
+          runWithTenantDatabaseScope(db, tenantA, () =>
+            service.create(
+              {
+                branch_id: owner.branch.branch_id,
+                created_by: owner.user.user_id,
+                agentic_tool: 'claude-code',
+                status: SessionStatus.IDLE,
+                mcpServerIds: [foreignId],
+              },
+              params
+            )
           )
-        )
-      ).rejects.toMatchObject({ name: NotFound.name, code: 404 });
+        ).rejects.toMatchObject({ name: NotFound.name, code: 404 });
+      }
 
       const state = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => ({
         sessions: await new SessionRepository(scoped).findAll(),
@@ -183,6 +186,270 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         owner.server.mcp_server_id,
       ]);
       expect(events).toHaveLength(1);
+
+      // Foreign-tenant and genuinely deleted default IDs have the same public
+      // outcome. Never consult an unscoped inventory to distinguish the two.
+      const input = {
+        branch_id: owner.branch.branch_id,
+        created_by: owner.user.user_id,
+        agentic_tool: 'claude-code',
+        status: SessionStatus.IDLE,
+      } as const;
+      for (const unavailable of [foreignServer.mcp_server_id, foreignPrefix, generateId()]) {
+        const inherited = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+          await new BranchRepository(scoped).update(owner.branch.branch_id, {
+            mcp_server_ids: [owner.server.mcp_server_id, unavailable],
+          });
+          return service.create(input, params);
+        });
+        expect(inherited.mcp_defaults_skipped).toBe(1);
+        expect(Object.getOwnPropertyDescriptor(inherited, 'tenant_id')).toMatchObject({
+          value: tenantA,
+          enumerable: false,
+        });
+        expect(JSON.parse(JSON.stringify(inherited))).not.toHaveProperty('tenant_id');
+        expect(
+          await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+            new SessionMCPServerRepository(scoped).listServers(inherited.session_id)
+          )
+        ).toMatchObject([{ mcp_server_id: owner.server.mcp_server_id }]);
+      }
+      expect(
+        await runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+          new MCPServerRepository(scoped).findById(foreignServer.mcp_server_id)
+        )
+      ).not.toBeNull();
+
+      // Mixed spellings used to sort in opposite canonical orders. Hold the
+      // first creator after its first row lock, then prove the second is waiting
+      // in PostgreSQL before it can attach anything. Record every acquisition,
+      // including alias deduplication; mere absence of a deadlock is not proof.
+      const secondServer = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+        new MCPServerRepository(scoped).create({
+          name: `ordered-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+        })
+      );
+      const orderedIds = [owner.server.mcp_server_id, secondServer.mcp_server_id].sort();
+      const prefix = (id: string) => id.replaceAll('-', '').slice(0, 31);
+      const selections = [
+        [orderedIds[0], prefix(orderedIds[1]), orderedIds[1]],
+        [prefix(orderedIds[0]), orderedIds[1], prefix(orderedIds[1])],
+      ];
+      // This fixture must reproduce the lexical inversion, not rely on UUID luck.
+      expect([prefix(orderedIds[0]), orderedIds[1]].sort()[0]).toBe(orderedIds[1]);
+      let firstLocked!: () => void;
+      let releaseFirst!: () => void;
+      const locked = new Promise<void>((resolve) => {
+        firstLocked = resolve;
+      });
+      const release = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const acquisitions = new Map<string, string[]>();
+      const addServer = SessionMCPServerRepository.prototype.addServer;
+      const attachmentGate = vi
+        .spyOn(SessionMCPServerRepository.prototype, 'addServer')
+        .mockImplementation(async function (
+          this: SessionMCPServerRepository,
+          sessionId,
+          serverId,
+          ...rest
+        ) {
+          const acquired = acquisitions.get(sessionId) ?? [];
+          acquired.push(serverId);
+          acquisitions.set(sessionId, acquired);
+          if (acquisitions.size === 1 && acquired.length === 1) {
+            firstLocked();
+            await release;
+          }
+          return addServer.call(this, sessionId, serverId, ...rest);
+        });
+      const firstCreate = runWithTenantDatabaseScope(db, tenantA, () =>
+        service.create({ ...input, mcpServerIds: selections[0] }, params)
+      );
+      let secondCreate: typeof firstCreate | undefined;
+      let secondPid: number | undefined;
+      try {
+        await locked;
+        expect([...acquisitions.values()]).toEqual([[orderedIds[0]]]);
+        secondCreate = runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+          const [connection] = rowsOf(
+            await executeRaw(scoped, sql`SELECT pg_backend_pid() AS pid`)
+          );
+          secondPid = Number(connection.pid);
+          return service.create({ ...input, mcpServerIds: selections[1] }, params);
+        });
+        await vi.waitFor(async () => {
+          expect(secondPid).toBeDefined();
+          const [locks] = rowsOf(
+            await executeRaw(
+              rawDb,
+              sql`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid = ${secondPid} AND NOT granted) AS waiting`
+            )
+          );
+          expect(locks.waiting).toBe(true);
+        });
+        expect([...acquisitions.values()]).toEqual([[orderedIds[0]]]);
+      } finally {
+        releaseFirst();
+        await Promise.all([firstCreate, secondCreate]);
+        attachmentGate.mockRestore();
+      }
+      expect([...acquisitions.values()]).toEqual([orderedIds, orderedIds]);
+      for (const created of await Promise.all([firstCreate, secondCreate!])) {
+        expect(created.mcp_defaults_skipped).toBeUndefined();
+        expect(
+          events.filter(
+            (event) => (event.data as { session_id?: string }).session_id === created.session_id
+          )
+        ).toHaveLength(2);
+      }
+
+      // Pause only scheduling, not data/authority: a real second transaction
+      // deletes after default resolution but before the attachment row lock.
+      const doomed = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const server = await new MCPServerRepository(scoped).create({
+          name: `race-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+        });
+        await new BranchRepository(scoped).update(owner.branch.branch_id, {
+          mcp_server_ids: [
+            owner.server.mcp_server_id,
+            prefix(server.mcp_server_id),
+            server.mcp_server_id,
+          ],
+        });
+        return server;
+      });
+      let signalReached!: () => void;
+      let signalResume!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        signalReached = resolve;
+      });
+      const resume = new Promise<void>((resolve) => {
+        signalResume = resolve;
+      });
+      const original = MCPServerRepository.prototype.resolveCanonicalId;
+      const gate = vi
+        .spyOn(MCPServerRepository.prototype, 'resolveCanonicalId')
+        .mockImplementation(async function (this: MCPServerRepository, id: string) {
+          const canonical = await original.call(this, id);
+          if (id === doomed.mcp_server_id) {
+            signalReached();
+            await resume;
+          }
+          return canonical;
+        });
+      const creating = runWithTenantDatabaseScope(db, tenantA, () => service.create(input, params));
+      try {
+        await reached;
+        await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+          new MCPServerRepository(scoped).delete(doomed.mcp_server_id)
+        );
+      } finally {
+        signalResume();
+        gate.mockRestore();
+      }
+      const raced = await creating;
+      expect(raced.mcp_defaults_skipped).toBe(2);
+      expect(
+        await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+          new SessionMCPServerRepository(scoped).listServers(raced.session_id)
+        )
+      ).toMatchObject([{ mcp_server_id: owner.server.mcp_server_id }]);
+
+      // Opposite ordering: once authorization has read a server, delete must
+      // wait rather than winning between that read and the FK insert. Observe
+      // the actual PostgreSQL wait, not a timing-based "hasn't finished yet".
+      const lockedServer = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const server = await new MCPServerRepository(scoped).create({
+          name: `locked-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+        });
+        await new BranchRepository(scoped).update(owner.branch.branch_id, {
+          mcp_server_ids: [
+            owner.server.mcp_server_id,
+            prefix(server.mcp_server_id),
+            server.mcp_server_id,
+          ],
+        });
+        return server;
+      });
+      let signalRead!: () => void;
+      let resumeRead!: () => void;
+      const readReached = new Promise<void>((resolve) => {
+        signalRead = resolve;
+      });
+      const readResume = new Promise<void>((resolve) => {
+        resumeRead = resolve;
+      });
+      const findById = MCPServerRepository.prototype.findById;
+      const readGate = vi
+        .spyOn(MCPServerRepository.prototype, 'findById')
+        .mockImplementation(async function (this: MCPServerRepository, id: string) {
+          const found = await findById.call(this, id);
+          if (id === lockedServer.mcp_server_id) {
+            signalRead();
+            await readResume;
+          }
+          return found;
+        });
+      const lockWinner = runWithTenantDatabaseScope(db, tenantA, () =>
+        service.create(input, params)
+      );
+      let deleting: Promise<void> | undefined;
+      let deletePid: number | undefined;
+      try {
+        await readReached;
+        deleting = runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+          const [connection] = rowsOf(
+            await executeRaw(scoped, sql`SELECT pg_backend_pid() AS pid`)
+          );
+          deletePid = Number(connection.pid);
+          await new MCPServerRepository(scoped).delete(lockedServer.mcp_server_id);
+        });
+        await vi.waitFor(async () => {
+          expect(deletePid).toBeDefined();
+          // Test-only connection observability; no tenant rows are read unscoped.
+          const [locks] = rowsOf(
+            await executeRaw(
+              rawDb,
+              sql`SELECT EXISTS(SELECT 1 FROM pg_locks WHERE pid = ${deletePid} AND NOT granted) AS waiting`
+            )
+          );
+          expect(locks.waiting).toBe(true);
+        });
+      } finally {
+        resumeRead();
+        readGate.mockRestore();
+        await Promise.all([lockWinner, deleting]);
+      }
+      const committed = await lockWinner;
+      expect(committed.mcp_defaults_skipped).toBeUndefined();
+      expect(
+        await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+          new SessionRepository(scoped).findById(committed.session_id)
+        )
+      ).not.toBeNull();
+      // Deletion happens after admission and cascades only that attachment.
+      expect(
+        await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+          new SessionMCPServerRepository(scoped).listServers(committed.session_id)
+        )
+      ).toMatchObject([{ mcp_server_id: owner.server.mcp_server_id }]);
     }, 30_000);
   }
 );

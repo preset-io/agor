@@ -140,8 +140,10 @@ it('reveals time and the board locator on hover or focus and opens rows by keybo
   const { onSessionClick } = mount();
   const target = row('Resync');
   // The toolbar mounts once the list is idle (or on first hover/focus), hidden until used.
-  const toolbar = await waitFor(() =>
-    within(target.parentElement!).getByRole('group', { name: 'Session actions' })
+  // The idle callback has a 2s deadline, longer than waitFor's default 1s timeout.
+  const toolbar = await waitFor(
+    () => within(target.parentElement!).getByRole('group', { name: 'Session actions' }),
+    { timeout: 5000 }
   );
   expect(getComputedStyle(toolbar).opacity).toBe('0');
   expect(getComputedStyle(target.parentElement!).backgroundColor).toBe(TRANSPARENT);

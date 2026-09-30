@@ -63,7 +63,7 @@ describe('authorizeMcpSessionConfigAccess', () => {
     ).toThrow(/Only the session's creator or an admin/);
   });
 
-  it('keeps every attachment and initialization mutation on the mutation guard', () => {
+  it('keeps available choices, every attachment mutation and initialization on the mutation guard', () => {
     const source = readFileSync(join(__dirname, '../register-routes.ts'), 'utf8');
     const attachmentStart = source.indexOf("'/sessions/:id/mcp-servers'");
     const attachmentEnd = source.indexOf('const mcpRefreshAttempts', attachmentStart);
@@ -73,9 +73,21 @@ describe('authorizeMcpSessionConfigAccess', () => {
     const initializationRoute = source.slice(initializationStart, initializationEnd);
 
     expect(attachmentStart).toBeGreaterThan(0);
-    expect(
-      attachmentRoute.match(/authorizeAndLoadSessionForMcpConfig\(id, params\);/g)
-    ).toHaveLength(4);
+    const handlers = [...attachmentRoute.matchAll(/async (find|create|update|remove|patch)\(/g)];
+    expect(handlers.map((handler) => handler[1])).toEqual([
+      'find',
+      'create',
+      'update',
+      'remove',
+      'patch',
+    ]);
+    for (const [index, handler] of handlers.entries()) {
+      const body = attachmentRoute.slice(handler.index, handlers[index + 1]?.index);
+      // The available=true branch of find needs mutation authority too; the
+      // executor exception belongs only to the ordinary attachment projection.
+      expect(body.match(/authorizeAndLoadSessionForMcpConfig\(id, params\);/g)).toHaveLength(1);
+      if (handler[1] !== 'find') expect(body).not.toContain('allowExecutorProjection');
+    }
     expect(attachmentRoute.match(/allowExecutorProjection: true/g)).toHaveLength(1);
     expect(initializationStart).toBeGreaterThan(0);
     expect(initializationRoute).toContain('authorizeAndLoadSessionForMcpConfig(id, params)');

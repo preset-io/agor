@@ -5,7 +5,7 @@ Resource Sharing (CORS), and how operators tune both from `~/.agor/config.yaml`.
 
 > This document is scoped to **web-layer hardening** (CSP / CORS / response
 > headers). For authentication, RBAC, and Unix isolation see
-> [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)
+> [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx)
 > and [`context/guides/rbac-and-unix-isolation.md`](../guides/rbac-and-unix-isolation.md).
 
 ---
@@ -282,5 +282,5 @@ error message.
 - `apps/agor-daemon/src/setup/security-headers.ts` — CSP middleware
 - `apps/agor-daemon/src/setup/cors.ts` — CORS policy builder
 - `packages/core/src/config/security-resolver.ts` — config resolver
-- [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx) — daemon auth, RBAC, OS-level isolation tiers
+- [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx) — daemon auth, RBAC, OS-level isolation tiers
 - [`context/guides/rbac-and-unix-isolation.md`](../guides/rbac-and-unix-isolation.md) — implementation guide

@@ -94,6 +94,12 @@
       "import": "./dist/config/index.js",
       "require": "./dist/config/index.cjs"
     },
+    "./config/agor-home": {
+      "source": "./src/config/agor-home.ts",
+      "types": "./dist/config/agor-home.d.ts",
+      "import": "./dist/config/agor-home.js",
+      "require": "./dist/config/agor-home.cjs"
+    },
     "./config/node": {
       "source": "./src/config/agor-yml.ts",
       "types": "./dist/config/agor-yml.d.ts",
@@ -559,12 +565,12 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.280",
-    "@google/gemini-cli-core": "0.59.0",
+    "@anthropic-ai/claude-agent-sdk": "0.3.284",
+    "@google/gemini-cli-core": "0.61.0",
     "@google/genai": "^1.52.0",
     "@octokit/auth-app": "^8.3.1",
     "@octokit/rest": "^22.0.1",
-    "@openai/codex-sdk": "0.156.1",
+    "@openai/codex-sdk": "0.159.0",
     "@types/bcryptjs": "^2.4.6",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.6.0",
@@ -572,11 +578,11 @@
     "analytics": "^0.8.19",
     "botbuilder": "^4.23.3",
     "concurrently": "^9.2.1",
-    "drizzle-kit": "^0.31.10",
+    "drizzle-kit": "^0.31.11",
     "handlebars": "^4.7.8",
     "open": "^11.0.4",
     "tsup": "^8.5.1",
-    "tsx": "4.23.13",
+    "tsx": "4.23.15",
     "typescript": "^6.0.3",
     "vitest": "^5.0.1"
   },

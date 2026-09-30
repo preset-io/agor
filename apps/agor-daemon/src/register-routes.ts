@@ -81,9 +81,9 @@ import {
   Unavailable,
 } from '@agor/core/feathers';
 import {
+  isMCPServerNotUsableError,
   isMCPServerUsableBy,
   MCP_RUNTIME_PROVIDER_CAPABILITIES,
-  MCPServerNotUsableError,
   mcpRuntimeProviderCapability,
 } from '@agor/core/mcp';
 import type {
@@ -210,6 +210,7 @@ import {
 } from './permissions/deliver-permission-decision.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
+import { authorizeCatalogCaller } from './services/mcp-catalog-access.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { createMCPCatalogStartSessionService } from './services/mcp-catalog-start-session.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
@@ -765,6 +766,8 @@ export function createRegisteredMCPCatalogConnectService(
     return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
   };
   return createMCPCatalogConnectService(app, {
+    authorizeCaller: (params) =>
+      runInTenantDatabaseScope(params, () => authorizeCatalogCaller(db, params)),
     runInTenantDatabaseScope,
     async listCandidates(userId, params) {
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
@@ -4008,7 +4011,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
-  registerAuthenticatedRoute(
+  // Long route: `.agor.yml` is read by an executor, so tenant identity is armed
+  // without a request-long transaction and the service opens a short unit per
+  // database access (see ReposService.importFromAgorYml).
+  registerLongAuthenticatedRoute(
     app,
     '/repos/:id/import-agor-yml',
     {
@@ -5289,6 +5295,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const session = await authorizeAndLoadSessionForMcpConfig(id, params, {
           allowExecutorProjection: true,
         });
+        if (params.query?.available === true || params.query?.available === 'true') {
+          // Configuration choices are not administrative inventory. Even admins
+          // may attach private rows only to their owner's sessions, and a shared
+          // session must not offer credentials belonging to a different caller.
+          await authorizeAndLoadSessionForMcpConfig(id, params);
+          const candidates = await sessionMCPServersService.listAvailableServers(
+            session,
+            params.user?.user_id as UserID | undefined
+          );
+          return candidates.map(redactMCPServerSecrets);
+        }
         const enabledOnly =
           params.query?.enabledOnly === 'true' || params.query?.enabledOnly === true;
         const includeGlobal =
@@ -5444,7 +5461,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             params
           );
         } catch (error) {
-          if (error instanceof MCPServerNotUsableError) {
+          if (isMCPServerNotUsableError(error)) {
             throw new Forbidden('That MCP server is private to another user');
           }
           throw error;
@@ -5505,7 +5522,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             )
           );
         } catch (error) {
-          if (error instanceof MCPServerNotUsableError) {
+          if (isMCPServerNotUsableError(error)) {
             throw new Forbidden('That MCP server is private to another user');
           }
           throw error;
@@ -6632,7 +6649,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             try {
               await sessionMCPServersService.setServers(session.session_id, serverIds, params);
             } catch (error) {
-              if (error instanceof MCPServerNotUsableError) {
+              if (isMCPServerNotUsableError(error)) {
                 throw new Forbidden('An MCP server is private to another user');
               }
               throw error;

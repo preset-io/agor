@@ -245,6 +245,10 @@ so do not blindly replay branch creation.
 
 Because MCP calls are just JSON-RPC, complex workflows can be scripted once and reused by any tool that speaks the protocol.
 
+`agor_repos_import_environment` exposes the repository editor's admin-only
+`.agor.yml` import. For its replacement semantics and the import/render/lifecycle
+sequence, see the [agent configuration workflow](/guide/environment-configuration#agent-configuration-workflow).
+
 Environment MCP tools call the same branch environment service as the UI. If an
 operator sets `execution.managed_envs_execution_mode: webhook-only`, MCP
 `agor_environment_start`, `agor_environment_stop`, `agor_environment_logs`, and

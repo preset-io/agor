@@ -37,10 +37,16 @@ const _CODEX_MODEL_REGISTRY = {
     selectable: true,
     availability: 'provider-dependent',
   },
+  'gpt-6.1-sol': {
+    name: 'GPT-6.1 Sol',
+    description: 'Upgraded Sol model for agentic coding, computer use, and professional work',
+    status: 'current',
+    selectable: true,
+    availability: 'provider-dependent',
+  },
   'gpt-6-sol': {
     name: 'GPT-6 Sol',
-    description:
-      'Built for complex coding and agentic workflows, with stronger factual reliability',
+    description: 'Previous Sol model for complex coding and agentic workflows',
     status: 'current',
     selectable: true,
     availability: 'provider-dependent',
@@ -361,6 +367,7 @@ const DEFAULT_CODEX_CONTEXT_LIMIT = 200_000;
  */
 export const CODEX_CONTEXT_LIMITS: Record<string, number> = {
   'gpt-6-astra': 1_050_000,
+  'gpt-6.1-sol': 1_050_000,
   'gpt-6-sol': 1_050_000,
   'gpt-6-luna': 1_050_000,
   // GPT-5.6 models

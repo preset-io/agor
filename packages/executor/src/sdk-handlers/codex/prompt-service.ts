@@ -27,6 +27,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
+import { agorHomePath } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import {
   getMcpServersForSession,
@@ -446,12 +447,12 @@ export class CodexPromptService {
 
   /**
    * Delete `agor-codex-instructions-*.md` files in `os.tmpdir()` (and the
-   * `~/.agor/tmp` fallback dir) older than 24h. Bounds the disk leak from
+   * `<agor home>/tmp` fallback dir) older than 24h. Bounds the disk leak from
    * the missing close hook described in the constructor.
    */
   private async sweepStaleInstructionsFiles(): Promise<void> {
     const cutoffMs = Date.now() - 24 * 60 * 60 * 1000;
-    const candidateDirs = [os.tmpdir(), path.join(os.homedir(), '.agor', 'tmp')];
+    const candidateDirs = [os.tmpdir(), agorHomePath('tmp')];
 
     for (const dir of candidateDirs) {
       let entries: string[];
@@ -673,13 +674,13 @@ export class CodexPromptService {
 
     const fileName = `agor-codex-instructions-${sessionId}.md`;
 
-    // Try /tmp first; fall back to ~/.agor/tmp if /tmp is unavailable
+    // Try /tmp first; fall back to `<agor home>/tmp` if /tmp is unavailable
     // (sandboxed executors / containers without /tmp).
     let filePath = path.join(os.tmpdir(), fileName);
     try {
       await fs.writeFile(filePath, agorSystemPrompt, { encoding: 'utf-8', mode: 0o600 });
     } catch {
-      const fallbackBase = path.join(os.homedir(), '.agor', 'tmp');
+      const fallbackBase = agorHomePath('tmp');
       console.warn('⚠️  [Codex] Primary instructions-file write failed; using fallback storage');
       await fs.mkdir(fallbackBase, { recursive: true, mode: 0o700 });
       filePath = path.join(fallbackBase, fileName);
@@ -1892,7 +1893,7 @@ export class CodexPromptService {
     const candidatePaths = new Set<string>([
       ...(recordedPath ? [recordedPath] : []),
       path.join(os.tmpdir(), fileName),
-      path.join(os.homedir(), '.agor', 'tmp', fileName),
+      agorHomePath('tmp', fileName),
     ]);
 
     for (const filePath of candidatePaths) {

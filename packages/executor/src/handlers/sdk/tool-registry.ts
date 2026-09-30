@@ -78,6 +78,17 @@ const auxiliaryAdapters: Partial<Record<Tool, () => Promise<AgenticToolAuxiliary
     (await import('@agor/agentic-tool-opencode/runtime')).OPENCODE_AUXILIARY_ADAPTER,
 };
 
+/** Only a missing top-level Gemini SDK is an optional-install failure. */
+export function isMissingGeminiSdk(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND' &&
+    /Cannot find (?:package|module) ['"]@google\/gemini-cli-core(?:\/[^'"]*)?['"]/.test(
+      error.message
+    )
+  );
+}
+
 /**
  * Tool registry - centralized configuration for all tools
  */
@@ -230,15 +241,11 @@ export async function initializeToolRegistry(): Promise<void> {
     name: getAgenticToolIntegration('gemini').displayName,
     apiKeyEnvVar: getAgenticToolIntegration('gemini').apiKeyName!,
     runner: async (params) => {
+      let gemini: typeof import('./gemini.js');
       try {
-        const gemini = await import('./gemini.js');
-        return await gemini.executeGeminiTask(params);
+        gemini = await import('./gemini.js');
       } catch (error) {
-        if (
-          error instanceof Error &&
-          (error.message.includes('@google/gemini-cli-core') ||
-            (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND')
-        ) {
+        if (isMissingGeminiSdk(error)) {
           throw new Error(
             'Gemini support is not installed on this Agor instance. ' +
               'See https://agor.live/guide/extended-install#agentic-tools',
@@ -247,6 +254,7 @@ export async function initializeToolRegistry(): Promise<void> {
         }
         throw error;
       }
+      return gemini.executeGeminiTask(params);
     },
   });
 

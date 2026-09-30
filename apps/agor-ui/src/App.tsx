@@ -58,6 +58,7 @@ import { MCPCatalogModalProvider } from './contexts/MCPCatalogModalContext';
 import { ThemeProvider, useTheme } from './contexts/ThemeContext';
 import { setPrimaryAgenticToolIfUnset } from './domain/primaryAgenticTool';
 import {
+  getSessionCreationWarning,
   type NewSessionConfig,
   runSessionCreationStages,
   type SessionCreationResult,
@@ -1258,7 +1259,9 @@ function AppContent() {
       createSession: () => createSession({ ...sessionConfig, branch_id }),
       onSessionCreated: (session) => {
         sessionCreated(session);
-        showSuccess('Session created!');
+        const warning = getSessionCreationWarning(session);
+        if (warning) showWarning(warning, { duration: 10 });
+        else showSuccess('Session created!');
       },
       initialPrompt: config.initialPrompt ?? '',
       preparePrompt: attachmentFiles?.length
@@ -1722,7 +1725,7 @@ function AppContent() {
       ref: string;
       refType?: 'branch' | 'tag';
       createBranch: boolean;
-      sourceBranch: string;
+      sourceBranch?: string;
       sourceRemoteUrl?: string;
       pullLatest: boolean;
       issue_url?: string;

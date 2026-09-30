@@ -337,6 +337,36 @@ environment:
 
 Notice that `postgres` and `full` both extend `lean` (not each other). That's the single-level rule. Both inherit `health` and `app` from `lean` and override the rest.
 
+### Agent configuration workflow
+
+Agents use the same environment service as the branch card's Play/Stop controls.
+Discover the tools with `agor_search_tools` and inspect their schemas with
+`agor_get_tool_details` before calling them:
+
+1. Inspect the target repository's `.agor.yml`, the imported definitions from
+   `agor_repos_get`, and the branch's current rendered commands and lifecycle state.
+   For a remote provider, adapt the [provider-neutral lifecycle pattern](#provider-neutral-lifecycle-pattern)
+   and [Railway reference](#railway-reference-implementation) to your application.
+2. Review the complete configuration, then call `agor_repos_import_environment`
+   with `repoId` and the source `branchId`. This requires admin access and branch
+   filesystem read access. It replaces the repository's variants and default,
+   preserves deployment-local overrides, and leaves existing branch snapshots alone.
+   Editing the file by itself does not apply it. The admin **Import `.agor.yml`**
+   action below is the fallback when the tool is unavailable.
+3. Call `agor_environment_set` with the target `branchId` and desired `variant`.
+   Omit `variant` to re-render the current one. Stop an active environment before
+   switching variants, and inspect the resulting commands before starting.
+4. Call `agor_environment_start`, then inspect `agor_environment_health` and
+   `agor_environment_logs`. An accepted request does not prove readiness.
+5. Use the reported app URL, and call `agor_environment_stop` when finished.
+   Use `agor_environment_nuke` only when destructive cleanup is intended.
+
+Import changes repository-wide definitions, including those other branches may
+render later. Keep every intended variant in the replacement and inspect existing
+configuration before changing it. Environment commands use the invoking user's
+**Global** environment variables; collect missing credentials through
+`agor_widgets_request_env_vars`, not YAML or rendered command arguments.
+
 ### Import / export
 
 Two admin-only actions in the repo editor header:
@@ -604,7 +634,7 @@ expose them.
 HA `hybrid` mode supports **remote-environment trigger scripts**, not application
 hosting. Agor dispatches a bounded executor, which claims its admitted attempt
 and reports progress and completion to any daemon replica. The initiating HTTP
-request waits at most 10 seconds for launcher admission, **not** for the command
+request waits at most 30 seconds for launcher admission, **not** for the command
 or its result. An accepted Start is not a readiness guarantee.
 
 | Deployment / action           | Start, Stop, Nuke                                                 | Restart                                | Diagnostic shell Logs                                                           |
@@ -634,8 +664,8 @@ execution:
   executor_command_template: /path/to/reviewed-external-launcher
   # Assertion about the external Job's TOTAL lifetime, including termination grace.
   # Set only after the launcher/control plane enforce this bound.
-  environment_command_job_deadline_ms: 365000
-  session_token_expiration_ms: 900000 # at least 405000
+  environment_command_job_deadline_ms: 485000
+  session_token_expiration_ms: 900000 # at least 545000
 ```
 
 Do **not** simply flip the mode on an existing Cloud installation. The trusted
@@ -649,15 +679,20 @@ Keep daemon, database, and executor clocks synchronized for the absolute deadlin
 
 #### Deadlines and rollout coordination
 
+Admission and claim budgets are shared fixed defaults, not configurable settings.
+The longer startup allowance applies to managed environments across Agor; it does
+not change normal agent execution timeouts. Admission acknowledges the external
+Job, while the claim budget also covers cold-node scheduling and image pulls.
+
 | Bound                                           | Budget                                                             |
 | ----------------------------------------------- | ------------------------------------------------------------------ |
-| Local launcher admission                        | 10 seconds                                                         |
-| Executor claim, measured from durable admission | 60 seconds                                                         |
+| Local launcher admission                        | 30 seconds                                                         |
+| Executor claim, measured from durable admission | 180 seconds                                                        |
 | Command, measured from claim                    | At most 300 seconds, also capped by the admitted absolute deadline |
 | Owned process-group cleanup                     | TERM, then KILL after at most 5 seconds                            |
 | Result delivery grace                           | 30 seconds beyond the admitted command and cleanup deadline        |
-| Final result deadline, measured from admission  | 395 seconds                                                        |
-| External Job total bound                        | Operator-enforced 305–365 seconds, including termination grace     |
+| Final result deadline, measured from admission  | 515 seconds                                                        |
+| External Job total bound                        | Operator-enforced 305–485 seconds, including termination grace     |
 
 For Kubernetes, configure command-specific `activeDeadlineSeconds` **plus**
 `terminationGracePeriodSeconds` within the asserted total, with `backoffLimit: 0`

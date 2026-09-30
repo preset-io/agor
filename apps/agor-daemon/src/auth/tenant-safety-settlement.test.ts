@@ -101,6 +101,7 @@ describe('tenant safety settlement classification', () => {
       'data',
       'finalize',
       'failed',
+      'settled',
     ]) {
       await expect(
         isTenantSafetySettlement(

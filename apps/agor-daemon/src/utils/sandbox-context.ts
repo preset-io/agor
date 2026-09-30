@@ -50,13 +50,9 @@ export function resolveSandboxStoragePaths(
   const tenantDataRoot = filesystemIsolation
     ? resolveTenantDataRootFromConfig(config, dataHome, agorHome, tenantId)
     : dataHome;
-  const protectedDataRoots = [dataHome];
-  if (filesystemIsolation) {
-    protectedDataRoots.push(resolveTenantsBaseFolderFromConfig(config, agorHome));
-  }
   return {
     dataHome,
-    protectedDataRoots: [...new Set(protectedDataRoots)],
+    protectedDataRoots: resolveSandboxProtectedDataRoots(config),
     worktreesRoot: join(tenantDataRoot, 'worktrees'),
     ownerHomesRoot: filesystemIsolation
       ? join(tenantDataRoot, 'homes')
@@ -72,7 +68,10 @@ export function resolveSandboxStoragePaths(
 /** Resolve deployment-global roots that a per-user sandbox must hide. */
 export function resolveSandboxProtectedDataRoots(config: DeepReadonly<AgorConfig>): string[] {
   const agorHome = getAgorHome();
-  const roots = [resolveDataHomeFromConfig(config, agorHome)];
+  // The read-only host-root bind still permits reads. Hide daemon state even
+  // when AGOR_HOME is outside the OS home and git data lives elsewhere. The
+  // spawn wrapper canonicalizes these roots before constructing mount masks.
+  const roots = [agorHome, resolveDataHomeFromConfig(config, agorHome)];
   if (config.multi_tenancy?.filesystem_isolation_enabled === true) {
     roots.push(resolveTenantsBaseFolderFromConfig(config, agorHome));
   }

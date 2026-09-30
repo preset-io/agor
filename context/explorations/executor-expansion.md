@@ -1013,7 +1013,7 @@ Note: `serialize_on_disconnect` is not a real Zellij option - serialization happ
 - [ ] Add `paths.data_home` config option
 - [ ] Update all path resolution to use appropriate base
 - [ ] Update `@agor/core/git` to use AGOR_DATA_HOME
-- [ ] Update daemon to use AGOR_HOME for config/db
+- [x] Update daemon to use AGOR_HOME for config/db
 - [ ] Default AGOR_DATA_HOME = AGOR_HOME (backward compat)
 - [ ] Environment variable overrides
 - [ ] Documentation

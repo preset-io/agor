@@ -41,7 +41,13 @@ function pageSizeFor(pagination: TableProps<object>['pagination']): number {
   return pagination.pageSize ?? pagination.defaultPageSize ?? DEFAULT_MOBILE_PAGE_SIZE;
 }
 
-export function ResponsiveTable<RecordType extends object>(props: TableProps<RecordType>) {
+export function ResponsiveTable<RecordType extends object>({
+  primaryColumnKey,
+  ...props
+}: TableProps<RecordType> & {
+  /** Composed identity cells use the full card width instead of a label/value pair. */
+  primaryColumnKey?: React.Key;
+}) {
   const isCompact = useMediaQuery(COMPACT_SETTINGS_MEDIA_QUERY);
   const { token } = theme.useToken();
   const [visibleCount, setVisibleCount] = useState(() => pageSizeFor(props.pagination));
@@ -112,6 +118,18 @@ export function ResponsiveTable<RecordType extends object>(props: TableProps<Rec
                   ? col.render(cellValue(record, col.dataIndex), record, index)
                   : (cellValue(record, col.dataIndex) as React.ReactNode);
                 if (content == null || content === '') return null;
+                if (col.key === primaryColumnKey && primaryColumnKey !== undefined) {
+                  return (
+                    <div key={col.key} style={{ minWidth: 0 }}>
+                      <dt style={{ margin: 0 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                          {col.title}
+                        </Typography.Text>
+                      </dt>
+                      <dd style={{ margin: 0, minWidth: 0 }}>{content}</dd>
+                    </div>
+                  );
+                }
                 return (
                   <Flex
                     key={col.key ?? colIndex}

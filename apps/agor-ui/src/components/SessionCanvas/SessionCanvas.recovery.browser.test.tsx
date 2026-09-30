@@ -3,23 +3,27 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { App } from 'antd';
 import 'reactflow/dist/style.css';
 import { afterEach, expect, it, vi } from 'vitest';
+import { userEvent } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BoardTeammatePanel } from '../BoardTeammatePanel';
+import { makeTeammateBranch } from '../BranchModal/testUtils';
 import SessionCanvas from './SessionCanvas';
 
 afterEach(cleanup);
 it('board primary excluded from the canvas still exposes recovery in its panel', async () => {
-  const branch = {
-    branch_id: 'recovery-primary',
-    board_id: 'recovery-board',
-    repo_id: 'recovery-repo',
-    name: 'Recovery teammate',
-    filesystem_status: 'cleaned',
-    archived: false,
-    custom_context: { teammate: { kind: 'teammate', displayName: 'Recovery teammate' } },
-  } as Branch;
+  const branch = makeTeammateBranch(
+    {
+      branch_id: 'recovery-primary' as Branch['branch_id'],
+      board_id: 'recovery-board' as Branch['board_id'],
+      repo_id: 'recovery-repo' as Branch['repo_id'],
+      name: 'Recovery teammate' as Branch['name'],
+      filesystem_status: 'cleaned',
+      archived: false,
+    },
+    { displayName: 'Recovery teammate' }
+  );
   const board = {
     board_id: branch.board_id,
     name: 'Recovery board',
@@ -89,8 +93,31 @@ it('board primary excluded from the canvas still exposes recovery in its panel',
   expect(await screen.findByText('Filesystem provisioning in progress')).toBeVisible();
   expect(screen.queryByText('Filesystem recovery in progress')).toBeNull();
   view.rerender(
-    compose({ ...branch, filesystem_status: 'failed', error_message: 'Repair Git linkage' })
+    compose({
+      ...branch,
+      filesystem_status: 'failed',
+      provisioning_operation: 'create',
+      error_message: 'Template fetch failed',
+    })
   );
+  expect(await screen.findByText(/Ask a workspace admin to check/)).toBeVisible();
+  const summary = screen.getByText('Technical details');
+  const details = summary.closest('details')!;
+  expect(details).not.toHaveAttribute('open');
+  await userEvent.click(summary);
+  expect(details).toHaveAttribute('open');
+  expect((await screen.findAllByText('Template fetch failed'))[0]).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
+  view.rerender(
+    compose({
+      ...branch,
+      filesystem_status: 'failed',
+      provisioning_operation: 'restore',
+      error_message: 'Repair Git linkage',
+    })
+  );
+  expect(screen.queryByText('Technical details')).toBeNull();
+  expect(screen.queryByText(/Ask a workspace admin to check/)).toBeNull();
   expect((await screen.findAllByText('Repair Git linkage'))[0]).toBeVisible();
   expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible();
   view.rerender(compose({ ...branch, filesystem_status: 'ready' }));

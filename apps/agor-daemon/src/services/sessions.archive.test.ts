@@ -334,6 +334,82 @@ describe('SessionsService archive routes', () => {
     });
   });
 
+  dbTest(
+    'archives a spawn/fork tree built by the real child APIs and restores it symmetrically',
+    async ({ db }) => {
+      const emit = vi.fn();
+      const app = { service: () => ({ emit }) } as unknown as Application;
+      const service = new SessionsService(db, app);
+      // Child config materialization resolves the owner by UUID.
+      const ownerId = generateId() as UUID;
+      const branchId = await createBranch(db, 'tree', { created_by: ownerId });
+      const remoteBranchId = await createBranch(db, 'remote', { created_by: ownerId });
+      const root = await createSession(db, branchId, { created_by: ownerId });
+      // root --spawn--> child --fork--> grandchild --spawn--> greatGrandchild
+      const child = await service.spawn(root.session_id, { prompt: 'child' });
+      const grandchild = await service.fork(child.session_id, { prompt: 'grandchild' });
+      const greatGrandchild = await service.spawn(grandchild.session_id, { prompt: 'leaf' });
+      // grandchild also remote-created a session in another branch.
+      const remoteChild = await createSession(db, remoteBranchId, { created_by: ownerId });
+      await new SessionRelationshipRepository(db).create({
+        source_session_id: grandchild.session_id,
+        target_session_id: remoteChild.session_id,
+        relationship_type: 'remote_create',
+        created_by: ownerId,
+      });
+      const tree = [root, child, grandchild, greatGrandchild];
+      emit.mockClear();
+
+      // Same call shape as POST /sessions/:id/archive from the UI (body `{}`).
+      const archived = await service.archive(root.session_id, {});
+
+      expect(archived.count).toBe(4);
+      expect(archived.affectedSessions.map((session) => session.session_id).sort()).toEqual(
+        tree.map((session) => session.session_id).sort()
+      );
+      await expect(getArchivedState(db, root.session_id)).resolves.toEqual({
+        archived: true,
+        archived_reason: 'manual',
+      });
+      for (const descendant of [child, grandchild, greatGrandchild]) {
+        await expect(getArchivedState(db, descendant.session_id)).resolves.toEqual({
+          archived: true,
+          archived_reason: 'parent_archived',
+        });
+      }
+      await expect(getArchivedState(db, remoteChild.session_id)).resolves.toMatchObject({
+        archived: false,
+      });
+      // Every affected row is published, and creators carry their remote edges
+      // on the realtime payload so clients can retire (and later re-project)
+      // remote surrogates.
+      const emittedGrandchild = () =>
+        emit.mock.calls
+          .map(([, payload]) => payload as Session)
+          .find((session) => session.session_id === grandchild.session_id);
+      const grandchildRemoteEdges = [
+        expect.objectContaining({ target_session_id: remoteChild.session_id }),
+      ];
+      expect(emit).toHaveBeenCalledTimes(4);
+      expect(emittedGrandchild()).toMatchObject({ archived: true });
+      expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
+
+      emit.mockClear();
+      const restored = await service.unarchive(root.session_id, {});
+
+      expect(restored.count).toBe(4);
+      for (const session of tree) {
+        await expect(getArchivedState(db, session.session_id)).resolves.toEqual({
+          archived: false,
+          archived_reason: undefined,
+        });
+      }
+      expect(emit).toHaveBeenCalledTimes(4);
+      expect(emittedGrandchild()).toMatchObject({ archived: false });
+      expect(emittedGrandchild()?.remote_relationships?.as_source).toEqual(grandchildRemoteEdges);
+    }
+  );
+
   dbTest('does not rewrite or re-emit an already satisfied transition', async ({ db }) => {
     const emit = vi.fn();
     const app = { service: () => ({ emit }) } as unknown as Application;

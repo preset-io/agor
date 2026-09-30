@@ -14,6 +14,7 @@ import { drizzle as drizzleSQLite } from 'drizzle-orm/libsql';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
+import { getAgorHome } from '../config/agor-home';
 import { loadConfigSync } from '../config/config-manager';
 import type { AgorConfig } from '../config/types';
 import type { DatadogTracer } from '../tracing/datadog';
@@ -397,18 +398,33 @@ export type TenantScopedDatabase = Database & {
  */
 export type SystemDatabase = Database & { readonly [systemDatabaseBrand]: 'system-database' };
 
+/** Filename of the standalone SQLite database inside the Agor home. */
+export const DEFAULT_DB_FILENAME = 'agor.db';
+
 /**
- * Default database path for local development
+ * Documented default database URL, written with the default Agor home.
+ *
+ * Resolve through {@link resolveDefaultDatabaseUrl} rather than expanding this
+ * literal: the database must follow an `AGOR_HOME` override along with the
+ * rest of Agor's state, and `~` alone would keep it in the operating-system
+ * home.
  */
-export const DEFAULT_DB_PATH = 'file:~/.agor/agor.db';
+export const DEFAULT_DB_PATH = `file:~/.agor/${DEFAULT_DB_FILENAME}`;
+
+/** Default SQLite URL, rooted at the effective Agor home. */
+export function resolveDefaultDatabaseUrl(agorHome: string = getAgorHome()): string {
+  return `file:${join(agorHome, DEFAULT_DB_FILENAME)}`;
+}
 
 export interface DatabaseUrlResolutionOptions {
   /** Already-loaded config, allowing local callers to choose the correct home. */
   config?: Pick<AgorConfig, 'database'>;
   /** Environment override source (defaults to process.env). */
   env?: NodeJS.ProcessEnv;
-  /** Home used to expand `~` in local database paths. */
+  /** Home used to expand `~` in operator-supplied local database paths. */
   homeDir?: string;
+  /** Agor state home used to root the default database path. */
+  agorHome?: string;
 }
 
 function expandDatabasePathForHome(value: string, homeDir: string): string {
@@ -421,6 +437,7 @@ function expandDatabasePathForHome(value: string, homeDir: string): string {
 export function resolveDatabaseUrl(options: DatabaseUrlResolutionOptions = {}): string {
   const env = options.env ?? process.env;
   const homeDir = options.homeDir ?? homedir();
+  const agorHome = options.agorHome ?? getAgorHome();
 
   if (env.AGOR_DB_DIALECT === 'postgresql') {
     return env.DATABASE_URL || 'postgresql://localhost:5432/agor';
@@ -459,7 +476,7 @@ export function resolveDatabaseUrl(options: DatabaseUrlResolutionOptions = {}): 
     }
   }
 
-  return expandDatabasePathForHome(DEFAULT_DB_PATH, homeDir);
+  return resolveDefaultDatabaseUrl(agorHome);
 }
 
 /**
@@ -468,7 +485,7 @@ export function resolveDatabaseUrl(options: DatabaseUrlResolutionOptions = {}): 
  * Priority:
  * 1. AGOR_DB_DIALECT + DATABASE_URL/AGOR_DB_PATH environment variables
  * 2. database.dialect + database.postgresql.url / database.sqlite.path from config.yaml
- * 3. Default SQLite path (~/.agor/agor.db)
+ * 3. Default SQLite path (`<agor home>/agor.db`)
  *
  * This ensures consistent database URL resolution across CLI and daemon.
  *
@@ -488,5 +505,5 @@ export function getDatabaseUrl(): string {
  * Create database with default local configuration
  */
 export function createLocalDatabase(customPath?: string): Database {
-  return createDatabase({ url: customPath ?? DEFAULT_DB_PATH });
+  return createDatabase({ url: customPath ?? resolveDefaultDatabaseUrl() });
 }

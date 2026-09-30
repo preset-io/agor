@@ -9,9 +9,9 @@
  *   await seedDevFixtures();
  */
 
-import os from 'node:os';
 import path from 'node:path';
 import type { BranchID, UUID } from '@agor/core/types';
+import { agorHomePath } from '../config/agor-home';
 import { getBranchesDir, loadConfigSync } from '../config/config-manager';
 import { resolveBootstrapTenantId } from '../config/multitenancy';
 import {
@@ -25,7 +25,7 @@ import { generateId } from '../lib/ids';
 
 export interface SeedOptions {
   /**
-   * Base directory for cloning repos (defaults to ~/.agor/repos)
+   * Base directory for cloning repos (defaults to `<agor home>/repos`)
    */
   baseDir?: string;
 
@@ -59,6 +59,8 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
   }
   // Respect DATABASE_URL and AGOR_DB_DIALECT environment variables
   // Priority: DATABASE_URL env var > default SQLite file path
+  const { createDatabase, resolveDefaultDatabaseUrl } = await import('../db/client');
+
   let databaseUrl: string;
   const dialect = process.env.AGOR_DB_DIALECT;
 
@@ -66,13 +68,10 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     // Use DATABASE_URL for PostgreSQL
     databaseUrl = process.env.DATABASE_URL || 'postgresql://localhost:5432/agor';
   } else {
-    // Use SQLite file path (default)
-    const configPath = path.join(os.homedir(), '.agor');
-    const dbPath = path.join(configPath, 'agor.db');
-    databaseUrl = process.env.DATABASE_URL || `file:${dbPath}`;
+    // Use the standalone SQLite database inside the Agor home (default)
+    databaseUrl = process.env.DATABASE_URL || resolveDefaultDatabaseUrl();
   }
 
-  const { createDatabase } = await import('../db/client');
   const { createTenantScopedDatabaseProxy, runWithTenantDatabaseScope } = await import(
     '../db/tenant-scope'
   );
@@ -88,7 +87,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
     const boardRepo = new BoardRepository(db);
     const boardObjectRepo = new BoardObjectRepository(db);
 
-    const baseDir = options.baseDir ?? path.join(os.homedir(), '.agor', 'repos');
+    const baseDir = options.baseDir ?? agorHomePath('repos');
     const userId = options.userId;
 
     // Check if data already exists (always check for idempotency)

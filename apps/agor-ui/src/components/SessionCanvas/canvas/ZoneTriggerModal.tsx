@@ -26,6 +26,7 @@ import { DownOutlined } from '@ant-design/icons';
 import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgenticToolOption } from '../../../types';
+import { resolveSessionMcpServerIds } from '../../../utils/resolveQuickStartMcpServerIds';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
 // the page doesn't need CSP `script-src 'unsafe-eval'`.
@@ -192,19 +193,13 @@ const ZoneTriggerModalAction = ({
       const recentAgentSession =
         mostRecentSession?.agentic_tool === selectedAgent ? mostRecentSession : undefined;
 
-      // MCP inheritance: branch config > user defaults
-      const effectiveMcpServerIds =
-        initial.branch?.mcp_server_ids && initial.branch.mcp_server_ids.length > 0
-          ? initial.branch.mcp_server_ids
-          : initial.currentUser?.default_mcp_server_ids || [];
-
       // Calculate config values (priority: most recent session > user defaults)
       const configValues = {
         permissionMode:
           recentAgentSession?.permission_config?.mode || agentDefaults?.permissionMode,
         modelConfig: recentAgentSession?.model_config || agentDefaults?.modelConfig,
         effort: recentAgentSession?.model_config?.effort ?? agentDefaults?.modelConfig?.effort,
-        mcpServerIds: form.getFieldValue('mcpServerIds') ?? effectiveMcpServerIds,
+        mcpServerIds: form.getFieldValue('mcpServerIds'),
       };
 
       // Store in both form (for UI) AND component state (for execution)
@@ -495,6 +490,10 @@ const ZoneTriggerModalAction = ({
                       <AgenticToolConfigurationPicker
                         tool={selectedAgent}
                         mcpServerById={mcpServerById}
+                        inheritedMcpServerIds={resolveSessionMcpServerIds(
+                          initial.currentUser?.default_mcp_server_ids,
+                          initial.branch
+                        )}
                         showHelpText={true}
                         client={initial.client}
                       />

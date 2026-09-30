@@ -13,7 +13,7 @@
  */
 
 import { sql } from 'drizzle-orm';
-import { createDatabase, DEFAULT_DB_PATH } from '../client';
+import { createDatabase, resolveDefaultDatabaseUrl } from '../client';
 import { isSQLiteDatabase } from '../database-wrapper';
 import { initializeDatabase, seedInitialData } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
@@ -77,7 +77,7 @@ async function dropTables(db: ReturnType<typeof createDatabase>): Promise<void> 
 async function main() {
   try {
     const options = await parseArgs();
-    const dbPath = options.path ?? DEFAULT_DB_PATH;
+    const dbPath = options.path ?? resolveDefaultDatabaseUrl();
 
     console.log(`Setting up database at: ${dbPath}`);
     console.log('');

@@ -5,16 +5,16 @@
  * tasks existing with message_range data, and fixes the links.
  */
 
-import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 import { createClient } from '@libsql/client';
 import { and, count, eq, gte, isNull, lte } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/libsql';
+import { agorHomePath } from '../../config/agor-home';
 import { shortId } from '../../lib/ids';
 import { sanitizeDbError } from '../sanitize-error';
 import { messages, tasks } from '../schema';
 
-const AGOR_DB_PATH = process.env.AGOR_DB_PATH || resolve(homedir(), '.agor/agor.db');
+const AGOR_DB_PATH = process.env.AGOR_DB_PATH || resolve(agorHomePath('agor.db'));
 
 async function main() {
   console.log('🔧 Fixing message-to-task links...\n');

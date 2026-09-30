@@ -204,6 +204,7 @@ export interface DiscordGatewayConfig {
   message_content_enabled?: boolean;
   thread_mode?: 'public_thread_per_summon';
   thread_auto_archive_minutes?: 60 | 1440 | 4320 | 10080;
+  direct_messages_enabled?: boolean;
   align_discord_users?: boolean;
   user_map?: Record<string, string>;
   catch_up?: DiscordCatchUpConfig;
@@ -297,6 +298,11 @@ export function isDiscordSnowflake(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+/** Decode the provider timestamp of an already-validated Discord Snowflake. */
+export function discordSnowflakeTimestampMs(id: string): number {
+  return Number((BigInt(id) >> 22n) + 1420070400000n);
 }
 
 /** Compare two already-validated Discord Snowflakes without losing precision. */
@@ -553,6 +559,12 @@ export function validateDiscordConfig(
     errors.push('user_map must contain at least one entry when align_discord_users is true');
   }
 
+  if (
+    raw.direct_messages_enabled !== undefined &&
+    typeof raw.direct_messages_enabled !== 'boolean'
+  ) {
+    errors.push('direct_messages_enabled must be a boolean');
+  }
   validateCatchUpConfig(raw.catch_up, errors);
   if (raw.files !== undefined && typeof raw.files !== 'boolean') {
     errors.push('files must be a boolean');
@@ -682,6 +694,10 @@ export interface GatewayConnectionTestChannelAccess {
   permissions?: GatewayConnectionTestPermissionDetails;
 }
 
+export function isDiscordDirectMessagesEnabled(config: DiscordGatewayConfig): boolean {
+  return config.direct_messages_enabled === true;
+}
+
 /**
  * Result of a best-effort gateway connector connection probe.
  *
@@ -690,6 +706,7 @@ export interface GatewayConnectionTestChannelAccess {
  * guarantee; connector-specific optional fields carry richer details.
  */
 export interface GatewayConnectionTestResult {
+  directMessages?: { enabled: boolean };
   ok: boolean;
   team?: { id: string; name: string };
   bot?: { userId: string; name: string };

@@ -197,7 +197,7 @@ describe('resolveChildSessionConfig', () => {
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'gemini-2.0-flash',
+        model: 'gemini-3.8-flash',
         updated_at: now.toISOString(),
       });
       expect(r.permission_config.mode).toBe('autoEdit'); // gemini system default

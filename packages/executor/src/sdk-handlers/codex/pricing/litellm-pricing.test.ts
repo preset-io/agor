@@ -3,7 +3,13 @@ import { estimateCodexCostUsd, getLiteLlmPricingForModel } from './litellm-prici
 
 describe('LiteLLM Codex pricing snapshot', () => {
   it('contains current Codex default model pricing', () => {
-    for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-terra']) {
+    for (const model of [
+      'gpt-6-astra',
+      'gpt-6.1-sol',
+      'gpt-6-sol',
+      'gpt-6-luna',
+      'gpt-5.6-terra',
+    ]) {
       const pricing = getLiteLlmPricingForModel(model);
 
       expect(pricing?.input_cost_per_token).toBeGreaterThan(0);

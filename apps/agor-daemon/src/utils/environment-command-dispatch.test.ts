@@ -22,6 +22,22 @@ describe('fire-and-forget environment launcher handoff', () => {
     );
     expect(payload).not.toHaveProperty('executorResponse');
   });
+  it('allows slow admission beyond ten seconds without waiting for executor startup', async () => {
+    vi.useFakeTimers();
+    let accepted = false;
+    const pending = dispatchEnvironmentCommand({ command: 'environment.lifecycle' }, {}).then(
+      () => {
+        accepted = true;
+      }
+    );
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(accepted).toBe(false);
+    const options = vi.mocked(spawnExecutor).mock.calls[0]![1];
+    void options?.onExit?.(0, { mode: 'templated' });
+    await pending;
+    expect(accepted).toBe(true);
+    expect(ENVIRONMENT_COMMAND_BUDGET.launchMs).toBe(30_000);
+  });
   it('bounds a hung launcher and reports nonzero handoff honestly', async () => {
     vi.useFakeTimers();
     const pending = expect(

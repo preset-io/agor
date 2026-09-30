@@ -222,8 +222,9 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                 {boardPrimary && (
                   <>
                     <Text>
-                      First clear or replace this board's primary teammate. Nothing changes until
-                      you confirm.
+                      First clear this board's primary teammate. To choose a replacement afterward,
+                      open the board and use Assign in its Teammate panel. Nothing changes until you
+                      confirm.
                     </Text>
                     <Space wrap>
                       {eligibility.canEditBoard && (
@@ -240,9 +241,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                         </Button>
                       )}
                       {!eligibility.boardUnavailable && (
-                        <Typography.Link href={eligibility.board?.url}>
-                          Open board to replace primary
-                        </Typography.Link>
+                        <Typography.Link href={eligibility.board?.url}>Open board</Typography.Link>
                       )}
                     </Space>
                     {!eligibility.canEditBoard && (

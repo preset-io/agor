@@ -57,7 +57,7 @@ export async function isTenantSafetySettlement(context: HookContext): Promise<bo
   }
   if (
     context.path === BRANCH_DELETION_REPORT_SERVICE &&
-    ['heartbeat', 'quiesce', 'upload', 'storage', 'data', 'finalize', 'failed'].includes(
+    ['heartbeat', 'quiesce', 'upload', 'storage', 'data', 'finalize', 'failed', 'settled'].includes(
       String(data.action)
     )
   ) {

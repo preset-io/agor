@@ -29,7 +29,7 @@ import { useStore } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { createStore } from 'zustand/vanilla';
 import type { InitialLoadItemKey, InitialLoadingStage } from '../hooks/useAgorData';
-import { type DataMaps, EMPTY_MAPS, MAP_KEYS, pickMaps } from './agorMaps';
+import { type DataMaps, EMPTY_MAPS, isSessionRowRemovedWith, MAP_KEYS, pickMaps } from './agorMaps';
 
 // Immer needs this to draft Map/Set state. Called once at module load; the
 // store's state is entirely Maps and one Set.
@@ -43,6 +43,8 @@ export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
+  /** Deletion fences for late MCP attachment responses/events in this authority lifetime. */
+  deletedMcpServerIds: Set<string>;
   loading: boolean;
   loadingStage: InitialLoadingStage;
   error: string | null;
@@ -153,6 +155,7 @@ function removeRelationshipsToDeletedSessions(
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
 const INITIAL_META: AgorMeta = {
+  deletedMcpServerIds: new Set(),
   loading: true,
   loadingStage: 'idle',
   error: null,
@@ -177,6 +180,7 @@ export const agorStore = createStore<AgorState>()(
     resetMaps: () =>
       set({
         ...EMPTY_MAPS,
+        deletedMcpServerIds: new Set(),
         agenticToolSettingsByName: new Map(),
         agenticToolSettingsHydrated: false,
       }),
@@ -312,15 +316,9 @@ export const agorStore = createStore<AgorState>()(
           removeRelationshipsToDeletedSessions(session, removedSessionIds);
         }
         for (const [bucketBranchId, sessions] of draft.sessionsByBranch) {
-          const remaining = sessions.filter((session) => {
-            if (removedSessionIds.has(session.session_id)) return false;
-            const surrogate = session.remote_surrogate;
-            return !(
-              surrogate &&
-              (removedSessionIds.has(surrogate.source_session_id) ||
-                removedSessionIds.has(surrogate.relationship.target_session_id))
-            );
-          });
+          const remaining = sessions.filter(
+            (session) => !isSessionRowRemovedWith(session, removedSessionIds)
+          );
           for (const session of remaining) {
             removeRelationshipsToDeletedSessions(session, removedSessionIds);
           }

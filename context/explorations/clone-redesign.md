@@ -132,7 +132,7 @@ Executor calls this just before invoking `cloneRepo` / `createBranch`, applies t
 
 ### Docs
 
-- `apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`: document the strict-mode auth model — each user must configure their own GitHub token in user settings.
+- `apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`: document the strict-mode auth model — each user must configure their own GitHub token in user settings.
 - `CLAUDE.md` "Feature Flags" section: add a note under each mode describing the auth identity used for git ops (daemon-user for simple/insulated, per-user for strict).
 - `context/explorations/clone-redesign.md`: this doc.
 

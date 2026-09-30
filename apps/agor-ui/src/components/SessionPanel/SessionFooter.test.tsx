@@ -1,5 +1,6 @@
 import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import type {
+  AgorClient,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -7,12 +8,25 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
-import { act, fireEvent, render, renderHook, screen, within } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { SessionFooter } from './SessionFooter';
+
+vi.mock('../../hooks/useAuth', () => ({
+  useAuth: () => ({ user: { user_id: 'footer-user', role: 'member' } }),
+}));
 
 // ModelSelector makes async network calls — replace with a stub
 vi.mock('../ModelSelector', () => ({
@@ -310,8 +324,25 @@ describe('SessionFooter', () => {
     expect(disclosure).toHaveFocus();
   });
 
-  it('exposes dialog popup state and restores disclosure focus when Escape dismisses it', () => {
-    render(<SessionFooter {...baseProps} client={{} as never} />, { wrapper: Wrapper });
+  it('exposes dialog popup state and restores disclosure focus when Escape dismisses it', async () => {
+    const findAvailable = vi.fn().mockResolvedValue([]);
+    const service = vi.fn(() => ({ find: findAvailable }));
+    const client = { service } as unknown as AgorClient;
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionFooter {...baseProps} client={client} currentUserId="footer-user" />
+      </ConnectionProvider>,
+      { wrapper: Wrapper }
+    );
     const disclosure = screen.getByRole('button', {
       name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
     });
@@ -327,6 +358,9 @@ describe('SessionFooter', () => {
     expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
 
     const selector = within(popup).getByRole('combobox');
+    await waitFor(() => expect(selector).toBeEnabled());
+    expect(service).toHaveBeenCalledWith(`sessions/${baseSession.session_id}/mcp-servers`);
+    expect(findAvailable).toHaveBeenCalledWith({ query: { available: true } });
     act(() => selector.focus());
     expect(selector).toHaveFocus();
     fireEvent.keyDown(selector, { key: 'Escape' });

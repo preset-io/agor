@@ -94,6 +94,7 @@ import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
 import { ToolIcon } from '../ToolIcon';
+import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
@@ -1333,6 +1334,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                 <Space size={8}>
                   <Badge color={statusDotColor[status.tone]} />
                   <span>{child.title}</span>
+                  {child.provider && <ToolBetaBadge tool={child.provider.tool} />}
                   <span style={SR_ONLY_STYLE}>{status.label}</span>
                 </Space>
               )}
@@ -1940,6 +1942,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
                     <Space size={8}>
                       <ToolIcon tool={tool} size={16} />
                       <span>{AGENTIC_TOOL_DISPLAY_NAMES[tool]}</span>
+                      <ToolBetaBadge tool={tool} />
                       {tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false && (
                         <Typography.Text type="secondary">Disabled</Typography.Text>
                       )}
@@ -2080,7 +2083,12 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       <PanelHeader
         title={displayName}
         icon={<ToolIcon tool={tool} size={32} />}
-        extra={statusTag}
+        extra={
+          <Space>
+            <ToolBetaBadge tool={tool} />
+            {statusTag}
+          </Space>
+        }
       />
     );
 
