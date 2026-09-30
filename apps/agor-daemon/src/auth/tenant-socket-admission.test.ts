@@ -177,29 +177,144 @@ describe('socket restriction monitor', () => {
     }
   });
 
-  it('retires a persistently unverifiable tenant but keeps transient skips non-disruptive', async () => {
+  it('marks a persistently unverifiable tenant, never on a transient skip, and a read clears it', async () => {
     const warn = warnings();
     try {
+      let down = true;
       let flakyFailed = false;
       const observe = vi.fn(async (tenantId: string) => {
-        if (tenantId === 'down') throw new Error('unreadable');
+        if (tenantId === 'down' && down) throw new Error('unreadable');
         if (tenantId === 'flaky' && !flakyFailed) {
           flakyFailed = true;
           throw new Error('transient');
         }
       });
-      const retireUnverifiable = vi.fn();
       const monitor = new TenantSocketRestrictionMonitor(observe, {
         timeoutMs: 20,
-        retireUnverifiable,
         unverifiableLimit: 3,
       });
       for (let sweep = 0; sweep < 2; sweep++) await monitor.check(['down', 'flaky', 'open']);
-      expect(retireUnverifiable).not.toHaveBeenCalled();
+      expect(monitor.isUnverified('down')).toBe(false);
       await monitor.check(['down', 'flaky', 'open']);
-      expect(retireUnverifiable).toHaveBeenCalledExactlyOnceWith('down');
-      for (let sweep = 0; sweep < 5; sweep++) await monitor.check(['flaky', 'open']);
-      expect(retireUnverifiable).toHaveBeenCalledOnce();
+      expect(monitor.isUnverified('down')).toBe(true);
+      for (let sweep = 0; sweep < 5; sweep++) await monitor.check(['down', 'flaky', 'open']);
+      expect(monitor.isUnverified('flaky')).toBe(false);
+      expect(monitor.isUnverified('open')).toBe(false);
+      down = false;
+      await monitor.check(['down', 'flaky', 'open']);
+      await vi.waitFor(() => expect(monitor.isUnverified('down')).toBe(false));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('never marks a tenant whose reads are slow but succeed after the timeout', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    try {
+      const observe = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 25)));
+      const monitor = new TenantSocketRestrictionMonitor(observe, {
+        timeoutMs: 20,
+        unverifiableLimit: 3,
+      });
+      for (let sweep = 0; sweep < 6; sweep++) {
+        const checking = monitor.check(['slow']);
+        await vi.advanceTimersByTimeAsync(20);
+        await checking;
+        // The next tick starts after the late read settled, as with the 1 s interval.
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      expect(observe).toHaveBeenCalledTimes(6);
+      expect(monitor.isUnverified('slow')).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('never counts saturation toward the streak', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    try {
+      const stuck = Array.from({ length: 8 }, (_, index) => `stuck-${index}`);
+      const observe = vi.fn((tenantId: string) =>
+        tenantId.startsWith('stuck') ? new Promise<void>(() => undefined) : Promise.resolve()
+      );
+      const monitor = new TenantSocketRestrictionMonitor(observe, {
+        timeoutMs: 20,
+        unverifiableLimit: 3,
+      });
+      for (let sweep = 0; sweep < 8; sweep++) {
+        const checking = monitor.check([...stuck, 'starved']);
+        await vi.advanceTimersByTimeAsync(40);
+        await checking;
+      }
+      expect(observe.mock.calls.some(([tenant]) => tenant === 'starved')).toBe(false);
+      expect(monitor.isUnverified('starved')).toBe(false);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('reads the tenants saturation skipped first on the next sweep', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    try {
+      const tenants = Array.from({ length: 10 }, (_, index) => `tenant-${index}`);
+      const observe = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 30)));
+      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
+      for (let sweep = 0; sweep < 2; sweep++) {
+        const checking = monitor.check(tenants);
+        await vi.advanceTimersByTimeAsync(20);
+        await checking;
+        await vi.advanceTimersByTimeAsync(20);
+      }
+      const read = new Set(observe.mock.calls.map(([tenant]) => tenant));
+      expect(read).toEqual(new Set(tenants));
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("gates an unverified tenant's raw packets through admission until a read succeeds", async () => {
+    const warn = warnings();
+    try {
+      let down = true;
+      const monitor = new TenantSocketRestrictionMonitor(
+        async () => {
+          if (down) throw new Error('unreadable');
+        },
+        { timeoutMs: 20, unverifiableLimit: 2 }
+      );
+      const admit = vi.fn(async () => {
+        if (down) throw new Error('unreadable');
+      });
+      const gate = createOrderedTenantPacketGate({
+        needsAdmission: (packet) => packet[0] === 'create' || monitor.isUnverified('a'),
+        admit,
+      });
+      const dispatched: string[] = [];
+      const send = (label: string) => {
+        const next = vi.fn((error?: Error) => {
+          if (!error) dispatched.push(label);
+        });
+        gate(['terminal:input', label], next);
+        return next;
+      };
+      send('before');
+      expect(admit).not.toHaveBeenCalled();
+      for (let sweep = 0; sweep < 2; sweep++) await monitor.check(['a']);
+      const refused = send('while-down');
+      await vi.waitFor(() => expect(refused).toHaveBeenCalledWith(expect.any(Forbidden)));
+      expect(admit).toHaveBeenCalledOnce();
+      down = false;
+      await monitor.check(['a']);
+      await vi.waitFor(() => expect(monitor.isUnverified('a')).toBe(false));
+      send('after');
+      expect(dispatched).toEqual(['before', 'after']);
+      expect(admit).toHaveBeenCalledOnce();
     } finally {
       warn.mockRestore();
     }

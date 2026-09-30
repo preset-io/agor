@@ -217,7 +217,7 @@ provider-less call, report-path name or customer flag is a generic exemption.
 Per-packet socket admission reads only for Feathers service-call packets (and
 every executor-socket packet), sharing that read with the service hook; it retains
 executor safety RPC transport only, and service guards still authorize each
-operation. Raw terminal/presence/cursor packets do no read, and every packet on a
+operation. Raw terminal/presence/cursor packets do no read while their tenant is verified, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
 pending admission). An admission read still pending after 2 s rejects its packet
 with the same ambiguous `Forbidden`, so one stuck read never freezes the socket; a
@@ -226,12 +226,17 @@ silently, and nothing queued behind it dispatches. Raw traffic from a restricted
 retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or
-saturated read skips that tenant until the next tick with a rate-limited warning.
-RPCs stay closed meanwhile because each reads admission itself, but raw terminal
-input does not read, so a skip alone would let it continue: after 10 consecutive
-unverifiable observations (about 10 s at the 1 s tick, longer when sweeps run
-slow) the monitor retires that tenant's sockets, and their reconnect handshake
-must pass admission again. A single transient skip retires nothing. A read still
+saturated read skips that tenant until the next tick with a rate-limited warning;
+each sweep reads the least recently read tenants first, so the eight-read bound
+cannot starve one. RPCs stay closed meanwhile because each reads admission itself,
+but raw packets do not read, so a skip alone would let terminal input continue:
+after 10 consecutive failed or timed-out observations (about 10 s at the 1 s tick,
+longer when sweeps run slow; saturation does not count) the monitor marks the
+tenant unverified. While marked, every raw terminal/presence/cursor packet of its
+sockets passes the same per-packet admission read in arrival order and is refused
+when that read fails. Any successful monitor read, even one settling after its
+timeout, clears the streak and the mark. Being unverifiable never disconnects a
+socket; only a positive observation retires it. A read still
 pending after 4 s is abandoned once so a fresh read can start; while that
 abandoned read is outstanding no further read replaces it, and abandoned reads
 count toward the eight-read bound. Ordinary publications and Redis relays recheck the generation through a

@@ -11,6 +11,7 @@ import {
   feathers,
   feathersExpress,
   socketio,
+  Unavailable,
 } from '@agor/core/feathers';
 import { TENANT_RESTRICTED_ERROR_CODE, type UserID } from '@agor/core/types';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -53,6 +54,7 @@ describe('Socket.IO per-packet tenant admission', () => {
     const arrivals: string[] = [];
     const closed = new Set<string>();
     const reads = { admission: 0, monitor: 0 };
+    const database = { down: false };
     const app = feathersExpress(feathers());
     app.use('users', {
       async get(id: string) {
@@ -99,6 +101,7 @@ describe('Socket.IO per-packet tenant admission', () => {
       assertTenantAccess: async (tenantId) => {
         reads.admission++;
         await sleep(Math.floor(Math.random() * 12));
+        if (database.down) throw new Unavailable('Tenant access cannot be verified');
         if (closed.has(tenantId)) {
           throw new Forbidden('Tenant access is restricted', {
             code: TENANT_RESTRICTED_ERROR_CODE,
@@ -107,6 +110,7 @@ describe('Socket.IO per-packet tenant admission', () => {
       },
       readTenantRestriction: async (tenantId) => {
         reads.monitor++;
+        if (database.down) throw new Error('unreadable');
         return { records: [], closed: closed.has(tenantId) };
       },
       corsOrigin: '*',
@@ -142,7 +146,7 @@ describe('Socket.IO per-packet tenant admission', () => {
     });
     client.io.connect();
     await connected;
-    return { arrivals, closed, reads, wire: client.io };
+    return { arrivals, closed, reads, database, wire: client.io };
   }
 
   it('dispatches service-call and raw packets in send order; raw packets never read', async () => {
@@ -185,4 +189,26 @@ describe('Socket.IO per-packet tenant admission', () => {
     await expect.poll(() => wire.connected, { timeout: 2_500, interval: 50 }).toBe(false);
     expect(Date.now() - restrictedAt).toBeLessThan(2_000);
   });
+
+  it("gates an unreadable tenant's raw traffic without disconnecting it until a read succeeds", async () => {
+    const { arrivals, database, wire } = await start();
+    const disconnects: string[] = [];
+    wire.on('disconnect', (reason) => disconnects.push(reason));
+    let probe = 0;
+    const delivered = async () => {
+      const label = probe++;
+      wire.emit('test:raw', label);
+      await sleep(300);
+      return arrivals.includes(`raw:${label}`);
+    };
+    expect(await delivered()).toBe(true);
+    database.down = true;
+    // Ten failed monitor ticks mark the tenant; its raw packets then need an admission read.
+    await expect.poll(delivered, { timeout: 25_000, interval: 0 }).toBe(false);
+    expect(await delivered()).toBe(false);
+    database.down = false;
+    await expect.poll(delivered, { timeout: 5_000, interval: 0 }).toBe(true);
+    expect(wire.connected).toBe(true);
+    expect(disconnects).toEqual([]);
+  }, 40_000);
 });

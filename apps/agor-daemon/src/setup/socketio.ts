@@ -972,6 +972,9 @@ export function createSocketIOConfig(
     });
     io.on(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, evictRevokedExecutorSockets);
 
+    // Assigned once the restriction monitor exists; no tenant is unverified before it.
+    let isTenantSocketUnverified = (_tenantId: string | undefined) => false;
+
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       const feathersSocket = socket as FeathersSocket;
@@ -993,8 +996,13 @@ export function createSocketIOConfig(
         );
         const executorSocket = authority?.principal.kind === 'executor';
         const gate = createOrderedTenantPacketGate({
-          // Raw terminal/presence packets do no read: the 1 s monitor retires a restricted tenant's sockets.
-          needsAdmission: (packet) => executorSocket || serviceMethods.has(packet[0] as string),
+          // Raw terminal/presence packets read only while the monitor cannot verify their tenant.
+          needsAdmission: (packet) =>
+            executorSocket ||
+            serviceMethods.has(packet[0] as string) ||
+            isTenantSocketUnverified(
+              getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id
+            ),
           // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
           scope: withTenantRestrictionRequest,
           onOverflow: () => socket.disconnect(true),
@@ -2044,34 +2052,29 @@ export function createSocketIOConfig(
     };
     const readTenantRestriction = options.readTenantRestriction;
     const restrictionMonitor = readTenantRestriction
-      ? new TenantSocketRestrictionMonitor(
-          async (tenantId) => {
-            const state = await readTenantRestriction(tenantId);
-            const sockets = monitoredSockets.get(tenantId) ?? [];
-            if (state.closed) {
-              for (const socket of sockets) retire(socket);
-              return;
-            }
-            const epoch = tenantCredentialEpoch(state, tenantId);
-            for (const socket of sockets) {
-              const connection = (socket as FeathersSocket).feathers;
-              try {
-                assertTenantCredentialEpochValue(
-                  epoch,
-                  getAuthenticatedConnectionCredentialPayload(connection)
-                );
-              } catch {
-                retire(socket);
-              }
-            }
-          },
-          {
-            retireUnverifiable: (tenantId) => {
-              for (const socket of monitoredSockets.get(tenantId) ?? []) retire(socket);
-            },
+      ? new TenantSocketRestrictionMonitor(async (tenantId) => {
+          const state = await readTenantRestriction(tenantId);
+          const sockets = monitoredSockets.get(tenantId) ?? [];
+          if (state.closed) {
+            for (const socket of sockets) retire(socket);
+            return;
           }
-        )
+          const epoch = tenantCredentialEpoch(state, tenantId);
+          for (const socket of sockets) {
+            const connection = (socket as FeathersSocket).feathers;
+            try {
+              assertTenantCredentialEpochValue(
+                epoch,
+                getAuthenticatedConnectionCredentialPayload(connection)
+              );
+            } catch {
+              retire(socket);
+            }
+          }
+        })
       : undefined;
+    isTenantSocketUnverified = (tenantId) =>
+      !!tenantId && !!restrictionMonitor?.isUnverified(tenantId);
     const restrictionInterval = restrictionMonitor
       ? setInterval(async () => {
           if (checkingRestrictions) return;
