@@ -1,5 +1,5 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { NotAuthenticated } from '@agor/core/feathers';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   type Params,
   TENANT_RESTRICTED_ERROR_CODE,
@@ -99,6 +99,8 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
             code: TENANT_RESTRICTED_ERROR_CODE,
           });
         }
+        // An unverifiable restriction read keeps its codeless 503, so the browser retries instead of signing out.
+        if (error instanceof Unavailable) throw new Unavailable('Tenant access cannot be verified');
         throw new NotAuthenticated('Invalid or expired refresh token');
       }
     },

@@ -6,7 +6,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { NotAuthenticated } from '@agor/core/feathers';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import { TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 
 const TENANT_CREDENTIAL_EPOCH_CLAIM = 'tenant_credential_epoch';
@@ -38,7 +38,7 @@ export function tenantCredentialEpoch(
     .digest('hex');
 }
 
-/** A failed or corrupt read stays codeless: an unverifiable observation is not a closed tenant. */
+/** A failed or corrupt read is a codeless 503: an unverifiable observation is neither a closed tenant nor a bad credential. */
 export async function readTenantCredentialEpoch(
   db: RestrictionDatabase,
   tenantId: string,
@@ -49,8 +49,8 @@ export async function readTenantCredentialEpoch(
   try {
     state = await read(db, tenantId);
   } catch {
-    // Database diagnostics, placement IDs and controller details are private.
-    throw new NotAuthenticated(CREDENTIAL_REJECTION);
+    // Database diagnostics, placement IDs and controller details are private; a 401 here would sign the browser out.
+    throw new Unavailable(CREDENTIAL_REJECTION);
   }
   return tenantCredentialEpoch(state, tenantId);
 }

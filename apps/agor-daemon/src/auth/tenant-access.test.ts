@@ -90,8 +90,9 @@ describe('admission from one restriction read', () => {
       expect(failure).toMatchObject({ code: 503, message: 'Tenant access cannot be verified' });
       expect(isTenantRestrictedRejection(failure)).toBe(false);
       const credential = await readTenantCredentialEpoch(db, 'a').catch((e) => e);
+      // A 503, not a 401: an outage must not read as a rejected credential and sign the browser out.
       expect(credential).toMatchObject({
-        code: 401,
+        code: 503,
         message: 'Tenant credential cannot be verified',
       });
       expect(credential.data).toBeUndefined();

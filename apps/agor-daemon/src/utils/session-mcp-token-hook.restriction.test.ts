@@ -25,7 +25,7 @@ const run = (method = 'get', provider: string | null = 'socketio') =>
     params: { user: { user_id: 'user-1', role: 'member' }, provider: provider ?? undefined },
     result: session,
   } as never);
-const readFailure = () => new NotAuthenticated('Tenant credential cannot be verified');
+const readFailure = () => new Unavailable('Tenant credential cannot be verified');
 
 describe('sessions MCP-token hook restriction reads', () => {
   it('issues from the read that admitted the request', async () => {

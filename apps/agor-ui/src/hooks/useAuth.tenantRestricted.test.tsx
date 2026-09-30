@@ -2,6 +2,7 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { resetRefreshFailureState } from '../utils/singleFlightRefresh';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../utils/tokenRefresh';
 import { useAuth } from './useAuth';
 
@@ -185,5 +186,31 @@ describe('useAuth on a suspended workspace', () => {
 
     expect(result.current.tenantRestricted).toBe(true);
     expect(result.current.authenticated).toBe(false);
+  });
+
+  it('keeps the stored credential when the daemon cannot verify the generation (503)', async () => {
+    vi.useFakeTimers();
+    resetRefreshFailureState();
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'member-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'member-refresh');
+    authenticate.mockRejectedValue(staleCredential());
+    // The daemon's codeless 503 when its restriction read fails.
+    refreshCreate.mockRejectedValue(
+      Object.assign(new Error('Tenant access cannot be verified'), {
+        code: 503,
+        className: 'unavailable',
+      })
+    );
+
+    const { result } = renderHook(() => useAuth());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(refreshCreate).toHaveBeenCalled();
+    expect(result.current.tenantRestricted).toBe(false);
+    // An outage is retried, never treated as a dead session.
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('member-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('member-refresh');
   });
 });

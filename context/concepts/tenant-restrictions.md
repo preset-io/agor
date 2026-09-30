@@ -352,14 +352,16 @@ revocation. Standalone SQLite remains outside hosted restriction support.
 
 A read that finds any record in a non-`active` phase rejects with
 `NotAuthenticated` carrying `data` of exactly
-`{ code: TENANT_RESTRICTED_ERROR_CODE }`; a failed, unavailable or corrupt read,
-and a stale supplied generation against an open tenant, stay codeless. The
+`{ code: TENANT_RESTRICTED_ERROR_CODE }`; a stale supplied generation against an
+open tenant is a codeless 401, and a failed, unavailable or corrupt read is a codeless
+503 (`Unavailable`), so an outage never reads as a rejected credential. The
 credential is refused on every path either way; the code exists because this
 check runs ahead of tenant admission on each JWT path, so the browser could
 otherwise not tell a suspended workspace from an expired session. Only a holder
 of a signed runtime credential or valid primary credentials for that tenant can
-reach it. The refresh service preserves that one code; every other refresh
-failure stays "invalid or expired". After activation the watermark moves, so a
+reach it. The refresh service preserves that one code and the codeless 503; every
+other refresh failure stays "invalid or expired". The browser treats the 503 as
+transient and keeps its stored credential. After activation the watermark moves, so a
 parked credential is rejected codelessly and the browser falls back to sign-in.
 
 Ordinary service admission, bearer authentication (executor-session upload and

@@ -1,5 +1,5 @@
 import type { AgorConfig } from '@agor/core/config';
-import { type Application, NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import { type Application, Unavailable } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
 import {
   isTenantRestrictedRejection,
@@ -74,8 +74,8 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     } catch (error) {
       // A closed tenant mints no MCP credential; the session read itself still succeeds.
       if (isTenantRestrictedRejection(error)) return context;
-      if (!(error instanceof NotAuthenticated)) throw error;
-      // A failed read (codeless 401) fails only a transport get visibly (503), so no agent starts without MCP; internal, create and termination reads go on without a token.
+      if (!(error instanceof Unavailable)) throw error;
+      // A failed read (codeless 503) fails only a transport get visibly, so no agent starts without MCP; internal, create and termination reads go on without a token.
       if (
         context.method !== 'get' ||
         !context.params.provider ||
