@@ -573,6 +573,57 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     });
   });
 
+  it.each([TaskStatus.QUEUED, TaskStatus.CREATED] as const)(
+    'directly admits a new prompt past a restriction-held %s prompt after reactivation',
+    async (status) => {
+      const seed = await seedTenant(db, `held-${status}`);
+      const held = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).create(
+          taskInput(seed, status, status === TaskStatus.QUEUED ? { queue_position: 1 } : {})
+        )
+      );
+      const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+        applyTenantRestrictionIntent(db, seed.tenantId, {
+          version: 1,
+          controllerId: 'control-one',
+          placementId: 'placement-one',
+          operationId: action === 'restrict' ? 'suspend' : 'release',
+          revision,
+          action,
+        });
+      await apply(1, 'restrict');
+      await apply(2, 'prepare_release');
+      await apply(2, 'activate');
+      await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        expect((await tasks.findById(held.task_id))?.tenant_restriction_hold?.reason).toBe(
+          'tenant_restricted'
+        );
+        const next = await tasks.createPending({
+          session_id: seed.sessionId,
+          created_by: seed.userId,
+          full_prompt: 'after reactivation',
+          status: TaskStatus.QUEUED,
+          dispatchIfIdle: {
+            status: TaskStatus.DISPATCHING,
+            executor_mode: 'local',
+            message_range: {
+              start_index: 0,
+              end_index: 1,
+              start_timestamp: new Date().toISOString(),
+            },
+            git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
+          },
+        });
+        expect(next.status).toBe(TaskStatus.DISPATCHING);
+        expect(await tasks.findById(held.task_id)).toMatchObject({
+          status,
+          tenant_restriction_hold: { reason: 'tenant_restricted' },
+        });
+      });
+    }
+  );
+
   it('reconciles late executor quiescence through RLS without exposing it cross-tenant', async () => {
     const owner = await seedTenant(db, 'late-quiescence-owner');
     const other = await seedTenant(db, 'late-quiescence-other');
