@@ -82,9 +82,11 @@ rollback to an ignoring binary cannot be treated as safe.
 The writer records intent; it does not validate containment proof or
 authenticate its caller. `activate` is a low-level transition for that trusted
 caller, not a customer-reachable endpoint; whoever runs it must establish the
-release barrier first. `assertTenantUnrestricted` is an uncached admission
-primitive, not a guard for already-admitted work, stale tokens, sockets, or
-agents. A database row or an intent write response does not prove connection
+release barrier first. `readTenantRestrictionState` is the single uncached
+read (records, closed, event cutoff) every admission check derives from; it is
+not a guard for already-admitted work, stale tokens, sockets, or agents. One
+handshake, socket packet or request shares one read across its strategy, packet
+and hook checks; the share never crosses requests and never outlives one 1 s tick. A database row or an intent write response does not prove connection
 draining, process containment, or current-replica freshness.
 
 ## CLI
@@ -186,10 +188,16 @@ claims remain denied; ongoing authorized deletion cleanup may settle. No role,
 provider-less call, report-path name or customer flag is a generic exemption.
 
 Socket admission retains executor safety RPC transport only; service guards still
-authorize each operation. A bounded per-replica monitor disconnects ordinary
-customer/service/terminal sockets when restriction cannot be ruled out. Ordinary
-publications and Redis relays recheck admission; the exact task termination signal
-retains its narrowly scoped channel. Socket retirement does not prove process exit. Terminal creation also rechecks execution
+authorize each operation. A bounded per-replica monitor (1 s tick) disconnects
+ordinary customer/service/terminal sockets only on a positive observation: a
+closed tenant or a stale credential generation. A failed, slow (>2 s) or
+saturated read skips that tenant until the next tick with a rate-limited warning;
+it cannot open anything, because every RPC still reads admission itself and fails
+closed. Ordinary publications and Redis relays recheck the generation through a
+per-replica, per-tenant single-flight read reused for at most one tick (a failed
+read suppresses delivery for that tick), so suspension or reactivation reaches
+publications within about one tick; the exact task termination signal retains its
+narrowly scoped channel. Socket retirement does not prove process exit. Terminal creation also rechecks execution
 admission before branch admission, but the transaction does not span process spawn.
 Zellij sessions can survive detach; neither closing the attachment nor removing
 its registry entry is containment evidence.
