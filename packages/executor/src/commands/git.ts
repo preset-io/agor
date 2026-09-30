@@ -48,6 +48,7 @@ import {
   isValidGitRepo,
   redactGitUrlCredentials,
   removeBranchWorkspace,
+  resolveContainedRepoPath,
   resolveGitRef,
   restoreBranchFilesystem,
   scanGitConfigRemoteCredentials,
@@ -444,7 +445,7 @@ export async function handleGitRepoRealignOrigin(
   payload: GitRepoRealignOriginPayload,
   options: CommandOptions
 ): Promise<ExecutorResult> {
-  const { repoId, repoPath, remoteUrl, repoSlug } = payload.params;
+  const { repoId, repoPath, remoteUrl, repoSlug, reposRoot } = payload.params;
 
   if (options.dryRun) {
     return {
@@ -458,7 +459,8 @@ export async function handleGitRepoRealignOrigin(
   }
 
   try {
-    const result = await ensureGitRemoteUrl(repoPath, 'origin', remoteUrl);
+    const managedRepoPath = await resolveContainedRepoPath(repoPath, reposRoot);
+    const result = await ensureGitRemoteUrl(managedRepoPath, 'origin', remoteUrl);
     if (result.changed) {
       const { redactUrlUserinfo } = await import('@agor/core/config');
       console.warn(
