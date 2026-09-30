@@ -1682,7 +1682,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               </Typography.Text>
             )}
             {!query && !isMobileShell && (
-              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 Esc to close
               </Typography.Text>
             )}
@@ -1752,9 +1752,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               >
                 <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
               </div>
-              <Typography.Text strong style={{ fontSize: 13 }}>
-                No results
-              </Typography.Text>
+              <Typography.Text strong>No results</Typography.Text>
               <Typography.Text
                 type="secondary"
                 style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 200 }}
@@ -1893,7 +1891,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onCancel={() => setSwitchToolOpen(false)}
           footer={null}
         >
-          <Typography.Paragraph type="secondary" style={{ fontSize: 13 }}>
+          <Typography.Paragraph type="secondary">
             Choose a different tool for this session. Since nothing has been sent yet, this replaces
             the session in place.
           </Typography.Paragraph>
