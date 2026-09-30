@@ -562,6 +562,7 @@ describe('NavbarComposeButton', () => {
     fireEvent.change(promptBox, { target: { value: 'draft' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
     fireEvent.change(promptBox, { target: { value: '   ' } });
+    expect(screen.getByText('Pick a primary assistant above to send.')).toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId('pick-teammate'));
     await waitFor(() =>

@@ -37,6 +37,7 @@ describe('sameName', () => {
   it('keeps combining marks, so different names in scripts that use them stay different', () => {
     expect(sameName('किताब', 'कताब')).toBe(false);
     expect(sameName('Zoë', 'zoë!')).toBe(true);
+    expect(sameName('Zo\u00eb', 'Zoe\u0308')).toBe(true);
   });
 });
 

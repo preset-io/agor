@@ -32,7 +32,10 @@ export interface TeammateOption {
 
 // A name with no letters or digits keeps its symbols (emoji) and drops punctuation, spacing and emoji variation selectors.
 const bare = (text: string) => {
-  const lower = text.toLowerCase().replace(/[\uFE0E\uFE0F]/gu, '');
+  const lower = text
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[\uFE0E\uFE0F]/gu, '');
   return (
     lower.replace(/[^\p{L}\p{M}\p{N}]/gu, '') ||
     lower.replace(/[\p{P}\p{Z}\s]/gu, '') ||
