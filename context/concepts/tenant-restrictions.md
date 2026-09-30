@@ -217,7 +217,8 @@ provider-less call, report-path name or customer flag is a generic exemption.
 Per-packet socket admission reads only for Feathers service-call packets (and
 every executor-socket packet), sharing that read with the service hook; it retains
 executor safety RPC transport only, and service guards still authorize each
-operation. Raw terminal/presence/cursor packets do no read while their tenant is verified, and every packet on a
+operation. Executor safety RPCs do no packet read at all, since they pass whatever
+it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets do no read while their tenant is verified, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
 pending admission). An admission read still pending after 2 s rejects its packet
 with the same ambiguous `Forbidden`, so one stuck read never freezes the socket; a

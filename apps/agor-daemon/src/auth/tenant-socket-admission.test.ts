@@ -8,6 +8,7 @@ import {
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
+  tenantSocketPacketNeedsAdmission,
 } from './tenant-socket-admission.js';
 
 describe('restricted socket transport', () => {
@@ -40,6 +41,41 @@ describe('restricted socket transport', () => {
       }
     }
   );
+  it('dispatches executor safety packets without a read while an earlier read never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const assertAccess = vi.fn(() => new Promise<void>(() => undefined));
+      const gate = createOrderedTenantPacketGate({
+        needsAdmission: (packet) =>
+          tenantSocketPacketNeedsAdmission({
+            executor: true,
+            serviceCall: true,
+            unverified: false,
+            packet,
+          }),
+        admit: (packet) =>
+          admitTenantSocketPacket({ tenantId: 'a', executor: true, packet, assertAccess }),
+        admissionTimeoutMs: 20,
+      });
+      const dispatched: string[] = [];
+      for (const method of ['reportRuntimeTelemetry', 'reportTerminationComplete']) {
+        gate([method, 'tasks', {}, {}, vi.fn()], () => dispatched.push(method));
+      }
+      expect(dispatched).toEqual(['reportRuntimeTelemetry', 'reportTerminationComplete']);
+      expect(assertAccess).not.toHaveBeenCalled();
+      // Behind a stuck ordinary read they keep their place, and still settle once it is refused.
+      const stuckAck = vi.fn();
+      gate(['get', 'tasks', 'id', {}, stuckAck], () => dispatched.push('get'));
+      gate(['reportRuntimeTelemetry', 'tasks', {}, {}, vi.fn()], () => dispatched.push('late'));
+      await vi.advanceTimersByTimeAsync(20);
+      expect(stuckAck).toHaveBeenCalledOnce();
+      expect(dispatched.slice(2)).toEqual(['late']);
+      expect(assertAccess).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('preserves unrestricted transport and verifies the bound tenant', async () => {
     const assertAccess = vi.fn().mockResolvedValue(undefined);
     await admitTenantSocketPacket({

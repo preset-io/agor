@@ -15,6 +15,7 @@ import {
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
+  tenantSocketPacketNeedsAdmission,
 } from '../auth/tenant-socket-admission.js';
 /**
  * Socket.io Configuration
@@ -998,11 +999,14 @@ export function createSocketIOConfig(
         const gate = createOrderedTenantPacketGate({
           // Raw terminal/presence packets read only while the monitor cannot verify their tenant.
           needsAdmission: (packet) =>
-            executorSocket ||
-            serviceMethods.has(packet[0] as string) ||
-            isTenantSocketUnverified(
-              getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id
-            ),
+            tenantSocketPacketNeedsAdmission({
+              executor: executorSocket,
+              serviceCall: serviceMethods.has(packet[0] as string),
+              unverified: isTenantSocketUnverified(
+                getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id
+              ),
+              packet,
+            }),
           // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
           scope: withTenantRestrictionRequest,
           onOverflow: () => socket.disconnect(true),

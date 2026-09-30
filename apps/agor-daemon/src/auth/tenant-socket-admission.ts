@@ -25,18 +25,26 @@ function isTenantSafetyPacket(packet: unknown[]): boolean {
   );
 }
 
+/** Executor packets except safety RPCs, service calls, and every packet of an unverified tenant await a read. */
+export function tenantSocketPacketNeedsAdmission(input: {
+  executor: boolean;
+  serviceCall: boolean;
+  unverified: boolean;
+  packet: unknown[];
+}): boolean {
+  // Safety RPCs are admitted whatever a read says, so they only keep their place in the queue.
+  if (input.executor) return !isTenantSafetyPacket(input.packet);
+  return input.serviceCall || input.unverified;
+}
+
 export async function admitTenantSocketPacket(input: {
   tenantId: string;
   executor: boolean;
   packet: unknown[];
   assertAccess: (tenantId: string) => Promise<void>;
 }): Promise<void> {
-  try {
-    await input.assertAccess(input.tenantId);
-  } catch (error) {
-    if (input.executor && isTenantSafetyPacket(input.packet)) return;
-    throw error;
-  }
+  if (input.executor && isTenantSafetyPacket(input.packet)) return;
+  await input.assertAccess(input.tenantId);
 }
 
 type PacketNext = (error?: Error) => void;
