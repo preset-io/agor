@@ -52,6 +52,12 @@ this controller's own `(tenant_id, controller_id)` record only.
 A seeded row is an ordinary active record afterwards — a later restrict at a
 higher revision closes it like any other.
 
+Any accepted change, including a seed or any first record, changes the tenant
+credential generation (see Credential generations). Seeding or restricting a
+runtime that is already serving the tenant therefore signs everyone out and
+turns running tasks' telemetry into Stop. `apply` warns on stderr when a seed
+changed state; the orchestrator must seed before the destination serves.
+
 Restriction composition is OR across controllers. Releasing one controller's
 restriction cannot clear another's, and never modifies the separate portability
 write gate. Stored data is strictly parsed; corrupt or unsupported values and
@@ -93,6 +99,17 @@ The socket monitor likewise reads each connected tenant separately, because a
 batched read would need a cross-tenant RLS policy this table deliberately lacks. A database row or an intent write response does not prove connection
 draining, process containment, or current-replica freshness.
 Slack card delivery and OAuth callbacks check admission on entry only; per-dispatch Slack/OAuth freshness fencing is deferred, and provider calls already dispatched are not undone.
+The Slack repair sweep re-checks once per page, so a pass that began before a
+restriction stops within one page. The sweep only repairs cards and notices
+younger than 24 h: anything older at reactivation is never re-posted.
+
+Not contained by suspension: environments and dev servers keep running (hard
+containment is deferred). Stop writes assert the separate portability write
+gate like every candidate write, so while an operator holds that gate a Stop
+cannot be claimed or settled; restrict and let Stops settle before acquiring
+it. A branch-deletion `claim` needs ordinary admission, so a deletion dispatched
+just before a restriction is refused, marked failed after 2 min ("never
+claimed") and must be retried after reactivation.
 
 ## CLI
 
@@ -113,7 +130,8 @@ agor tenant restriction inspect --tenant-id <workspaceId>
 ```
 
 `apply` prints `{"record":…,"changed":…}`; `inspect` prints the records array
-ordered by controller id. Flags are validated with
+ordered by controller id, and the retained event cutoff (latest update) on
+stderr only, so the stdout record shape stays fixed for strict parsers. Flags are validated with
 `TenantRestrictionCommandSchema` before a connection is opened, so the CLI
 cannot accept an identity or revision the writer would reject. An exact replay of
 an accepted `seed_active` exits `0` with `"changed":false`; any other recorded
@@ -225,7 +243,11 @@ and activation preserve it. Queue inspection still shows held prompts, but runna
 selection/discovery/dispatch skip them. Explicit resubmission creates a new task.
 
 The retained restriction row's database update time is a conservative event cutoff.
-After activation only later schedule/gateway occurrences are eligible. Cron skips
+After activation only later schedule/gateway occurrences are eligible. Gateway
+occurrence times come from the provider's clock, so they must also clear a 5 s
+skew grace; a message in the first seconds after reactivation can be dropped,
+never a suspension-era one replayed. Prompts held by a restriction never block
+direct admission of a new prompt to the same session. Cron skips
 advance their cursor without changing enabled configuration. Gateway handling
 consumes durable event identities without provider preparation or prompt creation.
 Task persistence rechecks initial schedule identity/time and gateway receipt time
@@ -238,11 +260,24 @@ cannot start after reactivation. Stop, output and result settlement preserve the
 existing attempt/authority/deadline checks. Successful Stop commands and stopped
 environment metadata do not prove that services or background descendants exited.
 
-`services/tenant-restriction-reconciler.ts` uses existing routing-only task discovery,
-then re-enters each tenant scope before reading restrictions and initiating the
-existing Stop coordinator. It does not infer process absence or complete suspension
-from a scan, a task status or an empty page. Existing coordinator recovery still owns
-late connection, acknowledgement, containment and unverified outcomes.
+`services/tenant-restriction-reconciler.ts` first lists closed tenant ids under the
+read-only `tenant_restriction_discovery` capability (migration 0118: non-active rows
+only; the query selects ids alone), then pages live tasks of those tenants only, so
+a runtime with nothing restricted pages nothing. Each tenant's own scoped read still
+decides before the existing Stop coordinator is invoked; both reads are shared across
+a saturated drain for at most one 1 s tick. An empty discovery is not proof that a
+tenant is open: admission and restricted telemetry fail closed independently. It does
+not infer process absence or complete suspension from a scan, a task status or an
+empty page. Existing coordinator recovery still owns late connection,
+acknowledgement, containment and unverified outcomes; the runtime reconciler reloads
+candidates through termination reads, so dispatch-timeout, stale-heartbeat and
+stranded-Stop recovery continue while a tenant is restricted.
+
+A suspension Stop keeps its `tenant_suspension` cause (settling Stopped) when
+reactivation makes the old executor's generation stale; only a durable revocation
+replaces it. A task completing as the tenant closes still returns its session to
+idle; only completion automation (callbacks, queue trigger, fork result) is skipped
+and not replayed.
 
 ## Credential generations
 
@@ -274,7 +309,8 @@ stale nonexecutor connections after a rapid restriction/release cycle. Old execu
 credentials retain only exact safety settlement, including after activation;
 telemetry cannot use this exception to restart callback automation. Fresh command
 issuance carries the current generation; only internal Stop and ongoing deletion
-renewal issue safety-only recovery credentials. Initial cleanup/deletion claims
+renewal issue safety-only recovery credentials. An executor facing an older daemon
+without `tasks.getTerminationState` falls back to `tasks.get` for its Stop state. Initial cleanup/deletion claims
 still require ordinary admission.
 
 `auth/tenant-launch-revision.ts` additionally checks the signed handoff's
