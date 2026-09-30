@@ -36,7 +36,7 @@ import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
 import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
-import { reportExecutorQuiescence } from './termination-report.js';
+import { readExecutorTerminationState, reportExecutorQuiescence } from './termination-report.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
 patchConsole();
@@ -369,9 +369,10 @@ export class AgorExecutor {
 
   private async refreshTerminationState(source: TerminationObservationSource): Promise<void> {
     if (!this.client) return;
-    const task = await this.client
-      .service('tasks')
-      .getTerminationState({ task_id: this.config.taskId });
+    const task = await readExecutorTerminationState(
+      this.client.service('tasks'),
+      this.config.taskId
+    );
     this.handleTaskLifecycleUpdate(task, source);
   }
 
@@ -388,8 +389,7 @@ export class AgorExecutor {
             task_id: this.config.taskId,
             requested_at: requestedAt,
           }),
-        readTask: () =>
-          client.service('tasks').getTerminationState({ task_id: this.config.taskId }),
+        readTask: () => readExecutorTerminationState(client.service('tasks'), this.config.taskId),
       });
       this.terminationReport = report;
     }

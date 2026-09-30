@@ -1,5 +1,5 @@
 import { shortId } from '@agor/core/db';
-import type { ExecutorTerminationState } from '@agor/core/types';
+import type { ExecutorTerminationState, Task } from '@agor/core/types';
 import { isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 
 const RETRY_WINDOW_MS = 15_000;
@@ -28,6 +28,46 @@ function within<T>(operation: Promise<T>, timeoutMs: number): Promise<T> {
       }
     );
   });
+}
+
+interface TerminationStateReader {
+  getTerminationState(data: { task_id: string }): Promise<ExecutorTerminationState>;
+  get(id: string): Promise<unknown>;
+}
+
+/** A daemon predating getTerminationState answers MethodNotAllowed (or NotFound) for it. */
+function isMissingMethodError(error: unknown): boolean {
+  const { code, name } = (error ?? {}) as { code?: unknown; name?: unknown };
+  return code === 405 || name === 'MethodNotAllowed' || code === 404 || name === 'NotFound';
+}
+
+/** Read the minimal Stop projection, falling back to the task read an older daemon still serves. */
+export async function readExecutorTerminationState(
+  tasks: TerminationStateReader,
+  taskId: string
+): Promise<ExecutorTerminationState> {
+  try {
+    return await tasks.getTerminationState({ task_id: taskId });
+  } catch (error) {
+    if (!isMissingMethodError(error)) throw error;
+    const task = (await tasks.get(taskId)) as Task;
+    const request = task.termination_request;
+    return {
+      task_id: task.task_id,
+      status: task.status,
+      ...(request
+        ? {
+            termination_request: {
+              cause: request.cause,
+              requested_at: request.requested_at,
+              ...(request.executor_quiesced_at
+                ? { executor_quiesced_at: request.executor_quiesced_at }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
 }
 
 export interface ExecutorQuiescenceReportOptions {
