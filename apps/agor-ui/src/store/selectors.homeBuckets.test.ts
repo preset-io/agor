@@ -5,6 +5,7 @@ import type { AgorState } from './agorStore';
 import {
   compareHomeNeeds,
   type HomeBucketsOptions,
+  lastRunStartedAt,
   makeCommentsForYouSelector,
   makeHomeBucketsSelector,
   makeLatestOwnSessionSelector,
@@ -278,6 +279,65 @@ describe('makeHomeBucketsSelector', () => {
     expect(select(s).recent.map((r) => r.session_id)).toEqual(['spawned']);
   });
 
+  it('lets a later clean scheduled run supersede only scheduled failures', () => {
+    const scheduledFail = session('sf', {
+      status: 'failed',
+      ready_for_prompt: true,
+      scheduled_from_branch: true,
+      branch_id: 'nightly',
+      ...ranAt(30),
+      last_updated: hoursAgo(29),
+    });
+    const scheduledOk = session('sok', {
+      status: 'completed',
+      scheduled_from_branch: true,
+      branch_id: 'nightly',
+      ...ranAt(5),
+    });
+    const mineFail = session('mf', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'mine',
+      ...ranAt(30),
+      last_updated: hoursAgo(29),
+    });
+    const scheduledOnMine = { ...scheduledOk, session_id: 'sok2', branch_id: 'mine' } as Session;
+    expect(reasons(state({ sessions: [scheduledFail] }))).toEqual(['failed:sf']);
+    expect(reasons(state({ sessions: [scheduledFail, scheduledOk] }))).toEqual([]);
+    expect(reasons(state({ sessions: [mineFail, scheduledOnMine] }))).toEqual(['failed:mf']);
+  });
+
+  it('treats a fork cycle or a shared ancestor consistently when deciding who started a retry', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(5),
+      last_updated: hoursAgo(4),
+    });
+    const fork = (id: string, from: string, h: number) =>
+      session(id, {
+        status: 'completed',
+        branch_id: 'b',
+        ...ranAt(h),
+        genealogy: { children: [], forked_from_session_id: from } as Session['genealogy'],
+      });
+    const cycleA = fork('ca', 'cb', 1);
+    const cycleB = fork('cb', 'ca', 1);
+    expect(reasons(state({ sessions: [failed, cycleA, cycleB] }))).toEqual(['failed:f']);
+    const spawned = session('sp', {
+      branch_id: 'b',
+      genealogy: { children: [], parent_session_id: 'x' } as Session['genealogy'],
+    });
+    expect(
+      reasons(state({ sessions: [failed, spawned, fork('k1', 'sp', 1), fork('k2', 'k1', 1)] }))
+    ).toEqual(['failed:f']);
+    const root = session('r', { branch_id: 'b', created_at: hoursAgo(9) });
+    expect(
+      reasons(state({ sessions: [failed, root, fork('k3', 'r', 2), fork('k4', 'k3', 1)] }))
+    ).toEqual([]);
+  });
+
   it('keeps an opened failure dismissed through later patches, until a new run', () => {
     const failed = session('f', {
       status: 'failed',
@@ -285,7 +345,7 @@ describe('makeHomeBucketsSelector', () => {
       ...ranAt(3),
       last_updated: hoursAgo(1),
     });
-    const opened = { openedFailures: { f: Date.parse(hoursAgo(2)) } };
+    const opened = { openedFailures: { f: lastRunStartedAt(failed) } };
     expect(reasons(state({ sessions: [failed] }), opened)).toEqual([]);
     const reRan = { ...failed, ...ranAt(0.5) } as Session;
     expect(reasons(state({ sessions: [reRan] }), opened)).toEqual(['failed:f']);
