@@ -440,6 +440,21 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         )
       )
     ).toHaveLength(0);
+    // The capability learns ids only: a direct read of a closed tenant's row sees nothing.
+    expect(
+      await discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`SELECT controller_id, placement_id, operation_id, revision
+            FROM public.tenant_restrictions WHERE tenant_id IN (${restricted}, ${prepared})`
+        )
+      )
+    ).toHaveLength(0);
+    expect(
+      await runWithSystemDatabaseScope(db, 'restriction-discovery-test', (scoped) =>
+        executeRaw(scoped, sql`SELECT tenant_id FROM public.agor_restricted_tenant_ids()`)
+      )
+    ).toHaveLength(0);
     await expect(
       discover((scoped) =>
         executeRaw(scoped, sql`UPDATE public.tenant_restrictions SET phase = 'active'`)

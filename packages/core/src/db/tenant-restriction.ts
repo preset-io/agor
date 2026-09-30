@@ -246,7 +246,8 @@ export async function readTenantRestrictionState(
 
 /**
  * Routing-only ids of tenants with any non-active record, read under the
- * `tenant_restriction_discovery` capability. Callers must re-read each tenant's
+ * `tenant_restriction_discovery` capability through the ids-only function of
+ * migration 0118 (a direct table read there sees nothing). Callers must re-read each tenant's
  * state in its own scope; an empty result is never proof that a tenant is open.
  */
 export async function listRestrictedTenantIds(db: Database): Promise<string[]> {
@@ -258,9 +259,7 @@ export async function listRestrictedTenantIds(db: Database): Promise<string[]> {
     SELECT COALESCE(current_setting('agor.system_scope', true), '') AS scope_system,
       r.tenant_id
     FROM (SELECT 1) AS scope
-    LEFT JOIN (
-      SELECT DISTINCT tenant_id FROM public.tenant_restrictions WHERE phase <> 'active'
-    ) AS r ON true
+    LEFT JOIN public.agor_restricted_tenant_ids() AS r ON true
     ORDER BY r.tenant_id
   `
     )

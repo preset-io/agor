@@ -188,6 +188,12 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain("= 'tenant_restriction_discovery'");
     expect(migration).toContain(`"phase" <> 'active'`);
     expect(migration).not.toContain('WITH CHECK');
+    // Ids only: rows are visible solely inside the function, which returns tenant_id alone.
+    expect(migration).toContain('RETURNS TABLE ("tenant_id" text)');
+    expect(migration).toContain("set_config('agor.tenant_restriction_discovery_ids', 'on', true)");
+    expect(migration).toContain(
+      "current_setting('agor.tenant_restriction_discovery_ids', true) = 'on'"
+    );
   });
 
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {

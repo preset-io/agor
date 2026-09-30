@@ -270,8 +270,10 @@ existing attempt/authority/deadline checks. Successful Stop commands and stopped
 environment metadata do not prove that services or background descendants exited.
 
 `services/tenant-restriction-reconciler.ts` first lists closed tenant ids under the
-read-only `tenant_restriction_discovery` capability (migration 0118: non-active rows
-only; the query selects ids alone), then pages live tasks of those tenants only, so
+read-only `tenant_restriction_discovery` capability (migration 0118: the capability
+sees rows only inside `agor_restricted_tenant_ids()`, which returns the ids of tenants
+with a non-active row and nothing else; a direct table read under it sees no row),
+then pages live tasks of those tenants only, so
 a runtime with nothing restricted pages nothing. Each tenant's own scoped read still
 decides before the existing Stop coordinator is invoked; both reads are shared across
 a saturated drain for at most one 1 s tick. Because that observation may be a tick
