@@ -963,6 +963,12 @@ One-time operator setup:
    authorization and ownership, not source availability/readiness), push the
    application branch, then click **Start** when ready to incur preview costs.
 
+The automatic preview sets `AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE=false` alongside
+`AGOR_ADMIN_PASSWORD`, so newly bootstrapped admins can keep the operator-selected
+password at first login. Other deployments still require a change by default;
+generated passwords always require it. This only affects initial account creation:
+restarts never reset an existing password or clear an existing change requirement.
+
 **Trust boundary:** branch code receives the credential's full provider authority.
 Never inject production credentials into untrusted branches. Agor applies normal
 branch lifecycle permissions; the launcher is not an additional tenant-admin

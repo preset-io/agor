@@ -214,6 +214,7 @@ test('Start creates missing resources; repeated Start is read-only; Stop retains
   assert.equal(f.state.deployments.length, 2);
   assert.equal(JSON.stringify(f.state.vars).includes(f.env.RAILWAY_API_TOKEN), false);
   assert.equal(f.state.vars.AGOR_ADMIN_PASSWORD, f.env.RAILWAY_AGOR_ADMIN_PASSWORD);
+  assert.equal(f.state.vars.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE, 'false');
 });
 test('check/Stop of absent preview never provision', async () => {
   const f = fixture();

@@ -61,6 +61,12 @@ active configuration; conflicting project IDs are rejected. Do not remove legacy
 config to migrate an existing preview blindly: version-2 names are different.
 Clean up or explicitly migrate existing resources first.
 
+The automatic preview sets `AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE=false` alongside
+`AGOR_ADMIN_PASSWORD`, so newly bootstrapped admins can keep the operator-selected
+password at first login. Other deployments still require a change by default;
+generated passwords always require it. This only affects initial account creation:
+restarts never reset an existing password or clear an existing change requirement.
+
 ## Lifecycle and guardrails
 
 Start inspects deterministic branch-scoped resources and provider-side

@@ -164,6 +164,15 @@ describe('logFirstRunAdminBootstrap', () => {
     expect(written).toContain('will not reset passwords');
   });
 
+  it('does not announce a required change for an opted-out admin', () => {
+    logFirstRunAdminBootstrap({
+      createdAdmin: true,
+      admin: { email: 'admin@example.com', must_change_password: false } as never,
+      reattributedCount: 0,
+    });
+    expect(written).not.toContain('prompted to change');
+  });
+
   it('points operators at AGOR_ADMIN_PASSWORD when no file was written', () => {
     logFirstRunAdminBootstrap({
       createdAdmin: true,
@@ -182,10 +191,13 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
   let tempDir: string;
   let originalEnv: string | undefined;
   let originalAllowDevelopmentDefault: string | undefined;
+  let originalRequireChange: string | undefined;
   let originalNodeEnv: string | undefined;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-bootstrap-'));
+    originalRequireChange = process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE;
+    delete process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE;
     originalEnv = process.env.AGOR_ADMIN_PASSWORD;
     originalAllowDevelopmentDefault = process.env.AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN;
     originalNodeEnv = process.env.NODE_ENV;
@@ -210,6 +222,8 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     } else {
       process.env.NODE_ENV = originalNodeEnv;
     }
+    if (originalRequireChange === undefined) delete process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE;
+    else process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE = originalRequireChange;
     vi.clearAllMocks();
   });
 
@@ -245,6 +259,7 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
       expect.anything(),
       expect.objectContaining({
         password: 'super-secret-from-secret-store',
+        must_change_password: true,
         role: 'superadmin',
         unix_username: 'admin',
       })
@@ -255,8 +270,40 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     await expect(fs.access(credentialsPath)).rejects.toThrow();
   });
 
+  it('allows explicitly keeping a validated operator password on first login', async () => {
+    process.env.AGOR_ADMIN_PASSWORD = 'operator-selected-preview-secret';
+    process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE = 'false';
+    const { bootstrapFirstRunAdmin, createUser } = await loadMocks();
+    bootstrapFirstRunAdmin.mockImplementation(
+      async (_db: unknown, factory: () => Promise<unknown>) => ({
+        createdAdmin: true,
+        admin: await factory(),
+        reattributedCount: 0,
+      })
+    );
+    createUser.mockResolvedValue({ user_id: 'u1' });
+    await runFirstRunAdminBootstrap({} as never, { credentialsBaseDir: tempDir });
+    expect(createUser).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        password: 'operator-selected-preview-secret',
+        must_change_password: false,
+      })
+    );
+  });
+
+  it('does not update an existing admin when the opt-out is set', async () => {
+    process.env.AGOR_ADMIN_PASSWORD = 'operator-selected-preview-secret';
+    process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE = 'false';
+    const { bootstrapFirstRunAdmin, createUser } = await loadMocks();
+    bootstrapFirstRunAdmin.mockResolvedValue({ createdAdmin: false, reattributedCount: 0 });
+    await runFirstRunAdminBootstrap({} as never, { credentialsBaseDir: tempDir });
+    expect(createUser).not.toHaveBeenCalled();
+  });
+
   it('rejects the legacy fixed default password from AGOR_ADMIN_PASSWORD', async () => {
     process.env.AGOR_ADMIN_PASSWORD = 'admin';
+    process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE = 'false';
 
     const { bootstrapFirstRunAdmin } = await loadMocks();
     bootstrapFirstRunAdmin.mockImplementation(
@@ -311,7 +358,8 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     ).rejects.toThrow(/development-only.*NODE_ENV=development or NODE_ENV=test/);
   });
 
-  it('falls back to file-based generation when AGOR_ADMIN_PASSWORD is absent', async () => {
+  it('generated passwords still require a change even with operator opt-out', async () => {
+    process.env.AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE = 'false';
     const { bootstrapFirstRunAdmin, createUser } = await loadMocks();
     bootstrapFirstRunAdmin.mockImplementation(
       async (_db: unknown, factory: () => Promise<unknown>) => {
@@ -328,7 +376,11 @@ describe('runFirstRunAdminBootstrap — capability-driven password resolution', 
     expect(createUser).toHaveBeenCalledTimes(1);
     expect(createUser).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ role: 'superadmin', unix_username: 'admin' })
+      expect.objectContaining({
+        role: 'superadmin',
+        unix_username: 'admin',
+        must_change_password: true,
+      })
     );
     expect(result.credentialsPath).toBe(path.join(tempDir, 'admin-credentials'));
     // File exists with mode 0600.

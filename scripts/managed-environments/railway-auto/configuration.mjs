@@ -89,6 +89,7 @@ export function appVariables(record, domain, password) {
   return {
     [MARKER]: JSON.stringify(record),
     AGOR_ADMIN_PASSWORD: password,
+    AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE: 'false',
     AGOR_RUNTIME_TARGET: 'runtime-build',
     AGOR_RUNTIME_MODE: 'watch',
     AGOR_SOURCE_REPO: `https://github.com/${record.repository}.git`,
