@@ -555,6 +555,34 @@ describe('NavbarComposeButton', () => {
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
   });
 
+  it('does not resume a held send once the prompt was cleared', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    const promptBox = await screen.findByTestId('compose-prompt');
+    fireEvent.change(promptBox, { target: { value: 'draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
+    fireEvent.change(promptBox, { target: { value: '   ' } });
+
+    fireEvent.click(screen.getByTestId('pick-teammate'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('drops a held send when the popover closes, so a pick after reopening does not send', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
+    expect(screen.getByText('Pick a primary assistant above to send.')).toBeInTheDocument();
+
+    openPopover();
+    await waitFor(() => expect(screen.queryByTestId('pick-teammate')).not.toBeInTheDocument());
+    openPopover();
+    fireEvent.click(await screen.findByTestId('pick-teammate'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
   it('does not overwrite MCP edits made before choosing a primary assistant', async () => {
     const { onCreateSession } = renderCompose({ primary: null });
     openPopover();

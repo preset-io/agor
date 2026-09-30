@@ -24,9 +24,12 @@ describe('sameName', () => {
     expect(sameName('Ada', 'Grace')).toBe(false);
   });
 
-  it('compares names without letters or digits as written', () => {
+  it('compares names without letters or digits by their symbols, ignoring punctuation and spacing', () => {
     expect(sameName('🎨', '🚀')).toBe(false);
     expect(sameName('🎨', '🎨')).toBe(true);
+    expect(sameName('🎨', '🎨!')).toBe(true);
+    expect(sameName(' (🎨 🚀) ', '🎨🚀')).toBe(true);
+    expect(sameName('🎨', '🎨🚀')).toBe(false);
   });
 });
 

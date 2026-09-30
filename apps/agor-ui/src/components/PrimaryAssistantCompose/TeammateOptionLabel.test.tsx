@@ -21,6 +21,16 @@ describe('TeammateOptionLabel', () => {
     expect(screen.getByText('🎨')).toHaveAttribute('aria-hidden');
   });
 
+  it('gives the name its natural width so a long board truncates first', () => {
+    render(<TeammateOptionLabel option={option} />);
+    const name = screen.getByText('Ada');
+    const board = screen.getByText('📋 Research');
+    expect(name.style.flex).toBe('0 1 auto');
+    expect(board.style.flex).toBe('1 1 0%');
+    expect(board.style.minWidth).toMatch(/^0(px)?$/);
+    expect(screen.getByText('🎨').style.flex).toMatch(/^(none|0 0 auto)$/);
+  });
+
   it('omits the board when the option has no context', () => {
     const { container } = render(
       <TeammateOptionLabel option={{ ...option, context: undefined }} />

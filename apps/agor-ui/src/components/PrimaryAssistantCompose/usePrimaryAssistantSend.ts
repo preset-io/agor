@@ -21,7 +21,9 @@ export interface PrimaryAssistantSendOptions {
     boardId: string
   ) => Promise<SessionCreationResult | null>;
   buildConfig: (branch: Branch) => NewSessionConfig;
-  /** The caller's gate (disabled, config validity, form fields); also runs for a send resumed by `pick`. */
+  /** The caller's synchronous gate (disabled, content, config validity), checked before a send is held or run, including one resumed by `pick`. */
+  canSend?: () => boolean;
+  /** The caller's async checks (form fields), run once a target is known; also runs for a send resumed by `pick`. */
   validate?: () => Promise<boolean>;
   /** Re-resolves the primary assistant when it changes. */
   refreshKey?: unknown;
@@ -71,7 +73,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
 
   const send = useCallback(
     async (mode: ComposeSendMode, explicitBranch?: Branch) => {
-      if (inFlightRef.current) return;
+      if (inFlightRef.current || latest.current.canSend?.() === false) return;
       const { primary: resolved, message: toast, navigation: nav } = runtime.current;
       if (!explicitBranch && (resolved.resolving || resolved.failed)) return;
       // A primary resolved for a previous caller is never sent to.
