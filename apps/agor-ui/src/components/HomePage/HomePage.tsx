@@ -313,7 +313,7 @@ export const HomePage = memo(function HomePage({
     [onAllBoards]
   );
   const seeAllSessions = useCallback(
-    () => (onSeeAllSessions ?? (() => requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'sessions')))(),
+    () => (onSeeAllSessions ?? (() => requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'session')))(),
     [onSeeAllSessions]
   );
 

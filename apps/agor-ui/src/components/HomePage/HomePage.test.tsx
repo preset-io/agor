@@ -7,6 +7,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import {
+  OPEN_BOARD_SWITCHER_EVENT,
+  OPEN_GLOBAL_SEARCH_EVENT,
+  onShellPicker,
+} from '../../utils/shellEvents';
 import { HomePage, type HomePageProps } from './HomePage';
 
 // HomePage's body is the only caller; counting it counts HomePage renders.
@@ -471,6 +476,26 @@ describe('HomePage', () => {
     renderHome();
     const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
     expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
+  });
+
+  it('asks the header for search on Sessions and for the board switcher', () => {
+    seed({
+      sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
+      boards: [{ board_id: 'b-a', name: 'Launch board', archived: false } as Board],
+    });
+    const search = vi.fn();
+    const boards = vi.fn();
+    const off = [
+      onShellPicker(OPEN_GLOBAL_SEARCH_EVENT, search),
+      onShellPicker(OPEN_BOARD_SWITCHER_EVENT, boards),
+    ];
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'See all sessions' }));
+    expect(search).toHaveBeenCalledExactlyOnceWith('session');
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    fireEvent.click(within(recentBoards).getByRole('button', { name: 'All boards' }));
+    expect(boards).toHaveBeenCalledExactlyOnceWith(undefined);
+    for (const unsubscribe of off) unsubscribe();
   });
 
   it('shows onboarding only before the first session, and only steps the caller can do', () => {
