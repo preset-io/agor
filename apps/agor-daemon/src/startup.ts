@@ -28,6 +28,7 @@ import {
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
+import { readTenantCredentialEpoch } from './auth/tenant-credential-epoch.js';
 import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
 import type {
   Application,
@@ -729,11 +730,18 @@ export async function startup(ctx: StartupContext): Promise<void> {
           // one global executor cannot assume every tenant checkout is mounted.
           return;
         }
+        // The executor calls repos/branches with this token, and admission compares its generation.
+        const credentialEpoch = await readTenantCredentialEpoch(
+          db,
+          startupTenantParams(config).tenant.tenant_id
+        );
         const result = await requestExecutor(
           {
             command: 'git.managed-credentials.reconcile',
             sessionToken: generateDaemonServiceToken(
-              app as unknown as { settings: { authentication?: { secret?: string } } }
+              app as unknown as { settings: { authentication?: { secret?: string } } },
+              undefined,
+              credentialEpoch
             ),
             daemonUrl: getDaemonUrl(),
             params: {},

@@ -1548,9 +1548,15 @@ export function generateDaemonServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  expiresIn?: SignOptions['expiresIn']
+  expiresIn?: SignOptions['expiresIn'],
+  credentialEpoch?: string
 ): string {
-  return issueReservedServiceTokenFromApp(app, serviceTokenScopeForCurrentTenant(), expiresIn);
+  // The generation is the only extra claim: its calls still pass ordinary admission, which compares it.
+  return issueReservedServiceTokenFromApp(
+    app,
+    { ...serviceTokenScopeForCurrentTenant(), ...tenantCredentialEpochClaims(credentialEpoch) },
+    expiresIn
+  );
 }
 
 export interface TerminalExecutorTokenScope {
