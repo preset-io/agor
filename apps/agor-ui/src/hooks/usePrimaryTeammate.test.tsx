@@ -175,6 +175,7 @@ describe('usePrimaryTeammate', () => {
     rerender({ current: null });
     await act(async () => pending.resolve(branchA));
     expect(result.current.branch).toBeNull();
+    expect(result.current.resolving).toBe(false);
   });
 
   it('a refresh captured before a client swap neither queries the old client nor marks its answer owned', async () => {
