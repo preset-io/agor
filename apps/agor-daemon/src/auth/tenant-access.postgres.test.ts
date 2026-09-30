@@ -1,7 +1,4 @@
-/** Real PostgreSQL/RLS behind the candidate authenticated-admission composition.
- * The first task-safety test uses real signed Socket.IO authentication; later
- * service-composition cases use fixture authentication. No process-exit claim.
- */
+/** Real PostgreSQL/RLS behind authenticated admission; SDK/process exit stays simulated, never containment proof. */
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
@@ -49,6 +46,7 @@ import { configureChannels, createSocketIOConfig } from '../setup/socketio.js';
 import {
   beginExecutorTermination,
   requestExecutorTermination,
+  type TerminationInput,
 } from '../termination-coordinator.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
 import { getOrCreateExecutorConnectionRevocationFence } from './executor-connection-admission.js';
@@ -148,6 +146,70 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         return { user, branch, session, task, queued };
       });
+
+    type IntentAction = 'restrict' | 'prepare_release' | 'activate';
+    const intent = (
+      tenantId: string,
+      revision: number,
+      action: IntentAction,
+      database: Parameters<typeof applyTenantRestrictionIntent>[0] = raw
+    ) =>
+      applyTenantRestrictionIntent(database, tenantId, {
+        version: 1,
+        controllerId: 'controller',
+        placementId: 'placement',
+        operationId: `operation-${revision}`,
+        revision,
+        action,
+      });
+    const release = async (
+      tenantId: string,
+      revision: number,
+      database: Parameters<typeof applyTenantRestrictionIntent>[0] = raw
+    ) => {
+      await intent(tenantId, revision, 'prepare_release', database);
+      await intent(tenantId, revision, 'activate', database);
+    };
+    const findTask = (tenantId: string, taskId: string) =>
+      runWithTenantDatabaseScope(raw, tenantId, (scoped) =>
+        new TaskRepository(scoped).findById(taskId)
+      );
+    const terminationInput = (
+      app: unknown,
+      tenantId: string,
+      taskId: string,
+      cause: TerminationInput['cause'],
+      params: unknown
+    ): TerminationInput => ({
+      app: app as TerminationInput['app'],
+      taskId,
+      cause,
+      errorMessage: 'Tenant restricted',
+      params: params as TerminationInput['params'],
+      runInFreshTenantWriteDatabase: <T>(work: () => Promise<T>) =>
+        withFreshTenantWrite(db, tenantId, work),
+    });
+    // Settles one handshake: undefined when accepted, otherwise the connect_error.
+    const handshake = (client: AgorClient, token: string) => {
+      client.io.auth = { token };
+      const settled = new Promise<(Error & { data?: Record<string, unknown> }) | undefined>(
+        (resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('Handshake timed out')), 5_000);
+          client.io.once('connect', () => {
+            clearTimeout(timeout);
+            resolve(undefined);
+          });
+          client.io.once('connect_error', (error) => {
+            clearTimeout(timeout);
+            resolve(error);
+          });
+        }
+      );
+      client.io.connect();
+      return settled;
+    };
+    const socketClient = (origin: string) =>
+      createClient(origin, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
 
     const multiTenancy = {
       mode: 'required_from_auth',
@@ -256,7 +318,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           branchId: seeded.branch.branch_id,
         })
       );
-      // The claimed boundary here is task safety RPC transport, not all user routes.
       const started = await startAdmissionApp({
         name: 'socket-safety',
         jwtSecret,
@@ -275,52 +336,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const { app } = started;
       let client: AgorClient | undefined;
       try {
-        client = createClient(started.origin, false, {
-          reconnectionAttempts: 0,
-          ackTimeout: 2_000,
-        });
-        client.io.auth = { token };
-        const connect = async () => {
-          const connected = new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(
-              () => reject(new Error('Executor socket connect timed out')),
-              3_000
-            );
-            client!.io.once('connect', () => {
-              clearTimeout(timeout);
-              resolve();
-            });
-            client!.io.once('connect_error', (error) => {
-              clearTimeout(timeout);
-              reject(error);
-            });
-          });
-          client!.io.connect();
-          await connected;
-        };
-        await connect();
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          version: 1,
-          controllerId: 'controller',
-          placementId: 'placement',
-          operationId: 'suspend',
-          revision: 1,
-          action: 'restrict',
-        });
-        const params = {
-          user: seeded.user,
-          tenant: { tenant_id: tenantId, source: 'explicit' },
-        } as never;
-        const input = {
-          app,
-          taskId: seeded.task.task_id,
-          cause: 'authorization_revoked' as const,
-          errorMessage: 'Tenant restricted',
-          params,
-          runInFreshTenantWriteDatabase: <T>(work: () => Promise<T>) =>
-            withFreshTenantWrite(db, tenantId, work),
-        };
-        await beginExecutorTermination(input);
+        client = socketClient(started.origin);
+        expect(await handshake(client, token)).toBeUndefined();
+        await intent(tenantId, 1, 'restrict');
+        const params = { user: seeded.user, tenant: { tenant_id: tenantId, source: 'explicit' } };
+        await beginExecutorTermination(
+          terminationInput(app, tenantId, seeded.task.task_id, 'authorization_revoked', params)
+        );
         await expect(client.service('tasks').get(seeded.task.task_id)).rejects.toMatchObject({
           code: 403,
         });
@@ -333,29 +355,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           client.service('tasks').getTerminationState({ task_id: seeded.queued.task_id })
         ).rejects.toMatchObject({ code: 403 });
         expect(client.io.connected).toBe(true);
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          version: 1,
-          controllerId: 'controller',
-          placementId: 'placement',
-          operationId: 'reactivate',
-          revision: 2,
-          action: 'prepare_release',
-        });
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          version: 1,
-          controllerId: 'controller',
-          placementId: 'placement',
-          operationId: 'reactivate',
-          revision: 2,
-          action: 'activate',
-        });
-        // Even if the socket survives the whole cycle, old ordinary authority
-        // cannot revive; exact Stop recovery must still work after reconnect.
+        await release(tenantId, 2);
+        // A socket surviving the cycle cannot revive ordinary authority; exact Stop still works after reconnect.
         await expect(client.service('tasks').get(seeded.task.task_id)).rejects.toMatchObject({
           code: 403,
         });
         client.io.disconnect();
-        await connect();
+        expect(await handshake(client, token)).toBeUndefined();
         await expect(
           client.service('tasks').reportTerminationComplete({
             task_id: seeded.queued.task_id,
@@ -369,29 +375,17 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           })
         ).rejects.toThrow();
         expect(
-          await runWithTenantDatabaseScope(
-            raw,
-            tenantId,
-            async (scoped) =>
-              (await new TaskRepository(scoped).findById(seeded.task.task_id))?.termination_request
-                ?.executor_quiesced_at
-          )
+          (await findTask(tenantId, seeded.task.task_id))?.termination_request?.executor_quiesced_at
         ).toBeUndefined();
-        // This is a real signed/durable executor reconnect and acknowledgement;
-        // SDK/process exit itself remains simulated, not containment certification.
         await client.service('tasks').reportTerminationComplete({
           task_id: seeded.task.task_id,
           requested_at: control.termination_request!.requested_at,
         });
         await expect
-          .poll(() =>
-            runWithTenantDatabaseScope(
-              raw,
-              tenantId,
-              async (scoped) =>
-                !!(await new TaskRepository(scoped).findById(seeded.task.task_id))
-                  ?.termination_request?.executor_quiesced_at
-            )
+          .poll(
+            async () =>
+              !!(await findTask(tenantId, seeded.task.task_id))?.termination_request
+                ?.executor_quiesced_at
           )
           .toBe(true);
       } finally {
@@ -401,10 +395,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
     });
 
     it('answers a browser socket and REST call on a closed tenant with the stable code', async () => {
-      // Packet 05 gave tenant admission a stable code, but every JWT path
-      // checks the credential generation first, so a browser never reached it:
-      // a suspended workspace looked exactly like an expired session. This is
-      // the real signed handshake and the real REST body for that member.
+      // Every JWT path checks the credential generation first, so the code must survive it on both transports.
       const tenantId = `browser-restricted-${generateId()}`;
       const seeded = await seedTenant(tenantId);
       const jwtSecret = 'disposable-restricted-browser-secret';
@@ -425,15 +416,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ...authTokenIssuedAtClaim(Date.now(), seeded.user),
           ...tenantCredentialEpochClaims(await readTenantCredentialEpoch(db, tenantId)),
         }).accessToken;
-      const restore = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
-        applyTenantRestrictionIntent(raw, tenantId, {
-          version: 1,
-          controllerId: 'controller',
-          placementId: 'placement',
-          operationId: action === 'restrict' ? 'suspend' : 'reactivate',
-          revision,
-          action,
-        });
 
       let client: AgorClient | undefined;
       try {
@@ -444,36 +426,20 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           });
           return { status: response.status, body: await response.json() };
         };
-        client = createClient(origin, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
-        const handshake = async (token: string) => {
-          client!.io.auth = { token };
-          const settled = new Promise<Error | undefined>((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Handshake timed out')), 5_000);
-            client!.io.once('connect', () => {
-              clearTimeout(timeout);
-              resolve(undefined);
-            });
-            client!.io.once('connect_error', (error) => {
-              clearTimeout(timeout);
-              resolve(error);
-            });
-          });
-          client!.io.connect();
-          const outcome = await settled;
+        client = socketClient(origin);
+        const probe = async (token: string) => {
+          const outcome = await handshake(client!, token);
           client!.io.disconnect();
-          return outcome as (Error & { data?: Record<string, unknown> }) | undefined;
+          return outcome;
         };
 
         const open = await mintToken();
-        expect(await handshake(open)).toBeUndefined();
+        expect(await probe(open)).toBeUndefined();
         expect((await restSession(open)).status).toBe(200);
 
-        await restore(1, 'restrict');
-        // Socket.IO preserves a middleware error's `data` on connect_error, so
-        // the browser reads the same code on both transports. No status or
-        // class rides along: those are the client's cue to rotate a credential
-        // that is perfectly good.
-        expect((await handshake(open))?.data).toEqual({ code: 'tenant_restricted' });
+        await intent(tenantId, 1, 'restrict');
+        // Only the code rides along; a status or class would cue the client to rotate a good credential.
+        expect((await probe(open))?.data).toEqual({ code: 'tenant_restricted' });
         const closedRest = await restSession(open);
         expect(closedRest.status).toBe(401);
         expect(closedRest.body.data).toEqual({ code: 'tenant_restricted' });
@@ -482,21 +448,19 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           /controller|placement|revision|phase|suspend/i
         );
 
-        await restore(2, 'prepare_release');
-        expect((await handshake(open))?.data).toEqual({ code: 'tenant_restricted' });
+        await intent(tenantId, 2, 'prepare_release');
+        expect((await probe(open))?.data).toEqual({ code: 'tenant_restricted' });
 
-        await restore(2, 'activate');
-        // The workspace is open, but the generation moved: the parked tab's
-        // credential is now genuinely stale, so it gets the plain rejection
-        // that makes the browser fail over to sign-in.
-        const stale = await handshake(open);
+        await intent(tenantId, 2, 'activate');
+        // Open again, but the generation moved: the parked credential gets the plain rejection.
+        const stale = await probe(open);
         expect(stale?.data).toEqual({ code: 401, className: 'not-authenticated' });
         const staleRest = await restSession(open);
         expect(staleRest.status).toBe(401);
         expect(staleRest.body.data).toBeUndefined();
         // And a fresh sign-in works.
         const reissued = await mintToken();
-        expect(await handshake(reissued)).toBeUndefined();
+        expect(await probe(reissued)).toBeUndefined();
         expect((await restSession(reissued)).status).toBe(200);
       } finally {
         client?.io.close();
@@ -525,38 +489,15 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(refresh.create({ refreshToken: old.refreshToken })).resolves.toHaveProperty(
         'accessToken'
       );
-      const command = {
-        version: 1 as const,
-        controllerId: 'controller',
-        placementId: 'placement',
-        operationId: 'suspend',
-        revision: 1,
-        action: 'restrict' as const,
-      };
-      await applyTenantRestrictionIntent(raw, tenantId, command);
-      // Refusal, with the closed-workspace code preserved through the
-      // service's generic catch: the holder of this signed refresh token is
-      // already entitled to that fact, and the browser needs it to tell a
-      // suspended workspace from a dead session.
+      await intent(tenantId, 1, 'restrict');
+      // The closed-workspace code survives the service's generic catch.
       await expect(refresh.create({ refreshToken: old.refreshToken })).rejects.toMatchObject({
         code: 401,
         data: { code: 'tenant_restricted' },
       });
-      await applyTenantRestrictionIntent(raw, tenantId, {
-        ...command,
-        operationId: 'reactivate',
-        revision: 2,
-        action: 'prepare_release',
-      });
-      await applyTenantRestrictionIntent(raw, tenantId, {
-        ...command,
-        operationId: 'reactivate',
-        revision: 2,
-        action: 'activate',
-      });
+      await release(tenantId, 2);
       usersService.get.mockClear();
-      // Reopened, but this credential's generation is now genuinely stale, so
-      // the rejection carries no code and the browser falls over to sign-in.
+      // Reopened with a moved generation: the stale credential's rejection carries no code.
       const released = await refresh
         .create({ refreshToken: old.refreshToken })
         .catch((error) => error);
@@ -587,13 +528,18 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         { db, startCleanupTimer: false }
       );
       commandTokens.setJwtSecret(secret);
-      const ordinaryCommand = await runWithTenantDatabaseScope(raw, tenantId, () =>
-        commandTokens.generateCommandToken(
-          'branch-files-read',
-          seeded.user.user_id,
-          seeded.branch.branch_id
-        )
-      );
+      const commandToken = (commandId: string, issuance?: 'safety-recovery') =>
+        runWithTenantDatabaseScope(raw, tenantId, () =>
+          commandTokens.generateCommandToken(
+            commandId,
+            seeded.user.user_id,
+            seeded.branch.branch_id,
+            undefined,
+            undefined,
+            issuance
+          )
+        );
+      const ordinaryCommand = await commandToken('branch-files-read');
       await expect(
         assertTenantCredentialEpoch(db, tenantId, jwt.verify(ordinaryCommand, secret))
       ).resolves.toBeDefined();
@@ -614,15 +560,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           { kind: 'claim', action: 'start', attempt_id: 'attempt' },
         ],
       ] as const) {
-        const token = await runWithTenantDatabaseScope(raw, tenantId, () =>
-          commandTokens.generateCommandToken(
-            commandId,
-            seeded.user.user_id,
-            seeded.branch.branch_id
-          )
-        );
-        // Real signed issuance + PostgreSQL admission; the lifecycle service's
-        // durable command/operation schema checks are covered separately.
+        const token = await commandToken(commandId);
+        // Real signed issuance and admission; durable command schema checks are covered separately.
         await expect(
           assertRuntimeTenantRequestAccess(db, tenantId, {
             path,
@@ -653,47 +592,13 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(
         assertTenantCredentialEpoch(db, tenantId, jwt.verify(freshLogin.result.accessToken, secret))
       ).resolves.toBe(epoch);
-      // A transition after refresh validation cannot silently upgrade the
-      // issued token to the new generation, even across independent awaits.
+      // A transition after refresh validation never upgrades the issued token's generation.
       usersService.get.mockImplementationOnce(async () => {
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          ...command,
-          operationId: 'suspend-again',
-          revision: 3,
-        });
-        await expect(
-          runWithTenantDatabaseScope(raw, tenantId, () =>
-            commandTokens.generateCommandToken(
-              'branch-files-read',
-              seeded.user.user_id,
-              seeded.branch.branch_id
-            )
-          )
-        ).rejects.toMatchObject({ code: 401 });
-        const safety = await runWithTenantDatabaseScope(raw, tenantId, () =>
-          commandTokens.generateCommandToken(
-            'environment.stop:recovery',
-            seeded.user.user_id,
-            seeded.branch.branch_id,
-            undefined,
-            undefined,
-            'safety-recovery'
-          )
-        );
+        await intent(tenantId, 3, 'restrict');
+        await expect(commandToken('branch-files-read')).rejects.toMatchObject({ code: 401 });
+        const safety = await commandToken('environment.stop:recovery', 'safety-recovery');
         expect(jwt.verify(safety, secret)).toMatchObject({ purpose: 'executor-command' });
-
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          ...command,
-          operationId: 'reactivate-again',
-          revision: 4,
-          action: 'prepare_release',
-        });
-        await applyTenantRestrictionIntent(raw, tenantId, {
-          ...command,
-          operationId: 'reactivate-again',
-          revision: 4,
-          action: 'activate',
-        });
+        await release(tenantId, 4);
         return seeded.user;
       });
       const raced = await refresh.create({ refreshToken: fresh.refreshToken });
@@ -739,23 +644,16 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         tenant: { tenant_id: tenantId, source: 'explicit' },
       } as never;
       const racingEnqueues = [1, 2, 3].map((n) =>
-        runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
-          return new TaskRepository(scoped).createPending({
+        runWithTenantDatabaseScope(raw, tenantId, (scoped) =>
+          new TaskRepository(scoped).createPending({
             session_id: seeded.session.session_id,
             created_by: seeded.user.user_id,
             full_prompt: `racing prompt ${n}`,
             status: TaskStatus.QUEUED,
-          });
-        })
+          })
+        )
       );
-      const restrict = applyTenantRestrictionIntent(raw, tenantId, {
-        version: 1,
-        controllerId: 'controller',
-        placementId: 'placement',
-        operationId: 'suspend',
-        revision: 1,
-        action: 'restrict',
-      });
+      const restrict = intent(tenantId, 1, 'restrict');
       const outcomes = await Promise.allSettled(racingEnqueues);
       await restrict;
       await runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
@@ -811,38 +709,12 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           })
         ).rejects.toThrow();
       });
-      const input = {
-        app,
-        taskId: seeded.task.task_id,
-        cause: 'tenant_suspension' as const,
-        errorMessage: 'Tenant restricted',
-        params,
-        runInFreshTenantWriteDatabase: <T>(work: () => Promise<T>) =>
-          withFreshTenantWrite(db, tenantId, work),
-      };
       const observer = new TenantRestrictionReconciler(db, app as never);
       expect((await observer.checkOnce()).stopping).toBe(1);
-      expect(
-        await runWithTenantDatabaseScope(
-          raw,
-          tenantId,
-          async (scoped) =>
-            (await new TaskRepository(scoped).findById(seeded.task.task_id))?.termination_request
-              ?.cause
-        )
-      ).toBe('tenant_suspension');
-      expect(
-        await runWithTenantDatabaseScope(
-          raw,
-          neighborId,
-          async (scoped) =>
-            (await new TaskRepository(scoped).findById(neighbor.task.task_id))?.status
-        )
-      ).toBe(TaskStatus.RUNNING);
-      const stopping = await runWithTenantDatabaseScope(raw, tenantId, (scoped) =>
-        new TaskRepository(scoped).findById(seeded.task.task_id)
-      );
+      const stopping = await findTask(tenantId, seeded.task.task_id);
+      expect(stopping?.termination_request?.cause).toBe('tenant_suspension');
       expect(stopping?.status).toBe(TaskStatus.STOPPING);
+      expect((await findTask(neighborId, neighbor.task.task_id))?.status).toBe(TaskStatus.RUNNING);
       const control = await app
         .service('tasks')
         .getTerminationState({ task_id: seeded.task.task_id }, executorParams);
@@ -851,41 +723,29 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await expect(
         app.service('tasks').getTerminationState({ task_id: generateId() }, executorParams)
       ).rejects.toMatchObject({ code: 403 });
-      // The executor's SDK stop is simulated; durable acknowledgement and the
-      // actual runtime coordinator/Feathers/database path are real.
       await app
         .service('tasks')
         .reportTerminationComplete(
           { task_id: seeded.task.task_id, requested_at: control.termination_request.requested_at },
           executorParams
         );
-      await requestExecutorTermination(input);
-      // Acknowledgement schedules post-commit recovery. It can win the
-      // coordination lease before our explicit retry, which then returns
-      // pending; observe durable settlement rather than assuming ownership.
+      await requestExecutorTermination(
+        terminationInput(app, tenantId, seeded.task.task_id, 'tenant_suspension', params)
+      );
+      // Post-commit recovery may win the lease before this retry, so observe durable settlement.
       await expect
-        .poll(async () =>
-          runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
-            const task = await new TaskRepository(scoped).findById(seeded.task.task_id);
-            return {
-              status: task?.status,
-              quiesced: !!task?.termination_request?.executor_quiesced_at,
-            };
-          })
-        )
+        .poll(async () => {
+          const task = await findTask(tenantId, seeded.task.task_id);
+          return {
+            status: task?.status,
+            quiesced: !!task?.termination_request?.executor_quiesced_at,
+          };
+        })
         .toEqual({ status: TaskStatus.STOPPED, quiesced: true });
       await expect(app.service('tasks').get(seeded.task.task_id, params)).rejects.toMatchObject({
         code: 403,
       });
-      const release = {
-        version: 1 as const,
-        controllerId: 'controller',
-        placementId: 'placement',
-        operationId: 'release',
-        revision: 2,
-      };
-      await applyTenantRestrictionIntent(raw, tenantId, { ...release, action: 'prepare_release' });
-      await applyTenantRestrictionIntent(raw, tenantId, { ...release, action: 'activate' });
+      await release(tenantId, 2);
       await runWithTenantDatabaseScope(raw, tenantId, async (scoped) => {
         const tasks = new TaskRepository(scoped);
         await tasks.update(seeded.queued.task_id, {
@@ -919,18 +779,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         expect((await tasks.getNextQueued(seeded.session.session_id))?.task_id).toBe(fresh.task_id);
         // prepare_release itself is a legal closing transition from active.
-        await applyTenantRestrictionIntent(scoped, tenantId, {
-          ...release,
-          operationId: 'prepare-again',
-          revision: 3,
-          action: 'prepare_release',
-        });
-        await applyTenantRestrictionIntent(scoped, tenantId, {
-          ...release,
-          operationId: 'prepare-again',
-          revision: 3,
-          action: 'activate',
-        });
+        await release(tenantId, 3, scoped);
         expect((await tasks.findById(fresh.task_id))?.tenant_restriction_hold?.reason).toBe(
           'tenant_restricted'
         );
@@ -961,13 +810,6 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
     it('blocks reads and writes until exact activation while a neighboring tenant remains usable', async () => {
       const tenantA = `access-a-${randomUUID()}`;
       const tenantB = `access-b-${randomUUID()}`;
-      const base = {
-        version: 1 as const,
-        controllerId: 'controller',
-        placementId: 'placement',
-        operationId: 'suspend',
-        revision: 1,
-      };
       const authenticate = vi.fn(async (context: HookContext) => context);
       const hook = (tenantId: string) =>
         createTenantRestrictedAuthHook(
@@ -985,7 +827,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           },
         }) as unknown as HookContext;
       await expect(hook(tenantA)(context('find'))).resolves.toBeDefined();
-      await applyTenantRestrictionIntent(raw, tenantA, { ...base, action: 'restrict' });
+      await intent(tenantA, 1, 'restrict');
       for (const method of ['find', 'get', 'create', 'patch', 'remove']) {
         await expect(hook(tenantA)(context(method))).rejects.toMatchObject({
           code: 403,
@@ -993,14 +835,11 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         await expect(hook(tenantB)(context(method))).resolves.toBeDefined();
       }
-      const release = { ...base, revision: 2, operationId: 'release' };
-      await applyTenantRestrictionIntent(raw, tenantA, { ...release, action: 'prepare_release' });
+      await intent(tenantA, 2, 'prepare_release');
       await expect(hook(tenantA)(context('get'))).rejects.toMatchObject({ code: 403 });
-      await applyTenantRestrictionIntent(raw, tenantA, { ...release, action: 'activate' });
+      await intent(tenantA, 2, 'activate');
       await expect(hook(tenantA)(context('get'))).resolves.toBeDefined();
-      await expect(
-        applyTenantRestrictionIntent(raw, tenantA, { ...base, action: 'restrict' })
-      ).rejects.toThrow();
+      await expect(intent(tenantA, 1, 'restrict')).rejects.toThrow();
       await expect(hook(tenantA)(context('get'))).resolves.toBeDefined();
     });
   }
