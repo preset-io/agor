@@ -238,6 +238,7 @@ describe('makeHomeBucketsSelector', () => {
     const later = session('ok', { status: 'idle', branch_id: 'b', ...ranAt(1) });
     const completed = session('done', { status: 'completed', branch_id: 'b', ...ranAt(1) });
     const earlier = session('ok0', { status: 'idle', branch_id: 'b', ...ranAt(5) });
+    // Contrived (the daemon sets the flag only after a run), but pins that a clean run needs a task.
     const neverRan = session('new', {
       status: 'idle',
       ready_for_prompt: true,
