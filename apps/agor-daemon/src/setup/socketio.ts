@@ -973,10 +973,6 @@ export function createSocketIOConfig(
     });
     io.on(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, evictRevokedExecutorSockets);
 
-    // Assigned once the restriction monitor exists; no tenant is unverified before it.
-    let isTenantSocketUnverified = (_tenantId: string | undefined) => false;
-    let noteTenantSocketAdmitted = (_tenantId: string) => {};
-
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       const feathersSocket = socket as FeathersSocket;
@@ -997,21 +993,15 @@ export function createSocketIOConfig(
           Object.keys(app.services).flatMap((path) => getServiceOptions(app.service(path)).methods)
         );
         const executorSocket = authority?.principal.kind === 'executor';
-        // The handshake just read this tenant's admission, so the monitor's verification bound starts here.
-        if (!executorSocket && authority?.tenant?.tenant_id)
-          noteTenantSocketAdmitted(authority.tenant.tenant_id);
         const gate = createOrderedTenantPacketGate({
-          // Raw terminal/presence packets read only while the monitor cannot verify their tenant.
+          // Raw terminal/presence packets never read; the monitor retires a restricted tenant's sockets.
           needsAdmission: (packet) =>
             tenantSocketPacketNeedsAdmission({
               executor: executorSocket,
               serviceCall: serviceMethods.has(packet[0] as string),
-              unverified: isTenantSocketUnverified(
-                getAuthenticatedConnectionAuthority(feathersSocket.feathers)?.tenant?.tenant_id
-              ),
               packet,
             }),
-          // Raw packets have no service hook, so a burst shares whichever read is still in flight.
+          // Executor raw frames have no service hook, so a burst shares whichever read is still in flight.
           coalesce: (packet) => !serviceMethods.has(packet[0] as string),
           // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
           scope: withTenantRestrictionRequest,
@@ -2083,9 +2073,6 @@ export function createSocketIOConfig(
           }
         })
       : undefined;
-    isTenantSocketUnverified = (tenantId) =>
-      !!tenantId && !!restrictionMonitor?.isUnverified(tenantId);
-    noteTenantSocketAdmitted = (tenantId) => restrictionMonitor?.admitted(tenantId);
     const restrictionInterval = restrictionMonitor
       ? setInterval(async () => {
           if (checkingRestrictions) return;

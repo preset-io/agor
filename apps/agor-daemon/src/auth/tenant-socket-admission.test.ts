@@ -50,7 +50,6 @@ describe('restricted socket transport', () => {
           tenantSocketPacketNeedsAdmission({
             executor: true,
             serviceCall: true,
-            unverified: false,
             packet,
           }),
         admit: (packet) =>
@@ -296,130 +295,23 @@ describe('socket restriction monitor', () => {
     }
   });
 
-  /** Mirrors the daemon's 1 s interval, which skips a tick while a sweep is still running. */
-  const tick = (monitor: TenantSocketRestrictionMonitor, tenants: string[]) => {
-    let checking = false;
-    const interval = setInterval(() => {
-      if (checking) return;
-      checking = true;
-      void monitor.check(tenants).finally(() => {
-        checking = false;
-      });
-    }, 1000);
-    return () => clearInterval(interval);
-  };
-  const unverified = (monitor: TenantSocketRestrictionMonitor, tenants: string[]) =>
-    tenants.filter((tenantId) => monitor.isUnverified(tenantId));
-
-  it.each([1, 7, 8, 9, 20])(
-    'marks all %i tenants with hung reads 10 s after admission, saturated ones included',
-    async (count) => {
-      vi.useFakeTimers();
-      const warn = warnings();
-      try {
-        const tenants = Array.from({ length: count }, (_, index) => `tenant-${index}`);
-        const monitor = new TenantSocketRestrictionMonitor(
-          () => new Promise<void>(() => undefined)
-        );
-        for (const tenantId of tenants) monitor.admitted(tenantId);
-        const stop = tick(monitor, tenants);
-        await vi.advanceTimersByTimeAsync(9_999);
-        expect(unverified(monitor, tenants)).toEqual([]);
-        await vi.advanceTimersByTimeAsync(1);
-        expect(unverified(monitor, tenants)).toEqual(tenants);
-        stop();
-      } finally {
-        warn.mockRestore();
-        vi.useRealTimers();
-      }
-    }
-  );
-
-  it('marks a readable tenant that eight hung reads keep from ever being read', async () => {
+  it('keeps a rolling pool, so one slow read does not hold back the tenants queued behind it', async () => {
     vi.useFakeTimers();
-    const warn = warnings();
     try {
-      const tenants = [...Array.from({ length: 8 }, (_, index) => `stuck-${index}`), 'starved'];
+      const tenants = Array.from({ length: 12 }, (_, index) => `tenant-${index}`);
       const observe = vi.fn((tenantId: string) =>
-        tenantId.startsWith('stuck') ? new Promise<void>(() => undefined) : Promise.resolve()
+        tenantId === 'tenant-0'
+          ? new Promise<void>((resolve) => setTimeout(resolve, 15))
+          : Promise.resolve()
       );
-      const monitor = new TenantSocketRestrictionMonitor(observe);
-      for (const tenantId of tenants) monitor.admitted(tenantId);
-      const stop = tick(monitor, tenants);
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(observe.mock.calls.some(([tenant]) => tenant === 'starved')).toBe(false);
-      expect(monitor.isUnverified('starved')).toBe(true);
-      stop();
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it('never marks tenants whose slow reads succeed while saturation defers them', async () => {
-    vi.useFakeTimers();
-    const warn = warnings();
-    try {
-      const tenants = Array.from({ length: 20 }, (_, index) => `tenant-${index}`);
-      const observe = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 1500)));
-      const monitor = new TenantSocketRestrictionMonitor(observe);
-      for (const tenantId of tenants) monitor.admitted(tenantId);
-      const stop = tick(monitor, tenants);
-      for (let second = 0; second < 60; second++) {
-        await vi.advanceTimersByTimeAsync(1000);
-        expect(unverified(monitor, tenants)).toEqual([]);
-      }
+      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
+      const checking = monitor.check(tenants);
+      await vi.advanceTimersByTimeAsync(1);
+      // Lockstep groups of eight would hold tenants 8-11 until tenant-0 settles at 15 ms.
       expect(new Set(observe.mock.calls.map(([tenant]) => tenant))).toEqual(new Set(tenants));
-      stop();
+      await vi.advanceTimersByTimeAsync(15);
+      await checking;
     } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it('never marks a tenant whose reads are slow but succeed after the timeout', async () => {
-    vi.useFakeTimers();
-    const warn = warnings();
-    try {
-      const observe = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 2500)));
-      const monitor = new TenantSocketRestrictionMonitor(observe);
-      monitor.admitted('slow');
-      const stop = tick(monitor, ['slow']);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(observe.mock.calls.length).toBeGreaterThan(10);
-      expect(monitor.isUnverified('slow')).toBe(false);
-      stop();
-    } finally {
-      warn.mockRestore();
-      vi.useRealTimers();
-    }
-  });
-
-  it('clears the mark only with a read started within the bound, never a late stale one', async () => {
-    vi.useFakeTimers();
-    const warn = warnings();
-    try {
-      const hung: Array<() => void> = [];
-      let down = true;
-      const observe = vi.fn(() =>
-        down ? new Promise<void>((resolve) => hung.push(resolve)) : Promise.resolve()
-      );
-      const monitor = new TenantSocketRestrictionMonitor(observe);
-      monitor.admitted('a');
-      const stop = tick(monitor, ['a']);
-      await vi.advanceTimersByTimeAsync(20_000);
-      expect(monitor.isUnverified('a')).toBe(true);
-      // The first read (started at 1 s) and its one replacement settle late: their snapshots are over 10 s old.
-      expect(hung).toHaveLength(2);
-      for (const release of hung) release();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(monitor.isUnverified('a')).toBe(true);
-      down = false;
-      await vi.advanceTimersByTimeAsync(1000);
-      expect(monitor.isUnverified('a')).toBe(false);
-      stop();
-    } finally {
-      warn.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -431,9 +323,6 @@ describe('socket restriction monitor', () => {
       const tenants = Array.from({ length: 10 }, (_, index) => `tenant-${index}`);
       const observe = vi.fn(() => new Promise<void>((resolve) => setTimeout(resolve, 30)));
       const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
-      for (const tenantId of tenants) monitor.admitted(tenantId);
-      // As in the daemon, a tick follows the handshake that admitted the tenant.
-      await vi.advanceTimersByTimeAsync(1);
       for (let sweep = 0; sweep < 2; sweep++) {
         const checking = monitor.check(tenants);
         await vi.advanceTimersByTimeAsync(20);
@@ -445,53 +334,6 @@ describe('socket restriction monitor', () => {
     } finally {
       warn.mockRestore();
       vi.useRealTimers();
-    }
-  });
-
-  it("gates an unverified tenant's raw packets through admission until a read succeeds", async () => {
-    const warn = warnings();
-    try {
-      let down = true;
-      let now = 0;
-      const monitor = new TenantSocketRestrictionMonitor(
-        async () => {
-          if (down) throw new Error('unreadable');
-        },
-        { timeoutMs: 20, unverifiedAfterMs: 10, now: () => now }
-      );
-      const admit = vi.fn(async () => {
-        if (down) throw new Error('unreadable');
-      });
-      const gate = createOrderedTenantPacketGate({
-        needsAdmission: (packet) => packet[0] === 'create' || monitor.isUnverified('a'),
-        admit,
-      });
-      const dispatched: string[] = [];
-      const send = (label: string) => {
-        const next = vi.fn((error?: Error) => {
-          if (!error) dispatched.push(label);
-        });
-        gate(['terminal:input', label], next);
-        return next;
-      };
-      monitor.admitted('a');
-      send('before');
-      expect(admit).not.toHaveBeenCalled();
-      now = 5;
-      await monitor.check(['a']);
-      now = 10;
-      const refused = send('while-down');
-      await vi.waitFor(() => expect(refused).toHaveBeenCalledWith(expect.any(Forbidden)));
-      expect(admit).toHaveBeenCalledOnce();
-      down = false;
-      now = 11;
-      await monitor.check(['a']);
-      await vi.waitFor(() => expect(monitor.isUnverified('a')).toBe(false));
-      send('after');
-      expect(dispatched).toEqual(['before', 'after']);
-      expect(admit).toHaveBeenCalledOnce();
-    } finally {
-      warn.mockRestore();
     }
   });
 
@@ -529,6 +371,30 @@ describe('socket restriction monitor', () => {
       await checking;
       expect(skipLines()).toHaveLength(2);
       expect(skipLines().at(-1)).toMatch(/reason=(saturated|timeout|error) suppressed=[1-9]/);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('warns once when a sweep runs far past its tick', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    let now = 0;
+    try {
+      const observe = vi.fn(async () => {
+        now += 40;
+      });
+      const monitor = new TenantSocketRestrictionMonitor(observe, {
+        slowSweepMs: 100,
+        now: () => now,
+      });
+      await monitor.check(['a', 'b']);
+      expect(warn).not.toHaveBeenCalled();
+      await monitor.check(['a', 'b', 'c']);
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        '[tenant.restriction] socket observation sweep slow elapsed_ms=120 tenants=3 suppressed=0'
+      );
     } finally {
       warn.mockRestore();
       vi.useRealTimers();

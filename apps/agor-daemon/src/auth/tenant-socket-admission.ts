@@ -7,6 +7,7 @@ import {
 } from '@agor/core/types';
 import {
   isTenantRestrictedRejection,
+  TENANT_RESTRICTION_OBSERVATION_MS,
   TENANT_RESTRICTION_READ_TIMEOUT_MS,
 } from './tenant-access.js';
 import { TENANT_SAFETY_TASK_METHODS } from './tenant-safety-settlement.js';
@@ -25,16 +26,15 @@ function isTenantSafetyPacket(packet: unknown[]): boolean {
   );
 }
 
-/** Executor packets except safety RPCs, service calls, and every packet of an unverified tenant await a read. */
+/** Executor packets except safety RPCs, and service calls, await a read; raw customer packets never do. */
 export function tenantSocketPacketNeedsAdmission(input: {
   executor: boolean;
   serviceCall: boolean;
-  unverified: boolean;
   packet: unknown[];
 }): boolean {
   // Safety RPCs are admitted whatever a read says, so they only keep their place in the queue.
   if (input.executor) return !isTenantSafetyPacket(input.packet);
-  return input.serviceCall || input.unverified;
+  return input.serviceCall;
 }
 
 export async function admitTenantSocketPacket(input: {
@@ -59,7 +59,7 @@ export const TENANT_SOCKET_STALE_READ_LIMIT = 4;
 export function createOrderedTenantPacketGate(input: {
   needsAdmission: (packet: unknown[]) => boolean;
   admit: (packet: unknown[]) => Promise<void>;
-  /** Packets that may join this socket's read already in flight for another such packet, never a settled one. */
+  /** Executor raw frames that may join this socket's read already in flight for another such frame, never a settled one. */
   coalesce?: (packet: unknown[]) => boolean;
   /** Wraps an admitted packet's read and dispatch so later checks in that call can share the read. */
   scope?: <T>(work: () => T) => T;
@@ -108,7 +108,7 @@ export function createOrderedTenantPacketGate(input: {
     const timedOut = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
         if (running.has(admission)) stale.add(admission);
-        // Later raw packets start a fresh read instead of joining one already timed out.
+        // Later raw frames start a fresh read instead of joining one already timed out.
         if (shared === admission) shared = undefined;
         resolve(false);
       }, timeoutMs);
@@ -180,83 +180,76 @@ export function restrictedSocketHandshakeError(
 
 type MonitorSkip = 'timeout' | 'error' | 'saturated';
 
-/** A tenant no successful read has verified for this long is marked unverified, whatever kept the reads from succeeding. */
-export const TENANT_SOCKET_UNVERIFIED_AFTER_MS = 10_000;
+/** Reads one sweep keeps in flight, abandoned ones included, so an outage cannot pile up database load. */
+const TENANT_SOCKET_MONITOR_CONCURRENCY = 8;
 
 interface TenantSocketRestrictionMonitorOptions {
   timeoutMs?: number;
+  /** A sweep this much slower than its tick is logged, since tenants then wait longer than a tick. */
+  slowSweepMs?: number;
   now?: () => number;
-  unverifiedAfterMs?: number;
 }
 
-/** Bound each observation without piling up reads; sockets retire only on a positive observation, and a tenant no read verified recently is marked unverified. */
+/** Bounded per-tenant reads; sockets retire only on a positive observation, and a skipped tenant is read again next tick. */
 export class TenantSocketRestrictionMonitor {
   private readonly pending = new Map<string, { startedAt: number; read: Promise<void> }>();
   /** At most one abandoned read per tenant may still be running against the database. */
   private readonly abandoned = new Map<string, Promise<void>>();
-  /** Per monitored tenant, the start of its newest successful read (or its socket admission). */
-  private readonly verifiedAt = new Map<string, number>();
-  private unverifiedCount = 0;
+  /** When each monitored tenant was last handed a read, so sweeps start with the longest-waiting ones. */
+  private readonly lastReadAt = new Map<string, number>();
   private lastWarning?: { at: number; suppressed: number };
   private readonly timeoutMs: number;
+  private readonly slowSweepMs: number;
   private readonly now: () => number;
-  private readonly unverifiedAfterMs: number;
   constructor(
     private readonly observe: (tenantId: string) => Promise<void>,
     options: TenantSocketRestrictionMonitorOptions = {}
   ) {
     this.timeoutMs = options.timeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
-    this.now = options.now ?? (() => Date.now());
-    this.unverifiedAfterMs = options.unverifiedAfterMs ?? TENANT_SOCKET_UNVERIFIED_AFTER_MS;
-  }
-
-  /** A socket handshake just read this tenant's admission; an already monitored tenant keeps its own time. */
-  admitted(tenantId: string): void {
-    if (!this.verifiedAt.has(tenantId)) this.verifiedAt.set(tenantId, this.now());
-  }
-
-  /** Judged at packet time, so the bound holds however slowly sweeps run; while true, every packet passes the per-packet admission read. */
-  isUnverified(tenantId: string): boolean {
-    const at = this.verifiedAt.get(tenantId);
-    return at !== undefined && this.now() - at >= this.unverifiedAfterMs;
+    this.slowSweepMs = options.slowSweepMs ?? 10 * TENANT_RESTRICTION_OBSERVATION_MS;
+    this.now = options.now ?? (() => performance.now());
   }
 
   async check(tenantIds: Iterable<string>): Promise<void> {
+    const startedAt = this.now();
     const present = new Set(tenantIds);
-    // State of tenants with no sockets left is forgotten; every monitored socket passed a handshake read.
-    for (const tenantId of this.verifiedAt.keys())
-      if (!present.has(tenantId)) this.verifiedAt.delete(tenantId);
-    for (const tenantId of present) this.admitted(tenantId);
-    // Least recently verified first (stable), so the eight-read bound cannot starve a tenant.
-    const entries = [...present].sort(
-      (a, b) => (this.verifiedAt.get(a) ?? 0) - (this.verifiedAt.get(b) ?? 0)
+    for (const tenantId of this.lastReadAt.keys())
+      if (!present.has(tenantId)) this.lastReadAt.delete(tenantId);
+    // Least recently read first (never-read tenants lead), so a bounded sweep cannot starve one.
+    const queue = [...present].sort(
+      (a, b) => (this.lastReadAt.get(a) ?? -1) - (this.lastReadAt.get(b) ?? -1)
     );
-    for (let offset = 0; offset < entries.length; offset += 8) {
-      await Promise.all(
-        entries.slice(offset, offset + 8).map(async (tenantId) => {
-          const read = this.readFor(tenantId);
-          if (!read) return this.skip('saturated');
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          const timedOut = new Promise<MonitorSkip>((resolve) => {
-            timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
-          });
-          const skipped = await Promise.race([
-            read.then(
-              () => undefined,
-              () => 'error' as const
-            ),
-            timedOut,
-          ]);
-          if (timer) clearTimeout(timer);
-          if (skipped) this.skip(skipped);
-        })
-      );
-    }
-    const unverified = entries.filter((tenantId) => this.isUnverified(tenantId)).length;
-    if (unverified !== this.unverifiedCount) {
-      this.unverifiedCount = unverified;
-      console.warn(`[tenant.restriction] socket observation unverified tenants=${unverified}`);
-    }
+    // A rolling pool: each worker takes the next tenant as soon as its previous one settles or times out.
+    const worker = async () => {
+      for (let tenantId = queue.shift(); tenantId !== undefined; tenantId = queue.shift())
+        await this.checkOne(tenantId);
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(TENANT_SOCKET_MONITOR_CONCURRENCY, queue.length) }, worker)
+    );
+    const elapsed = this.now() - startedAt;
+    if (elapsed >= this.slowSweepMs)
+      this.warn(`sweep slow elapsed_ms=${Math.round(elapsed)} tenants=${present.size}`);
+  }
+
+  private async checkOne(tenantId: string): Promise<void> {
+    const read = this.readFor(tenantId);
+    if (!read) return this.warn('skipped reason=saturated');
+    this.lastReadAt.set(tenantId, this.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<MonitorSkip>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
+    });
+    // An unverifiable read retires nothing: every RPC still fails closed at admission.
+    const skipped = await Promise.race([
+      read.then(
+        () => undefined,
+        () => 'error' as const
+      ),
+      timedOut,
+    ]);
+    clearTimeout(timer);
+    if (skipped) this.warn(`skipped reason=${skipped}`);
   }
 
   /** Shared in-flight read; a read pending past two timeouts is abandoned once, never stacked. */
@@ -273,24 +266,20 @@ export class TenantSocketRestrictionMonitor {
       };
       void current.read.then(forget, forget);
     }
-    // Abandoned reads still hold a connection, so they count toward the eight-read bound.
-    if (this.pending.size + this.abandoned.size >= 8) return undefined;
+    // Abandoned reads still hold a connection, so they count toward the concurrency bound.
+    if (this.pending.size + this.abandoned.size >= TENANT_SOCKET_MONITOR_CONCURRENCY)
+      return undefined;
     const read = Promise.resolve().then(() => this.observe(tenantId));
     const entry = { startedAt: at, read };
     this.pending.set(tenantId, entry);
     const clear = () => {
       if (this.pending.get(tenantId) === entry) this.pending.delete(tenantId);
     };
-    void read.then(() => {
-      clear();
-      // A read verifies the state as of its start, so a late or abandoned one never looks fresher than its snapshot.
-      if ((this.verifiedAt.get(tenantId) ?? Number.POSITIVE_INFINITY) < at)
-        this.verifiedAt.set(tenantId, at);
-    }, clear);
+    void read.then(clear, clear);
     return read;
   }
 
-  private skip(reason: MonitorSkip): void {
+  private warn(detail: string): void {
     const at = this.now();
     // One line per minute across every reason; the count carries what was suppressed.
     const last = this.lastWarning;
@@ -299,7 +288,7 @@ export class TenantSocketRestrictionMonitor {
       return;
     }
     console.warn(
-      `[tenant.restriction] socket observation skipped reason=${reason} suppressed=${last?.suppressed ?? 0}`
+      `[tenant.restriction] socket observation ${detail} suppressed=${last?.suppressed ?? 0}`
     );
     this.lastWarning = { at, suppressed: 0 };
   }

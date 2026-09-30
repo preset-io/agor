@@ -190,31 +190,24 @@ describe('Socket.IO per-packet tenant admission', () => {
     expect(Date.now() - restrictedAt).toBeLessThan(2_000);
   });
 
-  it("gates an unreadable tenant's raw traffic without disconnecting it until a read succeeds", async () => {
+  it('keeps raw traffic and the connection while unreadable, and refuses service calls per call', async () => {
     const { arrivals, database, reads, wire } = await start();
     const disconnects: string[] = [];
     wire.on('disconnect', (reason) => disconnects.push(reason));
-    let probe = 0;
-    const delivered = async () => {
-      const label = probe++;
-      wire.emit('test:raw', label);
-      await sleep(300);
-      return arrivals.includes(`raw:${label}`);
-    };
-    expect(await delivered()).toBe(true);
     database.down = true;
-    // Ten failed monitor ticks mark the tenant; its raw packets then need an admission read.
-    await expect.poll(delivered, { timeout: 25_000, interval: 0 }).toBe(false);
-    expect(await delivered()).toBe(false);
-    // A burst of raw packets shares the read already in flight instead of one read each.
-    const before = reads.admission;
-    for (let i = 0; i < 20; i++) wire.emit('test:raw', `burst:${i}`);
-    await sleep(300);
-    expect(reads.admission - before).toBeGreaterThan(0);
-    expect(reads.admission - before).toBeLessThan(20);
-    database.down = false;
-    await expect.poll(delivered, { timeout: 5_000, interval: 0 }).toBe(true);
+    const monitorReads = reads.monitor;
+    await expect
+      .poll(() => reads.monitor - monitorReads, { timeout: 5_000, interval: 50 })
+      .toBeGreaterThanOrEqual(2);
+    await expect(
+      wire.timeout(2_000).emitWithAck('create', 'probe', { i: 1 })
+    ).resolves.toMatchObject({ name: 'Forbidden' });
+    // Bounded partition freshness is deferred: raw packets do no read and the socket stays.
+    const admissionReads = reads.admission;
+    for (let i = 0; i < 20; i++) wire.emit('test:raw', i);
+    await expect.poll(() => arrivals.filter((a) => a.startsWith('raw:')).length).toBe(20);
+    expect(reads.admission).toBe(admissionReads);
     expect(wire.connected).toBe(true);
     expect(disconnects).toEqual([]);
-  }, 40_000);
+  });
 });
