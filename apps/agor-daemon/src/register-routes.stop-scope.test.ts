@@ -17,6 +17,7 @@ describe('Stop route transaction scope', () => {
     );
 
     expect(stop).toContain('resolveSessionPromptAccess({');
+    expect(stop).toContain("app.service('sessions').get(id, withoutSessionMcpToken(params))");
     expect(stop).toContain('body.force_unverified !== true');
     const stopAccessScope = stop.slice(
       stop.indexOf('const access = await inCurrentTenantDatabaseScope'),

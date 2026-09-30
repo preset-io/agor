@@ -340,7 +340,7 @@ Runtime access/refresh tokens, MCP session tokens and MCP egress capabilities re
 the generation validated at issuance (a closed tenant is minted no MCP session token and its session read returns without one;
 issuance reuses the read that admitted the request, within its tick; when issuance's own read fails, a session get over
 a transport (the executor's or a browser's) fails with a 503, so an executor launch fails visibly rather than starting an agent
-without Agor MCP, while internal daemon reads, termination reads and a committed create return without a token; the `/mcp` route compares it on every request and answers a stale one 401); refresh and JWT re-login never replace an old generation
+without Agor MCP, while internal daemon reads, termination reads and a committed create return without a token, and daemon routes that read the session under the caller's provider for authorization only (Stop, permission decisions) mint none at all; the `/mcp` route compares it on every request and answers a stale one 401); refresh and JWT re-login never replace an old generation
 with the current one. Missing legacy claims work only without retained history.
 Fresh primary authentication (including existing API keys) is not permanent key
 revocation. Standalone SQLite remains outside hosted restriction support.

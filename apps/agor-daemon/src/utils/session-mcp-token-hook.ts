@@ -9,6 +9,17 @@ import { hasTerminationReadAuthority } from '../auth/termination-read-authority.
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
+const NO_MCP_TOKEN = Symbol('no-mcp-token');
+
+/** Server-side reads that never hand the session to an agent keep the caller's provider and auth but mint no MCP token. */
+export function withoutSessionMcpToken<P extends object>(params: P): P {
+  return { ...params, [NO_MCP_TOKEN]: true };
+}
+
+export function skipsSessionMcpToken(params: object | undefined): boolean {
+  return (params as { [NO_MCP_TOKEN]?: true } | undefined)?.[NO_MCP_TOKEN] === true;
+}
+
 export interface SessionMcpTokenHookOptions {
   app: Application;
   config: AgorConfig;
@@ -31,6 +42,7 @@ export interface SessionMcpTokenAfterHooksOptions
 export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
   return async (context: HookContext): Promise<HookContext> => {
     if (options.config.daemon?.mcpEnabled === false) return context;
+    if (skipsSessionMcpToken(context.params)) return context;
 
     const callerUser = (context.params as AuthenticatedParams).user;
     if (

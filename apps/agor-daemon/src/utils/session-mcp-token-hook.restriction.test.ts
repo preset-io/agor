@@ -8,7 +8,11 @@ vi.mock('../mcp/tokens.js', () => ({ generateSessionToken }));
 vi.mock('../auth/termination-read-authority.js', () => ({ hasTerminationReadAuthority }));
 
 import { readAdmittedTenantRestriction } from '../auth/tenant-access.js';
-import { createSessionMcpTokenHook } from './session-mcp-token-hook.js';
+import {
+  createSessionMcpTokenHook,
+  skipsSessionMcpToken,
+  withoutSessionMcpToken,
+} from './session-mcp-token-hook.js';
 
 const session = { session_id: 'session-1' } as Session;
 const hook = createSessionMcpTokenHook({
@@ -70,6 +74,20 @@ describe('sessions MCP-token hook restriction reads', () => {
     );
     const context = await run();
     expect(context.result).toBe(session);
+  });
+
+  it('mints nothing and raises no 503 for a server-side no-token read, keeping its provider', async () => {
+    generateSessionToken.mockClear();
+    const params = withoutSessionMcpToken({
+      user: { user_id: 'user-1', role: 'member' },
+      provider: 'rest',
+    });
+    const context = await hook({ method: 'get', params, result: session } as never);
+    expect(context.result).toBe(session);
+    expect(generateSessionToken).not.toHaveBeenCalled();
+    // Only the token hook is skipped: the caller's provider (and so its auth hooks) still applies.
+    expect(params.provider).toBe('rest');
+    expect(skipsSessionMcpToken(JSON.parse(JSON.stringify(params)))).toBe(false);
   });
 
   it('still surfaces minting failures that are not about tenant state', async () => {

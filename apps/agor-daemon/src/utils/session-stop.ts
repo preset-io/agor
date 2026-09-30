@@ -9,6 +9,7 @@ import {
   type TerminationResult,
 } from '../termination-coordinator.js';
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
+import { withoutSessionMcpToken } from './session-mcp-token-hook.js';
 import type { findActiveTasksForSession } from './session-tasks.js';
 
 export interface StopSessionDeps {
@@ -71,7 +72,7 @@ export async function stopSessionPreserveQueue(
   options: { reason?: string; expectedTaskId?: TaskID } = {}
 ): Promise<SessionStopResult> {
   const session = await deps.runInTenantDatabaseScope(() =>
-    deps.sessionsService.get(sessionId, params)
+    deps.sessionsService.get(sessionId, withoutSessionMcpToken(params))
   );
 
   // Stop is idempotent across retries and the per-session turn lock. A

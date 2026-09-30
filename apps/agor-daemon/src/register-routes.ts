@@ -287,6 +287,7 @@ import {
   type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import { withoutSessionMcpToken } from './utils/session-mcp-token-hook.js';
 import {
   deferWithSessionQueueTenantScope,
   runWithSessionQueueTenantScope,
@@ -3273,7 +3274,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
           withFreshTenantWrite(db, terminationTenantId, work);
         const session = await inCurrentTenantDatabaseScope(() =>
-          app.service('sessions').get(id, params)
+          app.service('sessions').get(id, withoutSessionMcpToken(params))
         );
 
         // Stop is Session lifecycle control. Managers may stop any Session on
