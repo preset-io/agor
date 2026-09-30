@@ -13,6 +13,7 @@ import {
 } from '@agor/core/config';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
+import { endTenantRestrictionRequest, withTenantRestrictionRequest } from './tenant-access.js';
 import { rejectTerminalExecutorIdentity } from './terminal-executor-guard.js';
 
 export type AuthHook = (context: HookContext) => Promise<HookContext>;
@@ -40,20 +41,22 @@ export function createRequireAuthHook(
   };
 }
 
-/**
- * Tenant admission after authentication. The caller must preserve narrowly
- * authorized containment reads and lifecycle acknowledgements; never replace
- * those with a provider/role exemption or customer-controlled bypass flag.
- */
+/** Tenant admission after authentication; safety traffic is authorized by the callback, never a provider/role/flag exemption. */
 export function createTenantRestrictedAuthHook(
   authenticatedHook: AuthHook,
   multiTenancy: ResolvedMultiTenancyConfig,
   assertTenantAccess: (tenantId: string, context: HookContext) => Promise<void>
 ): AuthHook {
   const identity = createRequireAuthHook(authenticatedHook, multiTenancy);
-  return async (context) => {
-    const authed = await identity(context);
-    await assertTenantAccess(authed.params.tenant!.tenant_id, authed);
-    return authed;
-  };
+  // Strategy and hook share the packet's (or this request's) single restriction read.
+  return (context) =>
+    withTenantRestrictionRequest(async () => {
+      try {
+        const authed = await identity(context);
+        await assertTenantAccess(authed.params.tenant!.tenant_id, authed);
+        return authed;
+      } finally {
+        endTenantRestrictionRequest();
+      }
+    }, true);
 }

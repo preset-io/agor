@@ -1,11 +1,17 @@
 import { createDatabase, runWithTenantContext, type TenantRestrictionState } from '@agor/core/db';
-import type { TenantRestrictionRecord } from '@agor/core/types';
+import type { HookContext, TenantRestrictionRecord } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createTenantRestrictedAuthHook } from './require-auth.js';
 import {
   assertRuntimeTenantAccess,
+  assertRuntimeTenantRequestAccess,
+  endTenantRestrictionRequest,
   gatewayOccurrenceTime,
   isCurrentTenantEventAdmitted,
   isTenantRestrictedRejection,
+  readRequestTenantRestriction,
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  withTenantRestrictionRequest,
 } from './tenant-access.js';
 import {
   assertTenantCredentialEpoch,
@@ -180,6 +186,82 @@ describe('launch revision', () => {
         expect.objectContaining(reject)
       );
     }
+  });
+});
+
+describe('per-request memoization', () => {
+  const context = (payload: unknown) =>
+    ({
+      path: 'sessions',
+      method: 'find',
+      params: {
+        provider: 'socketio',
+        tenant: { tenant_id: 'a' },
+        authentication: { strategy: 'jwt', payload },
+      },
+    }) as unknown as HookContext;
+  // The authenticated hook stands in for the runtime JWT strategy's generation check.
+  const hookFor = (payload: unknown) =>
+    createTenantRestrictedAuthHook(
+      async (ctx) => {
+        await assertTenantCredentialEpoch(db, 'a', payload, readRequestTenantRestriction);
+        return ctx;
+      },
+      { mode: 'static', static_tenant_id: 'a' as never },
+      (tenantId, ctx) => assertRuntimeTenantRequestAccess(db, tenantId, ctx)
+    );
+
+  it('reads once per socket packet across middleware, strategy and hook, and again per packet', async () => {
+    read.mockResolvedValue(state(owner()));
+    const payload = tenantCredentialEpochClaims(await readTenantCredentialEpoch(db, 'a'));
+    read.mockClear();
+    const packet = () =>
+      withTenantRestrictionRequest(async () => {
+        await assertRuntimeTenantAccess(db, 'a', { payload }, readRequestTenantRestriction);
+        await hookFor(payload)(context(payload));
+      });
+    await packet();
+    expect(read).toHaveBeenCalledOnce();
+    await packet();
+    expect(read).toHaveBeenCalledTimes(2);
+    // An HTTP request opens its own scope in the hook: strategy and hook still share one read.
+    await hookFor(payload)(context(payload));
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares a failed read as a closed decision rather than retrying into success', async () => {
+    read.mockRejectedValueOnce(new Error('down')).mockResolvedValue(state());
+    await withTenantRestrictionRequest(async () => {
+      await expect(readRequestTenantRestriction(db, 'a')).rejects.toThrow('down');
+      await expect(
+        assertRuntimeTenantAccess(db, 'a', undefined, readRequestTenantRestriction)
+      ).rejects.toMatchObject({ code: 503 });
+    });
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it('reads fresh after admission ends, after one tick, and outside any request scope', async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValue(state());
+    await readRequestTenantRestriction(db, 'a');
+    await readRequestTenantRestriction(db, 'a');
+    expect(read).toHaveBeenCalledTimes(2);
+    await withTenantRestrictionRequest(async () => {
+      await readRequestTenantRestriction(db, 'a');
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(3);
+      await readRequestTenantRestriction(db, 'b');
+      expect(read).toHaveBeenCalledTimes(4);
+      vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS);
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(5);
+    });
+    await withTenantRestrictionRequest(async () => {
+      await readRequestTenantRestriction(db, 'a');
+      endTenantRestrictionRequest();
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(7);
+    });
   });
 });
 

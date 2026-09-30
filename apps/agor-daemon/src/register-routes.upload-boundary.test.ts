@@ -138,7 +138,12 @@ describe('browser upload route boundary ordering', () => {
     expect(status).toHaveBeenCalledWith(error.code);
     expect(json).toHaveBeenCalledWith({ error: error.message });
     expect(next).not.toHaveBeenCalled();
-    expect(admission).toHaveBeenCalledWith(expect.anything(), 'tenant-a');
+    expect(admission).toHaveBeenCalledWith(
+      expect.anything(),
+      'tenant-a',
+      undefined,
+      tenantAccess.readRequestTenantRestriction
+    );
   });
 
   it.each([
@@ -257,7 +262,7 @@ describe('browser upload route boundary ordering', () => {
   });
 
   it('centralizes tenant-aware bearer authentication for upload and executor data planes', () => {
-    const helperStart = source.indexOf('export async function authenticateBearerHttpRequest');
+    const helperStart = source.indexOf('async function authenticateBearerHttp(');
     const middlewareStart = source.indexOf('export function createUploadAuthMiddleware');
     const routeStart = source.indexOf("'/executor/uploads/:uploadRef/content'");
     const routeEnd = source.indexOf('const authorizeUpload', routeStart);

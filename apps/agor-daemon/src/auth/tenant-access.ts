@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import {
   getCurrentTenantId,
   isPostgresDatabaseHandle,
@@ -15,6 +16,40 @@ import {
 import { isTenantSafetySettlement } from './tenant-safety-settlement.js';
 import { hasTerminationReadAuthority } from './termination-read-authority.js';
 
+/** Freshness bound shared by the socket monitor tick, request memo and publisher epoch cache. */
+export const TENANT_RESTRICTION_OBSERVATION_MS = 1000;
+
+const requestReads = new AsyncLocalStorage<{
+  until: number;
+  reads: Map<string, Promise<TenantRestrictionState>>;
+}>();
+
+/** Share one restriction read across a handshake/packet/request's admission checks; reuse never exceeds one tick. */
+export function withTenantRestrictionRequest<T>(work: () => T, reuse = false): T {
+  const current = requestReads.getStore();
+  if (reuse && current && Date.now() < current.until) return work();
+  const until = Date.now() + TENANT_RESTRICTION_OBSERVATION_MS;
+  return requestReads.run({ until, reads: new Map() }, work);
+}
+
+/** Admission is decided: later checks in this async context (service bodies, background work) read fresh. */
+export function endTenantRestrictionRequest(): void {
+  const current = requestReads.getStore();
+  if (current) current.until = 0;
+}
+
+/** Memoized within an open request scope only; uncached across requests. */
+export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
+  const current = requestReads.getStore();
+  if (!current || Date.now() >= current.until) return readTenantRestrictionState(db, tenantId);
+  let read = current.reads.get(tenantId);
+  if (!read) {
+    read = readTenantRestrictionState(db, tenantId);
+    current.reads.set(tenantId, read);
+  }
+  return read;
+};
+
 export async function assertRuntimeTenantRequestAccess(
   db: TenantScopeAwareDatabase,
   tenantId: string,
@@ -27,7 +62,8 @@ export async function assertRuntimeTenantRequestAccess(
   await assertRuntimeTenantAccess(
     db,
     tenantId,
-    authentication?.strategy === 'jwt' ? { payload: authentication.payload } : undefined
+    authentication?.strategy === 'jwt' ? { payload: authentication.payload } : undefined,
+    readRequestTenantRestriction
   );
 }
 

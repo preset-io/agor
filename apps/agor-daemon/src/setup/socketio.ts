@@ -1,4 +1,12 @@
-import { assertTenantCredentialEpochValue } from '../auth/tenant-credential-epoch.js';
+import type { TenantRestrictionState } from '@agor/core/db';
+import {
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  withTenantRestrictionRequest,
+} from '../auth/tenant-access.js';
+import {
+  assertTenantCredentialEpochValue,
+  tenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
 import {
   admitTenantSocketPacket,
   missingSocketTenant,
@@ -142,10 +150,10 @@ function retireSocketConnectionAuthority(app: Application, connection: unknown):
 }
 
 export interface SocketIOOptions {
-  /** Uncached admission; executors retain only guarded safety RPC transport. */
-  assertTenantAccess?: (tenantId: string) => Promise<void>;
-  assertTenantCredential?: (tenantId: string, payload: unknown) => Promise<unknown>;
-  readTenantCredentialEpoch?: (tenantId: string) => Promise<string | undefined>;
+  /** Access plus credential generation, one read per handshake/packet; executors retain only guarded safety RPC transport. */
+  assertTenantAccess?: (tenantId: string, credentialPayload: unknown) => Promise<void>;
+  /** Fresh state for the per-replica monitor, which retires sockets only on a positive observation. */
+  readTenantRestriction?: (tenantId: string) => Promise<TenantRestrictionState>;
   /** CORS origin configuration */
   corsOrigin: CorsOrigin;
   /**
@@ -714,7 +722,7 @@ export function createSocketIOConfig(
     // type, user, tenant-claim, executor-authority, and revocation validation;
     // this transport boundary only extracts the bearer and commits the
     // strategy result to the Feathers connection.
-    io.use(async (socket, next) => {
+    const authenticateHandshake = async (socket: Socket, next: (err?: Error) => void) => {
       const fs = socket as FeathersSocket;
       try {
         const connection = bindServerSocketAuthority(fs);
@@ -772,8 +780,7 @@ export function createSocketIOConfig(
 
         if (options.assertTenantAccess && authority.principal.kind !== 'executor') {
           if (!authority.tenant?.tenant_id) throw missingSocketTenant();
-          await options.assertTenantAccess(authority.tenant.tenant_id);
-          await options.assertTenantCredential?.(
+          await options.assertTenantAccess(
             authority.tenant.tenant_id,
             getAuthenticatedConnectionCredentialPayload(fs.feathers)
           );
@@ -836,7 +843,11 @@ export function createSocketIOConfig(
         publicError.data = { code: 401, className: 'not-authenticated' };
         next(publicError);
       }
-    });
+    };
+    // The strategy's generation check and tenant admission share one restriction read.
+    io.use((socket, next) =>
+      withTenantRestrictionRequest(() => authenticateHandshake(socket, next))
+    );
 
     // One input-target executor socket per process-local terminal attachment.
     // This registry is intentionally not shared through Redis: losing this
@@ -970,27 +981,29 @@ export function createSocketIOConfig(
         socket.disconnect(true);
         return;
       }
-      if (options.assertTenantAccess) {
-        socket.use((packet, next) => {
-          const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
-          const tenantId = current?.tenant?.tenant_id;
-          if (!tenantId) return rejectTenantSocketPacket(packet, next);
-          void admitTenantSocketPacket({
-            tenantId,
-            executor: current.principal.kind === 'executor',
-            packet,
-            assertAccess: async (id) => {
-              await options.assertTenantAccess!(id);
-              await options.assertTenantCredential?.(
-                id,
-                getAuthenticatedConnectionCredentialPayload(feathersSocket.feathers)
-              );
-            },
-          }).then(
-            () => next(),
-            () => rejectTenantSocketPacket(packet, next)
-          );
-        });
+      const assertTenantAccess = options.assertTenantAccess;
+      if (assertTenantAccess) {
+        // Each packet opens its own read scope; the service hook and strategy reuse its one read.
+        socket.use((packet, next) =>
+          withTenantRestrictionRequest(() => {
+            const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
+            const tenantId = current?.tenant?.tenant_id;
+            if (!tenantId) return rejectTenantSocketPacket(packet, next);
+            void admitTenantSocketPacket({
+              tenantId,
+              executor: current.principal.kind === 'executor',
+              packet,
+              assertAccess: (id) =>
+                assertTenantAccess(
+                  id,
+                  getAuthenticatedConnectionCredentialPayload(feathersSocket.feathers)
+                ),
+            }).then(
+              () => next(),
+              () => rejectTenantSocketPacket(packet, next)
+            );
+          })
+        );
       }
       activeConnections++;
       const recordClientDisconnect =
@@ -2009,11 +2022,12 @@ export function createSocketIOConfig(
     // cache or Redis notification is required, including after a missed event.
     let checkingRestrictions = false;
     let monitoredSockets = new Map<string, Socket[]>();
-    const restrictionMonitor = options.assertTenantAccess
+    const readTenantRestriction = options.readTenantRestriction;
+    const restrictionMonitor = readTenantRestriction
       ? new TenantSocketRestrictionMonitor(async (tenantId) => {
-          await options.assertTenantAccess!(tenantId);
-          if (!options.readTenantCredentialEpoch) return;
-          const epoch = await options.readTenantCredentialEpoch(tenantId);
+          const state = await readTenantRestriction(tenantId);
+          if (state.closed) throw new Error('Tenant access is restricted');
+          const epoch = tenantCredentialEpoch(state, tenantId);
           for (const socket of monitoredSockets.get(tenantId) ?? []) {
             const connection = (socket as FeathersSocket).feathers;
             try {
@@ -2028,7 +2042,7 @@ export function createSocketIOConfig(
           }
         })
       : undefined;
-    const restrictionInterval = options.assertTenantAccess
+    const restrictionInterval = restrictionMonitor
       ? setInterval(async () => {
           if (checkingRestrictions) return;
           checkingRestrictions = true;
@@ -2050,7 +2064,7 @@ export function createSocketIOConfig(
               tenants.set(tenantId, group);
             }
             monitoredSockets = tenants;
-            await restrictionMonitor!.check(
+            await restrictionMonitor.check(
               new Map(
                 [...tenants].map(([tenantId, sockets]) => [
                   tenantId,
@@ -2066,7 +2080,7 @@ export function createSocketIOConfig(
           } finally {
             checkingRestrictions = false;
           }
-        }, 1000)
+        }, TENANT_RESTRICTION_OBSERVATION_MS)
       : undefined;
     restrictionInterval?.unref();
     io.engine.once('close', () => {

@@ -1125,56 +1125,32 @@ describe('Socket.IO handshake credential extraction', () => {
     expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
   });
 
-  it('gives a closed tenant the stable code instead of a refreshable credential rejection', async () => {
-    // The credential-generation check runs inside the handshake, ahead of
-    // tenant admission, so on a suspended workspace it — not the 403 — is what
-    // a browser socket actually receives. Socket.IO preserves a middleware
-    // error's `data` on connect_error, which is the whole client contract.
-    const { io } = buildHarness({
-      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
-      assertTenantAccess: vi.fn(async () => {}),
-      assertTenantCredential: vi.fn(async () => {
-        const closed = new Error('Tenant credential cannot be verified') as Error & {
-          code: number;
-          className: string;
-          data: { code: string };
-        };
-        closed.code = 401;
-        closed.className = 'not-authenticated';
-        closed.data = { code: TENANT_RESTRICTED_ERROR_CODE };
-        throw closed;
+  // Socket.IO preserves a middleware error's `data` on connect_error: that is the whole client contract.
+  it.each([
+    {
+      name: 'a closed tenant gets only the stable code, never a refreshable rejection',
+      rejection: Object.assign(new Error('Tenant access is restricted'), {
+        code: 403,
+        data: { code: TENANT_RESTRICTED_ERROR_CODE },
       }),
-    });
-    const socket = makeSocket('closed-tenant-credential', io);
-    socket.handshake.auth = { token: 'signed-token' };
-    socket.feathers = {
-      pendingAuthenticationResult: {
-        user: { user_id: ALICE },
-        authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+      expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
+    },
+    {
+      name: 'an unverifiable read keeps the generic refreshable rejection',
+      rejection: Object.assign(new Error('Tenant access cannot be verified'), { code: 503 }),
+      expected: {
+        message: 'Invalid or expired authentication token',
+        data: { code: 401, className: 'not-authenticated' },
       },
-    };
-
-    const error = (await new Promise<Error | undefined>((resolve) =>
-      io.middlewares[0]?.(socket, resolve)
-    )) as (Error & { data: Record<string, unknown> }) | undefined;
-
-    expect(error?.data).toEqual({ code: TENANT_RESTRICTED_ERROR_CODE });
-    // No 401/not-authenticated signal rides along: that is the client's cue to
-    // rotate a token that is fine, and the reconnect storm packet 05 removed.
-    expect(error?.data).not.toHaveProperty('className');
-    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
-  });
-
-  it('keeps an unverifiable credential read on the generic refreshable rejection', async () => {
-    // A failed observation is not a statement that the tenant is closed.
+    },
+  ])('$name', async ({ rejection, expected }) => {
     const { io } = buildHarness({
       multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
-      assertTenantAccess: vi.fn(async () => {}),
-      assertTenantCredential: vi.fn(async () => {
-        throw Object.assign(new Error('Tenant credential cannot be verified'), { code: 401 });
+      assertTenantAccess: vi.fn(async () => {
+        throw rejection;
       }),
     });
-    const socket = makeSocket('unverifiable-tenant-credential', io);
+    const socket = makeSocket('restricted-handshake', io);
     socket.handshake.auth = { token: 'signed-token' };
     socket.feathers = {
       pendingAuthenticationResult: {
@@ -1187,10 +1163,11 @@ describe('Socket.IO handshake credential extraction', () => {
       io.middlewares[0]?.(socket, resolve)
     );
 
-    expect(error).toMatchObject({
-      message: 'Invalid or expired authentication token',
-      data: { code: 401, className: 'not-authenticated' },
-    });
+    expect(error).toMatchObject(expected);
+    expect(Object.keys((error as Error & { data: object }).data)).toEqual(
+      Object.keys(expected.data)
+    );
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
   });
 
   it('keeps ordinary user authority across routine access-token expiry', async () => {

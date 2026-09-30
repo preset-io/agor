@@ -1,4 +1,5 @@
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import { readRequestTenantRestriction } from './tenant-access.js';
 import { assertTenantCredentialEpoch } from './tenant-credential-epoch.js';
 /**
  * Runtime JWT Authentication Strategy
@@ -305,7 +306,14 @@ export class RuntimeJWTStrategy extends JWTStrategy {
 
     if (this.db) {
       const tenant = resolveSignedRuntimeTenant(this.multiTenancy, payload);
-      if (tenant) await assertTenantCredentialEpoch(this.db, tenant.tenant_id, payload);
+      if (tenant) {
+        await assertTenantCredentialEpoch(
+          this.db,
+          tenant.tenant_id,
+          payload,
+          readRequestTenantRestriction
+        );
+      }
     }
     if (result.user) {
       assertUserTokenNotInvalidated(result.user, payload);

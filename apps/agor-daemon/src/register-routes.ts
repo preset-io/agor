@@ -1,6 +1,10 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
-import { assertRuntimeTenantAccess } from './auth/tenant-access.js';
+import {
+  assertRuntimeTenantAccess,
+  readRequestTenantRestriction,
+  withTenantRestrictionRequest,
+} from './auth/tenant-access.js';
 import {
   assertTenantCredentialEpoch,
   readTenantCredentialEpoch,
@@ -800,7 +804,7 @@ interface BearerHttpAuthenticationService {
  * is reused in the result so verified tenant context cannot be lost between
  * user lookup and the route's authorization checks.
  */
-export async function authenticateBearerHttpRequest(input: {
+async function authenticateBearerHttp(input: {
   db: TenantScopeAwareDatabase;
   authentication: BearerHttpAuthenticationService;
   multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
@@ -828,9 +832,19 @@ export async function authenticateBearerHttpRequest(input: {
         headers: input.headers,
       }),
   };
-  await assertRuntimeTenantAccess(input.db, params.tenant!.tenant_id);
+  await assertRuntimeTenantAccess(
+    input.db,
+    params.tenant!.tenant_id,
+    undefined,
+    readRequestTenantRestriction
+  );
   return params;
 }
+
+/** The strategy's generation check and tenant admission share one restriction read. */
+export const authenticateBearerHttpRequest = (
+  input: Parameters<typeof authenticateBearerHttp>[0]
+) => withTenantRestrictionRequest(() => authenticateBearerHttp(input));
 
 export function createExecutorUploadContentHandler(input: {
   db: TenantScopeAwareDatabase;

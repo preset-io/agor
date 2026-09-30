@@ -54,7 +54,12 @@ import {
   resolveSecurity,
   resolveValidExternalLaunchProvider,
 } from '@agor/core/config';
-import { generateId, resolveDatabaseUrl } from '@agor/core/db';
+import {
+  generateId,
+  isPostgresDatabaseHandle,
+  readTenantRestrictionState,
+  resolveDatabaseUrl,
+} from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -73,11 +78,8 @@ import { createTenantRestrictedAuthHook } from './auth/require-auth.js';
 import {
   assertRuntimeTenantAccess,
   assertRuntimeTenantRequestAccess,
+  readRequestTenantRestriction,
 } from './auth/tenant-access.js';
-import {
-  assertTenantCredentialEpoch,
-  readTenantCredentialEpoch,
-} from './auth/tenant-credential-epoch.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import {
@@ -754,10 +756,13 @@ async function startDaemonWithOwnedMetrics(
   await realtimeRuntime?.connect();
 
   const socketIOConfig = createSocketIOConfig(app, {
-    assertTenantAccess: (tenantId) => assertRuntimeTenantAccess(db, tenantId),
-    assertTenantCredential: (tenantId, payload) =>
-      assertTenantCredentialEpoch(db, tenantId, payload),
-    readTenantCredentialEpoch: (tenantId) => readTenantCredentialEpoch(db, tenantId),
+    assertTenantAccess: (tenantId, payload) =>
+      assertRuntimeTenantAccess(db, tenantId, { payload }, readRequestTenantRestriction),
+    // Hosted restriction state is PostgreSQL-only; standalone SQLite observes an open tenant.
+    readTenantRestriction: async (tenantId) =>
+      isPostgresDatabaseHandle(db)
+        ? readTenantRestrictionState(db, tenantId)
+        : { records: [], closed: false },
     corsOrigin,
     credentialsAllowed,
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the

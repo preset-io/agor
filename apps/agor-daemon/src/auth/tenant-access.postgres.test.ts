@@ -14,6 +14,7 @@ import {
   initializeDatabase,
   type RawDatabase,
   RepoRepository,
+  readTenantRestrictionState,
   runWithTenantDatabaseScope,
   SessionRepository,
   TaskRepository,
@@ -60,7 +61,11 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './runtime-tokens.js';
-import { assertRuntimeTenantAccess, assertRuntimeTenantRequestAccess } from './tenant-access.js';
+import {
+  assertRuntimeTenantAccess,
+  assertRuntimeTenantRequestAccess,
+  readRequestTenantRestriction,
+} from './tenant-access.js';
 import {
   assertTenantCredentialEpoch,
   readTenantCredentialEpoch,
@@ -228,8 +233,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         credentialsAllowed: false,
         workIdentity: { instanceId: 'socket-safety', bootId: 'socket-safety-boot' },
         multiTenancy,
-        assertTenantAccess: (id) => assertRuntimeTenantAccess(db, id),
-        assertTenantCredential: (id, payload) => assertTenantCredentialEpoch(db, id, payload),
+        assertTenantAccess: (id, payload) =>
+          assertRuntimeTenantAccess(db, id, { payload }, readRequestTenantRestriction),
+        readTenantRestriction: (id) => readTenantRestrictionState(db, id),
       });
       app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
       configureChannels(app as never);
@@ -433,8 +439,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         credentialsAllowed: false,
         workIdentity: { instanceId: 'browser-restricted', bootId: 'browser-restricted-boot' },
         multiTenancy,
-        assertTenantAccess: (id) => assertRuntimeTenantAccess(db, id),
-        assertTenantCredential: (id, payload) => assertTenantCredentialEpoch(db, id, payload),
+        assertTenantAccess: (id, payload) =>
+          assertRuntimeTenantAccess(db, id, { payload }, readRequestTenantRestriction),
+        readTenantRestriction: (id) => readTenantRestrictionState(db, id),
       });
       app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
       configureChannels(app as never);

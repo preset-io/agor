@@ -20,6 +20,7 @@ import {
   generateId,
   initializeDatabase,
   isPostgresDatabase,
+  readTenantRestrictionState,
   runWithTenantDatabaseScope,
   sql,
   type TenantScopeAwareDatabase,
@@ -40,7 +41,7 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from '../auth/runtime-tokens.js';
-import { assertRuntimeTenantAccess } from '../auth/tenant-access.js';
+import { assertRuntimeTenantAccess, readRequestTenantRestriction } from '../auth/tenant-access.js';
 import { terminalChannelName } from '../realtime/routing.js';
 import { configureChannels, createSocketIOConfig } from './socketio.js';
 
@@ -266,7 +267,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       app.use('authentication', authentication);
 
       const socketConfig = createSocketIOConfig(app as never, {
-        assertTenantAccess: (tenantId) => assertRuntimeTenantAccess(db, tenantId),
+        assertTenantAccess: (tenantId, payload) =>
+          assertRuntimeTenantAccess(db, tenantId, { payload }, readRequestTenantRestriction),
+        readTenantRestriction: (tenantId) => readTenantRestrictionState(db, tenantId),
         corsOrigin: '*',
         credentialsAllowed: false,
         workIdentity: { instanceId: 'socket-test', bootId: 'socket-test-boot' },
