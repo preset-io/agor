@@ -603,10 +603,10 @@ function validateConfig(config: AgorConfig): void {
   }
   if (
     config.agentic_tools?.opencode_hosted_native_state !== undefined &&
-    config.agentic_tools.opencode_hosted_native_state !== 'checkpointed'
+    !['checkpointed', 'disabled'].includes(config.agentic_tools.opencode_hosted_native_state)
   ) {
     throw new Error(
-      "Config error: agentic_tools.opencode_hosted_native_state must be 'checkpointed' when set"
+      "Config error: agentic_tools.opencode_hosted_native_state must be 'checkpointed' or 'disabled'"
     );
   }
   if (config.agentic_tools?.installed !== undefined) {

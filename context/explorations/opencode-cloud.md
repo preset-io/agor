@@ -1,7 +1,7 @@
 # OpenCode in hosted workspaces
 
-Hosted OpenCode is opt-in (`agentic_tools.opencode_hosted_native_state: checkpointed`)
-and requires auth-derived tenancy, delegated execution with a command template, and
+Hosted OpenCode is on by default (`agentic_tools.opencode_hosted_native_state: disabled`
+opts out) and requires auth-derived tenancy, delegated execution with a command template, and
 a persistent per-user executor home. `resolveOpenCodeCapabilities`
 (`packages/agentic-tool-opencode/src/daemon/capabilities.ts`) is the only place
 that decides; every consumer reads it and unsupported deployments report one

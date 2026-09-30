@@ -20,8 +20,8 @@ export interface AgorAgenticToolsSettings {
    */
   claude_subscription_oauth?: boolean;
 
-  /** Opt in to hosted OpenCode (still requires every hosted prerequisite). */
-  opencode_hosted_native_state?: 'checkpointed';
+  /** Hosted OpenCode with checkpointed native state. Default: enabled when every hosted prerequisite holds; 'disabled' opts out. */
+  opencode_hosted_native_state?: 'checkpointed' | 'disabled';
 }
 
 /**

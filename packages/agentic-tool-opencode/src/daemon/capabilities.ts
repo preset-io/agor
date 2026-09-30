@@ -15,8 +15,7 @@ export type OpenCodeCapabilityConfig = Pick<
 >;
 
 const UNSUPPORTED_MESSAGES: Record<OpenCodeUnsupportedCode, string> = {
-  hosted_tenancy:
-    'OpenCode is unavailable in hosted multi-tenant mode: this workspace has no per-user home for its native state.',
+  hosted_tenancy: 'OpenCode is unavailable in hosted multi-tenant mode.',
   delegated_execution:
     'OpenCode is unavailable in delegated execution mode because the execution substrate does not provide a native-state home boundary.',
   templated_transport: 'OpenCode requires a locally containable executor process.',
@@ -38,7 +37,7 @@ export function resolveOpenCodeCapabilities(
     hosted &&
     unixUserMode === 'delegated' &&
     templated &&
-    config.agentic_tools?.opencode_hosted_native_state === 'checkpointed'
+    config.agentic_tools?.opencode_hosted_native_state !== 'disabled'
   ) {
     // Checkpoints live in the owner's executor home, so that home must outlive the Job.
     return config.execution?.executor_storage?.user_home === 'persistent-per-user'

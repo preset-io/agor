@@ -59,18 +59,17 @@ not disable ordinary Claude tasks using API keys or pasted subscription tokens.
 Disconnect remains available for saved backend logins even after opt-out or a
 capability downgrade.
 
-Hosted deployments can run OpenCode by opting in:
+Hosted deployments run OpenCode by default when they use auth-derived
+multi-tenancy, delegated execution with an executor command template, and
+`execution.executor_storage.user_home: persistent-per-user`. The executor image
+must set `AGOR_OPENCODE_SCRATCH_ROOT` to Job-local storage and ship Node 22.13 or
+newer. With a missing prerequisite, OpenCode reports itself as unavailable
+everywhere. To turn hosted OpenCode off:
 
 ```yaml
 agentic_tools:
-  opencode_hosted_native_state: checkpointed
-```
-
-It takes effect only with auth-derived multi-tenancy, delegated execution with an
-executor command template, and `execution.executor_storage.user_home:
-persistent-per-user`. The executor image must set `AGOR_OPENCODE_SCRATCH_ROOT` to
-Job-local storage and ship Node 22.13 or newer. Without the opt-in, or with a
-missing prerequisite, OpenCode reports itself as unavailable everywhere. See
+  opencode_hosted_native_state: disabled
+``` See
 [OpenCode in hosted workspaces](/guide/sdk-comparison#hosted-workspaces).
 
 For Claude subscription sign-in, two storage modes are supported:

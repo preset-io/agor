@@ -791,16 +791,16 @@ OpenCode supports MCP servers via its REST API:
 ### Limitations
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
-- **Local execution by default.** Agor must be able to contain the native writer process safely.
-  Hosted multi-tenant, delegated, and templated-executor deployments report OpenCode as
-  "not available" in settings, readiness, session creation, schedules, and prompts unless the
-  operator enables hosted workspaces (below).
+- **Supported deployments.** Agor must be able to contain the native writer process safely:
+  locally, or in hosted workspaces that meet the prerequisites below. Other multi-tenant,
+  delegated, and templated-executor deployments report OpenCode as "not available" in
+  settings, readiness, session creation, schedules, and prompts.
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
 
 ### Hosted workspaces
 
-With `agentic_tools.opencode_hosted_native_state: checkpointed` (see
-[config.yaml](/guide/config-yaml)), hosted workspaces run OpenCode like this:
+Hosted workspaces run OpenCode by default when they meet the prerequisites in
+[config.yaml](/guide/config-yaml), like this:
 
 - **Providers:** every OpenCode provider that needs only an API key (more than 180,
   including Anthropic, OpenAI, Google Gemini, OpenRouter, xAI, Mistral, and DeepSeek).

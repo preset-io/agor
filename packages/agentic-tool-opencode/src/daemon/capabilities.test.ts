@@ -28,7 +28,7 @@ describe('OpenCode capability resolver', () => {
     });
   });
 
-  it('admits hosted managed mode only with the opt-in and a persistent per-user home', () => {
+  it('admits hosted managed mode by default with a persistent per-user home unless disabled', () => {
     const hosted = {
       multi_tenancy: { mode: 'required_from_auth' as const },
       execution: {
@@ -37,21 +37,26 @@ describe('OpenCode capability resolver', () => {
         executor_storage: { user_home: 'persistent-per-user' as const },
       },
     };
-    const optIn = { agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const } };
-    expect(resolveOpenCodeCapabilities({ ...hosted, ...optIn })).toEqual({
-      mode: 'managed-projection',
-    });
-    expect(resolveOpenCodeCapabilities(hosted)).toMatchObject({
-      reason: { code: 'hosted_tenancy' },
-    });
+    expect(resolveOpenCodeCapabilities(hosted)).toEqual({ mode: 'managed-projection' });
     expect(
       resolveOpenCodeCapabilities({
         ...hosted,
-        ...optIn,
+        agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+      })
+    ).toEqual({ mode: 'managed-projection' });
+    expect(
+      resolveOpenCodeCapabilities({
+        ...hosted,
+        agentic_tools: { opencode_hosted_native_state: 'disabled' },
+      })
+    ).toMatchObject({ reason: { code: 'hosted_tenancy' } });
+    expect(
+      resolveOpenCodeCapabilities({
+        ...hosted,
         execution: { ...hosted.execution, executor_storage: { user_home: 'shared' } },
       })
     ).toMatchObject({ reason: { code: 'persistent_user_home_required' } });
-    expect(() => requireOpenCodeNativeFile({ ...hosted, ...optIn })).toThrow(/hosted workspaces/);
+    expect(() => requireOpenCodeNativeFile(hosted)).toThrow(/hosted workspaces/);
   });
 
   it('fails closed with the structured reason as BadRequest data', () => {
