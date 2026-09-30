@@ -1,7 +1,11 @@
 import type { AgorConfig } from '@agor/core/config';
-import { type Application, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Session, UserID } from '@agor/core/types';
-import { isTenantRestrictedRejection } from '../auth/tenant-access.js';
+import {
+  isTenantRestrictedRejection,
+  readAdmittedTenantRestriction,
+} from '../auth/tenant-access.js';
+import { hasTerminationReadAuthority } from '../auth/termination-read-authority.js';
 import { generateSessionToken } from '../mcp/tokens.js';
 import { canReceiveMcpTokenForSession } from './mcp-token-authorization.js';
 
@@ -49,11 +53,19 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
     const session = context.result as Session;
     let mcpToken: string;
     try {
-      mcpToken = await generateSessionToken(options.app, session.session_id, userId as UserID);
+      mcpToken = await generateSessionToken(
+        options.app,
+        session.session_id,
+        userId as UserID,
+        readAdmittedTenantRestriction
+      );
     } catch (error) {
-      // A closed tenant, or a restriction read that failed (codeless 401), mints no MCP credential; the session read still succeeds.
-      if (isTenantRestrictedRejection(error) || error instanceof NotAuthenticated) return context;
-      throw error;
+      // A closed tenant mints no MCP credential; the session read itself still succeeds.
+      if (isTenantRestrictedRejection(error)) return context;
+      if (!(error instanceof NotAuthenticated)) throw error;
+      // A failed read (codeless 401) spares a committed create and termination reads; other reads fail visibly (503) rather than start an agent without MCP.
+      if (context.method !== 'get' || hasTerminationReadAuthority(context)) return context;
+      throw new Unavailable('Tenant access cannot be verified');
     }
 
     context.result = { ...session, mcp_token: mcpToken };

@@ -23,6 +23,8 @@ export const TENANT_RESTRICTION_READ_TIMEOUT_MS = 2000;
 
 const requestReads = new AsyncLocalStorage<{
   until: number;
+  /** Deadline of the scope that admission ended, for credential issuance only. */
+  admittedUntil?: number;
   reads: Map<string, Promise<TenantRestrictionState>>;
 }>();
 
@@ -37,7 +39,9 @@ export function withTenantRestrictionRequest<T>(work: () => T, reuse = false): T
 /** Admission is decided: later checks in this async context (service bodies, background work) read fresh. */
 export function endTenantRestrictionRequest(): void {
   const current = requestReads.getStore();
-  if (current) current.until = 0;
+  if (!current) return;
+  if (current.until) current.admittedUntil = current.until;
+  current.until = 0;
 }
 
 /** Memoized within an open request scope only; uncached across requests. */
@@ -50,6 +54,14 @@ export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenant
     current.reads.set(tenantId, read);
   }
   return read;
+};
+
+/** Credential issuance after admission reuses the read that admitted this request within its tick; never an admission check. */
+export const readAdmittedTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
+  const current = requestReads.getStore();
+  const until = Math.max(current?.until ?? 0, current?.admittedUntil ?? 0);
+  const read = current && Date.now() < until ? current.reads.get(tenantId) : undefined;
+  return read ?? readTenantRestrictionState(db, tenantId);
 };
 
 export async function assertRuntimeTenantRequestAccess(

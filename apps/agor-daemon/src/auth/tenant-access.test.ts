@@ -9,6 +9,7 @@ import {
   gatewayOccurrenceTime,
   isCurrentTenantEventAdmitted,
   isTenantRestrictedRejection,
+  readAdmittedTenantRestriction,
   readRequestTenantRestriction,
   TENANT_RESTRICTION_OBSERVATION_MS,
   withTenantRestrictionRequest,
@@ -262,6 +263,25 @@ describe('per-request memoization', () => {
       await readRequestTenantRestriction(db, 'a');
       expect(read).toHaveBeenCalledTimes(7);
     });
+  });
+
+  it('lets credential issuance reuse the read that admitted the request, within its tick only', async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValue(state());
+    await withTenantRestrictionRequest(async () => {
+      const admitted = readRequestTenantRestriction(db, 'a');
+      await admitted;
+      endTenantRestrictionRequest();
+      expect(readAdmittedTenantRestriction(db, 'a')).toBe(admitted);
+      expect(read).toHaveBeenCalledOnce();
+      await readAdmittedTenantRestriction(db, 'b');
+      expect(read).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS);
+      await readAdmittedTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(3);
+    });
+    await readAdmittedTenantRestriction(db, 'a');
+    expect(read).toHaveBeenCalledTimes(4);
   });
 });
 

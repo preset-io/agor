@@ -52,6 +52,7 @@ import {
 import jwt from 'jsonwebtoken';
 import {
   readTenantCredentialEpoch,
+  type TenantRestrictionReader,
   tenantCredentialEpochClaims,
 } from '../auth/tenant-credential-epoch.js';
 
@@ -217,7 +218,8 @@ function resolveIssuanceTenantId(state: ModuleState): TenantID {
 export async function generateSessionToken(
   app: Application,
   sessionId: SessionID,
-  userId: UserID
+  userId: UserID,
+  readRestriction?: TenantRestrictionReader
 ): Promise<string> {
   const s = requireState();
   const jwtSecret = app.settings.authentication?.secret;
@@ -237,7 +239,7 @@ export async function generateSessionToken(
   }
 
   // Bind the generation current at issuance; a closed tenant or failed read mints nothing.
-  const epoch = await readTenantCredentialEpoch(s.db, tenantId);
+  const epoch = await readTenantCredentialEpoch(s.db, tenantId, readRestriction);
   const cacheKey = `${tenantId}:${sessionId}:${userId}:${epoch ?? ''}`;
   const cached = s.tokenCache.get(cacheKey);
   // Keep a buffer so callers never receive a token that is about to expire.

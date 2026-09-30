@@ -1,10 +1,13 @@
-import { NotAuthenticated } from '@agor/core/feathers';
-import type { Session } from '@agor/core/types';
+import { NotAuthenticated, Unavailable } from '@agor/core/feathers';
+import { type Session, TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 const generateSessionToken = vi.hoisted(() => vi.fn());
+const hasTerminationReadAuthority = vi.hoisted(() => vi.fn(() => false));
 vi.mock('../mcp/tokens.js', () => ({ generateSessionToken }));
+vi.mock('../auth/termination-read-authority.js', () => ({ hasTerminationReadAuthority }));
 
+import { readAdmittedTenantRestriction } from '../auth/tenant-access.js';
 import { createSessionMcpTokenHook } from './session-mcp-token-hook.js';
 
 const session = { session_id: 'session-1' } as Session;
@@ -12,20 +15,54 @@ const hook = createSessionMcpTokenHook({
   app: { settings: { authentication: { secret: 'secret' } } } as never,
   config: {},
 });
-const run = () =>
+const run = (method = 'get') =>
   hook({
+    method,
     params: { user: { user_id: 'user-1', role: 'member' } },
     result: session,
   } as never);
+const readFailure = () => new NotAuthenticated('Tenant credential cannot be verified');
 
 describe('sessions MCP-token hook restriction reads', () => {
-  it('returns the session without a token when the restriction read fails', async () => {
-    generateSessionToken.mockRejectedValueOnce(
-      new NotAuthenticated('Tenant credential cannot be verified')
+  it('issues from the read that admitted the request', async () => {
+    generateSessionToken.mockResolvedValueOnce('token');
+    const context = await run();
+    expect(context.result).toMatchObject({ mcp_token: 'token' });
+    expect(generateSessionToken).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'session-1',
+      'user-1',
+      readAdmittedTenantRestriction
     );
+  });
+
+  it('fails an ordinary session read as unavailable instead of returning it without a token', async () => {
+    generateSessionToken.mockRejectedValueOnce(readFailure());
+    await expect(run()).rejects.toBeInstanceOf(Unavailable);
+  });
+
+  it('returns a committed create without a token when the restriction read fails', async () => {
+    generateSessionToken.mockRejectedValueOnce(readFailure());
+    const context = await run('create');
+    expect(context.result).toBe(session);
+  });
+
+  it('returns a termination read without a token when the restriction read fails', async () => {
+    hasTerminationReadAuthority.mockReturnValueOnce(true);
+    generateSessionToken.mockRejectedValueOnce(readFailure());
     const context = await run();
     expect(context.result).toBe(session);
     expect(context.result).not.toHaveProperty('mcp_token');
+  });
+
+  it('returns the session without a token for a closed tenant', async () => {
+    generateSessionToken.mockRejectedValueOnce(
+      new NotAuthenticated('Tenant credential cannot be verified', {
+        code: TENANT_RESTRICTED_ERROR_CODE,
+      })
+    );
+    const context = await run();
+    expect(context.result).toBe(session);
   });
 
   it('still surfaces minting failures that are not about tenant state', async () => {
