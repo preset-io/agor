@@ -299,10 +299,12 @@ describe('HomePage privacy for superadmins', () => {
         };
       },
     } as unknown as AgorClient;
-    renderHome({ currentUser: superadmin, client: flaky });
+    renderHome({ currentUser: superadmin, client: flaky, onSeeAllTeammates: () => {} });
     await waitFor(() => expect(answers).toHaveLength(1));
     await act(async () => answers[0].settle(true));
     const rail = await screen.findByRole('region', { name: 'AI teammates' });
+    // No "See all 0" beside the failure notice.
+    expect(within(rail).queryByRole('button', { name: /^See all/ })).not.toBeInTheDocument();
     const retry = within(rail).getByRole('button', { name: 'Try again' });
     retry.focus();
 
@@ -314,5 +316,6 @@ describe('HomePage privacy for superadmins', () => {
     await act(async () => answers[1].settle(false));
     expect(await within(rail).findByText('Teammate open')).toBeInTheDocument();
     expect(within(rail).queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
+    expect(within(rail).getByRole('button', { name: 'See all 1' })).toBeInTheDocument();
   });
 });

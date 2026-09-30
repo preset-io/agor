@@ -73,7 +73,10 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
               onClick={() => setOffset((o) => o + RAIL_SIZE)}
             />
           )}
-          {onSeeAll && <HomeLink onClick={onSeeAll}>See all {teammates.length}</HomeLink>}
+          {/* Nothing to list yet (e.g. every read failed): the failure notice says why. */}
+          {onSeeAll && teammates.length > 0 && (
+            <HomeLink onClick={onSeeAll}>See all {teammates.length}</HomeLink>
+          )}
         </>
       }
     >
