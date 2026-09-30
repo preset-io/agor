@@ -111,7 +111,7 @@ const excludedPaths = new Set([
   workflowPath,
   'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
-  'scripts/managed-environments/railway-auto/image.mjs',
+  'scripts/managed-environments/railway/image.mjs',
 ]);
 const references = [];
 
@@ -161,55 +161,25 @@ const localWorktreeBuildStarts = [
 const codespacesWorktreeBuildStarts = [
   ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
 ].length;
-// Reviewed remote-source exception: Railway builds the adopted pushed branch,
-// not the caller's dirty worktree and not a published application image.
+// Reviewed branch-local automatic Railway source build.
 const railwaySourceBuildStarts = [
   ...managedEnvironments.matchAll(
     /node scripts\/managed-environments\/railway\/launcher\.mjs start\b/g
   ),
 ].length;
-// Separate opt-in automatic launcher: same pushed-source contract, not an
-// exception for arbitrary scripts or published application images.
-const railwayAutoSourceBuildStarts = [
-  ...managedEnvironments.matchAll(
-    /node scripts\/managed-environments\/railway-auto\/launcher\.mjs start\b/g
-  ),
-].length;
 assert.equal(
   explicitStarts,
-  localWorktreeBuildStarts +
-    codespacesWorktreeBuildStarts +
-    railwaySourceBuildStarts +
-    railwayAutoSourceBuildStarts,
+  localWorktreeBuildStarts + codespacesWorktreeBuildStarts + railwaySourceBuildStarts,
   'every explicit managed-environment start must build local source or use a reviewed remote-source exception'
 );
 
 if (railwaySourceBuildStarts > 0) {
-  assert.equal(railwaySourceBuildStarts, 1, 'only one adopted Railway variant is reviewed');
+  assert.equal(railwaySourceBuildStarts, 1, 'only one automatic Railway variant is reviewed');
   assert.match(
     managedEnvironments,
     /railway-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
   );
-  const railway = await readFile(path.join(root, '.railway/railway.ts'), 'utf8');
-  assert.match(railway, /source: github\('preset-io\/agor',/);
-  assert.match(railway, /builder: 'DOCKERFILE', dockerfilePath: 'docker\/Dockerfile'/);
-  assert.match(railway, /AGOR_RUNTIME_TARGET: 'runtime-build'/);
-  assert.doesNotMatch(railway, imageReference);
-  const checkout = await readFile(path.join(root, 'docker/runtime-checkout.mjs'), 'utf8');
-  assert.match(
-    checkout,
-    /\.clone\(repo, staging, \['--depth=1', '--single-branch', '--branch', branch\]\)/
-  );
-  assert.match(checkout, /\.fetch\('origin', branch, \['--depth=1', '--no-tags'\]\)/);
-}
-
-if (railwayAutoSourceBuildStarts > 0) {
-  assert.equal(railwayAutoSourceBuildStarts, 1, 'only one automatic Railway variant is reviewed');
-  assert.match(
-    managedEnvironments,
-    /railway-auto-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway-auto\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
-  );
-  const directory = path.join(root, 'scripts/managed-environments/railway-auto');
+  const directory = path.join(root, 'scripts/managed-environments/railway');
   const launcher = await readFile(path.join(directory, 'launcher.mjs'), 'utf8');
   const preview = await readFile(path.join(directory, 'preview.mjs'), 'utf8');
   const configuration = await readFile(path.join(directory, 'configuration.mjs'), 'utf8');
@@ -220,6 +190,12 @@ if (railwayAutoSourceBuildStarts > 0) {
   assert.match(preview, /dockerfilePath: 'docker\/Dockerfile'/);
   assert.match(configuration, /AGOR_RUNTIME_TARGET: 'railway-preview'/);
   assert.match(configuration, /AGOR_PREVIEW_BASE: previewBase/);
+  const checkout = await readFile(path.join(root, 'docker/runtime-checkout.mjs'), 'utf8');
+  assert.match(
+    checkout,
+    /\.clone\(repo, staging, \['--depth=1', '--single-branch', '--branch', branch\]\)/
+  );
+  assert.match(checkout, /\.fetch\('origin', branch, \['--depth=1', '--no-tags'\]\)/);
   for (const source of [launcher, preview, configuration])
     assert.doesNotMatch(source, imageReference);
 }
@@ -274,7 +250,7 @@ assert.doesNotMatch(warm, /--push/);
 assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
 assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
 const resolver = await readFile(
-  path.join(root, 'scripts/managed-environments/railway-auto/image.mjs'),
+  path.join(root, 'scripts/managed-environments/railway/image.mjs'),
   'utf8'
 );
 assert.match(resolver, /manifests\/preview-runtime-main/);

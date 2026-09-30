@@ -1,6 +1,6 @@
 # Branch-local Railway previews
 
-`railway-auto-sqlite` is an opt-in, compose-like launcher: **Start ensures the
+`railway-sqlite` is an opt-in, compose-like launcher: **Start ensures the
 branch preview is up**, Stop retains its data, and Nuke explicitly removes it.
 It runs plain Node (22+) using built-in HTTP support. No npm install, Railway
 SDK, PostgreSQL, or daemon-specific handler is needed. Railway builds the app;
@@ -39,7 +39,7 @@ accidental cross-scope reuse, not malicious code holding the provisioning token.
 Controller credentials are not sent to the app or written into command arguments.
 
 Import this branch's `.agor.yml` in the repository environment editor, then select
-`railway-auto-sqlite` to refresh saved commands. Old `railway-preview:start`
+`railway-sqlite` to refresh saved commands. Old `railway-preview:start`
 markers are not executables. Subsequent launcher edits run directly from the
 branch and need no daemon upgrade or dependency installation. Application source
 must be **pushed**: deployment resolves the public GitHub ref to a commit SHA,
@@ -49,7 +49,7 @@ nothing. Start is the explicit paid-resource opt-in.
 For read-only configuration, authorization and ownership validation:
 
 ```sh
-node scripts/managed-environments/railway-auto/launcher.mjs check \
+node scripts/managed-environments/railway/launcher.mjs check \
   --repository preset-io/agor --ref YOUR_PUSHED_REF --binding AGOR_BRANCH_UUID
 ```
 
@@ -129,14 +129,12 @@ bounded at 100 resources; API calls have a four-minute deadline. These are not
 dollar spending limits: configure Railway spending controls separately.
 
 There is no automatic expiry or branch/tenant deletion cleanup. Stop/Nuke and
-review inventory before deleting the branch or revoking credentials. Do not use
-the legacy volume-reset script on these previews. Legacy `railway-sqlite`
-explicit bindings remain unchanged.
+review inventory before deleting the branch or revoking credentials.
 
 ## Local verification
 
 ```sh
-node --test scripts/managed-environments/railway-auto/*.test.mjs
+node --test scripts/managed-environments/railway/*.test.mjs
 ```
 
 Tests use mocked APIs and create no provider resources. Live deployment behavior
@@ -146,3 +144,16 @@ Provider references: [API authentication](https://docs.railway.com/integrations/
 [services](https://docs.railway.com/integrations/api/manage-services),
 [environments](https://docs.railway.com/integrations/api/manage-environments),
 [variables](https://docs.railway.com/integrations/api/manage-variables).
+
+## Migration
+
+The automatic variant was renamed from `railway-auto-sqlite` to `railway-sqlite`.
+Import the new `.agor.yml`, then select `railway-sqlite` to re-render saved commands
+(stop running environments before switching). Automatic resource identities are
+unchanged; no reprovisioning or data migration is required.
+
+The old binding-based launcher, `bindings.json`, volume-reset helper and `.railway`
+SDK tooling were removed. Their manually provisioned/bootstrap resources remain
+untouched and are not adopted by this launcher. Manage them directly in Railway,
+or retain the earlier source revision for old tooling. Review saved commands
+before using the renamed variant; the old variant name alone does not migrate data.
