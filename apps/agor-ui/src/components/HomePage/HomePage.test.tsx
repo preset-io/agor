@@ -2,8 +2,7 @@ import type { AgorClient, Board, Branch, Session, User } from '@agor-live/client
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionMaps } from '../../store/agorMaps';
-import { type AgorState, agorStore } from '../../store/agorStore';
-import type { HomeSessionNeed } from '../../store/selectors';
+import { agorStore } from '../../store/agorStore';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
   OPEN_GLOBAL_SEARCH_EVENT,
@@ -25,37 +24,7 @@ import {
 // The side rail mounts at once.
 vi.mock('../../hooks/useIdleReady', () => ({ useIdleReady: () => true }));
 
-// Failure id → earlier failure ids folded into its row; empty passes the real selector through.
-const earlierFailures = vi.hoisted(() => new Map<string, string[]>());
-vi.mock('../../store/selectors', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../store/selectors')>();
-  const makeHomeBucketsSelector: typeof actual.makeHomeBucketsSelector = (options) => {
-    const select = actual.makeHomeBucketsSelector(options);
-    let last: { from: HomeSessionNeed[]; to: HomeSessionNeed[] } | undefined;
-    return (s: AgorState) => {
-      const buckets = select(s);
-      if (!earlierFailures.size) return buckets;
-      if (last?.from !== buckets.needs) {
-        const folded = new Set([...earlierFailures.values()].flat());
-        const to = buckets.needs
-          .filter((need) => !folded.has(need.session.session_id))
-          .map((need) => {
-            const ids = earlierFailures.get(need.session.session_id);
-            const earlier = ids?.map((id) => s.sessionById.get(id)).filter((x) => !!x);
-            return earlier ? { ...need, earlier } : need;
-          });
-        last = { from: buckets.needs, to };
-      }
-      return { ...buckets, needs: last.to };
-    };
-  };
-  return { ...actual, makeHomeBucketsSelector };
-});
-
-beforeEach(() => {
-  resetHome();
-  earlierFailures.clear();
-});
+beforeEach(resetHome);
 
 describe('HomePage', () => {
   it('shows rows before hydration but never “all caught up” or counts', () => {
@@ -161,10 +130,9 @@ describe('HomePage', () => {
   it('marks a failure row’s earlier failures opened along with it', async () => {
     const at = { status: 'failed', created_at: recent(60) } as const;
     const failures = [
-      session('f1', { ...at, title: 'Broken run' }),
-      session('f0', { ...at, title: 'Earlier broken run' }),
+      session('f1', { ...at, title: 'Broken run', last_updated: recent(1) }),
+      session('f0', { ...at, title: 'Earlier broken run', last_updated: recent(10) }),
     ];
-    earlierFailures.set('f1', ['f0']);
     seed({ sessions: failures });
     const onSessionClick = vi.fn();
     renderHome({ onSessionClick });
@@ -176,8 +144,7 @@ describe('HomePage', () => {
     expect(Object.keys(opened).sort()).toEqual(['f0', 'f1']);
     expect(opened.f0.at).toBe(opened.f1.at);
 
-    // Unfolded, neither run comes back: each was recorded against its own last run.
-    earlierFailures.clear();
+    // Neither run comes back: each was recorded against its own last run.
     act(() => agorStore.setState(buildSessionMaps(failures)));
     await waitFor(() => expect(within(needs).queryByText(/Broken run/i)).not.toBeInTheDocument());
   });
