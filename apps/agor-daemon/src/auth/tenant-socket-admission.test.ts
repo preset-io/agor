@@ -140,7 +140,7 @@ describe('socket restriction monitor', () => {
         if (tenantId === 'a') return new Promise<void>(() => undefined);
         observed.push(tenantId);
       });
-      const monitor = new TenantSocketRestrictionMonitor(observe, 20);
+      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
       for (let sweep = 0; sweep < 2; sweep++) {
         const checking = monitor.check(['a', 'b']);
         await vi.advanceTimersByTimeAsync(20);
@@ -158,6 +158,53 @@ describe('socket restriction monitor', () => {
     }
   });
 
+  it('abandons a wedged read once after two timeouts and never stacks another behind it', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    try {
+      const observe = vi.fn(() => new Promise<void>(() => undefined));
+      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
+      for (let sweep = 0; sweep < 6; sweep++) {
+        const checking = monitor.check(['a']);
+        await vi.advanceTimersByTimeAsync(20);
+        await checking;
+      }
+      // The original read plus exactly one replacement; the abandoned one is still outstanding.
+      expect(observe).toHaveBeenCalledTimes(2);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('retires a persistently unverifiable tenant but keeps transient skips non-disruptive', async () => {
+    const warn = warnings();
+    try {
+      let flakyFailed = false;
+      const observe = vi.fn(async (tenantId: string) => {
+        if (tenantId === 'down') throw new Error('unreadable');
+        if (tenantId === 'flaky' && !flakyFailed) {
+          flakyFailed = true;
+          throw new Error('transient');
+        }
+      });
+      const retireUnverifiable = vi.fn();
+      const monitor = new TenantSocketRestrictionMonitor(observe, {
+        timeoutMs: 20,
+        retireUnverifiable,
+        unverifiableLimit: 3,
+      });
+      for (let sweep = 0; sweep < 2; sweep++) await monitor.check(['down', 'flaky', 'open']);
+      expect(retireUnverifiable).not.toHaveBeenCalled();
+      await monitor.check(['down', 'flaky', 'open']);
+      expect(retireUnverifiable).toHaveBeenCalledExactlyOnceWith('down');
+      for (let sweep = 0; sweep < 5; sweep++) await monitor.check(['flaky', 'open']);
+      expect(retireUnverifiable).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('skips on error and saturation with one rate-limited line per minute', async () => {
     vi.useFakeTimers();
     const warn = warnings();
@@ -168,7 +215,10 @@ describe('socket restriction monitor', () => {
           ? Promise.reject(new Error('private detail'))
           : new Promise<void>(() => undefined)
       );
-      const monitor = new TenantSocketRestrictionMonitor(observe, 20, () => now);
+      const monitor = new TenantSocketRestrictionMonitor(observe, {
+        timeoutMs: 20,
+        now: () => now,
+      });
       const tenants = ['failing', ...Array.from({ length: 20 }, (_, index) => `tenant-${index}`)];
       for (let sweep = 0; sweep < 2; sweep++) {
         const checking = monitor.check(tenants);

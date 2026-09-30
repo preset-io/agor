@@ -133,36 +133,53 @@ export function restrictedSocketHandshakeError(
 
 type MonitorSkip = 'timeout' | 'error' | 'saturated';
 
-/** Bound each observation without duplicate reads; only `observe` itself retires sockets, on a positive observation. */
+/** Consecutive unverifiable observations (about 10 s at the 1 s tick) before a tenant's sockets are retired. */
+export const TENANT_SOCKET_UNVERIFIABLE_LIMIT = 10;
+
+interface TenantSocketRestrictionMonitorOptions {
+  timeoutMs?: number;
+  now?: () => number;
+  /** Retires a tenant's sockets once its state stayed unverifiable for `unverifiableLimit` observations. */
+  retireUnverifiable?: (tenantId: string) => void;
+  unverifiableLimit?: number;
+}
+
+/** Bound each observation without piling up reads; sockets retire on a positive observation or a persistent unverifiable streak. */
 export class TenantSocketRestrictionMonitor {
-  private readonly pending = new Map<string, Promise<void>>();
+  private readonly pending = new Map<string, { startedAt: number; read: Promise<void> }>();
+  /** At most one abandoned read per tenant may still be running against the database. */
+  private readonly abandoned = new Map<string, Promise<void>>();
+  private readonly unverifiable = new Map<string, number>();
   private lastWarning?: { at: number; suppressed: number };
+  private readonly timeoutMs: number;
+  private readonly now: () => number;
+  private readonly unverifiableLimit: number;
   constructor(
     private readonly observe: (tenantId: string) => Promise<void>,
-    private readonly timeoutMs = TENANT_RESTRICTION_READ_TIMEOUT_MS,
-    private readonly now = Date.now
-  ) {}
+    private readonly options: TenantSocketRestrictionMonitorOptions = {}
+  ) {
+    this.timeoutMs = options.timeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
+    this.now = options.now ?? Date.now;
+    this.unverifiableLimit = options.unverifiableLimit ?? TENANT_SOCKET_UNVERIFIABLE_LIMIT;
+  }
 
   async check(tenantIds: Iterable<string>): Promise<void> {
-    const entries = [...tenantIds];
+    const entries = [...new Set(tenantIds)];
+    const present = new Set(entries);
+    // Streaks of tenants with no sockets left are forgotten.
+    for (const tenantId of this.unverifiable.keys()) {
+      if (!present.has(tenantId)) this.unverifiable.delete(tenantId);
+    }
     for (let offset = 0; offset < entries.length; offset += 8) {
       await Promise.all(
         entries.slice(offset, offset + 8).map(async (tenantId) => {
-          let read = this.pending.get(tenantId);
-          if (!read && this.pending.size >= 8) return this.skip('saturated');
-          if (!read) {
-            read = Promise.resolve().then(() => this.observe(tenantId));
-            this.pending.set(tenantId, read);
-            const clear = () => {
-              if (this.pending.get(tenantId) === read) this.pending.delete(tenantId);
-            };
-            void read.then(clear, clear);
-          }
+          const read = this.readFor(tenantId);
+          if (!read) return this.skip(tenantId, 'saturated');
           let timer: ReturnType<typeof setTimeout> | undefined;
           const timedOut = new Promise<MonitorSkip>((resolve) => {
             timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
           });
-          // An unverifiable read retires nothing: every RPC still fails closed at admission.
+          // One unverifiable read retires nothing: every RPC still fails closed at admission.
           const skipped = await Promise.race([
             read.then(
               () => undefined,
@@ -171,13 +188,51 @@ export class TenantSocketRestrictionMonitor {
             timedOut,
           ]);
           if (timer) clearTimeout(timer);
-          if (skipped) this.skip(skipped);
+          if (skipped) this.skip(tenantId, skipped);
+          else this.unverifiable.delete(tenantId);
         })
       );
     }
   }
 
-  private skip(reason: MonitorSkip): void {
+  /** Shared in-flight read; a read pending past two timeouts is abandoned once, never stacked. */
+  private readFor(tenantId: string): Promise<void> | undefined {
+    const at = this.now();
+    const current = this.pending.get(tenantId);
+    if (current) {
+      const wedged = at - current.startedAt >= 2 * this.timeoutMs;
+      if (!wedged || this.abandoned.has(tenantId)) return current.read;
+      this.pending.delete(tenantId);
+      this.abandoned.set(tenantId, current.read);
+      const forget = () => {
+        if (this.abandoned.get(tenantId) === current.read) this.abandoned.delete(tenantId);
+      };
+      void current.read.then(forget, forget);
+    }
+    // Abandoned reads still hold a connection, so they count toward the eight-read bound.
+    if (this.pending.size + this.abandoned.size >= 8) return undefined;
+    const read = Promise.resolve().then(() => this.observe(tenantId));
+    const entry = { startedAt: at, read };
+    this.pending.set(tenantId, entry);
+    const clear = () => {
+      if (this.pending.get(tenantId) === entry) this.pending.delete(tenantId);
+    };
+    void read.then(clear, clear);
+    return read;
+  }
+
+  private skip(tenantId: string, reason: MonitorSkip): void {
+    const streak = (this.unverifiable.get(tenantId) ?? 0) + 1;
+    if (streak >= this.unverifiableLimit && this.options.retireUnverifiable) {
+      // A tenant nobody can verify must not keep driving raw terminal input indefinitely.
+      this.unverifiable.delete(tenantId);
+      this.options.retireUnverifiable(tenantId);
+      console.warn(
+        `[tenant.restriction] socket observation unverifiable; retired sockets streak=${streak}`
+      );
+    } else {
+      this.unverifiable.set(tenantId, streak);
+    }
     const at = this.now();
     // One line per minute across every reason; the count carries what was suppressed.
     const last = this.lastWarning;

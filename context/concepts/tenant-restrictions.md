@@ -223,9 +223,15 @@ silently, and nothing queued behind it dispatches. Raw traffic from a restricted
 retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or
-saturated read skips that tenant until the next tick with a rate-limited warning;
-it cannot open anything, because every RPC still reads admission itself and fails
-closed. Ordinary publications and Redis relays recheck the generation through a
+saturated read skips that tenant until the next tick with a rate-limited warning.
+RPCs stay closed meanwhile because each reads admission itself, but raw terminal
+input does not read, so a skip alone would let it continue: after 10 consecutive
+unverifiable observations (about 10 s at the 1 s tick, longer when sweeps run
+slow) the monitor retires that tenant's sockets, and their reconnect handshake
+must pass admission again. A single transient skip retires nothing. A read still
+pending after 4 s is abandoned once so a fresh read can start; while that
+abandoned read is outstanding no further read replaces it, and abandoned reads
+count toward the eight-read bound. Ordinary publications and Redis relays recheck the generation through a
 per-replica, per-tenant single-flight read reused for at most one tick (a failed
 read suppresses delivery for that tick; while a read stays pending past 2 s, that tenant's
 publications are suppressed until it settles, and after 4 s a fresh read replaces it), so suspension or reactivation reaches

@@ -2044,26 +2044,33 @@ export function createSocketIOConfig(
     };
     const readTenantRestriction = options.readTenantRestriction;
     const restrictionMonitor = readTenantRestriction
-      ? new TenantSocketRestrictionMonitor(async (tenantId) => {
-          const state = await readTenantRestriction(tenantId);
-          const sockets = monitoredSockets.get(tenantId) ?? [];
-          if (state.closed) {
-            for (const socket of sockets) retire(socket);
-            return;
-          }
-          const epoch = tenantCredentialEpoch(state, tenantId);
-          for (const socket of sockets) {
-            const connection = (socket as FeathersSocket).feathers;
-            try {
-              assertTenantCredentialEpochValue(
-                epoch,
-                getAuthenticatedConnectionCredentialPayload(connection)
-              );
-            } catch {
-              retire(socket);
+      ? new TenantSocketRestrictionMonitor(
+          async (tenantId) => {
+            const state = await readTenantRestriction(tenantId);
+            const sockets = monitoredSockets.get(tenantId) ?? [];
+            if (state.closed) {
+              for (const socket of sockets) retire(socket);
+              return;
             }
+            const epoch = tenantCredentialEpoch(state, tenantId);
+            for (const socket of sockets) {
+              const connection = (socket as FeathersSocket).feathers;
+              try {
+                assertTenantCredentialEpochValue(
+                  epoch,
+                  getAuthenticatedConnectionCredentialPayload(connection)
+                );
+              } catch {
+                retire(socket);
+              }
+            }
+          },
+          {
+            retireUnverifiable: (tenantId) => {
+              for (const socket of monitoredSockets.get(tenantId) ?? []) retire(socket);
+            },
           }
-        })
+        )
       : undefined;
     const restrictionInterval = restrictionMonitor
       ? setInterval(async () => {
