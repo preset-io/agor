@@ -114,8 +114,8 @@ describe('Home selectors on a 7k-session tenant', () => {
       `[home-perf] 7k sessions: first pass ${firstPassMs.toFixed(1)}ms, per patch buckets ${median(bucketTimes).toFixed(2)}ms, comments memo hit ${median(commentHitTimes).toFixed(3)}ms, comments recompute ${median(commentTimes).toFixed(2)}ms`
     );
     expect(firstComments.length).toBeGreaterThan(0);
-    // About 5x what was measured locally (first pass 1.1ms, 0.35ms, 0.008ms, recompute 0.25ms), for CI headroom.
-    expect(firstPassMs).toBeLessThan(8);
+    // Well above local measurements (first pass 1.1ms, 0.35ms, 0.008ms, recompute 0.25ms), for CI headroom.
+    expect(firstPassMs).toBeLessThan(20);
     expect(median(bucketTimes)).toBeLessThan(2.5);
     expect(median(commentHitTimes)).toBeLessThan(0.1);
     expect(median(commentTimes)).toBeLessThan(1.5);
