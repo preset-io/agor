@@ -1,5 +1,6 @@
 import type { Branch } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
+import { theme } from 'antd';
 import { describe, expect, it } from 'vitest';
 import { TeammateOptionLabel } from './TeammateOptionLabel';
 
@@ -27,7 +28,7 @@ describe('TeammateOptionLabel', () => {
     const board = screen.getByText('📋 Research');
     expect(name.style.flex).toBe('0 1 auto');
     expect(board.style.flex).toBe('1 1 0%');
-    expect(board.style.minWidth).toBe('3em');
+    expect(board.style.minWidth).toBe(`${theme.getDesignToken().fontSize * 3}px`);
     expect(screen.getByText('🎨').style.flex).toMatch(/^(none|0 0 auto)$/);
   });
 

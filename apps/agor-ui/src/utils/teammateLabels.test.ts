@@ -24,6 +24,12 @@ describe('sameName', () => {
     expect(sameName('Ada', 'Grace')).toBe(false);
   });
 
+  it('keeps symbols beside letters, so names differing only in symbols stay different', () => {
+    expect(sameName('C++', 'C#')).toBe(false);
+    expect(sameName('Hodor 🚀', 'Hodor 🎨')).toBe(false);
+    expect(sameName('Hodor 🚀', 'hodor🚀!')).toBe(true);
+  });
+
   it('compares names without letters or digits by their symbols, ignoring punctuation and spacing', () => {
     expect(sameName('🎨', '🚀')).toBe(false);
     expect(sameName('🎨', '🎨')).toBe(true);
@@ -53,6 +59,9 @@ describe('teammateOption', () => {
       '📋 Research'
     );
     expect(teammateOption(teammate('🎨'), boards('🚀'), repoById).context).toBe('📋 🚀');
+    expect(teammateOption(teammate('Hodor 🚀'), boards('Hodor 🎨'), repoById).context).toBe(
+      '📋 Hodor 🎨'
+    );
   });
 
   it('falls back to the repo slug without a known board, and to the default emoji', () => {

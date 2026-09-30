@@ -53,6 +53,8 @@ export function usePrimaryTeammate(
   }, []);
 
   const refresh = useCallback(async () => {
+    // A refresh captured before a client swap is superseded; it must not tag the old client's answer as the new caller's.
+    if (callerRef.current[0] !== client) return undefined;
     if (!client) return null;
     requestRef.current += 1;
     const request = requestRef.current;
