@@ -950,6 +950,11 @@ export function useAgorData(
         // The background hydrations kicked off below re-snapshot AFTER this bump,
         // so they're unaffected.
         bumpFirstPaintMergeRevisions();
+        if (silent) {
+          // A silent resync just applied the full active session and branch sets.
+          agorStore.getState().markHydrated('sessionsHydrated');
+          agorStore.getState().markHydrated('branchesHydrated');
+        }
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 

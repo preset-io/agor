@@ -1286,6 +1286,49 @@ describe('useAgorData — lean boards list + objects hydration', () => {
   });
 });
 
+describe('useAgorData — session and branch hydration flags', () => {
+  it('marks both flags again once the silent resync after an identity change lands', async () => {
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [makeSession()],
+      'sessions:findAll': [makeSession()],
+      'branches:findAll': [makeBranch()],
+    };
+    const gate = deferred();
+    const { client, onFetch, fetchCount } = makeMockClient(seed);
+    const { result, rerender } = renderHook(
+      ({ userId, generation }) =>
+        useAgorData(client, {
+          authenticatedUserId: userId,
+          authenticatedUserRole: 'member',
+          authGeneration: generation,
+          connectionReady: true,
+        }),
+      { initialProps: { userId: 'user-a', generation: 1 } }
+    );
+    await waitForInitialLoad(result);
+    await flush();
+    expect(agorStore.getState().sessionsHydrated).toBe(true);
+    expect(agorStore.getState().branchesHydrated).toBe(true);
+
+    // Hold the resync's full session fetch so the reset flags can be observed first.
+    const calls = fetchCount('sessions', 'findAll');
+    onFetch('sessions', 'findAll', (call) => (call > calls ? gate.promise : undefined));
+    rerender({ userId: 'user-b', generation: 2 });
+    await flush();
+    expect(agorStore.getState().sessionsHydrated).toBe(false);
+    expect(agorStore.getState().branchesHydrated).toBe(false);
+
+    await act(async () => {
+      gate.resolve();
+      await gate.promise;
+    });
+    await flush();
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
+    expect(agorStore.getState().sessionsHydrated).toBe(true);
+    expect(agorStore.getState().branchesHydrated).toBe(true);
+  });
+});
+
 describe('session MCP initialization events', () => {
   it('replaces attachments immediately, preserves unrelated sessions, and clears explicit empty selection', async () => {
     const { client, emit, listeners } = makeMockClient({
