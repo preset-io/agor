@@ -94,6 +94,26 @@ describe('usePrimaryTeammate', () => {
     expect(result.current).toMatchObject({ branch: branchB, current: true });
   });
 
+  it('keeps the branch owned across a refresh-key re-resolve, but not across a caller change', async () => {
+    const next = deferred<Branch | null>();
+    const getPrimaryTeammate = vi
+      .fn<() => Promise<Branch | null>>()
+      .mockResolvedValueOnce(branchA)
+      .mockReturnValueOnce(next.promise)
+      .mockReturnValueOnce(new Promise<Branch | null>(() => {}));
+    const client = clientResolving(getPrimaryTeammate);
+    const { result, rerender } = renderHook(
+      (props) => usePrimaryTeammate(client, props.userId, 0, props.refreshKey),
+      { initialProps: { userId: 'user-1', refreshKey: false } }
+    );
+    await waitFor(() => expect(result.current.ownedByCaller).toBe(true));
+    rerender({ userId: 'user-1', refreshKey: true });
+    expect(result.current).toMatchObject({ branch: branchA, current: false, ownedByCaller: true });
+    await act(async () => next.resolve(branchA));
+    rerender({ userId: 'user-2', refreshKey: true });
+    expect(result.current).toMatchObject({ branch: branchA, ownedByCaller: false });
+  });
+
   it('is not current after a failed resolve, and current again after an explicit pick', async () => {
     const client = clientResolving(async () => {
       throw new Error('offline');

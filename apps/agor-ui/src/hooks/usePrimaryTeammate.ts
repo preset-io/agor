@@ -5,6 +5,8 @@ interface PrimaryTeammate {
   branch: Branch | null;
   /** False from the render an identity change or a new resolve begins until its answer (or an explicit pick) lands, and after a failure. */
   current: boolean;
+  /** Whether `branch` was resolved or picked for this client and caller; a `refreshKey` re-resolve keeps it true. */
+  ownedByCaller: boolean;
   setBranch: (branch: Branch | null) => void;
   resolving: boolean;
   failed: boolean;
@@ -21,12 +23,16 @@ export function usePrimaryTeammate(
 ): PrimaryTeammate {
   const [branch, setResolvedBranch] = useState<Branch | null>(null);
   const [branchRequest, setBranchRequest] = useState(0);
+  const [branchCaller, setBranchCaller] = useState<readonly unknown[] | null>(null);
   const [resolving, setResolving] = useState(false);
   const [failed, setFailed] = useState(false);
   const requestRef = useRef(0);
   // Invalidate during render, as useIdentityGuardedAsync does: a response landing right after an identity change commits must not be accepted.
   const identity = [client, userId, authenticationGeneration, refreshKey];
   const renderedIdentityRef = useRef(identity);
+  const caller = [client, userId, authenticationGeneration] as const;
+  const callerRef = useRef(caller);
+  callerRef.current = caller;
   if (renderedIdentityRef.current.some((value, index) => !Object.is(value, identity[index]))) {
     requestRef.current += 1;
     renderedIdentityRef.current = identity;
@@ -45,6 +51,7 @@ export function usePrimaryTeammate(
     requestRef.current += 1;
     setResolvedBranch(next);
     setBranchRequest(requestRef.current);
+    setBranchCaller(callerRef.current);
     setResolving(false);
     setFailed(false);
   }, []);
@@ -60,6 +67,7 @@ export function usePrimaryTeammate(
       if (requestRef.current !== request) return undefined;
       setResolvedBranch(next);
       setBranchRequest(request);
+      setBranchCaller(callerRef.current);
       return next;
     } catch {
       if (requestRef.current !== request) return undefined;
@@ -76,5 +84,7 @@ export function usePrimaryTeammate(
   }, [refresh, userId, authenticationGeneration, refreshKey]);
 
   const current = branchRequest === requestRef.current;
-  return { branch, current, setBranch, resolving, failed, refresh };
+  const ownedByCaller =
+    !!branchCaller && branchCaller.every((value, index) => Object.is(value, caller[index]));
+  return { branch, current, ownedByCaller, setBranch, resolving, failed, refresh };
 }

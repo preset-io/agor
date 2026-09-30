@@ -238,9 +238,14 @@ describe('makeHomeBucketsSelector', () => {
     const later = session('ok', { status: 'idle', branch_id: 'b', ...ranAt(1) });
     const completed = session('done', { status: 'completed', branch_id: 'b', ...ranAt(1) });
     const earlier = session('ok0', { status: 'idle', branch_id: 'b', ...ranAt(5) });
-    const neverRan = session('new', { status: 'idle', branch_id: 'b', created_at: hoursAgo(1) });
+    const neverRan = session('new', {
+      status: 'idle',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      created_at: hoursAgo(1),
+    });
     expect(reasons(state({ sessions: [failed, earlier] }))).toEqual(['failed:f']);
-    expect(reasons(state({ sessions: [failed, neverRan] }))).toEqual(['failed:f']);
+    expect(reasons(state({ sessions: [failed, neverRan] }))).toEqual(['failed:f', 'finished:new']);
     expect(reasons(state({ sessions: [failed, later] }))).toEqual([]);
     expect(reasons(state({ sessions: [failed, completed] }))).toEqual([]);
     const theirs = { ...later, created_by: 'user-other' } as Session;
@@ -277,6 +282,25 @@ describe('makeHomeBucketsSelector', () => {
     ).toEqual(['failed:f']);
   });
 
+  it('falls back to creation time when the latest task id is not a UUIDv7', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+    });
+    // A v4 id's leading bits are random; read as a v7 timestamp they would land far in the future.
+    const v4 = session('v4', {
+      status: 'idle',
+      branch_id: 'b',
+      created_at: hoursAgo(5),
+      tasks: ['ffffffff-ffff-4fff-8fff-ffffffffffff'],
+    });
+    expect(reasons(state({ sessions: [failed, v4] }))).toEqual(['failed:f']);
+    const v4Later = { ...v4, created_at: hoursAgo(1) } as Session;
+    expect(reasons(state({ sessions: [failed, v4Later] }))).toEqual([]);
+  });
+
   it('keeps its result identity when a patch touches nothing it shows', () => {
     const shown = session('shown', { status: 'awaiting_permission' });
     const other = session('other', { created_by: 'user-other' });
@@ -304,6 +328,29 @@ describe('makeHomeBucketsSelector', () => {
     expect(
       select(s, { query: 'home', onlyStartedByMe: true }).recent.map((r) => r.session_id)
     ).toEqual(['x']);
+  });
+
+  it('counts every running session that passes the My work filters, beyond the preview cap', () => {
+    const running = (id: string, extra: Partial<Session> = {}) =>
+      session(id, { status: 'running', title: `Home ${id}`, ...extra });
+    const s = state({
+      sessions: [
+        running('a'),
+        running('b'),
+        running('c'),
+        running('d', { scheduled_from_branch: true }),
+        running('e', { title: 'Other work' }),
+        session('idle', { title: 'Home idle' }),
+      ],
+    });
+    const all = select(s, { recentLimit: 2 });
+    expect([all.running.length, all.runningCount, all.runningMatchCount]).toEqual([2, 5, 5]);
+    const filtered = select(s, { recentLimit: 2, query: 'home' });
+    expect([filtered.running.length, filtered.runningCount, filtered.runningMatchCount]).toEqual([
+      2, 5, 4,
+    ]);
+    const mine = select(s, { recentLimit: 2, query: 'home', onlyStartedByMe: true });
+    expect([mine.runningCount, mine.runningMatchCount]).toEqual([5, 3]);
   });
 });
 

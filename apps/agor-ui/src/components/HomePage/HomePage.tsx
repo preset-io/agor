@@ -5,11 +5,13 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { dropLegacyLocalStorageKey } from '../../hooks/localStorageJson';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { userStorageKey } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
   agorStore,
@@ -213,11 +215,13 @@ export const HomePage = memo(function HomePage({
     [client, userId]
   );
   const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage(
-    `agor:home-only-mine:${userId ?? 'anonymous'}`,
+    userStorageKey(userId, 'home-only-mine'),
     false
   );
+  // The shared pre-per-user filter is never read again.
+  useEffect(() => dropLegacyLocalStorageKey('agor:home-only-mine'), []);
   const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
-    `agor:home-opened-failures:${userId ?? 'anonymous'}`,
+    userStorageKey(userId, 'home-opened-failures'),
     {}
   );
   const [query, setQuery] = useState('');
@@ -287,15 +291,15 @@ export const HomePage = memo(function HomePage({
 
   // A landing filter applies once there is something to show, then leaves the history entry.
   const routeFilter = (location.state as HomeLocationState | null)?.needsFilter;
-  const { pathname, search } = location;
+  const { pathname, search, hash } = location;
   useEffect(() => {
     if (!routeFilter) return;
     const applicable = routeFilter !== 'comments' || comments.length > 0;
     if (!applicable && !hydrated) return;
     if (applicable) setNeedsFilter(routeFilter);
     requestAnimationFrame(() => scrollToSection('needs'));
-    navigate(`${pathname}${search}`, { replace: true, state: null });
-  }, [routeFilter, comments.length, hydrated, navigate, pathname, search]);
+    navigate({ pathname, search, hash }, { replace: true, state: null });
+  }, [routeFilter, comments.length, hydrated, navigate, pathname, search, hash]);
 
   const openComment = useCallback(
     ({ thread }: HomeCommentNeed) => {
@@ -464,9 +468,9 @@ export const HomePage = memo(function HomePage({
           <HomeMyWork
             recent={buckets.recent}
             recentCount={buckets.recentCount}
-            limit={workLimit}
             running={buckets.running}
             runningCount={buckets.runningCount}
+            runningMatchCount={buckets.runningMatchCount}
             hydrated={hydrated}
             tab={tab}
             onTabChange={setTab}

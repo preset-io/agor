@@ -16,6 +16,12 @@ describe('runWithLimit', () => {
     expect(failed.sort()).toEqual([3, 6]);
   });
 
+  it('still runs every item, one at a time, for a limit below one', async () => {
+    const seen: number[] = [];
+    expect(await runWithLimit([1, 2], 0, async (n) => void seen.push(n))).toEqual([]);
+    expect(seen).toEqual([1, 2]);
+  });
+
   it('resolves at once for no items', async () => {
     expect(await runWithLimit([], 3, async () => {})).toEqual([]);
   });

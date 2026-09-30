@@ -65,11 +65,16 @@ function AskTargetSelect({
     shallow
   );
   const { teammates: shared } = useSharedTeammates(client, listed ? currentUser : null);
-  const { access } = useSessionAccess(
+  const { access, failed, retry } = useSessionAccess(
     listed ? client : null,
     userId,
     shared.map((b) => b.branch_id)
   );
+  // Reads start on the first open; a later open retries the ones that failed.
+  const openList = () => {
+    setListed(true);
+    if (failed > 0) retry();
+  };
   const boardById = useAgorStore((s) => s.boardById);
   const repoById = useAgorStore((s) => s.repoById);
   const options = useMemo(() => {
@@ -91,7 +96,7 @@ function AskTargetSelect({
           type="text"
           aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
           onClick={() => {
-            setListed(true);
+            openList();
             setSheetOpen(true);
           }}
           style={{ flex: '0 0 auto', paddingInline: token.paddingXS }}
@@ -132,7 +137,7 @@ function AskTargetSelect({
       optionFilterProp="searchText"
       popupMatchSelectWidth={false}
       notFoundContent="No teammates you can ask"
-      onOpenChange={(open) => open && setListed(true)}
+      onOpenChange={(open) => open && openList()}
       onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
       labelRender={() => label}
       optionRender={({ data }) => <TeammateOptionLabel option={data} />}

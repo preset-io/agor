@@ -65,6 +65,8 @@ interface HomeBuckets {
   recentCount: number;
   running: Session[];
   runningCount: number;
+  /** Running sessions that pass the My work query and started-by-me filters, uncapped. */
+  runningMatchCount: number;
   /** Finished-unopened runs, counted singly (Needs you groups them per branch). */
   unreadCount: number;
   /** Known, unarchived boards of the caller's latest sessions, most recent first. */
@@ -100,12 +102,14 @@ const needBefore = (a: HomeNeed, b: HomeNeed) => compareHomeNeeds(a, b) < 0;
 const updatedAt = (session: Session) => getTimeMs(session, 'last_updated');
 const updatedBefore = (a: Session, b: Session) => updatedAt(a) > updatedAt(b);
 
-/** Epoch ms of a UUIDv7 id's creation timestamp (its first 48 bits). */
-const uuidV7Ms = (id: string) => Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16);
+/** Epoch ms of a UUIDv7 id's creation timestamp (its first 48 bits); NaN for any other id. */
+const uuidV7Ms = (id: string) =>
+  id[14] === '7' ? Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16) : Number.NaN;
 
 /** When the session's latest run started: its newest task's id timestamp, else its creation. */
 function lastRunStartedAt(session: Session): number {
   const tasks = session.tasks ?? [];
+  // Ids carry queue time, not start: later runs read early, which errs toward keeping the failure.
   const taskMs = tasks.length ? uuidV7Ms(tasks[tasks.length - 1]) : Number.NaN;
   const createdMs = getTimeMs(session, 'created_at');
   return Math.max(Number.isFinite(taskMs) ? taskMs : 0, Number.isFinite(createdMs) ? createdMs : 0);
@@ -114,6 +118,7 @@ function lastRunStartedAt(session: Session): number {
 /**
  * The session ran at least once and its latest run settled without failing:
  * failed and timed-out runs leave it FAILED / TIMED_OUT, so they never count.
+ * Limitation: stopped runs, and timed-out runs a daemon restart reset to IDLE, count as clean.
  */
 const ranCleanly = (session: Session) =>
   session.status === SessionStatus.COMPLETED ||
@@ -215,6 +220,7 @@ export function makeHomeBucketsSelector(
     let needsCount = 0;
     const needsByReason = { permission: 0, failed: 0, finished: 0 };
     let runningCount = 0;
+    let runningMatchCount = 0;
     let unreadCount = 0;
     let recentCount = 0;
     let hasSessions = false;
@@ -245,7 +251,10 @@ export function makeHomeBucketsSelector(
         boardAt.set(board.board_id, updatedAt(session));
       if (session.status === SessionStatus.RUNNING) {
         runningCount++;
-        if (passes(session)) insertTopK(running, session, recentLimit, updatedBefore);
+        if (passes(session)) {
+          runningMatchCount++;
+          insertTopK(running, session, recentLimit, updatedBefore);
+        }
       }
       if (session.status === SessionStatus.AWAITING_PERMISSION) {
         addNeed(session, 'permission');
@@ -296,6 +305,7 @@ export function makeHomeBucketsSelector(
       recentCount,
       running: prev && sameItems(prev.running, running) ? prev.running : running,
       runningCount,
+      runningMatchCount,
       unreadCount,
       boardIds: prev && sameItems(prev.boardIds, boardIds) ? prev.boardIds : boardIds,
       hasSessions,

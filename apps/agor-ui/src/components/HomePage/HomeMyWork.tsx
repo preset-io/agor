@@ -47,8 +47,8 @@ interface HomeMyWorkProps {
   running: Session[];
   /** Every running session, before the filters. */
   runningCount: number;
-  /** Rows per list: `recent` and `running` are capped here. */
-  limit: number;
+  /** Running sessions that pass the filters, uncapped. */
+  runningMatchCount: number;
   hydrated: boolean;
   tab: MyWorkTab;
   onTabChange: (tab: MyWorkTab) => void;
@@ -147,7 +147,7 @@ export const HomeMyWork = memo(function HomeMyWork({
   recentCount,
   running,
   runningCount,
-  limit,
+  runningMatchCount,
   hydrated,
   tab,
   onTabChange,
@@ -167,14 +167,7 @@ export const HomeMyWork = memo(function HomeMyWork({
   const [filtersOpen, setFiltersOpen] = useState(false);
   const sessions = tab === 'running' ? running : recent;
   const filtered = !!query.trim() || onlyStartedByMe;
-  // Recent's count is already filtered. Running's is not: under a filter the capped list is exact
-  // until it fills its page, and past that only "more" is known.
-  const runningTotal = !filtered
-    ? runningCount
-    : running.length < limit || running.length === runningCount
-      ? running.length
-      : undefined;
-  const total = tab === 'running' ? runningTotal : recentCount;
+  const total = tab === 'running' ? runningMatchCount : recentCount;
   const grouped = tab === 'recent' && view === 'board';
   const homes = useStoreWithEqualityFn(
     agorStore,
@@ -368,13 +361,9 @@ export const HomeMyWork = memo(function HomeMyWork({
               )}
             />
           )}
-          {(total === undefined || total > sessions.length) && (
+          {total > sessions.length && (
             <HomeShowMore
-              label={
-                total === undefined
-                  ? 'Show more'
-                  : `Show ${Math.min(total - sessions.length, MY_WORK_PAGE)} more`
-              }
+              label={`Show ${Math.min(total - sessions.length, MY_WORK_PAGE)} more`}
               onClick={onShowMore}
             />
           )}

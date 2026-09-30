@@ -113,7 +113,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
         : [...teammates.slice(offset % teammates.length), ...teammates].slice(0, RAIL_SIZE),
     [teammates, offset]
   );
-  const { access } = useSessionAccess(
+  const { access, failed, retry } = useSessionAccess(
     checkAccess ? client : null,
     currentUser?.user_id,
     shown.map((b) => b.branch_id)
@@ -155,6 +155,14 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
             </div>
           ))}
         </HomeCard>
+      )}
+      {failed > 0 && (
+        <Typography.Text
+          type="secondary"
+          style={{ display: 'block', marginTop: token.marginXS, fontSize: token.fontSizeSM }}
+        >
+          Couldn’t check access for some teammates. <HomeLink onClick={retry}>Try again</HomeLink>
+        </Typography.Text>
       )}
     </HomeSection>
   );
