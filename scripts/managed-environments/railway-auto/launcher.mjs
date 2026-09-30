@@ -78,7 +78,10 @@ export async function run(action, input, env = process.env, request = fetch) {
   await preview.stop(owned);
   if (action === 'nuke') {
     await preview.remove(await preview.inspect());
-    return { message: 'Owned preview removed. Its data was permanently deleted.' };
+    return {
+      message:
+        'Owned preview removed. Volume deletion requested; Railway may retain data during its recovery window.',
+    };
   }
   return { message: 'Compute stopped. Service and volume retained; storage charges still apply.' };
 }

@@ -573,11 +573,39 @@ export class Preview {
       );
     }
     const last = await this.inventory();
+    // Railway soft-deletes volume instances for its recovery window. Accept only
+    // the exact previously owned, now-detached instance after confirmed deletion.
+    const retained = last.volumes.find((v) => v.id === owned.volume.id);
+    let pendingDeletion = false;
+    if (retained) {
+      const instances = nodes(retained.volumeInstances);
+      requireValue(
+        instances.length === 1 &&
+          instances[0].serviceId === null &&
+          instances[0].environmentId === owned.environment.id &&
+          instances[0].mountPath === '/home/agor/.agor',
+        'Volume changed during deletion; inspect provider state.'
+      );
+      const { volumeInstance } = await this.api.query(
+        'query PreviewDeletedVolume($id:String!){volumeInstance(id:$id){id volumeId serviceId environmentId isPendingDeletion deletedAt}}',
+        { id: instances[0].id }
+      );
+      pendingDeletion =
+        volumeInstance?.id === instances[0].id &&
+        volumeInstance.volumeId === owned.volume.id &&
+        volumeInstance.serviceId === null &&
+        volumeInstance.environmentId === owned.environment.id &&
+        volumeInstance.isPendingDeletion === true &&
+        typeof volumeInstance.deletedAt === 'string' &&
+        Number.isFinite(Date.parse(volumeInstance.deletedAt));
+      requireValue(pendingDeletion, 'Volume deletion is not yet visible; inspect before retrying.');
+    }
     requireValue(
       !last.volumes.some(
         (v) =>
-          v.id === owned.volume.id ||
-          nodes(v.volumeInstances).some((i) => i.environmentId === owned.environment.id)
+          !(v.id === owned.volume.id && pendingDeletion) &&
+          (v.id === owned.volume.id ||
+            nodes(v.volumeInstances).some((i) => i.environmentId === owned.environment.id))
       ) &&
         !last.services.some((s) =>
           nodes(s.serviceInstances).some((i) => i.environmentId === owned.environment.id)

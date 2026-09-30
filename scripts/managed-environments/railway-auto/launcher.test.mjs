@@ -170,8 +170,18 @@ function fixture() {
       state.afterServiceDelete?.();
       data = { serviceDelete: true };
     } else if (q.includes('PreviewDeleteVolume')) {
-      state.volumes = state.volumes.filter((volume) => volume.id !== v.id);
+      if (!state.softDelete) state.volumes = state.volumes.filter((volume) => volume.id !== v.id);
       data = { volumeDelete: true };
+    } else if (q.includes('PreviewDeletedVolume')) {
+      const volume = state.volumes[0];
+      data = {
+        volumeInstance: {
+          ...volume.volumeInstances.edges[0].node,
+          volumeId: volume.id,
+          isPendingDeletion: state.softDelete === 'confirmed',
+          deletedAt: '2026-10-02T00:00:00Z',
+        },
+      };
     } else if (q.includes('PreviewDeleteEnvironment')) {
       state.environments = state.environments.filter((e) => e.id !== v.id);
       data = { environmentDelete: true };
@@ -338,6 +348,20 @@ test('Nuke refuses a detached volume moved to another environment or reattached'
     // Partial cleanup must not adopt an orphan by name on subsequent Start/Nuke.
     await assert.rejects(f.action('start'), /orphaned/);
     await assert.rejects(f.action('nuke'), /orphaned/);
+  }
+});
+test('Nuke accepts only confirmed soft deletion of the exact owned volume', async () => {
+  for (const status of ['confirmed', 'unconfirmed']) {
+    const f = fixture();
+    await f.action('start');
+    f.state.softDelete = status;
+    if (status === 'confirmed') {
+      await f.action('nuke');
+      assert.equal(f.state.environments.length, 0);
+    } else {
+      await assert.rejects(f.action('nuke'), /not yet visible/);
+      assert.equal(f.state.environments.length, 1);
+    }
   }
 });
 test('plain Node loads launcher; lifecycle commands never install dependencies', () => {

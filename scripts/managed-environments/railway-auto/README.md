@@ -87,8 +87,10 @@ preview-only project.
 
 Stop removes/cancels compute only; repeat Stop after draining if needed. Service,
 volume and domain remain, and storage charges continue. Nuke explicitly deletes
-the owned service, private volume and environment, never the project. Partial
-cleanup may require manual Railway recovery; no broad orphan deletion is done.
+the owned service, private volume and environment, never the project.
+Railway volume deletion may retain data during the provider's recovery window;
+Nuke accepts confirmed pending deletion, not merely a successful API response.
+Partial cleanup may require manual Railway recovery; no broad orphan deletion is done.
 Missing recorded volumes are never silently replaced with empty storage.
 
 Use **one lifecycle controller per project**, and serialize lifecycle actions.
