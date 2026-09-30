@@ -953,12 +953,16 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   ): Promise<string | undefined> => {
     const now = Date.now();
     if (now >= nextEviction) {
-      // Settled entries past their tick are dropped; in-flight reads never expire here.
+      // Settled entries past their tick are dropped; in-flight reads are only replaced on lookup.
       for (const [id, stale] of epochReads) if (now >= stale.until) epochReads.delete(id);
       nextEviction = now + TENANT_RESTRICTION_OBSERVATION_MS;
     }
     let entry = epochReads.get(tenantId);
-    if (!entry || now >= entry.until) {
+    // A read that never settles is abandoned after two timeouts so one wedged read cannot suppress delivery forever.
+    const abandoned =
+      entry?.until === Number.POSITIVE_INFINITY &&
+      now - entry.startedAt >= 2 * TENANT_RESTRICTION_READ_TIMEOUT_MS;
+    if (!entry || now >= entry.until || abandoned) {
       const created = {
         startedAt: now,
         until: Number.POSITIVE_INFINITY,

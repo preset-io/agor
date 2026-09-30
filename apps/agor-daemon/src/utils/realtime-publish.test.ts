@@ -3057,19 +3057,24 @@ describe('publication restriction observation', () => {
       await first;
       expect(app.emit).not.toHaveBeenCalled();
 
-      // Past the tick the in-flight read is neither evicted nor duplicated; publications stay suppressed.
+      // Past the tick (but within two timeouts) the in-flight read is neither evicted nor duplicated.
       await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
       await relayBoard();
       expect(read).toHaveBeenCalledOnce();
       expect(app.emit).not.toHaveBeenCalled();
 
-      // Once it settles, the stale entry is evicted and the next tick reads afresh.
-      stuck.resolve(undefined);
+      // A read still pending after two timeouts is abandoned: the next publication reads afresh.
       read.mockImplementation(async () => undefined);
-      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
+      await vi.advanceTimersByTimeAsync(2 * 2000 - 2000 - TENANT_RESTRICTION_OBSERVATION_MS);
       await relayBoard();
       expect(read).toHaveBeenCalledTimes(2);
       expect(app.emit).toHaveBeenCalledOnce();
+
+      // The abandoned read settling late never replaces the fresh entry.
+      stuck.resolve('f'.repeat(64));
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).toHaveBeenCalledTimes(2);
     } finally {
       read.mockReset();
       vi.useRealTimers();

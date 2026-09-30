@@ -202,7 +202,7 @@ it cannot open anything, because every RPC still reads admission itself and fail
 closed. Ordinary publications and Redis relays recheck the generation through a
 per-replica, per-tenant single-flight read reused for at most one tick (a failed
 read suppresses delivery for that tick; while a read stays pending past 2 s, that tenant's
-publications are suppressed until it settles), so suspension or reactivation reaches
+publications are suppressed until it settles, and after 4 s a fresh read replaces it), so suspension or reactivation reaches
 publications within about one tick; the exact task termination signal retains its
 narrowly scoped channel. Socket retirement does not prove process exit. Terminal creation also rechecks execution
 admission before branch admission, but the transaction does not span process spawn.
