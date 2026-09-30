@@ -1,10 +1,6 @@
-import type {
-  AgorClient,
-  EffectiveCapabilityPolicyAccess,
-  GatewayChannel,
-  User,
-} from '@agor-live/client';
+import type { AgorClient, EffectiveBranchAccess, GatewayChannel, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { canStartSessions } from './branchAccess';
 
 /** Transient setup request, not a grant or a credential. */
 export type OnboardingSlackGatewayIntent = 'prefer-existing' | 'request-new';
@@ -20,8 +16,8 @@ export async function readOnboardingSlackGateways(client: AgorClient) {
     try {
       const access = (await client.service('branches/:id/effective-access').find({
         route: { id: channel.target_branch_id },
-      })) as unknown as EffectiveCapabilityPolicyAccess;
-      if (access.capabilities.includes('sessions.create')) {
+      })) as unknown as EffectiveBranchAccess;
+      if (canStartSessions(access)) {
         existing.push({
           id: channel.id,
           name: channel.name,

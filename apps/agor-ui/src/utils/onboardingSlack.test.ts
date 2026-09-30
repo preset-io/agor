@@ -3,9 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { readOnboardingSlackGateways, resolveOnboardingSlackIntent } from './onboardingSlack';
 import { buildTeammateBootstrapPrompt } from './teammateBootstrapPrompt';
 
-function setup(channels: unknown[] = [], capabilities = ['sessions.create'], role = 'admin') {
+function setup(channels: unknown[] = [], can = 'session', role = 'admin') {
   const findAll = vi.fn(async () => channels);
-  const find = vi.fn(async () => ({ capabilities }));
+  const find = vi.fn(async () => ({ can, is_owner: false, source: 'others' }));
   const client = {
     service: (name: string) =>
       name === 'gateway-channels'
@@ -42,14 +42,14 @@ describe('Slack onboarding availability and consent', () => {
     expect(findAll).not.toHaveBeenCalled();
     expect(await resolveOnboardingSlackIntent(client, user, 'request-new')).toBe('request-new');
     expect(
-      await resolveOnboardingSlackIntent(setup([], [], 'member').client, user, 'request-new')
+      await resolveOnboardingSlackIntent(setup([], 'view', 'member').client, user, 'request-new')
     ).toBe('prefer-existing');
     expect(
       await resolveOnboardingSlackIntent(client, { ...user, role: 'member' }, 'request-new')
     ).toBe('prefer-existing');
   });
   it('does not expose a foreign or permission-denied branch as usable and fails closed on lookup failure', async () => {
-    expect(await readOnboardingSlackGateways(setup([gateway], []).client)).toEqual([]);
+    expect(await readOnboardingSlackGateways(setup([gateway], 'view').client)).toEqual([]);
     const api = setup([gateway]);
     api.find.mockRejectedValueOnce(new Error('Foreign tenant'));
     expect(await resolveOnboardingSlackIntent(api.client, user, 'request-new')).toBe(
