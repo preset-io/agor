@@ -55,22 +55,26 @@ function busyTenant(): AgorState {
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 
+const bucketsSelector = () =>
+  makeHomeBucketsSelector({ userId: ME, now: NOW, needsLimit: 3, recentLimit: 20, boardsLimit: 5 });
+const commentsSelector = () => makeCommentsForYouSelector({ userId: ME, userName: 'Kasia' });
+
 describe('Home selectors on a 7k-session tenant', () => {
   it('stay cheap per session patch and quiet for patches outside the previews', () => {
+    // Warm up JIT on a throwaway tenant; the timed first pass then runs on fresh objects.
+    for (let i = 0; i < 3; i++) {
+      const warm = busyTenant();
+      bucketsSelector()(warm);
+      commentsSelector()(warm);
+    }
     const base = busyTenant();
-    const buckets = makeHomeBucketsSelector({
-      userId: ME,
-      now: NOW,
-      needsLimit: 3,
-      recentLimit: 20,
-      boardsLimit: 5,
-    });
-    const comments = makeCommentsForYouSelector({ userId: ME, userName: 'Kasia' });
+    const buckets = bucketsSelector();
+    const comments = commentsSelector();
 
     let t = performance.now();
     const firstBuckets = buckets(base);
     const firstComments = comments(base);
-    const coldMs = performance.now() - t;
+    const firstPassMs = performance.now() - t;
 
     // Streaming-style patches to someone else's sessions: new session and map identities.
     const patched = Array.from({ length: 30 }, (_, i) => {
@@ -80,23 +84,40 @@ describe('Home selectors on a 7k-session tenant', () => {
       return { ...base, sessionById };
     });
     const bucketTimes: number[] = [];
-    const commentTimes: number[] = [];
+    const commentHitTimes: number[] = [];
     for (const state of patched) {
       t = performance.now();
       expect(buckets(state)).toBe(firstBuckets);
       bucketTimes.push(performance.now() - t);
       t = performance.now();
       expect(comments(state)).toBe(firstComments);
+      commentHitTimes.push(performance.now() - t);
+    }
+
+    // A new comment each time: the comments selector recomputes every thread.
+    const commentTimes: number[] = [];
+    for (let i = 0; i < 30; i++) {
+      const commentById = new Map(base.commentById);
+      commentById.set(`new-${i}`, {
+        ...base.commentById.get('c-0')!,
+        comment_id: `new-${i}`,
+        content: 'ping @Kasia',
+        resolved: false,
+      });
+      const state = { ...base, commentById };
+      t = performance.now();
+      expect(comments(state)).not.toBe(firstComments);
       commentTimes.push(performance.now() - t);
     }
 
     console.info(
-      `[home-perf] 7k sessions: cold ${coldMs.toFixed(1)}ms, per patch buckets ${median(bucketTimes).toFixed(2)}ms, comments ${median(commentTimes).toFixed(3)}ms`
+      `[home-perf] 7k sessions: first pass ${firstPassMs.toFixed(1)}ms, per patch buckets ${median(bucketTimes).toFixed(2)}ms, comments memo hit ${median(commentHitTimes).toFixed(3)}ms, comments recompute ${median(commentTimes).toFixed(2)}ms`
     );
     expect(firstComments.length).toBeGreaterThan(0);
-    // About 5x the medians measured locally (cold 3ms, 0.5ms, 0.013ms), for CI headroom.
-    expect(coldMs).toBeLessThan(20);
+    // About 5x what was measured locally (first pass 1.1ms, 0.35ms, 0.008ms, recompute 0.25ms), for CI headroom.
+    expect(firstPassMs).toBeLessThan(8);
     expect(median(bucketTimes)).toBeLessThan(2.5);
-    expect(median(commentTimes)).toBeLessThan(0.1);
+    expect(median(commentHitTimes)).toBeLessThan(0.1);
+    expect(median(commentTimes)).toBeLessThan(1.5);
   });
 });

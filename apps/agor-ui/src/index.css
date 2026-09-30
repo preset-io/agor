@@ -1,4 +1,4 @@
-/* biome-ignore-all lint/plugin/noFirstPartyCss: global resets, accessibility motion, keyframes, and third-party semantic integrations require selectors */
+/* biome-ignore-all lint/plugin/noFirstPartyCss: global resets, accessibility motion, keyframes, pseudo-class interaction states (Home rows' :hover, :focus-visible, :focus-within and :has), and third-party semantic integrations require selectors */
 /* Import Inter font from Bunny Fonts CDN (privacy-friendly, GDPR compliant) */
 /* Weights: 400 (regular), 500 (medium), 600 (semibold) */
 /* Total size: ~75KB for Latin subset, cached across sites */
@@ -234,8 +234,9 @@
   min-height: 0;
 }
 
-/* Home rows, secondary links and group headers: hover, keyboard focus and
-   hover-revealed actions are pseudo-class states, not per-row React state. */
+/* Home rows and group headers: hover, keyboard focus and hover-revealed
+   actions are pseudo-class states that inline styles cannot express, kept here
+   instead of per-row React state. Only Agor's own classes are styled. */
 .agor-home-pressable:hover,
 .agor-home-pressable:has(> [data-home-row]:focus-visible) {
   background: var(--ant-control-item-bg-hover);
@@ -244,10 +245,6 @@
 .agor-home-pressable > [data-home-row]:focus-visible {
   outline: 2px solid var(--ant-color-primary);
   outline-offset: -2px;
-}
-
-.agor-home-link.ant-btn:not(:hover, :focus-visible) {
-  color: var(--ant-color-text-secondary);
 }
 
 @media (hover: hover) {

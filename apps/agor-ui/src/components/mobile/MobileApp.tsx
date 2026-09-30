@@ -35,6 +35,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
@@ -326,14 +327,17 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '');
+  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
   const openHomeBoard = useCallback(
     (boardId: string) => navigate(`/m/board/${boardId}`),
     [navigate]
   );
   const openHomeSession = useCallback(
-    (sessionId: string) => navigate(`/m/session/${sessionId}`),
-    [navigate]
+    (sessionId: string) => {
+      clearOpenedSessionFlags(client, sessionId);
+      navigate(`/m/session/${sessionId}`);
+    },
+    [client, navigate]
   );
   const openHomeBranch = useCallback(
     (branchId: string) => {
@@ -512,6 +516,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 firstTaskAssistantName={primaryTeammateName}
                 commentsBadge={boardCommentsBadge}
                 onOpenComments={openBoardComments}
+                userId={user?.user_id}
               />
             }
           />

@@ -27,11 +27,18 @@ describe('useCommentsForYou', () => {
     } as never);
     const client = {
       service: () => ({
+        findAll: async () => [],
         find: async ({ route }: { route: { id: string } }) => ({
           primary_owner_user_id: 'other',
           board_access: {
+            policy_kind: 'board_access',
             sharing_mode: route.id === 'b-open' ? 'shared' : 'private',
             entries: [],
+            others: {
+              preset: 'viewer',
+              capabilities: route.id === 'b-open' ? ['board.view'] : [],
+              fs_access: 'none',
+            },
           },
         }),
       }),

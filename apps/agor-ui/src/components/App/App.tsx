@@ -70,6 +70,7 @@ import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -681,7 +682,11 @@ export const App: React.FC<AppProps> = ({
   // and the localStorage-backed recents list keeps both in sync. The boards arg
   // only shapes `recentBoards`, which the shell does not consume — passing the
   // stable empty list avoids a whole-map subscription here.
-  const { recentBoardIds, trackBoardVisit } = useRecentBoards(EMPTY_BOARDS, currentBoardId);
+  const { recentBoardIds, trackBoardVisit } = useRecentBoards(
+    EMPTY_BOARDS,
+    currentBoardId,
+    user?.user_id
+  );
 
   // Persist current board to localStorage when it changes
   useEffect(() => {
@@ -1110,31 +1115,9 @@ export const App: React.FC<AppProps> = ({
 
   const handleSessionClick = useCallback(
     (sessionId: string) => {
-      // Call-time store read: the shell no longer subscribes to the session /
-      // branch maps, so any render-time snapshot here would be stale. The
-      // handler's identity stays stable across socket churn — important
-      // because it flows through SessionCanvas → initialNodes deps and a
-      // flipping identity would cascade re-renders into every BranchCard.
-      const { sessionById, branchById } = agorStore.getState();
-      const session = sessionById.get(sessionId);
-
-      // Best-effort: clear highlight flags when opening the conversation.
-      // These updates may fail silently if the user lacks write permission (e.g. read-only
-      // access via RBAC). We suppress errors to avoid spurious toasts for read-only users.
-      if (client && session?.ready_for_prompt) {
-        client
-          .service('sessions')
-          .patch(sessionId, { ready_for_prompt: false })
-          .catch(() => {});
-      }
-
-      const branch = session?.branch_id ? branchById.get(session.branch_id) : undefined;
-      if (client && branch?.needs_attention) {
-        client
-          .service('branches')
-          .patch(branch.branch_id, { needs_attention: false })
-          .catch(() => {});
-      }
+      // Reads the store at call time, so the handler's identity stays stable across
+      // socket churn (it flows into SessionCanvas → initialNodes deps).
+      clearOpenedSessionFlags(client, sessionId);
 
       // Route through URL nav so deep links / back-forward / cross-board
       // recenter all funnel through the same pipe. setSelectedSessionId

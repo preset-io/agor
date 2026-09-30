@@ -2,12 +2,23 @@ import type { AgorClient, Board, BoardComment, Branch, Session, User } from '@ag
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { Profiler, useLayoutEffect, useState } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import {
+  OPEN_BOARD_SWITCHER_EVENT,
+  OPEN_GLOBAL_SEARCH_EVENT,
+  onShellPicker,
+} from '../../utils/shellEvents';
 import { HomePage, type HomePageProps } from './HomePage';
+
+/** Renders the current route state, so a test can see Home clear it. */
+function RouteStateProbe() {
+  const { state } = useLocation();
+  return <output aria-label="route state">{JSON.stringify(state)}</output>;
+}
 
 // HomePage's body is the only caller; counting it counts HomePage renders.
 // Its effect counts HomePage mounts.
@@ -21,6 +32,20 @@ vi.mock('../../hooks/useIdleReady', async () => {
         homeRenders.mounts += 1;
       }, []);
       return true;
+    },
+  };
+});
+
+// Counts title reads per session: every session row render reads its title once.
+const titleReads = vi.hoisted(() => new Map<string, number>());
+vi.mock('../../utils/sessionTitle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/sessionTitle')>();
+  return {
+    ...actual,
+    getSessionDisplayTitle: (...args: Parameters<typeof actual.getSessionDisplayTitle>) => {
+      const id = args[0].session_id;
+      titleReads.set(id, (titleReads.get(id) ?? 0) + 1);
+      return actual.getSessionDisplayTitle(...args);
     },
   };
 });
@@ -119,11 +144,11 @@ const stableProps: HomePageProps = {
   onCreateSession: async () => null,
 };
 
-function wrap(node: React.ReactNode, route: string | object = '/') {
+function wrap(node: React.ReactNode, route: string | object = '/', connected = true) {
   return (
     <ConnectionProvider
       value={{
-        connected: true,
+        connected,
         connecting: false,
         authGeneration: 1,
         outOfSync: false,
@@ -132,19 +157,28 @@ function wrap(node: React.ReactNode, route: string | object = '/') {
       }}
     >
       <AntApp>
-        <MemoryRouter initialEntries={[route as string]}>{node}</MemoryRouter>
+        <MemoryRouter initialEntries={[route as string]}>
+          {node}
+          <RouteStateProbe />
+        </MemoryRouter>
       </AntApp>
     </ConnectionProvider>
   );
 }
 
-function renderHome(props: Partial<HomePageProps> = {}, onRender = () => {}, route?: object) {
+function renderHome(
+  props: Partial<HomePageProps> = {},
+  onRender = () => {},
+  route?: object,
+  connected = true
+) {
   return render(
     wrap(
       <Profiler id="home" onRender={onRender}>
         <HomePage {...stableProps} {...props} />
       </Profiler>,
-      route
+      route,
+      connected
     )
   );
 }
@@ -298,7 +332,7 @@ describe('HomePage', () => {
     expect(screen.getByText(/^waiting /)).toBeInTheDocument();
   });
 
-  it('lands on the comments filter from route state (the phone bell)', () => {
+  it('lands on the comments filter from route state (the phone bell), then clears it', async () => {
     seed({
       sessions: [session('perm', { status: 'awaiting_permission' })],
       comments: [comment('c1')],
@@ -307,6 +341,23 @@ describe('HomePage', () => {
     const needs = screen.getByRole('region', { name: 'Needs you' });
     expect(within(needs).getAllByRole('button', { name: /mentioned you/ })).toHaveLength(1);
     expect(within(needs).queryByRole('button', { name: /Session perm/ })).not.toBeInTheDocument();
+    // Back to this entry must not apply the filter again.
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'route state' })).toHaveTextContent('null')
+    );
+  });
+
+  it('stays on All when the bell lands with no comments for you', async () => {
+    seed({ sessions: [session('perm', { status: 'awaiting_permission' })] });
+    renderHome({}, undefined, { pathname: '/', state: { needsFilter: 'comments' } });
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    expect(
+      within(needs).getByRole('button', { name: 'Session perm, Waiting for your permission' })
+    ).toBeInTheDocument();
+    expect(screen.queryByText('You’re all caught up.')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'route state' })).toHaveTextContent('null')
+    );
   });
 
   it('hides the ask box for people who cannot start sessions', async () => {
@@ -417,6 +468,19 @@ describe('HomePage', () => {
     expect(within(toolbar).getByText('1')).toBeInTheDocument();
   });
 
+  it('keeps “Only sessions I started” per user', async () => {
+    seed({ sessions: [session('idle')] });
+    const { unmount } = renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
+    unmount();
+
+    renderHome({ currentUser: { ...user, user_id: 'someone-else' } as User });
+    const toolbar = document.querySelector<HTMLElement>('[data-home-toolbar]') as HTMLElement;
+    expect(within(toolbar).queryByText('1')).not.toBeInTheDocument();
+  });
+
   it('shows View in the toolbar, defaults to List, and counts only filters', () => {
     asDesktop();
     seed({
@@ -473,6 +537,131 @@ describe('HomePage', () => {
     expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
   });
 
+  it('falls back too when every visited board is gone or archived', () => {
+    seed({
+      sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
+      boards: [
+        { board_id: 'b-a', name: 'Launch board', archived: false } as Board,
+        { board_id: 'b-old', name: 'Old board', archived: true } as Board,
+      ],
+    });
+    renderHome({ recentBoardIds: ['b-deleted', 'b-old'] });
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
+    expect(
+      within(recentBoards).queryByRole('button', { name: 'Old board' })
+    ).not.toBeInTheDocument();
+  });
+
+  it('always offers All boards, even with no boards to show', () => {
+    seed({});
+    renderHome();
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(
+      within(recentBoards)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    ).toEqual(['All boards']);
+  });
+
+  it('counts only filtered running sessions, and says when a filter hides them all', async () => {
+    seed({
+      sessions: Array.from({ length: 25 }, (_, i) =>
+        session(`r${i}`, {
+          status: 'running',
+          title: i < 3 ? `alpha ${i}` : `beta ${i}`,
+          last_updated: recent(i),
+        })
+      ),
+    });
+    renderHome();
+    const work = screen.getByRole('region', { name: 'My work' });
+    fireEvent.click(within(work).getByRole('radio', { name: 'Running 25' }));
+    expect(within(work).getByRole('button', { name: 'Show 5 more' })).toBeInTheDocument();
+
+    const filter = within(work).getByRole('textbox', { name: 'Filter sessions' });
+    fireEvent.change(filter, { target: { value: 'alpha' } });
+    await waitFor(() => expect(work.querySelectorAll('[data-home-row]')).toHaveLength(3));
+    expect(within(work).queryByRole('button', { name: /more$/ })).not.toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: 'gamma' } });
+    expect(await within(work).findByText(/No running sessions match “gamma”/)).toBeInTheDocument();
+    fireEvent.click(within(work).getByRole('button', { name: 'Clear filters' }));
+    await waitFor(() => expect(work.querySelectorAll('[data-home-row]')).toHaveLength(20));
+  });
+
+  it('marks all as read a few at a time, with one summary error, and not while offline', async () => {
+    asDesktop();
+    let inFlight = 0;
+    let peak = 0;
+    const patch = vi.fn(async (id: string) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight--;
+      if (id === 'd1' || id === 'd2') throw new Error('forbidden');
+    });
+    const client = {
+      service: () => ({ patch, find: async () => [], getPrimaryTeammate: async () => null }),
+    } as unknown as AgorClient;
+    const sessions = Array.from({ length: 8 }, (_, i) =>
+      session(`d${i}`, { ready_for_prompt: true, branch_id: `b-${i}` })
+    );
+    seed({ sessions });
+    const { unmount } = renderHome({ client }, undefined, undefined, false);
+    // A text query: jsdom cannot compute styles for AntD's disabled link buttons.
+    expect(screen.getByText('Mark all as read').closest('button')).toBeDisabled();
+    unmount();
+
+    seed({ sessions });
+    renderHome({ client });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark all as read' }));
+    expect(await screen.findByText('Couldn’t mark 2 of 8 as read')).toBeInTheDocument();
+    expect(patch).toHaveBeenCalledTimes(8);
+    expect(peak).toBeLessThanOrEqual(4);
+    expect(screen.getAllByText(/Couldn’t mark/)).toHaveLength(1);
+  });
+
+  it('does not send twice while a send is in flight', async () => {
+    let finish!: (result: { sessionId: string }) => void;
+    const onCreateSession = vi.fn(
+      () => new Promise<{ sessionId: string }>((resolve) => (finish = resolve))
+    );
+    const primary = teammate('primary', 'b-primary');
+    seed({ sessions: [session('idle')], branches: [primary] });
+    const client = {
+      service: () => ({ getPrimaryTeammate: async () => primary, find: async () => [] }),
+    } as unknown as AgorClient;
+    renderHome({ client, onCreateSession });
+    const input = await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
+    fireEvent.change(input, { target: { value: 'Once please' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onCreateSession).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ sessionId: 'new' }));
+  });
+
+  it('asks the header for search on Sessions and for the board switcher', () => {
+    seed({
+      sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
+      boards: [{ board_id: 'b-a', name: 'Launch board', archived: false } as Board],
+    });
+    const search = vi.fn();
+    const boards = vi.fn();
+    const off = [
+      onShellPicker(OPEN_GLOBAL_SEARCH_EVENT, search),
+      onShellPicker(OPEN_BOARD_SWITCHER_EVENT, boards),
+    ];
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'See all sessions' }));
+    expect(search).toHaveBeenCalledExactlyOnceWith('session');
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    fireEvent.click(within(recentBoards).getByRole('button', { name: 'All boards' }));
+    expect(boards).toHaveBeenCalledExactlyOnceWith(undefined);
+    for (const unsubscribe of off) unsubscribe();
+  });
+
   it('shows onboarding only before the first session, and only steps the caller can do', () => {
     seed({ boards: [{ board_id: 'b', name: 'B', archived: false } as Board] });
     const { unmount } = renderHome({ onOpenSettings: () => {} });
@@ -483,6 +672,19 @@ describe('HomePage', () => {
     renderHome({ onOpenSettings: () => {}, currentUser: { ...user, role: 'admin' } as User });
     expect(screen.getByText('Configure MCP tools')).toBeInTheDocument();
     cleanupAndSeedSession();
+  });
+
+  it('starts from the ask box on phones, and hides the step for people who cannot start sessions', () => {
+    seed({ boards: [{ board_id: 'b', name: 'B', archived: false } as Board] });
+    const { unmount } = renderHome({ onOpenSettings: () => {} });
+    const step = screen.getByText('Launch an AI session').parentElement as HTMLElement;
+    fireEvent.click(within(step).getByRole('button', { name: 'Start' }));
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: /^Ask / }));
+    unmount();
+
+    renderHome({ onOpenSettings: () => {}, onCreateSession: undefined });
+    expect(screen.getByText('Connect a repository')).toBeInTheDocument();
+    expect(screen.queryByText('Launch an AI session')).not.toBeInTheDocument();
   });
 });
 
@@ -575,7 +777,7 @@ describe('HomePage teammates', () => {
     renderHome({ client: client({}), onCreateSession, onSessionClick });
     const input = await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
     const toolbar = document.querySelector<HTMLElement>('[data-home-ask-toolbar]') as HTMLElement;
-    expect(within(toolbar).getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: 'Send in background' })).toBeInTheDocument();
     expect(within(toolbar).queryByRole('button', { name: 'Send & open' })).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'Open it' } });
     fireEvent.click(within(toolbar).getByRole('button', { name: 'More send options' }));
@@ -630,14 +832,25 @@ describe('HomePage privacy for superadmins', () => {
           ? {
               find: async ({ route }: { route: { id: string } }) => ({
                 primary_owner_user_id: 'owner-1',
-                board_access: { sharing_mode: sharing[route.id], entries: [] },
+                board_access: {
+                  policy_kind: 'board_access',
+                  sharing_mode: sharing[route.id],
+                  entries: [],
+                  others: {
+                    preset: 'viewer',
+                    capabilities: sharing[route.id] === 'shared' ? ['board.view'] : [],
+                    fs_access: 'none',
+                  },
+                },
               }),
             }
-          : {
-              getPrimaryTeammate: async () => null,
-              find: async () => ({ can: 'view' }),
-              get: () => new Promise(() => {}),
-            },
+          : name === 'group-memberships' || name === 'groups'
+            ? { findAll: async () => [] }
+            : {
+                getPrimaryTeammate: async () => null,
+                find: async () => ({ can: 'view' }),
+                get: () => new Promise(() => {}),
+              },
     }) as unknown as AgorClient;
 
   it('never lists teammates or comments from boards private to others', async () => {
@@ -704,6 +917,20 @@ describe('HomePage re-render isolation', () => {
       agorStore.setState({ branchById });
     });
     expect(commits.count).toBe(0);
+  });
+
+  it('re-renders only the preview row whose session changed', () => {
+    const others = ['b', 'c'].map((id) => session(id, { last_updated: recent(10) }));
+    seed({ sessions: [mine, ...others] });
+    renderHome();
+    titleReads.clear();
+    act(() => {
+      agorStore.setState(buildSessionMaps([{ ...mine, title: 'Renamed' }, ...others]));
+    });
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(titleReads.get('mine')).toBeGreaterThan(0);
+    expect(titleReads.get('b')).toBeUndefined();
+    expect(titleReads.get('c')).toBeUndefined();
   });
 
   it('bails out of a parent re-render when its props are stable', () => {

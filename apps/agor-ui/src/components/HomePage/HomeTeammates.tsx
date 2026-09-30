@@ -2,7 +2,7 @@ import type { AgorClient, Board, Branch, EffectiveBranchAccess, User } from '@ag
 import { getTeammateConfig, TEAMMATE_FRAMEWORK_REPO_SLUG } from '@agor-live/client';
 import { SyncOutlined } from '@ant-design/icons';
 import { Avatar, Button, Flex, Typography, theme } from 'antd';
-import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import { useBoardsSharedWithMe } from '../../hooks/useBoardsSharedWithMe';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
@@ -33,10 +33,13 @@ export const canStartSessionsOn = (client: AgorClient, branchId: string) =>
     .find({ route: { id: branchId } })
     .then((access) => canStartSessions(access as unknown as EffectiveBranchAccess));
 
+const NO_FAILURES: ReadonlySet<string> = new Set();
+
 /**
  * Session access for the given teammates, read through the shared access cache.
  * `settled` once every id has an answer or a failed read (unknown stays out of
- * `access`).
+ * `access`). Failures are this mount's only: the next mount, id set or sign-in
+ * reads them again, and `retry` does so now.
  */
 export function useSessionAccess(
   client: AgorClient | null,
@@ -47,22 +50,33 @@ export function useSessionAccess(
   const scope = `${userId}:${authGeneration}`;
   const key = branchIds.join(',');
   const [version, setVersion] = useState(0);
-  const failed = useRef({ scope, ids: new Set<string>() });
-  if (failed.current.scope !== scope) failed.current = { scope, ids: new Set() };
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
+  const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
   useEffect(() => {
     if (!client || !userId || !key) return;
-    let cancelled = false;
-    const ids = failed.current.ids;
+    const controller = new AbortController();
     for (const id of key.split(',')) {
-      if (peekAccess(client, scope, `branch:${id}`) !== undefined || ids.has(id)) continue;
-      readAccess(client, scope, `branch:${id}`, () => canStartSessionsOn(client, id))
-        .catch(() => ids.add(id))
-        .then(() => !cancelled && setVersion((v) => v + 1));
+      readAccess(client, scope, `branch:${id}`, () => canStartSessionsOn(client, id), {
+        signal: controller.signal,
+      }).then(
+        () => setVersion((v) => v + 1),
+        () => {
+          if (controller.signal.aborted) return;
+          setFailed((prev) => ({
+            scope,
+            ids: new Set([...(prev.scope === scope ? prev.ids : []), id]),
+          }));
+        }
+      );
     }
-    return () => {
-      cancelled = true;
-    };
-  }, [client, userId, scope, key]);
+    return () => controller.abort();
+  }, [client, userId, scope, key, attempt]);
+  const retry = useCallback(() => {
+    setFailed({ scope, ids: NO_FAILURES });
+    setAttempt((a) => a + 1);
+  }, [scope]);
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {
     const access: Record<string, boolean> = {};
@@ -70,10 +84,10 @@ export function useSessionAccess(
     for (const id of client && userId && key ? key.split(',') : []) {
       const known = peekAccess(client as AgorClient, scope, `branch:${id}`);
       if (known !== undefined) access[id] = known;
-      else settled &&= failed.current.ids.has(id);
+      else settled &&= failedIds.has(id);
     }
-    return { access, settled };
-  }, [client, userId, scope, key, version]);
+    return { access, settled, retry };
+  }, [client, userId, scope, key, version, failedIds, retry]);
 }
 
 /** Others' teammates whose home board reaches the caller through its policy. */

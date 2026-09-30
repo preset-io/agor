@@ -28,6 +28,7 @@ import { BoardPill, BranchPill, getChannelIcon, TeammatePill } from '../Pill';
 import { SessionRowLogo, SessionStatusMark } from '../SessionRow';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { HomeLink, useHomeCompact } from './HomeSection';
+import { HOME_META_PILL_MAX_WIDTH_COMPACT, HOME_ROW_LEAD, HOME_ROW_LINE } from './homeLayout';
 
 /** Divided list of Home rows; short previews, so no virtualization. */
 export function HomeList<T>({
@@ -137,7 +138,7 @@ const HomeRow: React.FC<HomeRowProps> = ({
             style={{
               flex: '0 0 auto',
               alignSelf: 'flex-start',
-              height: 22,
+              height: HOME_ROW_LINE,
               marginTop: token.paddingXS,
               paddingInlineEnd: token.paddingSM,
             }}
@@ -165,7 +166,11 @@ const HomeRow: React.FC<HomeRowProps> = ({
       }}
     >
       {lead !== undefined && (
-        <Flex align="center" justify="center" style={{ width: 20, height: 22, flex: '0 0 auto' }}>
+        <Flex
+          align="center"
+          justify="center"
+          style={{ width: HOME_ROW_LEAD, height: HOME_ROW_LINE, flex: '0 0 auto' }}
+        >
           {lead}
         </Flex>
       )}
@@ -216,7 +221,7 @@ export const HomeContext: React.FC<{
   const resolvedBoardId = boardId ?? branch?.board_id;
   const board = useAgorStore(useMemo(() => makeBoardSelector(resolvedBoardId), [resolvedBoardId]));
   const teammate = branch ? getTeammateConfig(branch) : null;
-  const maxWidth = compact ? 140 : undefined;
+  const maxWidth = compact ? HOME_META_PILL_MAX_WIDTH_COMPACT : undefined;
   return (
     <>
       {teammate ? (
@@ -405,7 +410,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
                   size="small"
                   icon={<MoreOutlined />}
                   aria-label="More actions"
-                  style={{ marginBlock: (22 - token.controlHeightSM) / 2 }}
+                  style={{ marginBlock: (HOME_ROW_LINE - token.controlHeightSM) / 2 }}
                 />
               </Dropdown>
             )

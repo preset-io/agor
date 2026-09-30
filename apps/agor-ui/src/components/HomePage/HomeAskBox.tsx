@@ -8,24 +8,21 @@ import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessi
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeLatestOwnSessionSelector, makeTeammatesSelector } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
-import {
-  TeammateOptionLabel,
-  teammateEmoji,
-  teammateLabel,
-  teammateOption,
-} from '../../utils/teammateLabels';
+import { teammateEmoji, teammateLabel, teammateOption } from '../../utils/teammateLabels';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import {
   ComposeSendButtons,
   type ComposeSendMode,
+  TeammateOptionLabel,
   usePrimaryAssistantSend,
 } from '../PrimaryAssistantCompose';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { HomeList, HomePressable } from './HomeRow';
 import { HomeCard, HomeLink, HomeSectionError, HomeSheet, useHomeCompact } from './HomeSection';
 import { useSessionAccess, useSharedTeammates } from './HomeTeammates';
+import { HOME_ASK_TARGET_MAX_WIDTH } from './homeLayout';
 
 // Starters for new users only; returning users get the placeholder.
 const NEW_USER_PROMPTS = [
@@ -138,7 +135,7 @@ function AskTargetSelect({
       onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
       labelRender={() => label}
       optionRender={({ data }) => <TeammateOptionLabel option={data} />}
-      style={{ flex: '0 0 auto', maxWidth: 200 }}
+      style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
     />
   );
 }
@@ -204,7 +201,11 @@ export const HomeAskBox = memo(function HomeAskBox({
     ),
     shallow
   );
-  const busy = disabled || compose.resolving || (!target && compose.resolveFailed);
+  const busy =
+    disabled ||
+    compose.submitting !== null ||
+    compose.resolving ||
+    (!target && compose.resolveFailed);
   const focusInput = () => requestAnimationFrame(() => inputRef.current?.focus({ cursor: 'end' }));
   const send = (mode: ComposeSendMode) => {
     if (busy) return;

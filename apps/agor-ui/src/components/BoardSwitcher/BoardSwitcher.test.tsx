@@ -1,6 +1,7 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from './BoardSwitcher';
 
 const modalProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
@@ -113,6 +114,15 @@ describe('BoardSwitcher long-name layout', () => {
 });
 
 describe('BoardSwitcher current-board edit shortcut', () => {
+  it('opens its board list on the shell event', async () => {
+    renderSwitcher();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    act(() => {
+      requestShellPicker(OPEN_BOARD_SWITCHER_EVENT);
+    });
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+  });
+
   it('allows the primary owner without consulting a legacy owners route', async () => {
     renderSwitcher(clientFor({ reject: { code: 500 } }));
     expect(await screen.findByRole('button', { name: /Edit current board:/ })).toBeVisible();
