@@ -20,9 +20,7 @@ describe('WorkspaceSuspended', () => {
   it('discloses nothing else — no reason, operator, deployment or topology detail', () => {
     const { container } = render(<WorkspaceSuspended />);
 
-    // The screen is the customer-facing half of a neutral denial. It carries
-    // exactly the two lines above: no instance/Cell label, and nothing the
-    // restriction record knows.
+    // Exactly the two lines above: no instance/Cell label and nothing from the restriction record.
     expect(container.textContent).toBe(
       'This workspace is suspendedContact your administratorTry again'
     );

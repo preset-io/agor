@@ -26,8 +26,7 @@ vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
   withFreshTenantWrite,
 }));
 
-// This unit isolates heartbeat transaction/termination ordering. Epoch admission
-// has its own real PostgreSQL and negative credential tests.
+// Isolates heartbeat ordering; epoch admission has its own PostgreSQL and negative tests.
 vi.mock('../auth/tenant-credential-epoch.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../auth/tenant-credential-epoch.js')>()),
   assertTenantCredentialEpoch: vi.fn().mockResolvedValue(undefined),

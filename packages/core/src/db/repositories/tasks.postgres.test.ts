@@ -13,8 +13,7 @@ import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
-// Each operation uses its own explicit tenant transaction, preserving the two
-// independent connections used by the concurrency tests below.
+// Each operation uses its own tenant transaction, keeping the concurrency tests' two connections independent.
 function scopedTasks(db: Database): TaskRepository {
   return new Proxy(new TaskRepository(db), {
     get(target, property) {

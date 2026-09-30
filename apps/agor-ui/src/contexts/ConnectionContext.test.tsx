@@ -36,8 +36,7 @@ describe('mutation gate while the workspace is suspended', () => {
   });
 
   it('reports suspension rather than a connection problem it would recover from', () => {
-    // A live-looking socket state must not win here: nothing will succeed and
-    // "Reconnecting…" would promise a reconnect the client is not attempting.
+    // A live-looking socket must not win: nothing will succeed and no reconnect is being attempted.
     const { result } = renderHook(() => useMutationGate(), {
       wrapper: wrapperFor({ tenantRestricted: true, connecting: true, outOfSync: true }),
     });

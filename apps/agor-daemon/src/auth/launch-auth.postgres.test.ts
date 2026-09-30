@@ -226,10 +226,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     it('accepts a launch at the watermark a re-home seeded on a fresh destination runtime', async () => {
-      // Plan D2: `tenant_restrictions` is deployment-bound and never travels with a
-      // tenant, so a Workspace re-homed while its Team is active arrives with an empty
-      // history that the launch fence reads as a missing watermark. The seed restates
-      // the revision the Team already carries; nothing else about the fence changes.
+      // A re-homed Workspace arrives with empty restriction history; the seed restates the Team's revision.
       const tenantId = `launch-seeded-${generateId()}`;
       const identity = { subject: tenantId, email: `${tenantId}@example.invalid`, tenantId };
       let assertion = signClaims(identity);

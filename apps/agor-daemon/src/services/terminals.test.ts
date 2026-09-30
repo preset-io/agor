@@ -17,9 +17,7 @@ const mocks = vi.hoisted(() => {
   const state = {
     branch,
     tenantId: 'tenant-x' as string | undefined,
-    // Model the standalone SQLite handle used by these unit tests. The
-    // terminal admission helpers are mocked below, but the credential-epoch
-    // guard still needs to classify the handle before it can no-op on SQLite.
+    // SQLite-shaped handle so the credential-epoch guard classifies it and no-ops.
     tenantDb: { scope: 'tenant-x', run: vi.fn() },
     databaseScopeDepth: 0,
     transactionCalls: 0,

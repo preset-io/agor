@@ -116,16 +116,13 @@ describe('isTenantRestrictedError', () => {
       code: 403,
       data: { code: 'tenant_restricted' },
     });
-    // Clearing tokens would bounce a member to login for a workspace-level
-    // decision; retrying on the transient cadence is the reconnect storm.
+    // Neither clear tokens for a workspace-level decision nor retry on the transient cadence.
     expect(isDefiniteAuthFailure(restricted)).toBe(false);
     expect(isTransientConnectionError(restricted)).toBe(false);
   });
 
   it('holds for the coded 401 the credential check raises ahead of admission', () => {
-    // The daemon validates the credential generation before tenant admission,
-    // so this — not the 403 — is what a browser on a closed workspace gets on
-    // every JWT path: the socket handshake, a REST call, and refresh.
+    // The generation check runs first, so a closed workspace answers every JWT path with this coded 401.
     for (const coded of [
       Object.assign(new Error('Tenant credential cannot be verified'), {
         code: 401,
@@ -137,16 +134,14 @@ describe('isTenantRestrictedError', () => {
       }),
     ]) {
       expect(isTenantRestrictedError(coded)).toBe(true);
-      // The credential is still refused; it is just not the thing that failed,
-      // so the caller must not clear tokens or bounce the member to login.
+      // The credential is refused but is not what failed, so tokens must survive.
       expect(isDefiniteAuthFailure(coded)).toBe(false);
       expect(isTransientConnectionError(coded)).toBe(false);
     }
   });
 
   it('leaves an uncoded 401 a definite failure, including after release', () => {
-    // A released workspace rejects the parked tab's now-stale generation with
-    // no code. That one must still clear tokens and fail over to sign-in.
+    // A released workspace rejects the stale generation codelessly, which must still fail over to sign-in.
     const stale = Object.assign(new Error('Tenant credential cannot be verified'), {
       code: 401,
       className: 'not-authenticated',

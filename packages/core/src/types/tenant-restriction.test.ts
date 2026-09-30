@@ -90,13 +90,9 @@ describe('tenant restriction intent protocol', () => {
       changed: true,
     });
     expect(isTenantRestrictionClosed(seeded.record)).toBe(false);
-    // An EXACT replay of the seed this runtime already accepted writes nothing and
-    // says so: the transport is at-least-once, and a delivery whose reply was lost
-    // must be able to ask again without a correct runtime looking like a failed one.
+    // An exact replay of the accepted seed writes nothing and says so (at-least-once transport).
     expect(apply(seeded.record, seed)).toEqual({ record: seeded.record, changed: false });
-    // Every OTHER recorded state refuses it: a different operation or revision, a
-    // different placement, and any closed phase — including a closed row at the very
-    // same revision, which a replay must never reopen.
+    // Every other recorded state refuses it, including a closed row at the same revision.
     for (const current of [
       { ...seeded.record, operationId: 'another' },
       { ...seeded.record, revision: 9 },
@@ -107,10 +103,7 @@ describe('tenant restriction intent protocol', () => {
       apply(apply(null, restrict).record, release).record,
     ])
       expect(() => apply(current, seed)).toThrow('revision_conflict');
-    // The record the writer compares is ALREADY keyed by (tenant, controller), so a
-    // foreign controller's row is never this `current` — it composes as its own OR
-    // term instead. Restating that here would claim a check the writer does not make.
-    // The seeded watermark still behaves like any other active record afterwards.
+    // Foreign controllers compose as separate OR terms; the seeded watermark then behaves like any active record.
     expect(() => apply(seeded.record, { ...restrict, revision: 3 })).toThrow('stale_revision');
     expect(
       apply(seeded.record, { ...restrict, revision: 5, operationId: 'susp-5' }).record.phase

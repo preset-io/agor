@@ -1,8 +1,4 @@
-/**
- * End-to-end contract for `agor tenant restriction apply|inspect` against the
- * isolated PostgreSQL database: the commands run in a real child process with
- * only DATABASE_URL set and no daemon, exactly as the in-Cell Job invokes them.
- */
+/** End-to-end `agor tenant restriction apply|inspect` in a child process with only DATABASE_URL, as the in-Cell Job runs them. */
 
 import {
   createDatabase,
@@ -128,8 +124,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         activatedPayload.record,
       ]);
 
-      // The activated revision is a watermark: a delayed restrict at an older
-      // revision is rejected with a machine-readable conflict code.
+      // The activated revision is a watermark: a delayed older restrict gets a conflict code.
       const stale = await apply(tenant, 'susp-1', 1, 'restrict');
       expect(stale.code).toBe(2);
       expect(stale.stdout).toBe('');
@@ -161,8 +156,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         changed: true,
       });
 
-      // The Job may run twice (a lost report, an expired lease, a re-leased row).
-      // The second run must read as an accepted no-op, not a failure.
+      // A rerun Job (lost report, expired or re-leased lease) must read as an accepted no-op.
       const replayed = await apply(tenant, 'reactivate-4', 4, 'seed_active');
       expect(replayed.code).toBe(0);
       expect(JSON.parse(replayed.stdout)).toEqual({
@@ -170,8 +164,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         changed: false,
       });
 
-      // Once a legitimate newer restriction lands, the seed is refused — and the
-      // orchestrator can see WHY from the read: this controller has moved past it.
+      // After a newer restriction the seed is refused, and inspect shows this controller moved past it.
       expect((await apply(tenant, 'susp-5', 5, 'restrict')).code).toBe(0);
       const stale = await apply(tenant, 'reactivate-4', 4, 'seed_active');
       expect(stale.code).toBe(2);

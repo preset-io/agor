@@ -1,11 +1,4 @@
-/**
- * Authentication-layer half of the suspended workspace.
- *
- * `useAgorClient` covers the socket. This covers what happens before a socket
- * exists: the daemon checks the credential generation on every JWT path, so a
- * member reopening a suspended workspace is rejected during re-authentication
- * and never reaches the handshake at all.
- */
+/** Authentication half of the suspended workspace: re-authentication meets the closed tenant before any socket exists. */
 
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -70,9 +63,7 @@ describe('useAuth on a suspended workspace', () => {
 
     await waitFor(() => expect(result.current.tenantRestricted).toBe(true));
     expect(result.current.authenticated).toBe(false);
-    // Clearing these would send the member to a sign-in form for a decision
-    // their password cannot change, and would lose the session the probe
-    // restores when an administrator reopens the workspace.
+    // Clearing these would send the member to sign-in and lose the session the probe restores on reopen.
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('member-access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('member-refresh');
     // The suspended screen is the message; no banner may contradict it.
@@ -113,8 +104,7 @@ describe('useAuth on a suspended workspace', () => {
     });
     expect(authenticate).toHaveBeenCalledTimes(attempts);
 
-    // Release recorded: the next probe is accepted and clears the state
-    // without the member touching anything.
+    // Release recorded: the next probe is accepted and clears the state unattended.
     authenticate.mockResolvedValue({ user, accessToken: 'member-access' });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(1_000);
@@ -137,10 +127,7 @@ describe('useAuth on a suspended workspace', () => {
     });
     expect(result.current.tenantRestricted).toBe(true);
 
-    // Release moves the credential generation, so this tab's probe now gets a
-    // plain credential rejection. That is still the daemon answering, and it
-    // no longer says the workspace is closed: the member must land on sign-in
-    // rather than staying parked on a screen for a workspace that is open.
+    // Release moved the generation: a plain credential rejection must land the member on sign-in.
     authenticate.mockRejectedValue(staleCredential());
     refreshCreate.mockRejectedValue(staleCredential());
     await act(async () => {
@@ -174,8 +161,7 @@ describe('useAuth on a suspended workspace', () => {
     });
     expect(result.current.tenantRestricted).toBe(true);
 
-    // An unreachable daemon is not an answer; only the daemon may overturn the
-    // last one it gave.
+    // An unreachable daemon is not an answer; only the daemon may overturn its last one.
     authenticate.mockRejectedValue(new TypeError('Failed to fetch'));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(30_000);
@@ -185,9 +171,7 @@ describe('useAuth on a suspended workspace', () => {
   });
 
   it('reports a closed workspace from a fresh sign-in attempt', async () => {
-    // Nothing is stored, so this member lands on the sign-in form first. The
-    // daemon refuses to issue tokens for a closed workspace, and the answer
-    // must be the suspended state rather than a login error they can retry.
+    // With nothing stored, the closed workspace must show the suspended state, not a retryable login error.
     authenticate.mockRejectedValue(restricted());
     const { result } = renderHook(() => useAuth());
     await waitFor(() => expect(result.current.loading).toBe(false));

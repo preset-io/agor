@@ -201,9 +201,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     expect(written).toMatchObject({ changed: true, record: { phase: 'active', revision: 4 } });
     expect(await isClosed(db, seeded)).toBe(false);
     expect(await recordsOf(db, seeded)).toEqual([written.record]);
-    // An at-least-once transport replay of THIS seed is a no-op, not a conflict: the
-    // row is untouched and the caller is told the truth instead of being handed a
-    // failure for a runtime that is already correct.
+    // A transport replay of this seed is an untouched-row no-op, not a conflict.
     const replayed = await applyTenantRestrictionIntent(db, seeded, seed);
     expect(replayed).toEqual({ record: written.record, changed: false });
     expect(await recordsOf(db, seeded)).toEqual([written.record]);
@@ -231,8 +229,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
       'revision_conflict'
     );
     expect(await isClosed(db, recorded)).toBe(true);
-    // Concurrent seeds on one empty history: serialized by the advisory lock into
-    // exactly one WRITE and one replay no-op, leaving exactly one row.
+    // Concurrent seeds on empty history serialize into one write and one replay no-op.
     const raced = `restriction-${generateId()}`;
     const results = await Promise.all([
       applyTenantRestrictionIntent(db, raced, seed),

@@ -91,9 +91,7 @@ export async function seedHistoricalSessionRecency(db: Database) {
       children: [],
     },
   });
-  // This fixture deliberately stops before the restriction schema exists. Use
-  // historical SQL rather than current repository admission, which must keep
-  // checking tenant_restrictions for production prompt creation.
+  // This fixture predates the restriction schema, so it uses historical SQL instead of repository admission.
   const task = { task_id: generateId() };
   const taskData = JSON.stringify({
     full_prompt: 'Preserved child task',

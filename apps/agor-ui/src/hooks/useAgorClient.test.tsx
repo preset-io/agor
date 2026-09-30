@@ -206,9 +206,7 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
     expect(create).toHaveBeenCalledWith({ capability: true });
     expect(client.authenticate).not.toHaveBeenCalled();
-    // The only client-level hook is the tenant-restriction observer; the
-    // Feathers authentication client (and its post-connect reauthentication)
-    // must still never be configured here.
+    // The only client-level hook is the restriction observer; the authentication client is never configured here.
     expect(client.hooks).toHaveBeenCalledExactlyOnceWith({ error: [expect.any(Function)] });
     expect(result.current.authGeneration).toBe(1);
   });
@@ -441,8 +439,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     // Not "reconnecting": the socket is closed on purpose.
     expect(result.current.connecting).toBe(false);
     expect(result.current.error).toBeNull();
-    // Socket.IO only stops its own retry cadence when the client closes the
-    // socket; scheduling a probe on top of a live manager would not be enough.
+    // Only closing the socket stops Socket.IO's own retry cadence.
     expect(io.disconnect).toHaveBeenCalled();
     const connectsOnRejection = io.connect.mock.calls.length;
 
@@ -506,8 +503,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
     expect(io.connect).toHaveBeenCalledTimes(baseline + 1);
-    // The last authoritative answer is still "restricted"; an unreachable
-    // daemon does not overturn it and does not restore the fast retry.
+    // An unreachable daemon neither overturns "restricted" nor restores the fast retry.
     expect(result.current.tenantRestricted).toBe(true);
     await act(async () => {
       await vi.advanceTimersByTimeAsync(59_000);
@@ -531,9 +527,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     });
     expect(result.current.tenantRestricted).toBe(true);
 
-    // The credential epoch is checked before tenant access and changes on
-    // restrict, so a probe carrying a pre-restriction token is answered with a
-    // credential rejection — both while restricted and after reactivation.
+    // The credential epoch is checked first and moves on restrict, so an old token gets a credential rejection.
     rejectNextConnect(
       Object.assign(new Error('Invalid or expired authentication token'), {
         data: { code: 401, className: 'not-authenticated' },
@@ -543,8 +537,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
       await vi.advanceTimersByTimeAsync(30_000);
     });
 
-    // Parking on a suspended screen for a workspace that may be open again
-    // would be wrong; recovery runs and an accepted handshake clears the state.
+    // Recovery runs instead of parking, and an accepted handshake clears the state.
     expect(refreshTokensMock).toHaveBeenCalledWith(restClient, 'stored-refresh');
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -584,10 +577,7 @@ describe('useAgorClient suspended workspace lifecycle', () => {
   });
 
   it('enters the suspended state from the coded 401 the credential check raises', async () => {
-    // Every JWT path validates the credential generation before tenant
-    // admission, so a closed workspace answers the browser with a coded 401
-    // rather than the 403 above. Both mean the same thing here, and neither
-    // may start a token refresh: the credential is not what was rejected.
+    // A closed workspace answers JWT paths with a coded 401; like the 403, it must never start a token refresh.
     vi.useFakeTimers();
     localStorage.setItem('agor-refresh-token', 'stored-refresh');
     const seam = makeSeamClient();
