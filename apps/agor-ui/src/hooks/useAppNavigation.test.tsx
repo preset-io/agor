@@ -51,7 +51,7 @@ function wrap(initialEntry = '/') {
 function useTestNav(opts: Parameters<typeof useAppNavigation>[0]) {
   const nav = useAppNavigation(opts);
   const location = useLocation();
-  return { nav, pathname: location.pathname };
+  return { nav, pathname: location.pathname, key: location.key };
 }
 
 describe('useAppNavigation.goToSession', () => {
@@ -293,11 +293,19 @@ describe('useAppNavigation.goToTeammates', () => {
 });
 
 describe('useAppNavigation.goBack', () => {
-  it('pops an in-app entry, and goes Home on the current shell from a deep link', () => {
+  it('pops to Home when opened from it, and goes Home on the current shell otherwise', () => {
+    const fromHome = renderHook(() => useTestNav({}), { wrapper: wrap('/') });
+    act(() => fromHome.result.current.nav.goToTeammates());
+    act(() => fromHome.result.current.nav.goBack());
+    expect(fromHome.result.current.pathname).toBe('/');
+    // Popped back to the router's initial entry rather than pushing a new Home.
+    expect(fromHome.result.current.key).toBe('default');
+
+    // The back link is "Home", so an entry opened from anywhere else goes Home, not back.
     const { result } = renderHook(() => useTestNav({}), { wrapper: wrap('/b/alpha/') });
     act(() => result.current.nav.goToTeammates());
     act(() => result.current.nav.goBack());
-    expect(result.current.pathname).toBe('/b/alpha/');
+    expect(result.current.pathname).toBe('/');
 
     const desktop = renderHook(() => useTestNav({}), { wrapper: wrap('/teammates') });
     act(() => desktop.result.current.nav.goBack());

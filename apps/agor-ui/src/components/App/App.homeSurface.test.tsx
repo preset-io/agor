@@ -157,6 +157,23 @@ function seedStore() {
   } as never);
 }
 
+/** Someone else's teammate on Alpha, so Home's rail shows "See all 1". */
+function seedSharedTeammate() {
+  const shared = {
+    branch_id: '019e8888-0000-7000-8000-00000000000c',
+    repo_id: 'repo-1',
+    board_id: BOARD_A,
+    name: 'scout',
+    created_by: 'someone-else',
+    archived: false,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+  } as unknown as Branch;
+  const { branchById } = agorStore.getState();
+  agorStore.setState({
+    branchById: new Map([...branchById, [shared.branch_id, shared]]),
+  } as never);
+}
+
 let currentPath = '';
 function PathSpy() {
   currentPath = useLocation().pathname;
@@ -310,19 +327,7 @@ describe('Settings opens as an overlay, not a navigation', () => {
   );
 
   it('opens the teammates directory from the Home rail and returns Home from it', async () => {
-    const shared = {
-      branch_id: '019e8888-0000-7000-8000-00000000000c',
-      repo_id: 'repo-1',
-      board_id: BOARD_A,
-      name: 'scout',
-      created_by: 'someone-else',
-      archived: false,
-      custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
-    } as unknown as Branch;
-    const { branchById } = agorStore.getState();
-    agorStore.setState({
-      branchById: new Map([...branchById, [shared.branch_id, shared]]),
-    } as never);
+    seedSharedTeammate();
     renderApp('/');
     // Text queries: role queries trip jsdom's CSS parser on AntD's button styles here.
     fireEvent.click(await screen.findByText('See all 1'));
@@ -339,6 +344,25 @@ describe('Settings opens as an overlay, not a navigation', () => {
     fireEvent.click(screen.getByTestId('forward'));
     await settle();
     expect(currentPath).toBe('/teammates');
+  });
+
+  it('returns Home, not Settings, from the directory after a Settings round trip', async () => {
+    seedSharedTeammate();
+    renderApp('/');
+    fireEvent.click(await screen.findByText('See all 1'));
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+    fireEvent.click(screen.getByTestId('close-settings'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+
+    // Closing Settings pushed the directory again, so the entry before it is Settings, not Home.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    expect(screen.queryByTestId('settings-modal')).toBeNull();
   });
 
   it('returns Home from a deep-linked teammates directory', async () => {

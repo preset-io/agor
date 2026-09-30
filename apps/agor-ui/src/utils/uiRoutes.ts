@@ -1,5 +1,5 @@
 import { type BoardID, boardPath, type SessionID, sessionPath } from '@agor-live/client';
-import { matchPath } from 'react-router-dom';
+import { matchPath, type NavigateFunction } from 'react-router-dom';
 import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from './urlResolution';
 
@@ -27,6 +27,12 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
 export function hasInAppHistory(locationKey: string): boolean {
   const idx = (typeof window === 'undefined' ? undefined : window.history.state)?.idx;
   return typeof idx === 'number' ? idx > 0 : locationKey !== 'default';
+}
+
+/** Back one entry when `canPop`; else to `fallback`, replacing this entry so Back from there skips it. */
+export function backOr(navigate: NavigateFunction, canPop: boolean, fallback: string): void {
+  if (canPop) navigate(-1);
+  else navigate(fallback, { replace: true });
 }
 
 /** Whether `pathname` belongs to the mobile shell (`/m` and below). */
