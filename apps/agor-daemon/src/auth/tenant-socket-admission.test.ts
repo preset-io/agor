@@ -80,7 +80,7 @@ describe('socket restriction monitor', () => {
     }
   });
 
-  it('skips on error and saturation with one rate-limited line per reason', async () => {
+  it('skips on error and saturation with one rate-limited line per minute', async () => {
     vi.useFakeTimers();
     const warn = warnings();
     let now = 0;
@@ -100,13 +100,14 @@ describe('socket restriction monitor', () => {
       // Eight reads in flight cap the DB load; the rest are skipped, never retired.
       expect(observe.mock.calls.filter(([tenant]) => tenant !== 'failing')).toHaveLength(8);
       const lines = warn.mock.calls.map(([line]) => String(line));
-      expect(lines.filter((line) => line.includes('reason=error'))).toHaveLength(1);
-      expect(lines.filter((line) => line.includes('reason=saturated'))).toHaveLength(1);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatch(/reason=(saturated|error) suppressed=0/);
       expect(lines.join('\n')).not.toContain('private detail');
       now = 60_000;
       const checking = monitor.check(tenants);
       await vi.advanceTimersByTimeAsync(100);
       await checking;
+      expect(warn).toHaveBeenCalledTimes(2);
       expect(warn.mock.calls.at(-1)?.[0]).toMatch(
         /reason=(saturated|timeout|error) suppressed=[1-9]/
       );

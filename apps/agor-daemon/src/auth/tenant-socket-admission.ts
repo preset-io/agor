@@ -76,7 +76,7 @@ type MonitorSkip = 'timeout' | 'error' | 'saturated';
 /** Bound each observation without duplicate reads; only `observe` itself retires sockets, on a positive observation. */
 export class TenantSocketRestrictionMonitor {
   private readonly pending = new Map<string, Promise<void>>();
-  private readonly warnings = new Map<MonitorSkip, { at: number; suppressed: number }>();
+  private lastWarning?: { at: number; suppressed: number };
   constructor(
     private readonly observe: (tenantId: string) => Promise<void>,
     private readonly timeoutMs = 2000,
@@ -119,7 +119,8 @@ export class TenantSocketRestrictionMonitor {
 
   private skip(reason: MonitorSkip): void {
     const at = this.now();
-    const last = this.warnings.get(reason);
+    // One line per minute across every reason; the count carries what was suppressed.
+    const last = this.lastWarning;
     if (last && at >= last.at && at - last.at < 60_000) {
       last.suppressed++;
       return;
@@ -127,6 +128,6 @@ export class TenantSocketRestrictionMonitor {
     console.warn(
       `[tenant.restriction] socket observation skipped reason=${reason} suppressed=${last?.suppressed ?? 0}`
     );
-    this.warnings.set(reason, { at, suppressed: 0 });
+    this.lastWarning = { at, suppressed: 0 };
   }
 }
