@@ -3080,4 +3080,66 @@ describe('publication restriction observation', () => {
       vi.useRealTimers();
     }
   });
+
+  it('keeps at most one abandoned read per tenant outstanding during a database outage', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const member = { user: user('member') };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
+      configureRealtimePublish({
+        app,
+        db: scopeOnlyDb,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: {
+          relay: vi.fn(),
+          setRelayHandler: vi.fn((handler) => {
+            remoteHandler = handler;
+          }),
+        },
+        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      });
+      const relayBoard = async () =>
+        remoteHandler?.({
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path: 'boards',
+          event: 'patched',
+          method: 'patch',
+          id: 'board-a',
+          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+        });
+      const stuck: Array<PromiseWithResolvers<string | undefined>> = [];
+      read.mockImplementation(() => {
+        const pending = Promise.withResolvers<string | undefined>();
+        stuck.push(pending);
+        return pending.promise;
+      });
+      for (let round = 0; round < 5; round++) {
+        const relayed = relayBoard();
+        await vi.advanceTimersByTimeAsync(2 * 2000);
+        await relayed;
+      }
+      // The original read and one replacement; no further read starts while the abandoned one is outstanding.
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // Once the abandoned read settles, the wedged replacement may itself be abandoned once.
+      stuck[0]?.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      const relayed = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await relayed;
+      expect(read).toHaveBeenCalledTimes(3);
+      expect(app.emit).not.toHaveBeenCalled();
+    } finally {
+      read.mockReset();
+      vi.useRealTimers();
+    }
+  });
 });

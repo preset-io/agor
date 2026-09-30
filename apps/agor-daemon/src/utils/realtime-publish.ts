@@ -946,6 +946,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     string,
     { startedAt: number; until: number; epoch: Promise<string | undefined> }
   >();
+  const abandonedEpochReads = new Map<string, Promise<string | undefined>>();
   let nextEviction = 0;
   const readPublicationEpoch = (
     database: TenantScopeAwareDatabase,
@@ -959,10 +960,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     }
     let entry = epochReads.get(tenantId);
     // A read that never settles is abandoned after two timeouts so one wedged read cannot suppress delivery forever.
-    const abandoned =
+    const wedged =
       entry?.until === Number.POSITIVE_INFINITY &&
       now - entry.startedAt >= 2 * TENANT_RESTRICTION_READ_TIMEOUT_MS;
-    if (!entry || now >= entry.until || abandoned) {
+    // At most one abandoned read per tenant: while it is outstanding the wedged entry stays and delivery stays suppressed.
+    const abandon = wedged && !abandonedEpochReads.has(tenantId);
+    if (abandon && entry) {
+      const stale = entry.epoch;
+      abandonedEpochReads.set(tenantId, stale);
+      const forget = () => {
+        if (abandonedEpochReads.get(tenantId) === stale) abandonedEpochReads.delete(tenantId);
+      };
+      stale.then(forget, forget);
+    }
+    if (!entry || now >= entry.until || abandon) {
       const created = {
         startedAt: now,
         until: Number.POSITIVE_INFINITY,
