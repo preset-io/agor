@@ -12,7 +12,7 @@ import { isSessionFailed } from '../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../utils/sessionTitle';
 import type { AgorState } from './agorStore';
 
-/** Started by the person, not by a schedule or by another agent session. */
+/** Started by the person, not by a schedule or by another agent session; gateway messages count, since the person asked for them. */
 export const isSessionStartedByUser = (session: Session): boolean =>
   !session.scheduled_from_branch &&
   !session.genealogy?.parent_session_id &&
