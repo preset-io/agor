@@ -53,8 +53,10 @@ const NO_BOARD_IDS: string[] = [];
 /** Opened failure → the run it showed (server clock) and when it was opened; a bare number is the older click-time form. */
 type OpenedFailure = number | { run: number; at: number };
 const NO_OPENED_FAILURES: Record<string, OpenedFailure> = {};
-const openedAt = (entry: OpenedFailure) => (typeof entry === 'number' ? entry : entry.at);
-const openedRun = (entry: OpenedFailure) => (typeof entry === 'number' ? entry : entry.run);
+const openedAt = (entry: OpenedFailure | null) =>
+  typeof entry === 'number' ? entry : (entry?.at ?? 0);
+const openedRun = (entry: OpenedFailure | null) =>
+  typeof entry === 'number' ? entry : (entry?.run ?? 0);
 
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
