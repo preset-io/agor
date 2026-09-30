@@ -230,7 +230,7 @@ While four such timed-out reads of one socket are still running, its further
 packets that need a read are refused at once without starting another, which
 bounds the database load a socket can hold. Raw packets that need a read (executor
 terminal frames, an unverified tenant's traffic) join the socket's raw-packet read
-already in flight; a settled read is never reused for a later packet. A
+already in flight; a settled or timed-out read is never joined by a later packet. A
 socket holding 1,000 queued packets is disconnected rather than dropping packets
 silently, and nothing queued behind it dispatches. Raw traffic from a restricted tenant stops when the monitor
 retires the socket. A bounded per-replica monitor (1 s tick) disconnects

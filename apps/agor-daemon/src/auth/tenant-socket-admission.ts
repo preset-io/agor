@@ -108,6 +108,8 @@ export function createOrderedTenantPacketGate(input: {
     const timedOut = new Promise<boolean>((resolve) => {
       timer = setTimeout(() => {
         if (running.has(admission)) stale.add(admission);
+        // Later raw packets start a fresh read instead of joining one already timed out.
+        if (shared === admission) shared = undefined;
         resolve(false);
       }, timeoutMs);
     });

@@ -197,6 +197,34 @@ describe('ordered tenant packet gate', () => {
     await vi.waitFor(() => expect(dispatched.at(-1)).toBe('d'));
   });
 
+  it('starts a fresh read for raw packets once the shared one has timed out', async () => {
+    vi.useFakeTimers();
+    try {
+      const admit = vi
+        .fn(() => Promise.resolve())
+        .mockImplementationOnce(() => new Promise<void>(() => undefined));
+      const gate = createOrderedTenantPacketGate({
+        needsAdmission: () => true,
+        coalesce: () => true,
+        admit,
+        admissionTimeoutMs: 20,
+      });
+      const dispatched: string[] = [];
+      const send = (label: string) =>
+        gate(['terminal:input', label], (error?: Error) => {
+          if (!error) dispatched.push(label);
+        });
+      send('stuck');
+      await vi.advanceTimersByTimeAsync(20);
+      for (const label of ['a', 'b', 'c', 'd']) send(label);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(dispatched).toEqual(['a', 'b', 'c', 'd']);
+      expect(admit).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('disconnects once instead of queueing past the limit, and dispatches nothing after', async () => {
     const releases: Array<() => void> = [];
     const onOverflow = vi.fn();
