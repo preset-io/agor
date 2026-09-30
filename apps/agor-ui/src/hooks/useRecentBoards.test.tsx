@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const LEGACY_KEY = 'agor:recentBoardIds';
@@ -28,5 +28,25 @@ describe('useRecentBoards', () => {
     const { result } = renderHook(() => useRecentBoards([], '', 'user-1'));
     await waitFor(() => expect(window.localStorage.getItem(LEGACY_KEY)).toBeNull());
     expect(result.current.recentBoardIds).toEqual(['mine']);
+  });
+
+  it('keeps the moved history when a child instance mounts first and the parent tracks a visit', async () => {
+    window.localStorage.setItem(LEGACY_KEY, JSON.stringify(['b1', 'b2']));
+    const useRecentBoards = await loadHook();
+    let parent: ReturnType<typeof useRecentBoards> | undefined;
+    function Child() {
+      useRecentBoards([], '', 'user-1');
+      return null;
+    }
+    function Parent() {
+      parent = useRecentBoards([], '', 'user-1');
+      return <Child />;
+    }
+    render(<Parent />);
+    expect(parent?.recentBoardIds).toEqual(['b1', 'b2']);
+    act(() => parent?.trackBoardVisit('b9'));
+    expect(
+      JSON.parse(window.localStorage.getItem('agor:user:user-1:recentBoardIds') ?? '[]')
+    ).toEqual(['b9', 'b1', 'b2']);
   });
 });
