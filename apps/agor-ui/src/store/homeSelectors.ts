@@ -178,6 +178,9 @@ function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, 
   return result;
 }
 
+/** A scheduled run's branch and schedule; rows from before schedules had ids share their branch's key. */
+const scheduleKey = (session: Session) => `${session.branch_id}:${session.schedule_id ?? ''}`;
+
 /** Failures that need the person: sessions they started, including their scheduled runs, never spawned or delegated children. */
 const ownsFailure = (session: Session): boolean =>
   !session.genealogy?.parent_session_id && !session.remote_relationships?.as_target?.length;
@@ -258,8 +261,8 @@ export function makeHomeBucketsSelector(
     const failures: Session[] = [];
     // Newest clean run start per branch among the caller's user-started lineages.
     const cleanRunByBranch = new Map<string, number>();
-    // Newest clean scheduled run per branch: it supersedes only scheduled failures.
-    const cleanScheduledRunByBranch = new Map<string, number>();
+    // Newest clean scheduled run per branch and schedule: it supersedes only that schedule's failures.
+    const cleanScheduledRuns = new Map<string, number>();
     const lineageMemo = new Map<string, boolean>();
     const failedByBranch = new Map<string, Session>();
     const finishedByBranch = new Map<string, Session[]>();
@@ -278,14 +281,13 @@ export function makeHomeBucketsSelector(
         }
       }
       if (ranCleanly(session)) {
-        const cleanRuns = session.scheduled_from_branch
-          ? cleanScheduledRunByBranch
+        const [cleanRuns, key] = session.scheduled_from_branch
+          ? [cleanScheduledRuns, scheduleKey(session)]
           : startedByUserLineage(session, s, lineageMemo)
-            ? cleanRunByBranch
-            : undefined;
+            ? [cleanRunByBranch, session.branch_id]
+            : [undefined, ''];
         const runAt = lastRunStartedAt(session);
-        if (cleanRuns && runAt > (cleanRuns.get(session.branch_id) ?? 0))
-          cleanRuns.set(session.branch_id, runAt);
+        if (cleanRuns && runAt > (cleanRuns.get(key) ?? 0)) cleanRuns.set(key, runAt);
       }
       if (session.status === SessionStatus.AWAITING_PERMISSION) {
         addNeed(session, 'permission');
@@ -315,7 +317,7 @@ export function makeHomeBucketsSelector(
       if (
         (cleanRunByBranch.get(session.branch_id) ?? 0) > settledAt ||
         (session.scheduled_from_branch &&
-          (cleanScheduledRunByBranch.get(session.branch_id) ?? 0) > settledAt)
+          (cleanScheduledRuns.get(scheduleKey(session)) ?? 0) > settledAt)
       ) {
         addRecent(session);
         continue;
