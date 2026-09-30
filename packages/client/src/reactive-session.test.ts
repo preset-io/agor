@@ -2348,4 +2348,184 @@ describe.each(['lean', 'lazy'] as const)('stream lifecycle (%s)', (taskHydration
     expect(f.handle.getStreamingMessage('thought')).toBe(before);
     f.handle.dispose();
   });
+
+  it('refreshes the stream task index on replacement and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('first', 'turn');
+    const originalTasks = f.handle.state.tasks;
+    f.task('turn', TaskStatus.FAILED);
+    expect(originalTasks[0].status).toBe(TaskStatus.RUNNING);
+    expect(f.handle.getStreamingMessage('first')).toBeUndefined();
+    f.task('turn');
+    f.thinking('fresh', 'turn');
+    expect(f.handle.getStreamingMessage('fresh')?.isThinking).toBe(true);
+    f.opts.tasks = [makeTask('replacement', TaskStatus.RUNNING)];
+    await f.handle.resync();
+    f.event('streaming:chunk', 'replacement-text', 'replacement', { chunk: 'synthetic square' });
+    expect(f.handle.getStreamingMessage('replacement-text')?.isStreaming).toBe(true);
+    // Inspect only the bounded memoization lifetime, not a public API contract.
+    const index = () => Reflect.get(f.handle, 'streamTaskIndex');
+    expect(index().tasks).toBe(f.handle.state.tasks);
+    expect(index().byId.has('turn')).toBe(false);
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(index()).toBeUndefined();
+    f.handle.dispose();
+    expect(index()).toBeUndefined();
+  });
+
+  it.each([300, 3000])(
+    'does not rescan %i task rows during warmed real chunk updates',
+    async (count) => {
+      const f = await fixture();
+      f.opts.tasks = Array.from({ length: count }, (_, n) =>
+        makeTask(`history-${String(n).padStart(5, '0')}`, TaskStatus.COMPLETED)
+      );
+      // Load history through the real hydration path (lean intentionally pages).
+      await f.handle.resync();
+      f.task('zz-live');
+      f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      const tasks = f.handle.state.tasks;
+      const reads = tasks.flatMap((task) => {
+        const taskId = task.task_id;
+        const status = task.status;
+        Object.defineProperty(task, 'task_id', { configurable: true, get: () => taskId });
+        Object.defineProperty(task, 'status', { configurable: true, get: () => status });
+        return [vi.spyOn(task, 'task_id', 'get'), vi.spyOn(task, 'status', 'get')];
+      });
+      for (let n = 0; n < 2000; n++) {
+        f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      }
+      expect(f.handle.state.tasks).toBe(tasks);
+      expect(f.handle.getStreamingMessage('text')?.content.length).toBe(2001);
+      expect(reads.reduce((sum, spy) => sum + spy.mock.calls.length, 0)).toBe(0);
+      for (const spy of reads) spy.mockRestore();
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['empty', 'thinking'] as const)(
+    'retains an attributed late error after terminal settlement (%s)',
+    async (kind) => {
+      const f = await fixture();
+      f.task('turn');
+      if (kind === 'thinking') f.thinking('retired', 'turn');
+      else f.event('streaming:start', 'retired', 'turn');
+      f.task('turn', TaskStatus.FAILED);
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.task('next');
+      f.thinking('active', 'next');
+      const active = f.handle.getStreamingMessage('active');
+      f.event('streaming:error', 'retired', 'turn', {
+        session_id: 'foreign-session',
+        error: 'synthetic foreign failure',
+      });
+      f.event('streaming:error', 'retired', 'next', { error: 'synthetic wrong task' });
+      f.event('streaming:error', 'retired', 'unknown-task', { error: 'synthetic unknown task' });
+      f.event('streaming:error', 'unknown-message', 'turn', { error: 'synthetic unknown message' });
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['active']);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      expect(f.handle.getStreamingMessage('retired')).toMatchObject({
+        task_id: 'turn',
+        content: '',
+        error: 'synthetic late failure',
+        isStreaming: false,
+        isThinking: false,
+        isTextStreaming: false,
+      });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('active')).toBe(active);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      f.event('thinking:chunk', 'retired', 'turn', { chunk: 'synthetic discarded' });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('retired')?.isStreaming).toBe(false);
+      f.persist('retired', 'turn');
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.handle.dispose();
+    }
+  );
+
+  it('preserves late-error attribution across reconnect/resync but not persistence or task replacement', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('streaming:start', 'partial', 'turn');
+    f.event('streaming:chunk', 'partial', 'turn', { chunk: 'synthetic partial' });
+    f.task('turn', TaskStatus.FAILED);
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic failure' });
+    f.event('streaming:error', 'partial', 'turn', { error: 'synthetic failure' });
+    expect(f.handle.getStreamingMessage('thought')?.error).toBe('synthetic failure');
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'synthetic partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    f.task('next');
+    f.thinking('saved', 'next');
+    f.thinking('removed', 'next');
+    f.task('next', TaskStatus.FAILED);
+    f.persist('saved', 'next');
+    f.event('streaming:error', 'saved', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('saved')).toBeUndefined();
+    f.task('next'); // reactivation discards the previous retirement window
+    f.event('streaming:error', 'removed', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('removed')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('bounds retired attribution, drops unknown/evicted IDs, and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    for (let n = 0; n < 300; n++) f.thinking(`thought-${n}`, 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    const retired = () => Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>;
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect(retired().size).toBe(256);
+    expect([...retired().values()].every((value) => value === 'turn')).toBe(true);
+    f.event('streaming:error', 'thought-0', 'turn', { error: 'synthetic evicted' });
+    f.event('streaming:error', 'thought-299', 'turn', {
+      task_id: undefined,
+      error: 'synthetic untagged',
+    });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.event('streaming:error', 'thought-299', 'turn', { error: 'synthetic late failure' });
+    expect(f.handle.getStreamingMessage('thought-299')?.error).toBe('synthetic late failure');
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(retired().size).toBe(0);
+    f.handle.dispose();
+    expect(retired().size).toBe(0);
+  });
+
+  it('clears a retired ID when persistence is learned through resync with no live streams', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    f.opts.messagesByTask.turn = [
+      {
+        ...makeMessage('turn', 0),
+        message_id: 'thought' as Message['message_id'],
+      },
+    ];
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('releases both populated memoization and retired attribution on direct disposal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeDefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(1);
+    f.handle.dispose();
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeUndefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(0);
+  });
 });
