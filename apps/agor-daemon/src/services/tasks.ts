@@ -1790,8 +1790,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     } catch (error) {
       if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
+      // Only a durable revocation replaces a suspension Stop; a stale generation after reactivation keeps it Stopped.
+      const suspensionInFlight =
+        report.task.status === TaskStatus.STOPPING &&
+        report.task.termination_request?.cause === 'tenant_suspension';
       const suspended =
-        report.outcome !== 'authorization_revoked' && isTenantRestrictedRejection(error);
+        report.outcome !== 'authorization_revoked' &&
+        (isTenantRestrictedRejection(error) || suspensionInFlight);
       return beginExecutorTermination({
         app: this.app,
         taskId: data.task_id,

@@ -1,4 +1,4 @@
-import { Forbidden } from '@agor/core/feathers';
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 
 const assertRuntimeTenantAccess = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('../auth/tenant-access.js', async (importOriginal) => ({
@@ -121,6 +121,41 @@ describe('TasksService heartbeat authority control', () => {
     });
     assertRuntimeTenantAccess.mockRejectedValueOnce(
       new Forbidden('Tenant access is restricted', { code: 'tenant_restricted' })
+    );
+    beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
+    await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'authorization_revoked' })
+    );
+  });
+
+  it('keeps an in-flight suspension Stop Stopped-cause when reactivation makes its generation stale', async () => {
+    const stopping = {
+      ...task,
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'tenant_suspension',
+        requested_at: '2026-08-28T00:00:10.000Z',
+        error_message: 'Tenant access is restricted.',
+      },
+    };
+    const { service } = serviceHarness({ report: { outcome: 'continued', task: stopping } });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
+    );
+    beginExecutorTermination.mockResolvedValueOnce(stopping);
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).resolves.toBe(stopping);
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'tenant_suspension' })
+    );
+  });
+
+  it('still revokes a running task whose generation is stale after reactivation', async () => {
+    const { service } = serviceHarness({ report: { outcome: 'continued', task } });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
     );
     beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
     await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
