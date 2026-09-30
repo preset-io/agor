@@ -14,12 +14,11 @@ const NO_FAILURES: ReadonlySet<string> = new Set();
 
 /**
  * Session access for the given teammates, read through the shared access cache.
- * `pending` counts ids with neither an answer nor a failed read, `failed` those
- * whose read failed (unknown stays out of `access`); `settled` once none are
- * pending. Failures are this mount's only: the next mount, id set or sign-in
- * reads them again, and `retry` does so now. With `read: false` only answers
- * already cached are reported and nothing is requested. Unmounting, or a new id
- * set, abandons reads still queued.
+ * Unknown ids stay out of `access`; `failed` counts those whose read failed,
+ * listed in `failedIds`, and the rest are still being read. Failures are this
+ * mount's only: the next mount, id set, sign-in or turning `read` back on reads
+ * them again, and `retry` does so now. With `read: false` only answers already cached are reported and
+ * nothing is requested. Unmounting, or a new id set, abandons reads still queued.
  */
 export function useSessionAccess(
   client: AgorClient | null,
@@ -33,6 +32,12 @@ export function useSessionAccess(
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
+  const [wasReading, setWasReading] = useState(read);
+  // Turning reads back on re-reads the failures, so they stop showing now.
+  if (wasReading !== read) {
+    setWasReading(read);
+    if (read) setFailed({ scope, ids: NO_FAILURES });
+  }
   const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
   useEffect(() => {
@@ -61,14 +66,12 @@ export function useSessionAccess(
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {
     const access: Record<string, boolean> = {};
-    let pending = 0;
     let failures = 0;
     for (const id of client && userId && key ? key.split(',') : []) {
       const known = peekAccess(client as AgorClient, scope, `branch:${id}`);
       if (known !== undefined) access[id] = known;
       else if (failedIds.has(id)) failures++;
-      else if (read) pending++;
     }
-    return { access, pending, failed: failures, settled: pending === 0, retry };
-  }, [client, userId, scope, key, read, version, failedIds, retry]);
+    return { access, failedIds, failed: failures, retry };
+  }, [client, userId, scope, key, version, failedIds, retry]);
 }

@@ -328,7 +328,8 @@ describe('Settings opens as an overlay, not a navigation', () => {
     expect(currentPath).toBe('/teammates');
     expect(document.querySelector('[aria-label="Scout, open Alpha"]')).toBeTruthy();
 
-    fireEvent.click(screen.getByText('Home', { selector: 'button > span' }));
+    // The directory's back link, by its icon: "Home" text appears elsewhere in the shell.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
     await settle();
     expect(currentPath).toBe('/');
     expect(homeIsShowing()).toBe(true);

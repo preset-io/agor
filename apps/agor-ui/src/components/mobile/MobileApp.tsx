@@ -15,6 +15,7 @@ import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -38,7 +39,6 @@ import {
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
-import { MOBILE_TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -135,6 +135,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onExecuteScheduleNow,
 }) => {
   const navigate = useNavigate();
+  const navigation = useAppNavigation();
   const location = useLocation();
   const goBackHome = useMobileBack('/m');
   const { connected, connecting } = useConnectionState();
@@ -349,7 +350,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
   const openBoardList = useCallback(() => setMoreOpen(true), []);
   const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
-  const openTeammates = useCallback(() => navigate(MOBILE_TEAMMATES_ROUTE_PATH), [navigate]);
+  const openTeammates = useCallback(() => navigation.goToTeammates({ mobile: true }), [navigation]);
   const createSession = useStableCallback(onCreateSession);
 
   // The bell opens comments for you across boards (Home › Needs you); on a board

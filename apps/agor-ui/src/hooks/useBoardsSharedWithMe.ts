@@ -8,7 +8,7 @@ import type {
   UserID,
 } from '@agor-live/client';
 import { hasMinimumRole, ROLES, resolveCapabilityPolicyAccess } from '@agor-live/client';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
 import { ACCESS_TTL_MS, peekAccess, readAccess } from '../utils/accessCache';
 
@@ -62,28 +62,41 @@ async function boardPolicyGrantsView(
   }).capabilities.includes('board.view');
 }
 
+/** A board's sharing answer for the caller: pending until its policy read answers or fails. */
+export type BoardSharingStatus = 'shared' | 'hidden' | 'pending' | 'failed';
+
+const sharedAlways = (): BoardSharingStatus => 'shared';
+
 /**
  * Whether a board reaches the caller through its policy rather than a role
  * bypass. Board lists are already policy-scoped for everyone except
  * superadmins, so only they pay one policy read per board, resolved with the
  * shared capability resolver and shared through the access cache. Unknown and
- * failed reads are false; a failed read is retried on the next mount, board
- * set or sign-in. `settled` once every board has an answer or a failed read.
+ * failed reads are not shared; a failed read is retried on the next mount,
+ * board set or sign-in, and `retry` does so now. `settled` once every board has
+ * an answer or a failed read.
  */
 export function useBoardSharing(
   client: AgorClient | null,
   user: User | null | undefined,
   boardIds: readonly string[]
-): { sharedWithMe: (boardId: string) => boolean; settled: boolean } {
+): {
+  sharedWithMe: (boardId: string) => boolean;
+  status: (boardId: string) => BoardSharingStatus;
+  settled: boolean;
+  retry: () => void;
+} {
   const { authGeneration } = useConnectionState();
   const bypasses = hasMinimumRole(user?.role, ROLES.SUPERADMIN);
   const userId = user?.user_id;
   const scope = `${userId}:${authGeneration}`;
   const key = bypasses ? [...new Set(boardIds)].sort().join(',') : '';
   const [version, setVersion] = useState(0);
+  const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
   const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
   useEffect(() => {
     if (!client || !key || !userId) return;
     const controller = new AbortController();
@@ -106,22 +119,29 @@ export function useBoardSharing(
       );
     }
     return () => controller.abort();
-  }, [client, key, scope, userId]);
+  }, [client, key, scope, userId, attempt]);
+  const retry = useCallback(() => {
+    setFailed({ scope, ids: NO_FAILURES });
+    setAttempt((a) => a + 1);
+  }, [scope]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {
-    if (!bypasses) return { sharedWithMe: allowAll, settled: true };
-    const known = (boardId: string) =>
-      client ? peekAccess(client, scope, `board:${boardId}`) : undefined;
-    return {
-      sharedWithMe: (boardId: string) => known(boardId) === true,
-      settled:
-        !client ||
-        !userId ||
-        !key ||
-        key.split(',').every((id) => known(id) !== undefined || failedIds.has(id)),
+    if (!bypasses) return { sharedWithMe: allowAll, status: sharedAlways, settled: true, retry };
+    const reading = !!client && !!userId && !!key;
+    const status = (boardId: string): BoardSharingStatus => {
+      const known = client ? peekAccess(client, scope, `board:${boardId}`) : undefined;
+      if (known !== undefined) return known ? 'shared' : 'hidden';
+      if (failedIds.has(boardId)) return 'failed';
+      return reading ? 'pending' : 'hidden';
     };
-  }, [bypasses, client, userId, scope, key, version, failedIds]);
+    return {
+      sharedWithMe: (boardId: string) => status(boardId) === 'shared',
+      status,
+      settled: !reading || key.split(',').every((id) => status(id) !== 'pending'),
+      retry,
+    };
+  }, [bypasses, client, userId, scope, key, version, failedIds, retry]);
 }
 
 /** `useBoardSharing`'s predicate alone, for callers that needn't wait for it. */

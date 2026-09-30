@@ -1,4 +1,4 @@
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgorClient, Branch, User } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Col, Empty, Flex, Input, Row, Segmented, Skeleton, Typography, theme } from 'antd';
 import { memo, useEffect, useMemo, useState } from 'react';
@@ -10,7 +10,7 @@ import { HomeCard, HomeFrame, HomeLink } from '../HomePage/HomeSection';
 import { TeammateCard, teammateOwner, teammatePurpose } from '../HomePage/HomeTeammates';
 
 /** Case- and accent-insensitive form for search ("José" matches "jose"). */
-const fold = (text: string) => text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+const fold = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
 
 interface TeammatesDirectoryProps {
   client: AgorClient | null;
@@ -32,7 +32,12 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
 }: TeammatesDirectoryProps) {
   const { token } = theme.useToken();
   const hydrated = useAgorStore((s) => s.branchesHydrated);
-  const { teammates, settled: sharingSettled } = useSharedTeammates(client, currentUser);
+  const {
+    teammates,
+    settled: sharingSettled,
+    failed: sharingFailed,
+    retry: retrySharing,
+  } = useSharedTeammates(client, currentUser);
   const userById = useAgorStore((s) => s.userById);
   const boardById = useAgorStore((s) => s.boardById);
   const [query, setQuery] = useState('');
@@ -44,17 +49,17 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
   }, [checkAccess]);
   const branchIds = useMemo(() => teammates.map((b) => b.branch_id), [teammates]);
   // Access is read for everyone only under "You can ask"; "All" shows answers already cached.
-  const { access, pending, failed, retry } = useSessionAccess(
-    checkAccess ? client : null,
-    currentUser?.user_id,
-    branchIds,
-    { read: asking }
-  );
+  const {
+    access,
+    failedIds,
+    failed: accessFailed,
+    retry: retryAccess,
+  } = useSessionAccess(checkAccess ? client : null, currentUser?.user_id, branchIds, {
+    read: asking,
+  });
   const loading = !hydrated || !sharingSettled;
-  const checking = asking && pending > 0;
   const q = fold(query.trim());
-  const visible = teammates.filter((branch) => {
-    if (asking && !access[branch.branch_id]) return false;
+  const matches = (branch: Branch) => {
     if (!q) return true;
     const owner = userById.get(teammateOwner(branch));
     const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
@@ -65,7 +70,29 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
       owner?.name,
       owner?.email,
     ].some((text) => text && fold(text).includes(q));
-  });
+  };
+  // Under "You can ask" a card waits for every match before it, so late answers only append.
+  const visible: Branch[] = [];
+  let pending = 0;
+  for (const branch of teammates.filter(matches)) {
+    const id = branch.branch_id;
+    if (!asking) visible.push(branch);
+    else if (id in access) {
+      if (access[id] && !pending) visible.push(branch);
+    } else if (!failedIds.has(id)) pending++;
+  }
+  const checking = pending > 0;
+  const failed = sharingFailed + (asking ? accessFailed : 0);
+  const retry = () => {
+    retrySharing();
+    retryAccess();
+  };
+  const emptyText =
+    teammates.length === 0
+      ? 'No teammates are shared with you yet.'
+      : asking && !q
+        ? 'None you can ask yet.'
+        : 'No teammates match.';
   const small = { fontSize: token.fontSizeSM };
 
   return (
@@ -118,14 +145,8 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
                 <Skeleton active title={false} paragraph={{ rows: 3 }} />
               </div>
             ) : (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description={
-                  teammates.length === 0
-                    ? 'No teammates are shared with you yet.'
-                    : 'No teammates match.'
-                }
-              />
+              // The failure notice below explains an empty list better than any empty state.
+              failed === 0 && <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={emptyText} />
             )
           ) : (
             <Row gutter={[token.marginSM, token.marginSM]}>
@@ -147,7 +168,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
               {loading ? 'Loading more teammates…' : `Checking access for ${pending} more…`}
             </Typography.Text>
           )}
-          {asking && failed > 0 && (
+          {failed > 0 && (
             <Flex align="center" gap={token.marginXXS} wrap>
               <Typography.Text type="secondary" style={small}>
                 Couldn’t check access for {failed} {failed === 1 ? 'teammate' : 'teammates'} ·

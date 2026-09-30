@@ -103,7 +103,11 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
   onSeeAll,
 }: HomeTeammatesSectionProps) {
   const { token } = theme.useToken();
-  const { teammates } = useSharedTeammates(client, currentUser);
+  const {
+    teammates,
+    failed: sharingFailed,
+    retry: retrySharing,
+  } = useSharedTeammates(client, currentUser);
   const hydrated = useAgorStore((s) => s.branchesHydrated);
   const [offset, setOffset] = useState(0);
   const shown = useMemo(
@@ -113,12 +117,20 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
         : [...teammates.slice(offset % teammates.length), ...teammates].slice(0, RAIL_SIZE),
     [teammates, offset]
   );
-  const { access, failed, retry } = useSessionAccess(
+  const {
+    access,
+    failed: accessFailed,
+    retry: retryAccess,
+  } = useSessionAccess(
     checkAccess ? client : null,
     currentUser?.user_id,
     shown.map((b) => b.branch_id)
   );
-  if (hydrated && teammates.length === 0) return null;
+  const retry = () => {
+    retrySharing();
+    retryAccess();
+  };
+  if (hydrated && teammates.length === 0 && sharingFailed === 0) return null;
   return (
     <HomeSection
       id="teammates"
@@ -139,7 +151,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
       }
     >
       {shown.length === 0 ? (
-        <HomeSkeleton />
+        sharingFailed === 0 && <HomeSkeleton />
       ) : (
         <HomeCard>
           {shown.map((branch, index) => (
@@ -156,7 +168,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
           ))}
         </HomeCard>
       )}
-      {failed > 0 && (
+      {sharingFailed + accessFailed > 0 && (
         <Typography.Text
           type="secondary"
           style={{ display: 'block', marginTop: token.marginXS, fontSize: token.fontSizeSM }}

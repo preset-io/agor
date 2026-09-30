@@ -30,6 +30,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { agorStore } from '../store/agorStore';
+import { MOBILE_TEAMMATES_ROUTE_PATH, TEAMMATES_ROUTE_PATH } from '../utils/uiRoutes';
 import { buildBoardPath } from './useUrlState';
 
 interface UseAppNavigationOptions {
@@ -68,6 +69,8 @@ export interface AppNavigation {
   goToBoard: (boardId: string, opts?: NavigationOpts) => void;
   /** Navigate to Home (`/`) with no board selected. */
   goHome: (opts?: NavigationOpts) => void;
+  /** Navigate to the teammates directory: `/teammates`, or `/m/teammates` with `mobile`. */
+  goToTeammates: (opts?: NavigationOpts & { mobile?: boolean }) => void;
 }
 
 /** Normalize a path to its trailing-slash canonical form so equality
@@ -131,6 +134,13 @@ export function useAppNavigation({
   const goHome = useCallback(
     (opts?: NavigationOpts) => {
       pushPath('/', opts);
+    },
+    [pushPath]
+  );
+
+  const goToTeammates = useCallback(
+    (opts?: NavigationOpts & { mobile?: boolean }) => {
+      pushPath(opts?.mobile ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH, opts);
     },
     [pushPath]
   );
@@ -204,7 +214,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome }),
-    [goToSession, goToBranch, goToArtifact, goToBoard, goHome]
+    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates }),
+    [goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates]
   );
 }

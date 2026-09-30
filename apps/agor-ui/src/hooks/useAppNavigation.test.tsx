@@ -279,3 +279,13 @@ describe('useAppNavigation.goToBoard', () => {
     expect(result.current.pathname).toBe('/b/my-board/');
   });
 });
+
+describe('useAppNavigation.goToTeammates', () => {
+  it('pushes the directory for each shell', () => {
+    const { result } = renderHook(() => useTestNav({}), { wrapper: wrap('/') });
+    act(() => result.current.nav.goToTeammates());
+    expect(result.current.pathname).toBe('/teammates');
+    act(() => result.current.nav.goToTeammates({ mobile: true }));
+    expect(result.current.pathname).toBe('/m/teammates');
+  });
+});

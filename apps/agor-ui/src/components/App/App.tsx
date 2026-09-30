@@ -28,7 +28,7 @@ import {
   PanelGroup,
   PanelResizeHandle,
 } from 'react-resizable-panels';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
@@ -77,7 +77,7 @@ import {
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import { isTeammatesRoute, TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
+import { isTeammatesRoute } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -741,7 +741,6 @@ export const App: React.FC<AppProps> = ({
   // from the store at call time so its function identities stay stable
   // across socket churn — important because they flow into memoized children.
   const navigation = useAppNavigation();
-  const navigate = useNavigate();
 
   const handleHomeBoardClick = useCallback(
     (boardId: string) => navigation.goToBoard(boardId),
@@ -1372,7 +1371,7 @@ export const App: React.FC<AppProps> = ({
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
   const handleHomeClick = useStableCallback(() => navigation.goHome());
-  const handleSeeAllTeammates = useStableCallback(() => navigate(TEAMMATES_ROUTE_PATH));
+  const handleSeeAllTeammates = useStableCallback(() => navigation.goToTeammates());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.

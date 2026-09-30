@@ -242,6 +242,109 @@ describe('TeammatesDirectory', () => {
     expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
   });
 
+  it('shows no empty state when every access check failed, only the retry notice', async () => {
+    seed([teammate('alpha', 'b1'), teammate('beta', 'b2')], [board('b1'), board('b2')]);
+    renderDirectory({
+      client: clientWith(async () => Promise.reject(new Error('offline'))),
+      checkAccess: true,
+    });
+    fireEvent.click(screen.getByText('You can ask'));
+    expect(await screen.findByText(/Couldn’t check access for 2 teammates/)).toBeInTheDocument();
+    expect(screen.queryByText(/No teammates|None you can ask/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Checking access' })).not.toBeInTheDocument();
+  });
+
+  it('counts only pending checks that match the search', async () => {
+    seed(
+      [teammate('alpha', 'b1'), teammate('beta', 'b2'), teammate('gamma', 'b3')],
+      [board('b1', 'Writes specs'), board('b2', 'Writes specs'), board('b3', 'Ships builds')]
+    );
+    const reads = deferredReads();
+    renderDirectory({ client: clientWith(reads.find), checkAccess: true });
+    fireEvent.click(screen.getByText('You can ask'));
+    await waitFor(() => expect(reads.find).toHaveBeenCalledTimes(3));
+    await act(async () => reads.resolve('alpha', answer('session')));
+    expect(await screen.findByText('Checking access for 2 more…')).toBeInTheDocument();
+
+    search('specs');
+    expect(screen.getByText('Checking access for 1 more…')).toBeInTheDocument();
+    // Free the shared read slots for the next test.
+    await act(async () => {
+      for (const id of [...reads.waiting.keys()]) reads.resolve(id, answer('view'));
+    });
+  });
+
+  it('keeps list order: a late answer never lands above cards already shown', async () => {
+    seed(
+      [teammate('alpha', 'b1'), teammate('beta', 'b2'), teammate('gamma', 'b3')],
+      [board('b1'), board('b2'), board('b3')]
+    );
+    const reads = deferredReads();
+    renderDirectory({ client: clientWith(reads.find), checkAccess: true });
+    fireEvent.click(screen.getByText('You can ask'));
+    await waitFor(() => expect(reads.find).toHaveBeenCalledTimes(3));
+
+    // Beta answers first but waits for alpha, which comes before it.
+    await act(async () => reads.resolve('beta', answer('session')));
+    expect(screen.queryByText('Teammate beta')).not.toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Checking access' })).toBeInTheDocument();
+
+    await act(async () => reads.resolve('alpha', answer('session')));
+    expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    const names = screen.getAllByText(/^Teammate (alpha|beta)$/).map((el) => el.textContent);
+    expect(names).toEqual(['Teammate alpha', 'Teammate beta']);
+    expect(screen.getByText('Checking access for 1 more…')).toBeInTheDocument();
+    await act(async () => reads.resolve('gamma', answer('view')));
+  });
+
+  it('drops stale failures when "You can ask" is chosen again and re-read', async () => {
+    seed([teammate('alpha', 'b1')], [board('b1')]);
+    const reads = deferredReads();
+    const find = vi
+      .fn<Find>()
+      .mockImplementationOnce(async () => Promise.reject(new Error('offline')))
+      .mockImplementation(reads.find);
+    renderDirectory({ client: clientWith(find), checkAccess: true });
+    fireEvent.click(screen.getByText('You can ask'));
+    expect(await screen.findByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('All'));
+    fireEvent.click(screen.getByText('You can ask'));
+    expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
+    expect(await screen.findByRole('status', { name: 'Checking access' })).toBeInTheDocument();
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    await act(async () => reads.resolve('alpha', answer('session')));
+    expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
+  });
+
+  it('counts a superadmin’s failed policy read in the notice and retries it', async () => {
+    seed([teammate('open', 'b-open')], [board('b-open')]);
+    const policy = vi
+      .fn<Find>()
+      .mockImplementationOnce(async () => Promise.reject(new Error('offline')))
+      .mockImplementation(async () => ({
+        primary_owner_user_id: 'owner-1',
+        board_access: {
+          schema_version: 1,
+          policy_kind: 'board_access',
+          sharing_mode: 'shared',
+          entries: [],
+          others: { preset: 'viewer', capabilities: ['board.view'], fs_access: 'none' },
+        },
+      }));
+    renderDirectory({ client: clientWith(vi.fn(), policy), currentUser: superadmin });
+    expect(await screen.findByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+    // Settled: no endless loading, and no empty state the notice already explains.
+    expect(screen.queryByRole('status', { name: 'Loading teammates' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/No teammates/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Teammate open')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
+    expect(policy).toHaveBeenCalledTimes(2);
+  });
+
   it('abandons queued access reads when the viewer switches back to "All"', async () => {
     const ids = ['a', 'b', 'c', 'd', 'e', 'f'];
     seed(
@@ -267,7 +370,7 @@ describe('TeammatesDirectory', () => {
     const client = clientWith(async () => answer('view'));
     const { rerender } = renderDirectory({ client, checkAccess: true });
     fireEvent.click(screen.getByText('You can ask'));
-    expect(await screen.findByText('No teammates match.')).toBeInTheDocument();
+    expect(await screen.findByText('None you can ask yet.')).toBeInTheDocument();
 
     rerender(
       <AntApp>

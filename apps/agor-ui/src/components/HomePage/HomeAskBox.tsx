@@ -64,8 +64,16 @@ function AskTargetSelect({
     useMemo(() => (listed ? makeTeammatesSelector(userId, 'own') : noTeammates), [listed, userId]),
     shallow
   );
-  const { teammates: shared } = useSharedTeammates(client, listed ? currentUser : null);
-  const { access, failed, retry } = useSessionAccess(
+  const {
+    teammates: shared,
+    failed: sharingFailed,
+    retry: retrySharing,
+  } = useSharedTeammates(client, listed ? currentUser : null);
+  const {
+    access,
+    failed: accessFailed,
+    retry: retryAccess,
+  } = useSessionAccess(
     listed ? client : null,
     userId,
     shared.map((b) => b.branch_id)
@@ -73,7 +81,8 @@ function AskTargetSelect({
   // Reads start on the first open; a later open retries the ones that failed.
   const openList = () => {
     setListed(true);
-    if (failed > 0) retry();
+    if (sharingFailed > 0) retrySharing();
+    if (accessFailed > 0) retryAccess();
   };
   const boardById = useAgorStore((s) => s.boardById);
   const repoById = useAgorStore((s) => s.repoById);
