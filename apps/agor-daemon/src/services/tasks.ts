@@ -828,6 +828,30 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) as Promise<Session>;
   }
 
+  /** Hook-free projection for a restricted tenant, whose ordinary session writes admission refuses. */
+  private async projectRestrictedTerminalSession(
+    task: Task,
+    status: Task['status'],
+    params?: TaskParams
+  ): Promise<void> {
+    const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    if (!tenantId) throw new Error('Missing tenant context for terminal session projection');
+    const session = await runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      await assertTenantWritable(tenantDb, tenantId);
+      return new SessionRepository(tenantDb).update(task.session_id, {
+        status: status === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
+        ready_for_prompt: true,
+      });
+    });
+    emitServiceEvent(this.app, {
+      path: 'sessions',
+      event: 'patched',
+      data: session,
+      id: session.session_id,
+      params,
+    });
+  }
+
   private async processCompletionSideEffects(
     task: Task,
     status: Task['status'],
@@ -837,10 +861,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!task.session_id || !this.app) return false;
     try {
       // Settlement is committed; while restricted, skip completion automation (not replayed on release).
-      if (!(await isCurrentTenantRuntimeActive(this.db))) return true;
-      const session = await this.app.service('sessions').get(task.session_id, params);
+      const automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
+      const session = automationAdmitted
+        ? await this.app.service('sessions').get(task.session_id, params)
+        : await readTerminationEntity(this.app, 'sessions', task.session_id, params, task.task_id);
 
-      if (session.branch_id) {
+      if (session.branch_id && automationAdmitted) {
         // Preserve fire-and-forget behavior, but never let Git orchestration
         // inherit a live (or already committed) completion transaction.
         deferWithTenantContext(
@@ -867,7 +893,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
         );
-        if (!isStop) {
+        if (!isStop && automationAdmitted) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
         return false;
@@ -883,12 +909,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           id: session.session_id,
           params,
         });
-      } else {
+      } else if (automationAdmitted) {
         await this.projectTerminalSession(task, status, params);
         console.log(
           `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
         );
+      } else {
+        // The session must still leave RUNNING, or it stays stuck after reactivation.
+        await this.projectRestrictedTerminalSession(task, status, params);
       }
+      if (!automationAdmitted) return true;
 
       // Defensive fallback for tasks created before create-time auto-title
       // ran (or after a transient title-patch failure). Later completed

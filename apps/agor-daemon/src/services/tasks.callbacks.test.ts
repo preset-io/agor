@@ -3,9 +3,10 @@ vi.mock('../auth/tenant-access.js', () => ({
   assertRuntimeTenantAccess: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { runWithTenantDatabaseScope, shortId } from '@agor/core/db';
+import { runWithTenantDatabaseScope, SessionRepository, shortId } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
 import { TasksService } from './tasks';
 
@@ -186,6 +187,31 @@ describe('TasksService completion callbacks', () => {
     await service.settleTermination({ taskId, outcome: 'verified_absent' } as never);
     expect(revokeTaskTokens).toHaveBeenLastCalledWith(taskId);
     expect(revokeTaskTokens).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the session to idle but runs no automation when the tenant closes before side effects', async () => {
+    const { service, createPending, sessionsPatch, triggerQueueProcessing, childSession } =
+      makeService();
+    const db = { run() {} };
+    (service as unknown as { db: unknown }).db = db;
+    const projected = vi
+      .spyOn(SessionRepository.prototype, 'update')
+      .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
+    vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    try {
+      await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
+        service.patch(taskId, { status: TaskStatus.COMPLETED })
+      );
+      expect(projected).toHaveBeenCalledWith(childSessionId, {
+        status: 'idle',
+        ready_for_prompt: true,
+      });
+      expect(sessionsPatch).not.toHaveBeenCalled();
+      expect(createPending).not.toHaveBeenCalled();
+      expect(triggerQueueProcessing).not.toHaveBeenCalled();
+    } finally {
+      projected.mockRestore();
+    }
   });
 
   it('retries credential retirement for an idempotent terminal-state write', async () => {
