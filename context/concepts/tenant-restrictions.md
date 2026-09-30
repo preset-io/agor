@@ -295,7 +295,7 @@ and not replayed.
 `auth/tenant-credential-epoch.ts` hashes the complete sorted controller/placement/
 revision vector and tenant identity. It is not a clock cutoff or maximum revision.
 Runtime access/refresh tokens, MCP session tokens and MCP egress capabilities retain
-the generation validated at issuance (a closed tenant is minted no MCP session token;
+the generation validated at issuance (a closed tenant, or one whose restriction read fails, is minted no MCP session token and its session read returns without one;
 the `/mcp` route compares it on every request and answers a stale one 401); refresh and JWT re-login never replace an old generation
 with the current one. Missing legacy claims work only without retained history.
 Fresh primary authentication (including existing API keys) is not permanent key
