@@ -30,6 +30,13 @@ describe('sameName', () => {
     expect(sameName('🎨', '🎨!')).toBe(true);
     expect(sameName(' (🎨 🚀) ', '🎨🚀')).toBe(true);
     expect(sameName('🎨', '🎨🚀')).toBe(false);
+    expect(sameName('❤️', '❤')).toBe(true);
+    expect(sameName('!!', '! !')).toBe(true);
+  });
+
+  it('keeps combining marks, so different names in scripts that use them stay different', () => {
+    expect(sameName('किताब', 'कताब')).toBe(false);
+    expect(sameName('Zoë', 'zoë!')).toBe(true);
   });
 });
 

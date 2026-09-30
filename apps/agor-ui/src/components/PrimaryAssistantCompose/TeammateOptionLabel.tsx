@@ -1,7 +1,7 @@
 import { Flex, Typography, theme } from 'antd';
 import type { TeammateOption } from '../../utils/teammateLabels';
 
-/** One line: emoji, name, then the board in regular secondary text; the board truncates before the name. */
+/** One line: emoji, name, then the board in regular secondary text; the board truncates first but keeps room for its ellipsis. */
 export const TeammateOptionLabel: React.FC<{ option: TeammateOption }> = ({ option }) => {
   const { token } = theme.useToken();
   return (
@@ -19,7 +19,7 @@ export const TeammateOptionLabel: React.FC<{ option: TeammateOption }> = ({ opti
         <Typography.Text
           type="secondary"
           ellipsis={{ tooltip: option.context }}
-          style={{ flex: '1 1 0%', minWidth: 0, fontWeight: 'normal' }}
+          style={{ flex: '1 1 0%', minWidth: '3em', fontWeight: 'normal' }}
         >
           {option.context}
         </Typography.Text>

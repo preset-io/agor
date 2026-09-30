@@ -30,11 +30,13 @@ export interface TeammateOption {
   branch: Branch;
 }
 
-// A name with no letters or digits keeps its symbols (emoji) and drops only punctuation and spacing, so such names don't all collapse to ''.
+// A name with no letters or digits keeps its symbols (emoji) and drops punctuation, spacing and emoji variation selectors.
 const bare = (text: string) => {
-  const lower = text.toLowerCase();
+  const lower = text.toLowerCase().replace(/[\uFE0E\uFE0F]/gu, '');
   return (
-    lower.replace(/[^\p{L}\p{N}]/gu, '') || lower.replace(/[\p{P}\p{Z}\s]/gu, '') || lower.trim()
+    lower.replace(/[^\p{L}\p{M}\p{N}]/gu, '') ||
+    lower.replace(/[\p{P}\p{Z}\s]/gu, '') ||
+    lower.replace(/\s/gu, '')
   );
 };
 
