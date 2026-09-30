@@ -454,6 +454,19 @@ describe('HomePage', () => {
     expect(within(toolbar).getByText('1')).toBeInTheDocument();
   });
 
+  it('keeps “Only sessions I started” per user', async () => {
+    seed({ sessions: [session('idle')] });
+    const { unmount } = renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
+    unmount();
+
+    renderHome({ currentUser: { ...user, user_id: 'someone-else' } as User });
+    const toolbar = document.querySelector<HTMLElement>('[data-home-toolbar]') as HTMLElement;
+    expect(within(toolbar).queryByText('1')).not.toBeInTheDocument();
+  });
+
   it('shows View in the toolbar, defaults to List, and counts only filters', () => {
     asDesktop();
     seed({

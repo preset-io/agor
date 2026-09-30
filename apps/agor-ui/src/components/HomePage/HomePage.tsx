@@ -29,6 +29,7 @@ import {
   OPEN_GLOBAL_SEARCH_EVENT,
   requestShellPicker,
 } from '../../utils/shellEvents';
+import { patchUserPreferences } from '../../utils/userPreferences';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab, type MyWorkView } from './HomeMyWork';
@@ -199,20 +200,19 @@ export const HomePage = memo(function HomePage({
     (view: MyWorkView) => {
       setViewPick({ userId, view });
       if (!client || !userId) return;
-      // Preferences patch as a whole: re-read so settings changed elsewhere survive, and
-      // chain so the last pick lands last. A failed write keeps the pick on this device.
+      // Chained so the last pick lands last; a failed write keeps the pick on this device.
       viewWrites.current = viewWrites.current
         .then(async () => {
-          const latest = (await client.service('users').get(userId)) as User;
-          await client
-            .service('users')
-            .patch(userId, { preferences: { ...latest.preferences, homeWorkView: view } });
+          await patchUserPreferences(client, userId, { homeWorkView: view });
         })
         .catch(() => {});
     },
     [client, userId]
   );
-  const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage('agor:home-only-mine', false);
+  const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage(
+    `agor:home-only-mine:${userId ?? 'anonymous'}`,
+    false
+  );
   const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
     `agor:home-opened-failures:${userId ?? 'anonymous'}`,
     {}
