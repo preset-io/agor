@@ -5,12 +5,14 @@ import { createTenantRestrictedAuthHook } from './require-auth.js';
 import {
   assertRuntimeTenantAccess,
   assertRuntimeTenantRequestAccess,
+  createSharedTenantRestrictionObservation,
   endTenantRestrictionRequest,
   gatewayOccurrenceTime,
   isCurrentTenantEventAdmitted,
   isTenantRestrictedRejection,
   readAdmittedTenantRestriction,
   readRequestTenantRestriction,
+  shareTenantRestrictionRead,
   TENANT_RESTRICTION_OBSERVATION_MS,
   withTenantRestrictionRequest,
 } from './tenant-access.js';
@@ -262,6 +264,37 @@ describe('per-request memoization', () => {
       endTenantRestrictionRequest();
       await readRequestTenantRestriction(db, 'a');
       expect(read).toHaveBeenCalledTimes(7);
+    });
+  });
+
+  it('shares one relay observation per tenant for at most one tick, never across tenants', async () => {
+    vi.useFakeTimers();
+    const source = vi.fn(async (tenantId: string) => ({ ...state(), tenantId }) as never);
+    const observe = createSharedTenantRestrictionObservation(source);
+    const first = observe('a');
+    expect(observe('a')).toBe(first);
+    expect(observe('b')).not.toBe(first);
+    await first.state;
+    expect(source.mock.calls).toEqual([['a'], ['b']]);
+    vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS - 1);
+    expect(observe('a')).toBe(first);
+    vi.advanceTimersByTime(1);
+    const second = observe('a');
+    expect(second).not.toBe(first);
+    await second.state;
+    expect(source).toHaveBeenCalledTimes(3);
+
+    // A seeded scope ends one tick after the shared read began, then reads fresh.
+    read.mockResolvedValue(state());
+    const seeded = observe('a');
+    vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS - 10);
+    await withTenantRestrictionRequest(async () => {
+      shareTenantRestrictionRead('a', seeded);
+      expect(readRequestTenantRestriction(db, 'a')).toBe(seeded.state);
+      expect(read).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(10);
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledOnce();
     });
   });
 

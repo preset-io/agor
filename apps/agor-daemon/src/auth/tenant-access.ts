@@ -57,6 +57,50 @@ export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenant
   return read;
 };
 
+/** One restriction observation and the monotonic time its read started. */
+export interface SharedTenantRestrictionObservation {
+  startedAt: number;
+  state: Promise<TenantRestrictionState>;
+}
+
+/** Per-tenant single-flight read reused for at most one tick from its start; never shared across tenants. */
+export function createSharedTenantRestrictionObservation(
+  read: (tenantId: string) => Promise<TenantRestrictionState>
+): (tenantId: string) => SharedTenantRestrictionObservation {
+  const observations = new Map<string, SharedTenantRestrictionObservation>();
+  let nextEviction = 0;
+  return (tenantId) => {
+    const at = performance.now();
+    if (at >= nextEviction) {
+      for (const [id, entry] of observations)
+        if (at - entry.startedAt >= TENANT_RESTRICTION_OBSERVATION_MS) observations.delete(id);
+      nextEviction = at + TENANT_RESTRICTION_OBSERVATION_MS;
+    }
+    const current = observations.get(tenantId);
+    if (current && at - current.startedAt < TENANT_RESTRICTION_OBSERVATION_MS) return current;
+    const state = Promise.resolve().then(() => read(tenantId));
+    // Every sharer awaits it; this only keeps a failure nobody else awaits from going unhandled.
+    state.catch(() => undefined);
+    const observation = { startedAt: at, state };
+    observations.set(tenantId, observation);
+    return observation;
+  };
+}
+
+/** Seed this request scope with a shared observation, shortening the scope so reuse still ends one tick after that read began. */
+export function shareTenantRestrictionRead(
+  tenantId: string,
+  observation: SharedTenantRestrictionObservation
+): void {
+  const current = requestReads.getStore();
+  if (!current || performance.now() >= current.until || current.reads.has(tenantId)) return;
+  current.reads.set(tenantId, observation.state);
+  current.until = Math.min(
+    current.until,
+    observation.startedAt + TENANT_RESTRICTION_OBSERVATION_MS
+  );
+}
+
 /** Credential issuance after admission reuses the read that admitted this request within its tick; never an admission check. */
 export const readAdmittedTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
   const current = requestReads.getStore();

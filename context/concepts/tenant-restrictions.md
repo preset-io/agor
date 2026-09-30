@@ -96,7 +96,8 @@ release barrier first. `readTenantRestrictionState` is the single uncached
 read (records, closed, event cutoff) every admission check derives from; it is
 not a guard for already-admitted work, stale tokens, sockets, or agents. One
 handshake, socket packet or request shares one read across its strategy, packet
-and hook checks; the share never crosses requests and never outlives one tick (1 s).
+and hook checks; the share never crosses requests (except executor streaming relay
+chunks, below) and never outlives one tick (1 s).
 Nested internal service calls read afresh on purpose: a nested call may be the
 write that has to observe a new restriction, so no cross-call cache is added.
 The socket monitor likewise reads each connected tenant separately: the only
@@ -221,7 +222,11 @@ provider-less call, report-path name or customer flag is a generic exemption.
 Per-packet socket admission reads only for Feathers service-call packets (and
 every executor-socket packet), sharing that read with the service hook; it retains
 executor safety RPC transport only, and service guards still authorize each
-operation. Executor safety RPCs do no packet read at all, since they pass whatever
+operation. Executor streaming relay chunks (`messages/streaming` and `tasks/streaming`
+creates) instead share one per-tenant single-flight read for at most one tick from its
+start, which also serves their service hook: for an executor they only re-emit through the
+publication gate, which drops closed or stale deliveries itself. Every other executor RPC
+still reads per call. Executor safety RPCs do no packet read at all, since they pass whatever
 it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets never read, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
 pending admission). An admission read still pending after 2 s rejects its packet

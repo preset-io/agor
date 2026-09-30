@@ -37,6 +37,18 @@ export function tenantSocketPacketNeedsAdmission(input: {
   return input.serviceCall;
 }
 
+/** Executor streaming relays only re-emit through the per-tick publication gate; for an executor they write nothing. */
+const STREAMING_RELAY_PATHS = new Set(['messages/streaming', 'tasks/streaming']);
+
+export function isStreamingRelayPacket(packet: unknown[]): boolean {
+  const [method, path] = packet;
+  return (
+    method === 'create' &&
+    typeof path === 'string' &&
+    STREAMING_RELAY_PATHS.has(path.replace(/^\/+|\/+$/g, ''))
+  );
+}
+
 export async function admitTenantSocketPacket(input: {
   tenantId: string;
   executor: boolean;

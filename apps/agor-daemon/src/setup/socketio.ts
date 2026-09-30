@@ -1,6 +1,8 @@
 import type { TenantRestrictionState } from '@agor/core/db';
 import {
+  createSharedTenantRestrictionObservation,
   endTenantRestrictionRequest,
+  shareTenantRestrictionRead,
   TENANT_RESTRICTION_OBSERVATION_MS,
   withTenantRestrictionRequest,
 } from '../auth/tenant-access.js';
@@ -11,6 +13,7 @@ import {
 import {
   admitTenantSocketPacket,
   createOrderedTenantPacketGate,
+  isStreamingRelayPacket,
   missingSocketTenant,
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
@@ -155,7 +158,7 @@ function retireSocketConnectionAuthority(app: Application, connection: unknown):
 export interface SocketIOOptions {
   /** Access plus credential generation, one read per handshake/packet; executors retain only guarded safety RPC transport. */
   assertTenantAccess?: (tenantId: string, credentialPayload: unknown) => Promise<void>;
-  /** Fresh state for the per-replica monitor, which retires sockets only on a positive observation. */
+  /** Fresh state for the per-replica monitor (retires sockets only on a positive observation) and the shared executor relay read. */
   readTenantRestriction?: (tenantId: string) => Promise<TenantRestrictionState>;
   /** CORS origin configuration */
   corsOrigin: CorsOrigin;
@@ -503,6 +506,9 @@ export function createSocketIOConfig(
   const { corsOrigin, credentialsAllowed, buildInfo } = options;
   const multiTenancy = options.multiTenancy;
   const executorRevocationFence = getOrCreateExecutorConnectionRevocationFence(app);
+  const streamingRelayObservation = options.readTenantRestriction
+    ? createSharedTenantRestrictionObservation(options.readTenantRestriction)
+    : undefined;
   // Default ON to mirror the daemon-wide default (see register-hooks.ts).
   const webTerminalEnabled = options.webTerminalEnabled !== false;
 
@@ -1010,6 +1016,14 @@ export function createSocketIOConfig(
             const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
             const tenantId = current?.tenant?.tenant_id;
             if (!tenantId) throw missingSocketTenant();
+            // Per-chunk relays share one read per tenant per tick; every other executor RPC still reads per call.
+            if (
+              streamingRelayObservation &&
+              current.principal.kind === 'executor' &&
+              isStreamingRelayPacket(packet)
+            ) {
+              shareTenantRestrictionRead(tenantId, streamingRelayObservation(tenantId));
+            }
             await admitTenantSocketPacket({
               tenantId,
               executor: current.principal.kind === 'executor',
