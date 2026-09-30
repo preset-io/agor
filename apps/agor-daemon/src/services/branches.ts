@@ -3022,6 +3022,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
+    // Persist as an internal write. The caller already passed the control gate
+    // above and the values come from the repo's admin-managed templates, so the
+    // patch hooks must not re-check them as a direct env command edit, which
+    // is admin-only (#2803). The env policy hook still runs on internal calls.
     return await this.withTenantDatabase(params, () =>
       this.patch(
         id,
@@ -3035,7 +3039,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           app_url: snapshot.app,
           updated_at: new Date().toISOString(),
         },
-        params
+        { ...params, provider: undefined }
       )
     );
   }
