@@ -458,13 +458,27 @@ async function projectLaunchUser(
   return { userId, authorizationChanged: false, credentialEpoch };
 }
 
+/** Cloud's retryable launch-code exchange refusal: Team-row contention, code left unconsumed. */
+const LAUNCH_EXCHANGE_BUSY_CODE = 'team_busy';
+
+class LaunchExchangeBusyError extends NotAuthenticated {}
+
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) {
-      throw new NotAuthenticated('Invalid or expired one-time launch code');
+      const busy =
+        response.status === 409 &&
+        (await response.json().then(
+          (body: unknown) =>
+            (body as { error?: unknown } | null)?.error === LAUNCH_EXCHANGE_BUSY_CODE,
+          () => false
+        ));
+      // Same message either way, so failure classification and logs are unchanged.
+      const message = 'Invalid or expired one-time launch code';
+      throw busy ? new LaunchExchangeBusyError(message) : new NotAuthenticated(message);
     }
     return response.json();
   } finally {
@@ -533,11 +547,21 @@ async function exchangeLaunchCode(
     ...(settings.forwardRequestHost && requestHost ? { request_host: requestHost } : {}),
   };
 
-  const json = await fetchJson(
-    settings.exchangeUrl as string,
-    { method: 'POST', headers, body: JSON.stringify(body) },
-    settings.requestTimeoutMs
-  );
+  const exchange = () =>
+    fetchJson(
+      settings.exchangeUrl as string,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+      settings.requestTimeoutMs
+    );
+  let json: unknown;
+  try {
+    json = await exchange();
+  } catch (error) {
+    if (!(error instanceof LaunchExchangeBusyError)) throw error;
+    // One bounded retry after 150-300 ms of jitter; a second busy answer fails like any rejection.
+    await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 150));
+    json = await exchange();
+  }
 
   if (!json || typeof json !== 'object') {
     throw new NotAuthenticated('Invalid one-time launch exchange response');
