@@ -1,14 +1,11 @@
-import type { AgorClient, Board, Branch, EffectiveBranchAccess, User } from '@agor-live/client';
+import type { AgorClient, Board, Branch, User } from '@agor-live/client';
 import { getTeammateConfig, TEAMMATE_FRAMEWORK_REPO_SLUG } from '@agor-live/client';
 import { SyncOutlined } from '@ant-design/icons';
 import { Avatar, Button, Flex, Typography, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { useConnectionState } from '../../contexts/ConnectionContext';
-import { useBoardsSharedWithMe } from '../../hooks/useBoardsSharedWithMe';
-import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
-import { makeTeammatesSelector } from '../../store/selectors';
-import { peekAccess, readAccess } from '../../utils/accessCache';
-import { canStartSessions } from '../../utils/branchAccess';
+import { memo, useMemo, useState } from 'react';
+import { useSessionAccess } from '../../hooks/useSessionAccess';
+import { useSharedTeammates } from '../../hooks/useSharedTeammates';
+import { useAgorStore } from '../../store/agorStore';
 import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { getTemplateBySourceBranch } from '../../utils/teammateTemplates';
 import { HomePressable } from './HomeRow';
@@ -26,84 +23,6 @@ export function teammatePurpose(branch: Branch, board?: Board): string | undefin
 }
 
 export const teammateOwner = (branch: Branch) => branch.primary_owner_user_id ?? branch.created_by;
-
-export const canStartSessionsOn = (client: AgorClient, branchId: string) =>
-  client
-    .service('branches/:id/effective-access')
-    .find({ route: { id: branchId } })
-    .then((access) => canStartSessions(access as unknown as EffectiveBranchAccess));
-
-const NO_FAILURES: ReadonlySet<string> = new Set();
-
-/**
- * Session access for the given teammates, read through the shared access cache.
- * `settled` once every id has an answer or a failed read (unknown stays out of
- * `access`). Failures are this mount's only: the next mount, id set or sign-in
- * reads them again, and `retry` does so now.
- */
-export function useSessionAccess(
-  client: AgorClient | null,
-  userId: string | undefined,
-  branchIds: string[]
-) {
-  const { authGeneration } = useConnectionState();
-  const scope = `${userId}:${authGeneration}`;
-  const key = branchIds.join(',');
-  const [version, setVersion] = useState(0);
-  const [attempt, setAttempt] = useState(0);
-  const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
-  const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
-  useEffect(() => {
-    if (!client || !userId || !key) return;
-    const controller = new AbortController();
-    for (const id of key.split(',')) {
-      readAccess(client, scope, `branch:${id}`, () => canStartSessionsOn(client, id), {
-        signal: controller.signal,
-      }).then(
-        () => setVersion((v) => v + 1),
-        () => {
-          if (controller.signal.aborted) return;
-          setFailed((prev) => ({
-            scope,
-            ids: new Set([...(prev.scope === scope ? prev.ids : []), id]),
-          }));
-        }
-      );
-    }
-    return () => controller.abort();
-  }, [client, userId, scope, key, attempt]);
-  const retry = useCallback(() => {
-    setFailed({ scope, ids: NO_FAILURES });
-    setAttempt((a) => a + 1);
-  }, [scope]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
-  return useMemo(() => {
-    const access: Record<string, boolean> = {};
-    let settled = true;
-    for (const id of client && userId && key ? key.split(',') : []) {
-      const known = peekAccess(client as AgorClient, scope, `branch:${id}`);
-      if (known !== undefined) access[id] = known;
-      else settled &&= failedIds.has(id);
-    }
-    return { access, settled, retry };
-  }, [client, userId, scope, key, version, failedIds, retry]);
-}
-
-/** Others' teammates whose home board reaches the caller through its policy. */
-export function useSharedTeammates(client: AgorClient | null, user: User | null | undefined) {
-  const candidates = useStoreWithEqualityFn(
-    agorStore,
-    useMemo(() => makeTeammatesSelector(user?.user_id, 'shared'), [user?.user_id]),
-    shallow
-  );
-  const boardIds = useMemo(() => candidates.map((b) => b.board_id ?? ''), [candidates]);
-  const sharedWithMe = useBoardsSharedWithMe(client, user, boardIds);
-  return useMemo(
-    () => candidates.filter((branch) => sharedWithMe(branch.board_id ?? '')),
-    [candidates, sharedWithMe]
-  );
-}
 
 export interface TeammateCardProps {
   branch: Branch;
@@ -184,7 +103,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
   onSeeAll,
 }: HomeTeammatesSectionProps) {
   const { token } = theme.useToken();
-  const teammates = useSharedTeammates(client, currentUser);
+  const { teammates } = useSharedTeammates(client, currentUser);
   const hydrated = useAgorStore((s) => s.branchesHydrated);
   const [offset, setOffset] = useState(0);
   const shown = useMemo(

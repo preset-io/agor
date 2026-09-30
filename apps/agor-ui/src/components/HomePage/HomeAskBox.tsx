@@ -5,6 +5,8 @@ import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useSessionAccess } from '../../hooks/useSessionAccess';
+import { useSharedTeammates } from '../../hooks/useSharedTeammates';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeLatestOwnSessionSelector, makeTeammatesSelector } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
@@ -21,7 +23,6 @@ import {
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { HomeList, HomePressable } from './HomeRow';
 import { HomeCard, HomeLink, HomeSectionError, HomeSheet, useHomeCompact } from './HomeSection';
-import { useSessionAccess, useSharedTeammates } from './HomeTeammates';
 import { HOME_ASK_TARGET_MAX_WIDTH } from './homeLayout';
 
 // Starters for new users only; returning users get the placeholder.
@@ -63,7 +64,7 @@ function AskTargetSelect({
     useMemo(() => (listed ? makeTeammatesSelector(userId, 'own') : noTeammates), [listed, userId]),
     shallow
   );
-  const shared = useSharedTeammates(client, listed ? currentUser : null);
+  const { teammates: shared } = useSharedTeammates(client, listed ? currentUser : null);
   const { access } = useSessionAccess(
     listed ? client : null,
     userId,

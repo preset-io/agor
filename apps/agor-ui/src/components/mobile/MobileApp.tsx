@@ -38,6 +38,7 @@ import {
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
+import { MOBILE_TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -45,8 +46,8 @@ import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/available
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { type HomeLocationState, HomePage } from '../HomePage';
-import { TeammatesDirectory } from '../HomePage/TeammatesDirectory';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
+import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
 import { MobileBoardPage } from './MobileBoardPage';
 import { MobileCommentsPage } from './MobileCommentsPage';
@@ -135,7 +136,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const goBackFromComments = useMobileBack('/m');
+  const goBackHome = useMobileBack('/m');
   const { connected, connecting } = useConnectionState();
   const reducedMotion = usePrefersReducedMotion();
   // Self-subscribe to the entity maps this surface drills into. The subscription
@@ -348,6 +349,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
   const openBoardList = useCallback(() => setMoreOpen(true), []);
   const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
+  const openTeammates = useCallback(() => navigate(MOBILE_TEAMMATES_ROUTE_PATH), [navigate]);
   const createSession = useStableCallback(onCreateSession);
 
   // The bell opens comments for you across boards (Home › Needs you); on a board
@@ -362,10 +364,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   const canCreateSessions = hasMinimumRole(user?.role, ROLES.MEMBER);
 
-  const withHeader = (title: string, page: React.ReactNode) => (
+  const withHeader = (title: string, page: React.ReactNode, onBack?: () => void) => (
     <div style={mobilePageStyle}>
       <MobileHeader
         title={title}
+        onBack={onBack}
         onSearch={() => navigate('/m/search')}
         commentsBadge={commentsBadge}
         onOpenComments={openComments}
@@ -433,6 +436,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onOpenSettings={onOpenWorkspaceSettings}
                 onAllBoards={openBoardList}
                 onSeeAllSessions={openSessionList}
+                onSeeAllTeammates={openTeammates}
               />
             )}
           />
@@ -445,7 +449,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 currentUser={user}
                 checkAccess={canCreateSessions}
                 onOpenBoard={openHomeBoard}
-              />
+              />,
+              goBackHome
             )}
           />
           <Route
@@ -552,7 +557,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 branchById={branchById}
                 userById={userById}
                 currentUser={user}
-                onBack={goBackFromComments}
+                onBack={goBackHome}
                 onSendComment={onSendComment}
                 onReplyComment={onReplyComment}
                 onResolveComment={onResolveComment}

@@ -13,6 +13,7 @@ import { useConnectionState } from '../contexts/ConnectionContext';
 import { ACCESS_TTL_MS, peekAccess, readAccess } from '../utils/accessCache';
 
 const allowAll = () => true;
+const NO_FAILURES: ReadonlySet<string> = new Set();
 
 const groupReads = new WeakMap<
   object,
@@ -67,19 +68,21 @@ async function boardPolicyGrantsView(
  * superadmins, so only they pay one policy read per board, resolved with the
  * shared capability resolver and shared through the access cache. Unknown and
  * failed reads are false; a failed read is retried on the next mount, board
- * set or sign-in.
+ * set or sign-in. `settled` once every board has an answer or a failed read.
  */
-export function useBoardsSharedWithMe(
+export function useBoardSharing(
   client: AgorClient | null,
   user: User | null | undefined,
   boardIds: readonly string[]
-): (boardId: string) => boolean {
+): { sharedWithMe: (boardId: string) => boolean; settled: boolean } {
   const { authGeneration } = useConnectionState();
   const bypasses = hasMinimumRole(user?.role, ROLES.SUPERADMIN);
   const userId = user?.user_id;
   const scope = `${userId}:${authGeneration}`;
   const key = bypasses ? [...new Set(boardIds)].sort().join(',') : '';
   const [version, setVersion] = useState(0);
+  const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
+  const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
 
   useEffect(() => {
     if (!client || !key || !userId) return;
@@ -93,18 +96,39 @@ export function useBoardsSharedWithMe(
         { signal: controller.signal }
       ).then(
         () => setVersion((v) => v + 1),
-        () => {}
+        () => {
+          if (controller.signal.aborted) return;
+          setFailed((prev) => ({
+            scope,
+            ids: new Set([...(prev.scope === scope ? prev.ids : []), boardId]),
+          }));
+        }
       );
     }
     return () => controller.abort();
   }, [client, key, scope, userId]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
-  return useMemo(
-    () =>
-      bypasses
-        ? (boardId: string) => !!client && peekAccess(client, scope, `board:${boardId}`) === true
-        : allowAll,
-    [bypasses, client, scope, version]
-  );
+  return useMemo(() => {
+    if (!bypasses) return { sharedWithMe: allowAll, settled: true };
+    const known = (boardId: string) =>
+      client ? peekAccess(client, scope, `board:${boardId}`) : undefined;
+    return {
+      sharedWithMe: (boardId: string) => known(boardId) === true,
+      settled:
+        !client ||
+        !userId ||
+        !key ||
+        key.split(',').every((id) => known(id) !== undefined || failedIds.has(id)),
+    };
+  }, [bypasses, client, userId, scope, key, version, failedIds]);
+}
+
+/** `useBoardSharing`'s predicate alone, for callers that needn't wait for it. */
+export function useBoardsSharedWithMe(
+  client: AgorClient | null,
+  user: User | null | undefined,
+  boardIds: readonly string[]
+): (boardId: string) => boolean {
+  return useBoardSharing(client, user, boardIds).sharedWithMe;
 }

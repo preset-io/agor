@@ -1,0 +1,74 @@
+import type { AgorClient, EffectiveBranchAccess } from '@agor-live/client';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useConnectionState } from '../contexts/ConnectionContext';
+import { peekAccess, readAccess } from '../utils/accessCache';
+import { canStartSessions } from '../utils/branchAccess';
+
+const canStartSessionsOn = (client: AgorClient, branchId: string) =>
+  client
+    .service('branches/:id/effective-access')
+    .find({ route: { id: branchId } })
+    .then((access) => canStartSessions(access as unknown as EffectiveBranchAccess));
+
+const NO_FAILURES: ReadonlySet<string> = new Set();
+
+/**
+ * Session access for the given teammates, read through the shared access cache.
+ * `pending` counts ids with neither an answer nor a failed read, `failed` those
+ * whose read failed (unknown stays out of `access`); `settled` once none are
+ * pending. Failures are this mount's only: the next mount, id set or sign-in
+ * reads them again, and `retry` does so now. With `read: false` only answers
+ * already cached are reported and nothing is requested. Unmounting, or a new id
+ * set, abandons reads still queued.
+ */
+export function useSessionAccess(
+  client: AgorClient | null,
+  userId: string | undefined,
+  branchIds: string[],
+  { read = true }: { read?: boolean } = {}
+) {
+  const { authGeneration } = useConnectionState();
+  const scope = `${userId}:${authGeneration}`;
+  const key = branchIds.join(',');
+  const [version, setVersion] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
+  const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
+  useEffect(() => {
+    if (!client || !userId || !key || !read) return;
+    const controller = new AbortController();
+    for (const id of key.split(',')) {
+      readAccess(client, scope, `branch:${id}`, () => canStartSessionsOn(client, id), {
+        signal: controller.signal,
+      }).then(
+        () => setVersion((v) => v + 1),
+        () => {
+          if (controller.signal.aborted) return;
+          setFailed((prev) => ({
+            scope,
+            ids: new Set([...(prev.scope === scope ? prev.ids : []), id]),
+          }));
+        }
+      );
+    }
+    return () => controller.abort();
+  }, [client, userId, scope, key, read, attempt]);
+  const retry = useCallback(() => {
+    setFailed({ scope, ids: NO_FAILURES });
+    setAttempt((a) => a + 1);
+  }, [scope]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
+  return useMemo(() => {
+    const access: Record<string, boolean> = {};
+    let pending = 0;
+    let failures = 0;
+    for (const id of client && userId && key ? key.split(',') : []) {
+      const known = peekAccess(client as AgorClient, scope, `branch:${id}`);
+      if (known !== undefined) access[id] = known;
+      else if (failedIds.has(id)) failures++;
+      else if (read) pending++;
+    }
+    return { access, pending, failed: failures, settled: pending === 0, retry };
+  }, [client, userId, scope, key, read, version, failedIds, retry]);
+}

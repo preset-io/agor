@@ -28,7 +28,7 @@ import {
   PanelGroup,
   PanelResizeHandle,
 } from 'react-resizable-panels';
-import { useLocation, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
@@ -77,7 +77,7 @@ import {
   buildTeammateFirstSessionTitle,
 } from '../../utils/teammateBootstrapPrompt';
 import { createTeammateBranch } from '../../utils/teammateCreation';
-import { TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
+import { isTeammatesRoute, TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
@@ -90,7 +90,6 @@ import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
-import { TeammatesDirectory } from '../HomePage/TeammatesDirectory';
 import { NewSessionButton } from '../NewSessionButton';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
@@ -98,6 +97,7 @@ import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal } from '../SettingsModal';
+import { TeammatesDirectory } from '../TeammatesDirectory';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
@@ -408,7 +408,7 @@ export const App: React.FC<AppProps> = ({
   // Settings owns the address bar, not the surface behind its modal.
   // Preserve the Home/board background recorded by useSettingsRoute.
   const shellSurfacePath = getShellSurfacePath(location);
-  const isTeammatesPath = shellSurfacePath === TEAMMATES_ROUTE_PATH;
+  const isTeammatesPath = isTeammatesRoute(shellSurfacePath);
   const isRootHomePath = shellSurfacePath === '/' || isTeammatesPath;
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
@@ -741,6 +741,7 @@ export const App: React.FC<AppProps> = ({
   // from the store at call time so its function identities stay stable
   // across socket churn — important because they flow into memoized children.
   const navigation = useAppNavigation();
+  const navigate = useNavigate();
 
   const handleHomeBoardClick = useCallback(
     (boardId: string) => navigation.goToBoard(boardId),
@@ -1371,6 +1372,7 @@ export const App: React.FC<AppProps> = ({
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
   const handleHomeClick = useStableCallback(() => navigation.goHome());
+  const handleSeeAllTeammates = useStableCallback(() => navigate(TEAMMATES_ROUTE_PATH));
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
@@ -1599,6 +1601,7 @@ export const App: React.FC<AppProps> = ({
                         onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
                         onOpenCreateDialog={handleHomeOpenCreateDialog}
                         onOpenSettings={openSettings}
+                        onSeeAllTeammates={handleSeeAllTeammates}
                       />
                     ) : (
                       <SessionCanvas

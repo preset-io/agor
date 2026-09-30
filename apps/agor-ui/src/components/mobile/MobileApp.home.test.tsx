@@ -60,9 +60,11 @@ const mention = (id: string, extra: Partial<BoardComment> = {}) =>
 function seed({
   sessions = [],
   comments = [],
+  branches = [],
 }: {
   sessions?: Session[];
   comments?: BoardComment[];
+  branches?: Branch[];
 }) {
   agorStore.setState({
     ...EMPTY_MAPS,
@@ -70,6 +72,7 @@ function seed({
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map([
       ['branch-1', { branch_id: 'branch-1', name: 'feature', board_id: 'board-1' } as Branch],
+      ...branches.map((b) => [b.branch_id, b] as const),
     ]),
     boardById: new Map([
       ['board-1', { board_id: 'board-1', name: 'Launch', archived: false } as Board],
@@ -95,7 +98,7 @@ const client = {
   }),
 } as unknown as AgorClient;
 
-function renderPhoneHome() {
+function renderPhoneHome(initialPath = '/m') {
   return render(
     <ThemeProvider>
       <ConnectionProvider
@@ -109,7 +112,7 @@ function renderPhoneHome() {
         }}
       >
         <AntApp>
-          <MemoryRouter initialEntries={['/m']}>
+          <MemoryRouter initialEntries={[initialPath]}>
             <Routes>
               <Route
                 path="/m/*"
@@ -190,5 +193,26 @@ describe('MobileApp Home wiring', () => {
     });
     expect(await screen.findByTestId('session-page')).toHaveTextContent('done');
     expect(patch).toHaveBeenCalledWith('done', { ready_for_prompt: false });
+  });
+
+  it('renders the teammates directory at /m/teammates/ with a back arrow to Home', async () => {
+    const scout = {
+      branch_id: 'scout',
+      name: 'scout',
+      board_id: 'board-1',
+      created_by: 'someone-else',
+      archived: false,
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+    } as unknown as Branch;
+    seed({ branches: [scout] });
+    const { unmount } = renderPhoneHome('/m/teammates/');
+    expect(screen.getByText('AI teammates')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Scout, open Launch' }));
+    expect(await screen.findByTestId('board-page')).toHaveTextContent('board-1');
+    unmount();
+
+    renderPhoneHome('/m/teammates');
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(await screen.findByText(/Good (morning|afternoon|evening), Kasia/)).toBeInTheDocument();
   });
 });

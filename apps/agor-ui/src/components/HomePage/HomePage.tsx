@@ -29,7 +29,6 @@ import {
   OPEN_GLOBAL_SEARCH_EVENT,
   requestShellPicker,
 } from '../../utils/shellEvents';
-import { TEAMMATES_ROUTE_PATH } from '../../utils/uiRoutes';
 import { patchUserPreferences } from '../../utils/userPreferences';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
@@ -73,6 +72,8 @@ export interface HomePageProps {
   onAllBoards?: () => void;
   /** Defaults to header search filtered to sessions. */
   onSeeAllSessions?: () => void;
+  /** Opens the teammates directory; the rail's "See all" hides without it. */
+  onSeeAllTeammates?: () => void;
 }
 
 const scrollToSection = (id: string) =>
@@ -174,6 +175,7 @@ export const HomePage = memo(function HomePage({
   onOpenSettings,
   onAllBoards,
   onSeeAllSessions,
+  onSeeAllTeammates,
 }: HomePageProps) {
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
@@ -357,10 +359,6 @@ export const HomePage = memo(function HomePage({
     () => (onSeeAllSessions ?? (() => requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'session')))(),
     [onSeeAllSessions]
   );
-  const openTeammates = useCallback(
-    () => navigate(isMobile ? `/m${TEAMMATES_ROUTE_PATH}` : TEAMMATES_ROUTE_PATH),
-    [navigate, isMobile]
-  );
 
   const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
   const onboarding = !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
@@ -491,7 +489,7 @@ export const HomePage = memo(function HomePage({
               currentUser={currentUser}
               checkAccess={!!onCreateSession}
               onOpenBoard={onBoardClick}
-              onSeeAll={openTeammates}
+              onSeeAll={onSeeAllTeammates}
             />
             <HomeKnowledgeSection client={client} connected={connected} />
           </Flex>

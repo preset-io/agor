@@ -728,6 +728,19 @@ describe('HomePage teammates', () => {
     expect(onBoardClick).toHaveBeenCalledWith('b');
   });
 
+  it('opens the directory through the shell’s "See all", and hides the link without one', async () => {
+    seedTeammates();
+    const onSeeAllTeammates = vi.fn();
+    const { unmount } = renderHome({ client: client({}), onSeeAllTeammates });
+    fireEvent.click(await screen.findByRole('button', { name: 'See all 3' }));
+    expect(onSeeAllTeammates).toHaveBeenCalledOnce();
+    unmount();
+
+    renderHome({ client: client({}) });
+    await screen.findByText('Teammate t');
+    expect(screen.queryByRole('button', { name: /^See all \d/ })).not.toBeInTheDocument();
+  });
+
   it('asks the primary by default, sends to a teammate picked from the phone sheet, then resets', async () => {
     seedTeammates();
     const onCreateSession = vi.fn(async () => ({ sessionId: 'new' }));
