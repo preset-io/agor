@@ -221,7 +221,12 @@ operation. Executor safety RPCs do no packet read at all, since they pass whatev
 it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets do no read while their tenant is verified, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
 pending admission). An admission read still pending after 2 s rejects its packet
-with the same ambiguous `Forbidden`, so one stuck read never freezes the socket; a
+with the same ambiguous `Forbidden`, so one stuck read never freezes the socket.
+While four such timed-out reads of one socket are still running, its further
+packets that need a read are refused at once without starting another, which
+bounds the database load a socket can hold. Raw packets that need a read (executor
+terminal frames, an unverified tenant's traffic) join the socket's raw-packet read
+already in flight; a settled read is never reused for a later packet. A
 socket holding 1,000 queued packets is disconnected rather than dropping packets
 silently, and nothing queued behind it dispatches. Raw traffic from a restricted tenant stops when the monitor
 retires the socket. A bounded per-replica monitor (1 s tick) disconnects

@@ -1007,6 +1007,8 @@ export function createSocketIOConfig(
               ),
               packet,
             }),
+          // Raw packets have no service hook, so a burst shares whichever read is still in flight.
+          coalesce: (packet) => !serviceMethods.has(packet[0] as string),
           // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
           scope: withTenantRestrictionRequest,
           onOverflow: () => socket.disconnect(true),

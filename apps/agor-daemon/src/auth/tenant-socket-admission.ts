@@ -52,23 +52,34 @@ type PacketNext = (error?: Error) => void;
 /** Packets one socket may hold behind pending admissions before the socket is disconnected. */
 export const TENANT_SOCKET_PACKET_QUEUE_LIMIT = 1000;
 
+/** Timed-out admission reads one socket may leave running before it starts no more. */
+export const TENANT_SOCKET_STALE_READ_LIMIT = 4;
+
 /** Per-socket packet gate: only `needsAdmission` packets await a read, and every packet dispatches in arrival order. */
 export function createOrderedTenantPacketGate(input: {
   needsAdmission: (packet: unknown[]) => boolean;
   admit: (packet: unknown[]) => Promise<void>;
+  /** Packets that may join this socket's read already in flight for another such packet, never a settled one. */
+  coalesce?: (packet: unknown[]) => boolean;
   /** Wraps an admitted packet's read and dispatch so later checks in that call can share the read. */
   scope?: <T>(work: () => T) => T;
   /** A stuck read rejects its packet after this bound, so later packets never freeze behind it. */
   admissionTimeoutMs?: number;
   queueLimit?: number;
+  staleReadLimit?: number;
   /** Called once when the queue would exceed its limit; every queued and later packet is then rejected. */
   onOverflow?: () => void;
 }): (packet: unknown[], next: PacketNext) => void {
   const timeoutMs = input.admissionTimeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
   const limit = input.queueLimit ?? TENANT_SOCKET_PACKET_QUEUE_LIMIT;
+  const staleLimit = input.staleReadLimit ?? TENANT_SOCKET_STALE_READ_LIMIT;
   let tail: Promise<void> = Promise.resolve();
   let queued = 0;
   let overflowed = false;
+  const running = new Set<Promise<void>>();
+  // Reads that outlived the bound still hold a database connection until they settle.
+  const stale = new Set<Promise<void>>();
+  let shared: Promise<void> | undefined;
   const enqueue = (packet: unknown[], next: PacketNext, admitted: Promise<boolean>) => {
     queued++;
     // Registered in the caller's async context, so dispatch keeps the packet's shared read scope.
@@ -81,10 +92,24 @@ export function createOrderedTenantPacketGate(input: {
       })
       .catch(() => undefined);
   };
+  const start = (packet: unknown[]): Promise<void> => {
+    const admission = input.admit(packet);
+    running.add(admission);
+    const settle = () => {
+      running.delete(admission);
+      stale.delete(admission);
+      if (shared === admission) shared = undefined;
+    };
+    admission.then(settle, settle);
+    return admission;
+  };
   const bounded = (admission: Promise<void>): Promise<boolean> => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), timeoutMs);
+      timer = setTimeout(() => {
+        if (running.has(admission)) stale.add(admission);
+        resolve(false);
+      }, timeoutMs);
     });
     return Promise.race([
       admission.then(
@@ -109,8 +134,20 @@ export function createOrderedTenantPacketGate(input: {
       else enqueue(packet, next, Promise.resolve(true));
       return;
     }
+    const joins = input.coalesce?.(packet) === true;
+    if (joins && shared) return enqueue(packet, next, bounded(shared));
+    if (stale.size >= staleLimit) {
+      // The database is not answering this socket: refuse fast rather than start another read.
+      if (queued === 0) rejectTenantSocketPacket(packet, next);
+      else enqueue(packet, next, Promise.resolve(false));
+      return;
+    }
     const run = input.scope ?? ((work) => work());
-    run(() => enqueue(packet, next, bounded(input.admit(packet))));
+    run(() => {
+      const admission = start(packet);
+      if (joins) shared = admission;
+      enqueue(packet, next, bounded(admission));
+    });
   };
 }
 

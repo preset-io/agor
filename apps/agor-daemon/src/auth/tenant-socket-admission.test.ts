@@ -142,6 +142,61 @@ describe('ordered tenant packet gate', () => {
     }
   });
 
+  it('refuses fast once timed-out reads still running reach the limit, without starting more', async () => {
+    vi.useFakeTimers();
+    try {
+      const releases: Array<() => void> = [];
+      const admit = vi.fn(() => new Promise<void>((resolve) => releases.push(resolve)));
+      const gate = createOrderedTenantPacketGate({
+        needsAdmission: () => true,
+        admit,
+        admissionTimeoutMs: 20,
+        staleReadLimit: 2,
+      });
+      const acks = [vi.fn(), vi.fn(), vi.fn()];
+      gate(['create', 0, acks[0]], vi.fn());
+      gate(['create', 1, acks[1]], vi.fn());
+      await vi.advanceTimersByTimeAsync(20);
+      gate(['create', 2, acks[2]], vi.fn());
+      expect(acks[2]).toHaveBeenCalledExactlyOnceWith(
+        new Forbidden('Tenant access cannot be verified').toJSON()
+      );
+      expect(admit).toHaveBeenCalledTimes(2);
+      releases[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+      const next = vi.fn();
+      gate(['create', 3, vi.fn()], next);
+      expect(admit).toHaveBeenCalledTimes(3);
+      releases[2]?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(next).toHaveBeenCalledExactlyOnceWith();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares one in-flight read across a burst of coalescing packets, never a settled one', async () => {
+    const releases: Array<() => void> = [];
+    const admit = vi.fn(() => new Promise<void>((resolve) => releases.push(resolve)));
+    const gate = createOrderedTenantPacketGate({
+      needsAdmission: () => true,
+      coalesce: (packet) => packet[0] === 'raw',
+      admit,
+    });
+    const dispatched: string[] = [];
+    gate(['raw', 'a'], () => dispatched.push('a'));
+    gate(['create', 'rpc', vi.fn()], () => dispatched.push('rpc'));
+    gate(['raw', 'b'], () => dispatched.push('b'));
+    gate(['raw', 'c'], () => dispatched.push('c'));
+    expect(admit).toHaveBeenCalledTimes(2);
+    for (const release of releases) release();
+    await vi.waitFor(() => expect(dispatched).toEqual(['a', 'rpc', 'b', 'c']));
+    gate(['raw', 'd'], () => dispatched.push('d'));
+    expect(admit).toHaveBeenCalledTimes(3);
+    releases[2]?.();
+    await vi.waitFor(() => expect(dispatched.at(-1)).toBe('d'));
+  });
+
   it('disconnects once instead of queueing past the limit, and dispatches nothing after', async () => {
     const releases: Array<() => void> = [];
     const onOverflow = vi.fn();

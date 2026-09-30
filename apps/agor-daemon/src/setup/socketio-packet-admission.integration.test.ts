@@ -191,7 +191,7 @@ describe('Socket.IO per-packet tenant admission', () => {
   });
 
   it("gates an unreadable tenant's raw traffic without disconnecting it until a read succeeds", async () => {
-    const { arrivals, database, wire } = await start();
+    const { arrivals, database, reads, wire } = await start();
     const disconnects: string[] = [];
     wire.on('disconnect', (reason) => disconnects.push(reason));
     let probe = 0;
@@ -206,6 +206,12 @@ describe('Socket.IO per-packet tenant admission', () => {
     // Ten failed monitor ticks mark the tenant; its raw packets then need an admission read.
     await expect.poll(delivered, { timeout: 25_000, interval: 0 }).toBe(false);
     expect(await delivered()).toBe(false);
+    // A burst of raw packets shares the read already in flight instead of one read each.
+    const before = reads.admission;
+    for (let i = 0; i < 20; i++) wire.emit('test:raw', `burst:${i}`);
+    await sleep(300);
+    expect(reads.admission - before).toBeGreaterThan(0);
+    expect(reads.admission - before).toBeLessThan(20);
     database.down = false;
     await expect.poll(delivered, { timeout: 5_000, interval: 0 }).toBe(true);
     expect(wire.connected).toBe(true);
