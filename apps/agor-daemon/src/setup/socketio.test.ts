@@ -3069,6 +3069,39 @@ describe('tenant restriction socket monitor', () => {
     closed: false,
   });
 
+  it('never lets a late read that began before a socket was admitted retire it', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      let settle!: (state: { records: never[]; closed: boolean }) => void;
+      const readTenantRestriction = vi.fn(
+        () => new Promise<{ records: never[]; closed: boolean }>((resolve) => (settle = resolve))
+      );
+      const { io } = buildHarness({ readTenantRestriction });
+      const early = makeSocket('admitted-before-read', io);
+      asUser(early, ALICE);
+      connect(io, early);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(readTenantRestriction).toHaveBeenCalledOnce();
+
+      // Reactivated meanwhile: a socket admitted now joins later sweeps that share the slow read.
+      await vi.advanceTimersByTimeAsync(1);
+      const late = makeSocket('admitted-after-read', io);
+      asUser(late, BOB);
+      connect(io, late);
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(readTenantRestriction).toHaveBeenCalledOnce();
+
+      settle({ records: [], closed: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(early.connected).toBe(false);
+      expect(late.connected).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps sockets through read errors and stalls, retiring only on a positive observation', async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

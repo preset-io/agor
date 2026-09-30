@@ -979,8 +979,12 @@ export function createSocketIOConfig(
     });
     io.on(HA_EXECUTOR_TOKEN_INVALIDATION_EVENT, evictRevokedExecutorSockets);
 
+    // Monotonic admission time, so a monitor read that began earlier never retires the socket.
+    const socketAdmittedAt = new WeakMap<Socket, number>();
+
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
+      socketAdmittedAt.set(socket, performance.now());
       const feathersSocket = socket as FeathersSocket;
       bindServerSocketAuthority(feathersSocket);
       const authority = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
@@ -2067,8 +2071,12 @@ export function createSocketIOConfig(
     const readTenantRestriction = options.readTenantRestriction;
     const restrictionMonitor = readTenantRestriction
       ? new TenantSocketRestrictionMonitor(async (tenantId) => {
+          const startedAt = performance.now();
           const state = await readTenantRestriction(tenantId);
-          const sockets = monitoredSockets.get(tenantId) ?? [];
+          // A late read may predate a socket admitted after reactivation; only sockets admitted before it began are judged.
+          const sockets = (monitoredSockets.get(tenantId) ?? []).filter(
+            (socket) => (socketAdmittedAt.get(socket) ?? Number.NEGATIVE_INFINITY) <= startedAt
+          );
           if (state.closed) {
             for (const socket of sockets) retire(socket);
             return;

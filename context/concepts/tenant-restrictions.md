@@ -247,7 +247,9 @@ tenants first. A failed, slow (>2 s) or saturated read skips that tenant until
 the next tick with a rate-limited warning, and a sweep running far past its tick
 is warned about the same way. A read still pending after 4 s is abandoned once so
 a fresh read can start; while that abandoned read is outstanding no further read
-replaces it, and abandoned reads count toward the eight-read bound.
+replaces it, and abandoned reads count toward the eight-read bound. A read judges only
+sockets admitted before it began, so a late or abandoned read never retires a socket
+admitted after reactivation.
 
 When a replica cannot read the restriction (database outage or partition), its
 already-connected sockets keep their raw terminal/presence/cursor traffic until a
