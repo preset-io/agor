@@ -206,7 +206,7 @@ describe('makeHomeBucketsSelector', () => {
       sessions: [
         failure('old', { last_updated: hoursAgo(24 * 8) }),
         failure('opened', { branch_id: 'o' }),
-        failure('superseded', { branch_id: 'b', ...ranAt(3) }),
+        failure('superseded', { branch_id: 'b', ...ranAt(3), last_updated: hoursAgo(2) }),
         session('retry', { status: 'idle', branch_id: 'b', ...ranAt(1) }),
         session('late', {
           status: 'timed_out',
@@ -234,6 +234,7 @@ describe('makeHomeBucketsSelector', () => {
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     const later = session('ok', { status: 'idle', branch_id: 'b', ...ranAt(1) });
     const completed = session('done', { status: 'completed', branch_id: 'b', ...ranAt(1) });
@@ -257,12 +258,65 @@ describe('makeHomeBucketsSelector', () => {
     ).toEqual(['failed:f']);
   });
 
+  it('lists failures only for sessions the user started, and permission requests from any', () => {
+    const failure = (id: string, extra: Partial<Session>) =>
+      session(id, { status: 'failed', ready_for_prompt: true, ...extra });
+    const s = state({
+      sessions: [
+        failure('mine', {}),
+        failure('scheduled', { scheduled_from_branch: true }),
+        failure('spawned', {
+          genealogy: { children: [], parent_session_id: 'mine' } as Session['genealogy'],
+        }),
+        session('child-perm', {
+          status: 'awaiting_permission',
+          genealogy: { children: [], parent_session_id: 'mine' } as Session['genealogy'],
+        }),
+      ],
+    });
+    expect(reasons(s)).toEqual(['permission:child-perm', 'failed:mine']);
+    expect(
+      select(s)
+        .recent.map((r) => r.session_id)
+        .sort()
+    ).toEqual(['scheduled', 'spawned']);
+  });
+
+  it('lets only a clean run the user started after the failure settled supersede it', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+      last_updated: hoursAgo(1),
+    });
+    const onBranch = (id: string, extra: Partial<Session>) =>
+      session(id, { status: 'completed', branch_id: 'b', ...ranAt(0.5), ...extra });
+    const lineage = (genealogy: Partial<Session['genealogy']>) => ({
+      genealogy: { children: [], ...genealogy } as Session['genealogy'],
+    });
+    const child = onBranch('child', lineage({ parent_session_id: 'f' }));
+    const childFork = onBranch('child-fork', lineage({ forked_from_session_id: 'child' }));
+    const orphanFork = onBranch('orphan-fork', lineage({ forked_from_session_id: 'not-loaded' }));
+    const scheduled = onBranch('sched', { scheduled_from_branch: true });
+    // Started after the failed run started but before it settled: ran alongside it, not after.
+    const parallel = onBranch('parallel', { status: 'idle', ...ranAt(2) });
+    expect(reasons(state({ sessions: [failed, child] }))).toEqual(['failed:f']);
+    for (const other of [childFork, orphanFork, scheduled, parallel])
+      expect(reasons(state({ sessions: [failed, child, other] }))).toEqual(['failed:f']);
+    const retry = onBranch('retry', { status: 'idle' });
+    const forkRetry = onBranch('fork-retry', lineage({ forked_from_session_id: 'f' }));
+    expect(reasons(state({ sessions: [failed, child, retry] }))).toEqual([]);
+    expect(reasons(state({ sessions: [failed, forkRetry] }))).toEqual([]);
+  });
+
   it('does not let a renamed older run or a timed-out later run supersede a failure', () => {
     const failed = session('f', {
       status: 'failed',
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     // Renaming bumps last_updated but not when the run started.
     const renamed = session('old-ok', {
@@ -289,6 +343,7 @@ describe('makeHomeBucketsSelector', () => {
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     // A v4 id's leading bits are random; read as a v7 timestamp they would land far in the future.
     const v4 = session('v4', {

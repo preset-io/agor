@@ -152,20 +152,21 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
 }
 
 /**
- * The same person started a run on the branch after the failed run started and
- * it ran cleanly, so the failure no longer needs them. Run start times ignore
- * renames and other metadata edits that move `last_updated`.
+ * The person started this session and every fork ancestor: no spawn, schedule or
+ * delegation in its lineage. An ancestor missing from the store counts as not.
  */
-function supersededFailure(session: Session, s: AgorState) {
-  const failedRunAt = lastRunStartedAt(session);
-  return (s.sessionsByBranch.get(session.branch_id) ?? []).some(
-    (other) =>
-      other !== session &&
-      !other.archived &&
-      other.created_by === session.created_by &&
-      ranCleanly(other) &&
-      lastRunStartedAt(other) > failedRunAt
-  );
+function startedByUserLineage(session: Session, s: AgorState): boolean {
+  let seen: Set<string> | undefined;
+  for (let cur: Session | undefined = session; cur; ) {
+    if (!isSessionStartedByUser(cur)) return false;
+    const from = cur.genealogy?.forked_from_session_id;
+    if (!from) return true;
+    seen ??= new Set();
+    if (seen.has(from)) return false;
+    seen.add(from);
+    cur = s.sessionById.get(from);
+  }
+  return false;
 }
 
 /**
@@ -241,6 +242,9 @@ export function makeHomeBucketsSelector(
       insertTopK(needs, sessionNeed(session, reason, earlier), needsLimit, needBefore);
     };
 
+    const failures: Session[] = [];
+    // Newest clean run start per branch among the caller's user-started lineages.
+    const cleanRunByBranch = new Map<string, number>();
     const failedByBranch = new Map<string, Session>();
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of userId ? s.sessionById.values() : []) {
@@ -257,21 +261,20 @@ export function makeHomeBucketsSelector(
           insertTopK(running, session, recentLimit, updatedBefore);
         }
       }
+      if (ranCleanly(session) && startedByUserLineage(session, s)) {
+        const runAt = lastRunStartedAt(session);
+        if (runAt > (cleanRunByBranch.get(session.branch_id) ?? 0))
+          cleanRunByBranch.set(session.branch_id, runAt);
+      }
       if (session.status === SessionStatus.AWAITING_PERMISSION) {
         addNeed(session, 'permission');
       } else if (
         isFailure(session) &&
+        isSessionStartedByUser(session) &&
         updatedAt(session) >= now - HOME_FAILED_WINDOW_MS &&
-        updatedAt(session) > (openedFailures[session.session_id] ?? 0) &&
-        !supersededFailure(session, s)
+        updatedAt(session) > (openedFailures[session.session_id] ?? 0)
       ) {
-        const shown = failedByBranch.get(session.branch_id);
-        if (shown && !updatedBefore(session, shown)) {
-          addRecent(session);
-        } else {
-          failedByBranch.set(session.branch_id, session);
-          if (shown) addRecent(shown);
-        }
+        failures.push(session);
       } else if (isUnreadResult(session)) {
         unreadCount++;
         const finished = finishedByBranch.get(session.branch_id);
@@ -279,6 +282,20 @@ export function makeHomeBucketsSelector(
         else finishedByBranch.set(session.branch_id, [session]);
       } else {
         addRecent(session);
+      }
+    }
+    for (const session of failures) {
+      // Superseded by a clean user-started run after the failure settled (a rename re-settles it).
+      if ((cleanRunByBranch.get(session.branch_id) ?? 0) > updatedAt(session)) {
+        addRecent(session);
+        continue;
+      }
+      const shown = failedByBranch.get(session.branch_id);
+      if (shown && !updatedBefore(session, shown)) {
+        addRecent(session);
+      } else {
+        failedByBranch.set(session.branch_id, session);
+        if (shown) addRecent(shown);
       }
     }
     for (const session of failedByBranch.values()) addNeed(session, 'failed');
