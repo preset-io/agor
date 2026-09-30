@@ -115,16 +115,24 @@ export const stableProps: HomePageProps = {
   onCreateSession: async () => null,
 };
 
-export function wrap(node: React.ReactNode, route: string | object = '/', connected = true) {
+/** `connected`, or the connection flags to override on a connected default. */
+type TestConnection = boolean | { connected?: boolean; connecting?: boolean; outOfSync?: boolean };
+
+export function wrap(
+  node: React.ReactNode,
+  route: string | object = '/',
+  connection: TestConnection = true
+) {
   return (
     <ConnectionProvider
       value={{
-        connected,
+        connected: true,
         connecting: false,
         authGeneration: 1,
         outOfSync: false,
         capturedSha: null,
         currentSha: null,
+        ...(typeof connection === 'boolean' ? { connected: connection } : connection),
       }}
     >
       <AntApp>
@@ -141,7 +149,7 @@ export function renderHome(
   props: Partial<HomePageProps> = {},
   onRender = () => {},
   route?: object,
-  connected = true
+  connection: TestConnection = true
 ) {
   return render(
     wrap(
@@ -149,7 +157,7 @@ export function renderHome(
         <HomePage {...stableProps} {...props} />
       </Profiler>,
       route,
-      connected
+      connection
     )
   );
 }

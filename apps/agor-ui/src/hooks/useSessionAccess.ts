@@ -1,4 +1,4 @@
-import type { AgorClient, EffectiveBranchAccess, User } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
 import {
@@ -8,13 +8,10 @@ import {
   readAccess,
   withoutFailure,
 } from '../utils/accessCache';
-import { canStartSessions } from '../utils/branchAccess';
+import { canStartSessions, readBranchAccess } from '../utils/branchAccess';
 
 const canStartSessionsOn = (client: AgorClient, branchId: string) =>
-  client
-    .service('branches/:id/effective-access')
-    .find({ route: { id: branchId } })
-    .then((access) => canStartSessions(access as unknown as EffectiveBranchAccess));
+  readBranchAccess(client, branchId).then(canStartSessions);
 
 const NO_FAILURES: ReadonlySet<string> = new Set();
 

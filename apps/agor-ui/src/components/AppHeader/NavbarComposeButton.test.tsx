@@ -568,7 +568,7 @@ describe('NavbarComposeButton', () => {
     await waitFor(() =>
       expect(screen.queryByText('Pick a primary assistant above to send.')).not.toBeInTheDocument()
     );
-    await act(async () => {});
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
@@ -584,7 +584,7 @@ describe('NavbarComposeButton', () => {
     openPopover();
     fireEvent.click(await screen.findByTestId('pick-teammate'));
     await waitFor(() => expect(screen.queryByTestId('pick-teammate')).not.toBeInTheDocument());
-    await act(async () => {});
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 

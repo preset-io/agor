@@ -10,7 +10,8 @@
  * - Permission and membership changes emit no event the UI receives, so an
  *   answer older than `ACCESS_TTL_MS` is re-read by the next `readAccess`;
  *   `peekAccess` keeps returning it until then, so nothing flickers.
- * - A failed read is forgotten, so the next caller retries.
+ * - A failed read is forgotten, along with any older answer for its key, so
+ *   the next caller retries and `peekAccess` stops vouching for a stale grant.
  * - A caller's `signal` abandons its wait; a queued read every caller has
  *   abandoned never issues its request.
  */
@@ -133,6 +134,8 @@ function startRead(
       if (entry.reads.get(key) === pending) entry.reads.delete(key);
     },
     () => {
+      // A re-read that ran and failed (e.g. Forbidden after a revoke) no longer vouches for the old answer.
+      if (pending.started) entry.known.delete(key);
       if (entry.reads.get(key) === pending) entry.reads.delete(key);
     }
   );

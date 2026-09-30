@@ -341,11 +341,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     },
     [client, navigate]
   );
+  // A branch this shell hasn't loaded still opens the board its comment names.
   const openHomeBranch = useCallback(
-    (branchId: string) => {
-      const boardId = agorStore.getState().branchById.get(branchId)?.board_id;
-      if (boardId) openHomeBoard(boardId);
-    },
+    (branchId: string, boardId: string) =>
+      openHomeBoard(agorStore.getState().branchById.get(branchId)?.board_id ?? boardId),
     [openHomeBoard]
   );
   const openBoardList = useCallback(() => setMoreOpen(true), []);

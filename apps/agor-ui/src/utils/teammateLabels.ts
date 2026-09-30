@@ -30,20 +30,16 @@ export interface TeammateOption {
   branch: Branch;
 }
 
-// A name with no letters or digits keeps its symbols (emoji) and drops punctuation, spacing and emoji variation selectors.
+// Keeps letters, marks, digits and symbols (emoji, "+"); drops punctuation, spacing and emoji variation selectors, or only spacing when nothing else is left.
 const bare = (text: string) => {
   const lower = text
     .normalize('NFC')
     .toLowerCase()
     .replace(/[\uFE0E\uFE0F]/gu, '');
-  return (
-    lower.replace(/[^\p{L}\p{M}\p{N}]/gu, '') ||
-    lower.replace(/[\p{P}\p{Z}\s]/gu, '') ||
-    lower.replace(/\s/gu, '')
-  );
+  return lower.replace(/[^\p{L}\p{M}\p{N}\p{S}]/gu, '') || lower.replace(/\s/gu, '');
 };
 
-/** Names that differ only in case, spacing or punctuation ("Hodor!" / "Hodor"). */
+/** Names that differ only in case, spacing or punctuation ("Hodor!" / "Hodor"); symbols still count ("C++" / "C#"). */
 export const sameName = (a: string, b: string) => bare(a) === bare(b);
 
 export function teammateOption(

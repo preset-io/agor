@@ -213,7 +213,7 @@ describe('usePrimaryAssistantSend', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
-  it('drops a held send that canSend refuses by the time pick resumes it', async () => {
+  it('keeps a held send that canSend refuses when pick resumes it', async () => {
     const { result, create, rerender } = renderSend({
       client: clientResolving(async () => null),
       canSend: () => true,
@@ -225,8 +225,13 @@ describe('usePrimaryAssistantSend', () => {
     rerender({ canSend: () => false });
     await act(async () => result.current.pick(grace));
     expect(create).not.toHaveBeenCalled();
-    expect(result.current.pendingSend).toBeNull();
+    expect(result.current.pendingSend).toBe('open');
     expect(result.current.primaryBranch).toBe(grace);
+
+    rerender({ canSend: () => true });
+    await act(() => result.current.send('open'));
+    expect(create).toHaveBeenCalledWith({ branch_id: 'branch-grace' }, '');
+    expect(result.current.pendingSend).toBeNull();
   });
 
   it('keeps send, pick and clearPendingSend stable across renders', async () => {

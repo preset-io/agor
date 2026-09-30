@@ -45,15 +45,17 @@ interface HomeNeedsYouProps {
   /** Counts and "all caught up" wait for the full session set; rows don't. */
   hydrated: boolean;
   onOpenSession: (sessionId: string) => void;
-  onOpenFailure: (sessionId: string) => void;
+  /** Gets the whole need: a failure row can stand for earlier failures too. */
+  onOpenFailure: (need: HomeSessionNeed) => void;
   onOpenComment: (need: HomeCommentNeed) => void;
   onMarkRead: (sessionId: string) => void;
   /** Shown while any finished result is unopened. */
   onMarkAllRead?: () => void;
   markingAllRead?: boolean;
-  /** While offline. */
+  /** While the connection can't take changes. */
   markAllReadDisabled?: boolean;
-  onArchive: (sessionId: string) => void;
+  /** Omitted while the connection can't take changes. */
+  onArchive?: (sessionId: string) => void;
 }
 
 export const HomeNeedsYou = memo(function HomeNeedsYou({
@@ -123,7 +125,7 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
             items={needs}
             itemKey={(need) => need.key}
             renderItem={(need, index) =>
-              'session' in need && need.earlier ? (
+              'session' in need && need.reason === 'finished' && need.earlier ? (
                 <HomeFinishedGroupRow
                   need={{ ...need, earlier: need.earlier }}
                   onOpen={onOpenSession}
@@ -134,7 +136,7 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
                   session={need.session}
                   reason={need.reason}
                   client={index < NEEDS_PREVIEW ? client : undefined}
-                  onOpen={need.reason === 'failed' ? onOpenFailure : onOpenSession}
+                  onOpen={need.reason === 'failed' ? () => onOpenFailure(need) : onOpenSession}
                   onMarkRead={need.reason === 'finished' ? onMarkRead : undefined}
                   onArchive={need.reason === 'failed' ? onArchive : undefined}
                 />

@@ -82,6 +82,8 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
         setPendingSend(mode);
         return;
       }
+      // Cleared only once the gates pass, so a refused resume stays held.
+      setPendingSend(null);
       inFlightRef.current = true;
       try {
         const opts = latest.current;
@@ -94,7 +96,6 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
           create(opts.buildConfig(branch), branch.board_id ?? opts.currentBoardId ?? '')
         );
         if (!outcome || opts.isAuthenticationGenerationCurrent?.(generation) === false) return;
-        setPendingSend(null);
         opts.onSent?.();
         if (mode === 'background') {
           toast.success(`Sent to ${teammateLabel(branch)} in the background`);
@@ -113,11 +114,9 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
     (branch: Branch) => {
       runtime.current.primary.setBranch(branch);
       const mode = pendingSendRef.current;
-      if (!mode) return;
-      setPendingSend(null);
-      void send(mode, branch);
+      if (mode) void send(mode, branch);
     },
-    [send, setPendingSend]
+    [send]
   );
 
   const clearPendingSend = useCallback(() => setPendingSend(null), [setPendingSend]);
