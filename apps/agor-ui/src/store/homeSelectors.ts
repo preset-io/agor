@@ -38,7 +38,7 @@ export interface HomeSessionNeed {
   reason: 'permission' | 'failed' | 'finished';
   at: number;
   session: Session;
-  /** Older finished runs on the same branch, newest first; the row stands for all of them. */
+  /** Older finished or failed runs on the same branch, newest first; the row stands for all of them. */
   earlier?: Session[];
 }
 
@@ -152,8 +152,8 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
 }
 
 /**
- * The person started this session and every fork ancestor: no spawn, schedule or
- * delegation in its lineage. An ancestor missing from the store counts as not.
+ * The person started this session and every fork ancestor: no spawn, schedule,
+ * gateway run or delegation in its lineage. An ancestor missing from the store counts as not.
  * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
  */
 function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, boolean>): boolean {
@@ -165,7 +165,8 @@ function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, 
       result = known;
       break;
     }
-    if (path.includes(cur.session_id) || !isSessionStartedByUser(cur)) break;
+    if (path.includes(cur.session_id) || !isSessionStartedByUser(cur) || isGatewaySession(cur))
+      break;
     path.push(cur.session_id);
     const from = cur.genealogy?.forked_from_session_id;
     if (!from) {
@@ -178,12 +179,14 @@ function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, 
   return result;
 }
 
-/** A scheduled run's branch and schedule; rows from before schedules had ids share their branch's key. */
+/** A scheduled run's branch and schedule; rows without a schedule id (pre-ids, or schedule deleted) share their branch's key. */
 const scheduleKey = (session: Session) => `${session.branch_id}:${session.schedule_id ?? ''}`;
 
-/** Failures that need the person: sessions they started, including their scheduled runs, never spawned or delegated children. */
+/** Failures that need the person: sessions they started, including their scheduled runs, never spawned, delegated or gateway runs. */
 const ownsFailure = (session: Session): boolean =>
-  !session.genealogy?.parent_session_id && !session.remote_relationships?.as_target?.length;
+  !session.genealogy?.parent_session_id &&
+  !session.remote_relationships?.as_target?.length &&
+  !isGatewaySession(session);
 
 /**
  * Home's session needs and My work in one pass over the caller's sessions.
@@ -264,7 +267,7 @@ export function makeHomeBucketsSelector(
     // Newest clean scheduled run per branch and schedule: it supersedes only that schedule's failures.
     const cleanScheduledRuns = new Map<string, number>();
     const lineageMemo = new Map<string, boolean>();
-    const failedByBranch = new Map<string, Session>();
+    const failedByBranch = new Map<string, Session[]>();
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of userId ? s.sessionById.values() : []) {
       if (session.archived || session.created_by !== userId) continue;
@@ -322,19 +325,18 @@ export function makeHomeBucketsSelector(
         addRecent(session);
         continue;
       }
-      const shown = failedByBranch.get(session.branch_id);
-      if (shown && !updatedBefore(session, shown)) {
-        addRecent(session);
-      } else {
-        failedByBranch.set(session.branch_id, session);
-        if (shown) addRecent(shown);
+      const failed = failedByBranch.get(session.branch_id);
+      if (failed) failed.push(session);
+      else failedByBranch.set(session.branch_id, [session]);
+    }
+    const addGroups = (groups: Map<string, Session[]>, reason: 'failed' | 'finished') => {
+      for (const group of groups.values()) {
+        const [latest, ...earlier] = group.sort((a, b) => updatedAt(b) - updatedAt(a));
+        addNeed(latest, reason, earlier.length ? earlier : undefined);
       }
-    }
-    for (const session of failedByBranch.values()) addNeed(session, 'failed');
-    for (const finished of finishedByBranch.values()) {
-      const [latest, ...earlier] = finished.sort((a, b) => updatedAt(b) - updatedAt(a));
-      addNeed(latest, 'finished', earlier.length ? earlier : undefined);
-    }
+    };
+    addGroups(failedByBranch, 'failed');
+    addGroups(finishedByBranch, 'finished');
     itemCache = nextItemCache;
     const boardIds = [...boardAt]
       .sort((a, b) => b[1] - a[1])

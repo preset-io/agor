@@ -196,8 +196,44 @@ describe('makeHomeBucketsSelector', () => {
       ],
     });
     expect(reasons(s)).toEqual(['failed:a2']);
-    expect(select(s).recent.map((r) => r.session_id)).toEqual(['a1', 'old']);
+    expect(select(s).needs[0].earlier?.map((e) => e.session_id)).toEqual(['a1']);
+    expect(select(s).needsByReason.failed).toBe(1);
+    expect(select(s).recent.map((r) => r.session_id)).toEqual(['old']);
     expect(select(s).unreadCount).toBe(0);
+  });
+
+  it('groups failures per branch so opening the row clears all of them until a new run', () => {
+    const fail = (id: string, h: number) =>
+      session(id, {
+        status: 'failed',
+        ready_for_prompt: true,
+        branch_id: 'b',
+        ...ranAt(h + 1),
+        last_updated: hoursAgo(h),
+      });
+    const sessions = [fail('f1', 3), fail('f3', 1), fail('f2', 2)];
+    const selector = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 50,
+      recentLimit: 8,
+    });
+    const first = selector(state({ sessions }));
+    const [need] = first.needs;
+    expect(first.needs).toHaveLength(1);
+    expect(need.session.session_id).toBe('f3');
+    expect(need.earlier?.map((e) => e.session_id)).toEqual(['f2', 'f1']);
+    expect(first.recent).toEqual([]);
+    expect(selector(state({ sessions: [...sessions] })).needs[0]).toBe(need);
+    // What Home records when the row is opened.
+    const openedFailures = Object.fromEntries(
+      [need.session, ...(need.earlier ?? [])].map((f) => [f.session_id, lastRunStartedAt(f)])
+    );
+    expect(reasons(state({ sessions }), { openedFailures })).toEqual([]);
+    const f1Rerun = { ...sessions[0], ...ranAt(0.5), last_updated: hoursAgo(0.2) } as Session;
+    expect(
+      reasons(state({ sessions: [f1Rerun, sessions[1], sessions[2]] }), { openedFailures })
+    ).toEqual(['failed:f1']);
   });
 
   it('never counts a failure as a finished result, even once it no longer needs the user', () => {
@@ -277,6 +313,41 @@ describe('makeHomeBucketsSelector', () => {
     });
     expect(reasons(s).sort()).toEqual(['failed:mine', 'failed:scheduled', 'permission:child-perm']);
     expect(select(s).recent.map((r) => r.session_id)).toEqual(['spawned']);
+  });
+
+  it('keeps gateway runs out of failures and never lets a clean one supersede a failure', () => {
+    const gateway = {
+      custom_context: { gateway_source: { platform: 'slack', channel_id: 'c1', thread_id: 't1' } },
+    } as Partial<Session>;
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+      last_updated: hoursAgo(2),
+    });
+    const slackOk = session('slack-ok', {
+      status: 'completed',
+      branch_id: 'b',
+      ...ranAt(1),
+      ...gateway,
+    });
+    const forkOfSlack = session('fork', {
+      status: 'completed',
+      branch_id: 'b',
+      ...ranAt(1),
+      genealogy: { children: [], forked_from_session_id: 'slack-ok' } as Session['genealogy'],
+    });
+    expect(reasons(state({ sessions: [failed, slackOk] }))).toEqual(['failed:f']);
+    expect(reasons(state({ sessions: [failed, slackOk, forkOfSlack] }))).toEqual(['failed:f']);
+    const slackFail = session('slack-fail', {
+      status: 'failed',
+      ready_for_prompt: true,
+      ...gateway,
+    });
+    const s = state({ sessions: [slackFail] });
+    expect(reasons(s)).toEqual([]);
+    expect(select(s).recent.map((r) => r.session_id)).toEqual(['slack-fail']);
   });
 
   it('lets a later clean scheduled run supersede only scheduled failures', () => {
