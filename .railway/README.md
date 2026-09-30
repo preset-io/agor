@@ -1,5 +1,43 @@
 # Railway SQLite bootstrap
 
+## Automatic per-branch previews
+
+The separate `railway-auto-sqlite` variant runs ordinary **branch-local scripts**
+in [`scripts/managed-environments/railway-auto`](../scripts/managed-environments/railway-auto).
+Edit the launcher in the checkout and click Start to iterate; no Agor daemon
+upgrade or application database migration is needed. The launcher is run from the
+checkout, while the deployed application uses the pushed public GitHub branch.
+
+One-time setup requires `RAILWAY_AGOR_PROJECT_ID`, `RAILWAY_API_TOKEN`, and
+`RAILWAY_AGOR_ADMIN_PASSWORD` in the invoking user’s secure Global environment.
+The script discovers the workspace and reads branch/repository identity from Agor.
+The launcher uses only Node built-ins: no npm install, SDK or PostgreSQL.
+No per-branch `bindings.json` edit is needed. See the
+[launcher setup](../scripts/managed-environments/railway-auto/README.md) and
+[environment guide](../apps/agor-docs/content/guide/environment-configuration.mdx#automatic-previews-opt-in).
+The credential holder explicitly trusts this branch code with its preview-project
+authority; do not inject production credentials into untrusted branches.
+
+Start creates what is missing and leaves an owned running deployment alone.
+Serialize lifecycle actions: this lightweight launcher is not HA-safe and has no
+distributed provisioning lock. Stop retains data and storage charges. Nuke removes
+only the owned preview, not this bootstrap's resources or its project. Unrelated
+services and volumes in the selected project are left untouched. Existing explicit
+`railway-sqlite` bindings remain supported unchanged.
+
+If a branch still has an old `railway-preview:start` command, first import this
+branch's `.agor.yml` in the repository environment editor, then reselect
+`railway-auto-sqlite` to re-render commands. That marker was not an executable;
+installing a host-side binary or daemon handler is not the fix.
+
+Provider contracts: [authentication](https://docs.railway.com/integrations/api),
+[environments](https://docs.railway.com/integrations/api/manage-environments),
+[services](https://docs.railway.com/integrations/api/manage-services),
+[volumes](https://docs.railway.com/integrations/api/manage-volumes), and
+[domains](https://docs.railway.com/integrations/api/manage-domains).
+
+## Legacy bootstrap deployment
+
 This deploys **Agor itself** from this branch. The opt-in `railway-sqlite` variant
 now connects Play/Stop/Logs to the explicitly adopted bootstrap preview. One trusted deployment, one replica, one private
 volume at `/home/agor/.agor`; no production data or shared tenant credentials.

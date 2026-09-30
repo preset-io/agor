@@ -74,6 +74,7 @@ jobs:
       # external resources or deployment mutations are needed.
       - run: npm ci --prefix .railway --ignore-scripts
       - run: node --experimental-strip-types --test docker/runtime-*.test.mjs scripts/managed-environments/railway/*.test.mjs .railway/*.test.mjs
+      - run: node --test scripts/managed-environments/railway-auto/*.test.mjs
       - run: pnpm check:shortid
       - run: pnpm check:multitenancy-boundaries
       # The ratchet's own unit test: the baseline is a named inventory, and a
