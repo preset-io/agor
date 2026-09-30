@@ -1,10 +1,17 @@
-vi.mock('../auth/tenant-access.js', () => ({
+vi.mock('../auth/tenant-access.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../auth/tenant-access.js')>()),
   isCurrentTenantRuntimeActive: vi.fn().mockResolvedValue(true),
   assertRuntimeTenantAccess: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { runWithTenantDatabaseScope, SessionRepository, shortId } from '@agor/core/db';
-import { type Session, type Task, TaskStatus } from '@agor/core/types';
+import { Forbidden } from '@agor/core/feathers';
+import {
+  type Session,
+  type Task,
+  TaskStatus,
+  TENANT_RESTRICTED_ERROR_CODE,
+} from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
@@ -119,6 +126,9 @@ function makeService(
     Object.assign(target, updates);
     return { ...target };
   });
+  const sessionsGet = vi.fn(async (id: string) =>
+    id === parentSessionId ? parentSession : childSession
+  );
   const triggerQueueProcessing = vi.fn(async () => undefined);
   const messagesFind = vi.fn(async () => [
     {
@@ -148,7 +158,7 @@ function makeService(
     service: vi.fn((name: string) => {
       if (name === 'sessions') {
         return {
-          get: vi.fn(async (id: string) => (id === parentSessionId ? parentSession : childSession)),
+          get: sessionsGet,
           patch: sessionsPatch,
           triggerQueueProcessing,
         };
@@ -163,6 +173,7 @@ function makeService(
     service,
     repository,
     createPending,
+    sessionsGet,
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
@@ -213,6 +224,44 @@ describe('TasksService completion callbacks', () => {
       projected.mockRestore();
     }
   });
+
+  it.each(['session read', 'session projection'] as const)(
+    'falls back to the hook-free projection when the tenant closes before the %s',
+    async (refusedAt) => {
+      const {
+        service,
+        createPending,
+        sessionsGet,
+        sessionsPatch,
+        triggerQueueProcessing,
+        childSession,
+      } = makeService();
+      const db = { run() {} };
+      (service as unknown as { db: unknown }).db = db;
+      const projected = vi
+        .spyOn(SessionRepository.prototype, 'update')
+        .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
+      const refusal = new Forbidden('Tenant access is restricted', {
+        code: TENANT_RESTRICTED_ERROR_CODE,
+      });
+      if (refusedAt === 'session read') sessionsGet.mockRejectedValueOnce(refusal);
+      else sessionsPatch.mockRejectedValueOnce(refusal);
+      try {
+        await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
+          service.patch(taskId, { status: TaskStatus.COMPLETED })
+        );
+        expect(projected).toHaveBeenCalledWith(childSessionId, {
+          status: 'idle',
+          ready_for_prompt: true,
+        });
+        expect(sessionsPatch).toHaveBeenCalledTimes(refusedAt === 'session read' ? 0 : 1);
+        expect(createPending).not.toHaveBeenCalled();
+        expect(triggerQueueProcessing).not.toHaveBeenCalled();
+      } finally {
+        projected.mockRestore();
+      }
+    }
+  );
 
   it('retries credential retirement for an idempotent terminal-state write', async () => {
     const { service, revokeTaskTokens } = makeService();

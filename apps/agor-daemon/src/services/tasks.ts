@@ -861,10 +861,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!task.session_id || !this.app) return false;
     try {
       // Settlement is committed; while restricted, skip completion automation (not replayed on release).
-      const automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
-      const session = automationAdmitted
-        ? await this.app.service('sessions').get(task.session_id, params)
-        : await readTerminationEntity(this.app, 'sessions', task.session_id, params, task.task_id);
+      let automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
+      const readSettledSession = () =>
+        readTerminationEntity(
+          this.app,
+          'sessions',
+          task.session_id,
+          params,
+          task.task_id
+        ) as Promise<Session>;
+      let session: Session;
+      try {
+        session = automationAdmitted
+          ? await this.app.service('sessions').get(task.session_id, params)
+          : await readSettledSession();
+      } catch (error) {
+        // The tenant closed after the check: continue on the restricted, automation-free path.
+        if (!automationAdmitted || !isTenantRestrictedRejection(error)) throw error;
+        automationAdmitted = false;
+        session = await readSettledSession();
+      }
 
       if (session.branch_id && automationAdmitted) {
         // Preserve fire-and-forget behavior, but never let Git orchestration
@@ -910,10 +926,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           params,
         });
       } else if (automationAdmitted) {
-        await this.projectTerminalSession(task, status, params);
-        console.log(
-          `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
-        );
+        try {
+          await this.projectTerminalSession(task, status, params);
+          console.log(
+            `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
+          );
+        } catch (error) {
+          // Closed between the check and this write: project hook-free so the session still leaves RUNNING.
+          if (!isTenantRestrictedRejection(error)) throw error;
+          automationAdmitted = false;
+          await this.projectRestrictedTerminalSession(task, status, params);
+        }
       } else {
         // The session must still leave RUNNING, or it stays stuck after reactivation.
         await this.projectRestrictedTerminalSession(task, status, params);
