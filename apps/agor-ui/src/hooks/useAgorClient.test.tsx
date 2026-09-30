@@ -546,6 +546,50 @@ describe('useAgorClient suspended workspace lifecycle', () => {
     expect(result.current.connected).toBe(true);
   });
 
+  it.each([
+    { name: 'the refresh itself', refreshRestricted: true },
+    { name: 'the refreshed handshake', refreshRestricted: false },
+  ])(
+    'keeps probing when $name reports the suspension after a 401 probe',
+    async ({ refreshRestricted }) => {
+      vi.useFakeTimers();
+      vi.mocked(createRestClient).mockResolvedValue({ service: vi.fn() } as never);
+      if (refreshRestricted) refreshTokensMock.mockRejectedValue(restrictedHandshake());
+      else
+        refreshTokensMock.mockResolvedValue({
+          accessToken: 'fresh-still-suspended',
+          refreshToken: 'next-refresh',
+          user: { user_id: 'u1' },
+        });
+      localStorage.setItem('agor-refresh-token', 'stored-refresh');
+      const { result, io, rejectNextConnect } = renderRestricted();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      rejectNextConnect(
+        Object.assign(new Error('Invalid or expired authentication token'), {
+          data: { code: 401, className: 'not-authenticated' },
+        })
+      );
+      if (!refreshRestricted) rejectNextConnect(restrictedHandshake());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      expect(refreshTokensMock).toHaveBeenCalledOnce();
+      expect(result.current.tenantRestricted).toBe(true);
+      expect(result.current.error).toBeNull();
+      const afterRecovery = io.connect.mock.calls.length;
+
+      // The next probe still fires on the slow schedule; the tab is never parked.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_PROBE_DELAYS_MS[1]!);
+      });
+      expect(io.connect.mock.calls.length).toBeGreaterThan(afterRecovery);
+      expect(result.current.tenantRestricted).toBe(false);
+      expect(result.current.connected).toBe(true);
+    }
+  );
+
   it('enters the suspended state from a rejected service call', async () => {
     vi.useFakeTimers();
     const seam = makeSeamClient();

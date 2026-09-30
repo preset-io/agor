@@ -387,6 +387,14 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
               if (!mounted) return;
+              // Still suspended after recovery: keep (or reschedule) the slow probe instead of an error.
+              if (
+                !(recoveryError instanceof RefreshUnrecoverableError) &&
+                (restricted || isTenantRestrictedError(recoveryError))
+              ) {
+                if (restrictionProbeTimer === null) enterTenantRestricted();
+                return;
+              }
               if (recoveryError instanceof RefreshUnrecoverableError) {
                 setError('Authentication could not be restored. Please sign in again.');
               } else {
