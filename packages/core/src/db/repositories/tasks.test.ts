@@ -1943,6 +1943,40 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     }
   );
 
+  dbTest(
+    'lets only a durable revocation replace a suspension cause under the claim lock',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+      await taskRepo.connectExecutor(task.task_id);
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'tenant_suspension',
+        errorMessage: 'Tenant access is restricted.',
+      });
+      // A caller acting on a stale snapshot cannot turn the suspension into a revocation.
+      const stale = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+      });
+      expect(stale.task.termination_request?.cause).toBe('tenant_suspension');
+      const durable = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+        durableRevocation: true,
+      });
+      expect(durable).toMatchObject({
+        outcome: 'claimed',
+        task: { termination_request: { cause: 'authorization_revoked' } },
+      });
+    }
+  );
+
   dbTest('rejects late telemetry after executor quiescence', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);

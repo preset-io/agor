@@ -188,6 +188,8 @@ export interface TerminationClaimInput {
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
   requireExecutorDisconnected?: boolean;
+  /** Set only for a revocation the heartbeat authority recorded durably; only that may replace a suspension cause. */
+  durableRevocation?: boolean;
   now?: Date;
 }
 
@@ -1695,9 +1697,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
       const existing = current.termination_request;
-      // A later genuine credential withdrawal must not inherit a suspension's benign Stopped classification.
+      // Decided under the row lock: only a durable credential withdrawal replaces a suspension's benign Stopped cause.
       const replacesSuspension =
-        existing?.cause === 'tenant_suspension' && input.cause === 'authorization_revoked';
+        existing?.cause === 'tenant_suspension' &&
+        input.cause === 'authorization_revoked' &&
+        input.durableRevocation === true;
       const cause =
         input.cause === 'user_stop' || !existing || replacesSuspension
           ? input.cause

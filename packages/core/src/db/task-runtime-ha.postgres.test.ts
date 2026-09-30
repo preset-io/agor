@@ -491,15 +491,18 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
     await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
       const tasks = new TaskRepository(scoped);
       const task = await tasks.create(taskInput(seed, TaskStatus.RUNNING));
+      // A real revocation is one the heartbeat authority recorded durably.
       await tasks.claimTermination({
         taskId: task.task_id,
         cause: first,
         errorMessage: 'First stop',
+        durableRevocation: first === 'authorization_revoked',
       });
       await tasks.claimTermination({
         taskId: task.task_id,
         cause: second,
         errorMessage: 'Second stop',
+        durableRevocation: second === 'authorization_revoked',
       });
       await tasks.claimTerminationCoordination({
         taskId: task.task_id,

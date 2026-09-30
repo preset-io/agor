@@ -51,6 +51,8 @@ export interface TerminationInput {
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
   requireExecutorDisconnected?: boolean;
+  /** The revocation was recorded durably by the heartbeat authority; see TerminationClaimInput. */
+  durableRevocation?: boolean;
   /** Permit guarded recovery when this daemon does not own a local process handle. */
   allowUnownedLocalContainment?: boolean;
   /**
@@ -178,6 +180,7 @@ async function claimRequest(input: TerminationInput) {
         expectedHeartbeatAt: input.expectedHeartbeatAt,
         heartbeatStaleBefore: input.heartbeatStaleBefore,
         requireExecutorDisconnected: input.requireExecutorDisconnected,
+        durableRevocation: input.durableRevocation,
       },
       internalParams(input.params)
     )

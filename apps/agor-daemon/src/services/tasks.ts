@@ -1843,20 +1843,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     } catch (error) {
       if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
-      // Only a durable revocation replaces a suspension Stop; a stale generation after reactivation keeps it Stopped.
-      const suspensionInFlight =
-        report.task.status === TaskStatus.STOPPING &&
-        report.task.termination_request?.cause === 'tenant_suspension';
-      const suspended =
-        report.outcome !== 'authorization_revoked' &&
-        (isTenantRestrictedRejection(error) || suspensionInFlight);
+      // A closed tenant or a codeless stale generation (it moves only with restriction records) is a suspension.
+      const revoked = report.outcome === 'authorization_revoked';
       return beginExecutorTermination({
         app: this.app,
         taskId: data.task_id,
-        cause: suspended ? 'tenant_suspension' : 'authorization_revoked',
-        errorMessage: suspended
-          ? 'Tenant access is restricted.'
-          : AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+        cause: revoked ? 'authorization_revoked' : 'tenant_suspension',
+        durableRevocation: revoked,
+        errorMessage: revoked
+          ? AUTHORIZATION_REVOKED_TERMINATION_MESSAGE
+          : 'Tenant access is restricted.',
         params,
         runInFreshTenantWriteDatabase: (work) =>
           withFreshTenantWrite(this.db, authority.tenantId, work),
@@ -1872,6 +1868,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         app: this.app,
         taskId: report.task.task_id,
         cause: 'authorization_revoked',
+        durableRevocation: true,
         errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
         params,
         runInFreshTenantWriteDatabase: (work) =>

@@ -125,7 +125,7 @@ describe('TasksService heartbeat authority control', () => {
     beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
     await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
     expect(beginExecutorTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ cause: 'authorization_revoked' })
+      expect.objectContaining({ cause: 'authorization_revoked', durableRevocation: true })
     );
   });
 
@@ -152,7 +152,8 @@ describe('TasksService heartbeat authority control', () => {
     );
   });
 
-  it('still revokes a running task whose generation is stale after reactivation', async () => {
+  it('stops a running task with a stale generation as a suspension, never as a durable revocation', async () => {
+    // The generation moves only with restriction records, so a codeless mismatch is a restriction change.
     const { service } = serviceHarness({ report: { outcome: 'continued', task } });
     assertRuntimeTenantAccess.mockRejectedValueOnce(
       new NotAuthenticated('Runtime credential generation is stale')
@@ -160,7 +161,21 @@ describe('TasksService heartbeat authority control', () => {
     beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
     await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
     expect(beginExecutorTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ cause: 'authorization_revoked' })
+      expect.objectContaining({ cause: 'tenant_suspension', durableRevocation: false })
+    );
+  });
+
+  it('keeps a durable revocation Failed-cause when the generation is also stale', async () => {
+    const { service } = serviceHarness({
+      report: { outcome: 'authorization_revoked', task, reason: 'token_revoked' },
+    });
+    assertRuntimeTenantAccess.mockRejectedValueOnce(
+      new NotAuthenticated('Runtime credential generation is stale')
+    );
+    beginExecutorTermination.mockResolvedValueOnce({ ...task, status: TaskStatus.STOPPING });
+    await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams());
+    expect(beginExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'authorization_revoked', durableRevocation: true })
     );
   });
 
