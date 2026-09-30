@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -568,6 +568,7 @@ describe('NavbarComposeButton', () => {
     await waitFor(() =>
       expect(screen.queryByText('Pick a primary assistant above to send.')).not.toBeInTheDocument()
     );
+    await act(async () => {});
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
@@ -583,6 +584,7 @@ describe('NavbarComposeButton', () => {
     openPopover();
     fireEvent.click(await screen.findByTestId('pick-teammate'));
     await waitFor(() => expect(screen.queryByTestId('pick-teammate')).not.toBeInTheDocument());
+    await act(async () => {});
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
