@@ -16,6 +16,16 @@ describe('commentMentionsUser', () => {
     expect(commentMentionsUser('ping @al@example.community', 'Alex', 'al@example.com')).toBe(false);
   });
 
+  it('bounds handles in any script, including combining marks', () => {
+    expect(commentMentionsUser('ping @Zoë', 'Zo')).toBe(false);
+    expect(commentMentionsUser('ping @Zoe\u0308', 'Zoe')).toBe(false);
+    expect(commentMentionsUser('ping @Zoë, thoughts?', 'Zoë')).toBe(true);
+    expect(commentMentionsUser('cc @łukasz', 'Łukasz')).toBe(true);
+    expect(commentMentionsUser('cc @Łukaszek', 'Łukasz')).toBe(false);
+    expect(commentMentionsUser('@田中さん', '田中')).toBe(false);
+    expect(commentMentionsUser('@田中 お願いします', '田中')).toBe(true);
+  });
+
   it('treats regex characters in handles literally and needs a handle', () => {
     expect(commentMentionsUser('hi @a.b', 'a.b')).toBe(true);
     expect(commentMentionsUser('hi @axb', 'a.b')).toBe(false);
