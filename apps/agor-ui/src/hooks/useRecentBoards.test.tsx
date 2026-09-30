@@ -49,4 +49,20 @@ describe('useRecentBoards', () => {
       JSON.parse(window.localStorage.getItem('agor:user:user-1:recentBoardIds') ?? '[]')
     ).toEqual(['b9', 'b1', 'b2']);
   });
+
+  it('keeps the shared key when the per-user write fails', async () => {
+    window.localStorage.setItem(LEGACY_KEY, JSON.stringify(['b1']));
+    const useRecentBoards = await loadHook();
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('quota');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      renderHook(() => useRecentBoards([], '', 'user-1'));
+    } finally {
+      setItem.mockRestore();
+      error.mockRestore();
+    }
+    expect(window.localStorage.getItem(LEGACY_KEY)).toBe(JSON.stringify(['b1']));
+  });
 });

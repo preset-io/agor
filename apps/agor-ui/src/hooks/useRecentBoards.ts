@@ -1,8 +1,8 @@
 import type { Board } from '@agor-live/client';
 import { useCallback, useMemo } from 'react';
 import {
+  migrateLegacyLocalStorageJson,
   readLocalStorageJson,
-  takeLegacyLocalStorageJson,
   writeLocalStorageJson,
 } from './localStorageJson';
 import { useLocalStorage } from './useLocalStorage';
@@ -18,13 +18,14 @@ export const recentBoardsStorageKey = (userId: string | undefined) =>
 /** Moves the shared pre-per-user history once to the first signed-in user without their own. */
 function migrateLegacyRecentBoards(userId: string | undefined): void {
   if (!userId) return;
-  const legacy = takeLegacyLocalStorageJson<unknown>('agor:recentBoardIds');
-  if (!Array.isArray(legacy)) return;
-  const ids = legacy.filter((id): id is string => typeof id === 'string').slice(0, MAX_RECENT);
-  const key = recentBoardsStorageKey(userId);
-  if (ids.length && readLocalStorageJson<string[]>(key, NO_RECENT).length === 0) {
-    writeLocalStorageJson(key, ids);
-  }
+  migrateLegacyLocalStorageJson('agor:recentBoardIds', (legacy) => {
+    const ids = Array.isArray(legacy)
+      ? legacy.filter((id): id is string => typeof id === 'string').slice(0, MAX_RECENT)
+      : [];
+    const key = recentBoardsStorageKey(userId);
+    if (!ids.length || readLocalStorageJson<string[]>(key, NO_RECENT).length > 0) return true;
+    return writeLocalStorageJson(key, ids);
+  });
 }
 
 /**
