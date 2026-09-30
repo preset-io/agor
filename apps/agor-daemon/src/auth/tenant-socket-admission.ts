@@ -71,26 +71,27 @@ export function restrictedSocketHandshakeError(
   return rejection;
 }
 
-/** Bound each observation without spawning duplicate reads if a DB call stalls. */
+type MonitorSkip = 'timeout' | 'error' | 'saturated';
+
+/** Bound each observation without duplicate reads; only `observe` itself retires sockets, on a positive observation. */
 export class TenantSocketRestrictionMonitor {
   private readonly pending = new Map<string, Promise<void>>();
+  private readonly warnings = new Map<MonitorSkip, { at: number; suppressed: number }>();
   constructor(
-    private readonly assertAccess: (tenantId: string) => Promise<void>,
-    private readonly timeoutMs = 2000
+    private readonly observe: (tenantId: string) => Promise<void>,
+    private readonly timeoutMs = 2000,
+    private readonly now = Date.now
   ) {}
 
-  async check(tenants: Map<string, () => void>): Promise<void> {
-    const entries = [...tenants];
+  async check(tenantIds: Iterable<string>): Promise<void> {
+    const entries = [...tenantIds];
     for (let offset = 0; offset < entries.length; offset += 8) {
       await Promise.all(
-        entries.slice(offset, offset + 8).map(async ([tenantId, close]) => {
+        entries.slice(offset, offset + 8).map(async (tenantId) => {
           let read = this.pending.get(tenantId);
-          if (!read && this.pending.size >= 8) {
-            close();
-            return;
-          }
+          if (!read && this.pending.size >= 8) return this.skip('saturated');
           if (!read) {
-            read = Promise.resolve().then(() => this.assertAccess(tenantId));
+            read = Promise.resolve().then(() => this.observe(tenantId));
             this.pending.set(tenantId, read);
             const clear = () => {
               if (this.pending.get(tenantId) === read) this.pending.delete(tenantId);
@@ -98,23 +99,34 @@ export class TenantSocketRestrictionMonitor {
             void read.then(clear, clear);
           }
           let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await Promise.race([
-              read,
-              new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(
-                  () => reject(new Error('Tenant access observation timed out')),
-                  this.timeoutMs
-                );
-              }),
-            ]);
-          } catch {
-            close();
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
+          const timedOut = new Promise<MonitorSkip>((resolve) => {
+            timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
+          });
+          // An unverifiable read retires nothing: every RPC still fails closed at admission.
+          const skipped = await Promise.race([
+            read.then(
+              () => undefined,
+              () => 'error' as const
+            ),
+            timedOut,
+          ]);
+          if (timer) clearTimeout(timer);
+          if (skipped) this.skip(skipped);
         })
       );
     }
+  }
+
+  private skip(reason: MonitorSkip): void {
+    const at = this.now();
+    const last = this.warnings.get(reason);
+    if (last && at >= last.at && at - last.at < 60_000) {
+      last.suppressed++;
+      return;
+    }
+    console.warn(
+      `[tenant.restriction] socket observation skipped reason=${reason} suppressed=${last?.suppressed ?? 0}`
+    );
+    this.warnings.set(reason, { at, suppressed: 0 });
   }
 }

@@ -2963,3 +2963,65 @@ describe('configureChannels tenant isolation', () => {
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
   });
 });
+
+describe('tenant restriction socket monitor', () => {
+  const active = (revision: number) => ({
+    records: [
+      {
+        version: 1 as const,
+        controllerId: 'control',
+        placementId: 'cell',
+        operationId: 'op',
+        revision,
+        phase: 'active' as const,
+      },
+    ],
+    closed: false,
+  });
+
+  it('keeps sockets through read errors and stalls, retiring only on a positive observation', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const readTenantRestriction = vi.fn();
+      const { io } = buildHarness({ readTenantRestriction });
+      const socket = makeSocket('monitored', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      readTenantRestriction.mockRejectedValue(new Error('private database address'));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(socket.connected).toBe(true);
+      // Rate-limited: one bounded line for repeated skips, never the error text.
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('reason=error'))).toEqual([
+        ['[tenant.restriction] socket observation skipped reason=error suppressed=0'],
+      ]);
+
+      readTenantRestriction.mockResolvedValue({ records: [], closed: false });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(socket.connected).toBe(true);
+
+      // A rapid restrict/release cycle leaves the old credential on a stale generation.
+      readTenantRestriction.mockResolvedValue(active(2));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(socket.connected).toBe(false);
+
+      const closedSocket = makeSocket('closed', io);
+      asUser(closedSocket, BOB);
+      connect(io, closedSocket);
+      readTenantRestriction.mockResolvedValue({ ...active(3), closed: true });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(closedSocket.connected).toBe(false);
+
+      const stalledSocket = makeSocket('stalled', io);
+      asUser(stalledSocket, ALICE);
+      connect(io, stalledSocket);
+      readTenantRestriction.mockReturnValue(new Promise(() => undefined));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(stalledSocket.connected).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

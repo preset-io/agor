@@ -2018,17 +2018,24 @@ export function createSocketIOConfig(
       });
     });
 
-    // Each replica checks its own sockets against durable state. No permissive
-    // cache or Redis notification is required, including after a missed event.
+    // Each replica checks its own sockets against durable state; no permissive cache or Redis notification.
     let checkingRestrictions = false;
     let monitoredSockets = new Map<string, Socket[]>();
+    const retire = (socket: Socket) => {
+      retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
+      socket.disconnect(true);
+    };
     const readTenantRestriction = options.readTenantRestriction;
     const restrictionMonitor = readTenantRestriction
       ? new TenantSocketRestrictionMonitor(async (tenantId) => {
           const state = await readTenantRestriction(tenantId);
-          if (state.closed) throw new Error('Tenant access is restricted');
+          const sockets = monitoredSockets.get(tenantId) ?? [];
+          if (state.closed) {
+            for (const socket of sockets) retire(socket);
+            return;
+          }
           const epoch = tenantCredentialEpoch(state, tenantId);
-          for (const socket of monitoredSockets.get(tenantId) ?? []) {
+          for (const socket of sockets) {
             const connection = (socket as FeathersSocket).feathers;
             try {
               assertTenantCredentialEpochValue(
@@ -2036,8 +2043,7 @@ export function createSocketIOConfig(
                 getAuthenticatedConnectionCredentialPayload(connection)
               );
             } catch {
-              retireSocketConnectionAuthority(app, connection);
-              socket.disconnect(true);
+              retire(socket);
             }
           }
         })
@@ -2064,19 +2070,7 @@ export function createSocketIOConfig(
               tenants.set(tenantId, group);
             }
             monitoredSockets = tenants;
-            await restrictionMonitor.check(
-              new Map(
-                [...tenants].map(([tenantId, sockets]) => [
-                  tenantId,
-                  () => {
-                    for (const socket of sockets) {
-                      retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
-                      socket.disconnect(true);
-                    }
-                  },
-                ])
-              )
-            );
+            await restrictionMonitor.check(tenants.keys());
           } finally {
             checkingRestrictions = false;
           }
