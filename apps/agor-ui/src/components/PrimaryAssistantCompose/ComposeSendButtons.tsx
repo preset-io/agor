@@ -27,6 +27,7 @@ export const ComposeSendButtons: React.FC<ComposeSendButtonsProps> = ({
     <Tooltip title={`Creates the session in the background, on ${board} — check on it anytime.`}>
       <Button
         type="primary"
+        aria-label={compact ? 'Send in background' : undefined}
         loading={submitting === 'background'}
         disabled={inactive}
         onClick={() => onSend('background')}

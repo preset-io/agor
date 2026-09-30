@@ -7,13 +7,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
-import {
-  type TeammateOption,
-  TeammateOptionLabel,
-  teammateContext,
-  teammateLabel,
-  teammateOption,
-} from '../../utils/teammateLabels';
+import { type TeammateOption, teammateLabel, teammateOption } from '../../utils/teammateLabels';
+import { TeammateOptionLabel } from '../PrimaryAssistantCompose/TeammateOptionLabel';
 
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
@@ -104,6 +99,8 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       .map((branch) => teammateOption(branch, boardById, repoById));
   }, [candidates, boardById, repoById, current]);
 
+  const currentOption = current ? teammateOption(current, boardById, repoById) : null;
+
   const handleChange = async (branchId: string | null) => {
     if (!client || !currentUserId) return;
     const operationUserId = currentUserId;
@@ -140,10 +137,10 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         <Typography.Text type="danger">
           Couldn't load your primary assistant. Check the connection and try again.
         </Typography.Text>
-      ) : current ? (
+      ) : currentOption ? (
         <Typography.Text>
-          Currently <Typography.Text strong>{teammateLabel(current)}</Typography.Text> on{' '}
-          {teammateContext(current, boardById, repoById)}.
+          Currently <Typography.Text strong>{currentOption.label}</Typography.Text>
+          {currentOption.context && ` on ${currentOption.context}`}.
         </Typography.Text>
       ) : compact ? null : (
         <Typography.Text type="secondary">
