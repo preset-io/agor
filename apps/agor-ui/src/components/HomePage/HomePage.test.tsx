@@ -312,6 +312,16 @@ describe('HomePage', () => {
     expect(within(toolbar).queryByText('1')).not.toBeInTheDocument();
   });
 
+  it('keeps filters only in memory until there is a signed-in user', async () => {
+    seed({ sessions: [session('idle')] });
+    renderHome({ currentUser: null });
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    const sheet = await screen.findByRole('dialog', { name: 'Filters' });
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
+    expect(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' })).toBeChecked();
+    expect(Object.keys(localStorage).filter((key) => key.includes('anonymous'))).toEqual([]);
+  });
+
   it('shows View in the toolbar, defaults to List, and counts only filters', () => {
     asDesktop();
     seed({
@@ -518,6 +528,14 @@ describe('HomePage', () => {
     renderHome({ onOpenSettings: () => {}, currentUser: { ...user, role: 'admin' } as User });
     expect(screen.getByText('Configure MCP tools')).toBeInTheDocument();
     cleanupAndSeedSession();
+  });
+
+  it('waits for hydration before offering onboarding, so returning users never see it flash', () => {
+    seed({ boards: [{ board_id: 'b', name: 'B', archived: false } as Board], hydrated: false });
+    renderHome({ onOpenSettings: () => {} });
+    expect(screen.queryByText('Connect a repository')).not.toBeInTheDocument();
+    act(() => seed({ sessions: [session('returning')] }));
+    expect(screen.queryByText('Connect a repository')).not.toBeInTheDocument();
   });
 
   it('starts from the ask box on phones, and hides the step for people who cannot start sessions', () => {

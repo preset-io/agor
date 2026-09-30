@@ -1,6 +1,6 @@
 import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
 import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, App as AntApp, Button, Flex, Skeleton, Typography, theme } from 'antd';
+import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -10,7 +10,7 @@ import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { userStorageKey } from '../../hooks/useUserLocalStorage';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
   agorStore,
@@ -24,6 +24,7 @@ import {
   isUnreadResult,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import { runWithLimit } from '../../utils/promisePool';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
@@ -47,6 +48,7 @@ const OPENED_FAILURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
+const NO_OPENED_FAILURES: Record<string, number> = {};
 
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
@@ -180,7 +182,7 @@ export const HomePage = memo(function HomePage({
   onSeeAllSessions,
 }: HomePageProps) {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
+  const { showError } = useThemedMessage();
   const location = useLocation();
   const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
@@ -215,13 +217,15 @@ export const HomePage = memo(function HomePage({
     },
     [client, userId]
   );
-  const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage(
-    userStorageKey(userId, 'home-only-mine'),
+  const [onlyStartedByMe, setOnlyStartedByMe] = useUserLocalStorage(
+    userId,
+    'home-only-mine',
     false
   );
-  const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
-    userStorageKey(userId, 'home-opened-failures'),
-    {}
+  const [openedFailures, setOpenedFailures] = useUserLocalStorage(
+    userId,
+    'home-opened-failures',
+    NO_OPENED_FAILURES
   );
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
@@ -324,9 +328,9 @@ export const HomePage = memo(function HomePage({
       client
         ?.service('sessions')
         .patch(sessionId, { ready_for_prompt: false })
-        .catch(() => message.error('Couldn’t mark as read'));
+        .catch(() => showError('Couldn’t mark as read'));
     },
-    [client, message]
+    [client, showError]
   );
   const [markingAll, setMarkingAll] = useState(false);
   const markAllRead = useCallback(async () => {
@@ -339,13 +343,12 @@ export const HomePage = memo(function HomePage({
       const failed = await runWithLimit(ids, MARK_ALL_CONCURRENCY, (id) =>
         client.service('sessions').patch(id, { ready_for_prompt: false })
       );
-      if (failed.length === ids.length && failed.length) message.error('Couldn’t mark as read');
-      else if (failed.length)
-        message.error(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
+      if (failed.length === ids.length && failed.length) showError('Couldn’t mark as read');
+      else if (failed.length) showError(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
     } finally {
       setMarkingAll(false);
     }
-  }, [client, userId, message]);
+  }, [client, userId, showError]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
   const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
   const showRunning = useCallback(() => {
@@ -364,7 +367,8 @@ export const HomePage = memo(function HomePage({
   );
 
   const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
-  const onboarding = !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
+  // Waits for hydration so returning users never see it flash on a cold load.
+  const onboarding = hydrated && !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
     <HomeOnboarding
       isAdmin={isAdmin}
       canStartSessions={!!onCreateSession}

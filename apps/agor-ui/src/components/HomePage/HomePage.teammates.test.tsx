@@ -1,5 +1,5 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   asDesktop,
@@ -95,6 +95,22 @@ describe('HomePage teammates', () => {
     expect(
       await screen.findByRole('textbox', { name: 'Ask Teammate primary' })
     ).toBeInTheDocument();
+  });
+
+  it('keeps a draft typed while a send is in flight', async () => {
+    seedTeammates();
+    let finish!: (result: { sessionId: string }) => void;
+    const onCreateSession = vi.fn(
+      () => new Promise<{ sessionId: string }>((resolve) => (finish = resolve))
+    );
+    renderHome({ client: client({}), onCreateSession });
+    const input = await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
+    fireEvent.change(input, { target: { value: 'First question' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: 'Next draft' } });
+    await act(async () => finish({ sessionId: 'new' }));
+    expect(input).toHaveValue('Next draft');
   });
 
   it('sends on Enter, adds a line on Shift+Enter, and opens on Ctrl+Enter', async () => {
