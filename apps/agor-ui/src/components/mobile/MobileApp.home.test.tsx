@@ -1,7 +1,7 @@
 import type { AgorClient, Board, BoardComment, Branch, Session, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { MemoryRouter, Route, Routes, useParams } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
@@ -95,7 +95,15 @@ const client = {
   }),
 } as unknown as AgorClient;
 
-function renderPhoneHome() {
+const history = { back: () => {} };
+/** Shows the path and lets a test go Back, so it can see what the bell left in history. */
+function HistoryProbe() {
+  const navigate = useNavigate();
+  history.back = () => navigate(-1);
+  return <output aria-label="path">{useLocation().pathname}</output>;
+}
+
+function renderPhoneHome(entries = ['/m']) {
   return render(
     <ThemeProvider>
       <ConnectionProvider
@@ -109,7 +117,8 @@ function renderPhoneHome() {
         }}
       >
         <AntApp>
-          <MemoryRouter initialEntries={['/m']}>
+          <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
+            <HistoryProbe />
             <Routes>
               <Route
                 path="/m/*"
@@ -161,6 +170,19 @@ describe('MobileApp Home wiring', () => {
     );
     expect(within(needs).getByRole('button', { name: /mentioned you/ })).toBeInTheDocument();
     expect(within(needs).getByRole('radio', { name: 'Comments 1' })).toBeChecked();
+  });
+
+  it('keeps Back leaving Home when the bell is tapped on Home', async () => {
+    seed({ sessions: [session('idle')], comments: [mention('c1')] });
+    renderPhoneHome(['/m/search', '/m']);
+    fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
+    expect(
+      await within(screen.getByRole('region', { name: 'Needs you' })).findByRole('radio', {
+        name: 'Comments 1',
+      })
+    ).toBeChecked();
+    act(() => history.back());
+    expect(screen.getByRole('status', { name: 'path' })).toHaveTextContent('/m/search');
   });
 
   it('opens a branch comment on its board', async () => {

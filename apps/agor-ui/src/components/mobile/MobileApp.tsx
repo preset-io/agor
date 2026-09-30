@@ -350,10 +350,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const createSession = useStableCallback(onCreateSession);
 
   // The bell opens comments for you across boards (Home › Needs you); on a board
-  // page it opens that board's comments.
+  // page it opens that board's comments. Already on Home, it replaces the entry so Back still leaves.
+  const onHome = location.pathname.replace(/\/$/, '') === '/m';
   const openComments = useCallback(
-    () => navigate('/m', { state: { needsFilter: 'comments' } satisfies HomeLocationState }),
-    [navigate]
+    () =>
+      navigate('/m', {
+        replace: onHome,
+        state: { needsFilter: 'comments' } satisfies HomeLocationState,
+      }),
+    [navigate, onHome]
   );
   const openBoardComments = useCallback(() => {
     if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);

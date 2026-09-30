@@ -5,7 +5,7 @@ import {
   readLocalStorageJson,
   writeLocalStorageJson,
 } from './localStorageJson';
-import { useLocalStorage } from './useLocalStorage';
+import { useLocalStorage, writeSharedLocalStorageJson } from './useLocalStorage';
 import { userStorageKey } from './useUserLocalStorage';
 
 const MAX_RECENT = 10;
@@ -29,6 +29,25 @@ function migrateLegacyRecentBoards(userId: string | undefined): void {
 }
 
 /**
+ * Records board visits in the signed-in user's history without subscribing to it; a no-op
+ * until there is a user, so nothing lands in the shared `anonymous` key.
+ */
+export function useTrackBoardVisit(userId: string | undefined): (boardId: string) => void {
+  // Before the first read or write, so the moved history is what a visit prepends to.
+  migrateLegacyRecentBoards(userId);
+  return useCallback(
+    (boardId: string) => {
+      if (!userId) return;
+      const key = recentBoardsStorageKey(userId);
+      const stored = readLocalStorageJson<unknown>(key, NO_RECENT);
+      const prev = Array.isArray(stored) ? stored.filter((id) => id !== boardId) : NO_RECENT;
+      writeSharedLocalStorageJson(key, [boardId, ...prev].slice(0, MAX_RECENT));
+    },
+    [userId]
+  );
+}
+
+/**
  * Hook for tracking the signed-in user's recently visited boards in localStorage.
  * Returns the recent board objects (excluding the current board) and a function to track visits.
  */
@@ -41,22 +60,9 @@ export function useRecentBoards(
   recentBoardIds: string[];
   trackBoardVisit: (boardId: string) => void;
 } {
-  // Before any instance reads storage, so every instance (App, AppHeader, board pages) sees the moved history.
-  migrateLegacyRecentBoards(userId);
-  const [recentIds, setRecentIds] = useLocalStorage<string[]>(
-    recentBoardsStorageKey(userId),
-    NO_RECENT
-  );
-
-  const trackBoardVisit = useCallback(
-    (boardId: string) => {
-      setRecentIds((prev) => {
-        const filtered = prev.filter((id) => id !== boardId);
-        return [boardId, ...filtered].slice(0, MAX_RECENT);
-      });
-    },
-    [setRecentIds]
-  );
+  // Migrates before any instance reads storage, so every instance (App, AppHeader, board pages) sees the moved history.
+  const trackBoardVisit = useTrackBoardVisit(userId);
+  const [recentIds] = useLocalStorage<string[]>(recentBoardsStorageKey(userId), NO_RECENT);
 
   const recentBoards = useMemo(() => {
     const boardMap = new Map<string, Board>(boards.map((b) => [b.board_id, b]));
