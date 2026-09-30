@@ -154,7 +154,8 @@ Production composes `createTenantRestrictedAuthHook` with the neutral PostgreSQL
 403/503 reader in `auth/tenant-access.ts`. Direct MCP and bearer upload routes
 check admission independently. The raw MCP egress gateway also reads restriction
 state in its existing current-authority check, including the final pre-dispatch
-check; already-dispatched provider effects are not undone. Provider session teardown
+check (a closed tenant or stale generation is `tenant_restricted`; a failed read is
+the transient `egress_unavailable`); already-dispatched provider effects are not undone. Provider session teardown
 is not a generic exemption, so unverified remote cleanup remains unverified.
 External launch projection takes the execution fence after the authorization fence
 and refuses restricted identity/default-board writes. The credential-generation

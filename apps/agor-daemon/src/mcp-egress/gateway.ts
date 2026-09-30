@@ -48,7 +48,11 @@ import {
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
 } from '@agor/core/utils/safe-outbound-fetch';
-import { assertTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
+import { isTenantRestrictedRejection } from '../auth/tenant-access.js';
+import {
+  assertTenantCredentialEpochValue,
+  readTenantCredentialEpoch,
+} from '../auth/tenant-credential-epoch.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import { resolveSessionPromptAccess } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -961,9 +965,28 @@ export class MCPEgressGateway {
       claims.tid,
       async (tenantDb) => {
         if (isPostgresDatabaseHandle(tenantDb)) {
+          let epoch: string | undefined;
           try {
-            await assertTenantCredentialEpoch(tenantDb, claims.tid, claims);
+            epoch = await readTenantCredentialEpoch(tenantDb, claims.tid);
+          } catch (error) {
+            // Only a positive closed observation is a restriction; a failed read is transient.
+            if (!isTenantRestrictedRejection(error)) {
+              throw new MCPEgressGatewayError(
+                503,
+                'egress_unavailable',
+                'MCP gateway egress is temporarily unavailable'
+              );
+            }
+            throw new MCPEgressGatewayError(
+              403,
+              'tenant_restricted',
+              'Tenant access is restricted'
+            );
+          }
+          try {
+            assertTenantCredentialEpochValue(epoch, claims);
           } catch {
+            // A stale generation stays non-recoverable: no recovery projection may revive it.
             throw new MCPEgressGatewayError(
               403,
               'tenant_restricted',

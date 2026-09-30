@@ -5,6 +5,7 @@ import {
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
+  executeRaw,
   generateId,
   initializeDatabase,
   MCPServerRepository,
@@ -14,6 +15,7 @@ import {
   SessionMCPServerRepository,
   SessionRepository,
   setMCPEgressGatewayMode,
+  sql,
   TaskRepository,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -27,7 +29,7 @@ import { MCPEgressGateway, mcpEgressMaterialHash, mcpOAuthGrantIdentity } from '
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
-const FINAL_CHECK_MUTATIONS = ['server', 'restriction', 'reactivation'] as const;
+const FINAL_CHECK_MUTATIONS = ['server', 'restriction', 'reactivation', 'unverifiable'] as const;
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
   'MCP egress final admission (PostgreSQL HA)',
@@ -319,6 +321,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           revision: 1,
           action: 'restrict',
         });
+        if (mutation === 'unverifiable') {
+          // A corrupt row makes the restriction read fail: transient, never reported as restricted.
+          await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            executeRaw(
+              scoped,
+              sql`UPDATE public.tenant_restrictions SET phase = 'unknown' WHERE tenant_id = ${tenantId}`
+            )
+          );
+        }
         if (mutation === 'reactivation') {
           for (const action of ['prepare_release', 'activate'] as const) {
             await applyTenantRestrictionIntent(dbB, tenantId, {
@@ -342,7 +353,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       releaseDns();
 
       await expect(pending).rejects.toMatchObject({
-        code: mutation !== 'server' ? 'tenant_restricted' : 'tool_permission_changed',
+        code:
+          mutation === 'server'
+            ? 'tool_permission_changed'
+            : mutation === 'unverifiable'
+              ? 'egress_unavailable'
+              : 'tenant_restricted',
       });
       expect(providerRequests).toBe(0);
 
