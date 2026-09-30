@@ -22,7 +22,7 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
 
 /**
  * Whether Back stays inside Agor. The browser router keeps `idx` in history state across
- * replaces, so a redirected deep link still counts as the first entry; other routers fall back to the key.
+ * replaces, so a redirected deep link still counts as the first entry; without that state (memory-router tests) the key decides.
  */
 export function hasInAppHistory(locationKey: string): boolean {
   const idx = (typeof window === 'undefined' ? undefined : window.history.state)?.idx;
