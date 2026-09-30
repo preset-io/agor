@@ -25,8 +25,9 @@ it('returns focus to the percentage when Escape closes the breakdown from raw SD
 
   await act(async () => userEvent.keyboard('{Escape}'));
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
-  await new Promise((resolve) => setTimeout(resolve, 400)); // Let the popover exit animation finish.
-  expect(rawDetails).not.toBeVisible();
+  // aria-expanded changes before AntD finishes leaving (or its 1s motion deadline fires).
+  // Observe the hidden content rather than racing that animation with a fixed sleep.
+  await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
   expect(document.activeElement).toBe(trigger);
   await act(async () => userEvent.keyboard(' '));
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));

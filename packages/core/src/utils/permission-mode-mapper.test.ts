@@ -167,3 +167,21 @@ describe('getDefaultCodexPermissionConfig', () => {
     });
   });
 });
+
+describe('Gemini runtime Manual gate', () => {
+  it('uses the same mapping for inherited modes and never promotes missing modes', async () => {
+    const { isGeminiManualMode } = await import('./permission-mode-mapper');
+    for (const mode of [undefined, 'default', 'ask', 'plan'] as const)
+      expect(isGeminiManualMode(mode)).toBe(true);
+    for (const mode of [
+      'acceptEdits',
+      'auto',
+      'autoEdit',
+      'on-failure',
+      'bypassPermissions',
+      'allow-all',
+      'yolo',
+    ] as const)
+      expect(isGeminiManualMode(mode)).toBe(false);
+  });
+});

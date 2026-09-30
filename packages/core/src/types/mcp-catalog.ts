@@ -381,7 +381,11 @@ export interface MCPCatalogFilters {
  * server-side, so this cannot be used to register an arbitrary server, and a
  * client cannot name the destination its own credential is sent to.
  */
+export type MCPCatalogSharing = 'private' | 'shared';
+
 export interface MCPCatalogConnectData {
+  /** Configuration ownership, independent of scope. Omission is private. */
+  sharing?: MCPCatalogSharing;
   /** The entry's reverse-DNS catalog name. */
   catalog_key: string;
   /**
@@ -472,6 +476,10 @@ export interface MCPCatalogReadiness {
   /** Echo of the catalog identity that was evaluated. */
   catalog_key: string;
   state: MCPCatalogReadinessState;
+  /** Matching configuration can be used without creating/reconciling a row. */
+  reusable_configuration?: boolean;
+  /** Eligible canonical shared configuration exists, independent of selected ownership/grant. Advisory only. */
+  shared_configuration_available?: boolean;
 }
 
 /**

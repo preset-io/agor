@@ -548,7 +548,9 @@ export async function executeToolTask(params: {
     }
     if (!hasProviderCredential(toolName, connection) && !resolution.useNativeAuth) {
       throw new MissingCredentialError(
-        `No scoped ${toolName} credential is configured for this workspace or user.`
+        toolName === 'gemini'
+          ? 'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).'
+          : `No scoped ${toolName} credential is configured for this workspace or user.`
       );
     }
 

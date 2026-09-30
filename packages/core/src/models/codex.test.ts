@@ -19,13 +19,14 @@ describe('Codex model registry', () => {
   it('surfaces supported and provider-dependent models newest-first', () => {
     const selectableIds = Object.keys(CODEX_MODEL_METADATA);
 
-    expect(selectableIds.slice(0, 4)).toEqual([
+    expect(selectableIds.slice(0, 5)).toEqual([
       'gpt-6-astra',
+      'gpt-6.1-sol',
       'gpt-6-sol',
       'gpt-6-luna',
       'gpt-5.6-terra',
     ]);
-    for (const model of ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna'] as const) {
+    for (const model of ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-sol', 'gpt-6-luna'] as const) {
       expect(CODEX_MODEL_METADATA[model].availability).toBe('provider-dependent');
     }
     expect(selectableIds).toContain('gpt-5.5');
@@ -57,6 +58,9 @@ describe('Codex model registry', () => {
     expect(getCodexModelLifecycle('gpt-6-luna-2026-09-04')).toBe(
       CODEX_MODEL_REGISTRY['gpt-6-luna']
     );
+    expect(getCodexModelLifecycle('gpt-6.1-sol-2026-09-29')).toBe(
+      CODEX_MODEL_REGISTRY['gpt-6.1-sol']
+    );
   });
 
   it('flags only known unsupported Agor Codex aliases', () => {
@@ -77,6 +81,7 @@ describe('Codex model registry', () => {
 
   it('accepts curated aliases and rejects unknown alias selections actionably', () => {
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-astra' })).toBeUndefined();
+    expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6.1-sol' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-sol' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-6-luna' })).toBeUndefined();
     expect(getCodexModelSelectionError({ mode: 'alias', model: 'gpt-5.6-terra' })).toBeUndefined();

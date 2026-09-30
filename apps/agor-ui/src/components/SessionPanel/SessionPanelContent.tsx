@@ -179,11 +179,9 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                 display: 'block',
                 marginBottom: token.sizeUnit,
                 fontWeight: 500,
-                textTransform: 'uppercase',
-                letterSpacing: '0.5px',
               }}
             >
-              Queued Tasks ({queuedTasks.length})
+              Queued tasks ({queuedTasks.length})
             </Typography.Text>
           }
           queue={

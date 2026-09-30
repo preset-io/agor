@@ -70,6 +70,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
   }),
   gemini: defineIntegration({
     name: 'gemini',
+    beta: true,
     displayName: 'Gemini',
     apiKeyName: 'GEMINI_API_KEY',
     authentication: 'api-key',
@@ -93,6 +94,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
   }),
   copilot: defineIntegration({
     name: 'copilot',
+    beta: true,
     displayName: 'GitHub Copilot',
     apiKeyName: 'COPILOT_GITHUB_TOKEN',
     authentication: 'api-key',
@@ -112,6 +114,7 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
   }),
   cursor: defineIntegration({
     name: 'cursor',
+    beta: true,
     displayName: 'Cursor SDK',
     apiKeyName: 'CURSOR_API_KEY',
     authentication: 'api-key',

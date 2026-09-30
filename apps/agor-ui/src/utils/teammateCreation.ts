@@ -31,7 +31,7 @@ export interface TeammateCreationDeps {
       name: string;
       ref: string;
       createBranch: boolean;
-      sourceBranch: string;
+      sourceBranch?: string;
       sourceRemoteUrl?: string;
       pullLatest: boolean;
       boardId?: string;
@@ -62,7 +62,9 @@ export async function createTeammateBranch(
 
   const repo = deps.repoById.get(input.repoId);
   const branchName = input.branchName || `private-${slugify(input.displayName)}`;
-  const sourceBranch = input.sourceBranch || repo?.default_branch || 'main';
+  // Preserve omission: the executor distinguishes a template default from an
+  // explicit user ref (even when the user typed the default branch name).
+  const sourceBranch = input.sourceBranch || undefined;
 
   if (!deps.client) {
     throw new Error('Not connected');

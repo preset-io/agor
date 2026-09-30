@@ -1,10 +1,12 @@
-import { mkdtempSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchSdkHomeAuthUnsupportedReason,
   resolveBranchSdkHomeLaunch,
+  resolveExecutionSdkHomeEnv,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
   sessionUsesBranchSdkHome,
@@ -194,4 +196,40 @@ describe('branchSdkHomeAuthUnsupportedReason', () => {
       })
     ).toBeUndefined();
   });
+});
+
+describe('Gemini execution-home projection', () => {
+  it.each(['execution_home', undefined, 'branch'] as const)(
+    'starts the adapter in the selected %s home',
+    (sessionScope) => {
+      const executionHome = mkdtempSync(join(tmpdir(), 'gemini-launch-'));
+      const branchHome = mkdtempSync(join(tmpdir(), 'gemini-branch-'));
+      const branch = sessionUsesBranchSdkHome({ sessionScope, branchSdkHomeIntent: 'per_branch' });
+      const env = resolveExecutionSdkHomeEnv({
+        tool: 'gemini',
+        executionHome,
+        branchEnv: branch ? { GEMINI_CLI_HOME: branchHome } : undefined,
+      });
+      expect(env.GEMINI_CLI_HOME).toBe(branch ? branchHome : executionHome);
+      const probe = spawnSync(
+        process.execPath,
+        [
+          '--import',
+          'tsx',
+          '--input-type=module',
+          '-e',
+          `
+      import { enterGeminiRuntime } from '../../packages/executor/src/sdk-handlers/gemini/runtime.ts';
+      const close = await enterGeminiRuntime();
+      if (!process.env.TMPDIR.startsWith(process.env.GEMINI_CLI_HOME + '/.gemini/')) throw new Error('wrong home');
+      await close();
+    `,
+        ],
+        { cwd: process.cwd(), env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000 }
+      );
+      rmSync(executionHome, { recursive: true, force: true });
+      rmSync(branchHome, { recursive: true, force: true });
+      expect(probe.status, probe.stderr).toBe(0);
+    }
+  );
 });

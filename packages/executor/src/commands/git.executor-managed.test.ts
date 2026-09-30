@@ -546,6 +546,48 @@ describe('managed executor git/fs commands', () => {
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
   });
 
+  it('redacts template source failures before logging or publishing technical details', async () => {
+    const token = 'synthetic-template-token';
+    const patchedBranches: Array<Record<string, unknown>> = [];
+    createClient({
+      repo: { repo_id: repoId, remote_url: 'https://example.test/private.git' },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'teammate',
+        ref: 'teammate',
+        new_branch: true,
+        storage_mode: 'clone',
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } },
+      },
+      gitEnv: { GITHUB_TOKEN: token },
+      patchedBranches,
+    });
+    mocks.resolveGitRef.mockRejectedValueOnce(
+      new Error(`Authentication failed ${token} https://user:secret@example.test/private.git`)
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const result = await handleGitBranchAdd(
+        {
+          command: 'git.branch.add',
+          sessionToken: 'fixture',
+          params: { branchId, repoId, allowExistingCheckout: false, useReference: false },
+        },
+        {}
+      );
+      expect(result.success).toBe(false);
+      expect(result.error?.message).toContain('Authentication failed');
+      const diagnostic = JSON.stringify([result, patchedBranches, log.mock.calls]);
+      expect(diagnostic).not.toContain(token);
+      expect(diagnostic).not.toContain('user:secret');
+      expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('resolves once before worktree dispatch and reports the concrete ref and SHA', async () => {
     const patchedBranches: Array<Record<string, unknown>> = [];
     createClient({
@@ -611,12 +653,13 @@ describe('managed executor git/fs commands', () => {
   });
 
   it.each([
-    ['personal/topic', false],
-    ['refs/remotes/personal/topic', false],
-    ['personal/topic', true],
+    ['personal/topic', false, false],
+    ['refs/remotes/personal/topic', false, false],
+    ['personal/topic', true, false],
+    ['personal/topic', false, true],
   ] as const)(
-    'withholds managed credentials from configured/persisted clone source %s (restore=%s)',
-    async (baseRef, restoreMode) => {
+    'withholds managed credentials from configured/persisted clone source %s (restore=%s, teammate=%s)',
+    async (baseRef, restoreMode, teammate) => {
       const actual = await vi.importActual<typeof import('@agor/git')>('@agor/git');
       const authorization: Array<string | undefined> = [];
       const server = createServer((req, res) => {
@@ -643,7 +686,12 @@ describe('managed executor git/fs commands', () => {
             name: 'feature',
             ref: 'feature',
             base_ref: baseRef,
-            ...(restoreMode ? { base_source: { name: 'topic', remote_url: remoteUrl } } : {}),
+            ...(restoreMode || teammate
+              ? { base_source: { name: 'topic', remote_url: remoteUrl } }
+              : {}),
+            ...(teammate
+              ? { custom_context: { teammate: { kind: 'teammate', displayName: 'Fixture' } } }
+              : {}),
             new_branch: true,
             ref_type: 'branch',
             storage_mode: 'clone',
@@ -682,7 +730,7 @@ describe('managed executor git/fs commands', () => {
         );
         expect(authorization.length).toBeGreaterThan(0); // Real clone transport reached the server.
         expect(authorization.every((header) => header === undefined)).toBe(true);
-        if (restoreMode) {
+        if (restoreMode || teammate) {
           expect(mocks.resolveGitRef).toHaveBeenLastCalledWith(undefined, 'topic', {
             refType: 'branch',
             remote: { url: remoteUrl },

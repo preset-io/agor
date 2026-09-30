@@ -3,6 +3,7 @@ import {
   agenticToolRequiresModelSelection,
   getAgenticToolModelSelectionError,
 } from '@agor/agentic-tools';
+import { GEMINI_MANUAL_MESSAGE, isGeminiManualMode } from '@agor/core/utils/permission-mode-mapper';
 import type {
   AgenticToolName,
   AgorClient,
@@ -351,7 +352,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         label={permissionLabel}
         title="Permission mode"
         editable={inlineAllowed}
-        managedNote={managedNote}
+        managedNote={
+          tool === 'gemini' && isGeminiManualMode(resolvedPermission) ? (
+            <Typography.Text type="warning">
+              {GEMINI_MANUAL_MESSAGE} Ask a workspace admin to update the preset.
+            </Typography.Text>
+          ) : (
+            managedNote
+          )
+        }
         color={permissionColor}
         width={340}
         testid="permission-chip"
@@ -582,31 +591,17 @@ const EditableChip: React.FC<EditableChipProps> = ({
     </Button>
   );
 
-  if (!editable) {
-    return (
-      <Popover
-        open={open}
-        onOpenChange={setOpen}
-        trigger="click"
-        placement="bottomLeft"
-        title={title}
-        content={managedNote}
-      >
-        {chip}
-      </Popover>
-    );
-  }
-
   return (
     <Popover
       open={open}
       onOpenChange={setOpen}
       trigger="click"
       placement="bottomLeft"
+      align={editable ? undefined : { overflow: { adjustX: true, adjustY: true, shiftX: true } }}
       title={title}
       content={
         <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
-          {renderContent(() => setOpen(false))}
+          {editable ? renderContent(() => setOpen(false)) : managedNote}
         </div>
       }
     >

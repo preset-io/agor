@@ -44,6 +44,7 @@ export {
 } from './member-policy';
 export {
   filterMCPServersForSession,
+  isMCPServerNotUsableError,
   isMCPServerUsableBy,
   isMCPServerUsableInSession,
   MCPServerNotUsableError,

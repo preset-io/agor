@@ -2258,7 +2258,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     'runtime failure SENTINEL_RUNTIME',
   ])('keeps real message-only SDK failures unknown and generic: %s', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
-    // 0.156.1 ThreadError has no status/code/context discriminator.
+    // 0.159.0 ThreadError has no status/code/context discriminator.
     const events: ThreadEvent[] = [
       { type: 'error', message },
       { type: 'turn.failed', error: { message } },

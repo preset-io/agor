@@ -1980,7 +1980,7 @@ describe('agor_models_list', () => {
 
     expect(Object.keys(parsed)).toEqual(AGENTIC_TOOL_NAMES);
 
-    expect(parsed['claude-code'].default).toBe('claude-sonnet-5');
+    expect(parsed['claude-code'].default).toBe('claude-sonnet-5-5');
     expect(Array.isArray(parsed['claude-code'].models)).toBe(true);
     expect(parsed['claude-code'].models[0]).toMatchObject({
       id: expect.any(String),
@@ -1990,6 +1990,7 @@ describe('agor_models_list', () => {
     // Sanity: the canonical aliases an agent would want to pin should be discoverable
     const claudeIds = parsed['claude-code'].models.map((m: { id: string }) => m.id);
     expect(claudeIds).toContain('claude-opus-4-6');
+    expect(claudeIds).toContain('claude-sonnet-5-5');
     expect(claudeIds).toContain('claude-sonnet-5');
     expect(parsed.opencode).toMatchObject({
       default: null,
@@ -2018,8 +2019,9 @@ describe('agor_models_list', () => {
 
     const codexIds = parsed.codex.models.map((m: { id: string }) => m.id);
     expect(parsed.codex.default).toBe('gpt-6-astra');
-    expect(codexIds.slice(0, 4)).toEqual([
+    expect(codexIds.slice(0, 5)).toEqual([
       'gpt-6-astra',
+      'gpt-6.1-sol',
       'gpt-6-sol',
       'gpt-6-luna',
       'gpt-5.6-terra',
