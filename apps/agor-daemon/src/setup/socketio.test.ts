@@ -25,7 +25,7 @@ import {
   type ResolvedMultiTenancyConfig,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
-import type { Application } from '@agor/core/feathers';
+import { type Application, NotAuthenticated } from '@agor/core/feathers';
 import {
   type BranchID,
   MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
@@ -1156,6 +1156,14 @@ describe('Socket.IO handshake credential extraction', () => {
       expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
     },
     {
+      name: 'a coded 401 from the strategy generation check gets only the stable code',
+      rejection: new NotAuthenticated('Tenant credential cannot be verified', {
+        code: TENANT_RESTRICTED_ERROR_CODE,
+      }),
+      fromStrategy: true,
+      expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
+    },
+    {
       name: 'an unverifiable read keeps the generic refreshable rejection',
       rejection: Object.assign(new Error('Tenant access cannot be verified'), { code: 503 }),
       expected: {
@@ -1163,13 +1171,17 @@ describe('Socket.IO handshake credential extraction', () => {
         data: { code: 401, className: 'not-authenticated' },
       },
     },
-  ])('$name', async ({ rejection, expected }) => {
-    const { io } = buildHarness({
+  ])('$name', async ({ rejection, expected, fromStrategy }) => {
+    const { io, app } = buildHarness({
       multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
       assertTenantAccess: vi.fn(async () => {
-        throw rejection;
+        if (!fromStrategy) throw rejection;
       }),
     });
+    if (fromStrategy) {
+      const authentication = app.service('authentication') as { authenticate: () => unknown };
+      vi.spyOn(authentication, 'authenticate').mockRejectedValueOnce(rejection);
+    }
     const socket = makeSocket('restricted-handshake', io);
     socket.handshake.auth = { token: 'signed-token' };
     socket.feathers = {
