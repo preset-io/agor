@@ -1316,7 +1316,9 @@ describe('snapshot reconciliation of persisted streams', () => {
     async (taskHydration) => {
       const message = makeMessage('task-2', 1);
       const opts: MockClientOptions = {
-        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.RUNNING)],
+        // Both are nonterminal: this test exercises unloaded/active streams,
+        // not late events for a task whose executor has already settled.
+        tasks: [makeTask('task-1', TaskStatus.RUNNING), makeTask('task-2', TaskStatus.RUNNING)],
         messagesByTask: { 'task-1': [makeMessage('task-1', 1)], 'task-2': [message] },
       };
       const mock = createMockClient(opts);
@@ -2058,4 +2060,292 @@ it('retains consecutive tool activity across partial persistence, duplicate even
   } finally {
     handle.dispose();
   }
+});
+
+// Only invented payloads and a fake transport; all lifecycle handlers are real.
+describe.each(['lean', 'lazy'] as const)('stream lifecycle (%s)', (taskHydration) => {
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = attachReactiveSessionApi(mock.client).session(SESSION_ID, {
+      taskHydration,
+    });
+    await handle.ready();
+    const task = (id: string, status: TaskStatus = TaskStatus.RUNNING) => {
+      const row = makeTask(id, status);
+      opts.tasks = [...opts.tasks.filter((t) => t.task_id !== id), row];
+      mock.emitServiceEvent('tasks', 'patched', row);
+    };
+    const event = (name: string, id: string, taskId: string, extra = {}) =>
+      mock.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: id,
+        task_id: taskId,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    const thinking = (id: string, taskId: string) => {
+      event('thinking:start', id, taskId);
+      event('thinking:chunk', id, taskId, { chunk: 'synthetic violet pebble '.repeat(64) });
+    };
+    const persist = (id: string, taskId: string) => {
+      const row = {
+        ...makeMessage(taskId, (opts.messagesByTask[taskId] ?? []).length),
+        message_id: id as Message['message_id'],
+        role: 'assistant',
+        content: [{ type: 'text', text: 'invented amber square' }],
+      } as Message;
+      opts.messagesByTask[taskId] = [...(opts.messagesByTask[taskId] ?? []), row];
+      mock.emitServiceEvent('messages', 'created', row);
+    };
+    return { ...mock, opts, handle, task, event, thinking, persist };
+  }
+
+  it.each(['separate', 'same', 'thinking-only'] as const)(
+    'releases 40 completed turns (%s IDs), including reconnect and resync',
+    async (ids) => {
+      const f = await fixture();
+      const retained: number[] = [];
+      for (let n = 0; n < 40; n++) {
+        const t = `turn-${String(n).padStart(2, '0')}`;
+        const thought = `${t}-thought`;
+        const text = ids === 'separate' ? `${t}-text` : thought;
+        f.task(t);
+        f.thinking(thought, t);
+        f.event('thinking:end', thought, t);
+        if (ids !== 'thinking-only') {
+          f.event('streaming:start', text, t);
+          f.event('streaming:chunk', text, t, { chunk: 'invented amber square' });
+          f.event('streaming:end', text, t);
+        }
+        f.persist(text, t);
+        f.task(t, TaskStatus.COMPLETED);
+        if ([10, 20, 40].includes(n + 1)) retained.push(f.handle.state.streamingMessages.size);
+      }
+      expect(retained).toEqual([0, 0, 0]);
+      f.fireIo('disconnect');
+      f.fireIo('connect');
+      await f.handle.ready();
+      await f.handle.resync();
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('does not mistake earlier assistant persistence for newer thinking completion', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('newer', 'turn');
+    f.persist('earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.isThinking).toBe(true);
+    f.event('thinking:end', 'newer', 'turn');
+    expect(f.handle.getStreamingMessage('newer')).toMatchObject({
+      isThinking: false,
+      isStreaming: false,
+    });
+    // Even ended thinking may belong to a later, not-yet-persisted message.
+    f.persist('another-earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.thinkingContent).toContain('violet');
+    f.task('turn', TaskStatus.COMPLETED);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('cleans many blocks at the task boundary without sweeping another active task', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('live', 'second');
+    for (let n = 0; n < 40; n++) {
+      f.thinking(`block-${n}`, 'first');
+      f.event('thinking:end', `block-${n}`, 'first');
+      f.persist(`saved-${n}`, 'first');
+    }
+    f.task('first', TaskStatus.COMPLETED);
+    expect([...f.handle.state.streamingMessages.keys()]).toEqual(['live']);
+    expect(f.handle.getStreamingMessage('live')?.isThinking).toBe(true);
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it.each([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'clears stale activity on %s before persistence and ignores late thinking events',
+    async (status) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('thought', 'turn'); // no end was delivered
+      f.event('streaming:start', 'text', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'synthetic partial' });
+      f.event('streaming:start', 'error', 'turn');
+      f.event('streaming:error', 'error', 'turn', { error: 'invented failure' });
+      f.task('turn', status);
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')).toMatchObject({
+        content: 'synthetic partial',
+        isStreaming: false,
+        isThinking: false,
+      });
+      expect(f.handle.getStreamingMessage('error')?.error).toBe('invented failure');
+      f.task('next');
+      f.event('thinking:chunk', 'thought', 'turn', { chunk: 'late synthetic' });
+      f.thinking('thought', 'turn');
+      f.event('thinking:end', 'thought', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'late synthetic' });
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')?.content).toBe('synthetic partial');
+      f.persist('text', 'turn');
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['error']);
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['thinking', 'streaming'] as const)(
+    'preserves overlapping same-ID activity when %s ends first',
+    async (first) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('both', 'turn');
+      f.event('streaming:start', 'both', 'turn');
+      f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+      f.event(`${first}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')).toMatchObject({
+        content: 'synthetic text',
+        isStreaming: true,
+      });
+      expect(f.handle.getStreamingMessage('both')?.thinkingContent).toContain('violet');
+      f.event(`${first === 'thinking' ? 'streaming' : 'thinking'}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+      f.persist('both', 'turn');
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('ends thinking-only activity but does not turn stopping into terminal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.STOPPING);
+    expect(f.handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    expect(f.handle.getStreamingMessage('thought')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('recovers a missed terminal event through resync and reconnect', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.opts.tasks = [makeTask('turn', TaskStatus.COMPLETED)];
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    await f.handle.resync();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('retains 40 intended partial errors, not 40 additional thinking orphans', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 40; n++) {
+      const t = `error-turn-${n}`;
+      f.task(t);
+      f.thinking(`thought-${n}`, t);
+      f.event('thinking:end', `thought-${n}`, t);
+      f.event('streaming:start', `error-${n}`, t);
+      f.event('streaming:chunk', `error-${n}`, t, { chunk: 'invented partial square' });
+      f.event('streaming:error', `error-${n}`, t, { error: 'invented failure' });
+      f.task(t, TaskStatus.FAILED);
+    }
+    const streams = [...f.handle.state.streamingMessages.values()];
+    expect(streams).toHaveLength(40);
+    expect(streams.every((s) => s.error && s.content && !s.isStreaming && !s.isThinking)).toBe(
+      true
+    );
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it('preserves text-first same-ID streams and duplicate starts without losing payloads', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+    f.thinking('both', 'turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('thinking:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')).toMatchObject({
+      content: 'synthetic text',
+      isStreaming: true,
+    });
+    f.event('streaming:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('uses the chunk task attribution instead of the latest task after reconnect', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('latest');
+    f.event('thinking:chunk', 'thought', 'first', { chunk: 'synthetic early pebble' });
+    f.event('streaming:chunk', 'text', 'first', { chunk: 'synthetic early square' });
+    expect(f.handle.getStreamingMessage('thought')?.task_id).toBe('first');
+    expect(f.handle.getStreamingMessage('text')?.task_id).toBe('first');
+    f.task('first', TaskStatus.COMPLETED);
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(f.handle.getStreamingMessage('text')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('ignores mismatched-task end/chunk/error events for the same stream ID', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('thought', 'first');
+    const before = f.handle.getStreamingMessage('thought');
+    f.event('thinking:end', 'thought', 'second');
+    f.event('thinking:chunk', 'thought', 'second', { chunk: 'foreign synthetic' });
+    f.event('streaming:end', 'thought', 'second');
+    f.event('streaming:error', 'thought', 'second', { error: 'foreign synthetic' });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
+
+  it('settles late/duplicate chunks and ends after persistence and terminal-before-persistence', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:chunk', 'thought', 'turn', { chunk: 'delayed synthetic pebble' });
+    f.event('thinking:end', 'thought', 'turn');
+    f.task('turn', TaskStatus.COMPLETED);
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('streaming:end', 'text', 'turn');
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('rejects foreign-session lifecycle events even with colliding task/message IDs', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    const before = f.handle.getStreamingMessage('thought');
+    f.emitServiceEvent('tasks', 'patched', {
+      ...makeTask('turn', TaskStatus.COMPLETED),
+      session_id: 'foreign-session',
+    });
+    f.event('thinking:end', 'thought', 'turn', { session_id: 'foreign-session' });
+    f.event('thinking:chunk', 'thought', 'turn', {
+      session_id: 'foreign-session',
+      chunk: 'foreign synthetic',
+    });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
 });

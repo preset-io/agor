@@ -1,5 +1,11 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
-import { isTaskExecuting, MESSAGE_PAGINATION, PAGINATION, TaskStatus } from '@agor/core/client';
+import {
+  isTaskExecuting,
+  isTerminalTaskStatus,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+  TaskStatus,
+} from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
@@ -29,6 +35,8 @@ export interface StreamingMessageState {
   thinkingContent?: string;
   timestamp: string;
   isStreaming: boolean;
+  /** Text activity is independent of thinking when both share a message ID. */
+  isTextStreaming?: boolean;
   isThinking?: boolean;
   error?: string;
 }
@@ -124,17 +132,20 @@ interface StreamingStartEvent {
 }
 
 interface StreamingChunkEvent {
+  task_id?: string;
   message_id: string;
   session_id: string;
   chunk: string;
 }
 
 interface StreamingEndEvent {
+  task_id?: string;
   message_id: string;
   session_id: string;
 }
 
 interface StreamingErrorEvent {
+  task_id?: string;
   message_id: string;
   session_id: string;
   error: string;
@@ -148,12 +159,14 @@ interface ThinkingStartEvent {
 }
 
 interface ThinkingChunkEvent {
+  task_id?: string;
   message_id: string;
   session_id: string;
   chunk: string;
 }
 
 interface ThinkingEndEvent {
+  task_id?: string;
   message_id: string;
   session_id: string;
 }
@@ -725,6 +738,47 @@ export class ReactiveSessionHandle {
     }
   }
 
+  /** The wire stamps task_id on every event, including chunks after reconnect. */
+  private acceptsStreamActivity(event: { message_id: string; task_id?: string }): boolean {
+    if (this.stateSnapshot.terminal) return false;
+    const current = this.stateSnapshot.streamingMessages.get(event.message_id);
+    if (event.task_id && current?.task_id && event.task_id !== current.task_id) return false;
+    const taskId = event.task_id ?? current?.task_id;
+    const task = this.stateSnapshot.tasks.find((row) => row.task_id === taskId);
+    if (task && isTerminalTaskStatus(task.status)) return false;
+    // Old transports omitted task_id. Do not attribute their late chunks to a
+    // completed turn; preserve pre-bootstrap and active mid-stream attachment.
+    return !!taskId || this.stateSnapshot.loading || this.stateSnapshot.tasks.some(isTaskExecuting);
+  }
+
+  private settleTerminalStreams(state: ReactiveSessionState): ReactiveSessionState {
+    if (state.streamingMessages.size === 0) return state;
+    const terminalIds = new Set<string>(
+      state.tasks.filter((task) => isTerminalTaskStatus(task.status)).map((task) => task.task_id)
+    );
+    let streams = state.streamingMessages;
+    for (const [id, stream] of streams) {
+      if (!stream.task_id || !terminalIds.has(stream.task_id)) continue;
+      // Unlike a same-task assistant row, terminal state proves there can be
+      // no newer legitimate thinking stream in this turn. Claude's temporary
+      // thinking ID need not match the saved text ID. Never guess that pairing
+      // from arrival order: several assistant messages can overlap persistence.
+      if (!stream.content && !stream.error) {
+        if (streams === state.streamingMessages) streams = new Map(streams);
+        streams.delete(id);
+      } else if (stream.isStreaming || stream.isThinking || stream.isTextStreaming) {
+        if (streams === state.streamingMessages) streams = new Map(streams);
+        streams.set(id, {
+          ...stream,
+          isStreaming: false,
+          isThinking: false,
+          isTextStreaming: false,
+        });
+      }
+    }
+    return streams === state.streamingMessages ? state : { ...state, streamingMessages: streams };
+  }
+
   private updateState(
     updater: (previous: ReactiveSessionState) => ReactiveSessionState
   ): ReactiveSessionState {
@@ -750,6 +804,7 @@ export class ReactiveSessionHandle {
         ),
       };
     }
+    next = this.settleTerminalStreams(next);
     if (this.options.cacheScope === 'preview') {
       const latest = next.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
       const keep = new Set<string>(next.tasks.filter(isTaskExecuting).map((task) => task.task_id));
@@ -1436,18 +1491,21 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingStart = (event: StreamingStartEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || !this.acceptsStreamActivity(event)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
+        const existing = nextStreaming.get(event.message_id);
         nextStreaming.set(event.message_id, {
+          ...existing,
           message_id: event.message_id,
           session_id: event.session_id,
-          task_id: event.task_id,
+          task_id: event.task_id ?? existing?.task_id,
           role: event.role,
-          content: '',
-          thinkingContent: '',
-          timestamp: event.timestamp,
+          content: existing?.content || '',
+          thinkingContent: existing?.thinkingContent || '',
+          timestamp: existing?.timestamp || event.timestamp,
           isStreaming: true,
+          isTextStreaming: true,
         });
         return {
           ...prev,
@@ -1457,7 +1515,7 @@ export class ReactiveSessionHandle {
     };
 
     const onStreamingChunk = (event: StreamingChunkEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || !this.acceptsStreamActivity(event)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
@@ -1465,6 +1523,8 @@ export class ReactiveSessionHandle {
           nextStreaming.set(event.message_id, {
             ...current,
             content: current.content + event.chunk,
+            isTextStreaming: true,
+            isStreaming: true,
           });
         } else {
           // Attached or reconnected after streaming:start already fired: the
@@ -1476,12 +1536,13 @@ export class ReactiveSessionHandle {
           nextStreaming.set(event.message_id, {
             message_id: event.message_id,
             session_id: event.session_id,
-            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            task_id: event.task_id ?? prev.tasks.filter(isTaskExecuting).at(-1)?.task_id,
             role: 'assistant',
             content: event.chunk,
             thinkingContent: '',
             timestamp: new Date().toISOString(),
             isStreaming: true,
+            isTextStreaming: true,
           });
         }
         return {
@@ -1495,11 +1556,13 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
+        if (!current || (event.task_id && current.task_id && event.task_id !== current.task_id))
+          return prev;
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.set(event.message_id, {
           ...current,
-          isStreaming: false,
+          isStreaming: !!current.isThinking,
+          isTextStreaming: false,
         });
         return {
           ...prev,
@@ -1512,12 +1575,15 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
+        if (!current || (event.task_id && current.task_id && event.task_id !== current.task_id))
+          return prev;
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.set(event.message_id, {
           ...current,
           error: event.error,
           isStreaming: false,
+          isThinking: false,
+          isTextStreaming: false,
         });
         return {
           ...prev,
@@ -1527,11 +1593,12 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingStart = (event: ThinkingStartEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || !this.acceptsStreamActivity(event)) return;
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         const existing = nextStreaming.get(event.message_id);
         nextStreaming.set(event.message_id, {
+          ...existing,
           message_id: event.message_id,
           session_id: event.session_id,
           task_id: event.task_id ?? existing?.task_id,
@@ -1550,7 +1617,7 @@ export class ReactiveSessionHandle {
     };
 
     const onThinkingChunk = (event: ThinkingChunkEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || !this.acceptsStreamActivity(event)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
         const nextStreaming = new Map(prev.streamingMessages);
@@ -1558,6 +1625,7 @@ export class ReactiveSessionHandle {
           nextStreaming.set(event.message_id, {
             ...current,
             isThinking: true,
+            isStreaming: true,
             thinkingContent: (current.thinkingContent || '') + event.chunk,
           });
         } else {
@@ -1567,7 +1635,7 @@ export class ReactiveSessionHandle {
           nextStreaming.set(event.message_id, {
             message_id: event.message_id,
             session_id: event.session_id,
-            task_id: findLatestHydratableTask(prev.tasks)?.task_id,
+            task_id: event.task_id ?? prev.tasks.filter(isTaskExecuting).at(-1)?.task_id,
             role: 'assistant',
             content: '',
             thinkingContent: event.chunk,
@@ -1587,11 +1655,13 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(event.session_id)) return;
       this.updateState((prev) => {
         const current = prev.streamingMessages.get(event.message_id);
-        if (!current) return prev;
+        if (!current || (event.task_id && current.task_id && event.task_id !== current.task_id))
+          return prev;
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.set(event.message_id, {
           ...current,
           isThinking: false,
+          isStreaming: !!current.isTextStreaming,
         });
         return {
           ...prev,
