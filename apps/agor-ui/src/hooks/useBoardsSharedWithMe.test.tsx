@@ -121,7 +121,7 @@ describe('useBoardsSharedWithMe', () => {
     expect(find).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps a failed board failed through a grown board set until its re-read answers', async () => {
+  it('keeps a failed board failed through a grown board set, then shows its re-read answer', async () => {
     const owned = { primary_owner_user_id: ME, board_access: policy('private') };
     let grant: ((value: unknown) => void) | undefined;
     const find = vi

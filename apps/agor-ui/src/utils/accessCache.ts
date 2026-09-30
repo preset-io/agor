@@ -52,7 +52,8 @@ const acquire = () => {
 const release = () => {
   const next = waiting.shift();
   if (next) next();
-  else inFlight--;
+  // A read started before a test reset must not push the count below zero.
+  else inFlight = Math.max(0, inFlight - 1);
 };
 
 /** A caller's failed ids carried to a new comma-joined id set: only those still in it. */
