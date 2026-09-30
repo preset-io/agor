@@ -171,6 +171,8 @@ export class TenantRestrictionReconciler {
               taskId: ref.task_id,
               cause: 'tenant_suspension',
               errorMessage: 'Tenant access is restricted.',
+              // The memoized read may be a tick old; the claim re-reads closure under the fence.
+              requireTenantClosed: true,
               params,
               runInFreshTenantWriteDatabase: (work) =>
                 withFreshTenantWrite(this.db, tenantId, work),

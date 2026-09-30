@@ -274,7 +274,9 @@ read-only `tenant_restriction_discovery` capability (migration 0118: non-active 
 only; the query selects ids alone), then pages live tasks of those tenants only, so
 a runtime with nothing restricted pages nothing. Each tenant's own scoped read still
 decides before the existing Stop coordinator is invoked; both reads are shared across
-a saturated drain for at most one 1 s tick. An empty discovery is not proof that a
+a saturated drain for at most one 1 s tick. Because that observation may be a tick
+old, the Stop claim itself re-reads closure under the shared execution fence in the
+claim transaction and does nothing for a tenant that has since reopened. An empty discovery is not proof that a
 tenant is open: admission and restricted telemetry fail closed independently. It does
 not infer process absence or complete suspension from a scan, a task status or an
 empty page. Existing coordinator recovery still owns late connection,

@@ -24,6 +24,7 @@ import {
   TaskRepository,
   UsersRepository,
 } from './repositories';
+import { applyTenantRestrictionIntent } from './tenant-restriction';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { setTestBranchUserRole } from './test-helpers';
 
@@ -524,6 +525,51 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
           termination_request: { cause: 'authorization_revoked' },
         },
       });
+    });
+  });
+
+  it('claims a restriction Stop only while the tenant is still closed under the execution fence', async () => {
+    const seed = await seedTenant(db, 'closure-claim');
+    const [closedTask, reopenedTask] = await runWithTenantDatabaseScope(
+      db,
+      seed.tenantId,
+      async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        return Promise.all([
+          tasks.create(taskInput(seed, TaskStatus.RUNNING)),
+          tasks.create(taskInput(seed, TaskStatus.RUNNING)),
+        ]);
+      }
+    );
+    const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+      applyTenantRestrictionIntent(db, seed.tenantId, {
+        version: 1,
+        controllerId: 'control-one',
+        placementId: 'placement-one',
+        operationId: action === 'restrict' ? 'suspend' : 'release',
+        revision,
+        action,
+      });
+    const claim = (taskId: string) =>
+      runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).claimTermination({
+          taskId,
+          cause: 'tenant_suspension',
+          errorMessage: 'Tenant access is restricted.',
+          requireTenantClosed: true,
+        })
+      );
+    await apply(1, 'restrict');
+    await expect(claim(closedTask.task_id)).resolves.toMatchObject({
+      outcome: 'claimed',
+      task: { status: TaskStatus.STOPPING },
+    });
+    await apply(2, 'prepare_release');
+    await apply(2, 'activate');
+    // A reconciler still holding its closed observation cannot stop the reopened tenant's task.
+    await expect(claim(reopenedTask.task_id)).resolves.toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
     });
   });
 

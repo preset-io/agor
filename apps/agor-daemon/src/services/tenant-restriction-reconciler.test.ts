@@ -88,6 +88,10 @@ describe('TenantRestrictionReconciler pass', () => {
       expect(
         fixture.begin.mock.calls.map(([input]) => (input as { taskId: string }).taskId)
       ).toEqual(['a-1', 'a-2']);
+      // The memoized observation only nominates; each claim re-checks closure under the fence.
+      for (const [input] of fixture.begin.mock.calls) {
+        expect(input).toMatchObject({ cause: 'tenant_suspension', requireTenantClosed: true });
+      }
       // Two failed stops in one pass log one warning.
       expect(warn).toHaveBeenCalledTimes(1);
 

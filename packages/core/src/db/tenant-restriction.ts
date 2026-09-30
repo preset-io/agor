@@ -82,6 +82,15 @@ export async function assertTenantExecutionAdmission(
   return state;
 }
 
+/** Closure read under the shared execution fence, so no restriction transition can commit until the caller's transaction ends. */
+export async function readTenantExecutionClosure(db: Database): Promise<boolean> {
+  if (!isPostgresDatabaseHandle(db)) return false;
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new TenantRestrictionDataError();
+  await lockTenantExecutionFence(db, tenantId, 'admission');
+  return (await readTenantRestrictionState(db, tenantId)).closed;
+}
+
 /** A hidden row is not proof of absence when RLS context disagrees with ALS. */
 async function assertRestrictionScope(db: Database, tenantId: string): Promise<void> {
   const [context] = rows(

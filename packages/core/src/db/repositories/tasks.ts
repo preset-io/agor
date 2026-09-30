@@ -77,7 +77,7 @@ import {
   users,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
-import { assertTenantExecutionAdmission } from '../tenant-restriction';
+import { assertTenantExecutionAdmission, readTenantExecutionClosure } from '../tenant-restriction';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -190,6 +190,8 @@ export interface TerminationClaimInput {
   requireExecutorDisconnected?: boolean;
   /** Set only for a revocation the heartbeat authority recorded durably; only that may replace a suspension cause. */
   durableRevocation?: boolean;
+  /** Claim only while the tenant is still closed, read under the execution fence in this transaction. */
+  requireTenantClosed?: boolean;
   now?: Date;
 }
 
@@ -403,9 +405,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       txDb: Database,
       taskRow: TaskRow,
       sessionRow: SessionRow,
-      fullId: string
+      fullId: string,
+      tenantClosed?: boolean
     ) => Promise<T>,
-    admission = false
+    admission: boolean | 'tenant_closure' = false
   ): Promise<T> {
     const fullId = await this.resolveId(id);
     const routing = await select(this.db, { session_id: tasks.session_id })
@@ -418,7 +421,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       runDatabaseTransaction(
         this.db,
         async (txDb) => {
-          if (admission) {
+          // The fence precedes session/task locks; a closure read keeps it shared until commit.
+          const tenantClosed =
+            admission === 'tenant_closure' ? await readTenantExecutionClosure(txDb) : undefined;
+          if (admission === true) {
             await assertTenantExecutionAdmission(txDb);
             await lockSessionBranchForAdmission(txDb, routing.session_id);
           }
@@ -440,7 +446,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           if (taskRow.session_id !== sessionRow.session_id) {
             throw new RepositoryError('Task changed Session during dispatch admission');
           }
-          return mutation(txDb, taskRow, sessionRow, fullId);
+          return mutation(txDb, taskRow, sessionRow, fullId, tenantClosed);
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       )
@@ -1677,83 +1683,93 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
   /** Atomically validate and persist ownership of a termination request. */
   async claimTermination(input: TerminationClaimInput): Promise<TerminationClaimResult> {
-    return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
-      const current = this.rowToTask(row);
-      if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+    return this.mutateLockedSessionTask(
+      input.taskId,
+      async (txDb, row, sessionRow, fullId, tenantClosed) => {
+        const current = this.rowToTask(row);
+        if (isTerminalTaskStatus(current.status)) return { outcome: 'terminal', task: current };
+        // A stale observation must not stop a task of a tenant that has since reopened.
+        if (input.requireTenantClosed && !tenantClosed) {
+          return { outcome: 'condition_changed', task: current };
+        }
 
-      const staleBefore = input.heartbeatStaleBefore
-        ? Date.parse(input.heartbeatStaleBefore)
-        : undefined;
-      const heartbeatAt = current.last_executor_heartbeat_at
-        ? Date.parse(current.last_executor_heartbeat_at)
-        : undefined;
-      const conditionChanged =
-        (input.expectedStatus !== undefined && current.status !== input.expectedStatus) ||
-        (input.expectedHeartbeatAt !== undefined &&
-          current.last_executor_heartbeat_at !== input.expectedHeartbeatAt) ||
-        (staleBefore !== undefined &&
-          (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
-        (input.requireExecutorDisconnected === true && !!current.executor_connected_at);
-      if (conditionChanged) return { outcome: 'condition_changed', task: current };
+        const staleBefore = input.heartbeatStaleBefore
+          ? Date.parse(input.heartbeatStaleBefore)
+          : undefined;
+        const heartbeatAt = current.last_executor_heartbeat_at
+          ? Date.parse(current.last_executor_heartbeat_at)
+          : undefined;
+        const conditionChanged =
+          (input.expectedStatus !== undefined && current.status !== input.expectedStatus) ||
+          (input.expectedHeartbeatAt !== undefined &&
+            current.last_executor_heartbeat_at !== input.expectedHeartbeatAt) ||
+          (staleBefore !== undefined &&
+            (!Number.isFinite(heartbeatAt) || heartbeatAt! > staleBefore)) ||
+          (input.requireExecutorDisconnected === true && !!current.executor_connected_at);
+        if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
-      const existing = current.termination_request;
-      // Decided under the row lock: only a durable credential withdrawal replaces a suspension's benign Stopped cause.
-      const replacesSuspension =
-        existing?.cause === 'tenant_suspension' &&
-        input.cause === 'authorization_revoked' &&
-        input.durableRevocation === true;
-      const cause =
-        input.cause === 'user_stop' || !existing || replacesSuspension
-          ? input.cause
-          : existing.cause;
-      if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
-        return { outcome: 'unchanged', task: current };
-      }
-      const incomingWins =
-        !existing ||
-        input.cause === 'user_stop' ||
-        replacesSuspension ||
-        existing.cause === input.cause;
-      const mutationAt = await this.mutationNow(txDb, fullId, input.now);
-      const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
-      const request = {
-        cause,
-        requested_at: requestedAt,
-        error_message:
-          cause === input.cause
-            ? input.errorMessage
-            : (existing?.error_message ?? input.errorMessage),
-        ...(existing?.executor_quiesced_at
-          ? { executor_quiesced_at: existing.executor_quiesced_at }
-          : {}),
-      };
-      const sdkFailure = incomingWins
-        ? (input.sdkFailure ?? current.sdk_failure)
-        : current.sdk_failure;
-      const failureTermination: SdkFailure['termination'] =
-        sdkFailure?.termination === 'unverified' ? 'unverified' : 'requested';
-      const data = {
-        ...row.data,
-        termination_request: request,
-        ...(sdkFailure ? { sdk_failure: { ...sdkFailure, termination: failureTermination } } : {}),
-      };
-      await update(txDb, tasks)
-        .set({ status: TaskStatus.STOPPING, data })
-        .where(eq(tasks.task_id, fullId))
-        .run();
-      await update(txDb, sessions)
-        .set({
-          status: SessionStatus.STOPPING,
-          ready_for_prompt: false,
-          updated_at: mutationAt,
-        })
-        .where(eq(sessions.session_id, sessionRow.session_id))
-        .run();
-      return {
-        outcome: 'claimed',
-        task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
-      };
-    });
+        const existing = current.termination_request;
+        // Decided under the row lock: only a durable credential withdrawal replaces a suspension's benign Stopped cause.
+        const replacesSuspension =
+          existing?.cause === 'tenant_suspension' &&
+          input.cause === 'authorization_revoked' &&
+          input.durableRevocation === true;
+        const cause =
+          input.cause === 'user_stop' || !existing || replacesSuspension
+            ? input.cause
+            : existing.cause;
+        if (current.status === TaskStatus.STOPPING && existing?.cause === cause) {
+          return { outcome: 'unchanged', task: current };
+        }
+        const incomingWins =
+          !existing ||
+          input.cause === 'user_stop' ||
+          replacesSuspension ||
+          existing.cause === input.cause;
+        const mutationAt = await this.mutationNow(txDb, fullId, input.now);
+        const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
+        const request = {
+          cause,
+          requested_at: requestedAt,
+          error_message:
+            cause === input.cause
+              ? input.errorMessage
+              : (existing?.error_message ?? input.errorMessage),
+          ...(existing?.executor_quiesced_at
+            ? { executor_quiesced_at: existing.executor_quiesced_at }
+            : {}),
+        };
+        const sdkFailure = incomingWins
+          ? (input.sdkFailure ?? current.sdk_failure)
+          : current.sdk_failure;
+        const failureTermination: SdkFailure['termination'] =
+          sdkFailure?.termination === 'unverified' ? 'unverified' : 'requested';
+        const data = {
+          ...row.data,
+          termination_request: request,
+          ...(sdkFailure
+            ? { sdk_failure: { ...sdkFailure, termination: failureTermination } }
+            : {}),
+        };
+        await update(txDb, tasks)
+          .set({ status: TaskStatus.STOPPING, data })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        await update(txDb, sessions)
+          .set({
+            status: SessionStatus.STOPPING,
+            ready_for_prompt: false,
+            updated_at: mutationAt,
+          })
+          .where(eq(sessions.session_id, sessionRow.session_id))
+          .run();
+        return {
+          outcome: 'claimed',
+          task: this.rowToTask({ ...row, status: TaskStatus.STOPPING, data }),
+        };
+      },
+      input.requireTenantClosed ? 'tenant_closure' : false
+    );
   }
 
   /**

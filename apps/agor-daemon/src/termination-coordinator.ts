@@ -53,6 +53,8 @@ export interface TerminationInput {
   requireExecutorDisconnected?: boolean;
   /** The revocation was recorded durably by the heartbeat authority; see TerminationClaimInput. */
   durableRevocation?: boolean;
+  /** Claim only while the tenant is still closed under the execution fence; see TerminationClaimInput. */
+  requireTenantClosed?: boolean;
   /** Permit guarded recovery when this daemon does not own a local process handle. */
   allowUnownedLocalContainment?: boolean;
   /**
@@ -181,6 +183,7 @@ async function claimRequest(input: TerminationInput) {
         heartbeatStaleBefore: input.heartbeatStaleBefore,
         requireExecutorDisconnected: input.requireExecutorDisconnected,
         durableRevocation: input.durableRevocation,
+        requireTenantClosed: input.requireTenantClosed,
       },
       internalParams(input.params)
     )
