@@ -64,7 +64,7 @@ failure detail and emits one `diagnostics_limited` omission summary on completio
 when needed. A stream error remains `outcome=awaiting_terminal_event`: it neither
 ends the turn nor establishes retryability. No automatic replay is added.
 
-**Source limits (pinned `@openai/codex-sdk` 0.156.1):** `dist/index.d.ts` declares
+**Source limits (pinned `@openai/codex-sdk` 0.159.0):** `dist/index.d.ts` declares
 `ThreadError` / `ThreadErrorEvent` with only `message`, and item notices with
 `id`, `type`, and `message`. `Thread.runStreamedInternal` parses CLI JSONL without
 adding diagnostic fields. `CodexExec.run` forwards native spawn exceptions, but

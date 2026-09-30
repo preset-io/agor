@@ -7,7 +7,7 @@
 
 **Status:** 🔬 Exploration / design. **Phase 1A (config hygiene, §1.5) is shipping in this PR** (H1–H4). Phase 1B and Phases 2–4 are still position-paper. **H5 (CLI config separation) is split to a follow-up branch** to keep Phase 1A focused and reviewable.
 **Created:** 2026-05-16
-**Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/pages/guide/containerized-execution.mdx) guide.
+**Companion exploration docs:** [`executor-expansion.md`](./executor-expansion.md), [`executor-isolation.md`](./executor-isolation.md), and the user-facing [`containerized-execution`](../../apps/agor-docs/content/guide/containerized-execution.mdx) guide.
 
 ---
 
@@ -255,7 +255,7 @@ It breaks under any topology where:
    `vite --watch` watches the branch directly. On a single host: kernel inotify → done. On EFS: events may only fire on the writer side. An agent writing from a _different_ pod via the same EFS volume may not deliver inotify events to the env pod. Vite's `usePolling: true` fallback works but burns CPU.
 
 3. **uid/gid locality.**
-   uid 1001 inside pod A is not the same human as uid 1001 inside pod B unless an NSS source (LDAP/sssd) bridges them. `apps/agor-docs/pages/guide/containerized-execution.mdx:90-180` already mandates this for the executor model — it's a real, hard prereq, not a footnote.
+   uid 1001 inside pod A is not the same human as uid 1001 inside pod B unless an NSS source (LDAP/sssd) bridges them. `apps/agor-docs/content/guide/containerized-execution.mdx:90-180` already mandates this for the executor model — it's a real, hard prereq, not a footnote.
 
 4. **Daemon needs to set ACLs via sudo on the volume.**
    In `unix_user_mode: strict`, the daemon does `sudo setfacl ...` against the branch path. If the daemon doesn't see the branch path (because it's a different pod's volume), it can't run setfacl. So either the daemon retains FS access to the branch volume just to run ACL prep, or ACL setup moves into the executor (which `unix.sync-branch` already does today — that's the right shape).

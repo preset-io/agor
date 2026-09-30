@@ -38,9 +38,8 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('unknown-mode')).toBe(expectedDefault);
     });
 
-    it('should fallback to centralized default for undefined', () => {
-      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
-      expect(mapPermissionMode(undefined)).toBe(expectedDefault);
+    it('keeps missing mode Manual', () => {
+      expect(mapPermissionMode(undefined)).toBe(ApprovalMode.DEFAULT);
     });
 
     it('should fallback to centralized default for empty string', () => {
@@ -56,10 +55,8 @@ describe('mapPermissionMode', () => {
       expect(mapPermissionMode('acceptEdits')).toBe(expectedDefault);
     });
 
-    it('should fallback to centralized default for legacy "bypassPermissions" mode', () => {
-      // Legacy Claude Code mode should fallback to Gemini default
-      const expectedDefault = mapPermissionMode(GEMINI_DEFAULT_PERMISSION_MODE);
-      expect(mapPermissionMode('bypassPermissions')).toBe(expectedDefault);
+    it('maps legacy Bypass to YOLO', () => {
+      expect(mapPermissionMode('bypassPermissions')).toBe(ApprovalMode.YOLO);
     });
 
     it('should map legacy "ask" mode to DEFAULT (cross-agent compat)', () => {

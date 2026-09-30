@@ -159,7 +159,7 @@ describe('resolveSessionDefaults', () => {
       const r = resolveSessionDefaults({ agenticTool: 'claude-code', now });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         updated_at: now.toISOString(),
       });
     });
@@ -224,7 +224,7 @@ describe('resolveSessionDefaults', () => {
       });
       expect(r.model_config).toEqual({
         mode: 'alias',
-        model: 'claude-sonnet-5',
+        model: 'claude-sonnet-5-5',
         effort: 'max',
         updated_at: now.toISOString(),
       });

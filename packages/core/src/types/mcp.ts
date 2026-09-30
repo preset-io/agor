@@ -743,7 +743,7 @@ export interface CreateMCPServerInput {
   /** null explicitly creates a server with no authentication configuration. */
   auth?: MCPAuth | null;
   scope: MCPScope;
-  owner_user_id?: UserID; // Private to this user; omit for a shared server
+  owner_user_id?: UserID | null; // Explicit null publishes; omission defaults private for members
   source?: MCPSource;
   import_path?: string;
   catalog_entry_name?: string;

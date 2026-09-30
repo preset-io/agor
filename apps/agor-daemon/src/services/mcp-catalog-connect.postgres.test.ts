@@ -266,7 +266,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     async function seedPeer(
       tenantId: string,
       user: User,
-      options: { fingerprintDrift?: boolean; compatibilityMode?: 'strict' | 'legacy' } = {}
+      options: {
+        fingerprintDrift?: boolean;
+        compatibilityMode?: 'strict' | 'legacy';
+        shared?: boolean;
+      } = {}
     ) {
       return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const server = await new MCPServerRepository(scoped).create({
@@ -274,7 +278,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           transport: 'http',
           url: RESOURCE,
           scope: 'session',
-          source: 'user',
+          source: options.shared ? 'catalog' : 'user',
+          owner_user_id: options.shared ? undefined : user.user_id,
+          ...(options.shared ? { catalog_entry_name: ENTRY.name } : {}),
           enabled: true,
           auth: {
             type: 'oauth',
@@ -371,7 +377,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       user: User,
       tenantId: string,
       entry: MCPCatalogEntry = ENTRY,
-      app = connectApp(entry)
+      app = connectApp(entry),
+      sharing: 'private' | 'shared' = 'private'
     ) {
       // Deliberately no ambient database scope here. This is the production
       // long-route shape: authenticated tenant identity is present, while each
@@ -379,7 +386,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // proxy. Wrapping this whole call would hide the regression this test
       // guards and would hold a PostgreSQL transaction across the remote probe.
       return createRegisteredMCPCatalogConnectService(app, db).create(
-        REQUEST,
+        { ...REQUEST, sharing },
         params(user, tenantId)
       );
     }
@@ -400,6 +407,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
     }
 
+    it('keeps shared install identities tenant-local and distinct from private requests', async () => {
+      const a = await buildTenant('shared-a');
+      const b = await buildTenant('shared-b');
+      const [sharedA, sharedB] = await Promise.all([
+        connect(a.user, a.tenantId, ENTRY, connectApp(), 'shared'),
+        connect(b.user, b.tenantId, ENTRY, connectApp(), 'shared'),
+      ]);
+      expect(sharedA.mcp_server.mcp_server_id).not.toBe(sharedB.mcp_server.mcp_server_id);
+      for (const result of [sharedA, sharedB]) {
+        expect(result.mcp_server.owner_user_id).toBeUndefined();
+        expect(result.mcp_server.scope).toBe('session');
+        expect(result.mcp_server.auth?.oauth_access_token).toBeUndefined();
+      }
+      const privateA = await connect(a.user, a.tenantId);
+      expect(privateA.mcp_server.owner_user_id).toBe(a.user.user_id);
+      expect(privateA.mcp_server.mcp_server_id).not.toBe(sharedA.mcp_server.mcp_server_id);
+      await runWithTenantDatabaseScope(db, b.tenantId, async (scoped) => {
+        expect(
+          await new MCPServerRepository(scoped).findById(sharedA.mcp_server.mcp_server_id)
+        ).toBeNull();
+      });
+    });
+
     it('reuses the authenticated caller credential peer and obeys probed OAuth policy', async () => {
       const actor = await buildTenant('positive');
       const peer = await seedPeer(actor.tenantId, actor.user);
@@ -413,57 +443,65 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('does not reuse or re-key a visible same-tenant peer grant for another user', async () => {
-      const actor = await buildTenant('same-tenant-user-a');
-      const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
-        buildUser(scoped, 'same-tenant-user-b')
-      );
-      const peer = await seedPeer(actor.tenantId, actor.user);
-      const app = connectApp();
+    it.each(['allow_crud', 'allow_private_only', 'use_existing_only'] as const)(
+      'never borrows another user grant when reusing shared under %s',
+      async (policy) => {
+        const actor = await buildTenant('same-tenant-user-a');
+        const otherUser = await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+          buildUser(scoped, 'same-tenant-user-b')
+        );
+        const peer = await seedPeer(actor.tenantId, actor.user, { shared: true });
+        await runWithTenantDatabaseScope(db, actor.tenantId, (scoped) =>
+          setMcpMemberPolicy(scoped, policy, actor.tenantId, null)
+        );
+        const app = connectApp();
 
-      const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
-        app.service('mcp-servers').find({
-          ...params(otherUser, actor.tenantId),
-          provider: undefined,
-          query: { usableByUserId: otherUser.user_id, $limit: 1000 },
-        })
-      );
-      expect(Array.isArray(visibleToOther) ? visibleToOther : visibleToOther.data).toEqual(
-        expect.arrayContaining([expect.objectContaining({ mcp_server_id: peer.mcp_server_id })])
-      );
+        const visibleToOther = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
+          app.service('mcp-servers').find({
+            ...params(otherUser, actor.tenantId),
+            provider: undefined,
+            query: { usableByUserId: otherUser.user_id, $limit: 1000 },
+          })
+        );
+        expect(Array.isArray(visibleToOther) ? visibleToOther : visibleToOther.data).toEqual(
+          expect.arrayContaining([expect.objectContaining({ mcp_server_id: peer.mcp_server_id })])
+        );
 
-      // Both calls use the same tenant scope, so tenant RLS cannot distinguish
-      // these users. The production grant lookup must enforce the user key.
-      const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app);
-      expect(actorResult).toMatchObject({
-        reused_existing_server: true,
-        reuse_kind: 'credential_peer',
-        mcp_server: { mcp_server_id: peer.mcp_server_id },
-      });
+        // Both calls use the same tenant scope, so tenant RLS cannot distinguish
+        // these users. The production grant lookup must enforce the user key.
+        const actorResult = await connect(actor.user, actor.tenantId, ENTRY, app, 'shared');
+        expect(actorResult).toMatchObject({
+          reused_existing_server: true,
+          reuse_kind: 'catalog_install',
+          mcp_server: { mcp_server_id: peer.mcp_server_id },
+        });
 
-      const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app);
-      expect(otherResult.reused_existing_server).toBe(false);
-      expect(otherResult.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
+        const otherResult = await connect(otherUser, actor.tenantId, ENTRY, app, 'shared');
+        expect(otherResult.reused_existing_server).toBe(true);
+        expect(otherResult.mcp_server.auth?.oauth_access_token).toBeUndefined();
+        expect(otherResult.mcp_server.mcp_server_id).toBe(peer.mcp_server_id);
 
-      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
-        const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
-        expect(await grants.listForUser(actor.user.user_id)).toEqual([
-          expect.objectContaining({
-            user_id: actor.user.user_id,
-            mcp_server_id: peer.mcp_server_id,
-          }),
-        ]);
-        expect(await grants.listForUser(otherUser.user_id)).toEqual([]);
-      });
-    });
+        await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+          const grants = new UserMCPOAuthTokenRepository(scoped, SECRET);
+          expect(await grants.listForUser(actor.user.user_id)).toEqual([
+            expect.objectContaining({
+              user_id: actor.user.user_id,
+              mcp_server_id: peer.mcp_server_id,
+            }),
+          ]);
+          expect(await grants.listForUser(otherUser.user_id)).toEqual([]);
+        });
+      }
+    );
 
     it('denies cross-tenant reuse even with a valid foreign user and server identifier', async () => {
       const foreign = await buildTenant('foreign');
       const local = await buildTenant('local');
       const foreignPeer = await seedPeer(foreign.tenantId, foreign.user);
 
-      const result = await connect(foreign.user, local.tenantId);
-      expect(result.reused_existing_server).toBe(false);
+      await expect(connect(foreign.user, local.tenantId)).rejects.toMatchObject({ code: 401 });
+      // A valid local caller still cannot discover or reuse the foreign row.
+      const result = await connect(local.user, local.tenantId);
       expect(result.mcp_server.mcp_server_id).not.toBe(foreignPeer.mcp_server_id);
     });
 

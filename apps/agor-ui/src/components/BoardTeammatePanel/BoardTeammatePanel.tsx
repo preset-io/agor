@@ -290,11 +290,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               borderBottom: `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: token.marginXS, minWidth: 0 }}
+            >
               <div
                 style={{
-                  width: 36,
-                  height: 36,
+                  width: token.fontSizeHeading3,
+                  height: token.fontSizeHeading3,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -302,24 +304,28 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                 }}
               >
                 {isCreating ? (
-                  <Spin />
+                  <Spin size="small" />
                 ) : teammateConfig?.emoji ? (
-                  <span style={{ fontSize: 30 }}>{teammateConfig.emoji}</span>
+                  <span style={{ fontSize: token.fontSizeHeading3, lineHeight: 1 }}>
+                    {teammateConfig.emoji}
+                  </span>
                 ) : (
-                  <RobotOutlined style={{ fontSize: 30, color: token.colorInfo }} />
+                  <RobotOutlined
+                    style={{ fontSize: token.fontSizeHeading3, color: token.colorInfo }}
+                  />
                 )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                 <Typography.Title
-                  level={4}
-                  style={{ margin: 0, fontWeight: 600 }}
+                  level={5}
+                  style={{ margin: 0 }}
                   ellipsis={{
                     tooltip: teammateConfig?.displayName ?? primaryTeammateBranch.name,
                   }}
                 >
                   {teammateConfig?.displayName ?? primaryTeammateBranch.name}
                 </Typography.Title>
-                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                   Primary teammate
                 </Typography.Text>
               </div>
@@ -507,16 +513,30 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           {
             key: 'comments',
             label: (
-              <Badge
-                count={unreadCommentsCount}
-                size="small"
-                offset={[8, 0]}
-                style={{
-                  backgroundColor: hasUserMentions ? token.colorError : token.colorPrimaryBgHover,
-                }}
-              >
-                <span>Comments</span>
-              </Badge>
+              <span style={{ display: 'inline-flex', alignItems: 'flex-start' }}>
+                Comments
+                {/* In-flow (so the tab measures it and the scrolling list never clips it),
+                    raised into the tab's top padding and tucked over the label's end. */}
+                <Badge
+                  count={unreadCommentsCount}
+                  size="small"
+                  styles={{
+                    root: {
+                      position: 'relative',
+                      top: -token.paddingXS,
+                      // An empty badge still has a root; do not subtract from
+                      // the measured label width after the unread count clears.
+                      marginInlineStart: unreadCommentsCount > 0 ? -token.marginXS : 0,
+                    },
+                    indicator: {
+                      paddingInline: token.paddingXXS,
+                      backgroundColor: hasUserMentions
+                        ? token.colorError
+                        : token.colorPrimaryBgHover,
+                    },
+                  }}
+                />
+              </span>
             ),
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)' }}>
@@ -542,22 +562,34 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             ),
           },
         ]}
+        rootClassName="agor-panel-tabs"
+        tabBarGutter={token.marginSM}
         style={{ height: '100%' }}
-        styles={{ body: { height: '100%' }, content: { height: '100%' } }}
-        tabBarStyle={{ margin: 0, padding: '0 12px' }}
+        styles={{
+          body: { height: '100%' },
+          content: { height: '100%' },
+          item: { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
+        }}
+        tabBarStyle={{ margin: 0 }}
+        // Insets live in the extra slots, not tab-bar padding: rc-tabs measures the bar
+        // minus its extras, so padding would hide overflow from its scroll/fade logic.
         tabBarExtraContent={{
-          right: onCollapse ? (
-            <Tooltip title="Collapse panel" placement="bottom">
-              <Button
-                type="text"
-                size="small"
-                aria-label="Collapse panel"
-                icon={<LeftOutlined style={{ fontSize: 11 }} />}
-                onClick={onCollapse}
-                style={{ marginRight: 4 }}
-              />
-            </Tooltip>
-          ) : undefined,
+          left: <div style={{ width: token.padding }} />,
+          right: (
+            <div style={{ paddingInlineEnd: token.paddingXXS }}>
+              {onCollapse && (
+                <Tooltip title="Collapse panel" placement="bottom">
+                  <Button
+                    type="text"
+                    size="small"
+                    aria-label="Collapse panel"
+                    icon={<LeftOutlined style={{ fontSize: 11 }} />}
+                    onClick={onCollapse}
+                  />
+                </Tooltip>
+              )}
+            </div>
+          ),
         }}
       />
     </div>

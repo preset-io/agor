@@ -366,6 +366,7 @@ export class MCPServerRepository
     const normalizedAuth = (submittedAuth === null ? undefined : data.auth) as MCPAuth | undefined;
     const effective = {
       ...data,
+      owner_user_id: data.owner_user_id ?? undefined,
       headers,
       auth: normalizedAuth,
       source: data.source ?? 'user',

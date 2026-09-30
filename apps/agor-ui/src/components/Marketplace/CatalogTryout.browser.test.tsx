@@ -175,6 +175,7 @@ describe('recovered Catalog tryout flow in Chromium', () => {
     expect(api.connect).toHaveBeenCalledWith({
       catalog_key: entry.name,
       acknowledged_disclosure: entry.permission_disclosure,
+      sharing: 'private',
     });
     expect(api.start).not.toHaveBeenCalled();
     expect(api.candidates).not.toHaveBeenCalled();
@@ -190,7 +191,7 @@ describe('recovered Catalog tryout flow in Chromium', () => {
     );
     await userEvent.click(drawer.getByRole('combobox', { name: 'Agent tool' }));
     await userEvent.click(
-      await screen.findByText('Codex', { selector: '.ant-select-item-option-content' })
+      await screen.findByText('Codex', { selector: '.ant-select-item-option-content span' })
     );
     await page.screenshot({ path: `./__screenshots__/tryout-setup-${window.innerWidth}.png` });
     await userEvent.click(drawer.getByRole('button', { name: 'Start session', exact: true }));

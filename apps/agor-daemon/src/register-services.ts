@@ -155,6 +155,7 @@ import {
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
   resolveBranchSdkHomeLaunch,
+  resolveExecutionSdkHomeEnv,
   sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
 import { invalidateLiveBranchCodexCredentialBinds } from './codex-auth-bind-invalidation.js';
@@ -1697,14 +1698,21 @@ function createExecuteHandler(
       scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
     });
 
-    // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
-    // (design §8). These are relocations, NOT credentials — so the MCP scrub
+    // Explicitly project the selected execution home for Gemini, then apply
+    // the session's branch SDK-home override (design §8). These are NOT credentials — so the MCP scrub
     // above leaves them alone, and they compose with the caller-scoped
     // credential env injected by createUserProcessEnvironment (#2555): different
     // keys, no collision (verified — the branch home never carries a credential,
     // §8A.3). Skipped in delegated mode (the launcher owns the environment).
-    if (branchSdkHomeEnv) {
-      Object.assign(executorEnv, branchSdkHomeEnv);
+    if (!isDelegatedExecution) {
+      Object.assign(
+        executorEnv,
+        resolveExecutionSdkHomeEnv({
+          tool: sdkHomeTool,
+          executionHome: executorHomeDir,
+          branchEnv: branchSdkHomeEnv,
+        })
+      );
     }
 
     executorEnv.DAEMON_URL = daemonUrl;

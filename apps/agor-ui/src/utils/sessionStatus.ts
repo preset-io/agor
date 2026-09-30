@@ -21,7 +21,7 @@
  * helper is a future cleanup — they should keep their icon/label tables
  * (richer presentation), but defer color/tone to here.
  */
-import type { Session } from '@agor-live/client';
+import { type Session, SessionStatus } from '@agor-live/client';
 
 export type StatusTone = 'processing' | 'warning' | 'error' | 'success' | 'default';
 
@@ -54,3 +54,17 @@ export function getSessionStatusTone(status: StatusInput): StatusTone {
 
 export const isSessionFailed = (session: Pick<Session, 'status'>): boolean =>
   session.status === 'failed';
+
+const STATUS_LABELS: Record<SessionStatus, string> = {
+  [SessionStatus.RUNNING]: 'Running',
+  [SessionStatus.AWAITING_PERMISSION]: 'Awaiting permission',
+  [SessionStatus.AWAITING_INPUT]: 'Awaiting input',
+  [SessionStatus.STOPPING]: 'Stopping',
+  [SessionStatus.TIMED_OUT]: 'Timed out',
+  [SessionStatus.FAILED]: 'Failed',
+  [SessionStatus.IDLE]: 'Idle',
+  [SessionStatus.COMPLETED]: 'Completed',
+};
+
+export const getSessionStatusLabel = (status: string): string =>
+  STATUS_LABELS[status as SessionStatus] ?? status.replaceAll('_', ' ');

@@ -301,6 +301,33 @@ describe('seedOnboardingTeammate', () => {
     expect(result).toEqual({});
   });
 
+  it.each(['Template fetch failed', 'Authentication failed', 'Git branch does not exist'])(
+    'guides recovery of the saved teammate without duplicating it: %s',
+    async (detail) => {
+      const saved = {
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+        custom_context: {
+          teammate: { kind: 'teammate', createdViaOnboarding: true, displayName: 'Rusty' },
+        },
+      } as unknown as Branch;
+      createTeammateBranchMock.mockResolvedValue(saved);
+      startTeammateBootstrapSessionMock.mockRejectedValueOnce(new Error(detail));
+      const { input, onWarn } = setup();
+      expect(await seedOnboardingTeammate(input)).toEqual({ branchId: saved.branch_id });
+      expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('Retry on that same teammate'));
+      expect(onWarn).toHaveBeenCalledWith(expect.stringContaining(detail));
+      expect(onWarn.mock.calls[0][0]).not.toContain('create one from the board');
+      input.branchById.set(saved.branch_id, saved);
+      startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+      expect(await seedOnboardingTeammate(input)).toMatchObject({
+        branchId: saved.branch_id,
+        sessionId: completeInitialization.sessionId,
+      });
+      expect(createTeammateBranchMock).toHaveBeenCalledTimes(1);
+    }
+  );
+
   // The LLM step is skippable, so `agent` can legitimately be null at completion.
   // Bootstrapping a claude-code session anyway would fail on the first turn with
   // no credentials — the workspace is still created, but the caller gets no

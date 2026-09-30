@@ -899,12 +899,10 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     );
   };
 
-  // Section headers use the session panel's uppercase label ("Queued Tasks").
+  // Section headers match the session panel's queue label ("Queued tasks").
   const sectionLabelStyle: React.CSSProperties = {
     fontSize: token.fontSizeSM,
     fontWeight: 500,
-    letterSpacing: '0.5px',
-    textTransform: 'uppercase',
   };
   const renderSectionLabel = (label: string) => (
     <Typography.Text type="secondary" style={sectionLabelStyle}>

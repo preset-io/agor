@@ -76,7 +76,10 @@ export const ToolUseRenderer: React.FC<ToolUseRendererProps> = ({ toolUse, toolR
 
   // A partial input/result is not valid input to a specialized renderer. In
   // particular, do not recompute an apparently complete diff from a projection.
-  const CustomRenderer = isProjected ? undefined : getToolRenderer(name);
+  const invalidEditInput =
+    ['Write', 'Edit'].includes(name) &&
+    (typeof input.file_path !== 'string' || !input.file_path.trim());
+  const CustomRenderer = isProjected || invalidEditInput ? undefined : getToolRenderer(name);
 
   // Shared collapsible input parameters block
   const inputParamsBlock = (

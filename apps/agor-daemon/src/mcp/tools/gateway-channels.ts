@@ -41,6 +41,7 @@ import {
   getGatewaySource,
   getRequiredSecretFields,
   hasMinimumRole,
+  isDiscordDirectMessagesEnabled,
   isDiscordSnowflake,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
@@ -246,6 +247,7 @@ const GATEWAY_INTERNAL_CONFIG_KEYS = new Set([
 ]);
 
 const DISCORD_PUBLIC_CONFIG_KEYS = new Set([
+  'direct_messages_enabled',
   'bot_token',
   'application_id',
   'guild_id',
@@ -311,10 +313,10 @@ const outboundTargetSchema = z
   .string()
   .trim()
   .regex(
-    /^(channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
+    /^(user:\d{17,20}|channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
   )
   .describe(
-    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake>. Thread targets are intentionally not supported for a new seed.'
+    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake> or user:<snowflake> (when DMs are enabled). Thread targets are intentionally not supported for a new seed.'
   );
 
 const envVarSchema = z.strictObject({
@@ -1144,6 +1146,12 @@ const discordSetupSchema = z
       'User',
       'Fixed Agor run-as user. Required unless alignUsers:true with a tenant-owned userMap.'
     ),
+    directMessages: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Allow 1:1 DMs from allowed current server members. DM sessions are visible to people with access to the target branch.'
+      ),
     outbound: z.boolean().default(false),
     alignUsers: z.boolean().default(false),
     userMap: z.record(z.string(), z.string().min(1)).optional(),
@@ -1784,7 +1792,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_channels_create',
     {
       description:
-        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live PNG/JPEG images, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get, and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
+        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live PNG/JPEG images, direct_messages_enabled:false by default or true for allowed current server members, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get, and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: gatewayChannelCreateSchema,
     },
@@ -1874,6 +1882,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         alignUsers: args.alignUsers,
         userMap: args.userMap,
         files: args.files,
+        directMessagesEnabled: args.directMessages,
         channelHistory: args.channelHistory,
         outboundEnabled: args.outbound,
         defaultOutboundTarget:
@@ -1901,7 +1910,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           artifact.messageContent.instruction,
           'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
           'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
-          'Keep the channel and author allowlists explicit. Discord ignores DMs, webhooks, bot/self messages, wrong guild/channel, and unmentioned messages; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
+          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages; DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
         ],
         validation: artifact.validation,
         caveats: [
@@ -2022,7 +2031,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               : {}),
             accepted_target_formats:
               channel.channel_type === 'discord'
-                ? ['channel:<snowflake>']
+                ? [
+                    'channel:<snowflake>',
+                    ...(isDiscordDirectMessagesEnabled(channel.config) ? ['user:<snowflake>'] : []),
+                  ]
                 : [
                     'channel:C123',
                     '#project-updates',
@@ -2533,7 +2545,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_emit_message',
     {
       description:
-        "Send a proactive Slack or Discord message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake>. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
+        "Send a proactive Slack or Discord message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake> or user:<snowflake> when DMs are enabled. DM targets require current server membership; replies go to the recipient’s DM session, not the sending session. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: z.strictObject({
         gatewayChannelId: mcpRequiredId(
@@ -2545,7 +2557,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         target: outboundTargetSchema.optional().describe('Omit to use default_outbound_target.'),
         threadTs: slackOptionalTimestampSchema(
           'threadTs',
-          'Optional Slack thread timestamp. Discord proactive outbound is always a fresh channel:<snowflake> seed.'
+          'Optional Slack thread timestamp. Discord proactive outbound does not accept thread targets.'
         ),
         purpose: mcpOptionalNonEmptyString('purpose', 'Optional audit purpose.'),
       }),

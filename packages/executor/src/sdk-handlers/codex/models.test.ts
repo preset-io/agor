@@ -7,6 +7,7 @@ describe('getCodexContextWindowLimit', () => {
   it('returns expected limits for known Codex-compatible models', () => {
     const cases: Array<{ model: string; expected: number }> = [
       { model: 'gpt-6-astra', expected: 1_050_000 },
+      { model: 'gpt-6.1-sol', expected: 1_050_000 },
       { model: 'gpt-6-sol', expected: 1_050_000 },
       { model: 'gpt-6-luna', expected: 1_050_000 },
       { model: 'gpt-5.6-terra', expected: 1_050_000 },
@@ -35,6 +36,7 @@ describe('getCodexContextWindowLimit', () => {
 
   it('uses base model limit when version suffix is present', () => {
     expect(getCodexContextWindowLimit('gpt-6-astra-2026-09-04')).toBe(1_050_000);
+    expect(getCodexContextWindowLimit('gpt-6.1-sol-2026-09-29')).toBe(1_050_000);
     expect(getCodexContextWindowLimit('gpt-6-sol-2026-09-04')).toBe(
       getCodexContextWindowLimit('gpt-6-sol')
     );

@@ -22,6 +22,7 @@ export { getConnector, hasConnector, registerConnector } from './connector-regis
 export {
   chunkDiscordMessage,
   DiscordConnector,
+  DiscordDirectMessageError,
   extractDiscordInboundFiles,
   isAllowedDiscordAttachmentUrl,
   stripDiscordBotMention,
@@ -110,6 +111,8 @@ export type {
 export {
   buildDiscordDeliveryMetadata,
   buildDiscordDeliveryNonce,
+  buildDiscordDirectMessageMetadata,
+  buildDiscordDirectMessageThreadKey,
   buildDiscordInboundMetadata,
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,

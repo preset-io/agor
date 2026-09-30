@@ -39,7 +39,7 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { MCPServerNotUsableError } from '@agor/core';
+import { isMCPServerNotUsableError } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type DeploymentAgenticToolPolicy,
@@ -273,7 +273,7 @@ function permanentInitializationDiagnosis(
   error: ScheduledInitializationError
 ): PermanentScheduledInitializationError | null {
   if (error.cause instanceof PermanentScheduledInitializationError) return error.cause;
-  if (error.stage === 'mcp_attachment' && error.cause instanceof MCPServerNotUsableError) {
+  if (error.stage === 'mcp_attachment' && isMCPServerNotUsableError(error.cause)) {
     return new PermanentScheduledInitializationError('mcp_server_not_usable', error.stage);
   }
   return null;
