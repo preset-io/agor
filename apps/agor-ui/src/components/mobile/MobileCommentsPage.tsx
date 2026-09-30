@@ -78,7 +78,6 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <CommentsPanel
           alwaysShowActions
-          hideHeader
           client={client}
           boardId={boardId}
           comments={boardComments}

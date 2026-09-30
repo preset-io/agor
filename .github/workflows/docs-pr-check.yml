@@ -50,6 +50,9 @@ jobs:
         env:
           NEXT_PUBLIC_GA_ID: G-DME77D3LDH
 
+      - name: Verify favicon artwork and exported icon links
+        run: pnpm --filter @agor/docs validate:brand-assets --export
+
       - name: Verify build output
         run: |
           if [ ! -d "apps/agor-docs/out" ]; then

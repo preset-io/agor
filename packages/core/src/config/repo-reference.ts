@@ -161,11 +161,12 @@ export function extractGitHubSlugFromUrl(url: string): RepoSlug | undefined {
  */
 /**
  * Regex for valid repo slugs (org/name format matching GitHub naming rules).
- * Supports: alphanumeric, hyphens, underscores, dots. Safe for filesystem paths.
+ * Supports: alphanumeric, hyphens, underscores, dots. Rejects `.`/`..` segments
+ * so a slug is safe to join onto a filesystem root.
  *
  * Shared across repo-reference validation and config resource schemas.
  */
-export const REPO_SLUG_PATTERN = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+export const REPO_SLUG_PATTERN = /^(?!\.\.?\/)[a-zA-Z0-9._-]+\/(?!\.\.?$)[a-zA-Z0-9._-]+$/;
 
 export function isValidSlug(slug: string): boolean {
   return REPO_SLUG_PATTERN.test(slug);

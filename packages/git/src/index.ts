@@ -7,9 +7,19 @@
 
 import { randomUUID } from 'node:crypto';
 import { constants, existsSync, readdirSync } from 'node:fs';
-import { lstat, mkdir, mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { simpleGit } from 'simple-git';
 import { resolveGitBinary } from './git-binary';
 import {
@@ -1491,6 +1501,30 @@ export async function getRemoteUrl(
 export interface EnsureRemoteUrlResult {
   changed: boolean;
   previousUrl: string | undefined;
+}
+
+function isStrictlyInsideDirectory(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel !== '' && rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
+}
+
+/**
+ * Canonicalize a managed repository path and prove it lies strictly inside
+ * `allowedRoot` after resolving symlinks, so a stored path cannot select a
+ * repository outside the caller's tenant.
+ */
+export async function resolveContainedRepoPath(
+  repoPath: string,
+  allowedRoot: string
+): Promise<string> {
+  if (!isAbsolute(repoPath)) {
+    throw new Error('Repository path is outside the managed repositories root');
+  }
+  const [root, repository] = await Promise.all([realpath(allowedRoot), realpath(repoPath)]);
+  if (!isStrictlyInsideDirectory(root, repository)) {
+    throw new Error('Repository path is outside the managed repositories root');
+  }
+  return repository;
 }
 
 /**
