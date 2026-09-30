@@ -1,7 +1,7 @@
 import type { AgorClient, EffectiveBranchAccess } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
-import { peekAccess, readAccess } from '../utils/accessCache';
+import { failuresStillIn, peekAccess, readAccess, withoutFailure } from '../utils/accessCache';
 import { canStartSessions } from '../utils/branchAccess';
 
 const canStartSessionsOn = (client: AgorClient, branchId: string) =>
@@ -16,10 +16,11 @@ const NO_FAILURES: ReadonlySet<string> = new Set();
  * Session access for the given teammates, read through the shared access cache.
  * Unknown ids stay out of `access`; `failed` counts those whose read failed,
  * listed in `failedIds`, and the rest are still being read. Failures are this
- * mount's and id set's only: the next mount, id set, sign-in or turning `read`
- * back on reads them again, and `retry` does so now. With `read: false` only
- * answers already cached are reported and nothing is requested. Unmounting, or
- * a new id set, abandons reads still queued.
+ * mount's only: the next mount, id set, sign-in or turning `read` back on reads
+ * them again, and `retry` does so now. A new id set keeps the failures still in
+ * it until their re-read answers, so nothing shown turns pending. With
+ * `read: false` only answers already cached are reported and nothing is
+ * requested. Unmounting, or a new id set, abandons reads still queued.
  */
 export function useSessionAccess(
   client: AgorClient | null,
@@ -38,8 +39,10 @@ export function useSessionAccess(
   if (wasReading !== read) {
     setWasReading(read);
     if (read) setFailed({ scope, key, ids: NO_FAILURES });
+  } else if (failed.scope === scope && failed.key !== key) {
+    // A failure stays shown until its re-read answers, so revealed cards never hide again.
+    setFailed({ scope, key, ids: failuresStillIn(failed.ids, key) });
   }
-  // A new id set re-reads every failure, so those show as pending again.
   const failedIds = failed.scope === scope && failed.key === key ? failed.ids : NO_FAILURES;
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
   useEffect(() => {
@@ -49,7 +52,10 @@ export function useSessionAccess(
       readAccess(client, scope, `branch:${id}`, () => canStartSessionsOn(client, id), {
         signal: controller.signal,
       }).then(
-        () => setVersion((v) => v + 1),
+        () => {
+          setVersion((v) => v + 1);
+          setFailed((prev) => withoutFailure(prev, id));
+        },
         () => {
           if (controller.signal.aborted) return;
           setFailed((prev) => ({

@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ACCESS_TTL_MS, peekAccess, readAccess } from './accessCache';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ACCESS_TTL_MS, peekAccess, readAccess, resetAccessCacheForTests } from './accessCache';
 
 const deferred = () => {
   let resolve!: (value: boolean) => void;
@@ -24,6 +24,8 @@ function occupySlots(client: object) {
     },
   };
 }
+
+beforeEach(() => resetAccessCacheForTests());
 
 afterEach(() => {
   vi.useRealTimers();

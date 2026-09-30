@@ -10,7 +10,13 @@ import type {
 import { hasMinimumRole, ROLES, resolveCapabilityPolicyAccess } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
-import { ACCESS_TTL_MS, peekAccess, readAccess } from '../utils/accessCache';
+import {
+  ACCESS_TTL_MS,
+  failuresStillIn,
+  peekAccess,
+  readAccess,
+  withoutFailure,
+} from '../utils/accessCache';
 
 const allowAll = () => true;
 const NO_FAILURES: ReadonlySet<string> = new Set();
@@ -73,8 +79,9 @@ const sharedAlways = (): BoardSharingStatus => 'shared';
  * superadmins, so only they pay one policy read per board, resolved with the
  * shared capability resolver and shared through the access cache. Unknown and
  * failed reads are not shared; a failed read is retried on the next mount,
- * board set or sign-in, and `retry` does so now. `settled` once every board has
- * an answer or a failed read.
+ * board set or sign-in, and `retry` does so now. A new board set keeps the
+ * failures still in it until their re-read answers. `settled` once every board
+ * has an answer or a failed read.
  */
 export function useBoardSharing(
   client: AgorClient | null,
@@ -94,7 +101,10 @@ export function useBoardSharing(
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);
   const [failed, setFailed] = useState({ scope, key, ids: NO_FAILURES });
-  // A new board set re-reads every failure, so those show as pending again.
+  // A failure stays shown until its re-read answers, so revealed cards never hide again.
+  if (failed.scope === scope && failed.key !== key) {
+    setFailed({ scope, key, ids: failuresStillIn(failed.ids, key) });
+  }
   const failedIds = failed.scope === scope && failed.key === key ? failed.ids : NO_FAILURES;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry; boardIds only orders the reads its sorted key names
@@ -110,7 +120,10 @@ export function useBoardSharing(
         () => boardPolicyGrantsView(client, scope, userId, boardId),
         { signal: controller.signal }
       ).then(
-        () => setVersion((v) => v + 1),
+        () => {
+          setVersion((v) => v + 1);
+          setFailed((prev) => withoutFailure(prev, boardId));
+        },
         () => {
           if (controller.signal.aborted) return;
           setFailed((prev) => ({

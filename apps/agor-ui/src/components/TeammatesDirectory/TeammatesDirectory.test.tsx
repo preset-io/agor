@@ -5,6 +5,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { TeammatesDirectory } from './TeammatesDirectory';
 
 const ME = 'user-me';
@@ -75,6 +76,18 @@ function deferredReads() {
   return { find, resolve, waiting };
 }
 
+/** Reads of `failing` that reject only when the test says so; the rest answer with `value`. */
+function failingReads(failing: string, value: () => unknown) {
+  const rejects: (() => void)[] = [];
+  const find = vi.fn<Find>(({ route }) =>
+    route.id === failing
+      ? new Promise((_, reject) => rejects.push(() => reject(new Error('offline'))))
+      : Promise.resolve(value())
+  );
+  const failNext = () => rejects.shift()?.();
+  return { find, failNext, rejects };
+}
+
 function renderDirectory(props: Partial<React.ComponentProps<typeof TeammatesDirectory>> = {}) {
   return render(
     <AntApp>
@@ -96,7 +109,10 @@ const search = (value: string) =>
     target: { value },
   });
 
-beforeEach(() => agorStore.getState().reset());
+beforeEach(() => {
+  agorStore.getState().reset();
+  resetAccessCacheForTests();
+});
 
 describe('TeammatesDirectory', () => {
   it('lists teammates on boards the server returned, never private or own ones', () => {
@@ -345,11 +361,63 @@ describe('TeammatesDirectory', () => {
 
     // Past the cache's freshness, a policy re-read would reach the server.
     const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120_000);
-    find.mockImplementation(async () => answer('session'));
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    try {
+      find.mockImplementation(async () => answer('session'));
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
+      expect(policy).toHaveBeenCalledTimes(2);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('keeps revealed cards while an early failed policy read is read again', async () => {
+    const alpha = teammate('alpha', 'b1');
+    const beta = teammate('beta', 'b2');
+    seed([alpha, beta], [board('b1'), board('b2')]);
+    const reads = failingReads('b1', openPolicy);
+    renderDirectory({ client: clientWith(vi.fn(), reads.find), currentUser: superadmin });
+    await waitFor(() => expect(reads.rejects).toHaveLength(1));
+    await act(async () => reads.failNext());
     expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
-    expect(policy).toHaveBeenCalledTimes(2);
-    now.mockRestore();
+
+    // A new teammate re-reads the failed board; beta stays while that read is out.
+    act(() =>
+      seed([alpha, beta, teammate('gamma', 'b3')], [board('b1'), board('b2'), board('b3')])
+    );
+    await waitFor(() => expect(reads.rejects).toHaveLength(1));
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+
+    await act(async () => reads.failNext());
+    expect(await screen.findByText('Teammate gamma')).toBeInTheDocument();
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+  });
+
+  it('keeps revealed cards while an early failed access check is read again', async () => {
+    const alpha = teammate('alpha', 'b1');
+    const beta = teammate('beta', 'b2');
+    seed([alpha, beta], [board('b1'), board('b2')]);
+    const reads = failingReads('alpha', () => answer('session'));
+    renderDirectory({ client: clientWith(reads.find), checkAccess: true });
+    fireEvent.click(screen.getByText('You can ask'));
+    await waitFor(() => expect(reads.rejects).toHaveLength(1));
+    await act(async () => reads.failNext());
+    expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
+
+    // A new teammate re-reads the failed check; beta stays while that read is out.
+    act(() =>
+      seed([alpha, beta, teammate('gamma', 'b3')], [board('b1'), board('b2'), board('b3')])
+    );
+    await waitFor(() => expect(reads.rejects).toHaveLength(1));
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+
+    await act(async () => reads.failNext());
+    expect(await screen.findByText('Teammate gamma')).toBeInTheDocument();
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
   });
 
   it('keeps list order: a late answer never lands above cards already shown', async () => {

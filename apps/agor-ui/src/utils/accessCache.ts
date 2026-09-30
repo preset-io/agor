@@ -55,6 +55,27 @@ const release = () => {
   else inFlight--;
 };
 
+/** A caller's failed ids carried to a new comma-joined id set: only those still in it. */
+export function failuresStillIn(ids: ReadonlySet<string>, key: string): ReadonlySet<string> {
+  if (ids.size === 0) return ids;
+  const current = new Set(key.split(','));
+  return new Set([...ids].filter((id) => current.has(id)));
+}
+
+/** A caller's failures once `id` answered: the answer replaces its failure. */
+export function withoutFailure<T extends { ids: ReadonlySet<string> }>(failed: T, id: string): T {
+  if (!failed.ids.has(id)) return failed;
+  const ids = new Set(failed.ids);
+  ids.delete(id);
+  return { ...failed, ids };
+}
+
+/** Test-only: frees every read slot and drops queued waiters a failed test left behind. */
+export function resetAccessCacheForTests() {
+  inFlight = 0;
+  waiting.length = 0;
+}
+
 const abortError = () => new DOMException('The access read was aborted.', 'AbortError');
 
 function scoped(client: object, scope: string) {
