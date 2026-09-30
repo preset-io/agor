@@ -440,6 +440,16 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         )
       )
     ).toHaveLength(0);
+    // The function resets its transaction-local flag, so a later read in the same transaction sees nothing.
+    expect(
+      await discover(async (scoped) => {
+        await listRestrictedTenantIds(scoped);
+        return executeRaw(
+          scoped,
+          sql`SELECT tenant_id FROM public.tenant_restrictions WHERE tenant_id = ${restricted}`
+        );
+      })
+    ).toHaveLength(0);
     // The capability learns ids only: a direct read of a closed tenant's row sees nothing.
     expect(
       await discover((scoped) =>

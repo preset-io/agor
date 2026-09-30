@@ -15,7 +15,7 @@ LANGUAGE plpgsql VOLATILE
 SET search_path = pg_catalog, public
 AS $$
 BEGIN
-  -- Transaction-local; the SET clause also reverts it when the function exits.
+  -- is_local = true and reset below; an aborted (sub)transaction discards it. A function-level SET of this custom setting is refused for the app role.
   PERFORM pg_catalog.set_config('agor.tenant_restriction_discovery_ids', 'on', true);
   RETURN QUERY
     SELECT DISTINCT r."tenant_id"

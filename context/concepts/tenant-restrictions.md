@@ -78,6 +78,10 @@ proof that a new or restored runtime is allowed to serve. Tenant identifiers mus
 an authenticated adapter must reject work for retired placements/tenants before
 calling the persistence writer.
 
+Migration 0118 changed during this branch's development and the migrator never
+re-runs an applied migration, so reset any development database that applied an
+earlier build of it; no released database ran it.
+
 Do not delete active-phase rows to release a restriction: they retain the
 revision watermark. Erasure is the separate irreversible tenant lifecycle.
 Older binaries do not enforce this state; once serving adapters are installed,
@@ -305,6 +309,10 @@ tenant and for a codeless stale generation, which moves only with restriction
 records, so a Stop keeps that cause across reactivation. Only a revocation the
 heartbeat authority recorded durably claims `authorization_revoked`, and the
 repository decides under the Task row lock whether it replaces a suspension cause.
+A `seed_active` against a runtime already serving the tenant (documented misuse)
+also moves the generation, and its running tasks are stopped as `tenant_suspension`
+too: the read holds only current records and the task credential only the
+generation hash, so a seeded record cannot be told from a reactivated one.
 
 A task completing as the tenant closes (including a close between the admission
 check and the session write), or while that check cannot read restriction state,
