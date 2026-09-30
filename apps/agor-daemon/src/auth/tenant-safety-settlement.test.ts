@@ -5,7 +5,10 @@ import {
   environmentCommandTokenId,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { isTenantSafetySettlement } from './tenant-safety-settlement.js';
+import {
+  isTenantSafetySettlement,
+  TENANT_SAFETY_TASK_METHODS,
+} from './tenant-safety-settlement.js';
 
 function context(path: string, method: string, data: unknown, command?: string): HookContext {
   return {
@@ -30,12 +33,7 @@ function context(path: string, method: string, data: unknown, command?: string):
 }
 
 describe('tenant safety settlement classification', () => {
-  it.each([
-    'getTerminationState',
-    'reportTerminationComplete',
-    'reportRuntimeTelemetry',
-    'reportSdkHealthFailure',
-  ])('requires exact task authority for %s', async (method) => {
+  it.each(TENANT_SAFETY_TASK_METHODS)('requires exact task authority for %s', async (method) => {
     await expect(
       isTenantSafetySettlement(context('tasks', method, { task_id: 'task-a' }))
     ).resolves.toBe(true);

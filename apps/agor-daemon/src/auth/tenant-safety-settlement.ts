@@ -12,21 +12,21 @@ import {
   requireTaskScopedExecutorRuntimeToken,
 } from './executor-runtime-scope.js';
 
+/** Executor task RPCs that stay reachable while a tenant is closed; each still authenticates its exact capability. */
+export const TENANT_SAFETY_TASK_METHODS: readonly string[] = [
+  'getTerminationState',
+  'reportTerminationComplete',
+  'reportRuntimeTelemetry',
+  'reportSdkHealthFailure',
+];
+
 /**
  * Authenticate exact lifecycle capabilities BEFORE treating a request as safety
  * traffic. Service schemas and durable operation/generation checks still run.
  * This grants no general read, start, claim, role or provider exemption.
  */
 export async function isTenantSafetySettlement(context: HookContext): Promise<boolean> {
-  if (
-    context.path === 'tasks' &&
-    [
-      'getTerminationState',
-      'reportTerminationComplete',
-      'reportRuntimeTelemetry',
-      'reportSdkHealthFailure',
-    ].includes(context.method)
-  ) {
+  if (context.path === 'tasks' && TENANT_SAFETY_TASK_METHODS.includes(context.method)) {
     await requireTaskScopedExecutorRuntimeToken()(context);
     return true;
   }
