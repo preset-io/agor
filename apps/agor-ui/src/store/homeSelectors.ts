@@ -104,6 +104,7 @@ const updatedBefore = (a: Session, b: Session) => updatedAt(a) > updatedAt(b);
 
 /** Epoch ms of a UUIDv7 id's creation timestamp (its first 48 bits); NaN for any other id. */
 const uuidV7Ms = (id: string) =>
+  // shortid-guard:ignore reads the 48-bit timestamp, not a display short id
   id[14] === '7' ? Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16) : Number.NaN;
 
 /** When the session's latest run started: its newest task's id timestamp, else its creation. */
