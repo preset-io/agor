@@ -60,6 +60,7 @@ export function usePrimaryTeammate(
     if (!client) return null;
     requestRef.current += 1;
     const request = requestRef.current;
+    const requestCaller = callerRef.current;
     setResolving(true);
     setFailed(false);
     try {
@@ -67,7 +68,7 @@ export function usePrimaryTeammate(
       if (requestRef.current !== request) return undefined;
       setResolvedBranch(next);
       setBranchRequest(request);
-      setBranchCaller(callerRef.current);
+      setBranchCaller(requestCaller);
       return next;
     } catch {
       if (requestRef.current !== request) return undefined;
