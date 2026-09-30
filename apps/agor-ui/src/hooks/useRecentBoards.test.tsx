@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const LEGACY_KEY = 'agor:recentBoardIds';
 
-// The legacy key is taken once per page load, so each test gets a fresh module.
+// The legacy key is migrated at most once per page load, so each test gets a fresh module.
 async function loadHook() {
   vi.resetModules();
   return (await import('./useRecentBoards')).useRecentBoards;
@@ -64,5 +64,11 @@ describe('useRecentBoards', () => {
       error.mockRestore();
     }
     expect(window.localStorage.getItem(LEGACY_KEY)).toBe(JSON.stringify(['b1']));
+    const nextLoad = await loadHook();
+    renderHook(() => nextLoad([], '', 'user-1'));
+    expect(window.localStorage.getItem('agor:user:user-1:recentBoardIds')).toBe(
+      JSON.stringify(['b1'])
+    );
+    expect(window.localStorage.getItem(LEGACY_KEY)).toBeNull();
   });
 });
