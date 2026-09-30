@@ -16,8 +16,13 @@ import { HomePage, type HomePageProps } from './HomePage';
 
 /** Renders the current route state, so a test can see Home clear it. */
 function RouteStateProbe() {
-  const { state } = useLocation();
-  return <output aria-label="route state">{JSON.stringify(state)}</output>;
+  const { state, search, hash } = useLocation();
+  return (
+    <>
+      <output aria-label="route state">{JSON.stringify(state)}</output>
+      <output aria-label="route url">{`${search}${hash}`}</output>
+    </>
+  );
 }
 
 // HomePage's body is the only caller; counting it counts HomePage renders.
@@ -332,12 +337,17 @@ describe('HomePage', () => {
     expect(screen.getByText(/^waiting /)).toBeInTheDocument();
   });
 
-  it('lands on the comments filter from route state (the phone bell), then clears it', async () => {
+  it('lands on the comments filter from route state (the phone bell), then clears only it', async () => {
     seed({
       sessions: [session('perm', { status: 'awaiting_permission' })],
       comments: [comment('c1')],
     });
-    renderHome({}, undefined, { pathname: '/', state: { needsFilter: 'comments' } });
+    renderHome({}, undefined, {
+      pathname: '/',
+      search: '?from=bell',
+      hash: '#needs',
+      state: { needsFilter: 'comments' },
+    });
     const needs = screen.getByRole('region', { name: 'Needs you' });
     expect(within(needs).getAllByRole('button', { name: /mentioned you/ })).toHaveLength(1);
     expect(within(needs).queryByRole('button', { name: /Session perm/ })).not.toBeInTheDocument();
@@ -345,6 +355,7 @@ describe('HomePage', () => {
     await waitFor(() =>
       expect(screen.getByRole('status', { name: 'route state' })).toHaveTextContent('null')
     );
+    expect(screen.getByRole('status', { name: 'route url' })).toHaveTextContent('?from=bell#needs');
   });
 
   it('stays on All when the bell lands with no comments for you', async () => {
@@ -564,7 +575,7 @@ describe('HomePage', () => {
     ).toEqual(['All boards']);
   });
 
-  it('counts only filtered running sessions, and says when a filter hides them all', async () => {
+  it('counts only filtered running sessions, exactly past a page, and says when a filter hides them all', async () => {
     seed({
       sessions: Array.from({ length: 25 }, (_, i) =>
         session(`r${i}`, {
@@ -580,6 +591,9 @@ describe('HomePage', () => {
     expect(within(work).getByRole('button', { name: 'Show 5 more' })).toBeInTheDocument();
 
     const filter = within(work).getByRole('textbox', { name: 'Filter sessions' });
+    fireEvent.change(filter, { target: { value: 'beta' } });
+    expect(await within(work).findByRole('button', { name: 'Show 2 more' })).toBeInTheDocument();
+
     fireEvent.change(filter, { target: { value: 'alpha' } });
     await waitFor(() => expect(work.querySelectorAll('[data-home-row]')).toHaveLength(3));
     expect(within(work).queryByRole('button', { name: /more$/ })).not.toBeInTheDocument();
@@ -726,6 +740,28 @@ describe('HomePage teammates', () => {
     expect(await screen.findAllByText(/View only · ask/)).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Teammate t, open Board B' }));
     expect(onBoardClick).toHaveBeenCalledWith('b');
+  });
+
+  it('offers a quiet retry when a teammate’s access read fails', async () => {
+    seedTeammates();
+    let down = true;
+    const flaky = client({ t: 'session' });
+    const service = flaky.service.bind(flaky);
+    flaky.service = ((name: string) => {
+      const real = service(name as never) as { find: (params: unknown) => Promise<unknown> };
+      if (name !== 'branches/:id/effective-access') return real;
+      return {
+        find: (params: { route: { id: string } }) =>
+          down && params.route.id === 'v' ? Promise.reject(new Error('down')) : real.find(params),
+      };
+    }) as never;
+    renderHome({ client: flaky });
+    const rail = await screen.findByRole('region', { name: 'AI teammates' });
+    expect(await within(rail).findByText(/Couldn’t check access/)).toBeInTheDocument();
+    down = false;
+    fireEvent.click(within(rail).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(within(rail).queryByText(/Couldn’t check access/)).toBeNull());
+    expect(within(rail).getAllByText(/View only · ask/)).toHaveLength(2);
   });
 
   it('asks the primary by default, sends to a teammate picked from the phone sheet, then resets', async () => {

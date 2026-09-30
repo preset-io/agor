@@ -37,9 +37,9 @@ const NO_FAILURES: ReadonlySet<string> = new Set();
 
 /**
  * Session access for the given teammates, read through the shared access cache.
- * `settled` once every id has an answer or a failed read (unknown stays out of
- * `access`). Failures are this mount's only: the next mount, id set or sign-in
- * reads them again, and `retry` does so now.
+ * Unknown ids stay out of `access`; `failed` when a read for one of them failed.
+ * Failures are this mount's only: the next mount, id set or sign-in reads them
+ * again, and `retry` does so now.
  */
 export function useSessionAccess(
   client: AgorClient | null,
@@ -80,13 +80,13 @@ export function useSessionAccess(
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {
     const access: Record<string, boolean> = {};
-    let settled = true;
+    let failed = false;
     for (const id of client && userId && key ? key.split(',') : []) {
       const known = peekAccess(client as AgorClient, scope, `branch:${id}`);
       if (known !== undefined) access[id] = known;
-      else settled &&= failedIds.has(id);
+      else failed ||= failedIds.has(id);
     }
-    return { access, settled, retry };
+    return { access, failed, retry };
   }, [client, userId, scope, key, version, failedIds, retry]);
 }
 
@@ -194,7 +194,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
         : [...teammates.slice(offset % teammates.length), ...teammates].slice(0, RAIL_SIZE),
     [teammates, offset]
   );
-  const { access } = useSessionAccess(
+  const { access, failed, retry } = useSessionAccess(
     checkAccess ? client : null,
     currentUser?.user_id,
     shown.map((b) => b.branch_id)
@@ -236,6 +236,14 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
             </div>
           ))}
         </HomeCard>
+      )}
+      {failed && (
+        <Typography.Text
+          type="secondary"
+          style={{ display: 'block', marginTop: token.marginXS, fontSize: token.fontSizeSM }}
+        >
+          Couldn’t check access for some teammates. <HomeLink onClick={retry}>Try again</HomeLink>
+        </Typography.Text>
       )}
     </HomeSection>
   );

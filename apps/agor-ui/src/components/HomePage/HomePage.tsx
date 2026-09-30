@@ -288,15 +288,15 @@ export const HomePage = memo(function HomePage({
 
   // A landing filter applies once there is something to show, then leaves the history entry.
   const routeFilter = (location.state as HomeLocationState | null)?.needsFilter;
-  const { pathname, search } = location;
+  const { pathname, search, hash } = location;
   useEffect(() => {
     if (!routeFilter) return;
     const applicable = routeFilter !== 'comments' || comments.length > 0;
     if (!applicable && !hydrated) return;
     if (applicable) setNeedsFilter(routeFilter);
     requestAnimationFrame(() => scrollToSection('needs'));
-    navigate(`${pathname}${search}`, { replace: true, state: null });
-  }, [routeFilter, comments.length, hydrated, navigate, pathname, search]);
+    navigate({ pathname, search, hash }, { replace: true, state: null });
+  }, [routeFilter, comments.length, hydrated, navigate, pathname, search, hash]);
 
   const openComment = useCallback(
     ({ thread }: HomeCommentNeed) => {
@@ -465,9 +465,9 @@ export const HomePage = memo(function HomePage({
           <HomeMyWork
             recent={buckets.recent}
             recentCount={buckets.recentCount}
-            limit={workLimit}
             running={buckets.running}
             runningCount={buckets.runningCount}
+            runningMatchCount={buckets.runningMatchCount}
             hydrated={hydrated}
             tab={tab}
             onTabChange={setTab}
