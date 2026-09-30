@@ -997,6 +997,7 @@ export function createSocketIOConfig(
           needsAdmission: (packet) => executorSocket || serviceMethods.has(packet[0] as string),
           // Each admitted packet opens its own read scope; the service hook and strategy reuse its one read.
           scope: withTenantRestrictionRequest,
+          onOverflow: () => socket.disconnect(true),
           admit: async (packet) => {
             const current = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
             const tenantId = current?.tenant?.tenant_id;

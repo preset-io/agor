@@ -79,6 +79,53 @@ describe('ordered tenant packet gate', () => {
     gate(['raw'], next('sync'));
     expect(dispatched.at(-1)).toEqual(['sync', undefined]);
   });
+
+  it('rejects a never-settling admission after the bound so later packets still move', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = createOrderedTenantPacketGate({
+        needsAdmission: (packet) => packet[0] === 'create',
+        admit: (packet) =>
+          packet[1] === 'stuck' ? new Promise<void>(() => undefined) : Promise.resolve(),
+        admissionTimeoutMs: 20,
+      });
+      const stuckAck = vi.fn();
+      const dispatched: string[] = [];
+      gate(['create', 'stuck', stuckAck], () => dispatched.push('stuck'));
+      gate(['raw'], () => dispatched.push('raw'));
+      gate(['create', 'ok', vi.fn()], () => dispatched.push('ok'));
+      await vi.advanceTimersByTimeAsync(19);
+      expect(dispatched).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(stuckAck).toHaveBeenCalledExactlyOnceWith(
+        new Forbidden('Tenant access cannot be verified').toJSON()
+      );
+      expect(dispatched).toEqual(['raw', 'ok']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('disconnects once instead of queueing past the limit, and dispatches nothing after', async () => {
+    const releases: Array<() => void> = [];
+    const onOverflow = vi.fn();
+    const gate = createOrderedTenantPacketGate({
+      needsAdmission: (packet) => packet[0] === 'create',
+      admit: () => new Promise<void>((resolve) => releases.push(resolve)),
+      queueLimit: 2,
+      onOverflow,
+    });
+    const dispatched: string[] = [];
+    const acks = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    for (const [index, ack] of acks.entries()) {
+      gate(['create', index, ack], () => dispatched.push(String(index)));
+    }
+    expect(onOverflow).toHaveBeenCalledOnce();
+    for (const release of releases) release();
+    await vi.waitFor(() => expect(acks[1]).toHaveBeenCalled());
+    expect(dispatched).toEqual([]);
+    for (const ack of acks) expect(ack).toHaveBeenCalledOnce();
+  });
 });
 
 describe('socket restriction monitor', () => {

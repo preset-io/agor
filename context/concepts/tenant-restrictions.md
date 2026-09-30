@@ -216,7 +216,10 @@ every executor-socket packet), sharing that read with the service hook; it retai
 executor safety RPC transport only, and service guards still authorize each
 operation. Raw terminal/presence/cursor packets do no read, and every packet on a
 socket dispatches in arrival order (a raw packet waits only behind an earlier
-pending admission). Raw traffic from a restricted tenant stops when the monitor
+pending admission). An admission read still pending after 2 s rejects its packet
+with the same ambiguous `Forbidden`, so one stuck read never freezes the socket; a
+socket holding 1,000 queued packets is disconnected rather than dropping packets
+silently, and nothing queued behind it dispatches. Raw traffic from a restricted tenant stops when the monitor
 retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or

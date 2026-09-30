@@ -41,15 +41,26 @@ export async function admitTenantSocketPacket(input: {
 
 type PacketNext = (error?: Error) => void;
 
+/** Packets one socket may hold behind pending admissions before the socket is disconnected. */
+export const TENANT_SOCKET_PACKET_QUEUE_LIMIT = 1000;
+
 /** Per-socket packet gate: only `needsAdmission` packets await a read, and every packet dispatches in arrival order. */
 export function createOrderedTenantPacketGate(input: {
   needsAdmission: (packet: unknown[]) => boolean;
   admit: (packet: unknown[]) => Promise<void>;
   /** Wraps an admitted packet's read and dispatch so later checks in that call can share the read. */
   scope?: <T>(work: () => T) => T;
+  /** A stuck read rejects its packet after this bound, so later packets never freeze behind it. */
+  admissionTimeoutMs?: number;
+  queueLimit?: number;
+  /** Called once when the queue would exceed its limit; every queued and later packet is then rejected. */
+  onOverflow?: () => void;
 }): (packet: unknown[], next: PacketNext) => void {
+  const timeoutMs = input.admissionTimeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
+  const limit = input.queueLimit ?? TENANT_SOCKET_PACKET_QUEUE_LIMIT;
   let tail: Promise<void> = Promise.resolve();
   let queued = 0;
+  let overflowed = false;
   const enqueue = (packet: unknown[], next: PacketNext, admitted: Promise<boolean>) => {
     queued++;
     // Registered in the caller's async context, so dispatch keeps the packet's shared read scope.
@@ -57,12 +68,33 @@ export function createOrderedTenantPacketGate(input: {
       .then(() => admitted)
       .then((ok) => {
         queued--;
-        if (ok) next();
+        if (ok && !overflowed) next();
         else rejectTenantSocketPacket(packet, next);
       })
       .catch(() => undefined);
   };
+  const bounded = (admission: Promise<void>): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+    return Promise.race([
+      admission.then(
+        () => true,
+        () => false
+      ),
+      timedOut,
+    ]).finally(() => clearTimeout(timer));
+  };
   return (packet, next) => {
+    if (overflowed) return rejectTenantSocketPacket(packet, next);
+    if (queued >= limit) {
+      // A backlog this deep means admission is not keeping up; drop the connection rather than packets.
+      overflowed = true;
+      rejectTenantSocketPacket(packet, next);
+      input.onOverflow?.();
+      return;
+    }
     if (!input.needsAdmission(packet)) {
       // Raw realtime traffic never reads; it only waits behind an earlier admitted packet.
       if (queued === 0) next();
@@ -70,16 +102,7 @@ export function createOrderedTenantPacketGate(input: {
       return;
     }
     const run = input.scope ?? ((work) => work());
-    run(() =>
-      enqueue(
-        packet,
-        next,
-        input.admit(packet).then(
-          () => true,
-          () => false
-        )
-      )
-    );
+    run(() => enqueue(packet, next, bounded(input.admit(packet))));
   };
 }
 
