@@ -1,6 +1,7 @@
 import type { AgorClient, CapabilityPolicyDraft, User } from '@agor-live/client';
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { ACCESS_TTL_MS } from '../utils/accessCache';
 import { useBoardsSharedWithMe } from './useBoardsSharedWithMe';
 
 const ME = 'me';
@@ -144,5 +145,27 @@ describe('useBoardsSharedWithMe', () => {
     const second = renderHook(() => useBoardsSharedWithMe(client, superadmin, ['b']));
     await waitFor(() => expect(second.result.current('b')).toBe(true));
     expect(find).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-renders when a stale grant’s re-read fails, so it stops showing', async () => {
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({ primary_owner_user_id: ME, board_access: policy('private') })
+      .mockRejectedValueOnce(new Error('Forbidden'))
+      .mockReturnValue(new Promise(() => {}));
+    const client = clientFor({}, find);
+    const { result, rerender } = renderHook(
+      ({ ids }) => useBoardsSharedWithMe(client, superadmin, ids)('b'),
+      { initialProps: { ids: ['b'] } }
+    );
+    await waitFor(() => expect(result.current).toBe(true));
+
+    // Past the answer's TTL, a new board set re-reads `b`; `c` never settles, so only the failure can re-render.
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(now + ACCESS_TTL_MS + 1);
+    rerender({ ids: ['b', 'c'] });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(result.current).toBe(false));
+    clock.mockRestore();
   });
 });

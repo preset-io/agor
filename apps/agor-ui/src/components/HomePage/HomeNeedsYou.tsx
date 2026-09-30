@@ -2,7 +2,7 @@ import type { AgorClient } from '@agor-live/client';
 import { Alert, Segmented } from 'antd';
 import { memo } from 'react';
 import type { HomeCommentNeed, HomeNeed, HomeSessionNeed } from '../../store/selectors';
-import { HomeCommentRow, HomeFinishedGroupRow, HomeList, HomeSessionRow } from './HomeRow';
+import { HomeCommentRow, HomeList, HomeNeedRow } from './HomeRow';
 import { HomeCard, HomeLink, HomeSection, HomeShowMore, HomeSkeleton } from './HomeSection';
 
 export const NEEDS_PREVIEW = 3;
@@ -45,7 +45,7 @@ interface HomeNeedsYouProps {
   /** Counts and "all caught up" wait for the full session set; rows don't. */
   hydrated: boolean;
   onOpenSession: (sessionId: string) => void;
-  /** Gets the whole need: a failure row can stand for earlier failures too. */
+  /** Gets the whole need: a failure group's header stands for its earlier failures too. */
   onOpenFailure: (need: HomeSessionNeed) => void;
   onOpenComment: (need: HomeCommentNeed) => void;
   onMarkRead: (sessionId: string) => void;
@@ -54,8 +54,8 @@ interface HomeNeedsYouProps {
   markingAllRead?: boolean;
   /** While the connection can't take changes. */
   markAllReadDisabled?: boolean;
-  /** Omitted while the connection can't take changes. */
-  onArchive?: (sessionId: string) => void;
+  /** Omitted while the connection can't take changes; a failure group archives all of its runs. */
+  onArchive?: (sessionIds: string | readonly string[]) => void;
 }
 
 export const HomeNeedsYou = memo(function HomeNeedsYou({
@@ -125,20 +125,14 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
             items={needs}
             itemKey={(need) => need.key}
             renderItem={(need, index) =>
-              'session' in need && need.reason === 'finished' && need.earlier ? (
-                <HomeFinishedGroupRow
-                  need={{ ...need, earlier: need.earlier }}
-                  onOpen={onOpenSession}
-                  onMarkRead={onMarkRead}
-                />
-              ) : 'session' in need ? (
-                <HomeSessionRow
-                  session={need.session}
-                  reason={need.reason}
+              'session' in need ? (
+                <HomeNeedRow
+                  need={need}
                   client={index < NEEDS_PREVIEW ? client : undefined}
-                  onOpen={need.reason === 'failed' ? () => onOpenFailure(need) : onOpenSession}
-                  onMarkRead={need.reason === 'finished' ? onMarkRead : undefined}
-                  onArchive={need.reason === 'failed' ? onArchive : undefined}
+                  onOpenSession={onOpenSession}
+                  onOpenFailure={onOpenFailure}
+                  onMarkRead={onMarkRead}
+                  onArchive={onArchive}
                 />
               ) : (
                 <HomeCommentRow need={need} onOpen={onOpenComment} />

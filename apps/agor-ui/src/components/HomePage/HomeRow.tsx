@@ -9,7 +9,7 @@ import {
 } from '@ant-design/icons';
 import type { FlexProps, MenuProps } from 'antd';
 import { Button, Dropdown, Flex, Tooltip, Typography, theme } from 'antd';
-import { memo, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -20,6 +20,7 @@ import {
   makeBranchSelector,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { getTimeMs } from '../../utils/entityTime';
 import { pressableProps } from '../../utils/pressableProps';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
 import { formatRelativeTime } from '../../utils/time';
@@ -327,6 +328,7 @@ interface HomeSessionRowProps {
   onOpen: (sessionId: string) => void;
   onMarkRead?: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
+  archiveLabel?: string;
 }
 
 export const HomeSessionRow = memo(function HomeSessionRow({
@@ -341,6 +343,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   onOpen,
   onMarkRead,
   onArchive,
+  archiveLabel = 'Archive',
 }: HomeSessionRowProps) {
   const { token } = theme.useToken();
   const compact = useHomeCompact();
@@ -378,7 +381,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
       ? [
           {
             key: 'archive',
-            label: 'Archive',
+            label: archiveLabel,
             icon: <InboxOutlined />,
             onClick: () => onArchive(id),
           },
@@ -443,7 +446,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
                     icon={<InboxOutlined />}
                     onClick={() => onArchive(id)}
                   >
-                    Archive
+                    {archiveLabel}
                   </Button>
                 )}
               </Flex>
@@ -521,53 +524,139 @@ export const HomeCommentRow = memo(function HomeCommentRow({
   );
 });
 
-/** "N finished on {branch}": opens the latest run and expands to the rest. */
-export const HomeFinishedGroupRow = memo(function HomeFinishedGroupRow({
-  need,
-  onOpen,
-  onMarkRead,
-}: {
-  need: HomeSessionNeed & { earlier: Session[] };
-  onOpen: (sessionId: string) => void;
+interface HomeNeedRowProps {
+  need: HomeSessionNeed;
+  /** Reads what a permission request asks or why a run failed; pass only for visible previews. */
+  client?: AgorClient | null;
+  showContext?: boolean;
+  indent?: number;
+  onOpenSession: (sessionId: string) => void;
+  /** Gets the whole need, so every run a failure row stands for is recorded as opened. */
+  onOpenFailure: (need: HomeSessionNeed) => void;
   onMarkRead: (sessionId: string) => void;
-}) {
+  /** A failure group's header passes all of its runs; omitted while changes can't be made. */
+  onArchive?: (sessionIds: string | readonly string[]) => void;
+}
+
+/** A Needs you session row; a branch's grouped finished or failed runs render as one group row. */
+export const HomeNeedRow = memo(function HomeNeedRow(props: HomeNeedRowProps) {
+  return props.need.earlier?.length ? (
+    <HomeNeedGroupRow {...props} />
+  ) : (
+    <HomeSingleNeedRow {...props} />
+  );
+});
+
+function HomeSingleNeedRow({
+  need,
+  client,
+  showContext,
+  indent,
+  onOpenSession,
+  onOpenFailure,
+  onMarkRead,
+  onArchive,
+}: HomeNeedRowProps) {
+  const failed = need.reason === 'failed';
+  const openFailure = useCallback(() => onOpenFailure(need), [onOpenFailure, need]);
+  return (
+    <HomeSessionRow
+      session={need.session}
+      reason={need.reason}
+      client={client}
+      showContext={showContext}
+      indent={indent}
+      onOpen={failed ? openFailure : onOpenSession}
+      onMarkRead={need.reason === 'finished' ? onMarkRead : undefined}
+      onArchive={failed ? onArchive : undefined}
+    />
+  );
+}
+
+/**
+ * "N finished on {branch}" or "N failed on {branch}": opens the latest run, acts on
+ * every run (mark as read, archive all), and expands to each run with its own actions.
+ */
+function HomeNeedGroupRow({
+  need,
+  client,
+  onOpenSession,
+  onOpenFailure,
+  onMarkRead,
+  onArchive,
+}: HomeNeedRowProps) {
   const { token } = theme.useToken();
   const [expanded, setExpanded] = useState(false);
-  const { session, earlier } = need;
+  const { session, reason } = need;
+  const failed = reason === 'failed';
   const branch = useAgorStore(
     useMemo(() => makeBranchSelector(session.branch_id), [session.branch_id])
   );
   const name = branch ? (getTeammateConfig(branch)?.displayName ?? branch.name) : 'this branch';
-  const all = [session, ...earlier];
+  // Each run as its own need, so opening one expanded failure records only that one.
+  const runs = useMemo(
+    () =>
+      [need.session, ...(need.earlier ?? [])].map(
+        (run): HomeSessionNeed => ({
+          key: `session:${run.session_id}`,
+          reason: need.reason,
+          at: getTimeMs(run, 'last_updated'),
+          session: run,
+        })
+      ),
+    [need]
+  );
+  const openGroup = useCallback(() => onOpenFailure(need), [onOpenFailure, need]);
+  const ids = runs.map((run) => run.session.session_id);
   return (
     <>
       <HomeSessionRow
         session={session}
-        reason="finished"
-        title={`${all.length} finished on ${name}`}
-        onOpen={onOpen}
-        onMarkRead={() => {
-          for (const run of all) onMarkRead(run.session_id);
-        }}
-        expand={{ expanded, count: all.length, onToggle: () => setExpanded(!expanded) }}
+        reason={reason}
+        client={client}
+        title={`${runs.length} ${failed ? 'failed' : 'finished'} on ${name}`}
+        onOpen={failed ? openGroup : onOpenSession}
+        onMarkRead={
+          failed
+            ? undefined
+            : () => {
+                for (const id of ids) onMarkRead(id);
+              }
+        }
+        onArchive={failed && onArchive ? () => onArchive(ids) : undefined}
+        archiveLabel={`Archive all ${runs.length}`}
+        expand={{ expanded, count: runs.length, onToggle: () => setExpanded(!expanded) }}
       />
       {expanded && (
         <div style={{ borderTop: homeDivider(token) }}>
           <HomeList
-            items={all}
-            itemKey={(run) => run.session_id}
-            renderItem={(run) => (
-              <HomeSessionRow
-                session={run}
-                showContext={false}
-                indent={token.paddingLG}
-                onOpen={onOpen}
-                onMarkRead={onMarkRead}
-              />
-            )}
+            items={runs}
+            itemKey={(run) => run.key}
+            renderItem={(run) =>
+              failed ? (
+                <HomeNeedRow
+                  need={run}
+                  client={client}
+                  showContext={false}
+                  indent={token.paddingLG}
+                  onOpenSession={onOpenSession}
+                  onOpenFailure={onOpenFailure}
+                  onMarkRead={onMarkRead}
+                  onArchive={onArchive}
+                />
+              ) : (
+                <HomeSessionRow
+                  session={run.session}
+                  showContext={false}
+                  indent={token.paddingLG}
+                  onOpen={onOpenSession}
+                  onMarkRead={onMarkRead}
+                />
+              )
+            }
           />
         </div>
       )}
     </>
   );
-});
+}

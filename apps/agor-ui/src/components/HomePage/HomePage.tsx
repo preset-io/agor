@@ -341,7 +341,7 @@ export const HomePage = memo(function HomePage({
     },
     [onBoardClick, onBranchClick, onSessionClick]
   );
-  // The row stands for its earlier failures too, so opening it marks every one seen.
+  // A group header stands for its earlier failures too, so opening it marks every one seen.
   const openFailure = useCallback(
     (need: HomeSessionNeed) => {
       const now = Date.now();
@@ -389,7 +389,10 @@ export const HomePage = memo(function HomePage({
     }
   }, [client, userId, showError]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
-  const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
+  const archive = useCallback(
+    (sessionIds: string | readonly string[]) => confirmArchive(sessionIds),
+    [confirmArchive]
+  );
   const showRunning = useCallback(() => {
     setTab('running');
     scrollToSection('mywork');

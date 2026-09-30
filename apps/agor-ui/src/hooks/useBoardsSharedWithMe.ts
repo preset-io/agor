@@ -87,7 +87,10 @@ export function useBoardsSharedWithMe(
         { signal: controller.signal }
       ).then(
         () => setVersion((v) => v + 1),
-        () => {}
+        // A failed re-read dropped any stale answer, so consumers re-render to stop showing it.
+        (error) => {
+          if ((error as Error)?.name !== 'AbortError') setVersion((v) => v + 1);
+        }
       );
     }
     return () => controller.abort();
