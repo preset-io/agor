@@ -9,7 +9,7 @@ import { isTenantRestrictedRejection } from './tenant-access.js';
 import { TENANT_SAFETY_TASK_METHODS } from './tenant-safety-settlement.js';
 
 /** This only preserves transport to authenticated service safety guards, never authorizes an RPC. */
-export function isTenantSafetyPacket(packet: unknown[]): boolean {
+function isTenantSafetyPacket(packet: unknown[]): boolean {
   const [method, path] = packet;
   if (path === 'tasks') return TENANT_SAFETY_TASK_METHODS.includes(String(method));
   return (

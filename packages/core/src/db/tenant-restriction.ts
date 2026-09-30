@@ -53,7 +53,7 @@ function rows(result: unknown): Record<string, unknown>[] {
 }
 
 /** Acquire before branch/session/task locks; caller must hold a transaction. */
-export async function lockTenantExecutionFence(db: Database, tenantId: string): Promise<void> {
+async function lockTenantExecutionFence(db: Database, tenantId: string): Promise<void> {
   if (!isPostgresDatabaseHandle(db)) return;
   await assertRestrictionScope(db, tenantId);
   const key = JSON.stringify(['tenant-execution-v1', tenantId]);
@@ -106,7 +106,7 @@ function parseRow(row: Record<string, unknown>): TenantRestrictionRecord {
   return parsed.data;
 }
 
-export interface TenantRestrictionIntentOptions {
+interface TenantRestrictionIntentOptions {
   /** Transition line sink (default `console.info`); the CLI passes stderr to keep stdout parseable. */
   log?: (line: string) => void;
 }

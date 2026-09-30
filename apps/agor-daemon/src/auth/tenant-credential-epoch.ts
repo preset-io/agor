@@ -9,7 +9,7 @@ import {
 import { NotAuthenticated } from '@agor/core/feathers';
 import { TENANT_RESTRICTED_ERROR_CODE } from '@agor/core/types';
 
-export const TENANT_CREDENTIAL_EPOCH_CLAIM = 'tenant_credential_epoch';
+const TENANT_CREDENTIAL_EPOCH_CLAIM = 'tenant_credential_epoch';
 
 /** One message for every rejection: the code in `data`, not text, is the contract. */
 const CREDENTIAL_REJECTION = 'Tenant credential cannot be verified';

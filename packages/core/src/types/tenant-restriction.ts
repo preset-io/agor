@@ -28,7 +28,6 @@ export const TenantRestrictionCommandSchema = z
   .strict();
 
 export type TenantRestrictionCommand = z.infer<typeof TenantRestrictionCommandSchema>;
-export type TenantRestrictionPhase = 'restricted' | 'release_prepared' | 'active';
 
 export const TenantRestrictionRecordSchema = z
   .object({
