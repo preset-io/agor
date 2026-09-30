@@ -37,6 +37,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   finalizeAuthenticatedConnectionAuthority,
   getAuthenticatedConnectionAuthority,
+  getAuthenticatedConnectionCredentialPayload,
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
 import {
@@ -2818,6 +2819,63 @@ describe('configureChannels tenant isolation', () => {
         executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       })
     ).toThrow(/immutable/i);
+  });
+
+  it('keeps the verified credential claims for every principal kind, terminal executors included', () => {
+    const { app } = makeChannelHarness();
+    const epoch = 'a'.repeat(64);
+    const claims = { tenant_id: 'tenant-a', tenant_credential_epoch: epoch };
+    const terminalUser = {
+      user_id: 'executor-service',
+      role: 'terminal-executor',
+      _isTerminalExecutor: true,
+      terminal_user_id: ALICE,
+      terminal_id: 'terminal-1',
+      terminal_branch_id: 'branch-1',
+      terminal_owner_boot_id: 'boot-1',
+    };
+    const executorResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: { ...claims, type: 'executor-session', session_id: 's', task_id: 't' },
+      },
+    };
+    attachTaskExecutorCandidate(app, executorResult, 'tenant-a', 's', 't');
+    const results = {
+      user: { user: { user_id: ALICE }, authentication: { strategy: 'jwt', payload: claims } },
+      impersonation: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { ...claims, is_impersonated: true } },
+      },
+      service: {
+        user: { user_id: 'executor-service', _isServiceAccount: true },
+        authentication: { strategy: 'jwt', payload: { ...claims, type: 'service' } },
+      },
+      'terminal-executor': {
+        user: terminalUser,
+        authentication: { strategy: 'jwt', payload: { ...claims, type: 'service' } },
+      },
+      executor: executorResult,
+    };
+    for (const [kind, authResult] of Object.entries(results)) {
+      const connection = {};
+      const authority = finalizeAuthenticatedConnectionAuthority({
+        connection,
+        authResult,
+        multiTenancy: REQUIRED_TENANCY,
+        executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+      });
+      expect(authority.principal.kind).toBe(kind === 'impersonation' ? 'user' : kind);
+      const payload = getAuthenticatedConnectionCredentialPayload(connection) as Record<
+        string,
+        unknown
+      >;
+      expect(payload?.tenant_credential_epoch).toBe(epoch);
+      expect(Object.isFrozen(payload)).toBe(true);
+      retireAuthenticatedConnectionAuthority(connection);
+      expect(getAuthenticatedConnectionCredentialPayload(connection)).toBeUndefined();
+    }
   });
 
   it('ignores caller-controlled login params and joins only from the signed tenant claim', () => {
