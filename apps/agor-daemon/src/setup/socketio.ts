@@ -975,6 +975,7 @@ export function createSocketIOConfig(
 
     // Assigned once the restriction monitor exists; no tenant is unverified before it.
     let isTenantSocketUnverified = (_tenantId: string | undefined) => false;
+    let noteTenantSocketAdmitted = (_tenantId: string) => {};
 
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
@@ -996,6 +997,9 @@ export function createSocketIOConfig(
           Object.keys(app.services).flatMap((path) => getServiceOptions(app.service(path)).methods)
         );
         const executorSocket = authority?.principal.kind === 'executor';
+        // The handshake just read this tenant's admission, so the monitor's verification bound starts here.
+        if (!executorSocket && authority?.tenant?.tenant_id)
+          noteTenantSocketAdmitted(authority.tenant.tenant_id);
         const gate = createOrderedTenantPacketGate({
           // Raw terminal/presence packets read only while the monitor cannot verify their tenant.
           needsAdmission: (packet) =>
@@ -2081,6 +2085,7 @@ export function createSocketIOConfig(
       : undefined;
     isTenantSocketUnverified = (tenantId) =>
       !!tenantId && !!restrictionMonitor?.isUnverified(tenantId);
+    noteTenantSocketAdmitted = (tenantId) => restrictionMonitor?.admitted(tenantId);
     const restrictionInterval = restrictionMonitor
       ? setInterval(async () => {
           if (checkingRestrictions) return;

@@ -237,15 +237,19 @@ retires the socket. A bounded per-replica monitor (1 s tick) disconnects
 ordinary customer/service/terminal sockets only on a positive observation: a
 closed tenant or a stale credential generation. A failed, slow (>2 s) or
 saturated read skips that tenant until the next tick with a rate-limited warning;
-each sweep reads the least recently read tenants first, so the eight-read bound
+each sweep reads the least recently verified tenants first, so the eight-read bound
 cannot starve one. RPCs stay closed meanwhile because each reads admission itself,
-but raw packets do not read, so a skip alone would let terminal input continue:
-after 10 consecutive failed or timed-out observations (about 10 s at the 1 s tick,
-longer when sweeps run slow; saturation does not count) the monitor marks the
-tenant unverified. While marked, every raw terminal/presence/cursor packet of its
-sockets passes the same per-packet admission read in arrival order and is refused
-when that read fails. Any successful monitor read, even one settling after its
-timeout, clears the streak and the mark. Being unverifiable never disconnects a
+but raw packets do not read, so a skip alone would let terminal input continue: a
+tenant is unverified once no successful read has verified it for 10 s, whatever
+kept the reads from succeeding (failure, timeout, saturation or an abandoned read).
+A read verifies the state as of its start, not its settlement, so a late or
+abandoned read never counts as fresher than its snapshot; the socket's handshake
+read starts the clock. The 10 s is judged as each packet arrives, so it holds when
+sweeps run slow or a replica has more tenants than eight reads cover (such a
+replica gates more tenants, never fewer). While unverified, every raw
+terminal/presence/cursor packet of its sockets passes the same per-packet admission
+read in arrival order and is refused when that read fails; a successful read
+started within the last 10 s ends it. Being unverifiable never disconnects a
 socket; only a positive observation retires it. A read still
 pending after 4 s is abandoned once so a fresh read can start; while that
 abandoned read is outstanding no further read replaces it, and abandoned reads
