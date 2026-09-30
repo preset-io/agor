@@ -1,4 +1,4 @@
-import type { BoardComment, Branch, Session } from '@agor-live/client';
+import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { buildSessionMaps, EMPTY_MAPS } from './agorMaps';
 import type { AgorState } from './agorStore';
@@ -14,6 +14,14 @@ import {
 const ME = 'user-me';
 const NOW = Date.parse('2026-09-28T12:00:00.000Z');
 const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+/** A session whose latest run started `h` hours ago: a UUIDv7 task id carries that start. */
+const ranAt = (h: number) => {
+  const hex = (NOW - h * 3_600_000).toString(16).padStart(12, '0');
+  return {
+    created_at: hoursAgo(h + 1),
+    tasks: [`${hex.slice(0, 8)}-${hex.slice(8)}-7000-8000-000000000000`],
+  } as Partial<Session>;
+};
 
 const session = (id: string, extra: Partial<Session> = {}) =>
   ({
@@ -41,21 +49,29 @@ const comment = (id: string, extra: Partial<BoardComment> = {}) =>
     ...extra,
   }) as unknown as BoardComment;
 
+const board = (id: string, archived = false) => ({ board_id: id, archived }) as Board;
+
 const state = ({
   sessions = [],
   comments = [],
   branches = [],
+  boards = [],
+  branchesHydrated = false,
 }: {
   sessions?: Session[];
   comments?: BoardComment[];
   branches?: Branch[];
+  boards?: Board[];
+  branchesHydrated?: boolean;
 }) =>
   ({
     ...EMPTY_MAPS,
     ...buildSessionMaps(sessions),
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),
+    boardById: new Map(boards.map((b) => [b.board_id, b])),
     sessionsHydrated: true,
+    branchesHydrated,
   }) as unknown as AgorState;
 
 const select = (s: AgorState, options: Partial<HomeBucketsOptions> = {}) =>
@@ -74,7 +90,7 @@ describe('makeHomeBucketsSelector', () => {
     const s = state({
       sessions: [
         session('finished', { ready_for_prompt: true }),
-        session('failed', { status: 'failed', last_updated: hoursAgo(2) }),
+        session('failed', { status: 'failed', ready_for_prompt: true, last_updated: hoursAgo(2) }),
         session('perm-old', { status: 'awaiting_permission', last_updated: hoursAgo(5) }),
         session('perm-new', { status: 'awaiting_permission', last_updated: hoursAgo(3) }),
       ],
@@ -139,44 +155,125 @@ describe('makeHomeBucketsSelector', () => {
     expect(buckets.needs[0].earlier?.map((e) => e.session_id)).toEqual(['r2', 'r1']);
   });
 
-  it('lists the boards of the latest sessions, most recent first', () => {
+  it('lists the known, unarchived boards of the latest sessions, most recent first', () => {
     const s = state({
       sessions: [
         session('a', { branch_board_id: 'board-a', last_updated: hoursAgo(3) }),
         session('b', { branch_board_id: 'board-b', last_updated: hoursAgo(1) }),
         session('a2', { branch_board_id: 'board-a', last_updated: hoursAgo(2) }),
         session('c', { branch_board_id: 'board-c', last_updated: hoursAgo(5) }),
+        session('gone', { branch_board_id: 'board-gone', last_updated: hoursAgo(0) }),
+        session('arch', { branch_board_id: 'board-arch', last_updated: hoursAgo(0) }),
       ] as Session[],
+      boards: [board('board-a'), board('board-b'), board('board-c'), board('board-arch', true)],
     });
     expect(select(s, { boardsLimit: 2 }).boardIds).toEqual(['board-b', 'board-a']);
+    expect(select(s, { boardsLimit: 5 }).boardIds).toEqual(['board-b', 'board-a', 'board-c']);
     expect(select(s).boardIds).toEqual([]);
   });
 
   it('shows one failure per branch from the last 7 days', () => {
     const s = state({
       sessions: [
-        session('a1', { status: 'failed', branch_id: 'b', last_updated: hoursAgo(2) }),
-        session('a2', { status: 'timed_out', branch_id: 'b', last_updated: hoursAgo(1) }),
-        session('old', { status: 'failed', last_updated: hoursAgo(24 * 8) }),
+        session('a1', {
+          status: 'failed',
+          ready_for_prompt: true,
+          branch_id: 'b',
+          last_updated: hoursAgo(2),
+        }),
+        session('a2', {
+          status: 'timed_out',
+          ready_for_prompt: true,
+          branch_id: 'b',
+          last_updated: hoursAgo(1),
+        }),
+        session('old', {
+          status: 'failed',
+          ready_for_prompt: true,
+          last_updated: hoursAgo(24 * 8),
+        }),
       ],
     });
     expect(reasons(s)).toEqual(['failed:a2']);
     expect(select(s).recent.map((r) => r.session_id)).toEqual(['a1', 'old']);
+    expect(select(s).unreadCount).toBe(0);
   });
 
-  it('drops a failure once a newer run on its branch succeeds or the user opened it', () => {
-    const failed = session('f', { status: 'failed', branch_id: 'b', last_updated: hoursAgo(3) });
-    const later = session('ok', { status: 'completed', branch_id: 'b', last_updated: hoursAgo(1) });
-    const earlier = session('ok0', { status: 'idle', branch_id: 'b', last_updated: hoursAgo(5) });
-    const untouched = session('new', { status: 'idle', branch_id: 'b', last_updated: hoursAgo(1) });
+  it('never counts a failure as a finished result, even once it no longer needs the user', () => {
+    const failure = (id: string, extra: Partial<Session>) =>
+      session(id, { status: 'failed', ready_for_prompt: true, ...extra });
+    const s = state({
+      sessions: [
+        failure('old', { last_updated: hoursAgo(24 * 8) }),
+        failure('opened', { branch_id: 'o' }),
+        failure('superseded', { branch_id: 'b', ...ranAt(3) }),
+        session('retry', { status: 'idle', branch_id: 'b', ...ranAt(1) }),
+        session('late', {
+          status: 'timed_out',
+          ready_for_prompt: true,
+          last_updated: hoursAgo(24 * 9),
+        }),
+      ],
+    });
+    const buckets = select(s, { openedFailures: { opened: NOW } });
+    expect(buckets.needs).toEqual([]);
+    expect(buckets.needsByReason).toEqual({ permission: 0, failed: 0, finished: 0 });
+    expect(buckets.unreadCount).toBe(0);
+    expect(buckets.recent.map((r) => r.session_id).sort()).toEqual([
+      'late',
+      'old',
+      'opened',
+      'retry',
+      'superseded',
+    ]);
+  });
+
+  it('drops a failure once the user started a later run on its branch that ran cleanly, or opened it', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+    });
+    const later = session('ok', { status: 'idle', branch_id: 'b', ...ranAt(1) });
+    const completed = session('done', { status: 'completed', branch_id: 'b', ...ranAt(1) });
+    const earlier = session('ok0', { status: 'idle', branch_id: 'b', ...ranAt(5) });
+    const neverRan = session('new', { status: 'idle', branch_id: 'b', created_at: hoursAgo(1) });
     expect(reasons(state({ sessions: [failed, earlier] }))).toEqual(['failed:f']);
-    expect(reasons(state({ sessions: [failed, untouched] }))).toEqual(['failed:f']);
+    expect(reasons(state({ sessions: [failed, neverRan] }))).toEqual(['failed:f']);
     expect(reasons(state({ sessions: [failed, later] }))).toEqual([]);
+    expect(reasons(state({ sessions: [failed, completed] }))).toEqual([]);
     const theirs = { ...later, created_by: 'user-other' } as Session;
     expect(reasons(state({ sessions: [failed, theirs] }))).toEqual(['failed:f']);
     expect(reasons(state({ sessions: [failed] }), { openedFailures: { f: NOW } })).toEqual([]);
     expect(
       reasons(state({ sessions: [failed] }), { openedFailures: { f: Date.parse(hoursAgo(4)) } })
+    ).toEqual(['failed:f']);
+  });
+
+  it('does not let a renamed older run or a timed-out later run supersede a failure', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+    });
+    // Renaming bumps last_updated but not when the run started.
+    const renamed = session('old-ok', {
+      status: 'idle',
+      branch_id: 'b',
+      ...ranAt(5),
+      last_updated: hoursAgo(0),
+    });
+    expect(reasons(state({ sessions: [failed, renamed] }))).toEqual(['failed:f']);
+    const timedOut = session('to', {
+      status: 'timed_out',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(1),
+    });
+    expect(
+      reasons(state({ sessions: [failed, timedOut] }), { openedFailures: { to: NOW } })
     ).toEqual(['failed:f']);
   });
 
@@ -249,6 +346,47 @@ describe('makeCommentsForYouSelector', () => {
     const added = new Map(s.commentById).set('d', comment('d', { content: '@Kasia again' }));
     expect(selector({ ...s, commentById: added })).toHaveLength(2);
   });
+
+  it('recomputes when a session a row depends on changes owner or leaves the store', () => {
+    const selector = makeCommentsForYouSelector({ userId: ME, userName: 'Kasia' });
+    const s = state({
+      sessions: [session('mine')],
+      comments: [comment('on-session', { session_id: 'mine' } as never)],
+    });
+    const first = selector(s);
+    expect(first.map((n) => n.key)).toEqual(['comment:on-session']);
+    const streamed = buildSessionMaps([session('mine', { title: 'streamed' })]);
+    expect(selector({ ...s, ...streamed })).toBe(first);
+    const handedOver = buildSessionMaps([session('mine', { created_by: 'user-other' })]);
+    expect(selector({ ...s, ...handedOver })).toEqual([]);
+    expect(selector(s)).toHaveLength(1);
+    expect(selector({ ...s, ...buildSessionMaps([]) })).toEqual([]);
+  });
+
+  it('drops threads on archived boards or branches', () => {
+    const ping = (id: string, extra: object) =>
+      comment(id, { content: 'ping @Kasia', ...extra } as Partial<BoardComment>);
+    const comments = [
+      ping('on-archived-board', { board_id: 'board-arch' }),
+      ping('on-archived-branch', { branch_id: 'branch-arch' }),
+      ping('on-missing-branch', { branch_id: 'branch-gone' }),
+      ping('on-live-branch', { branch_id: 'branch-live' }),
+    ];
+    const branches = [
+      { branch_id: 'branch-arch', archived: true } as Branch,
+      { branch_id: 'branch-live', archived: false } as Branch,
+    ];
+    const boards = [board('board-1'), board('board-arch', true)];
+    const keys = (branchesHydrated: boolean) =>
+      makeCommentsForYouSelector({ userId: ME, userName: 'Kasia' })(
+        state({ comments, branches, boards, branchesHydrated })
+      )
+        .map((n) => n.thread.comment_id)
+        .sort();
+    // Until branches hydrate, a missing branch may just not be loaded yet.
+    expect(keys(false)).toEqual(['on-live-branch', 'on-missing-branch']);
+    expect(keys(true)).toEqual(['on-live-branch']);
+  });
 });
 
 describe('makeLatestOwnSessionSelector', () => {
@@ -292,5 +430,18 @@ describe('makeTeammatesSelector', () => {
     } as unknown as AgorState;
     expect(makeTeammatesSelector(ME, 'shared')(s).map((b) => b.branch_id)).toEqual(['shared']);
     expect(makeTeammatesSelector(ME, 'own')(s).map((b) => b.branch_id)).toEqual(['mine']);
+  });
+
+  it('treats every unarchived board in the store as visible and runs no access check itself', () => {
+    // Contract: callers whose board list is not policy-scoped must filter 'shared' themselves.
+    const s = state({
+      branches: [
+        teammate('on-listed', 'b-listed'),
+        teammate('on-archived', 'b-archived'),
+        teammate('on-unlisted', 'b-unlisted'),
+      ],
+      boards: [board('b-listed'), board('b-archived', true)],
+    });
+    expect(makeTeammatesSelector(ME, 'shared')(s).map((b) => b.branch_id)).toEqual(['on-listed']);
   });
 });
