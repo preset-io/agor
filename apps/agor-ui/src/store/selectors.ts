@@ -16,7 +16,7 @@ import { SessionStatus } from '@agor-live/client';
 import { commentMentionsUser } from '../utils/commentMentions';
 import type { AgorState } from './agorStore';
 
-// Home selectors live in homeSelectors.ts; re-exported so existing imports keep working.
+// Home selectors live in homeSelectors.ts; re-exported so store selectors have one import surface.
 export {
   compareHomeNeeds,
   type HomeBucketsOptions,
