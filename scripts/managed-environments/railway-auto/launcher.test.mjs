@@ -488,7 +488,7 @@ test('live region and limit response shapes are accepted without repeated limit 
     }
     if (query.includes('PreviewLimits'))
       body.data.serviceInstanceLimits = {
-        containers: { cpu: 2, memoryBytes: 4000000000, pidLimit: 1000 },
+        containers: { cpu: 2, memoryBytes: 8000000000, pidLimit: 1000 },
       };
     return new Response(JSON.stringify(body));
   };

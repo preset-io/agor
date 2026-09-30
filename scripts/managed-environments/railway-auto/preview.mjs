@@ -420,7 +420,7 @@ export class Preview {
       location
     );
     if (
-      (limits?.containers?.memoryBytes ?? limits?.memoryGB * 1_000_000_000) !== 4_000_000_000 ||
+      (limits?.containers?.memoryBytes ?? limits?.memoryGB * 1_000_000_000) !== 8_000_000_000 ||
       (limits?.containers?.cpu ?? limits?.vCPUs) !== 2
     ) {
       const result = await this.api.query(
@@ -429,7 +429,7 @@ export class Preview {
           input: {
             serviceId: owned.service.id,
             environmentId: owned.environment.id,
-            memoryGB: 4,
+            memoryGB: 8,
             vCPUs: 2,
           },
         }

@@ -99,7 +99,7 @@ example where that risk is unacceptable.
 Capacity is three retained previews in the simplified setup (legacy JSON can
 configure 1–10), checked before
 creation, not an atomic quota. Stopped previews count. Each app has one `sfo`
-replica, 2 vCPUs/4 GB limit and bounded restart retries. Inventory reads are
+replica, 2 vCPUs/8 GB limit and bounded restart retries. Inventory reads are
 bounded at 100 resources; API calls have a four-minute deadline. These are not
 dollar spending limits: configure Railway spending controls separately.
 
