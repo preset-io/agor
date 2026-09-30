@@ -68,30 +68,32 @@ describe('usePrimaryTeammate', () => {
     expect(getPrimaryTeammate).toHaveBeenCalledTimes(2);
   });
 
-  it('is not current from the very render an identity change begins until the new answer lands', async () => {
+  it('is not owned from the very render a caller change begins until the new answer lands', async () => {
     const next = deferred<Branch | null>();
     const getPrimaryTeammate = vi
       .fn<() => Promise<Branch | null>>()
       .mockResolvedValueOnce(branchA)
       .mockReturnValueOnce(next.promise);
     const client = clientResolving(getPrimaryTeammate);
-    const renders: { generation: number; current: boolean }[] = [];
+    const renders: { generation: number; ownedByCaller: boolean }[] = [];
     const { result, rerender } = renderHook(
       ({ generation }) => {
         const teammate = usePrimaryTeammate(client, 'user-1', generation);
-        renders.push({ generation, current: teammate.current });
+        renders.push({ generation, ownedByCaller: teammate.ownedByCaller });
         return teammate;
       },
       { initialProps: { generation: 0 } }
     );
-    await waitFor(() => expect(result.current).toMatchObject({ branch: branchA, current: true }));
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ branch: branchA, ownedByCaller: true })
+    );
 
     rerender({ generation: 1 });
     expect(result.current.branch).toBe(branchA);
-    expect(renders.filter((entry) => entry.generation === 1 && entry.current)).toEqual([]);
+    expect(renders.filter((entry) => entry.generation === 1 && entry.ownedByCaller)).toEqual([]);
 
     await act(async () => next.resolve(branchB));
-    expect(result.current).toMatchObject({ branch: branchB, current: true });
+    expect(result.current).toMatchObject({ branch: branchB, ownedByCaller: true });
   });
 
   it('keeps the branch owned across a refresh-key re-resolve, but not across a caller change', async () => {
@@ -108,31 +110,21 @@ describe('usePrimaryTeammate', () => {
     );
     await waitFor(() => expect(result.current.ownedByCaller).toBe(true));
     rerender({ userId: 'user-1', refreshKey: true });
-    expect(result.current).toMatchObject({ branch: branchA, current: false, ownedByCaller: true });
+    expect(result.current).toMatchObject({ branch: branchA, ownedByCaller: true });
     await act(async () => next.resolve(branchA));
     rerender({ userId: 'user-2', refreshKey: true });
     expect(result.current).toMatchObject({ branch: branchA, ownedByCaller: false });
   });
 
-  it('is not current after a failed resolve, and current again after an explicit pick', async () => {
+  it('an explicit pick clears a failed resolve and owns the picked branch', async () => {
     const client = clientResolving(async () => {
       throw new Error('offline');
     });
     const { result } = renderHook(() => usePrimaryTeammate(client, 'user-1', 0));
     await waitFor(() => expect(result.current.failed).toBe(true));
-    expect(result.current.current).toBe(false);
+    expect(result.current.ownedByCaller).toBe(false);
     act(() => result.current.setBranch(branchA));
-    expect(result.current).toMatchObject({ branch: branchA, current: true });
-  });
-
-  it('an explicit pick clears a failed resolve', async () => {
-    const client = clientResolving(async () => {
-      throw new Error('offline');
-    });
-    const { result } = renderHook(() => usePrimaryTeammate(client, 'user-1', 0));
-    await waitFor(() => expect(result.current.failed).toBe(true));
-    act(() => result.current.setBranch(branchA));
-    expect(result.current).toMatchObject({ branch: branchA, failed: false });
+    expect(result.current).toMatchObject({ branch: branchA, failed: false, ownedByCaller: true });
   });
 
   it('an explicit pick supersedes a resolve still in flight', async () => {
@@ -141,9 +133,17 @@ describe('usePrimaryTeammate', () => {
     const { result } = renderHook(() => usePrimaryTeammate(client, 'user-1', 0));
     expect(result.current.resolving).toBe(true);
     act(() => result.current.setBranch(branchA));
-    expect(result.current).toMatchObject({ branch: branchA, current: true, resolving: false });
+    expect(result.current).toMatchObject({
+      branch: branchA,
+      ownedByCaller: true,
+      resolving: false,
+    });
     await act(async () => pending.resolve(branchB));
-    expect(result.current).toMatchObject({ branch: branchA, current: true, resolving: false });
+    expect(result.current).toMatchObject({
+      branch: branchA,
+      ownedByCaller: true,
+      resolving: false,
+    });
   });
 
   it('a manual refresh settling after unmount reports undefined', async () => {

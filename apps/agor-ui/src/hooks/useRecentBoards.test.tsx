@@ -50,6 +50,21 @@ describe('useRecentBoards', () => {
     ).toEqual(['b9', 'b1', 'b2']);
   });
 
+  it('records visits without a subscription, and none before there is a user', async () => {
+    vi.resetModules();
+    const { useTrackBoardVisit, useRecentBoards } = await import('./useRecentBoards');
+    const anonymous = renderHook(() => useTrackBoardVisit(undefined));
+    act(() => anonymous.result.current('b1'));
+    expect(Object.keys(window.localStorage)).toEqual([]);
+
+    const reader = renderHook(() => useRecentBoards([], '', 'user-1'));
+    const tracker = renderHook(() => useTrackBoardVisit('user-1'));
+    act(() => tracker.result.current('b1'));
+    act(() => tracker.result.current('b2'));
+    act(() => tracker.result.current('b1'));
+    expect(reader.result.current.recentBoardIds).toEqual(['b1', 'b2']);
+  });
+
   it('keeps the shared key when the per-user write fails', async () => {
     window.localStorage.setItem(LEGACY_KEY, JSON.stringify(['b1']));
     const useRecentBoards = await loadHook();

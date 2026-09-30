@@ -1,7 +1,13 @@
-import type { AgorClient, EffectiveBranchAccess } from '@agor-live/client';
+import type { AgorClient, EffectiveBranchAccess, User } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
-import { failuresStillIn, peekAccess, readAccess, withoutFailure } from '../utils/accessCache';
+import {
+  accessScope,
+  failuresStillIn,
+  peekAccess,
+  readAccess,
+  withoutFailure,
+} from '../utils/accessCache';
 import { canStartSessions } from '../utils/branchAccess';
 
 const canStartSessionsOn = (client: AgorClient, branchId: string) =>
@@ -24,12 +30,13 @@ const NO_FAILURES: ReadonlySet<string> = new Set();
  */
 export function useSessionAccess(
   client: AgorClient | null,
-  userId: string | undefined,
+  user: User | null | undefined,
   branchIds: string[],
   { read = true }: { read?: boolean } = {}
 ) {
   const { authGeneration } = useConnectionState();
-  const scope = `${userId}:${authGeneration}`;
+  const userId = user?.user_id;
+  const scope = accessScope(user, authGeneration);
   const key = branchIds.join(',');
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);

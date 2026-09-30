@@ -1,6 +1,6 @@
-import type { AgorClient, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, App as AntApp, Button, Flex, Skeleton, Typography, theme } from 'antd';
+import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
+import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
+import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -10,7 +10,7 @@ import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { userStorageKey } from '../../hooks/useUserLocalStorage';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
   agorStore,
@@ -22,8 +22,10 @@ import {
   compareHomeNeeds,
   type HomeCommentNeed,
   isUnreadResult,
+  lastRunStartedAt,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
 import { runWithLimit } from '../../utils/promisePool';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
@@ -33,19 +35,25 @@ import {
 import { patchUserPreferences } from '../../utils/userPreferences';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
-import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab, type MyWorkView } from './HomeMyWork';
+import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
 import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './HomeNeedsYou';
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
 import { HomeTeammatesSection } from './HomeTeammates';
+import { HOME_MAIN_COLUMN_BASIS, HOME_RAIL_BASIS } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
-const OPENED_FAILURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Kept past the 7-day failure window: entries hold run starts, and a later patch can keep an old run's failure in view.
+const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
+const NO_OPENED_FAILURES: Record<string, number> = {};
+
+const isHomeWorkView = (value: unknown): value is HomeWorkView =>
+  HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
 type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
 
@@ -179,9 +187,9 @@ export const HomePage = memo(function HomePage({
   onSeeAllTeammates,
 }: HomePageProps) {
   const { token } = theme.useToken();
-  const { message } = AntApp.useApp();
-  const navigate = useNavigate();
+  const { showError } = useThemedMessage();
   const location = useLocation();
+  const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
   const { connected, connecting } = useConnectionState();
   const railReady = useIdleReady();
@@ -192,16 +200,17 @@ export const HomePage = memo(function HomePage({
   const [needsExpanded, setNeedsExpanded] = useState(false);
   const [tab, setTab] = useState<MyWorkTab>('recent');
   // This visit's pick wins over the loaded record; keyed by user so it never crosses accounts.
-  const [viewPick, setViewPick] = useState<{ userId?: string; view: MyWorkView }>();
-  const workView: MyWorkView =
+  const [viewPick, setViewPick] = useState<{ userId?: string; view: HomeWorkView }>();
+  const savedView = currentUser?.preferences?.homeWorkView;
+  const workView: HomeWorkView =
     viewPick && viewPick.userId === userId
       ? viewPick.view
-      : currentUser?.preferences?.homeWorkView === 'board'
-        ? 'board'
-        : 'list';
+      : isHomeWorkView(savedView)
+        ? savedView
+        : HOME_WORK_VIEWS[0];
   const viewWrites = useRef(Promise.resolve());
   const changeWorkView = useCallback(
-    (view: MyWorkView) => {
+    (view: HomeWorkView) => {
       setViewPick({ userId, view });
       if (!client || !userId) return;
       // Chained so the last pick lands last; a failed write keeps the pick on this device.
@@ -213,13 +222,15 @@ export const HomePage = memo(function HomePage({
     },
     [client, userId]
   );
-  const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage(
-    userStorageKey(userId, 'home-only-mine'),
+  const [onlyStartedByMe, setOnlyStartedByMe] = useUserLocalStorage(
+    userId,
+    'home-only-mine',
     false
   );
-  const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
-    userStorageKey(userId, 'home-opened-failures'),
-    {}
+  const [openedFailures, setOpenedFailures] = useUserLocalStorage(
+    userId,
+    'home-opened-failures',
+    NO_OPENED_FAILURES
   );
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
@@ -309,9 +320,12 @@ export const HomePage = memo(function HomePage({
   const openFailure = useCallback(
     (sessionId: string) => {
       const cutoff = Date.now() - OPENED_FAILURES_WINDOW_MS;
+      const session = agorStore.getState().sessionById.get(sessionId);
+      // The run the person saw, on the server clock, so only a newer run brings the failure back.
+      const seenRun = session ? lastRunStartedAt(session) : Date.now();
       setOpenedFailures((prev) => ({
         ...Object.fromEntries(Object.entries(prev).filter(([, at]) => at > cutoff)),
-        [sessionId]: Date.now(),
+        [sessionId]: seenRun,
       }));
       onSessionClick(sessionId);
     },
@@ -322,9 +336,9 @@ export const HomePage = memo(function HomePage({
       client
         ?.service('sessions')
         .patch(sessionId, { ready_for_prompt: false })
-        .catch(() => message.error('Couldn’t mark as read'));
+        .catch(() => showError('Couldn’t mark as read'));
     },
-    [client, message]
+    [client, showError]
   );
   const [markingAll, setMarkingAll] = useState(false);
   const markAllRead = useCallback(async () => {
@@ -337,13 +351,12 @@ export const HomePage = memo(function HomePage({
       const failed = await runWithLimit(ids, MARK_ALL_CONCURRENCY, (id) =>
         client.service('sessions').patch(id, { ready_for_prompt: false })
       );
-      if (failed.length === ids.length && failed.length) message.error('Couldn’t mark as read');
-      else if (failed.length)
-        message.error(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
+      if (failed.length === ids.length && failed.length) showError('Couldn’t mark as read');
+      else if (failed.length) showError(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
     } finally {
       setMarkingAll(false);
     }
-  }, [client, userId, message]);
+  }, [client, userId, showError]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
   const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
   const showRunning = useCallback(() => {
@@ -362,7 +375,8 @@ export const HomePage = memo(function HomePage({
   );
 
   const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
-  const onboarding = !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
+  // Waits for hydration so returning users never see it flash on a cold load.
+  const onboarding = hydrated && !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
     <HomeOnboarding
       isAdmin={isAdmin}
       canStartSessions={!!onCreateSession}
@@ -438,7 +452,11 @@ export const HomePage = memo(function HomePage({
         </div>
       )}
       <Flex gap={token.marginXL} wrap align="flex-start">
-        <Flex vertical gap={token.marginXL} style={{ flex: '999 1 560px', minWidth: 0 }}>
+        <Flex
+          vertical
+          gap={token.marginXL}
+          style={{ flex: `999 1 ${HOME_MAIN_COLUMN_BASIS}px`, minWidth: 0 }}
+        >
           {!newUser && (
             <HomeNeedsYou
               client={client}
@@ -484,7 +502,11 @@ export const HomePage = memo(function HomePage({
           />
         </Flex>
         {railReady && (
-          <Flex vertical gap={token.marginXL} style={{ flex: '1 1 300px', minWidth: 0 }}>
+          <Flex
+            vertical
+            gap={token.marginXL}
+            style={{ flex: `1 1 ${HOME_RAIL_BASIS}px`, minWidth: 0 }}
+          >
             <HomeTeammatesSection
               client={client}
               currentUser={currentUser}

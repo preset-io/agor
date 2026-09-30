@@ -7,8 +7,13 @@ import { makeCommentsForYouSelector, makeHomeBucketsSelector } from './selectors
 const ME = 'user-0';
 const NOW = Date.parse('2026-09-28T12:00:00.000Z');
 const STATUSES = ['idle', 'completed', 'running', 'failed', 'awaiting_permission', 'idle'];
+/** A UUIDv7 task id created at `ms`. */
+const taskAt = (ms: number) => {
+  const hex = ms.toString(16).padStart(12, '0');
+  return `${hex.slice(0, 8)}-${hex.slice(8)}-7000-8000-000000000000`;
+};
 
-// A busy tenant: 7k sessions over 400 branches and 20 people, 600 comments.
+// A busy tenant: 7k sessions over 400 branches and 19 people, 600 comments.
 function busyTenant(): AgorState {
   const sessions = Array.from(
     { length: 7000 },
@@ -18,11 +23,13 @@ function busyTenant(): AgorState {
         title: `Session ${i}`,
         status: STATUSES[i % STATUSES.length],
         archived: i % 17 === 0,
-        created_by: `user-${i % 20}`,
+        // 19 is coprime with the 6 statuses, so the caller (user-0) owns every status.
+        created_by: `user-${i % 19}`,
         branch_id: `b-${i % 400}`,
         genealogy: { children: [] },
         scheduled_from_branch: i % 5 === 0,
         ready_for_prompt: i % 7 === 0,
+        tasks: [taskAt(NOW - i * 60_000 - 30_000)],
         last_updated: new Date(NOW - i * 60_000).toISOString(),
       }) as unknown as Session
   );
@@ -53,7 +60,42 @@ function busyTenant(): AgorState {
   } as unknown as AgorState;
 }
 
+// One hot branch: 2000 of the caller's sessions, oldest first, mixing failures, clean runs and spawns.
+function hotBranch(): AgorState {
+  const statuses = ['failed', 'completed', 'idle', 'timed_out'];
+  const sessions = Array.from(
+    { length: 2000 },
+    (_, i) =>
+      ({
+        session_id: `h-${i}`,
+        title: `Run ${i}`,
+        status: statuses[i % statuses.length],
+        archived: false,
+        created_by: ME,
+        branch_id: 'hot',
+        genealogy: i % 9 === 2 ? { children: [], parent_session_id: 'h-0' } : { children: [] },
+        scheduled_from_branch: false,
+        ready_for_prompt: true,
+        tasks: [taskAt(NOW - (2000 - i) * 60_000 - 30_000)],
+        last_updated: new Date(NOW - (2000 - i) * 60_000).toISOString(),
+      }) as unknown as Session
+  );
+  return { ...EMPTY_MAPS, ...buildSessionMaps(sessions), sessionsHydrated: true } as AgorState;
+}
+
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
+
+/** Median ms of `runs` passes, each on a freshly built state. */
+function medianFreshPass(build: () => AgorState, pass: (s: AgorState) => void, runs = 5) {
+  const times: number[] = [];
+  for (let i = 0; i < runs; i++) {
+    const s = build();
+    const t = performance.now();
+    pass(s);
+    times.push(performance.now() - t);
+  }
+  return median(times);
+}
 
 const bucketsSelector = () =>
   makeHomeBucketsSelector({ userId: ME, now: NOW, needsLimit: 3, recentLimit: 20, boardsLimit: 5 });
@@ -67,18 +109,23 @@ describe('Home selectors on a 7k-session tenant', () => {
       bucketsSelector()(warm);
       commentsSelector()(warm);
     }
+    const firstPassMs = medianFreshPass(busyTenant, (s) => {
+      bucketsSelector()(s);
+      commentsSelector()(s);
+    });
     const base = busyTenant();
+    const mine = [...base.sessionById.values()].filter((s) => s.created_by === ME);
+    for (const status of STATUSES) expect(mine.some((s) => s.status === status)).toBe(true);
     const buckets = bucketsSelector();
     const comments = commentsSelector();
-
-    let t = performance.now();
     const firstBuckets = buckets(base);
     const firstComments = comments(base);
-    const firstPassMs = performance.now() - t;
+    expect(firstBuckets.needsByReason.failed).toBeGreaterThan(0);
 
     // Streaming-style patches to someone else's sessions: new session and map identities.
+    let t = 0;
     const patched = Array.from({ length: 30 }, (_, i) => {
-      const id = `s-${i * 20 + 1}`;
+      const id = `s-${i * 19 + 1}`;
       const sessionById = new Map(base.sessionById);
       sessionById.set(id, { ...base.sessionById.get(id)!, title: `token ${i}` });
       return { ...base, sessionById };
@@ -114,10 +161,26 @@ describe('Home selectors on a 7k-session tenant', () => {
       `[home-perf] 7k sessions: first pass ${firstPassMs.toFixed(1)}ms, per patch buckets ${median(bucketTimes).toFixed(2)}ms, comments memo hit ${median(commentHitTimes).toFixed(3)}ms, comments recompute ${median(commentTimes).toFixed(2)}ms`
     );
     expect(firstComments.length).toBeGreaterThan(0);
-    // Well above local measurements (first pass 1.1ms, 0.35ms, 0.008ms, recompute 0.25ms), for CI headroom.
+    // Well above local measurements (first pass 0.8ms, 0.24ms, 0.005ms, recompute 0.17ms), for CI headroom.
     expect(firstPassMs).toBeLessThan(20);
     expect(median(bucketTimes)).toBeLessThan(2.5);
     expect(median(commentHitTimes)).toBeLessThan(0.1);
     expect(median(commentTimes)).toBeLessThan(1.5);
+  });
+
+  it("stays fast on one branch with thousands of the caller's runs, oldest first", () => {
+    for (let i = 0; i < 3; i++) bucketsSelector()(hotBranch());
+    let buckets = bucketsSelector()(hotBranch());
+    const passMs = medianFreshPass(hotBranch, (s) => {
+      buckets = bucketsSelector()(s);
+    });
+    console.info(`[home-perf] 2000 runs on one branch: first pass ${passMs.toFixed(1)}ms`);
+    // Only the newest run, timed out after the latest clean user-started run, outlives it.
+    expect(
+      buckets.needs.filter((n) => n.reason === 'failed').map((n) => n.session.session_id)
+    ).toEqual(['h-1999']);
+    expect(buckets.recentCount).toBeGreaterThan(1000);
+    // Local 1.9ms; a per-failure scan of the branch took ~120ms here.
+    expect(passMs).toBeLessThan(20);
   });
 });

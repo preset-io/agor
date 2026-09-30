@@ -75,7 +75,7 @@ function AskTargetSelect({
     retry: retryAccess,
   } = useSessionAccess(
     listed ? client : null,
-    userId,
+    currentUser,
     shared.map((b) => b.branch_id)
   );
   const emptyText =
@@ -186,6 +186,8 @@ export const HomeAskBox = memo(function HomeAskBox({
   const inputRef = useRef<TextAreaRef>(null);
   const [prompt, setPrompt] = useState('');
   const [target, setTarget] = useState<Branch | null>(null);
+  // What the in-flight send took, so its completion clears only a box still holding it.
+  const sentRef = useRef<{ prompt: string; target: Branch | null } | null>(null);
 
   const compose = usePrimaryAssistantSend({
     client,
@@ -193,8 +195,11 @@ export const HomeAskBox = memo(function HomeAskBox({
     authenticationGeneration: authGeneration,
     onCreateSession,
     onOpenSession,
-    buildConfig: (branch) =>
-      buildNewSessionConfig({
+    // Also gates a held send resumed by a pick after the box was emptied.
+    canSend: () => prompt.trim().length > 0,
+    buildConfig: (branch) => {
+      sentRef.current = { prompt, target };
+      return buildNewSessionConfig({
         user: currentUser,
         tool: resolveAvailableUserAgenticTool(
           currentUser,
@@ -203,10 +208,13 @@ export const HomeAskBox = memo(function HomeAskBox({
         ),
         branch,
         initialPrompt: prompt.trim(),
-      }),
+      });
+    },
     onSent: () => {
-      setPrompt('');
-      setTarget(null);
+      const sent = sentRef.current;
+      if (!sent) return;
+      setPrompt((current) => (current === sent.prompt ? '' : current));
+      setTarget((current) => (current === sent.target ? null : current));
     },
   });
   const primary = compose.primaryBranch;

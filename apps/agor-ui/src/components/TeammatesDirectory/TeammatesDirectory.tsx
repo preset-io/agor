@@ -54,7 +54,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
     failedIds,
     failed: accessFailed,
     retry: retryAccess,
-  } = useSessionAccess(checkAccess ? client : null, currentUser?.user_id, branchIds, {
+  } = useSessionAccess(checkAccess ? client : null, currentUser, branchIds, {
     read: asking,
   });
   const loading = !hydrated || !sharingSettled;

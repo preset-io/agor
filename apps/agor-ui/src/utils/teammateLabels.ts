@@ -30,9 +30,18 @@ export interface TeammateOption {
   branch: Branch;
 }
 
-// A name with no letters or digits (emoji only) is compared as written, so two such names don't both collapse to ''.
-const bare = (text: string) =>
-  text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '') || text.trim().toLowerCase();
+// A name with no letters or digits keeps its symbols (emoji) and drops punctuation, spacing and emoji variation selectors.
+const bare = (text: string) => {
+  const lower = text
+    .normalize('NFC')
+    .toLowerCase()
+    .replace(/[\uFE0E\uFE0F]/gu, '');
+  return (
+    lower.replace(/[^\p{L}\p{M}\p{N}]/gu, '') ||
+    lower.replace(/[\p{P}\p{Z}\s]/gu, '') ||
+    lower.replace(/\s/gu, '')
+  );
+};
 
 /** Names that differ only in case, spacing or punctuation ("Hodor!" / "Hodor"). */
 export const sameName = (a: string, b: string) => bare(a) === bare(b);

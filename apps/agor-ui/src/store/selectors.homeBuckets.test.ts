@@ -5,6 +5,7 @@ import type { AgorState } from './agorStore';
 import {
   compareHomeNeeds,
   type HomeBucketsOptions,
+  lastRunStartedAt,
   makeCommentsForYouSelector,
   makeHomeBucketsSelector,
   makeLatestOwnSessionSelector,
@@ -206,7 +207,7 @@ describe('makeHomeBucketsSelector', () => {
       sessions: [
         failure('old', { last_updated: hoursAgo(24 * 8) }),
         failure('opened', { branch_id: 'o' }),
-        failure('superseded', { branch_id: 'b', ...ranAt(3) }),
+        failure('superseded', { branch_id: 'b', ...ranAt(3), last_updated: hoursAgo(2) }),
         session('retry', { status: 'idle', branch_id: 'b', ...ranAt(1) }),
         session('late', {
           status: 'timed_out',
@@ -234,6 +235,7 @@ describe('makeHomeBucketsSelector', () => {
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     const later = session('ok', { status: 'idle', branch_id: 'b', ...ranAt(1) });
     const completed = session('done', { status: 'completed', branch_id: 'b', ...ranAt(1) });
@@ -257,12 +259,133 @@ describe('makeHomeBucketsSelector', () => {
     ).toEqual(['failed:f']);
   });
 
+  it('lists failures for sessions the user started or scheduled, and permission requests from any', () => {
+    const failure = (id: string, extra: Partial<Session>) =>
+      session(id, { status: 'failed', ready_for_prompt: true, ...extra });
+    const s = state({
+      sessions: [
+        failure('mine', {}),
+        failure('scheduled', { scheduled_from_branch: true }),
+        failure('spawned', {
+          genealogy: { children: [], parent_session_id: 'mine' } as Session['genealogy'],
+        }),
+        session('child-perm', {
+          status: 'awaiting_permission',
+          genealogy: { children: [], parent_session_id: 'mine' } as Session['genealogy'],
+        }),
+      ],
+    });
+    expect(reasons(s).sort()).toEqual(['failed:mine', 'failed:scheduled', 'permission:child-perm']);
+    expect(select(s).recent.map((r) => r.session_id)).toEqual(['spawned']);
+  });
+
+  it('lets a later clean scheduled run supersede only scheduled failures', () => {
+    const scheduledFail = session('sf', {
+      status: 'failed',
+      ready_for_prompt: true,
+      scheduled_from_branch: true,
+      branch_id: 'nightly',
+      ...ranAt(30),
+      last_updated: hoursAgo(29),
+    });
+    const scheduledOk = session('sok', {
+      status: 'completed',
+      scheduled_from_branch: true,
+      branch_id: 'nightly',
+      ...ranAt(5),
+    });
+    const mineFail = session('mf', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'mine',
+      ...ranAt(30),
+      last_updated: hoursAgo(29),
+    });
+    const scheduledOnMine = { ...scheduledOk, session_id: 'sok2', branch_id: 'mine' } as Session;
+    expect(reasons(state({ sessions: [scheduledFail] }))).toEqual(['failed:sf']);
+    expect(reasons(state({ sessions: [scheduledFail, scheduledOk] }))).toEqual([]);
+    expect(reasons(state({ sessions: [mineFail, scheduledOnMine] }))).toEqual(['failed:mf']);
+  });
+
+  it('treats a fork cycle or a shared ancestor consistently when deciding who started a retry', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(5),
+      last_updated: hoursAgo(4),
+    });
+    const fork = (id: string, from: string, h: number) =>
+      session(id, {
+        status: 'completed',
+        branch_id: 'b',
+        ...ranAt(h),
+        genealogy: { children: [], forked_from_session_id: from } as Session['genealogy'],
+      });
+    const cycleA = fork('ca', 'cb', 1);
+    const cycleB = fork('cb', 'ca', 1);
+    expect(reasons(state({ sessions: [failed, cycleA, cycleB] }))).toEqual(['failed:f']);
+    const spawned = session('sp', {
+      branch_id: 'b',
+      genealogy: { children: [], parent_session_id: 'x' } as Session['genealogy'],
+    });
+    expect(
+      reasons(state({ sessions: [failed, spawned, fork('k1', 'sp', 1), fork('k2', 'k1', 1)] }))
+    ).toEqual(['failed:f']);
+    const root = session('r', { branch_id: 'b', created_at: hoursAgo(9) });
+    expect(
+      reasons(state({ sessions: [failed, root, fork('k3', 'r', 2), fork('k4', 'k3', 1)] }))
+    ).toEqual([]);
+  });
+
+  it('keeps an opened failure dismissed through later patches, until a new run', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      ...ranAt(3),
+      last_updated: hoursAgo(1),
+    });
+    const opened = { openedFailures: { f: lastRunStartedAt(failed) } };
+    expect(reasons(state({ sessions: [failed] }), opened)).toEqual([]);
+    const reRan = { ...failed, ...ranAt(0.5) } as Session;
+    expect(reasons(state({ sessions: [reRan] }), opened)).toEqual(['failed:f']);
+  });
+
+  it('lets only a clean run the user started after the failure settled supersede it', () => {
+    const failed = session('f', {
+      status: 'failed',
+      ready_for_prompt: true,
+      branch_id: 'b',
+      ...ranAt(3),
+      last_updated: hoursAgo(1),
+    });
+    const onBranch = (id: string, extra: Partial<Session>) =>
+      session(id, { status: 'completed', branch_id: 'b', ...ranAt(0.5), ...extra });
+    const lineage = (genealogy: Partial<Session['genealogy']>) => ({
+      genealogy: { children: [], ...genealogy } as Session['genealogy'],
+    });
+    const child = onBranch('child', lineage({ parent_session_id: 'f' }));
+    const childFork = onBranch('child-fork', lineage({ forked_from_session_id: 'child' }));
+    const orphanFork = onBranch('orphan-fork', lineage({ forked_from_session_id: 'not-loaded' }));
+    const scheduled = onBranch('sched', { scheduled_from_branch: true });
+    // Started after the failed run started but before it settled: ran alongside it, not after.
+    const parallel = onBranch('parallel', { status: 'idle', ...ranAt(2) });
+    expect(reasons(state({ sessions: [failed, child] }))).toEqual(['failed:f']);
+    for (const other of [childFork, orphanFork, scheduled, parallel])
+      expect(reasons(state({ sessions: [failed, child, other] }))).toEqual(['failed:f']);
+    const retry = onBranch('retry', { status: 'idle' });
+    const forkRetry = onBranch('fork-retry', lineage({ forked_from_session_id: 'f' }));
+    expect(reasons(state({ sessions: [failed, child, retry] }))).toEqual([]);
+    expect(reasons(state({ sessions: [failed, forkRetry] }))).toEqual([]);
+  });
+
   it('does not let a renamed older run or a timed-out later run supersede a failure', () => {
     const failed = session('f', {
       status: 'failed',
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     // Renaming bumps last_updated but not when the run started.
     const renamed = session('old-ok', {
@@ -289,6 +412,7 @@ describe('makeHomeBucketsSelector', () => {
       ready_for_prompt: true,
       branch_id: 'b',
       ...ranAt(3),
+      last_updated: hoursAgo(2),
     });
     // A v4 id's leading bits are random; read as a v7 timestamp they would land far in the future.
     const v4 = session('v4', {

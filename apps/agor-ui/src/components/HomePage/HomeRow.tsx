@@ -28,7 +28,15 @@ import { BoardPill, BranchPill, getChannelIcon, TeammatePill } from '../Pill';
 import { SessionRowLogo, SessionStatusMark } from '../SessionRow';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { HomeLink, useHomeCompact } from './HomeSection';
-import { HOME_META_PILL_MAX_WIDTH_COMPACT, HOME_ROW_LEAD, HOME_ROW_LINE } from './homeLayout';
+import {
+  HOME_META_PILL_MAX_WIDTH_COMPACT,
+  HOME_NEED_DOT_SIZE,
+  HOME_ROW_LEAD,
+  HOME_ROW_LINE,
+  HOME_ROW_LINE_GAP,
+  HOME_ROW_TITLE_WEIGHT,
+  homeDivider,
+} from './homeLayout';
 
 /** Divided list of Home rows; short previews, so no virtualization. */
 export function HomeList<T>({
@@ -44,10 +52,7 @@ export function HomeList<T>({
   return (
     <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
       {items.map((item, index) => (
-        <li
-          key={itemKey(item)}
-          style={index ? { borderTop: `1px solid ${token.colorSplit}` } : undefined}
-        >
+        <li key={itemKey(item)} style={index ? { borderTop: homeDivider(token) } : undefined}>
           {renderItem(item, index)}
         </li>
       ))}
@@ -174,11 +179,11 @@ const HomeRow: React.FC<HomeRowProps> = ({
           {lead}
         </Flex>
       )}
-      <Flex vertical gap={2} style={{ flex: 1, minWidth: 0 }}>
+      <Flex vertical gap={HOME_ROW_LINE_GAP} style={{ flex: 1, minWidth: 0 }}>
         <Flex align="center" gap={token.marginXS} style={{ minWidth: 0, overflow: 'hidden' }}>
           <Typography.Text
             ellipsis={{ tooltip: title }}
-            style={{ flex: 1, minWidth: 0, fontWeight: 500 }}
+            style={{ flex: 1, minWidth: 0, fontWeight: HOME_ROW_TITLE_WEIGHT }}
           >
             {title}
           </Typography.Text>
@@ -295,8 +300,8 @@ const NeedDot: React.FC = () => {
     <span
       aria-hidden
       style={{
-        width: 6,
-        height: 6,
+        width: HOME_NEED_DOT_SIZE,
+        height: HOME_NEED_DOT_SIZE,
         borderRadius: '50%',
         background: token.colorTextTertiary,
         flex: '0 0 auto',
@@ -547,7 +552,7 @@ export const HomeFinishedGroupRow = memo(function HomeFinishedGroupRow({
         expand={{ expanded, count: all.length, onToggle: () => setExpanded(!expanded) }}
       />
       {expanded && (
-        <div style={{ borderTop: `1px solid ${token.colorSplit}` }}>
+        <div style={{ borderTop: homeDivider(token) }}>
           <HomeList
             items={all}
             itemKey={(run) => run.session_id}

@@ -9,8 +9,8 @@ let cached: { key: string; pattern: RegExp | null } | undefined;
 
 /**
  * Whether comment text @-mentions the user by display name or email, bare or
- * quoted, ignoring case. A bare handle must end at a non-word character, so
- * `@Al` does not match `@Alice`.
+ * quoted, ignoring case. A bare handle must not run on into a letter, digit or
+ * underscore in any script, so `@Al` does not match `@Alice` and `@Zo` not `@Zoë`.
  */
 export function commentMentionsUser(
   content: string,
@@ -24,7 +24,7 @@ export function commentMentionsUser(
     cached = {
       key,
       pattern: handles.length
-        ? new RegExp(`@(?:"(?:${alternation})"|(?:${alternation})(?!\\w))`, 'i')
+        ? new RegExp(`@(?:"(?:${alternation})"|(?:${alternation})(?![\\p{L}\\p{M}\\p{N}_]))`, 'iu')
         : null,
     };
   }

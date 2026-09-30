@@ -3,8 +3,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 interface PrimaryTeammate {
   branch: Branch | null;
-  /** False from the render an identity change or a new resolve begins until its answer (or an explicit pick) lands, and after a failure. */
-  current: boolean;
   /** Whether `branch` was resolved or picked for this client and caller; a `refreshKey` re-resolve keeps it true. */
   ownedByCaller: boolean;
   setBranch: (branch: Branch | null) => void;
@@ -22,7 +20,6 @@ export function usePrimaryTeammate(
   refreshKey?: unknown
 ): PrimaryTeammate {
   const [branch, setResolvedBranch] = useState<Branch | null>(null);
-  const [branchRequest, setBranchRequest] = useState(0);
   const [branchCaller, setBranchCaller] = useState<readonly unknown[] | null>(null);
   const [resolving, setResolving] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -50,7 +47,6 @@ export function usePrimaryTeammate(
   const setBranch = useCallback((next: Branch | null) => {
     requestRef.current += 1;
     setResolvedBranch(next);
-    setBranchRequest(requestRef.current);
     setBranchCaller(callerRef.current);
     setResolving(false);
     setFailed(false);
@@ -67,7 +63,6 @@ export function usePrimaryTeammate(
       const next = await client.service('users').getPrimaryTeammate();
       if (requestRef.current !== request) return undefined;
       setResolvedBranch(next);
-      setBranchRequest(request);
       setBranchCaller(requestCaller);
       return next;
     } catch {
@@ -84,8 +79,7 @@ export function usePrimaryTeammate(
     void refresh();
   }, [refresh, userId, authenticationGeneration, refreshKey]);
 
-  const current = branchRequest === requestRef.current;
   const ownedByCaller =
     !!branchCaller && branchCaller.every((value, index) => Object.is(value, caller[index]));
-  return { branch, current, ownedByCaller, setBranch, resolving, failed, refresh };
+  return { branch, ownedByCaller, setBranch, resolving, failed, refresh };
 }

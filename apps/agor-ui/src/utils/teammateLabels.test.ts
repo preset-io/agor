@@ -24,9 +24,20 @@ describe('sameName', () => {
     expect(sameName('Ada', 'Grace')).toBe(false);
   });
 
-  it('compares names without letters or digits as written', () => {
+  it('compares names without letters or digits by their symbols, ignoring punctuation and spacing', () => {
     expect(sameName('🎨', '🚀')).toBe(false);
     expect(sameName('🎨', '🎨')).toBe(true);
+    expect(sameName('🎨', '🎨!')).toBe(true);
+    expect(sameName(' (🎨 🚀) ', '🎨🚀')).toBe(true);
+    expect(sameName('🎨', '🎨🚀')).toBe(false);
+    expect(sameName('❤️', '❤')).toBe(true);
+    expect(sameName('!!', '! !')).toBe(true);
+  });
+
+  it('keeps combining marks, so different names in scripts that use them stay different', () => {
+    expect(sameName('किताब', 'कताब')).toBe(false);
+    expect(sameName('Zoë', 'zoë!')).toBe(true);
+    expect(sameName('Zo\u00eb', 'Zoe\u0308')).toBe(true);
   });
 });
 

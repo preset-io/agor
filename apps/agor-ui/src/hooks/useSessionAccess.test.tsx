@@ -1,10 +1,11 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetAccessCacheForTests } from '../utils/accessCache';
 import { useSessionAccess } from './useSessionAccess';
 
 const session = { can: 'session', is_owner: false, source: 'others' };
+const me = { user_id: 'me', role: 'member' } as User;
 
 /** Access reads that settle only when the test says so, keyed by branch id. */
 function deferredReads() {
@@ -24,10 +25,9 @@ beforeEach(() => resetAccessCacheForTests());
 describe('useSessionAccess', () => {
   it('keeps a failure through a grown id set until its re-read answers, which replaces it', async () => {
     const reads = deferredReads();
-    const { result, rerender } = renderHook(
-      ({ ids }) => useSessionAccess(reads.client, 'me', ids),
-      { initialProps: { ids: ['a'] } }
-    );
+    const { result, rerender } = renderHook(({ ids }) => useSessionAccess(reads.client, me, ids), {
+      initialProps: { ids: ['a'] },
+    });
     await waitFor(() => expect(reads.waiting.has('a')).toBe(true));
     await act(async () => reads.waiting.get('a')?.reject());
     expect(result.current.failedIds.has('a')).toBe(true);
@@ -52,10 +52,9 @@ describe('useSessionAccess', () => {
 
   it('drops a failure for an id that left the set, even when it comes back', async () => {
     const reads = deferredReads();
-    const { result, rerender } = renderHook(
-      ({ ids }) => useSessionAccess(reads.client, 'me', ids),
-      { initialProps: { ids: ['a', 'b'] } }
-    );
+    const { result, rerender } = renderHook(({ ids }) => useSessionAccess(reads.client, me, ids), {
+      initialProps: { ids: ['a', 'b'] },
+    });
     await waitFor(() => expect(reads.waiting.size).toBe(2));
     await act(async () => reads.waiting.get('a')?.reject());
     expect(result.current.failedIds.has('a')).toBe(true);

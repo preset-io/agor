@@ -1,4 +1,4 @@
-import type { Board, Branch, Session } from '@agor-live/client';
+import type { Board, Branch, HomeWorkView, Session } from '@agor-live/client';
 import { FilterOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -34,12 +34,11 @@ import {
   HomeSkeleton,
   useHomeCompact,
 } from './HomeSection';
-import { HOME_ROW_LEAD, homeGroupIndent, homeNestedIndent } from './homeLayout';
+import { HOME_ROW_LEAD, homeDivider, homeGroupIndent, homeNestedIndent } from './homeLayout';
 
 export const MY_WORK_PAGE = 20;
 
 export type MyWorkTab = 'recent' | 'running';
-export type MyWorkView = 'board' | 'list';
 
 interface HomeMyWorkProps {
   recent: Session[];
@@ -52,8 +51,8 @@ interface HomeMyWorkProps {
   hydrated: boolean;
   tab: MyWorkTab;
   onTabChange: (tab: MyWorkTab) => void;
-  view: MyWorkView;
-  onViewChange: (view: MyWorkView) => void;
+  view: HomeWorkView;
+  onViewChange: (view: HomeWorkView) => void;
   query: string;
   onQueryChange: (query: string) => void;
   onlyStartedByMe: boolean;
@@ -200,7 +199,7 @@ export const HomeMyWork = memo(function HomeMyWork({
 
   // A view, not a filter: in the toolbar where it fits, in the Filters sheet on phones.
   const viewSelect = (
-    <Select<MyWorkView>
+    <Select<HomeWorkView>
       value={view}
       onChange={onViewChange}
       prefix="View"
@@ -253,7 +252,7 @@ export const HomeMyWork = memo(function HomeMyWork({
             data-home-toolbar
             style={{
               padding: `${token.paddingXS}px ${token.paddingSM}px`,
-              borderBottom: `1px solid ${token.colorSplit}`,
+              borderBottom: homeDivider(token),
             }}
           >
             <Segmented<MyWorkTab>
@@ -304,7 +303,7 @@ export const HomeMyWork = memo(function HomeMyWork({
                 <div
                   style={{
                     background: token.colorFillQuaternary,
-                    borderBottom: `1px solid ${token.colorSplit}`,
+                    borderBottom: homeDivider(token),
                   }}
                 >
                   <BoardGroupHeader boardId={boardId || undefined} onOpenBoard={onOpenBoard} />

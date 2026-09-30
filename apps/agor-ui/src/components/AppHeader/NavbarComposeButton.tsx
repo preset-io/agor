@@ -89,6 +89,8 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
       showError: (msg) => message.error(msg),
     });
 
+  const hasContent = prompt.trim().length > 0 || attachments.length > 0;
+
   // One lightweight tinted-box treatment, shared by the tip and the no-primary banner.
   const bannerBox: React.CSSProperties = {
     padding: `${token.paddingXS}px ${token.paddingSM}px`,
@@ -128,10 +130,9 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         initialPrompt: prompt,
         attachmentFiles: attachments.map((attachment) => attachment.file),
       }),
-    // The single send gate: also covers a send resumed after picking a primary.
-    validate: async () =>
-      !disabled &&
-      configValidity.valid &&
+    // Same conditions as the buttons' disabled state; also re-checked when picking a primary resumes a held send.
+    canSend: () => !disabled && configValidity.valid && hasContent,
+    validate: () =>
       form.validateFields().then(
         () => true,
         () => false
@@ -181,7 +182,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     resolveFailed ||
     !configValidity.valid ||
     submitting !== null ||
-    (!prompt.trim() && attachments.length === 0);
+    !hasContent;
 
   const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || DEFAULT_TEAMMATE_EMOJI;
 
@@ -340,7 +341,10 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     <Popover
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!disabled) setOpen(nextOpen);
+        if (disabled) return;
+        setOpen(nextOpen);
+        // A held send belongs to this opening; a later pick must not send a stale draft.
+        if (!nextOpen) clearPendingSend();
       }}
       trigger="click"
       placement="bottomRight"
