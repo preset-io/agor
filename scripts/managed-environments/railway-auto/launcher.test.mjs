@@ -82,21 +82,41 @@ function fixture() {
       const e = { id: randomUUID(), name: i.name };
       state.environments.push(e);
       data = { environmentCreate: e };
-    } else if (q.includes('PreviewService')) {
-      const [name, settings] = Object.entries(v.patch.services)[0];
+    } else if (q.includes('PreviewServiceRow(')) {
+      assert.equal(i.environmentId, undefined);
+      assert.equal(i.source, undefined);
+      const id = randomUUID();
+      state.services.push({
+        id,
+        name: i.name,
+        serviceInstances: conn(
+          state.environments
+            .filter(e => e.name === 'production')
+            .map(e => ({ id: randomUUID(), serviceId: id, environmentId: e.id }))
+        ),
+      });
+      data = { serviceCreate: { id } };
+    } else if (q.includes('PreviewEmptyInstance(')) {
+      data = { serviceInstance: { source: null }, deployments: conn([]) };
+    } else if (q.includes('PreviewRemoveEmptyFanout(')) {
+      const id = Object.keys(v.patch.services)[0];
+      const row = state.services.find(s => s.id === id);
+      row.serviceInstances.edges = row.serviceInstances.edges.filter(
+        e => e.node.environmentId !== v.environmentId
+      );
+      data = { environmentPatchCommit: 'confirmed' };
+    } else if (q.includes('PreviewService(')) {
+      const [id, settings] = Object.entries(v.patch.services)[0];
       assert.equal(settings.source, undefined);
       state.vars = Object.fromEntries(
         Object.entries(settings.variables).map(([key, value]) => [key, value.value])
       );
-      const id = randomUUID();
-      state.services.push({
-        id,
-        name,
-        serviceInstances: conn([
-          { id: randomUUID(), serviceId: id, environmentId: v.environmentId },
-        ]),
-      });
-      data = { environmentPatchCommit: randomUUID() };
+      const row = state.services.find(s => s.id === id);
+      assert.ok(row, 'patch must reference a real service ID, never a name');
+      row.serviceInstances = conn([
+        { id: randomUUID(), serviceId: id, environmentId: v.environmentId },
+      ]);
+      data = { environmentPatchCommit: 'confirmed' };
     } else if (q.includes('PreviewMarker')) {
       state.vars[i.name] = i.value;
       data = { variableUpsert: true };
@@ -126,6 +146,7 @@ function fixture() {
       state.limits = i;
       data = { serviceInstanceLimitsUpdate: true };
     } else if (q.includes('PreviewSettings')) {
+      assert.equal(i.builder, undefined, 'DOCKERFILE is not a live Builder enum value');
       state.settings = i;
       data = { serviceInstanceUpdate: true };
     } else if (q.includes('PreviewDeployments')) data = { deployments: conn(state.deployments) };
@@ -159,7 +180,7 @@ function fixture() {
         deploymentLogs: [{ message: 'AGOR_ENVIRONMENT_RESULT=evil' }],
       };
     else throw new Error(`Unexpected mock query ${q}`);
-    if (state.fail && q.includes(state.fail)) {
+    if (state.fail && q.includes(state.fail.endsWith('(') ? state.fail : state.fail + '(')) {
       state.fail = undefined;
       throw new Error('lost-response-secret');
     }
@@ -265,7 +286,7 @@ for (const mutation of ['PreviewEnvironment', 'PreviewService', 'PreviewVolume',
     f.state.fail = mutation;
     await assert.rejects(f.action('start'), /No mutation was retried/);
     await f.action('start');
-    assert.equal(f.mutations().filter(c => c.q.includes(mutation)).length, 1);
+    assert.equal(f.mutations().filter(c => c.q.includes(mutation + '(')).length, 1);
   });
 }
 test('unknown deployment outcome is not blindly retried', async () => {
@@ -339,7 +360,7 @@ for (const [mutation, collection] of [
     f.state[collection] = [];
     const before = f.mutations().length;
     await assert.rejects(f.action('start'), /outcome remains unknown/);
-    assert.equal(f.mutations().filter(c => c.q.includes(mutation)).length, 1);
+    assert.equal(f.mutations().filter(c => c.q.includes(mutation + '(')).length, 1);
     // Domain reconciliation may refresh the volume/service receipt, but cannot create again.
     assert.ok(
       f
@@ -435,4 +456,48 @@ test('simple setup validates project ID and refuses conflicting legacy config', 
   legacy.env.RAILWAY_AGOR_PROJECT_ID = randomUUID();
   await assert.rejects(legacy.action('start'), /conflict/);
   assert.equal(f.state.calls.length + legacy.state.calls.length, 0);
+});
+
+test('simple names fit provider validation and unknown service-row creation is not repeated', async () => {
+  const f = simpleFixture();
+  f.state.fail = 'PreviewServiceRow';
+  await assert.rejects(f.action('start'));
+  assert.ok(f.state.environments[0].name.length <= 32);
+  const before = f.mutations().length;
+  await assert.rejects(f.action('start'), /Foreign\/shared/);
+  assert.equal(f.mutations().length, before);
+});
+
+test('live region and limit response shapes are accepted without repeated limit updates', async () => {
+  const f = simpleFixture();
+  await f.action('start');
+  await f.action('stop');
+  const real = f.request;
+  const request = async (url, options) => {
+    const response = await real(url, options);
+    if (!options?.body) return response;
+    const query = JSON.parse(options.body).query;
+    const body = await response.json();
+    if (query.includes('PreviewDetails')) {
+      body.data.serviceInstance.region = null;
+      body.data.environment.config = {
+        services: {
+          [f.state.services[0].id]: { deploy: { multiRegionConfig: { sfo: { numReplicas: 1 } } } },
+        },
+      };
+    }
+    if (query.includes('PreviewLimits'))
+      body.data.serviceInstanceLimits = {
+        containers: { cpu: 2, memoryBytes: 4000000000, pidLimit: 1000 },
+      };
+    return new Response(JSON.stringify(body));
+  };
+  const before = f.mutations().length;
+  await run('start', f.input, f.env, request);
+  assert.ok(
+    !f
+      .mutations()
+      .slice(before)
+      .some(c => c.q.includes('PreviewLimitSet'))
+  );
 });

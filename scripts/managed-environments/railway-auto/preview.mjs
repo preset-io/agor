@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { nodes, requireValue, uuid } from './api.mjs';
 import { appVariables, identity, MARKER, resourceName } from './configuration.mjs';
 
@@ -62,6 +63,14 @@ export class Preview {
   }
   async inspect() {
     const all = await this.inventory();
+    if (this.config.sharedProject) {
+      const previousName = resourceName({ ...this.owner, version: 1 });
+      requireValue(
+        !all.environments.some(e => e.name === previousName) &&
+          !all.services.some(s => s.name === previousName),
+        'An earlier long-name preview exists. Explicit migration is required; refusing to allocate duplicate data.'
+      );
+    }
     const targetEnvironments = all.environments.filter(e => e.name === this.name);
     requireValue(
       targetEnvironments.length <= 1,
@@ -176,7 +185,7 @@ export class Preview {
         `query PreviewDetails($projectId:String!,$environmentId:String!,$serviceId:String!){
         domains(projectId:$projectId,environmentId:$environmentId,serviceId:$serviceId){serviceDomains{domain targetPort}}
         serviceInstance(serviceId:$serviceId,environmentId:$environmentId){source{repo} numReplicas region}
-        environment(id:$environmentId){deploymentTriggers(first:100){edges{node{id}}pageInfo{hasNextPage}}}
+        environment(id:$environmentId){config(decryptVariables:false) deploymentTriggers(first:100){edges{node{id}}pageInfo{hasNextPage}}}
       }`,
         location
       );
@@ -210,11 +219,30 @@ export class Preview {
             owned.domain &&
             owned.settings?.source?.repo === this.input.repository &&
             owned.settings.numReplicas === 1 &&
-            owned.settings.region === 'sfo',
+            (owned.settings.region === 'sfo' ||
+              (Object.keys(
+                details.environment.config?.services?.[owned.service.id]?.deploy
+                  ?.multiRegionConfig ?? {}
+              ).length === 1 &&
+                details.environment.config.services[owned.service.id].deploy.multiRegionConfig.sfo
+                  ?.numReplicas === 1)),
           'Ready preview configuration drifted; refusing changes.'
         );
     }
     return { ...owned, all };
+  }
+  async settled() {
+    // Read-only polling after confirmed asynchronous writes. No mutation retries.
+    let error;
+    for (let i = 0; i < 15; i++) {
+      try {
+        return await this.inspect();
+      } catch (e) {
+        error = e;
+      }
+      await delay(1000);
+    }
+    throw error;
   }
   async mark(owned, patch) {
     owned.record = { ...owned.record, ...patch };
@@ -259,15 +287,61 @@ export class Preview {
     }
     if (!owned.service) {
       const record = { ...this.owner, environmentId: owned.environment.id };
-      // serviceCreate fans out to non-fork environments. Config patches create
-      // an empty service in this environment only, with its ownership marker.
+      // Create a source-less service row, then instantiate by provider ID.
+      // The live API may fan empty instances into other environments.
+      const created = await this.api.query(
+        'mutation PreviewServiceRow($input:ServiceCreateInput!){serviceCreate(input:$input){id}}',
+        {
+          input: { projectId: this.config.projectId, name: this.name },
+        }
+      );
+      requireValue(
+        uuid(created.serviceCreate?.id),
+        'Detached service creation was not confirmed; inspect Railway before retrying.'
+      );
+      record.serviceId = created.serviceCreate.id;
+      // Current API fans empty instances out even without environmentId.
+      // Remove ONLY empty instances of the row just returned by our creation.
+      const inventory = await this.inventory();
+      const row = inventory.services.find(s => s.id === record.serviceId);
+      requireValue(row?.name === this.name, 'New service row identity mismatch.');
+      for (const instance of nodes(row.serviceInstances)) {
+        if (instance.environmentId === owned.environment.id) continue;
+        const state = await this.api.query(
+          'query PreviewEmptyInstance($serviceId:String!,$environmentId:String!,$input:DeploymentListInput!){serviceInstance(serviceId:$serviceId,environmentId:$environmentId){source{repo image}}deployments(input:$input,first:100){edges{node{id}}pageInfo{hasNextPage}}}',
+          {
+            serviceId: row.id,
+            environmentId: instance.environmentId,
+            input: {
+              projectId: this.config.projectId,
+              serviceId: row.id,
+              environmentId: instance.environmentId,
+            },
+          }
+        );
+        requireValue(
+          !state.serviceInstance.source &&
+            nodes(state.deployments).length === 0 &&
+            !inventory.volumes.some(v =>
+              nodes(v.volumeInstances).some(i => i.serviceId === row.id)
+            ),
+          'New service fan-out is not empty; refusing cleanup.'
+        );
+        await this.api.query(
+          'mutation PreviewRemoveEmptyFanout($environmentId:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environmentId,patch:$patch)}',
+          {
+            environmentId: instance.environmentId,
+            patch: { services: { [row.id]: { isDeleted: true } } },
+          }
+        );
+      }
       const result = await this.api.query(
         'mutation PreviewService($environmentId:String!,$patch:EnvironmentConfig!){environmentPatchCommit(environmentId:$environmentId,patch:$patch)}',
         {
           environmentId: owned.environment.id,
           patch: {
             services: {
-              [this.name]: {
+              [record.serviceId]: {
                 isCreated: true,
                 variables: { [MARKER]: { value: JSON.stringify(record) } },
               },
@@ -279,7 +353,7 @@ export class Preview {
         !!result.environmentPatchCommit,
         'Service creation was not confirmed; inspect before retrying.'
       );
-      owned = await this.inspect();
+      owned = await this.settled();
       requireValue(owned.service, 'Created service is not visible yet; inspect before retrying.');
     }
     if (!owned.volume) {
@@ -299,7 +373,7 @@ export class Preview {
         'Volume creation was not confirmed; inspect before retrying.'
       );
       await this.mark(owned, { volumeId: result.volumeCreate.id, volumePending: false });
-      owned = await this.inspect();
+      owned = await this.settled();
     } else if (!owned.record.volumeId)
       await this.mark(owned, { volumeId: owned.volume.id, volumePending: false });
     if (!owned.domain) {
@@ -344,7 +418,10 @@ export class Preview {
       'query PreviewLimits($serviceId:String!,$environmentId:String!){serviceInstanceLimits(serviceId:$serviceId,environmentId:$environmentId)}',
       location
     );
-    if (limits?.memoryGB !== 4 || limits?.vCPUs !== 2) {
+    if (
+      (limits?.containers?.memoryBytes ?? limits?.memoryGB * 1_000_000_000) !== 4_000_000_000 ||
+      (limits?.containers?.cpu ?? limits?.vCPUs) !== 2
+    ) {
       const result = await this.api.query(
         'mutation PreviewLimitSet($input:ServiceInstanceLimitsUpdateInput!){serviceInstanceLimitsUpdate(input:$input)}',
         {
@@ -368,7 +445,6 @@ export class Preview {
           ...location,
           input: {
             source: { repo: this.input.repository },
-            builder: 'DOCKERFILE',
             dockerfilePath: 'docker/Dockerfile',
             region: 'sfo',
             numReplicas: 1,

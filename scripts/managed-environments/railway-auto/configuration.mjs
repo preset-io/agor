@@ -83,7 +83,7 @@ export function resourceName(record) {
       ])
     )
     .digest('hex')
-    .slice(0, 32)}`;
+    .slice(0, record.version === 2 ? 20 : 32)}`;
 }
 export function appVariables(record, domain, password) {
   return {

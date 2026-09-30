@@ -71,6 +71,14 @@ An already-running owned deployment is left alone, without a redeploy. App/healt
 URLs are reported after deployment admission; Agor's health observer establishes
 readiness. The application's runtime watch mode follows its pushed branch.
 
+Railway service creation can briefly add empty instances of the **new** service
+in other project environments. The launcher verifies those instances have no
+source, deployments or volumes, then removes only those new empty instances
+before configuring the preview. It never changes existing services. Interrupted
+service creation/cleanup fails closed and may require operator reconciliation.
+For strict separation with no transient instances in production, choose a
+preview-only project.
+
 Stop removes/cancels compute only; repeat Stop after draining if needed. Service,
 volume and domain remain, and storage charges continue. Nuke explicitly deletes
 the owned service, private volume and environment, never the project. Partial

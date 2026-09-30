@@ -42,7 +42,7 @@ export class RailwayAPI {
         body: JSON.stringify({ query, variables }),
       });
       detail = `HTTP ${response.status}`;
-      const body = response.ok ? await response.json() : null;
+      const body = await response.json();
       if (body?.errors?.length) {
         const codes = body.errors.map(e => e.extensions?.code);
         const safeCodes = [
@@ -67,9 +67,9 @@ export class RailwayAPI {
                 : messages.some(m => /invalid|validation/.test(m))
                   ? 'input validation'
                   : 'provider rejected request';
-        detail += `; ${code ?? category}`;
+        detail += `; ${code ? `${code}; ` : ''}${category}`;
       }
-      if (!body?.data || body.errors?.length) throw new Error();
+      if (!response.ok || !body?.data || body.errors?.length) throw new Error();
       return body.data;
     } catch {
       throw new PreviewError(

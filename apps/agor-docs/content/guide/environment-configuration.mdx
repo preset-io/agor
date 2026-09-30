@@ -979,6 +979,14 @@ Controller credentials never enter the app. App/health URLs are reported after
 deployment admission; Agor's health observer determines readiness, not command
 success. Runtime watch mode follows the pushed application branch.
 
+Railway service creation can briefly add empty instances of the **new** service
+in other project environments. The launcher verifies those instances have no
+source, deployments or volumes, then removes only those new empty instances
+before configuring the preview. It never changes existing services. Interrupted
+service creation/cleanup fails closed and may require operator reconciliation.
+For strict separation with no transient instances in production, choose a
+preview-only project.
+
 **Stop preserves data** and removes/cancels compute only. Repeat after draining
 if needed. Storage charges continue. **Nuke permanently removes the owned
 service, volume and environment**, never the project. Missing recorded volumes
