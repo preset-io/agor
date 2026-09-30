@@ -409,7 +409,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
     !(sharing === 'shared' && (needsApiKey || configuredApp)) &&
-    !blockedReason &&
+      !blockedReason &&
       !policyRefusal &&
       acknowledged &&
       !connecting &&
@@ -825,7 +825,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     {(canShare || canUseShared || sharing === 'shared') && (
                       <Radio
                         value="shared"
-                        disabled={needsApiKey || Boolean(configuredApp) || policyPending || (!canShare && !canUseShared)}
+                        disabled={
+                          needsApiKey ||
+                          Boolean(configuredApp) ||
+                          policyPending ||
+                          (!canShare && !canUseShared)
+                        }
                       >
                         {canShare ? 'Shared' : 'Use existing shared'}
                       </Radio>
@@ -834,8 +839,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                 </Form.Item>
                 {(needsApiKey || configuredApp) && (
                   <Text type="secondary">
-                    Bearer/API-key and configured OAuth app installations stay private because the credential is stored with
-                    the configuration.
+                    Bearer/API-key and configured OAuth app installations stay private because the
+                    credential is stored with the configuration.
                   </Text>
                 )}
               </Form>

@@ -67,6 +67,8 @@ it('keeps configured app IDs and secrets in the secure form, requires consent, a
   );
   const button = page.getByRole('button', { name: 'Connect', exact: true });
   await expect.element(button).toBeDisabled();
+  await expect.element(page.getByRole('radio', { name: 'Shared', exact: true })).toBeDisabled();
+  await expect.element(page.getByRole('radio', { name: 'Private', exact: true })).toBeChecked();
   await page.getByLabelText('OAuth app Client ID', { exact: true }).fill('customer-app');
   await page.getByLabelText('OAuth app Client secret', { exact: true }).fill('fake-client-secret');
   await expect

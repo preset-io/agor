@@ -974,7 +974,9 @@ export function createMCPCatalogConnectService(
         );
       }
       if (sharing === 'shared' && entry.oauth?.configured_client) {
-        throw new BadRequest('Configured OAuth apps must use a private Catalog installation; administrators can configure a shared per-user server in Settings');
+        throw new BadRequest(
+          'Configured OAuth apps must use a private Catalog installation; administrators can configure a shared per-user server in Settings'
+        );
       }
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
@@ -993,7 +995,8 @@ export function createMCPCatalogConnectService(
                 ).claimCatalogConnectGeneration(userId, entry.name)
               ),
             };
-      const connectGeneration = bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
+      const connectGeneration =
+        bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
         auth = await resolveAuthRequirement(entry, bearerToken, sharing);

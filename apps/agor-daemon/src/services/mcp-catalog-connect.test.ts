@@ -2376,6 +2376,23 @@ describe('customer-owned configured OAuth app', () => {
     });
     expect(fixture.generationFinalizations).toHaveLength(1);
   });
+  it('refuses shared Catalog BYO before probing or saving app material', async () => {
+    probeRemoteAuthType.mockClear();
+    const fixture = buildApp(byo);
+    await expect(
+      createMCPCatalogConnectService(fixture.app, fixture.deps).create(
+        {
+          ...request,
+          sharing: 'shared',
+          oauth_client: { client_id: 'customer-app', client_secret: 'secret' },
+        },
+        params
+      )
+    ).rejects.toThrow('private Catalog installation');
+    expect(probeRemoteAuthType).not.toHaveBeenCalled();
+    expect(fixture.created.mcpServers).toHaveLength(0);
+    expect(fixture.generationFinalizations).toHaveLength(0);
+  });
   it('refuses app material for entries without a reviewed recipe', async () => {
     const fixture = buildApp(CURATED);
     await expect(
