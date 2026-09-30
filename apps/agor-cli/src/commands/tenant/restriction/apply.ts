@@ -24,6 +24,9 @@ export default class TenantRestrictionApply extends Command {
     'seed_active restates an already-open watermark on a runtime that holds NO record for the controller ' +
     '(a tenant moved to a fresh runtime, whose restriction state is never portable); an exact replay of an ' +
     'accepted seed is a no-op ("changed":false) and any other existing record is a revision_conflict. ' +
+    'Every recorded change, including a seed or any first record, changes the tenant credential generation: ' +
+    'runtime sessions and running tasks holding the old generation are refused, so seeding a runtime that is ' +
+    'already serving the tenant signs everyone out. ' +
     'Exit codes: 0 applied or already in that state (see "changed"); ' +
     '2 conflict — stderr carries {"error":"identity_mismatch|stale_revision|revision_conflict|release_not_prepared"}; ' +
     '3 the runtime is not PostgreSQL and holds no restriction state; 1 any other failure.';
@@ -102,6 +105,13 @@ export default class TenantRestrictionApply extends Command {
     this.logToStderr(
       chalk.dim('  Intent only — this proves no containment of already-admitted work.')
     );
+    if (result.changed && command.action === 'seed_active') {
+      this.logToStderr(
+        chalk.yellow(
+          '  Warning: the credential generation changed; any session or running task on this runtime must re-authenticate.'
+        )
+      );
+    }
     await flushStderr();
     process.exit(EXIT_APPLIED);
   }

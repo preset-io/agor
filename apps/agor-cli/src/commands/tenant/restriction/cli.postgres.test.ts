@@ -136,6 +136,10 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       const inspected = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
       expect(inspected.code).toBe(0);
       expect(JSON.parse(inspected.stdout)).toEqual([activatedPayload.record]);
+      const cutoff = (await readTenantRestrictionState(db, tenant)).resumeAfter!;
+      expect(inspected.stderr).toContain(
+        `Event cutoff (latest update): ${new Date(cutoff).toISOString()}`
+      );
     }, 180_000);
 
     it('seeds a re-homed tenant, replays as a no-op, and refuses once the runtime moved on', async () => {
@@ -144,6 +148,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       const seeded = await apply(tenant, 'reactivate-4', 4, 'seed_active');
       expect(seeded.code).toBe(0);
       const seededPayload = JSON.parse(seeded.stdout) as ApplyPayload;
+      expect(seeded.stderr).toContain('credential generation changed');
       expect(seededPayload).toEqual({
         record: {
           version: 1,
@@ -163,6 +168,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         record: seededPayload.record,
         changed: false,
       });
+      expect(replayed.stderr).not.toContain('credential generation changed');
 
       // After a newer restriction the seed is refused, and inspect shows this controller moved past it.
       expect((await apply(tenant, 'susp-5', 5, 'restrict')).code).toBe(0);

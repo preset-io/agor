@@ -19,6 +19,7 @@ export default class TenantRestrictionInspect extends Command {
     'ordered by controller id. Runs non-interactively against the runtime database (PostgreSQL-only) without ' +
     'the daemon. An empty array only means this database holds no recorded intent; it is not evidence that the ' +
     'tenant may be served, and a recorded row is not evidence that anything was contained. ' +
+    'The latest update time (the reactivation event cutoff) is printed on stderr only. ' +
     'Exit codes: 0 read (including empty); 3 the runtime is not PostgreSQL and holds no restriction state; ' +
     '1 any other failure, with {"error":<code>} on stderr.';
 
@@ -41,9 +42,10 @@ export default class TenantRestrictionInspect extends Command {
     }
 
     let records: TenantRestrictionRecord[];
+    let resumeAfter: number | undefined;
     try {
       const db = createDatabase({ url: getDatabaseUrl() });
-      records = (await readTenantRestrictionState(db, tenantId)).records;
+      ({ records, resumeAfter } = await readTenantRestrictionState(db, tenantId));
     } catch (error) {
       const { exitCode, code } = tenantRestrictionFailure(error);
       this.logToStderr(tenantRestrictionErrorLine(code));
@@ -59,6 +61,12 @@ export default class TenantRestrictionInspect extends Command {
           `${chalk.cyan(closed)} closed`
       )
     );
+    // Human audit only: the stdout record shape stays fixed for strict parsers.
+    if (resumeAfter !== undefined) {
+      this.logToStderr(
+        chalk.dim(`  Event cutoff (latest update): ${new Date(resumeAfter).toISOString()}`)
+      );
+    }
     await flushStderr();
     process.exit(EXIT_APPLIED);
   }
