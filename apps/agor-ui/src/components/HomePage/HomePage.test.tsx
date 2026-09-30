@@ -36,6 +36,20 @@ vi.mock('../../hooks/useIdleReady', async () => {
   };
 });
 
+// Counts title reads per session: every session row render reads its title once.
+const titleReads = vi.hoisted(() => new Map<string, number>());
+vi.mock('../../utils/sessionTitle', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../utils/sessionTitle')>();
+  return {
+    ...actual,
+    getSessionDisplayTitle: (...args: Parameters<typeof actual.getSessionDisplayTitle>) => {
+      const id = args[0].session_id;
+      titleReads.set(id, (titleReads.get(id) ?? 0) + 1);
+      return actual.getSessionDisplayTitle(...args);
+    },
+  };
+});
+
 /** Wide viewport: every media query matches, so Home renders at desktop density. */
 const asDesktop = () =>
   vi.spyOn(window, 'matchMedia').mockImplementation(
@@ -903,6 +917,20 @@ describe('HomePage re-render isolation', () => {
       agorStore.setState({ branchById });
     });
     expect(commits.count).toBe(0);
+  });
+
+  it('re-renders only the preview row whose session changed', () => {
+    const others = ['b', 'c'].map((id) => session(id, { last_updated: recent(10) }));
+    seed({ sessions: [mine, ...others] });
+    renderHome();
+    titleReads.clear();
+    act(() => {
+      agorStore.setState(buildSessionMaps([{ ...mine, title: 'Renamed' }, ...others]));
+    });
+    expect(screen.getByText('Renamed')).toBeInTheDocument();
+    expect(titleReads.get('mine')).toBeGreaterThan(0);
+    expect(titleReads.get('b')).toBeUndefined();
+    expect(titleReads.get('c')).toBeUndefined();
   });
 
   it('bails out of a parent re-render when its props are stable', () => {
