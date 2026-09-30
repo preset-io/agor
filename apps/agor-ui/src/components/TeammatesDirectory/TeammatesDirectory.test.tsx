@@ -88,6 +88,19 @@ function failingReads(failing: string, value: () => unknown) {
   return { find, failNext, rejects };
 }
 
+/** Reads of `failing` that settle only when the test says so, each as a failure or with `value`. */
+function settledReads(failing: string, value: () => unknown) {
+  const settles: ((fail: boolean) => void)[] = [];
+  const find = vi.fn<Find>(({ route }) =>
+    route.id === failing
+      ? new Promise((resolve, reject) =>
+          settles.push((fail) => (fail ? reject(new Error('offline')) : resolve(value())))
+        )
+      : Promise.resolve(value())
+  );
+  return { find, settles };
+}
+
 function renderDirectory(props: Partial<React.ComponentProps<typeof TeammatesDirectory>> = {}) {
   return render(
     <AntApp>
@@ -418,6 +431,45 @@ describe('TeammatesDirectory', () => {
     expect(await screen.findByText('Teammate gamma')).toBeInTheDocument();
     expect(screen.getByText('Teammate beta')).toBeInTheDocument();
     expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+  });
+
+  it('keeps later cards while a Retry re-reads an early failed access check', async () => {
+    seed([teammate('alpha', 'b1'), teammate('beta', 'b2')], [board('b1'), board('b2')]);
+    const reads = settledReads('alpha', () => answer('session'));
+    renderDirectory({ client: clientWith(reads.find), checkAccess: true });
+    fireEvent.click(screen.getByText('You can ask'));
+    await waitFor(() => expect(reads.settles).toHaveLength(1));
+    await act(async () => reads.settles[0](true));
+    expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(reads.settles).toHaveLength(2));
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.getByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retry/ })).toHaveClass('ant-btn-loading');
+
+    await act(async () => reads.settles[1](false));
+    expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
+  });
+
+  it('keeps a superadmin’s later cards while a Retry re-reads an early failed policy', async () => {
+    seed([teammate('alpha', 'b1'), teammate('beta', 'b2')], [board('b1'), board('b2')]);
+    const reads = settledReads('b1', openPolicy);
+    renderDirectory({ client: clientWith(vi.fn(), reads.find), currentUser: superadmin });
+    await waitFor(() => expect(reads.settles).toHaveLength(1));
+    await act(async () => reads.settles[0](true));
+    expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(reads.settles).toHaveLength(2));
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+
+    await act(async () => reads.settles[1](false));
+    expect(await screen.findByText('Teammate alpha')).toBeInTheDocument();
+    expect(screen.getByText('Teammate beta')).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
   });
 
   it('keeps list order: a late answer never lands above cards already shown', async () => {

@@ -108,6 +108,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
     teammates,
     failed: sharingFailed,
     retry: retrySharing,
+    retrying: sharingRetrying,
   } = useSharedTeammates(client, currentUser);
   const hydrated = useAgorStore((s) => s.branchesHydrated);
   const [offset, setOffset] = useState(0);
@@ -122,6 +123,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
     access,
     failed: accessFailed,
     retry: retryAccess,
+    retrying: accessRetrying,
   } = useSessionAccess(
     checkAccess ? client : null,
     currentUser,
@@ -174,7 +176,11 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
           type="secondary"
           style={{ display: 'block', marginTop: token.marginXS, fontSize: token.fontSizeSM }}
         >
-          Couldn’t check access for some teammates. <HomeLink onClick={retry}>Try again</HomeLink>
+          Couldn’t check access for some teammates.{' '}
+          {/* Loading, not hidden, while retried reads are out, so focus stays on it. */}
+          <HomeLink onClick={retry} loading={sharingRetrying || accessRetrying}>
+            Try again
+          </HomeLink>
         </Typography.Text>
       )}
     </HomeSection>

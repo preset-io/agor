@@ -7,6 +7,7 @@ import { vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { HomePage, type HomePageProps } from './HomePage';
 
 /** Renders the current route state, so a test can see Home clear it. */
@@ -158,5 +159,6 @@ export function resetHome() {
   Element.prototype.scrollIntoView = vi.fn();
   localStorage.clear();
   agorStore.getState().reset();
+  resetAccessCacheForTests();
   vi.restoreAllMocks();
 }

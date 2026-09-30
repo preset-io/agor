@@ -250,4 +250,44 @@ describe('HomePage privacy for superadmins', () => {
     expect(screen.queryByText('Teammate hidden')).not.toBeInTheDocument();
     expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
   });
+
+  it('keeps the rail and its retry link mounted while a failed policy read is retried', async () => {
+    seed({
+      sessions: [session('idle')],
+      branches: [teammate('open', 'b-shared')],
+      boards: [{ board_id: 'b-shared', name: 'S', archived: false } as Board],
+    });
+    const real = policyClient({ 'b-shared': 'shared' });
+    const answers: { settle: (fail: boolean) => void }[] = [];
+    const flaky = {
+      service: (name: string) => {
+        const service = real.service(name as never) as { find: (p: unknown) => Promise<unknown> };
+        if (name !== 'boards/:id/permissions') return service;
+        return {
+          find: (params: unknown) =>
+            new Promise((resolve, reject) =>
+              answers.push({
+                settle: (fail) =>
+                  fail ? reject(new Error('down')) : service.find(params).then(resolve),
+              })
+            ),
+        };
+      },
+    } as unknown as AgorClient;
+    renderHome({ currentUser: superadmin, client: flaky });
+    await waitFor(() => expect(answers).toHaveLength(1));
+    await act(async () => answers[0].settle(true));
+    const rail = await screen.findByRole('region', { name: 'AI teammates' });
+    const retry = within(rail).getByRole('button', { name: 'Try again' });
+    retry.focus();
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(answers).toHaveLength(2));
+    expect(screen.getByRole('region', { name: 'AI teammates' })).toBe(rail);
+    expect(within(rail).getByRole('button', { name: /Try again/ })).toBe(document.activeElement);
+
+    await act(async () => answers[1].settle(false));
+    expect(await within(rail).findByText('Teammate open')).toBeInTheDocument();
+    expect(within(rail).queryByText(/Couldn’t check access/)).not.toBeInTheDocument();
+  });
 });

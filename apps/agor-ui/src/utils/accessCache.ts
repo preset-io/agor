@@ -38,22 +38,28 @@ interface ScopedReads {
 }
 
 const byClient = new WeakMap<object, ScopedReads>();
+const abortError = () => new DOMException('The access read was aborted.', 'AbortError');
+// Slots belong to a generation; a test reset starts a new one, so older releases can't miscount.
+let generation = 0;
 let inFlight = 0;
-const waiting: (() => void)[] = [];
+const waiting: { grant: () => void; drop: () => void }[] = [];
 
+/** A read slot, resolving with the generation it belongs to. */
 const acquire = () => {
   if (inFlight < MAX_IN_FLIGHT) {
     inFlight++;
-    return Promise.resolve();
+    return Promise.resolve(generation);
   }
-  return new Promise<void>((resolve) => waiting.push(resolve));
+  return new Promise<number>((resolve, reject) =>
+    waiting.push({ grant: () => resolve(generation), drop: () => reject(abortError()) })
+  );
 };
 
-const release = () => {
+const release = (slot: number) => {
+  if (slot !== generation) return;
   const next = waiting.shift();
-  if (next) next();
-  // A read started before a test reset must not push the count below zero.
-  else inFlight = Math.max(0, inFlight - 1);
+  if (next) next.grant();
+  else inFlight--;
 };
 
 /** A caller's failed ids carried to a new comma-joined id set: only those still in it. */
@@ -71,13 +77,12 @@ export function withoutFailure<T extends { ids: ReadonlySet<string> }>(failed: T
   return { ...failed, ids };
 }
 
-/** Test-only: frees every read slot and drops queued waiters a failed test left behind. */
+/** Test-only: frees every read slot, ignores releases from reads already running and aborts queued ones. */
 export function resetAccessCacheForTests() {
+  generation++;
   inFlight = 0;
-  waiting.length = 0;
+  for (const dropped of waiting.splice(0)) dropped.drop();
 }
-
-const abortError = () => new DOMException('The access read was aborted.', 'AbortError');
 
 /** The signed-in scope answers belong to; a role change re-reads them like a new sign-in. */
 export const accessScope = (
@@ -113,13 +118,13 @@ function startRead(
     started: false,
     cancelled: false,
   };
-  pending.promise = acquire().then(async () => {
+  pending.promise = acquire().then(async (slot) => {
     try {
       if (pending.cancelled || byClient.get(client) !== entry) throw abortError();
       pending.started = true;
       return await read();
     } finally {
-      release();
+      release(slot);
     }
   });
   pending.promise.then(

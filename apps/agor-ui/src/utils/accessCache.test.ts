@@ -101,6 +101,29 @@ describe('readAccess', () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it('on a test reset aborts queued reads and ignores releases from reads already running', async () => {
+    const client = {};
+    const slots = occupySlots(client);
+    const read = vi.fn(async () => true);
+    const queued = readAccess(client, 's', 'queued', read);
+    resetAccessCacheForTests();
+    await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
+
+    // Four fresh reads fill the new slots; the old reads finishing free none of them.
+    const fresh = occupySlots({});
+    await slots.release();
+    let started = false;
+    const fifth = readAccess({}, 's', 'fifth', async () => {
+      started = true;
+      return true;
+    });
+    await flush();
+    expect(started).toBe(false);
+    await fresh.release();
+    expect(await fifth).toBe(true);
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it('rejects at once when the signal has already aborted', async () => {
     const read = vi.fn(async () => true);
     await expect(

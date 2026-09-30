@@ -68,9 +68,9 @@ const sharedAlways = (): BoardSharingStatus => 'shared';
  * superadmins, so only they pay one policy read per board, resolved with the
  * shared capability resolver and shared through the access cache. Unknown and
  * failed reads are not shared; a failed read is retried on the next mount,
- * board set or sign-in, and `retry` does so now. A new board set keeps the
- * failures still in it until their re-read answers. `settled` once every board
- * has an answer or a failed read.
+ * board set or sign-in, and `retry` does so now, `retrying` until those reads
+ * settle. A retry or a new board set keeps the failures still in it until their
+ * re-read answers. `settled` once every board has an answer or a failed read.
  */
 export function useBoardSharing(
   client: AgorClient | null,
@@ -81,6 +81,7 @@ export function useBoardSharing(
   status: (boardId: string) => BoardSharingStatus;
   settled: boolean;
   retry: () => void;
+  retrying: boolean;
 } {
   const { authGeneration } = useConnectionState();
   const bypasses = hasMinimumRole(user?.role, ROLES.SUPERADMIN);
@@ -89,6 +90,7 @@ export function useBoardSharing(
   const key = bypasses ? [...new Set(boardIds)].sort().join(',') : '';
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);
+  const [settledAttempt, setSettledAttempt] = useState(0);
   const [failed, setFailed] = useState({ scope, key, ids: NO_FAILURES });
   // A failure stays shown until its re-read answers, so revealed cards never hide again.
   if (failed.scope === scope && failed.key !== key) {
@@ -106,7 +108,7 @@ export function useBoardSharing(
     );
     groupIds.catch(() => {});
     // Read in display order: cards reveal in order, so an early card mustn't queue behind later ones.
-    for (const boardId of new Set(boardIds)) {
+    const reads = [...new Set(boardIds)].map((boardId) =>
       readAccess(
         client,
         scope,
@@ -126,18 +128,22 @@ export function useBoardSharing(
             ids: new Set([...(prev.scope === scope && prev.key === key ? prev.ids : []), boardId]),
           }));
         }
-      );
-    }
+      )
+    );
+    Promise.all(reads).then(() => {
+      if (!controller.signal.aborted) setSettledAttempt(attempt);
+    });
     return () => controller.abort();
   }, [client, key, scope, userId, attempt]);
-  const retry = useCallback(() => {
-    setFailed({ scope, key, ids: NO_FAILURES });
-    setAttempt((a) => a + 1);
-  }, [scope, key]);
+  // Failures stay until their re-read answers, so a retry never turns them pending.
+  const retry = useCallback(() => setAttempt((a) => a + 1), []);
+  const retrying = !!client && !!userId && !!key && settledAttempt < attempt;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {
-    if (!bypasses) return { sharedWithMe: allowAll, status: sharedAlways, settled: true, retry };
+    if (!bypasses) {
+      return { sharedWithMe: allowAll, status: sharedAlways, settled: true, retry, retrying };
+    }
     const reading = !!client && !!userId && !!key;
     const status = (boardId: string): BoardSharingStatus => {
       const known = client ? peekAccess(client, scope, `board:${boardId}`) : undefined;
@@ -150,8 +156,9 @@ export function useBoardSharing(
       status,
       settled: !reading || key.split(',').every((id) => status(id) !== 'pending'),
       retry,
+      retrying,
     };
-  }, [bypasses, client, userId, scope, key, version, failedIds, retry]);
+  }, [bypasses, client, userId, scope, key, version, failedIds, retry, retrying]);
 }
 
 /** `useBoardSharing`'s predicate alone, for callers that needn't wait for it. */

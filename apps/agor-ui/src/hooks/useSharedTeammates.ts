@@ -9,7 +9,8 @@ import { useBoardSharing } from './useBoardsSharedWithMe';
  * `settled` once every board's policy answer is in (only superadmins wait).
  * The list grows at the bottom: a teammate shows once every one before it has
  * an answer. `failed` counts teammates whose policy read failed; `retry` reads
- * them again.
+ * them again, keeping them failed (not pending) until they answer, `retrying`
+ * meanwhile.
  */
 export function useSharedTeammates(client: AgorClient | null, user: User | null | undefined) {
   const candidates = useStoreWithEqualityFn(
@@ -18,7 +19,7 @@ export function useSharedTeammates(client: AgorClient | null, user: User | null 
     shallow
   );
   const boardIds = useMemo(() => candidates.map((b) => b.board_id ?? ''), [candidates]);
-  const { status, settled, retry } = useBoardSharing(client, user, boardIds);
+  const { status, settled, retry, retrying } = useBoardSharing(client, user, boardIds);
   return useMemo(() => {
     const teammates: Branch[] = [];
     let failed = 0;
@@ -29,6 +30,6 @@ export function useSharedTeammates(client: AgorClient | null, user: User | null 
       else if (answer === 'pending') waiting = true;
       else if (answer === 'shared' && !waiting) teammates.push(branch);
     }
-    return { teammates, settled, failed, retry };
-  }, [candidates, status, settled, retry]);
+    return { teammates, settled, failed, retry, retrying };
+  }, [candidates, status, settled, retry, retrying]);
 }

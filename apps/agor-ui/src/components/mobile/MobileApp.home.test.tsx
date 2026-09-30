@@ -8,6 +8,7 @@ import { ThemeProvider } from '../../contexts/ThemeContext';
 import { recentBoardsStorageKey } from '../../hooks/useRecentBoards';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { MobileApp } from './MobileApp';
 
 // The real shared HomePage; only the other phone pages are stand-ins.
@@ -155,6 +156,7 @@ beforeEach(() => {
   localStorage.clear();
   patch.mockClear();
   agorStore.getState().reset();
+  resetAccessCacheForTests();
 });
 
 describe('MobileApp Home wiring', () => {

@@ -16,6 +16,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { App } from './App';
 
 const canvasCommit = vi.hoisted(() => vi.fn<(boardName: string | null) => void>());
@@ -270,6 +271,7 @@ async function pickBoardFromSwitcher(name: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  resetAccessCacheForTests();
   seedStore();
   canvasCommit.mockClear();
 });

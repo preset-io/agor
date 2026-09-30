@@ -37,6 +37,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
     settled: sharingSettled,
     failed: sharingFailed,
     retry: retrySharing,
+    retrying: sharingRetrying,
   } = useSharedTeammates(client, currentUser);
   const userById = useAgorStore((s) => s.userById);
   const boardById = useAgorStore((s) => s.boardById);
@@ -54,6 +55,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
     failedIds,
     failed: accessFailed,
     retry: retryAccess,
+    retrying: accessRetrying,
   } = useSessionAccess(checkAccess ? client : null, currentUser, branchIds, {
     read: asking,
   });
@@ -175,7 +177,10 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
               <Typography.Text type="secondary" style={small}>
                 Couldn’t check access for {failed} {failed === 1 ? 'teammate' : 'teammates'} ·
               </Typography.Text>
-              <HomeLink onClick={retry}>Retry</HomeLink>
+              {/* Loading, not hidden, while retried reads are out, so focus stays on it. */}
+              <HomeLink onClick={retry} loading={sharingRetrying || accessRetrying}>
+                Retry
+              </HomeLink>
             </Flex>
           )}
         </Flex>
