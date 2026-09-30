@@ -76,16 +76,33 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
         align="center"
         style={{
           flexShrink: 0,
-          padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px`,
+          padding: `${token.paddingSM}px ${token.padding}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           background: token.colorBgContainer,
         }}
       >
-        <Flex align="center" gap={12} style={{ minWidth: 0 }}>
-          <RobotOutlined style={{ fontSize: 28, color: token.colorTextTertiary, flexShrink: 0 }} />
-          <Typography.Text strong style={{ fontSize: 18 }}>
-            {branch ? `Untitled session — ${branch.name}` : 'Untitled session'}
-          </Typography.Text>
+        <Flex align="center" gap={token.marginXS} style={{ minWidth: 0 }}>
+          <RobotOutlined
+            style={{
+              fontSize: token.fontSizeHeading3,
+              color: token.colorTextTertiary,
+              flexShrink: 0,
+            }}
+          />
+          <Flex vertical style={{ minWidth: 0 }}>
+            <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+              Untitled session
+            </Typography.Text>
+            {branch && (
+              <Typography.Text
+                type="secondary"
+                style={{ fontSize: token.fontSizeSM }}
+                ellipsis={{ tooltip: branch.name }}
+              >
+                {branch.name}
+              </Typography.Text>
+            )}
+          </Flex>
         </Flex>
         <Button type="text" icon={<CloseOutlined />} onClick={onClose} aria-label="Close panel" />
       </Flex>
@@ -103,7 +120,7 @@ export const PendingToolChoicePanel: React.FC<PendingToolChoicePanelProps> = ({
         }}
       >
         <div style={{ maxWidth: 480, width: '100%', textAlign: 'center' }}>
-          <Typography.Text style={{ fontSize: 13 }} type="secondary">
+          <Typography.Text type="secondary">
             Choose which AI tool this session should use.
           </Typography.Text>
 
