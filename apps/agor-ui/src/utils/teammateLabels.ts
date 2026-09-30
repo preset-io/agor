@@ -1,6 +1,8 @@
 import type { Board, Branch, Repo } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
-import { Flex, Typography, theme } from 'antd';
+
+/** Shown for a teammate without an emoji of its own. */
+export const DEFAULT_TEAMMATE_EMOJI = '🤖';
 
 export const teammateLabel = (branch: Branch) =>
   getTeammateConfig(branch)?.displayName ?? branch.name;
@@ -28,7 +30,9 @@ export interface TeammateOption {
   branch: Branch;
 }
 
-const bare = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+// A name with no letters or digits (emoji only) is compared as written, so two such names don't both collapse to ''.
+const bare = (text: string) =>
+  text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '') || text.trim().toLowerCase();
 
 /** Names that differ only in case, spacing or punctuation ("Hodor!" / "Hodor"). */
 export const sameName = (a: string, b: string) => bare(a) === bare(b);
@@ -45,27 +49,9 @@ export function teammateOption(
   return {
     value: branch.branch_id,
     label,
-    emoji: teammateEmoji(branch) ?? '🤖',
+    emoji: teammateEmoji(branch) ?? DEFAULT_TEAMMATE_EMOJI,
     context,
     searchText: `${label} ${branch.name} ${context ?? ''}`,
     branch,
   };
 }
-
-/** One line: emoji, name, then the board in regular secondary text. */
-export const TeammateOptionLabel: React.FC<{ option: TeammateOption }> = ({ option }) => {
-  const { token } = theme.useToken();
-  return (
-    <Flex gap={token.marginXS} align="center" style={{ minWidth: 0 }}>
-      <span aria-hidden>{option.emoji}</span>
-      <Typography.Text ellipsis style={{ flex: '0 1 auto' }}>
-        {option.label}
-      </Typography.Text>
-      {option.context && (
-        <Typography.Text type="secondary" ellipsis style={{ fontWeight: 'normal' }}>
-          {option.context}
-        </Typography.Text>
-      )}
-    </Flex>
-  );
-};

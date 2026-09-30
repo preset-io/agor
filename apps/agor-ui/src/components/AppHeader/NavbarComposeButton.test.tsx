@@ -424,7 +424,7 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByRole('button', { name: 'Send & open' })).not.toHaveClass('ant-btn-primary');
   });
 
-  it('Send & Open navigates to the new session when on a non-primary board', async () => {
+  it('send & open navigates to the new session when on a non-primary board', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: 'board-current',
@@ -477,13 +477,17 @@ describe('NavbarComposeButton', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(goToSession).not.toHaveBeenCalled();
+      // The abandoned send no longer holds the buttons for the new owner.
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Send & open' })).toBeEnabled()
+      );
     }
   );
 
   it.each([
     ['home', '/'],
     ['Knowledge', '/knowledge'],
-  ])('Send & Open navigates directly from the %s surface', async (_surface, pathname) => {
+  ])('send & open navigates directly from the %s surface', async (_surface, pathname) => {
     renderCompose({ primary: primaryBranch, currentBoardId: '', pathname });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'ping' } });
@@ -493,7 +497,7 @@ describe('NavbarComposeButton', () => {
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
   });
 
-  it('Send in Background never navigates (board surface)', async () => {
+  it('send in background never navigates (board surface)', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: 'board-current',
@@ -507,7 +511,7 @@ describe('NavbarComposeButton', () => {
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
   });
 
-  it('Send in Background never navigates (non-board surface)', async () => {
+  it('send in background never navigates (non-board surface)', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: '',

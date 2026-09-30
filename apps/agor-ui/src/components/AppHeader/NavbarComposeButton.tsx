@@ -19,7 +19,7 @@ import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { resolveSessionMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
-import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
+import { DEFAULT_TEAMMATE_EMOJI, teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import {
   buildNewSessionConfig,
@@ -29,11 +29,7 @@ import {
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
-import {
-  ComposeSendButtons,
-  type ComposeSendMode,
-  usePrimaryAssistantSend,
-} from '../PrimaryAssistantCompose';
+import { ComposeSendButtons, usePrimaryAssistantSend } from '../PrimaryAssistantCompose';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -58,8 +54,8 @@ export interface NavbarComposeButtonProps {
 /**
  * Global compose affordance: ask your primary assistant from anywhere. Resolves
  * the caller's primary teammate branch, mounts an agent picker + config chips +
- * prompt, and either navigates to the new session ("Send & Open") or leaves the
- * user in place ("Send in Background"). A null primary shows the Settings picker
+ * prompt, and either navigates to the new session ("Send & open") or leaves the
+ * user in place ("Send in background"). A null primary shows the Settings picker
  * inline and resumes the send once one is chosen, preserving the typed prompt.
  */
 export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
@@ -132,6 +128,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
         initialPrompt: prompt,
         attachmentFiles: attachments.map((attachment) => attachment.file),
       }),
+    // The single send gate: also covers a send resumed after picking a primary.
     validate: async () =>
       !disabled &&
       configValidity.valid &&
@@ -178,11 +175,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     );
   }, []);
 
-  const runSend = (mode: ComposeSendMode) => {
-    if (disabled || resolveFailed || !configValidity.valid) return;
-    void send(mode);
-  };
-
   const sendDisabled =
     disabled ||
     resolving ||
@@ -191,7 +183,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     submitting !== null ||
     (!prompt.trim() && attachments.length === 0);
 
-  const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || '🤖';
+  const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || DEFAULT_TEAMMATE_EMOJI;
 
   const content = (
     <div style={{ width: 450, maxWidth: '90vw' }}>
@@ -336,7 +328,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
               branch={primaryBranch}
               submitting={submitting}
               disabled={sendDisabled}
-              onSend={runSend}
+              onSend={send}
             />
           </Flex>
         </Form>

@@ -777,7 +777,7 @@ describe('HomePage teammates', () => {
     renderHome({ client: client({}), onCreateSession, onSessionClick });
     const input = await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
     const toolbar = document.querySelector<HTMLElement>('[data-home-ask-toolbar]') as HTMLElement;
-    expect(within(toolbar).getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(within(toolbar).getByRole('button', { name: 'Send in background' })).toBeInTheDocument();
     expect(within(toolbar).queryByRole('button', { name: 'Send & open' })).not.toBeInTheDocument();
     fireEvent.change(input, { target: { value: 'Open it' } });
     fireEvent.click(within(toolbar).getByRole('button', { name: 'More send options' }));

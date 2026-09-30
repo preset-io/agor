@@ -53,7 +53,7 @@ export function getSessionStatusTone(status: StatusInput): StatusTone {
 }
 
 export const isSessionFailed = (session: Pick<Session, 'status'>): boolean =>
-  session.status === 'failed';
+  session.status === SessionStatus.FAILED;
 
 const STATUS_LABELS: Record<SessionStatus, string> = {
   [SessionStatus.RUNNING]: 'Running',
