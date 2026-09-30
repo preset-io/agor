@@ -556,7 +556,11 @@ export class Preview {
     if (volume) {
       const attachments = nodes(volume.volumeInstances);
       requireValue(
-        attachments.length === 0,
+        attachments.length === 0 ||
+          (attachments.length === 1 &&
+            attachments[0].serviceId === null &&
+            attachments[0].environmentId === owned.environment.id &&
+            attachments[0].mountPath === '/home/agor/.agor'),
         'Deleted service volume was reattached; refusing deletion.'
       );
       const result = await this.api.query(

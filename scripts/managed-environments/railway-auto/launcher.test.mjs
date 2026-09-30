@@ -163,10 +163,11 @@ function fixture() {
     } else if (q.includes('PreviewDeleteService')) {
       state.services = state.services.filter((s) => s.id !== v.id);
       state.volumes.forEach((volume) => {
-        volume.volumeInstances.edges = volume.volumeInstances.edges.filter(
-          (e) => e.node.serviceId !== v.id
-        );
+        for (const edge of volume.volumeInstances.edges) {
+          if (edge.node.serviceId === v.id) edge.node.serviceId = null;
+        }
       });
+      state.afterServiceDelete?.();
       data = { serviceDelete: true };
     } else if (q.includes('PreviewDeleteVolume')) {
       state.volumes = state.volumes.filter((volume) => volume.id !== v.id);
@@ -320,6 +321,24 @@ test('only explicit Nuke removes owned resources', async () => {
   assert.equal(f.state.volumes.length, 0);
   assert.equal(f.state.services.length, 0);
   assert.equal(f.state.environments.length, 0);
+});
+test('Nuke refuses a detached volume moved to another environment or reattached', async () => {
+  for (const field of ['environmentId', 'serviceId', 'mountPath']) {
+    const f = fixture();
+    await f.action('start');
+    f.state.afterServiceDelete = () => {
+      f.state.volumes[0].volumeInstances.edges[0].node[field] = randomUUID();
+    };
+    await assert.rejects(f.action('nuke'), /reattached/);
+    assert.equal(f.state.volumes.length, 1);
+    assert.equal(
+      f.mutations().some((c) => c.q.includes('PreviewDeleteVolume')),
+      false
+    );
+    // Partial cleanup must not adopt an orphan by name on subsequent Start/Nuke.
+    await assert.rejects(f.action('start'), /orphaned/);
+    await assert.rejects(f.action('nuke'), /orphaned/);
+  }
 });
 test('plain Node loads launcher; lifecycle commands never install dependencies', () => {
   try {
