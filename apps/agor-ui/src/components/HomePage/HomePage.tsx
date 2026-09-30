@@ -3,7 +3,7 @@ import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useConnectionState } from '../../contexts/ConnectionContext';
+import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
@@ -21,6 +21,7 @@ import {
 import {
   compareHomeNeeds,
   type HomeCommentNeed,
+  type HomeSessionNeed,
   isUnreadResult,
   lastRunStartedAt,
   makeHomeBucketsSelector,
@@ -60,6 +61,11 @@ const openedField = (entry: unknown, field: 'run' | 'at'): number => {
 };
 const openedAt = (entry: OpenedFailure) => openedField(entry, 'at');
 const openedRun = (entry: OpenedFailure) => openedField(entry, 'run');
+// A stored container that isn't a plain object (null, a list, a number) reads as empty.
+const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
+  stored && typeof stored === 'object' && !Array.isArray(stored)
+    ? (stored as Record<string, OpenedFailure>)
+    : NO_OPENED_FAILURES;
 
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
@@ -76,7 +82,8 @@ export interface HomePageProps {
   currentUser?: User | null;
   recentBoardIds?: string[];
   onBoardClick: (boardId: string) => void;
-  onBranchClick: (branchId: string) => void;
+  /** `boardId` is where the branch lives, for callers that can't find the branch itself. */
+  onBranchClick: (branchId: string, boardId: string) => void;
   onSessionClick: (sessionId: string) => void;
   /** Omitted for callers who can't start sessions: the ask box hides. */
   onCreateSession?: (
@@ -198,6 +205,7 @@ export const HomePage = memo(function HomePage({
   const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
   const { connected, connecting } = useConnectionState();
+  const mutationDisabled = useConnectionDisabled();
   const railReady = useIdleReady();
   const confirmArchive = useConfirmArchiveSession(client);
   const userId = currentUser?.user_id;
@@ -233,7 +241,7 @@ export const HomePage = memo(function HomePage({
     'home-only-mine',
     false
   );
-  const [openedFailures, setOpenedFailures] = useUserLocalStorage(
+  const [storedOpenedFailures, setOpenedFailures] = useUserLocalStorage(
     userId,
     'home-opened-failures',
     NO_OPENED_FAILURES
@@ -241,9 +249,12 @@ export const HomePage = memo(function HomePage({
   const openedRuns = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(openedFailures).map(([id, entry]) => [id, openedRun(entry)])
+        Object.entries(asOpenedFailures(storedOpenedFailures)).map(([id, entry]) => [
+          id,
+          openedRun(entry),
+        ])
       ),
-    [openedFailures]
+    [storedOpenedFailures]
   );
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
@@ -325,23 +336,29 @@ export const HomePage = memo(function HomePage({
   const openComment = useCallback(
     ({ thread }: HomeCommentNeed) => {
       if (thread.session_id) onSessionClick(thread.session_id);
-      else if (thread.branch_id) onBranchClick(thread.branch_id);
+      else if (thread.branch_id) onBranchClick(thread.branch_id, thread.board_id);
       else onBoardClick(thread.board_id);
     },
     [onBoardClick, onBranchClick, onSessionClick]
   );
+  // The row stands for its earlier failures too, so opening it marks every one seen.
   const openFailure = useCallback(
-    (sessionId: string) => {
-      const cutoff = Date.now() - OPENED_FAILURES_WINDOW_MS;
-      const session = agorStore.getState().sessionById.get(sessionId);
-      // The run the person saw, on the server clock, so only a newer run brings the failure back.
+    (need: HomeSessionNeed) => {
       const now = Date.now();
-      const run = session ? lastRunStartedAt(session) : now;
+      const cutoff = now - OPENED_FAILURES_WINDOW_MS;
+      const { sessionById } = agorStore.getState();
+      const opened = [need.session, ...(need.earlier ?? [])].map(({ session_id }) => {
+        const session = sessionById.get(session_id);
+        // The run the person saw, on the server clock, so only a newer run brings the failure back.
+        return [session_id, { run: session ? lastRunStartedAt(session) : now, at: now }] as const;
+      });
       setOpenedFailures((prev) => ({
-        ...Object.fromEntries(Object.entries(prev).filter(([, entry]) => openedAt(entry) > cutoff)),
-        [sessionId]: { run, at: now },
+        ...Object.fromEntries(
+          Object.entries(asOpenedFailures(prev)).filter(([, entry]) => openedAt(entry) > cutoff)
+        ),
+        ...Object.fromEntries(opened),
       }));
-      onSessionClick(sessionId);
+      onSessionClick(need.session.session_id);
     },
     [onSessionClick, setOpenedFailures]
   );
@@ -459,7 +476,7 @@ export const HomePage = memo(function HomePage({
             client={client}
             currentUser={currentUser}
             hasSessions={!hydrated || buckets.hasSessions}
-            disabled={!connected}
+            disabled={mutationDisabled}
             onCreateSession={onCreateSession}
             onOpenSession={onSessionClick}
           />
@@ -489,8 +506,8 @@ export const HomePage = memo(function HomePage({
               onMarkRead={markRead}
               onMarkAllRead={client && buckets.unreadCount > 0 ? markAllRead : undefined}
               markingAllRead={markingAll}
-              markAllReadDisabled={!connected}
-              onArchive={archive}
+              markAllReadDisabled={mutationDisabled}
+              onArchive={mutationDisabled ? undefined : archive}
             />
           )}
           {onboarding}

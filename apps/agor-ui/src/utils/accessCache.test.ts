@@ -161,4 +161,31 @@ describe('readAccess', () => {
     expect(peekAccess(client, 's', 'k')).toBe(false);
     expect(read).toHaveBeenCalledTimes(2);
   });
+
+  it('stops peeking a stale grant once its re-read fails', async () => {
+    vi.useFakeTimers();
+    const client = {};
+    const read = vi.fn().mockResolvedValueOnce(true).mockRejectedValueOnce(new Error('Forbidden'));
+    expect(await readAccess(client, 's', 'k', read)).toBe(true);
+    vi.advanceTimersByTime(ACCESS_TTL_MS);
+    await expect(readAccess(client, 's', 'k', read)).rejects.toThrow('Forbidden');
+    expect(peekAccess(client, 's', 'k')).toBeUndefined();
+  });
+
+  it('keeps the last answer when an expired re-read is abandoned before it starts', async () => {
+    vi.useFakeTimers();
+    const client = {};
+    expect(await readAccess(client, 's', 'k', async () => true)).toBe(true);
+    vi.advanceTimersByTime(ACCESS_TTL_MS);
+    const slots = occupySlots(client);
+    const controller = new AbortController();
+    const read = vi.fn(async () => false);
+    const abandoned = readAccess(client, 's', 'k', read, { signal: controller.signal });
+    controller.abort();
+    await expect(abandoned).rejects.toThrow('aborted');
+    await slots.release();
+    await flush();
+    expect(read).not.toHaveBeenCalled();
+    expect(peekAccess(client, 's', 'k')).toBe(true);
+  });
 });

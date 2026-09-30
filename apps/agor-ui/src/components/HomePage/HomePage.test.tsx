@@ -2,7 +2,8 @@ import type { AgorClient, Board, Branch, Session, User } from '@agor-live/client
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionMaps } from '../../store/agorMaps';
-import { agorStore } from '../../store/agorStore';
+import { type AgorState, agorStore } from '../../store/agorStore';
+import type { HomeSessionNeed } from '../../store/selectors';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
   OPEN_GLOBAL_SEARCH_EVENT,
@@ -24,7 +25,37 @@ import {
 // The side rail mounts at once.
 vi.mock('../../hooks/useIdleReady', () => ({ useIdleReady: () => true }));
 
-beforeEach(resetHome);
+// Failure id → earlier failure ids folded into its row; empty passes the real selector through.
+const earlierFailures = vi.hoisted(() => new Map<string, string[]>());
+vi.mock('../../store/selectors', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../store/selectors')>();
+  const makeHomeBucketsSelector: typeof actual.makeHomeBucketsSelector = (options) => {
+    const select = actual.makeHomeBucketsSelector(options);
+    let last: { from: HomeSessionNeed[]; to: HomeSessionNeed[] } | undefined;
+    return (s: AgorState) => {
+      const buckets = select(s);
+      if (!earlierFailures.size) return buckets;
+      if (last?.from !== buckets.needs) {
+        const folded = new Set([...earlierFailures.values()].flat());
+        const to = buckets.needs
+          .filter((need) => !folded.has(need.session.session_id))
+          .map((need) => {
+            const ids = earlierFailures.get(need.session.session_id);
+            const earlier = ids?.map((id) => s.sessionById.get(id)).filter((x) => !!x);
+            return earlier ? { ...need, earlier } : need;
+          });
+        last = { from: buckets.needs, to };
+      }
+      return { ...buckets, needs: last.to };
+    };
+  };
+  return { ...actual, makeHomeBucketsSelector };
+});
+
+beforeEach(() => {
+  resetHome();
+  earlierFailures.clear();
+});
 
 describe('HomePage', () => {
   it('shows rows before hydration but never “all caught up” or counts', () => {
@@ -108,17 +139,47 @@ describe('HomePage', () => {
     expect(within(needs).getByRole('button', { name: '2 more · 2 comments' })).toBeInTheDocument();
   });
 
-  it('ignores malformed opened-failure entries instead of failing to render', () => {
-    localStorage.setItem(
-      `agor:user:${ME}:home-opened-failures`,
-      JSON.stringify({ f1: null, f2: 'oops', f3: [1] })
-    );
-    seed({
-      sessions: [session('f1', { status: 'failed', created_at: recent(60), title: 'Broken run' })],
-    });
-    renderHome();
+  it('ignores malformed opened failures instead of failing to render or open', () => {
+    const key = `agor:user:${ME}:home-opened-failures`;
+    for (const stored of [{ f1: null, f2: 'oops', f3: [1] }, null, [1], 5]) {
+      localStorage.setItem(key, JSON.stringify(stored));
+      seed({
+        sessions: [
+          session('f1', { status: 'failed', created_at: recent(60), title: 'Broken run' }),
+        ],
+      });
+      const onSessionClick = vi.fn();
+      const { unmount } = renderHome({ onSessionClick });
+      const needs = screen.getByRole('region', { name: 'Needs you' });
+      fireEvent.click(within(needs).getByText('Broken run'));
+      expect(onSessionClick).toHaveBeenCalledWith('f1');
+      expect(Object.keys(JSON.parse(localStorage.getItem(key) ?? '{}'))).toEqual(['f1']);
+      unmount();
+    }
+  });
+
+  it('marks a failure row’s earlier failures opened along with it', async () => {
+    const at = { status: 'failed', created_at: recent(60) } as const;
+    const failures = [
+      session('f1', { ...at, title: 'Broken run' }),
+      session('f0', { ...at, title: 'Earlier broken run' }),
+    ];
+    earlierFailures.set('f1', ['f0']);
+    seed({ sessions: failures });
+    const onSessionClick = vi.fn();
+    renderHome({ onSessionClick });
     const needs = screen.getByRole('region', { name: 'Needs you' });
-    expect(within(needs).getByText('Broken run')).toBeInTheDocument();
+    expect(within(needs).queryByText('Earlier broken run')).not.toBeInTheDocument();
+    fireEvent.click(within(needs).getByText('Broken run'));
+    expect(onSessionClick).toHaveBeenCalledWith('f1');
+    const opened = JSON.parse(localStorage.getItem(`agor:user:${ME}:home-opened-failures`) ?? '{}');
+    expect(Object.keys(opened).sort()).toEqual(['f0', 'f1']);
+    expect(opened.f0.at).toBe(opened.f1.at);
+
+    // Unfolded, neither run comes back: each was recorded against its own last run.
+    earlierFailures.clear();
+    act(() => agorStore.setState(buildSessionMaps(failures)));
+    await waitFor(() => expect(within(needs).queryByText(/Broken run/i)).not.toBeInTheDocument());
   });
 
   it('keeps an opened failure out of Needs you through a rename, until the session runs again', async () => {
@@ -515,6 +576,38 @@ describe('HomePage', () => {
     expect(patch).toHaveBeenCalledTimes(8);
     expect(peak).toBeLessThanOrEqual(4);
     expect(screen.getAllByText(/Couldn’t mark/)).toHaveLength(1);
+  });
+
+  it('blocks sending, marking all read and archiving until the daemon is back in sync', async () => {
+    asDesktop();
+    const primary = teammate('primary', 'b-primary');
+    const onCreateSession = vi.fn(async () => null);
+    const client = {
+      service: () => ({ getPrimaryTeammate: async () => primary, find: async () => [] }),
+    } as unknown as AgorClient;
+    const sessions = [
+      session('done', { ready_for_prompt: true }),
+      session('f1', { status: 'failed', created_at: recent(60), title: 'Broken run' }),
+    ];
+    seed({ sessions, branches: [primary] });
+    const { unmount } = renderHome({ client, onCreateSession }, undefined, undefined, {
+      outOfSync: true,
+    });
+    const input = await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
+    fireEvent.change(input, { target: { value: 'Hello' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    // Text queries: jsdom cannot compute styles for AntD's disabled buttons.
+    expect(screen.getByText('Send in background').closest('button')).toBeDisabled();
+    expect(screen.getByText('Mark all as read').closest('button')).toBeDisabled();
+    expect(screen.queryByText('Archive')).not.toBeInTheDocument();
+    expect(onCreateSession).not.toHaveBeenCalled();
+    unmount();
+
+    seed({ sessions, branches: [primary] });
+    renderHome({ client, onCreateSession });
+    await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
+    expect(screen.getByText('Mark all as read').closest('button')).toBeEnabled();
+    expect(screen.getByText('Archive')).toBeInTheDocument();
   });
 
   it('does not send twice while a send is in flight', async () => {

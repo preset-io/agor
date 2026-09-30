@@ -192,6 +192,18 @@ describe('MobileApp Home wiring', () => {
     expect(await screen.findByTestId('board-page')).toHaveTextContent('board-1');
   });
 
+  it('opens a comment on a branch not loaded yet on the comment’s board', async () => {
+    seed({
+      sessions: [session('idle')],
+      comments: [mention('c1', { branch_id: 'branch-unloaded', board_id: 'board-2' })],
+    });
+    // Before branches hydrate, a comment's branch may not be in the store yet.
+    agorStore.setState({ branchesHydrated: false });
+    renderPhoneHome();
+    fireEvent.click(await screen.findByRole('button', { name: /mentioned you/ }));
+    expect(await screen.findByTestId('board-page')).toHaveTextContent('board-2');
+  });
+
   it('shows the signed-in user’s visited boards and opens them', async () => {
     localStorage.setItem(recentBoardsStorageKey(ME), JSON.stringify(['board-2']));
     localStorage.setItem(recentBoardsStorageKey('someone-else'), JSON.stringify(['board-1']));

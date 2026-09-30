@@ -1,4 +1,5 @@
 import type { Board, Branch, HomeWorkView, Session } from '@agor-live/client';
+import { HOME_WORK_VIEWS } from '@agor-live/client';
 import { FilterOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
 import {
   Badge,
@@ -37,6 +38,9 @@ import {
 import { HOME_ROW_LEAD, homeDivider, homeGroupIndent, homeNestedIndent } from './homeLayout';
 
 export const MY_WORK_PAGE = 20;
+
+const VIEW_LABELS: Record<HomeWorkView, string> = { list: 'List', board: 'By board' };
+const VIEW_OPTIONS = HOME_WORK_VIEWS.map((value) => ({ value, label: VIEW_LABELS[value] }));
 
 export type MyWorkTab = 'recent' | 'running';
 
@@ -207,10 +211,7 @@ export const HomeMyWork = memo(function HomeMyWork({
       aria-label="View"
       popupMatchSelectWidth={false}
       style={{ flex: '0 0 auto' }}
-      options={[
-        { value: 'list', label: 'List' },
-        { value: 'board', label: 'By board' },
-      ]}
+      options={VIEW_OPTIONS}
     />
   );
   const filters = (

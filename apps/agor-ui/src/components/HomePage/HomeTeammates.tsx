@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, EffectiveBranchAccess, User } from '@agor-live/client';
+import type { AgorClient, Board, Branch, User } from '@agor-live/client';
 import { getTeammateConfig, TEAMMATE_FRAMEWORK_REPO_SLUG } from '@agor-live/client';
 import { SyncOutlined } from '@ant-design/icons';
 import { Avatar, Button, Flex, Typography, theme } from 'antd';
@@ -8,7 +8,7 @@ import { useBoardsSharedWithMe } from '../../hooks/useBoardsSharedWithMe';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeTeammatesSelector } from '../../store/selectors';
 import { accessScope, peekAccess, readAccess } from '../../utils/accessCache';
-import { canStartSessions } from '../../utils/branchAccess';
+import { canStartSessions, readBranchAccess } from '../../utils/branchAccess';
 import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { getTemplateBySourceBranch } from '../../utils/teammateTemplates';
 import { HomePressable } from './HomeRow';
@@ -29,10 +29,7 @@ export function teammatePurpose(branch: Branch, board?: Board): string | undefin
 export const teammateOwner = (branch: Branch) => branch.primary_owner_user_id ?? branch.created_by;
 
 export const canStartSessionsOn = (client: AgorClient, branchId: string) =>
-  client
-    .service('branches/:id/effective-access')
-    .find({ route: { id: branchId } })
-    .then((access) => canStartSessions(access as unknown as EffectiveBranchAccess));
+  readBranchAccess(client, branchId).then(canStartSessions);
 
 const NO_FAILURES: ReadonlySet<string> = new Set();
 
