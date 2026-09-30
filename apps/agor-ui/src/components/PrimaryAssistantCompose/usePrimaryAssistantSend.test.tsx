@@ -109,12 +109,31 @@ describe('usePrimaryAssistantSend', () => {
     const { result, create, rerender } = renderSend();
     await waitFor(() => expect(result.current.primaryBranch).toBe(ada));
 
-    // No client for the new caller, so the old branch lingers without a re-resolve.
+    // No client for the new caller, so the old branch lingers internally without a re-resolve.
     rerender({ client: null, currentUser: { user_id: 'user-b' } as User });
-    expect(result.current.primaryBranch).toBe(ada);
+    expect(result.current.resolving).toBe(false);
+    // Exposed as no primary, so the held send below shows the picker instead of a dead click.
+    expect(result.current.primaryBranch).toBeNull();
     await act(() => result.current.send('open'));
     expect(create).not.toHaveBeenCalled();
     expect(result.current.pendingSend).toBe('open');
+
+    await act(async () => result.current.pick(grace));
+    await waitFor(() => expect(create).toHaveBeenCalledWith({ branch_id: 'branch-grace' }, ''));
+    expect(result.current.primaryBranch).toBe(grace);
+  });
+
+  it('does not create a session when the identity changes while validate is pending', async () => {
+    const validation = deferred<boolean>();
+    const { result, create, rerender } = renderSend({ validate: () => validation.promise });
+    await waitFor(() => expect(result.current.primaryBranch).toBe(ada));
+
+    act(() => void result.current.send('open'));
+    rerender({ currentUser: { user_id: 'user-b' } as User });
+    await act(async () => validation.resolve(true));
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+    expect(create).not.toHaveBeenCalled();
+    expect(goToSession).not.toHaveBeenCalled();
   });
 
   it('releases an in-flight send and a held send when the identity changes', async () => {

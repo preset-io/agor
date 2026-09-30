@@ -33,7 +33,8 @@ export interface PrimaryAssistantSendOptions {
  * Send a prompt to the caller's primary assistant (or an explicit teammate), in
  * the background or opening the new session. One send runs at a time. Without a
  * primary, a send is held until `pick` supplies one. An identity change abandons
- * any in-flight send and drops a held one.
+ * any in-flight send and drops a held one. `primaryBranch` is null until the
+ * primary is this caller's settled answer, so a held send always shows the picker.
  */
 export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const latest = useRef(options);
@@ -120,7 +121,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const clearPendingSend = useCallback(() => setPendingSend(null), [setPendingSend]);
 
   return {
-    primaryBranch: primary.branch,
+    primaryBranch: primary.current ? primary.branch : null,
     setPrimaryBranch: primary.setBranch,
     resolving: primary.resolving,
     resolveFailed: primary.failed,
