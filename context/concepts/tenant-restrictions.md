@@ -228,7 +228,8 @@ pending admission). An admission read still pending after 2 s rejects its packet
 with the same ambiguous `Forbidden`, so one stuck read never freezes the socket.
 While four such timed-out reads of one socket are still running, its further
 packets that need a read are refused at once without starting another, which
-bounds the database load a socket can hold. Raw packets that need a read (executor
+bounds the database load a socket can hold; the cap is per socket, so a replica can
+hold up to four such reads for each connected socket. Raw packets that need a read (executor
 terminal frames, an unverified tenant's traffic) join the socket's raw-packet read
 already in flight; a settled or timed-out read is never joined by a later packet. A
 socket holding 1,000 queued packets is disconnected rather than dropping packets
