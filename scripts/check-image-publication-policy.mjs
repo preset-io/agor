@@ -264,6 +264,13 @@ assert.match(previewBuild, /cache-to: \$\{\{ github.event_name == 'workflow_run'
 assert.match(step('Push preview runtime'), /if: github.event_name == 'workflow_run'/);
 assert.match(step('Push preview runtime'), /tags: .*:preview-runtime-\$\{\{ env.IMAGE_REVISION/);
 assert.match(step('Smoke test preview runtime'), /runtime-checkout.mjs fingerprint/);
+const warm = step('Test warm preview base');
+assert.match(warm, /--builder default --load/);
+assert.match(warm, /--build-arg AGOR_PREVIEW_BASE=/);
+assert.match(warm, /Installing changed preview dependencies/);
+assert.match(warm, /Reusing preview dependencies/);
+assert.match(warm, /trap .*package.json/);
+assert.doesNotMatch(warm, /--push/);
 assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
 assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
 const resolver = await readFile(

@@ -1,5 +1,6 @@
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { validateSource } from '../../../docker/runtime-checkout.mjs';
 import { PreviewError, RailwayAPI, requireValue } from './api.mjs';
 import { configuration } from './configuration.mjs';
 import { previewBase } from './image.mjs';
@@ -11,6 +12,15 @@ export async function run(action, input, env = process.env, request = fetch) {
     'Expected start, stop, logs, nuke or check.'
   );
   const config = configuration(env, input);
+  if (action === 'start') {
+    try {
+      validateSource(`https://github.com/${input.repository}.git`, input.ref);
+    } catch {
+      throw new PreviewError(
+        'Unsupported runtime source: this example requires preset-io/agor and a branch using letters, digits, dots, underscores, hyphens or single slashes (no consecutive dots or trailing slash).'
+      );
+    }
+  }
   const api = new RailwayAPI(env.RAILWAY_API_TOKEN, request);
   if (config.sharedProject) {
     const { project } = await api.query(

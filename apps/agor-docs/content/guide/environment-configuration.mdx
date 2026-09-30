@@ -928,6 +928,9 @@ in `scripts/managed-environments/railway-auto`. **No npm install, SDK, PostgreSQ
 or daemon-specific handler is needed.** Edit the launcher in the branch to
 iterate. Railway builds the app from its pushed public GitHub branch, not your
 dirty checkout. Private source resolution is not supported by this example.
+The included runtime currently supports only `preset-io/agor`; Start validates
+the repository and branch with the same validator used by runtime checkout,
+before making provider requests.
 
 Successful main CI also publishes a public preview dependency image. On a new
 deployment, the automatic launcher resolves its `preview-runtime-main` tag to an

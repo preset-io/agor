@@ -69,6 +69,10 @@ restarts never reset an existing password or clear an existing change requiremen
 
 ## Lifecycle and guardrails
 
+This runtime example currently supports only the public `preset-io/agor` source.
+Start reuses the runtime checkout validator before any network/provisioning calls,
+so unsupported repositories or branch formats fail before resource creation.
+
 Successful main CI publishes a separate preview dependency image and promotes
 `preview-runtime-main` only for the current tested main commit. Start resolves
 that public tag to a digest before provisioning; only the digest is passed as

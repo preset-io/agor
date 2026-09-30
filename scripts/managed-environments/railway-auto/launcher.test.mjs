@@ -17,7 +17,7 @@ function fixture() {
     tenantId: 'tenant-a',
     workspaceId: randomUUID(),
     projectId: randomUUID(),
-    repository: 'owner/repo',
+    repository: 'preset-io/agor',
     maxPreviews: 3,
   };
   const env = {
@@ -350,6 +350,31 @@ test('Start pins the published base, but an already active Start never resolves 
   f.state.registryStatus = 500;
   await f.action('start');
   assert.equal(f.state.registryCalls, 1);
+});
+test('Unsupported runtime sources fail before any network request', async () => {
+  for (const shared of [false, true]) {
+    for (const source of [
+      { repository: 'example/agor', ref: 'feature' },
+      { repository: 'preset-io/agor', ref: 'feature@preview' },
+      { repository: 'preset-io/agor', ref: 'feature..preview' },
+      { repository: 'preset-io/agor', ref: 'feature/' },
+    ]) {
+      const f = fixture();
+      const config = JSON.parse(f.env.RAILWAY_PREVIEW_CONFIG);
+      if (shared) {
+        delete f.env.RAILWAY_PREVIEW_CONFIG;
+        f.env.RAILWAY_AGOR_PROJECT_ID = config.projectId;
+      } else {
+        f.env.RAILWAY_PREVIEW_CONFIG = JSON.stringify({ ...config, repository: source.repository });
+      }
+      await assert.rejects(
+        run('start', { ...f.input, ...source }, f.env, async () => {
+          assert.fail('unsupported input reached the network');
+        }),
+        /Unsupported runtime source/
+      );
+    }
+  }
 });
 test('Registry unavailable fails before any provider mutation', async () => {
   const f = fixture();

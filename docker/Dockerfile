@@ -365,7 +365,10 @@ RUN chown agor:agor /opt/agor-dependency-fingerprint \
 USER agor
 RUN set -eu; expected="$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)"; \
     if [ "$expected" != "$(cat /opt/agor-dependency-fingerprint)" ]; then \
+      echo 'Installing changed preview dependencies'; \
       env -i PATH="$PATH" HOME="$HOME" NODE_ENV=development CI=true pnpm install --frozen-lockfile; \
+    else \
+      echo 'Reusing preview dependencies'; \
     fi && printf '%s\n' "$expected" > /opt/agor-dependency-fingerprint
 
 # Railway selects a branch-source runtime through AGOR_RUNTIME_TARGET.
