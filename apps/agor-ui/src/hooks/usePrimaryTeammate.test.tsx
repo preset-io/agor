@@ -175,6 +175,29 @@ describe('usePrimaryTeammate', () => {
     rerender({ current: null });
     await act(async () => pending.resolve(branchA));
     expect(result.current.branch).toBeNull();
+    expect(result.current.resolving).toBe(false);
+  });
+
+  it('a refresh captured before a client swap neither queries the old client nor marks its answer owned', async () => {
+    const oldLookup = vi.fn<() => Promise<Branch | null>>(async () => branchA);
+    const oldClient = clientResolving(oldLookup);
+    const newClient = clientResolving(async () => null);
+    const { result, rerender } = renderHook(
+      ({ current }: { current: AgorClient }) => usePrimaryTeammate(current, 'user-1', 0),
+      { initialProps: { current: oldClient } }
+    );
+    await waitFor(() => expect(result.current.ownedByCaller).toBe(true));
+    const staleRefresh = result.current.refresh;
+
+    rerender({ current: newClient });
+    await waitFor(() => expect(result.current.branch).toBeNull());
+    let refreshed: Branch | null | undefined = null;
+    await act(async () => {
+      refreshed = await staleRefresh();
+    });
+    expect(refreshed).toBeUndefined();
+    expect(oldLookup).toHaveBeenCalledTimes(1);
+    expect(result.current).toMatchObject({ branch: null, resolving: false });
   });
 
   it('a manual refresh in flight across an identity change reports undefined', async () => {
