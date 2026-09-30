@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { PreviewError, RailwayAPI, requireValue } from './api.mjs';
 import { configuration } from './configuration.mjs';
+import { previewBase } from './image.mjs';
 import { Preview } from './preview.mjs';
 
 export async function run(action, input, env = process.env, request = fetch) {
@@ -58,6 +59,7 @@ export async function run(action, input, env = process.env, request = fetch) {
         'Cannot resolve the pushed public GitHub branch. Push it before Start; private source resolution is not supported.'
       );
     }
+    config.previewBase = await previewBase(request);
     owned = await preview.ensure(owned, password);
     return preview.start(owned, sha);
   }

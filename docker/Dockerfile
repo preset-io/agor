@@ -10,6 +10,7 @@
 # Platforms without a --target option can select the final runtime through a
 # build argument. Preserve the historical default; explicit targets are unchanged.
 ARG AGOR_RUNTIME_TARGET=production-source-ha
+ARG AGOR_PREVIEW_BASE=runtime-build
 
 # ============================================================================
 # Stage 0: Security-pinned bubblewrap
@@ -333,6 +334,40 @@ ENV NODE_ENV=production HOME=/home/agor
 EXPOSE 3030
 ENTRYPOINT ["docker-entrypoint-runtime.sh"]
 
-# Railway supplies AGOR_RUNTIME_TARGET=production-source as a build argument.
+# Published dependency image only; application source is still fetched from the branch.
+# Default keeps cold builds working before main has published the first image.
+FROM ${AGOR_PREVIEW_BASE} AS railway-preview
+USER agor
+RUN rm -rf /app/patches
+COPY --chown=agor:agor package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=agor:agor apps/agor-daemon/package.json ./apps/agor-daemon/
+COPY --chown=agor:agor apps/agor-cli/package.json ./apps/agor-cli/
+COPY --chown=agor:agor apps/agor-ui/package.json ./apps/agor-ui/
+COPY --chown=agor:agor packages/git/package.json ./packages/git/
+COPY --chown=agor:agor packages/core/package.json ./packages/core/
+COPY --chown=agor:agor packages/agentic-tool-opencode/package.json ./packages/agentic-tool-opencode/
+COPY --chown=agor:agor packages/agentic-tools/package.json ./packages/agentic-tools/
+COPY --chown=agor:agor packages/executor/package.json ./packages/executor/
+COPY --chown=agor:agor packages/client/package.json ./packages/client/
+COPY --chown=agor:agor patches/ ./patches/
+COPY --chown=agor:agor packages/agor-live/package.json ./packages/agor-live/
+COPY --chown=agor:agor packages/agor-claude/package.json ./packages/agor-claude/
+COPY --chown=agor:agor packages/agor-codex/package.json ./packages/agor-codex/
+COPY --chown=agor:agor packages/agor-copilot/package.json ./packages/agor-copilot/
+COPY --chown=agor:agor packages/agor-gemini/package.json ./packages/agor-gemini/
+COPY --chown=agor:agor packages/agor-opencode/package.json ./packages/agor-opencode/
+COPY --chown=agor:agor packages/agor-cursor/package.json ./packages/agor-cursor/
+USER root
+COPY docker/runtime-checkout.mjs docker/runtime-watch.mjs /usr/local/lib/agor/
+COPY docker/docker-entrypoint-runtime.sh docker/docker-entrypoint-prod.sh /usr/local/bin/
+RUN chown agor:agor /opt/agor-dependency-fingerprint \
+  && chmod +x /usr/local/bin/docker-entrypoint-runtime.sh /usr/local/bin/docker-entrypoint-prod.sh
+USER agor
+RUN set -eu; expected="$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)"; \
+    if [ "$expected" != "$(cat /opt/agor-dependency-fingerprint)" ]; then \
+      env -i PATH="$PATH" HOME="$HOME" NODE_ENV=development CI=true pnpm install --frozen-lockfile; \
+    fi && printf '%s\n' "$expected" > /opt/agor-dependency-fingerprint
+
+# Railway selects a branch-source runtime through AGOR_RUNTIME_TARGET.
 # This reuses the source-built SQLite runtime, not the npm-latest or HA image.
 FROM ${AGOR_RUNTIME_TARGET} AS runtime

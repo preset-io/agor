@@ -111,6 +111,7 @@ const excludedPaths = new Set([
   workflowPath,
   'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
+  'scripts/managed-environments/railway-auto/image.mjs',
 ]);
 const references = [];
 
@@ -217,7 +218,8 @@ if (railwayAutoSourceBuildStarts > 0) {
   assert.match(preview, /serviceInstanceDeployV2\([^)]*commitSha:\$commitSha\)/);
   assert.match(preview, /source: \{ repo: this.input.repository \}/);
   assert.match(preview, /dockerfilePath: 'docker\/Dockerfile'/);
-  assert.match(configuration, /AGOR_RUNTIME_TARGET: 'runtime-build'/);
+  assert.match(configuration, /AGOR_RUNTIME_TARGET: 'railway-preview'/);
+  assert.match(configuration, /AGOR_PREVIEW_BASE: previewBase/);
   for (const source of [launcher, preview, configuration])
     assert.doesNotMatch(source, imageReference);
 }
@@ -254,6 +256,46 @@ if (codespacesWorktreeBuildStarts > 0) {
   assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);
 }
 
+// Narrow dependency-only exception: trusted main publication, never a PR image.
+const previewBuild = step('Build preview runtime');
+assert.match(previewBuild, /target: railway-preview/);
+assert.match(previewBuild, /load: true/);
+assert.match(previewBuild, /cache-to: \$\{\{ github.event_name == 'workflow_run'/);
+assert.match(step('Push preview runtime'), /if: github.event_name == 'workflow_run'/);
+assert.match(step('Push preview runtime'), /tags: .*:preview-runtime-\$\{\{ env.IMAGE_REVISION/);
+assert.match(step('Smoke test preview runtime'), /runtime-checkout.mjs fingerprint/);
+assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
+assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
+const resolver = await readFile(
+  path.join(root, 'scripts/managed-environments/railway-auto/image.mjs'),
+  'utf8'
+);
+assert.match(resolver, /manifests\/preview-runtime-main/);
+assert.match(resolver, /return `preset\/agor@\$\{digest\}`/);
+assert.doesNotMatch(resolver, /process.env/);
+assert.match(dockerfile, /ARG AGOR_PREVIEW_BASE=runtime-build/);
+assert.match(dockerfile, /FROM \$\{AGOR_PREVIEW_BASE\} AS railway-preview/);
+const previewStage = dockerfile
+  .split('AS railway-preview')[1]
+  .split(/FROM \$\{AGOR_RUNTIME_TARGET\}/)[0];
+assert.match(previewStage, /pnpm install --frozen-lockfile/);
+assert.match(previewStage, /agor-dependency-fingerprint/);
+assert.doesNotMatch(previewStage, /COPY \. \./);
+
+// Keep the thin wrapper's dependency inputs in parity with its cold base.
+for (const line of dockerfile.split('AS railway-preview')[0].split('\n')) {
+  if (
+    line.startsWith('COPY ') &&
+    (line.includes('package.json') || line.startsWith('COPY patches/'))
+  ) {
+    assert.ok(
+      previewStage.includes(
+        line.replace(/^COPY (?:--chown=agor:agor )?/, 'COPY --chown=agor:agor ')
+      ),
+      `preview stage missing dependency input: ${line}`
+    );
+  }
+}
 console.log(
-  'Image publication policy valid: PRs build+smoke locally, publish no image/cache, and checked-in consumers do not pull preset/agor.'
+  'Image publication policy valid: PRs publish no image/cache; only the reviewed Railway dependency-base consumer is allowed.'
 );

@@ -15,7 +15,8 @@
 # mutable tags always identify a successfully tested main image; when a newer
 # main commit is red, they remain on the last successful promotion. v* tags
 # and manual runs publish directly, so those trusted commits remain deployable
-# by their own SHA.
+# by their own SHA. The preview dependency image is published only by successful
+# main workflow_run builds, and promoted under the same serialized head check.
 #
 # Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
 # (Settings → Secrets and variables → Actions):
@@ -58,7 +59,7 @@ jobs:
         github.event.workflow_run.conclusion == 'success'
       )
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     concurrency:
       group: build-image-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
       cancel-in-progress: true
@@ -126,6 +127,41 @@ jobs:
           echo "::error::Daemon did not become healthy within 120s"
           docker logs agor-smoke
           exit 1
+
+      # PRs validate this target too, but never publish images or caches.
+      - name: Build preview runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: railway-preview
+          platforms: linux/amd64
+          load: true
+          tags: ${{ env.IMAGE }}:preview-smoke
+          cache-from: type=gha,scope=agor-preview
+          cache-to: ${{ github.event_name == 'workflow_run' && 'type=gha,mode=max,scope=agor-preview' || '' }}
+
+      - name: Smoke test preview runtime
+        run: |
+          docker run --rm --entrypoint sh ${{ env.IMAGE }}:preview-smoke -ec '
+            test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)"
+            test -x /usr/local/bin/docker-entrypoint-runtime.sh
+            node --check /usr/local/lib/agor/runtime-watch.mjs
+            cd /app/packages/git
+            node -e "require(\"simple-git\")"
+          '
+
+      - name: Push preview runtime
+        if: github.event_name == 'workflow_run'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: railway-preview
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}:preview-runtime-${{ env.IMAGE_REVISION }}
+          cache-from: type=gha,scope=agor-preview
 
       - name: Docker metadata
         if: github.event_name != 'pull_request'
@@ -215,3 +251,7 @@ jobs:
             --tag "${IMAGE}:main" \
             --tag "${IMAGE}:latest" \
             "${IMAGE}:${IMAGE_REVISION}"
+
+          docker buildx imagetools create \
+            --tag "${IMAGE}:preview-runtime-main" \
+            "${IMAGE}:preview-runtime-${IMAGE_REVISION}"

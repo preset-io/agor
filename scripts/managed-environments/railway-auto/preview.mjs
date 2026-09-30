@@ -405,7 +405,7 @@ export class Preview {
       domainPending: false,
     });
     const location = this.location(owned);
-    const variables = appVariables(owned.record, owned.domain, password);
+    const variables = appVariables(owned.record, owned.domain, password, this.config.previewBase);
     if (Object.entries(variables).some(([key, value]) => owned.vars[key] !== value)) {
       const result = await this.api.query(
         'mutation PreviewVariablesSet($input:VariableCollectionUpsertInput!){variableCollectionUpsert(input:$input)}',

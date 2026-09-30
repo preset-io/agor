@@ -69,6 +69,19 @@ restarts never reset an existing password or clear an existing change requiremen
 
 ## Lifecycle and guardrails
 
+Successful main CI publishes a separate preview dependency image and promotes
+`preview-runtime-main` only for the current tested main commit. Start resolves
+that public tag to a digest before provisioning; only the digest is passed as
+`AGOR_PREVIEW_BASE`, never registry/controller credentials. Railway builds the
+thin `railway-preview` stage from it, copying branch startup scripts and dependency
+inputs. Matching dependency fingerprints reuse installed packages; changed inputs
+run a frozen install. Application source still follows the pushed branch.
+When the image is not publicly available (registry 401/404), Start reports a
+fallback to the local Dockerfile `runtime-build` stage. The repository must allow
+public pulls for reuse; no registry credentials are injected into branch builds. Other registry failures stop before provisioning. Already
+running previews are left alone. PR CI builds and checks the image without
+publishing it; there is no nightly publishing requirement.
+
 Start inspects deterministic branch-scoped resources and provider-side
 `AGOR_PREVIEW_BINDING` receipts. It creates an empty environment, an
 **environment-specific** service, private volume at `/home/agor/.agor` and domain

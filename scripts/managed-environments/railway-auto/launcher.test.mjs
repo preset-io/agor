@@ -41,6 +41,15 @@ function fixture() {
     missing: false,
   };
   const request = async (url, options) => {
+    if (String(url).startsWith('https://auth.docker.io/'))
+      return Response.json({ token: 'anonymous-pull-token' });
+    if (String(url).startsWith('https://registry-1.docker.io/')) {
+      state.registryCalls = (state.registryCalls ?? 0) + 1;
+      return new Response(null, {
+        status: state.registryStatus ?? (state.previewDigest ? 200 : 404),
+        headers: state.previewDigest ? { 'docker-content-digest': state.previewDigest } : {},
+      });
+    }
     if (String(url).startsWith('https://api.github.com/')) {
       assert.equal(options.headers, undefined);
       return new Response(
@@ -331,6 +340,22 @@ test('only explicit Nuke removes owned resources', async () => {
   assert.equal(f.state.volumes.length, 0);
   assert.equal(f.state.services.length, 0);
   assert.equal(f.state.environments.length, 0);
+});
+test('Start pins the published base, but an already active Start never resolves it again', async () => {
+  const f = fixture();
+  f.state.previewDigest = `sha256:${'b'.repeat(64)}`;
+  await f.action('start');
+  assert.ok(f.state.vars.AGOR_PREVIEW_BASE.endsWith(`@${f.state.previewDigest}`));
+  assert.equal(f.state.vars.AGOR_RUNTIME_TARGET, 'railway-preview');
+  f.state.registryStatus = 500;
+  await f.action('start');
+  assert.equal(f.state.registryCalls, 1);
+});
+test('Registry unavailable fails before any provider mutation', async () => {
+  const f = fixture();
+  f.state.registryStatus = 429;
+  await assert.rejects(f.action('start'), /Cannot resolve/);
+  assert.equal(f.mutations().length, 0);
 });
 test('Nuke refuses a detached volume moved to another environment or reattached', async () => {
   for (const field of ['environmentId', 'serviceId', 'mountPath']) {

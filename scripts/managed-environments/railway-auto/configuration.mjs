@@ -85,12 +85,13 @@ export function resourceName(record) {
     .digest('hex')
     .slice(0, record.version === 2 ? 20 : 32)}`;
 }
-export function appVariables(record, domain, password) {
+export function appVariables(record, domain, password, previewBase = 'runtime-build') {
   return {
     [MARKER]: JSON.stringify(record),
     AGOR_ADMIN_PASSWORD: password,
     AGOR_ADMIN_REQUIRE_PASSWORD_CHANGE: 'false',
-    AGOR_RUNTIME_TARGET: 'runtime-build',
+    AGOR_RUNTIME_TARGET: 'railway-preview',
+    AGOR_PREVIEW_BASE: previewBase,
     AGOR_RUNTIME_MODE: 'watch',
     AGOR_SOURCE_REPO: `https://github.com/${record.repository}.git`,
     AGOR_SOURCE_BRANCH: record.ref,

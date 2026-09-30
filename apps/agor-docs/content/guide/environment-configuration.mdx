@@ -929,6 +929,19 @@ or daemon-specific handler is needed.** Edit the launcher in the branch to
 iterate. Railway builds the app from its pushed public GitHub branch, not your
 dirty checkout. Private source resolution is not supported by this example.
 
+Successful main CI also publishes a public preview dependency image. On a new
+deployment, the automatic launcher resolves its `preview-runtime-main` tag to an
+immutable digest and supplies it as `AGOR_PREVIEW_BASE`. Railway's thin
+`railway-preview` stage keeps the branch's startup scripts and dependency inputs;
+matching dependencies are reused, changed inputs trigger a frozen install.
+Application code still comes from the pushed branch. Before the first image is
+publicly available (registry 401/404), the same Dockerfile builds its local
+`runtime-build` base instead and reports the fallback. The Docker Hub repository
+must allow public pulls; no registry secrets enter branch builds. Rate-limit and network errors fail before
+provisioning rather than silently triggering an expensive cold build. Running
+previews are not redeployed when main publishes a newer base. The legacy explicit
+binding variant is unchanged.
+
 Start behaves like “ensure this branch's preview is up”: create missing
 resources, safely reuse owned ones, and leave an owned running deployment alone.
 Creating a Git branch or selecting the variant creates no paid resources.
