@@ -1,0 +1,202 @@
+---
+title: 'Agent Modeling 201: Growing What AI Owns Without Creating Chaos'
+description: 'Why agent modeling is the discipline that decides how much of its potential AI actually delivers, and how to scope, staff, and grow a team of AI teammates without duplicated context, access spillover, and confusion.'
+author: 'Maxime Beauchemin'
+date: 2026-10-07
+---
+
+{/* DRAFT: not approved for publication. Reviewer notes appear as MDX comments like this one; they do not render. Remove the callout and all comments before publishing. Date is a placeholder. No hero image yet. */}
+
+> [!WARNING]
+> **Draft.** Work in progress, not approved for publication.
+
+In [Agent Modeling 101](/blog/agent-modeling-101), I laid out how to design a single long-lived agent: scope it like a role, give it a behavior model, compose it from reusable context and skills, put it where the team works, and build trust through visible collaboration.
+
+That post answered _how_. It mostly skipped _why_, and it skipped what happens next.
+
+What happens next is that you get more agents. At Preset we went from a handful of AI teammates to enough of them that people started asking in Slack: who is Hermes? What does Samwise do? Is Wendy the one that watches competitors? {/* TODO(max): confirm Hermes/Samwise can be named publicly. */} We had, in effect, hired too fast. And we hit the same problems a startup hits when headcount outruns structure: messy onboarding, new hires not connected to the right people or resources, work happening in the shadows, and nobody quite sure who owns what.
+
+This post is about that layer. Not how to model one agent, but why agent modeling is the discipline that decides how much value AI actually delivers to an organization, and how to model a whole team of agents without creating chaos.
+
+## The gap is the opportunity
+
+Here is the premise.
+
+In most organizations, the gap between what agents _can_ do and what they are _actually_ doing is enormous. Models can already read the contracts, reconcile the CRM, triage the bug backlog, watch the market, write the weekly report, and follow up on the action items from standup. Most teams are using a sliver of that.
+
+Closing that gap is not only an automation story. Automation is bounded: there is a finite amount of existing work to take off people's plates. The bigger opportunity has no obvious ceiling. It is all the work nobody was doing because nobody had time: the contract audit nobody got around to, the dashboard nobody checked, the bug nobody could reproduce, the competitor pricing change nobody noticed. Agents do not just make an organization cheaper. They expand what it can do at all.
+
+But you cannot get there in one prompt. Nobody can yet say "do all of my team's work, then find every opportunity we are missing and go tackle it, I will just make sure you have enough tokens." Not because models are useless, but because nobody would trust the result, and they would be right not to.
+
+So the real challenge is structural: how do you **progressively transfer ownership to AI**, and keep growing its scope, without breaking things?
+
+That is what agent modeling is for.
+
+> **Agent modeling** is the discipline of deciding what AI owns in an organization: which agents exist, what each is responsible for, what context and systems it can reach, how much agency it has, where the human sits in the loop today, and where that human should move next.
+
+Done well, it lets a team raise agents, supervise them to the right degree, expand their scope as they earn it, and multiply impact without disasters. Done poorly, or not at all, it produces a very specific kind of mess.
+
+## What happens without it
+
+Skip the modeling and you get organizational debt, just faster than you ever accumulated it with people. Here is what we saw, and what I expect most teams will see:
+
+- **Duplicated and drifting context.** Three agents each carry their own copy of the pricing rules, and they slowly disagree.
+- **Access spillover.** An agent can reach systems its job never needed, because it was easier to grant than to scope.
+- **Roster confusion.** People do not know which agent to ask, so they ask the wrong one or none.
+- **Duplicated work.** Two agents quietly produce overlapping reports for overlapping audiences.
+- **Noise.** Agents narrating their process in busy channels until humans mute them.
+- **Shadow work.** Agents doing things in private sessions nobody reviews, so nobody can correct them.
+- **Bad outcomes nobody can trace.** When something goes wrong, it is unclear which agent did it, with whose credentials, and why.
+
+This is not only our experience. A recent in-situ study of a persistent AI "teammate" deployed across teams at a large technology company found breakdowns around the tacit rules of collaborative work, the relational boundaries of the agent, and the redistribution of trust and human agency ([Qadri et al., 2026](https://arxiv.org/abs/2609.29901)). Those are organizational problems, not model problems.
+
+## The model is only one variable
+
+It is tempting to believe AI outcomes are mostly a function of which model you picked. The model matters. But two teams on the same model can get wildly different results, because the model is one input among several:
+
+- the **context** it can reach, and whether that context is current and owned,
+- the **systems** it can access, and whether that access fits its job,
+- its **memory**, and whether corrections actually stick,
+- its **controls**: what it can do alone, what needs approval, and who reviews it,
+- and the **observability** around it: whether anyone can see what it did and why.
+
+Every one of those is a modeling decision. That is why I think observability and governance are not optional overhead as AI's scope grows. They are the thing that lets scope grow at all.
+
+## The scoping spectrum: both ends fail
+
+The debate we kept having internally was about size. Should we have more, narrower agents, or fewer agents that each manage more?
+
+Both extremes break, in different ways.
+
+**One agent for everything.** The single super agent, the one entry point for all things, is appealing in a demo. {/* TODO(max): name Viktor here as the example? Needs your OK. */} In practice:
+
+- it has a scattered brain: too much context, not enough depth on any one workflow,
+- people do not know where to start with it or what it is actually good at,
+- its access spills over: it can touch everything because something, somewhere, needed it,
+- nobody owns it, so nobody corrects it,
+- and when it gets something wrong, the blast radius is the whole company.
+
+**One agent per task.** The opposite instinct: a hyper-specialized agent for every workflow. That breaks too:
+
+- no generalization: each agent only knows its narrow slice,
+- fragmented memory: a lesson learned in one workflow never reaches the related one,
+- no ability to combine tools across related tasks, which is often where the value is,
+- roster sprawl: more names than anyone can track,
+- and constant handoffs between agents that each lack the context the other one has.
+
+|                      | One agent for everything         | One agent per task                   |
+| -------------------- | -------------------------------- | ------------------------------------ |
+| Context              | Overloaded, shallow              | Fragmented, duplicated               |
+| Access               | Spills over                      | Scattered across many identities     |
+| Ownership            | Nobody's                         | Too many owners to coordinate        |
+| Discoverability      | "Ask it anything" (people don't) | "Which one do I ask?"                |
+| Learning             | Corrections get diluted          | Corrections stay siloed              |
+| Failure blast radius | Everything                       | Small, but frequent handoff failures |
+
+## Striking the balance: one named agent per context cluster
+
+There is no one-size-fits-all answer. But there is a guideline, and it is the one we already use for people: **align agents with roles, or with coherent collections of roles.**
+
+The useful unit is what I think of as a **context cluster**: a set of workflows and areas of ownership that naturally share
+
+- **knowledge and context** (the same definitions, docs, history, and decisions),
+- **systems access** (the same CRM, warehouse, repos, or drives),
+- **related workflows** (work whose outputs feed each other),
+- and **points of interaction** (the same channels, the same stakeholders, the same owner).
+
+When those line up, one named agent should own the cluster. Blake owns deal operations: quote review, CRM validation, and closing checks all use HubSpot, the contract archive, and the same deal-desk channel ([Blake's post](/blog/meet-blake)). Wendy owns competitive intelligence ([Wendy's post](/blog/meet-wendy-preset-ai-competitive-intelligence-analyst)). Neither needs the other's access, and neither is a single task.
+
+A practical starting point is **team-bound**: each team raises one AI teammate for its own domain (data, sales, marketing, devops, legal) and grows it from there. How much a given agent should span, a single role or a collection of roles, depends on the organization. A small company might have one "go-to-market" teammate where a larger one has three.
+
+### The hiring question
+
+The most useful question we found is the one you would ask before opening a new headcount:
+
+> Would it be a natural fit for one of our existing agents to expand its scope and also own this?
+
+With people, the constraint is usually hours in the week. With agents, that limit mostly does not apply. The constraints are context and access:
+
+- **Access:** this work needs the CRM and our contracts. Which existing agent already has access to those?
+- **New context:** what knowledge does this work require that nobody has yet?
+- **Context conflict:** is there context this work needs that the existing agent _should not_ have, or context the existing agent has that this work should not see?
+- **Audience:** does this work happen in the same channels, for the same people, as the existing agent's other workflows?
+- **Ownership:** would the person who owns that agent also own this workflow?
+
+{/* The split/merge signals below are my synthesis of Max's answers, not yet confirmed. */}
+
+If the answers point to an existing agent, expand its scope. If the work needs access or context an existing agent should not hold, or it serves a different audience with a different owner, it probably deserves its own agent. These questions are genuinely hard to answer, and that is the point: they are the questions that prevent both the super agent and the swarm.
+
+## Growing an AI team without the growing pains
+
+Scoping decides where the boundaries go. The rest of agent modeling is making those boundaries livable as the team grows. Here is what we ended up building or deciding, mapped to the problems above.
+
+### Keep a roster, and make it self-maintaining
+
+Once you have more agents than people can remember, you need an agent directory: who each agent is, what it owns, where it works, and who manages it. We went a step further and gave a generic Agor agent the job of tracking the other agents and their functions: an AI teammate org chart that someone can simply ask "who handles contract redlines?" {/* TODO(max): which agent is this (Atlas?), and is the directory a product feature or an internal convention? Keep the claim modest until confirmed. */}
+
+### Segment context instead of copying it
+
+Every agent carrying its own copy of the truth is how context drifts. The fix is shared, owned, segmented context. That debate is what led to [Knowledge](/guide/knowledge) namespaces in Agor, with configurable read and write access per agent. The pricing definitions live in one place, owned by one team, readable by the agents that need them, writable by fewer.
+
+### Decide identity per agent, on purpose
+
+We ended up with a mix, and I think most organizations will for a while. Some agents borrow a user's credentials. Some have their own service accounts. Some are only reachable by certain users, or only in certain Slack channels. None of these is wrong. What is wrong is not deciding. Identity is the part of agent modeling where the industry is still actively building standards: the OpenID Foundation calls out delegation chains across agents as an unsolved problem ([OpenID Foundation, 2025](https://openid.net/new-whitepaper-tackles-ai-agent-identity-challenges/)), and NIST's NCCoE has proposed a project on agent identity and authorization ([NCCoE, 2026](https://www.nccoe.nist.gov/news-insights/new-concept-paper-identity-and-authority-software-agents)). {/* NCCoE page returned 403 to our research agent; verify link and wording before publishing. */} Until those settle, the requirement from 101 stands: every action should trace back to an agent, a user, a session, and a credential source.
+
+### Write down how agents behave in shared spaces
+
+Agent noise was one of our more surprising problems. An agent that narrates every step in a busy channel ("First, I'm going to search X...") trains humans to ignore it. So we wrote an agent Slack behavior norm. Roughly:
+
+- always operate in threads,
+- do not narrate as you go,
+- post one short, clear final message,
+- put long-form analysis in the knowledge base and link to it.
+
+{/* TODO(max): paraphrased from your description. Quote the actual doc if you want; point me to it. */}
+
+Human teams have these norms too; they are just unwritten. Agents need them written.
+
+### Onboard agents like hires
+
+The "hired too fast" failures were onboarding failures: agents not connected to the right people or resources, missing context, working where nobody could see. Treat a new agent like a new employee. Introduce it to the channels it works in and the people it works with. Give it the context a new hire would get, including the meetings: an agent can "attend" by reading transcripts. And put it somewhere its manager can watch its early work, which is the core of [101's trust loop](/blog/agent-modeling-101#trust-is-built-through-collaboration-not-configuration).
+
+### Move the human, not just remove them
+
+Growing scope is not only adding workflows. It is giving agents more agency within the workflows they already own, and moving the human-in-the-loop to where their judgment matters most. That shift happens whether or not you plan for it: Anthropic's data on Claude Code shows experienced users auto-approve far more often (from roughly 20% of sessions for new users to over 40% at around 750 sessions) while also interrupting more often, shifting from approving each action to monitoring and intervening ([Anthropic, 2026](https://www.anthropic.com/research/measuring-agent-autonomy)). Agent modeling makes that shift deliberate: write down where the human sits today, where they should sit next, and what evidence would justify moving them.
+
+## The next level: agents working with agents
+
+Everything above treats agents as individual team members. The next phase is already here: agents working with each other, and with people, as a mesh.
+
+At Preset we already see several patterns:
+
+- **Persisted teammates managing ephemeral agents.** Bug Basher does not write fixes itself; it spawns an isolated worker agent per bug and verifies its claims before reporting them ([Bug Basher's post](/blog/meet-bug-basher)). Wendy does the same for research and publishing ([Wendy's post](/blog/meet-wendy-preset-ai-competitive-intelligence-analyst)).
+- **Teammates asking each other.** Agents route questions to the agent that owns the relevant domain instead of guessing.
+- **Councils of agents.** We have had good results putting several agents with different perspectives on the same question. {/* TODO(max): one concrete council example would make this land. */}
+- **Agents following up with people.** "At standup you said you'd do X yesterday. Any progress?" This is emerging rather than routine. Hodor already writes the Agor team's daily standup brief from the previous day's activity ([Hodor's post](/blog/meet-hodor)); following up on commitments is the natural next step. {/* TODO(max): is there a real follow-up example we can cite? */}
+
+This raises the stakes for modeling rather than lowering them. Anthropic's Project Vend is a useful caution: when they gave their shopkeeping agent an AI "CEO", the manager agent shared many of the worker's blind spots, while clear role separation and enforced procedures helped more ([Anthropic, 2025](https://www.anthropic.com/research/project-vend-2)). Adding a boss agent is not a substitute for structure. Agent-to-agent work needs the same scoping, identity, and observability as everything else, possibly more.
+
+## What is still unsolved
+
+We are early, and I would rather be honest about the open questions:
+
+- **Demotion and retirement.** We know how to give an agent more scope. We have much less practice taking it away, or retiring an agent cleanly: its memory, its credentials, the workflows it owned.
+- **Agents with many principals.** An agent in a shared channel answers to several people at once. Whose instructions win, and whose credentials apply, is still messy.
+- **Standard identity for agents.** Covered above: the standards work is real but not finished.
+- **The scoping question itself.** Context clusters are a guideline, not a formula. Organizations will draw these lines differently, and that is fine as long as they draw them on purpose.
+
+## From modeling an agent to modeling the org
+
+101 was about modeling one agent. 201 is about modeling the organization that agents are becoming part of.
+
+When you are deciding whether to add an agent, or grow one, the portfolio-level questions are:
+
+1. **Is there an existing agent that should own this?** Check access, context, audience, and owner before creating a new one.
+2. **What context cluster does this belong to?** Name the shared knowledge, systems, workflows, and people.
+3. **Where does the context live?** Shared and owned, not copied.
+4. **What identity does it act with?** Its own, a user's, or both, and how is that traced?
+5. **How does it show up in shared spaces?** Threads, brevity, links to long-form.
+6. **Where is the human now, and where should they move next?**
+7. **Who will find it?** Is it in the directory, with an owner and a one-line job description?
+
+The gap between what AI can do and what it is doing in your organization is not going to close on its own, and it will not close in one leap. It closes as you transfer ownership to AI deliberately, one well-scoped agent and one earned expansion at a time. That is agent modeling, and I think it is the most important discipline an organization can build right now.
