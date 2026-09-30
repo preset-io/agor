@@ -142,21 +142,21 @@ describe('Socket.IO per-packet tenant admission', () => {
     });
     client.io.connect();
     await connected;
-    return { arrivals, closed, reads, io: client.io };
+    return { arrivals, closed, reads, wire: client.io };
   }
 
   it('dispatches service-call and raw packets in send order; raw packets never read', async () => {
-    const { arrivals, reads, io } = await start();
+    const { arrivals, reads, wire } = await start();
     reads.admission = 0;
     const expected: string[] = [];
     const acks: Promise<unknown>[] = [];
     for (let i = 0; i < 60; i++) {
       if (i % 3 === 0) {
         expected.push(`service:${i}`);
-        acks.push(io.timeout(2_000).emitWithAck('create', 'probe', { i }));
+        acks.push(wire.timeout(2_000).emitWithAck('create', 'probe', { i }));
       } else {
         expected.push(`raw:${i}`);
-        io.emit('test:raw', i);
+        wire.emit('test:raw', i);
       }
     }
     await Promise.all(acks);
@@ -166,23 +166,23 @@ describe('Socket.IO per-packet tenant admission', () => {
 
     // Terminal and presence traffic do no restriction read at all.
     for (let i = 0; i < 20; i++) {
-      io.emit('terminal:input', { userId: USER, terminalId: 'none', input: 'x' });
-      io.emit('presence:heartbeat', {});
+      wire.emit('terminal:input', { userId: USER, terminalId: 'none', input: 'x' });
+      wire.emit('presence:heartbeat', {});
     }
-    io.emit('test:raw', 'last');
+    wire.emit('test:raw', 'last');
     await expect.poll(() => arrivals.at(-1)).toBe('raw:last');
     expect(reads.admission).toBe(20);
   });
 
   it('refuses a restricted tenant service call and retires its raw traffic within a monitor tick', async () => {
-    const { arrivals, closed, io } = await start();
+    const { arrivals, closed, wire } = await start();
     closed.add(TENANT);
-    await expect(io.timeout(2_000).emitWithAck('create', 'probe', { i: 1 })).resolves.toMatchObject(
-      { name: 'Forbidden' }
-    );
+    await expect(
+      wire.timeout(2_000).emitWithAck('create', 'probe', { i: 1 })
+    ).resolves.toMatchObject({ name: 'Forbidden' });
     expect(arrivals).toEqual([]);
     const restrictedAt = Date.now();
-    await expect.poll(() => io.connected, { timeout: 2_500, interval: 50 }).toBe(false);
+    await expect.poll(() => wire.connected, { timeout: 2_500, interval: 50 }).toBe(false);
     expect(Date.now() - restrictedAt).toBeLessThan(2_000);
   });
 });
