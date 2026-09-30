@@ -1,6 +1,10 @@
 import type { Board } from '@agor-live/client';
-import { useCallback, useEffect, useMemo } from 'react';
-import { takeLegacyLocalStorageJson } from './localStorageJson';
+import { useCallback, useMemo } from 'react';
+import {
+  migrateLegacyLocalStorageJson,
+  readLocalStorageJson,
+  writeLocalStorageJson,
+} from './localStorageJson';
 import { useLocalStorage } from './useLocalStorage';
 import { userStorageKey } from './useUserLocalStorage';
 
@@ -10,6 +14,19 @@ const NO_RECENT: string[] = [];
 /** Visit history is per signed-in user, never shared by everyone on the browser. */
 export const recentBoardsStorageKey = (userId: string | undefined) =>
   userStorageKey(userId, 'recentBoardIds');
+
+/** Moves the shared pre-per-user history once to the first signed-in user without their own. */
+function migrateLegacyRecentBoards(userId: string | undefined): void {
+  if (!userId) return;
+  migrateLegacyLocalStorageJson('agor:recentBoardIds', (legacy) => {
+    const ids = Array.isArray(legacy)
+      ? legacy.filter((id): id is string => typeof id === 'string').slice(0, MAX_RECENT)
+      : [];
+    const key = recentBoardsStorageKey(userId);
+    if (!ids.length || readLocalStorageJson<string[]>(key, NO_RECENT).length > 0) return true;
+    return writeLocalStorageJson(key, ids);
+  });
+}
 
 /**
  * Hook for tracking the signed-in user's recently visited boards in localStorage.
@@ -24,18 +41,12 @@ export function useRecentBoards(
   recentBoardIds: string[];
   trackBoardVisit: (boardId: string) => void;
 } {
+  // Before any instance reads storage, so every instance (App, AppHeader, board pages) sees the moved history.
+  migrateLegacyRecentBoards(userId);
   const [recentIds, setRecentIds] = useLocalStorage<string[]>(
     recentBoardsStorageKey(userId),
     NO_RECENT
   );
-  // The shared pre-per-user history moves once to the first signed-in user without their own.
-  useEffect(() => {
-    if (!userId) return;
-    const legacy = takeLegacyLocalStorageJson<unknown>('agor:recentBoardIds');
-    if (!Array.isArray(legacy)) return;
-    const ids = legacy.filter((id): id is string => typeof id === 'string').slice(0, MAX_RECENT);
-    if (ids.length) setRecentIds((prev) => (prev.length ? prev : ids));
-  }, [userId, setRecentIds]);
 
   const trackBoardVisit = useCallback(
     (boardId: string) => {

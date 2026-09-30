@@ -689,12 +689,12 @@ export const App: React.FC<AppProps> = ({
   );
 
   // Persist current board to localStorage when it changes
+  const userId = user?.user_id;
   useEffect(() => {
-    if (currentBoardId) {
-      localStorage.setItem('agor:currentBoardId', currentBoardId);
-      trackBoardVisit(currentBoardId);
-    }
-  }, [currentBoardId, trackBoardVisit]);
+    if (currentBoardId) localStorage.setItem('agor:currentBoardId', currentBoardId);
+    // Visits wait for the user so the first one lands in their own history.
+    if (currentBoardId && userId) trackBoardVisit(currentBoardId);
+  }, [currentBoardId, trackBoardVisit, userId]);
 
   // Initialize audio on first user interaction (for browser autoplay policy)
   useEffect(() => {
