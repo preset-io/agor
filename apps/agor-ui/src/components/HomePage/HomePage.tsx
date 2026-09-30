@@ -5,11 +5,13 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { dropLegacyLocalStorageKey } from '../../hooks/localStorageJson';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { userStorageKey } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
   agorStore,
@@ -210,11 +212,13 @@ export const HomePage = memo(function HomePage({
     [client, userId]
   );
   const [onlyStartedByMe, setOnlyStartedByMe] = useLocalStorage(
-    `agor:home-only-mine:${userId ?? 'anonymous'}`,
+    userStorageKey(userId, 'home-only-mine'),
     false
   );
+  // The shared pre-per-user filter is never read again.
+  useEffect(() => dropLegacyLocalStorageKey('agor:home-only-mine'), []);
   const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
-    `agor:home-opened-failures:${userId ?? 'anonymous'}`,
+    userStorageKey(userId, 'home-opened-failures'),
     {}
   );
   const [query, setQuery] = useState('');

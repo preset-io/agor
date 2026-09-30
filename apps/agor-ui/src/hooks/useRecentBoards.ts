@@ -1,13 +1,15 @@
 import type { Board } from '@agor-live/client';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
+import { dropLegacyLocalStorageKey } from './localStorageJson';
 import { useLocalStorage } from './useLocalStorage';
+import { userStorageKey } from './useUserLocalStorage';
 
 const MAX_RECENT = 10;
 const NO_RECENT: string[] = [];
 
 /** Visit history is per signed-in user, never shared by everyone on the browser. */
 export const recentBoardsStorageKey = (userId: string | undefined) =>
-  `agor:user:${userId ?? 'anonymous'}:recentBoardIds`;
+  userStorageKey(userId, 'recentBoardIds');
 
 /**
  * Hook for tracking the signed-in user's recently visited boards in localStorage.
@@ -26,6 +28,8 @@ export function useRecentBoards(
     recentBoardsStorageKey(userId),
     NO_RECENT
   );
+  // The shared pre-per-user history is never read again.
+  useEffect(() => dropLegacyLocalStorageKey('agor:recentBoardIds'), []);
 
   const trackBoardVisit = useCallback(
     (boardId: string) => {
