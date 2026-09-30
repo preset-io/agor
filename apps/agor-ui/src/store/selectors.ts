@@ -25,6 +25,7 @@ export {
   type HomeSessionNeed,
   isSessionStartedByUser,
   isUnreadResult,
+  lastRunStartedAt,
   makeCommentsForYouSelector,
   makeHomeBucketsSelector,
   makeLatestOwnSessionSelector,

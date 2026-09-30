@@ -82,7 +82,7 @@ export interface HomeBucketsOptions {
   boardsLimit?: number;
   query?: string;
   onlyStartedByMe?: boolean;
-  /** Failed sessions the user already opened (id → epoch ms when opened). */
+  /** Failed sessions the user already opened (id → `lastRunStartedAt` of the run they saw). */
   openedFailures?: Readonly<Record<string, number>>;
 }
 
@@ -107,8 +107,8 @@ const uuidV7Ms = (id: string) =>
   // shortid-guard:ignore reads the 48-bit timestamp, not a display short id
   id[14] === '7' ? Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16) : Number.NaN;
 
-/** When the session's latest run started: its newest task's id timestamp, else its creation. */
-function lastRunStartedAt(session: Session): number {
+/** When the session's latest run started (server clock): its newest task's id timestamp, else its creation. */
+export function lastRunStartedAt(session: Session): number {
   const tasks = session.tasks ?? [];
   // Ids carry queue time, not start: later runs read early, which errs toward keeping the failure.
   const taskMs = tasks.length ? uuidV7Ms(tasks[tasks.length - 1]) : Number.NaN;
@@ -258,6 +258,8 @@ export function makeHomeBucketsSelector(
     const failures: Session[] = [];
     // Newest clean run start per branch among the caller's user-started lineages.
     const cleanRunByBranch = new Map<string, number>();
+    // Newest clean scheduled run per branch: it supersedes only scheduled failures.
+    const cleanScheduledRunByBranch = new Map<string, number>();
     const lineageMemo = new Map<string, boolean>();
     const failedByBranch = new Map<string, Session>();
     const finishedByBranch = new Map<string, Session[]>();
@@ -275,10 +277,15 @@ export function makeHomeBucketsSelector(
           insertTopK(running, session, recentLimit, updatedBefore);
         }
       }
-      if (ranCleanly(session) && startedByUserLineage(session, s, lineageMemo)) {
+      if (ranCleanly(session)) {
+        const cleanRuns = session.scheduled_from_branch
+          ? cleanScheduledRunByBranch
+          : startedByUserLineage(session, s, lineageMemo)
+            ? cleanRunByBranch
+            : undefined;
         const runAt = lastRunStartedAt(session);
-        if (runAt > (cleanRunByBranch.get(session.branch_id) ?? 0))
-          cleanRunByBranch.set(session.branch_id, runAt);
+        if (cleanRuns && runAt > (cleanRuns.get(session.branch_id) ?? 0))
+          cleanRuns.set(session.branch_id, runAt);
       }
       if (session.status === SessionStatus.AWAITING_PERMISSION) {
         addNeed(session, 'permission');
@@ -286,7 +293,7 @@ export function makeHomeBucketsSelector(
         isFailure(session) &&
         ownsFailure(session) &&
         updatedAt(session) >= now - HOME_FAILED_WINDOW_MS &&
-        // Opening dismisses it until a new run, so renames and fork bookkeeping don't bring it back.
+        // Opening records the run it saw, so only a newer run brings it back (not a rename or fork patch).
         !(
           lastRunStartedAt(session) <=
           (openedFailures[session.session_id] ?? Number.NEGATIVE_INFINITY)
@@ -304,7 +311,12 @@ export function makeHomeBucketsSelector(
     }
     for (const session of failures) {
       // Superseded by a clean user-started run after the failure settled; any later patch (rename, fork) re-settles it, erring toward keeping it.
-      if ((cleanRunByBranch.get(session.branch_id) ?? 0) > updatedAt(session)) {
+      const settledAt = updatedAt(session);
+      if (
+        (cleanRunByBranch.get(session.branch_id) ?? 0) > settledAt ||
+        (session.scheduled_from_branch &&
+          (cleanScheduledRunByBranch.get(session.branch_id) ?? 0) > settledAt)
+      ) {
         addRecent(session);
         continue;
       }
