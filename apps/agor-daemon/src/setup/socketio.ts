@@ -13,7 +13,9 @@ import {
 import {
   admitTenantSocketPacket,
   createOrderedTenantPacketGate,
+  createRejectedPacketLog,
   isStreamingRelayPacket,
+  isTenantSocketPacketRejection,
   missingSocketTenant,
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
@@ -981,6 +983,7 @@ export function createSocketIOConfig(
 
     // Monotonic admission time, so a monitor read that began earlier never retires the socket.
     const socketAdmittedAt = new WeakMap<Socket, number>();
+    const logRejectedPacket = createRejectedPacketLog();
 
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
@@ -2057,6 +2060,8 @@ export function createSocketIOConfig(
 
       // Handle socket errors
       socket.on('error', (error) => {
+        // Refused packets flood during an outage, so they share one rate-limited line.
+        if (isTenantSocketPacketRejection(error)) return logRejectedPacket(socket.id);
         console.error(`❌ Socket.io error on ${socket.id}:`, error);
       });
     });

@@ -45,6 +45,7 @@ import {
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-admission.js';
 import { endTenantRestrictionRequest } from '../auth/tenant-access.js';
+import { rejectTenantSocketPacket } from '../auth/tenant-socket-admission.js';
 import type { DaemonOperationalMetrics } from '../metrics/operational';
 import {
   boardPresenceAssociationRoomName,
@@ -3067,6 +3068,30 @@ describe('tenant restriction socket monitor', () => {
       },
     ],
     closed: false,
+  });
+
+  it('aggregates refused ack-less packets instead of logging each as a socket error', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { io } = buildHarness();
+      const socket = makeSocket('refused-packets', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+      for (let i = 0; i < 100; i++) {
+        rejectTenantSocketPacket(['terminal:input', {}], (refused) =>
+          socket.handlers.get('error')?.(refused)
+        );
+      }
+      socket.handlers.get('error')?.(new Error('unrelated transport fault'));
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('packet refused'))).toEqual([
+        ['[tenant.restriction] socket packet refused socket=refused-packets suppressed=0'],
+      ]);
+      expect(error).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it('never lets a late read that began before a socket was admitted retire it', async () => {

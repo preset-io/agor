@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   admitTenantSocketPacket,
   createOrderedTenantPacketGate,
+  createRejectedPacketLog,
+  isTenantSocketPacketRejection,
   rejectTenantSocketPacket,
   restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
@@ -434,6 +436,29 @@ it('rejects unacknowledged raw packets without dispatch', () => {
   const next = vi.fn();
   rejectTenantSocketPacket(['terminal:input', {}], next);
   expect(next).toHaveBeenCalledExactlyOnceWith(expect.any(Forbidden));
+});
+
+it('logs refused ack-less packets once per interval with the suppressed count', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    let at = 0;
+    const log = createRejectedPacketLog(60_000, () => at);
+    for (let i = 0; i < 50; i++) log('s1');
+    at = 60_000;
+    log('s2');
+    expect(warn.mock.calls).toEqual([
+      ['[tenant.restriction] socket packet refused socket=s1 suppressed=0'],
+      ['[tenant.restriction] socket packet refused socket=s2 suppressed=49'],
+    ]);
+    const refused: Error[] = [];
+    rejectTenantSocketPacket(['terminal:input', {}], (error) => refused.push(error));
+    expect(isTenantSocketPacketRejection(refused[0])).toBe(true);
+    expect(isTenantSocketPacketRejection(new Forbidden('Tenant access cannot be verified'))).toBe(
+      false
+    );
+  } finally {
+    warn.mockRestore();
+  }
 });
 
 describe('restricted handshake rejection', () => {

@@ -165,13 +165,44 @@ export function createOrderedTenantPacketGate(input: {
   };
 }
 
+const packetRejections = new WeakSet<Error>();
+
 /** Reject without dispatching; Socket.IO next(error) alone never settles an RPC ack. */
 export function rejectTenantSocketPacket(packet: unknown[], next: (error: Error) => void): void {
   // Never serialize a database/observation error or private restriction metadata.
   const error = new Forbidden('Tenant access cannot be verified');
   const acknowledge = packet[packet.length - 1];
   if (typeof acknowledge === 'function') acknowledge(error.toJSON());
-  else next(error);
+  else {
+    packetRejections.add(error);
+    next(error);
+  }
+}
+
+/** True only for an ack-less packet this gate refused, which Socket.IO reports as a socket 'error'. */
+export function isTenantSocketPacketRejection(error: unknown): boolean {
+  return error instanceof Error && packetRejections.has(error);
+}
+
+/** One warning per interval per replica for refused ack-less packets, carrying how many it stands for. */
+export function createRejectedPacketLog(
+  intervalMs = 60_000,
+  now: () => number = () => performance.now()
+): (socketId: string) => void {
+  let lastAt: number | undefined;
+  let suppressed = 0;
+  return (socketId) => {
+    const at = now();
+    if (lastAt !== undefined && at - lastAt < intervalMs) {
+      suppressed++;
+      return;
+    }
+    console.warn(
+      `[tenant.restriction] socket packet refused socket=${socketId} suppressed=${suppressed}`
+    );
+    lastAt = at;
+    suppressed = 0;
+  };
 }
 
 export function missingSocketTenant(): Error {
