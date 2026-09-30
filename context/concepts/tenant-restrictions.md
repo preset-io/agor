@@ -326,7 +326,10 @@ in completion is skipped and not replayed: origin alignment, auto-title, complet
 queue trigger, and the sessions after-patch hook, whose gateway outbound flush and
 progress `done` do not run. A buffered final gateway reply is therefore never
 posted, and a Slack thread status can stay `working` until that session's next
-turn updates it; reactivation does not repair it.
+turn updates it; reactivation does not repair it. No durable path retries completion
+callbacks, so a parent session whose child completed while its tenant was merely
+unverifiable (never restricted) permanently misses that callback. Each skip logs
+one `[tasks.completion] automation skipped reason=restricted|unverifiable` line.
 
 ## Credential generations
 

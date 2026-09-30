@@ -866,13 +866,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
-      // Settlement is committed; while restricted, skip completion automation (not replayed on release).
-      let automationAdmitted: boolean;
+      // Settlement is committed; while restricted or unverifiable, skip completion automation (no durable retry replays it).
+      let automationAdmitted = true;
+      const skipAutomation = (reason: 'restricted' | 'unverifiable') => {
+        automationAdmitted = false;
+        console.warn(
+          `[tasks.completion] automation skipped reason=${reason} task=${shortId(task.task_id)}`
+        );
+      };
       try {
-        automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
+        if (!(await isCurrentTenantRuntimeActive(this.db))) skipAutomation('restricted');
       } catch {
         // Unverifiable: still project the terminal session hook-free, which is always correct, and run no automation.
-        automationAdmitted = false;
+        skipAutomation('unverifiable');
       }
       const readSettledSession = () =>
         readTerminationEntity(
@@ -890,7 +896,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       } catch (error) {
         // The tenant closed after the check, or the read became unverifiable: continue without automation.
         if (!automationAdmitted || !isCompletionAdmissionRefusal(error)) throw error;
-        automationAdmitted = false;
+        skipAutomation(isTenantRestrictedRejection(error) ? 'restricted' : 'unverifiable');
         session = await readSettledSession();
       }
 
@@ -946,7 +952,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         } catch (error) {
           // Closed or unverifiable at this write: project hook-free so the session still leaves RUNNING.
           if (!isCompletionAdmissionRefusal(error)) throw error;
-          automationAdmitted = false;
+          skipAutomation(isTenantRestrictedRejection(error) ? 'restricted' : 'unverifiable');
           await this.projectRestrictedTerminalSession(task, status, params);
         }
       } else {

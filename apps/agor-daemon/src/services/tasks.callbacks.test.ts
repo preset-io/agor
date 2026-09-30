@@ -209,9 +209,13 @@ describe('TasksService completion callbacks', () => {
       .spyOn(SessionRepository.prototype, 'update')
       .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
     vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
         service.patch(taskId, { status: TaskStatus.COMPLETED })
+      );
+      expect(warn).toHaveBeenCalledWith(
+        `[tasks.completion] automation skipped reason=restricted task=${shortId(taskId)}`
       );
       expect(projected).toHaveBeenCalledWith(childSessionId, {
         status: 'idle',
@@ -222,6 +226,7 @@ describe('TasksService completion callbacks', () => {
       expect(triggerQueueProcessing).not.toHaveBeenCalled();
     } finally {
       projected.mockRestore();
+      warn.mockRestore();
     }
   });
 
@@ -236,9 +241,13 @@ describe('TasksService completion callbacks', () => {
     vi.mocked(isCurrentTenantRuntimeActive).mockRejectedValueOnce(
       new Unavailable('Tenant access cannot be verified')
     );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
         service.patch(taskId, { status: TaskStatus.COMPLETED })
+      );
+      expect(warn).toHaveBeenCalledWith(
+        `[tasks.completion] automation skipped reason=unverifiable task=${shortId(taskId)}`
       );
       expect(projected).toHaveBeenCalledWith(childSessionId, {
         status: 'idle',
@@ -249,6 +258,7 @@ describe('TasksService completion callbacks', () => {
       expect(triggerQueueProcessing).not.toHaveBeenCalled();
     } finally {
       projected.mockRestore();
+      warn.mockRestore();
     }
   });
 
