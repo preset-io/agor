@@ -179,6 +179,17 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toContain('user_api_keys');
   });
 
+  it('limits tenant restriction discovery to closed rows, read-only, under an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0118_tenant_restriction_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'tenant_restriction_discovery'");
+    expect(migration).toContain(`"phase" <> 'active'`);
+    expect(migration).not.toContain('WITH CHECK');
+  });
+
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {
     const migration = readRepoFile('packages/core/drizzle/postgres/0069_upload_maintenance.sql');
 

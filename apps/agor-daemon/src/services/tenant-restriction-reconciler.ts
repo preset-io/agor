@@ -1,5 +1,6 @@
 import {
   isPostgresDatabaseHandle,
+  listRestrictedTenantIds,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -8,10 +9,23 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { AuthenticatedParams, TenantID } from '@agor/core/types';
-import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
+import {
+  isCurrentTenantRuntimeActive,
+  TENANT_RESTRICTION_OBSERVATION_MS,
+} from '../auth/tenant-access.js';
 import type { Application } from '../declarations.js';
 import { beginExecutorTermination } from '../termination-coordinator.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+
+const PAGE_SIZE = 50;
+const STOP_WARNING_INTERVAL_MS = 60_000;
+
+/** One pass spans consecutive saturated pages; its memo never outlives one observation tick. */
+interface RestrictionPass {
+  expiresAt: number;
+  restricted?: Promise<string[]>;
+  activeByTenant: Map<string, Promise<boolean>>;
+}
 
 /** Page-bounded, restart-safe Stop initiation; the existing coordinator owns containment proof. */
 export class TenantRestrictionReconciler {
@@ -19,10 +33,14 @@ export class TenantRestrictionReconciler {
   private stopped = true;
   private running = false;
   private cursor: TaskRuntimeDiscoveryCursor | undefined;
+  private pass: RestrictionPass | undefined;
+  private lastStopWarningAt = Number.NEGATIVE_INFINITY;
+  private suppressedStopWarnings = 0;
   constructor(
     private readonly db: TenantScopeAwareDatabase,
     private readonly app: Application,
-    private readonly tenantId?: string
+    private readonly tenantId?: string,
+    private readonly now: () => number = Date.now
   ) {}
 
   start(): void {
@@ -40,7 +58,7 @@ export class TenantRestrictionReconciler {
     this.timer = setTimeout(async () => {
       let saturated = false;
       try {
-        saturated = (await this.checkOnce()).candidates === 50;
+        saturated = (await this.checkOnce()).candidates === PAGE_SIZE;
       } catch {
         console.warn(
           '[tenant-restriction] Task observation failed; containment remains unverified'
@@ -52,12 +70,77 @@ export class TenantRestrictionReconciler {
     this.timer.unref();
   }
 
+  private currentPass(): RestrictionPass {
+    if (!this.pass || this.now() >= this.pass.expiresAt) {
+      this.pass = {
+        expiresAt: this.now() + TENANT_RESTRICTION_OBSERVATION_MS,
+        activeByTenant: new Map(),
+      };
+    }
+    return this.pass;
+  }
+
+  private tenantActive(pass: RestrictionPass, tenantId: string): Promise<boolean> {
+    let active = pass.activeByTenant.get(tenantId);
+    if (!active) {
+      active = runWithTenantContext(tenantId, () => isCurrentTenantRuntimeActive(this.db));
+      pass.activeByTenant.set(tenantId, active);
+    }
+    return active;
+  }
+
+  /** Tenants worth paging: a single system read of closed ids, or the static tenant's own state. */
+  private async restrictedTenants(pass: RestrictionPass): Promise<string[]> {
+    if (this.tenantId) {
+      return (await this.tenantActive(pass, this.tenantId)) ? [] : [this.tenantId];
+    }
+    pass.restricted ??= runWithSystemDatabaseScope(
+      this.db,
+      'tenant restriction discovery',
+      (scoped) => listRestrictedTenantIds(scoped),
+      { capability: 'tenant_restriction_discovery' }
+    );
+    return pass.restricted;
+  }
+
+  private async restrictedTenantsOrReset(pass: RestrictionPass): Promise<string[]> {
+    try {
+      return await this.restrictedTenants(pass);
+    } catch (error) {
+      // A failed read is never memoized as an answer.
+      this.pass = undefined;
+      throw error;
+    }
+  }
+
+  private warnStopFailure(): void {
+    const at = this.now();
+    if (at - this.lastStopWarningAt < STOP_WARNING_INTERVAL_MS) {
+      this.suppressedStopWarnings++;
+      return;
+    }
+    console.warn(
+      '[tenant-restriction] Task stop request failed; containment remains unverified' +
+        (this.suppressedStopWarnings ? ` (suppressed=${this.suppressedStopWarnings})` : '')
+    );
+    this.lastStopWarningAt = at;
+    this.suppressedStopWarnings = 0;
+  }
+
   async checkOnce(): Promise<{ candidates: number; stopping: number; failures: number }> {
     if (this.running || !isPostgresDatabaseHandle(this.db))
       return { candidates: 0, stopping: 0, failures: 0 };
     this.running = true;
     try {
-      const options = { limit: 50, ...(this.cursor ? { after: this.cursor } : {}) };
+      const pass = this.currentPass();
+      const restricted = await this.restrictedTenantsOrReset(pass);
+      if (restricted.length === 0) {
+        // Nothing is closed: page no tasks and restart the sweep when something closes.
+        this.cursor = undefined;
+        this.pass = undefined;
+        return { candidates: 0, stopping: 0, failures: 0 };
+      }
+      const options = { limit: PAGE_SIZE, ...(this.cursor ? { after: this.cursor } : {}) };
       const refs = this.tenantId
         ? await runWithTenantDatabaseScope(this.db, this.tenantId, (scoped) =>
             new TaskRepository(scoped).findRestrictionRuntimeRefs(options)
@@ -65,25 +148,20 @@ export class TenantRestrictionReconciler {
         : await runWithSystemDatabaseScope(
             this.db,
             'tenant restriction live task routing',
-            (scoped) => new TaskRepository(scoped).findRestrictionRuntimeRefs(options),
+            (scoped) => new TaskRepository(scoped).findRestrictionRuntimeRefs(options, restricted),
             { capability: 'task_runtime_discovery' }
           );
       this.cursor = refs.at(-1)?.cursor;
+      if (refs.length < PAGE_SIZE) this.pass = undefined;
       let stopping = 0;
       let failures = 0;
-      // One restriction read per tenant per pass; a failed read still fails each of its tasks.
-      const activeByTenant = new Map<string, Promise<boolean>>();
       for (const ref of refs) {
-        const tenantId = this.tenantId ?? ref.tenant_id;
-        if (!tenantId) throw new Error('Restriction candidate omitted tenant authority');
         try {
+          const tenantId = this.tenantId ?? ref.tenant_id;
+          if (!tenantId) throw new Error('Restriction candidate omitted tenant authority');
+          // Discovery only narrows; the tenant's own scoped read decides.
+          if (await this.tenantActive(pass, tenantId)) continue;
           await runWithTenantContext(tenantId, async () => {
-            let active = activeByTenant.get(tenantId);
-            if (!active) {
-              active = isCurrentTenantRuntimeActive(this.db);
-              activeByTenant.set(tenantId, active);
-            }
-            if (await active) return;
             const params: AuthenticatedParams = {
               provider: undefined,
               tenant: { tenant_id: tenantId as TenantID, source: 'explicit' },
@@ -97,13 +175,11 @@ export class TenantRestrictionReconciler {
               runInFreshTenantWriteDatabase: (work) =>
                 withFreshTenantWrite(this.db, tenantId, work),
             });
-            stopping++;
           });
+          stopping++;
         } catch {
           failures++;
-          console.warn(
-            '[tenant-restriction] Task stop request failed; containment remains unverified'
-          );
+          this.warnStopFailure();
         }
       }
       return { candidates: refs.length, stopping, failures };

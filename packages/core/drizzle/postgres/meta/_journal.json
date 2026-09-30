@@ -813,6 +813,13 @@
       "when": 1790129000216,
       "tag": "0117_tenant_restrictions",
       "breakpoints": true
+    },
+    {
+      "idx": 117,
+      "version": "7",
+      "when": 1790129000217,
+      "tag": "0118_tenant_restriction_discovery",
+      "breakpoints": true
     }
   ]
 }

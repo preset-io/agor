@@ -16,6 +16,7 @@ import {
 import {
   applyTenantRestrictionIntent,
   assertTenantExecutionAdmission,
+  listRestrictedTenantIds,
   readTenantRestrictionState,
   TenantRestrictedError,
   TenantRestrictionDataError,
@@ -407,6 +408,59 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         TenantRestrictionDataError
       );
     });
+  });
+
+  it('discovers only closed tenant ids, read-only, and only under its capability', async () => {
+    const restricted = `restriction-${generateId()}`;
+    const prepared = `restriction-${generateId()}`;
+    const reopened = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, restricted, command());
+    await applyTenantRestrictionIntent(
+      db,
+      prepared,
+      command({ action: 'prepare_release', revision: 2 })
+    );
+    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release' });
+    await applyTenantRestrictionIntent(db, reopened, command());
+    await applyTenantRestrictionIntent(db, reopened, release);
+    await applyTenantRestrictionIntent(db, reopened, { ...release, action: 'activate' });
+
+    const discover = <T>(work: (scoped: Database) => Promise<T>) =>
+      runWithSystemDatabaseScope(db, 'restriction-discovery-test', work, {
+        capability: 'tenant_restriction_discovery',
+      });
+    const ids = await discover((scoped) => listRestrictedTenantIds(scoped));
+    expect(ids).toEqual(expect.arrayContaining([restricted, prepared]));
+    expect(ids).not.toContain(reopened);
+    expect(
+      await discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`SELECT * FROM public.tenant_restrictions WHERE tenant_id = ${reopened}`
+        )
+      )
+    ).toHaveLength(0);
+    await expect(
+      discover((scoped) =>
+        executeRaw(scoped, sql`UPDATE public.tenant_restrictions SET phase = 'active'`)
+      )
+    ).resolves.toBeDefined();
+    expect(await isClosed(db, restricted)).toBe(true);
+    await expect(
+      discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`INSERT INTO public.tenant_restrictions
+            (tenant_id, controller_id, placement_id, operation_id, revision, phase)
+            VALUES (${reopened}, 'forged', 'p', 'o', 9, 'restricted')`
+        )
+      )
+    ).rejects.toThrow();
+    await expect(
+      runWithSystemDatabaseScope(db, 'restriction-discovery-test', (scoped) =>
+        listRestrictedTenantIds(scoped)
+      )
+    ).rejects.toBeInstanceOf(TenantRestrictionDataError);
   });
 
   it('erases only the selected tenant restriction rows through the audited deletion engine', async () => {

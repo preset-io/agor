@@ -1159,10 +1159,16 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
   /** Live task routing only; tenant restriction authority is checked after discovery. */
   async findRestrictionRuntimeRefs(
-    options: TaskRuntimeDiscoveryOptions = {}
+    options: TaskRuntimeDiscoveryOptions = {},
+    tenantIds?: readonly string[]
   ): Promise<TaskRuntimeDiscoveryRef[]> {
     const limit = this.validateRuntimeDiscovery(options.limit);
     const afterAt = this.runtimeCursorDate(options.after, 'Restriction');
+    const tenantColumn = (tasks as unknown as { tenant_id?: typeof tasks.task_id }).tenant_id;
+    if (tenantIds && (!tenantColumn || isSQLiteDatabase(this.db))) {
+      throw new RepositoryError('Tenant-filtered restriction discovery requires tenant metadata');
+    }
+    if (tenantIds?.length === 0) return [];
     const rows = await select(this.db, {
       ...this.runtimeDiscoveryColumns(),
       runtime_order_at: tasks.created_at,
@@ -1176,6 +1182,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             TaskStatus.AWAITING_PERMISSION,
             TaskStatus.AWAITING_INPUT,
           ]),
+          tenantIds && tenantColumn ? inArray(tenantColumn, [...tenantIds]) : undefined,
           afterAt
             ? or(
                 gt(tasks.created_at, afterAt),
