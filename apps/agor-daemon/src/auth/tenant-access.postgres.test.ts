@@ -48,6 +48,7 @@ import {
   shutdownMcpTokens,
   verifySessionToken,
 } from '../mcp/tokens.js';
+import { createExecutorUploadContentHandler } from '../register-routes.js';
 import { SessionTokenService } from '../services/session-token-service.js';
 import { TASKS_SERVICE_TRANSPORT_METHODS, TasksService } from '../services/tasks.js';
 import { TenantRestrictionReconciler } from '../services/tenant-restriction-reconciler.js';
@@ -357,6 +358,69 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await expect(admit(neighborToken, neighborId)).resolves.toBeUndefined();
       } finally {
         shutdownMcpTokens();
+      }
+    });
+
+    it('compares the credential generation for executor-session bearer uploads', async () => {
+      const tenantId = `bearer-generation-${randomUUID()}`;
+      const seeded = await seedTenant(tenantId);
+      const jwtSecret = 'disposable-bearer-generation-secret';
+      const tokenService = new SessionTokenService(
+        { expiration_ms: 60_000, max_uses: -1 },
+        { db, startCleanupTimer: false }
+      );
+      tokenService.setJwtSecret(jwtSecret);
+      const issue = () =>
+        runWithTenantDatabaseScope(raw, tenantId, () =>
+          tokenService.generateToken(seeded.session.session_id, seeded.user.user_id, {
+            taskId: seeded.task.task_id,
+            branchId: seeded.branch.branch_id,
+          })
+        );
+      const started = await startAdmissionApp({
+        name: 'bearer-generation',
+        jwtSecret,
+        strategy: (app) => ({
+          sessionTokenService: tokenService,
+          executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+        }),
+        services: () => [],
+      });
+      const handler = createExecutorUploadContentHandler({
+        db,
+        authentication: started.app.service('authentication') as never,
+        multiTenancy,
+      });
+      // Past admission this token lacks the upload scope, so 403 means admitted and 401 means refused.
+      const upload = async (token: string) => {
+        let code = 0;
+        const res = {
+          headersSent: false,
+          status: (value: number) => {
+            code = value;
+            return { json: () => undefined };
+          },
+        };
+        await handler(
+          {
+            headers: { authorization: `Bearer ${token}`, 'x-agor-session-id': 'none' },
+            params: { uploadRef: 'none' },
+          },
+          res
+        );
+        return code;
+      };
+      try {
+        await intent(tenantId, 1, 'restrict');
+        await release(tenantId, 2);
+        const beforeSuspension = await issue();
+        expect(await upload(beforeSuspension)).toBe(403);
+        await intent(tenantId, 3, 'restrict');
+        await release(tenantId, 4);
+        expect(await upload(beforeSuspension)).toBe(401);
+        expect(await upload(await issue())).toBe(403);
+      } finally {
+        await started.close();
       }
     });
 

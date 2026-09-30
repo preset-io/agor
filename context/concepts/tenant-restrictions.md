@@ -262,7 +262,8 @@ reach it. The refresh service preserves that one code; every other refresh
 failure stays "invalid or expired". After activation the watermark moves, so a
 parked credential is rejected codelessly and the browser falls back to sign-in.
 
-Ordinary service admission, bearer authentication, socket packets/publications,
+Ordinary service admission, bearer authentication (executor-session upload and
+Slack upload bearers included), socket packets/publications,
 and egress dispatch compare the watermark. The bounded socket monitor also retires
 stale nonexecutor connections after a rapid restriction/release cycle. Old executor
 credentials retain only exact safety settlement, including after activation;

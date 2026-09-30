@@ -836,10 +836,11 @@ async function authenticateBearerHttp(input: {
         headers: input.headers,
       }),
   };
+  // Compare the signed generation here too: executor-session bearers skip the strategy's check.
   await assertRuntimeTenantAccess(
     input.db,
     params.tenant!.tenant_id,
-    undefined,
+    { payload: result.authentication?.payload },
     readRequestTenantRestriction
   );
   return params;
@@ -918,7 +919,9 @@ export function createExecutorUploadContentHandler(input: {
       stream.pipe(res);
     } catch (error) {
       const status =
-        error instanceof Forbidden || error instanceof Unavailable
+        error instanceof Forbidden ||
+        error instanceof Unavailable ||
+        error instanceof NotAuthenticated
           ? error.code
           : ((error as { status?: number }).status ?? 404);
       if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });

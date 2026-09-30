@@ -143,7 +143,7 @@ describe('browser upload route boundary ordering', () => {
     expect(admission).toHaveBeenCalledWith(
       expect.anything(),
       'tenant-a',
-      undefined,
+      { payload: undefined },
       tenantAccess.readRequestTenantRestriction
     );
   });
