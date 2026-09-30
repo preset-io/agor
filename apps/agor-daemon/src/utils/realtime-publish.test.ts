@@ -2988,4 +2988,64 @@ describe('publication restriction observation', () => {
       vi.useRealTimers();
     }
   });
+
+  it('suppresses delivery after a stuck shared read times out and keeps it single-flight', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const member = { user: user('member') };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
+      configureRealtimePublish({
+        app,
+        db: scopeOnlyDb,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: {
+          relay: vi.fn(),
+          setRelayHandler: vi.fn((handler) => {
+            remoteHandler = handler;
+          }),
+        },
+        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      });
+      const relayBoard = async () =>
+        remoteHandler?.({
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path: 'boards',
+          event: 'patched',
+          method: 'patch',
+          id: 'board-a',
+          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+        });
+
+      const stuck = Promise.withResolvers<string | undefined>();
+      read.mockImplementation(() => stuck.promise);
+      const first = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await first;
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // Past the tick the in-flight read is neither evicted nor duplicated; publications stay suppressed.
+      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
+      await relayBoard();
+      expect(read).toHaveBeenCalledOnce();
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // Once it settles, the stale entry is evicted and the next tick reads afresh.
+      stuck.resolve(undefined);
+      read.mockImplementation(async () => undefined);
+      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).toHaveBeenCalledOnce();
+    } finally {
+      read.mockReset();
+      vi.useRealTimers();
+    }
+  });
 });

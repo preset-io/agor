@@ -913,6 +913,9 @@ function resolveRealtimeTenantId(
  * at least `view` permission for the event's branch. Service executor sockets
  * remain trusted so prompt/permission plumbing keeps working.
  */
+/** Matches the socket monitor's observation bound. */
+const PUBLICATION_EPOCH_READ_TIMEOUT_MS = 2000;
+
 export function configureRealtimePublish(options: RealtimePublishOptions): void {
   const {
     app,
@@ -930,21 +933,45 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   } = options;
 
   // Per-tenant single-flight epoch read: a publication observes state at most one monitor tick old.
-  const epochReads = new Map<string, { until: number; epoch: Promise<string | undefined> }>();
-  const readPublicationEpoch = (database: TenantScopeAwareDatabase, tenantId: string) => {
-    const cached = epochReads.get(tenantId);
-    if (cached && Date.now() < cached.until) return cached.epoch;
-    const startedAt = Date.now();
-    const entry = {
-      until: Number.POSITIVE_INFINITY,
-      epoch: readTenantCredentialEpoch(database, tenantId),
-    };
-    const expire = () => {
-      entry.until = startedAt + TENANT_RESTRICTION_OBSERVATION_MS;
-    };
-    entry.epoch.then(expire, expire);
-    epochReads.set(tenantId, entry);
-    return entry.epoch;
+  const epochReads = new Map<
+    string,
+    { startedAt: number; until: number; epoch: Promise<string | undefined> }
+  >();
+  let nextEviction = 0;
+  const readPublicationEpoch = (
+    database: TenantScopeAwareDatabase,
+    tenantId: string
+  ): Promise<string | undefined> => {
+    const now = Date.now();
+    if (now >= nextEviction) {
+      // Settled entries past their tick are dropped; in-flight reads never expire here.
+      for (const [id, stale] of epochReads) if (now >= stale.until) epochReads.delete(id);
+      nextEviction = now + TENANT_RESTRICTION_OBSERVATION_MS;
+    }
+    let entry = epochReads.get(tenantId);
+    if (!entry || now >= entry.until) {
+      const created = {
+        startedAt: now,
+        until: Number.POSITIVE_INFINITY,
+        epoch: readTenantCredentialEpoch(database, tenantId),
+      };
+      const expire = () => {
+        created.until = created.startedAt + TENANT_RESTRICTION_OBSERVATION_MS;
+      };
+      created.epoch.then(expire, expire);
+      epochReads.set(tenantId, created);
+      entry = created;
+    }
+    if (entry.until !== Number.POSITIVE_INFINITY) return entry.epoch;
+    // A stuck shared read suppresses this tick's delivery instead of holding it until statement_timeout.
+    const timeout = new Error('Publication restriction read timed out');
+    const remaining = entry.startedAt + PUBLICATION_EPOCH_READ_TIMEOUT_MS - now;
+    if (remaining <= 0) return Promise.reject(timeout);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(timeout), remaining);
+    });
+    return Promise.race([entry.epoch, timedOut]).finally(() => clearTimeout(timer));
   };
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
