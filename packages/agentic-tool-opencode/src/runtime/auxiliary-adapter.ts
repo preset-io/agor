@@ -18,9 +18,13 @@ interface InteractiveChannel {
 }
 
 function payloadFor(input: AuxiliaryInput): OpenCodeAuthPayload {
+  const context = parseOpenCodeExecutorContext(input.context);
+  if (!('dataHome' in context)) {
+    throw new Error('OpenCode provider operations require a native data home');
+  }
   return {
     command: 'opencode.auth',
-    dataHome: parseOpenCodeExecutorContext(input.context).dataHome,
+    dataHome: context.dataHome,
     params: OpenCodeAuthParamsSchema.parse(input.request),
   };
 }

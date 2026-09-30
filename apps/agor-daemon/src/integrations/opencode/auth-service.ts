@@ -1,9 +1,14 @@
-import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
+import {
+  createOpenCodeHostedProviderDiscovery,
+  hostedCredentialFieldForProvider,
+  OPENCODE_VERSION,
+} from '@agor/agentic-tool-opencode';
 import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
 import type {
+  AgenticToolsUpdate,
   AuthenticatedParams,
   DeepReadonly,
   OpenCodeOAuthAttempt,
@@ -15,7 +20,9 @@ import type {
 import { resolveOpenCodeConfigurationDirectory } from './configuration-scope.js';
 import {
   type AuthenticatedOpenCodeSubjectContext,
+  type ManagedOpenCodeSubject,
   resolveAuthenticatedOpenCodeSubjectContext,
+  resolveManagedOpenCodeSubject,
 } from './credential-namespace.js';
 import { startOpenCodeExecutorInvocation } from './executor-command.js';
 import {
@@ -101,11 +108,56 @@ function scheduleAttemptPrune(attempt: StoredOAuthAttempt): void {
   timer.unref();
 }
 
+/** Host surface for hosted keys: the users service owns encryption and self-only writes. */
+type UsersPatchHost = {
+  service(path: 'users'): {
+    patch(
+      id: string,
+      data: { agentic_tools: AgenticToolsUpdate },
+      params?: AuthenticatedParams
+    ): Promise<unknown>;
+  };
+};
+
 export class OpenCodeAuthService {
   constructor(
     private readonly db: TenantScopeAwareDatabase,
-    private readonly config: DeepReadonly<AgorConfig>
+    private readonly config: DeepReadonly<AgorConfig>,
+    private readonly host?: UsersPatchHost
   ) {}
+
+  private managedSettings(subject: ManagedOpenCodeSubject): OpenCodeProviderSettings {
+    return {
+      ...createOpenCodeHostedProviderDiscovery(subject.savedProviderIds),
+      isolation: { mode: 'managed-projection', boundary: 'executor-run' },
+    };
+  }
+
+  /** Save or clear one curated provider key on the caller's own encrypted credential bucket. */
+  private async patchManagedKey(
+    providerId: string,
+    value: string | null,
+    params?: AuthenticatedParams
+  ): Promise<OpenCodeProviderSettings> {
+    const subject = await resolveManagedOpenCodeSubject(this.db, params);
+    const field = hostedCredentialFieldForProvider(providerId);
+    if (!field) throw new BadRequest('That provider is not available for hosted OpenCode.');
+    if (!this.host) throw new BadRequest('OpenCode credential storage is not available.');
+    const { query: _query, ...callerParams } = (params ?? {}) as AuthenticatedParams & {
+      query?: unknown;
+    };
+    await this.host
+      .service('users')
+      .patch(
+        subject.subjectUserId,
+        { agentic_tools: { opencode: { [field]: value } } },
+        callerParams as AuthenticatedParams
+      );
+    const saved = new Set(subject.savedProviderIds);
+    if (value === null) saved.delete(providerId);
+    else saved.add(providerId);
+    return this.managedSettings({ ...subject, savedProviderIds: saved });
+  }
 
   private credentialContext(
     params?: AuthenticatedParams
@@ -167,6 +219,9 @@ export class OpenCodeAuthService {
         providers: [],
       };
     }
+    if (capabilities.mode === 'managed-projection') {
+      return this.managedSettings(await resolveManagedOpenCodeSubject(this.db, params));
+    }
     const context = await resolveAuthenticatedOpenCodeSubjectContext(this.db, this.config, params);
     const directory = await resolveOpenCodeConfigurationDirectory({
       db: this.db,
@@ -199,6 +254,12 @@ export class OpenCodeAuthService {
     if (!providerId || !apiKey) throw new BadRequest('Provider and API key are required.');
     const metadata = data.metadata;
     assertOptionalStringRecord(metadata);
+    if (resolveOpenCodeCapabilities(this.config).mode === 'managed-projection') {
+      if (metadata && Object.keys(metadata).length > 0) {
+        throw new BadRequest('Hosted OpenCode providers accept an API key only.');
+      }
+      return this.patchManagedKey(providerId, apiKey, params);
+    }
 
     const context = await this.credentialContext(params);
     const result = await inOpenCodeNativeStateMutationSlot(context.namespaceKey, (fence) =>
@@ -405,6 +466,9 @@ export class OpenCodeAuthService {
   async remove(id: string, params?: AuthenticatedParams): Promise<OpenCodeProviderSettings> {
     const providerId = id?.trim();
     if (!providerId) throw new BadRequest('Provider is required.');
+    if (resolveOpenCodeCapabilities(this.config).mode === 'managed-projection') {
+      return this.patchManagedKey(providerId, null, params);
+    }
     const context = await this.credentialContext(params);
     const result = await inOpenCodeNativeStateMutationSlot(context.namespaceKey, (fence) =>
       this.execute(context, { operation: 'disconnect', providerId }, fence)
@@ -415,7 +479,8 @@ export class OpenCodeAuthService {
 
 export function createOpenCodeAuthService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  host?: UsersPatchHost
 ) {
-  return new OpenCodeAuthService(db, config);
+  return new OpenCodeAuthService(db, config, host);
 }

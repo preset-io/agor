@@ -1,11 +1,14 @@
-import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
+import { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type { AuthenticatedParams, DeepReadonly, OpenCodeModelCatalog } from '@agor/core/types';
 import type { ExecutorCommandResult } from '../../utils/spawn-executor.js';
-import { resolveAuthenticatedOpenCodeSubjectContext } from './credential-namespace.js';
+import {
+  resolveAuthenticatedOpenCodeSubjectContext,
+  resolveManagedOpenCodeSubject,
+} from './credential-namespace.js';
 import { startOpenCodeExecutorInvocation } from './executor-command.js';
 import { blockOpenCodeNativeStateNamespace } from './native-state-coordinator.js';
 
@@ -90,6 +93,16 @@ export class OpenCodeModelsService {
     const capabilities = resolveOpenCodeCapabilities(this.config);
     if (capabilities.mode === 'unsupported') {
       return { runtimeVersion: OPENCODE_VERSION, providers: [], unsupported: capabilities.reason };
+    }
+    if (capabilities.mode === 'managed-projection') {
+      // Saved curated keys are the only availability evidence; no executor is started.
+      const subject = await resolveManagedOpenCodeSubject(this.db, params);
+      return {
+        runtimeVersion: OPENCODE_VERSION,
+        ...createOpenCodeKnownModelCatalog(subject.savedProviderIds, {
+          allowCredentialless: false,
+        }),
+      };
     }
     return readModelCatalog(this.db, this.config, params);
   }

@@ -791,10 +791,31 @@ OpenCode supports MCP servers via its REST API:
 ### Limitations
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
-- **Execution is local-only.** Agor must be able to contain the native writer process safely.
+- **Local execution by default.** Agor must be able to contain the native writer process safely.
   Hosted multi-tenant, delegated, and templated-executor deployments report OpenCode as
-  "not available" in settings, readiness, session creation, schedules, and prompts.
+  "not available" in settings, readiness, session creation, schedules, and prompts unless the
+  operator enables hosted workspaces (below).
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
+
+### Hosted workspaces
+
+With `agentic_tools.opencode_hosted_native_state: checkpointed` (see
+[config.yaml](/guide/config-yaml)), hosted workspaces run OpenCode like this:
+
+- **Providers:** Anthropic, OpenAI, and Kimi for Coding, with an API key saved in
+  Settings → OpenCode. Keys are encrypted for your account and delivered only to
+  your own executor runs; a key is verified by your first prompt. OAuth sign-in,
+  custom endpoints, and other providers are not offered.
+- **Owner only:** only the session creator can prompt an OpenCode session, and it
+  runs in the creator's own executor home.
+- **Conversation state:** each successful turn saves an immutable copy of
+  OpenCode's database in your home (`~/.agor/opencode/sessions/`), and the next
+  turn resumes from the last completed one. A failed or stopped turn keeps the
+  previous state. If saved state is missing or damaged, the turn fails rather
+  than silently starting an empty conversation; start a new session to recover.
+- **Cleanup:** superseded copies and copies from deleted sessions are removed
+  during your later OpenCode turns. Removal is best-effort, not an erasure
+  guarantee.
 
 ---
 

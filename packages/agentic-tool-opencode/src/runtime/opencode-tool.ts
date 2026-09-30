@@ -22,6 +22,7 @@ import {
   MCP_CLIENT_HINTS,
   type MCPServer,
   type MessageID,
+  type OpenCodeCheckpointManifest,
   type PermissionMode,
   type SessionID,
   shortId,
@@ -37,6 +38,7 @@ import {
   type OpenCodeEventEffect,
   reconcileOpenCodeMessages,
 } from './event-translator.js';
+import { assertHostedOpenCodeInvocationConfig, writeHostedOpenCodeAuth } from './hosted-config.js';
 import {
   createOpenCodeSanitizer,
   type ManagedChild,
@@ -46,6 +48,7 @@ import {
   resolvePackagedOpenCodeBinary,
   startManagedOpenCodeServer,
 } from './managed-server.js';
+import { type OpenCodeNativeStateLayout, sealOpenCodeCheckpoint } from './native-state.js';
 import { loadOpenCodeSdk } from './sdk-loader.js';
 
 export { resolvePackagedOpenCodeBinary };
@@ -96,6 +99,12 @@ export type RunOpenCodeTurnInput = {
   mcpToken?: string;
   permissionMode?: PermissionMode;
   dataHome?: string;
+  /** Hosted turn: Job-local layout plus the owner's selected provider auth entry. */
+  managed?: {
+    layout: OpenCodeNativeStateLayout;
+    authContent: string;
+    authSecrets: readonly string[];
+  };
   signal: AbortSignal;
   persistOpenCodeSessionId: (sessionId: string) => Promise<void>;
 };
@@ -103,6 +112,8 @@ export type RunOpenCodeTurnInput = {
 export type OpenCodeTurnResult = {
   openCodeSessionId: string;
   sessionWasCreated: boolean;
+  /** Hosted turns only: the sealed checkpoint reported with completion. */
+  checkpoint?: OpenCodeCheckpointManifest;
   finalMessage: {
     content: string;
     contentBlocks: ContentBlock[];
@@ -669,9 +680,17 @@ export class OpenCodeTool {
     if (!provider?.trim() || !model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
+    const managedSecrets = input.managed
+      ? [
+          ...input.managed.authSecrets,
+          input.managed.layout.scratchRoot,
+          input.managed.layout.sessionsDir,
+        ]
+      : [];
     const preliminarySanitizer = createOpenCodeSanitizer([
       input.mcpToken ?? '',
       input.dataHome ?? '',
+      ...managedSecrets,
     ]);
     let resolvedInvocationConfig: OpenCodeInvocationConfig;
     try {
@@ -686,10 +705,15 @@ export class OpenCodeTool {
     const configContent = JSON.stringify(invocationConfig);
     let managedServer: ManagedOpenCodeServer;
     try {
+      if (input.managed) {
+        assertHostedOpenCodeInvocationConfig(resolvedInvocationConfig);
+        await writeHostedOpenCodeAuth(input.managed.layout, input.managed.authContent);
+      }
       managedServer = await startManagedOpenCodeServer(
         {
           directory: input.directory,
           dataHome: input.dataHome,
+          hostedLayout: input.managed?.layout,
           environment: {
             OPENCODE_CONFIG_CONTENT: configContent,
             // OpenCode resolves this dedicated runtime override when creating
@@ -697,7 +721,7 @@ export class OpenCodeTool {
             // permissive project/agent rules cannot bypass Agor interception.
             OPENCODE_PERMISSION: JSON.stringify(AGOR_PERMISSION_INTERCEPTION),
           },
-          secrets: [input.mcpToken ?? '', configContent, invocationConfig],
+          secrets: [input.mcpToken ?? '', configContent, invocationConfig, ...managedSecrets],
         },
         {
           resolveBinary: this.dependencies.resolveBinary,
@@ -800,6 +824,17 @@ export class OpenCodeTool {
 
     if (turnFailure) throw turnFailure;
     if (!outcome) throw new Error('OpenCode turn ended without a result');
+    if (input.managed) {
+      // The server has exited; a checkpoint that cannot be sealed fails the turn.
+      try {
+        outcome.checkpoint = await sealOpenCodeCheckpoint(
+          input.managed.layout,
+          outcome.openCodeSessionId
+        );
+      } catch (error) {
+        throw sanitizer.error(error);
+      }
+    }
     return outcome;
   }
 

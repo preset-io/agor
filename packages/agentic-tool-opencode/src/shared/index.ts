@@ -1,9 +1,19 @@
 export {
   createOpenCodeExecutorContext,
+  createOpenCodeManagedExecutorContext,
+  isOpenCodeManagedExecutorContext,
   type OpenCodeExecutorContext,
+  type OpenCodeNativeFileExecutorContext,
   parseOpenCodeExecutorContext,
 } from './executor-context.js';
-export { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from './known-models.js';
+export {
+  createOpenCodeHostedProviderDiscovery,
+  createOpenCodeKnownModelCatalog,
+  hostedCredentialFieldForProvider,
+  hostedProviderIdsFromConnection,
+  OPENCODE_HOSTED_PROVIDER_FIELDS,
+  OPENCODE_VERSION,
+} from './known-models.js';
 
 export {
   hasCompleteOpenCodeModelConfig,

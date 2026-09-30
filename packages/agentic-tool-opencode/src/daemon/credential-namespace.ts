@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { UnixUserMode } from '@agor/core/config';
 import type { Session } from '@agor/core/types';
-import { type OpenCodeCapabilityConfig, requireOpenCodeSupported } from './capabilities.js';
+import { type OpenCodeCapabilityConfig, requireOpenCodeNativeFile } from './capabilities.js';
 
 const SUBJECT_KEY_VERSION = 'agor-opencode-v1';
 
@@ -59,5 +59,5 @@ export function resolveOpenCodeTaskCredentialNamespace(input: {
 export function assertOpenCodeNativeAuthSupported(
   config: OpenCodeCapabilityConfig
 ): OpenCodeNativeUnixUserMode {
-  return requireOpenCodeSupported(config).unixUserMode;
+  return requireOpenCodeNativeFile(config).unixUserMode;
 }

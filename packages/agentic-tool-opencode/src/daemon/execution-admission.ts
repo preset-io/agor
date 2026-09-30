@@ -4,7 +4,7 @@ import { requireOpenCodeSupported } from './capabilities.js';
 
 export function assertOpenCodeExecutionAllowed(input: {
   tenantId: string | undefined;
-  config: Pick<AgorConfig, 'execution' | 'multi_tenancy'>;
+  config: Pick<AgorConfig, 'execution' | 'multi_tenancy' | 'agentic_tools'>;
   sessionOwnerId: string;
   prompterUserId: string | undefined;
 }): void {

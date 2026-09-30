@@ -399,6 +399,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`DROP TABLE kb_import_receipts`);
 
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
+      // 0117 is newer than this watermark; replaying the chain must recreate it.
+      await executeRaw(db, sql`DROP TABLE opencode_checkpoint_attempts`);
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
       await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
 

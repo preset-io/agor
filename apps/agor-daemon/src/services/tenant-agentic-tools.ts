@@ -15,7 +15,6 @@ import type {
 } from '@agor/core/types';
 import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
-  isProviderConnectionTool,
   PROVIDER_RESOLUTION_POLICIES,
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
@@ -47,10 +46,8 @@ export class TenantAgenticToolSettingsService {
   ): TenantAgenticToolSettings {
     const deploymentEnabled = this.deploymentAvailable(tool);
     const connection: TenantAgenticToolSettings['connection'] = {};
-    if (isProviderConnectionTool(tool)) {
-      for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
-        connection[field] = { configured: Boolean(stored.connection?.[field]) };
-      }
+    for (const field of TENANT_PROVIDER_CONNECTION_FIELDS[tool]) {
+      connection[field] = { configured: Boolean(stored.connection?.[field]) };
     }
     return {
       tool,
@@ -103,8 +100,17 @@ export class TenantAgenticToolSettingsService {
     ) {
       throw new BadRequest('resolution_policy is invalid');
     }
-    if (data.resolution_policy !== undefined && !isProviderConnectionTool(tool)) {
-      throw new BadRequest(`${tool} does not use provider resolution`);
+    if (
+      tool === 'opencode' &&
+      data.resolution_policy !== undefined &&
+      data.resolution_policy !== 'user_required' &&
+      data.resolution_policy !== 'user_preferred'
+    ) {
+      // Hosted OpenCode offers no workspace-level keys, so a tenant-side
+      // policy could only make every prompt fail while settings say Saved.
+      throw new BadRequest(
+        'opencode keys are per user; workspace-level policies are not available'
+      );
     }
     if (
       data.connection !== undefined &&

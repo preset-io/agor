@@ -16,7 +16,10 @@ export type ApiKeyName =
   | 'OPENAI_API_KEY'
   | 'GEMINI_API_KEY'
   | 'COPILOT_GITHUB_TOKEN'
-  | 'CURSOR_API_KEY';
+  | 'CURSOR_API_KEY'
+  | 'OPENCODE_API_KEY_ANTHROPIC'
+  | 'OPENCODE_API_KEY_OPENAI'
+  | 'OPENCODE_API_KEY_KIMI_FOR_CODING';
 
 /**
  * Agentic coding tool names

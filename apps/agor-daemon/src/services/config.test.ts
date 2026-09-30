@@ -681,6 +681,97 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it('allows an OpenCode executor to resolve its own hosted provider fields only', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'opencode' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const params = {
+      provider: 'socketio',
+      user: { user_id: 'creator-1' },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          task_id: 'task-1',
+          session_id: 'session-1',
+        },
+      },
+    } as never;
+
+    configMocks.resolveApiKey.mockResolvedValueOnce({
+      apiKey: 'resolved-test-key',
+      source: 'user',
+      connection: {
+        OPENCODE_API_KEY_ANTHROPIC: 'resolved-test-key',
+        OPENCODE_API_KEY_OPENAI: 'unselected-key',
+      },
+    });
+    const resolved = await service.resolveApiKey(
+      { taskId: 'task-1' as TaskID, keyName: 'OPENCODE_API_KEY_ANTHROPIC', tool: 'opencode' },
+      params
+    );
+    expect(resolved).toMatchObject({ apiKey: 'resolved-test-key', source: 'user' });
+    // Only the requested provider's key leaves the daemon.
+    expect(resolved.connection).toEqual({ OPENCODE_API_KEY_ANTHROPIC: 'resolved-test-key' });
+    expect(configMocks.resolveApiKey).toHaveBeenCalledWith('OPENCODE_API_KEY_ANTHROPIC', {
+      userId: 'creator-1',
+      db: {},
+      tool: 'opencode',
+    });
+    // Another tool's canonical key is still refused for the OpenCode token.
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'ANTHROPIC_API_KEY', tool: 'opencode' },
+        params
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+  });
+
+  it('refuses an OpenCode provider field to a token whose session runs another tool', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { get: vi.fn(async () => ({ created_by: 'creator-1', session_id: 'session-1' })) };
+        }
+        if (name === 'sessions') {
+          return { get: vi.fn(async () => ({ agentic_tool: 'codex' })) };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENCODE_API_KEY_ANTHROPIC', tool: 'codex' },
+        {
+          provider: 'socketio',
+          user: { user_id: 'creator-1' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
+          },
+        } as never
+      )
+    ).rejects.toBeInstanceOf(Forbidden);
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
+  });
+
   it('rejects executor runtime tokens for tools without a canonical API key mapping', async () => {
     const service = new ConfigService({} as never);
     service.app = {

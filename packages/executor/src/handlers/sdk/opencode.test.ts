@@ -13,6 +13,14 @@ const mocks = vi.hoisted(() => ({
   getMcpServersForSession: vi.fn(),
   tasksGet: vi.fn(),
   sessionsGet: vi.fn(),
+  prepareManaged: vi.fn(),
+  completeManaged: vi.fn(),
+  discardScratch: vi.fn(),
+}));
+
+vi.mock('./opencode-managed.js', () => ({
+  prepareManagedOpenCodeTurn: mocks.prepareManaged,
+  completeManagedOpenCodeTurn: mocks.completeManaged,
 }));
 
 vi.mock('@agor/core/mcp', async (importOriginal) => ({
@@ -21,6 +29,7 @@ vi.mock('@agor/core/mcp', async (importOriginal) => ({
 }));
 
 vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
+  discardOpenCodeScratch: mocks.discardScratch,
   isOpenCodeCleanupUnverifiedError: (error: unknown) =>
     error instanceof Error && error.name === 'OpenCodeCleanupUnverifiedError',
   OpenCodeTool: class {
@@ -282,5 +291,89 @@ describe('OpenCode executor adapter', () => {
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('hosted OpenCode executor adapter', () => {
+  const managedContext = { mode: 'managed', sessionId, taskId };
+  const turn = {
+    holderId: '00000000-0000-7000-8000-000000000009',
+    layout: { scratchRoot: '/scratch/task' },
+    input: { openCodeSessionId: 'ses_accepted' },
+    authContent: '{"openai":{"type":"api","key":"sk-test"}}',
+    authSecrets: ['sk-test'],
+  };
+  const checkpoint = { version: 1, taskId, openCodeSessionId: 'ses_accepted' };
+
+  function executeManaged(value: ReturnType<typeof client>['value']) {
+    return executeOpenCodeTask({
+      client: value as never,
+      sessionId: sessionId as never,
+      taskId: taskId as never,
+      prompt: 'Continue',
+      abortController: new AbortController(),
+      agenticToolContext: managedContext,
+    });
+  }
+
+  beforeEach(() => {
+    mocks.discardScratch.mockResolvedValue(undefined);
+  });
+
+  it('exits without any transcript or status effect when another executor holds the Task', async () => {
+    mocks.prepareManaged.mockResolvedValue(null);
+    const state = client();
+
+    await executeManaged(state.value);
+
+    expect(mocks.createUserMessage).not.toHaveBeenCalled();
+    expect(mocks.runTurn).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
+  it('resumes the accepted native session and completes with the sealed checkpoint', async () => {
+    mocks.prepareManaged.mockResolvedValue(turn);
+    mocks.runTurn.mockResolvedValue({
+      openCodeSessionId: 'ses_accepted',
+      checkpoint,
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    const state = client({ sdk_session_id: 'stale-local-id' });
+
+    await executeManaged(state.value);
+
+    const [input] = mocks.runTurn.mock.calls[0];
+    expect(input).toMatchObject({
+      existingOpenCodeSessionId: 'ses_accepted',
+      managed: { layout: turn.layout, authContent: turn.authContent, authSecrets: ['sk-test'] },
+    });
+    await input.persistOpenCodeSessionId('ses_new');
+    expect(state.services.sessions.patch).not.toHaveBeenCalled();
+    expect(mocks.completeManaged).toHaveBeenCalledWith(
+      state.value,
+      taskId,
+      expect.objectContaining({ status: 'completed' }),
+      turn,
+      checkpoint
+    );
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+    expect(mocks.discardScratch).toHaveBeenCalledWith(turn.layout);
+  });
+
+  it('fails the Task instead of completing when no checkpoint was sealed', async () => {
+    mocks.prepareManaged.mockResolvedValue(turn);
+    mocks.runTurn.mockResolvedValue({
+      openCodeSessionId: 'ses_accepted',
+      finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
+    });
+    const state = client();
+
+    await expect(executeManaged(state.value)).rejects.toThrow(/no checkpoint/);
+
+    expect(mocks.completeManaged).not.toHaveBeenCalled();
+    expect(state.services.tasks.patch).toHaveBeenCalledWith(
+      taskId,
+      expect.objectContaining({ status: 'failed' })
+    );
   });
 });

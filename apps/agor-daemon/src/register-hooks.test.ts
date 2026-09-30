@@ -40,6 +40,7 @@ import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
+  constrainedHaGateApplies,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -1755,4 +1756,24 @@ describe('file service RBAC database preload', () => {
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('constrained-HA gate for hosted OpenCode', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch {task_id}',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+    },
+    agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const },
+  };
+
+  it('lets any replica serve hosted OpenCode settings but keeps every other gate', () => {
+    expect(constrainedHaGateApplies('openCodeAuth', hosted)).toBe(false);
+    expect(constrainedHaGateApplies('openCodeAuth', {})).toBe(true);
+    for (const [, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      if (feature !== 'openCodeAuth') expect(constrainedHaGateApplies(feature, hosted)).toBe(true);
+    }
+  });
 });

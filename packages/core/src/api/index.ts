@@ -556,6 +556,16 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  /** Admit this executor as the one checkpoint writer of a hosted OpenCode Task. */
+  beginOpenCodeCheckpoint(
+    data: import('../types/opencode-native-state').OpenCodeCheckpointBeginInput,
+    params?: Params
+  ): Promise<import('../types/opencode-native-state').OpenCodeCheckpointAdmission>;
+  /** Forget checkpoint attempts whose files the admitted executor removed. */
+  acknowledgeOpenCodeCleanup(
+    data: import('../types/opencode-native-state').OpenCodeCheckpointCleanupInput,
+    params?: Params
+  ): Promise<void>;
   cancelQueued(data: CancelQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   reorderQueued(data: ReorderQueuedTasksInput, params?: Params): Promise<TaskQueueMutationResult>;
   /**
@@ -1383,6 +1393,8 @@ function extendTasksService(client: AgorClient): void {
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
+      'beginOpenCodeCheckpoint',
+      'acknowledgeOpenCodeCleanup',
       'cancelQueued',
       'reorderQueued'
     );

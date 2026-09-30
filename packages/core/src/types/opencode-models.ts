@@ -2,7 +2,8 @@
 export type OpenCodeUnsupportedCode =
   | 'hosted_tenancy'
   | 'delegated_execution'
-  | 'templated_transport';
+  | 'templated_transport'
+  | 'persistent_user_home_required';
 
 export interface OpenCodeUnsupportedReason {
   code: OpenCodeUnsupportedCode;

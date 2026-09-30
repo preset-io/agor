@@ -1,5 +1,5 @@
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-import type { AgenticToolName, Session } from '@agor/core/types';
+import type { AgenticToolName } from '@agor/core/types';
 
 /**
  * Result of a tool's executor-launch hook: a key used to serialize native-state
@@ -26,11 +26,9 @@ export interface AgenticToolDaemonContribution {
    * launch time. Absent for tools that need no special launch handling; when
    * absent, the caller spawns the executor with today's default path.
    */
-  getExecutorLaunch?: (input: {
-    tenantId: string;
-    session: Pick<Session, 'created_by' | 'unix_username'>;
-    homeDir: string;
-  }) => ExecutorLaunchContribution;
+  getExecutorLaunch?: (
+    input: Parameters<typeof OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch>[0]
+  ) => ExecutorLaunchContribution;
 }
 
 /**

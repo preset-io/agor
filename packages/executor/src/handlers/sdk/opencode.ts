@@ -6,10 +6,12 @@
  */
 
 import {
+  isOpenCodeManagedExecutorContext,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
   parseOpenCodeExecutorContext,
 } from '@agor/agentic-tool-opencode';
 import {
+  discardOpenCodeScratch,
   isOpenCodeCleanupUnverifiedError,
   OpenCodeTool,
 } from '@agor/agentic-tool-opencode/runtime';
@@ -40,6 +42,11 @@ import {
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
+import {
+  completeManagedOpenCodeTurn,
+  type ManagedOpenCodeTurn,
+  prepareManagedOpenCodeTurn,
+} from './opencode-managed.js';
 
 export async function executeOpenCodeTask(params: {
   client: AgorClient;
@@ -62,13 +69,31 @@ export async function executeOpenCodeTask(params: {
     client.service('sessions').emit(event, data);
   }, params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000);
   globalPermissionManager.register(sessionId, permissionService);
+  let managed: ManagedOpenCodeTurn | null | undefined;
 
   try {
     const session = await client.service('sessions').get(sessionId);
     if (!session.model_config?.provider?.trim() || !session.model_config.model?.trim()) {
       throw new Error(OPENCODE_MODEL_CONFIG_PAIR_ERROR);
     }
-    const { dataHome } = parseOpenCodeExecutorContext(params.agenticToolContext);
+    const context = parseOpenCodeExecutorContext(params.agenticToolContext);
+    const dataHome = 'dataHome' in context ? context.dataHome : undefined;
+    if (isOpenCodeManagedExecutorContext(context)) {
+      if (context.sessionId !== sessionId || context.taskId !== taskId) {
+        throw new Error('OpenCode managed executor context does not belong to this task');
+      }
+      managed = await prepareManagedOpenCodeTurn({
+        client,
+        sessionId,
+        taskId,
+        provider: session.model_config.provider,
+      });
+      if (!managed) {
+        // Another executor holds this Task; leave its transcript and status untouched.
+        console.warn('[opencode] event=managed_duplicate_executor');
+        return;
+      }
+    }
 
     const repos = createFeathersBackedRepositories(client);
     const contextUserId = await resolveContextUserId({
@@ -150,7 +175,10 @@ export async function executeOpenCodeTask(params: {
         taskId,
         prompt,
         agorAssistantMessageId: assistantMessageId,
-        existingOpenCodeSessionId: session.sdk_session_id,
+        // Hosted turns resume only the accepted checkpoint's native session.
+        existingOpenCodeSessionId: managed
+          ? managed.input?.openCodeSessionId
+          : session.sdk_session_id,
         title: session.title || `Task ${shortId(taskId)}`,
         directory: branch.path,
         provider: session.model_config.provider,
@@ -160,7 +188,10 @@ export async function executeOpenCodeTask(params: {
         permissionMode: params.permissionMode,
         signal: params.abortController.signal,
         dataHome,
+        managed: managed ?? undefined,
         persistOpenCodeSessionId: async (openCodeSessionId) => {
+          // Hosted native ids travel only inside the accepted checkpoint.
+          if (managed) return;
           await client.service('sessions').patch(sessionId, { sdk_session_id: openCodeSessionId });
         },
       },
@@ -183,11 +214,17 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
-    await client.service('tasks').patch(taskId, {
-      status: 'completed',
+    const completion = {
+      status: 'completed' as const,
       completed_at: new Date().toISOString(),
       model: `${session.model_config.provider}/${session.model_config.model}`,
-    });
+    };
+    if (managed) {
+      if (!result.checkpoint) throw new Error('Hosted OpenCode turn produced no checkpoint');
+      await completeManagedOpenCodeTurn(client, taskId, completion, managed, result.checkpoint);
+    } else {
+      await client.service('tasks').patch(taskId, completion);
+    }
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     console.error('[opencode] execution failed category=task_execution');
@@ -207,5 +244,6 @@ export async function executeOpenCodeTask(params: {
     throw failure;
   } finally {
     globalPermissionManager.unregister(sessionId);
+    if (managed) await discardOpenCodeScratch(managed.layout).catch(() => undefined);
   }
 }

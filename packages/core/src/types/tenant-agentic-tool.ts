@@ -12,7 +12,8 @@ export const TENANT_AGENTIC_TOOL_NAMES = [
 ] as const;
 
 export type TenantAgenticToolName = (typeof TENANT_AGENTIC_TOOL_NAMES)[number];
-export type ProviderConnectionTool = Exclude<TenantAgenticToolName, 'opencode'>;
+/** Every tenant tool carries a provider connection; local OpenCode just never stores one. */
+export type ProviderConnectionTool = TenantAgenticToolName;
 
 export const PROVIDER_RESOLUTION_POLICIES = [
   'user_required',
@@ -38,6 +39,11 @@ export const PROVIDER_CONNECTION_FIELDS = {
   gemini: ['GEMINI_API_KEY'],
   copilot: ['COPILOT_GITHUB_TOKEN'],
   cursor: ['CURSOR_API_KEY'],
+  opencode: [
+    'OPENCODE_API_KEY_ANTHROPIC',
+    'OPENCODE_API_KEY_OPENAI',
+    'OPENCODE_API_KEY_KIMI_FOR_CODING',
+  ],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 /** Credential-bearing subset of each atomic provider connection (excludes endpoints). */
@@ -47,6 +53,11 @@ export const PROVIDER_CREDENTIAL_FIELDS = {
   gemini: ['GEMINI_API_KEY'],
   copilot: ['COPILOT_GITHUB_TOKEN'],
   cursor: ['CURSOR_API_KEY'],
+  opencode: [
+    'OPENCODE_API_KEY_ANTHROPIC',
+    'OPENCODE_API_KEY_OPENAI',
+    'OPENCODE_API_KEY_KIMI_FOR_CODING',
+  ],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 export const TENANT_PROVIDER_CONNECTION_FIELDS = {
@@ -54,6 +65,8 @@ export const TENANT_PROVIDER_CONNECTION_FIELDS = {
   'claude-code': PROVIDER_CONNECTION_FIELDS['claude-code'].filter(
     (field) => field !== 'CLAUDE_CODE_OAUTH_TOKEN'
   ),
+  // OpenCode keys are per user; no workspace-level connection exists.
+  opencode: [],
 } as const satisfies Record<ProviderConnectionTool, readonly AgenticToolConfigField[]>;
 
 export interface StoredTenantAgenticToolSettings {
@@ -94,12 +107,6 @@ export interface TenantAgenticToolSettingsPatch {
 
 export function canonicalTenantAgenticTool(tool: AgenticToolName): TenantAgenticToolName {
   return tool;
-}
-
-export function isProviderConnectionTool(
-  tool: TenantAgenticToolName
-): tool is ProviderConnectionTool {
-  return tool !== 'opencode';
 }
 
 export function providerToolForField(field: AgenticToolConfigField): ProviderConnectionTool | null {

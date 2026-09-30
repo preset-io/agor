@@ -225,3 +225,33 @@ describe('OpenCode model catalog service', () => {
     }
   });
 });
+
+describe('OpenCode model catalog service (hosted)', () => {
+  it('derives availability from saved curated keys without any executor', async () => {
+    loadConfig.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+      execution: {
+        unix_user_mode: 'delegated',
+        executor_command_template: 'launch',
+        executor_storage: { user_home: 'persistent-per-user' },
+      },
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    } as never);
+    usersRepository.mockImplementation(function repository() {
+      return {
+        findById: vi.fn(async () => ({
+          user_id: 'same-user',
+          agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: true } },
+        })),
+      };
+    } as never);
+
+    const result = await runWithTenantContext('tenant-a', () => service().find(params));
+
+    expect(result.unsupported).toBeUndefined();
+    expect(result.suggestedSelection).toMatchObject({ providerId: 'openai' });
+    expect(result.providers.find((p) => p.id === 'openai')?.availableForSelection).toBe(true);
+    expect(result.providers.find((p) => p.id === 'anthropic')?.availableForSelection).toBe(false);
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+});

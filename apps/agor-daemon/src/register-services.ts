@@ -1733,7 +1733,9 @@ function createExecuteHandler(
       return contribution.getExecutorLaunch({
         tenantId,
         session,
+        taskId: data.taskId,
         homeDir: executorHomeDir,
+        config,
       });
     })();
 
@@ -1971,7 +1973,7 @@ function createExecuteHandler(
       },
     });
 
-    if (executorLaunch) {
+    if (executorLaunch?.requiresLocalContainment) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;

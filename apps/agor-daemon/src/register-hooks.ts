@@ -7,6 +7,7 @@ import { KNOWLEDGE_TRANSFER, OWNERSHIP_TRANSFER_SERVICES } from '@agor/core/type
  * Extracted from index.ts for maintainability.
  */
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { projectClaudeResultResponse, projectNormalizedSdkResponse } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
@@ -682,23 +683,37 @@ export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
   ['opencode-models', 'openCodeAuth'],
 ] as const satisfies ReadonlyArray<readonly [string, Parameters<typeof rejectInConstrainedHa>[1]]>;
 
+/** Hosted OpenCode keeps no daemon-local native state, so any replica may serve its settings. */
+export function constrainedHaGateApplies(
+  feature: (typeof CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES)[number][1],
+  config: Parameters<typeof resolveOpenCodeCapabilities>[0]
+): boolean {
+  return (
+    feature !== 'openCodeAuth' || resolveOpenCodeCapabilities(config).mode !== 'managed-projection'
+  );
+}
+
 const taskFieldSet = (...fields: (keyof Task)[]) => new Set<string>(fields);
 
-const EXECUTOR_TASK_PATCH_FIELDS = taskFieldSet(
-  'status',
-  'completed_at',
-  'git_state',
-  'message_range',
-  'model',
-  'raw_sdk_response',
-  'normalized_sdk_response',
-  'computed_context_window',
-  'duration_ms',
-  'agent_session_id',
-  'error_message',
-  'report',
-  'permission_request'
-);
+const EXECUTOR_TASK_PATCH_FIELDS = new Set([
+  ...taskFieldSet(
+    'status',
+    'completed_at',
+    'git_state',
+    'message_range',
+    'model',
+    'raw_sdk_response',
+    'normalized_sdk_response',
+    'computed_context_window',
+    'duration_ms',
+    'agent_session_id',
+    'error_message',
+    'report',
+    'permission_request'
+  ),
+  // Transport-only: TasksService.patch consumes it and accepts the checkpoint with completion.
+  'opencode_checkpoint',
+]);
 
 const EXTERNAL_TASK_CREATE_FIELDS = taskFieldSet('session_id', 'full_prompt', 'status');
 
@@ -1360,6 +1375,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   if (deployment.mode === 'ha') {
     for (const [path, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      if (!constrainedHaGateApplies(feature, config)) continue;
       safeService(path)?.hooks({ before: { all: [rejectInConstrainedHa(deployment, feature)] } });
     }
   }
@@ -3589,6 +3605,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireTaskScopedExecutorRuntimeToken()],
+      beginOpenCodeCheckpoint: [requireTaskScopedExecutorRuntimeToken()],
+      acknowledgeOpenCodeCleanup: [requireTaskScopedExecutorRuntimeToken()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch
