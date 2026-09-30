@@ -168,12 +168,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   // The caller's primary assistant: Home shows its name and emoji, and Ask starts its session.
   const {
     branch: resolvedPrimaryBranch,
-    current: primaryBranchIsCurrent,
+    ownedByCaller: primaryBranchIsOwned,
     setBranch: setPrimaryBranch,
     refresh: refreshPrimaryBranch,
   } = usePrimaryTeammate(client, user?.user_id, authGeneration);
-  // A held branch that is not the current caller's settled answer may be a previous caller's, so it is never an Ask target.
-  const primaryBranch = primaryBranchIsCurrent ? resolvedPrimaryBranch : null;
+  // A branch resolved for a previous caller is never shown or used as an Ask target.
+  const primaryBranch = primaryBranchIsOwned ? resolvedPrimaryBranch : null;
   const primaryTeammateName = primaryBranch
     ? getTeammateConfig(primaryBranch)?.displayName
     : undefined;

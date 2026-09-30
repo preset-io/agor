@@ -5,7 +5,6 @@ import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useSta
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
-import { dropLegacyLocalStorageKey } from '../../hooks/localStorageJson';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
@@ -218,8 +217,6 @@ export const HomePage = memo(function HomePage({
     userStorageKey(userId, 'home-only-mine'),
     false
   );
-  // The shared pre-per-user filter is never read again.
-  useEffect(() => dropLegacyLocalStorageKey('agor:home-only-mine'), []);
   const [openedFailures, setOpenedFailures] = useLocalStorage<Record<string, number>>(
     userStorageKey(userId, 'home-opened-failures'),
     {}

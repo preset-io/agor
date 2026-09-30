@@ -1,6 +1,6 @@
 import type { Board } from '@agor-live/client';
 import { useCallback, useEffect, useMemo } from 'react';
-import { dropLegacyLocalStorageKey } from './localStorageJson';
+import { takeLegacyLocalStorageJson } from './localStorageJson';
 import { useLocalStorage } from './useLocalStorage';
 import { userStorageKey } from './useUserLocalStorage';
 
@@ -28,8 +28,14 @@ export function useRecentBoards(
     recentBoardsStorageKey(userId),
     NO_RECENT
   );
-  // The shared pre-per-user history is never read again.
-  useEffect(() => dropLegacyLocalStorageKey('agor:recentBoardIds'), []);
+  // The shared pre-per-user history moves once to the first signed-in user without their own.
+  useEffect(() => {
+    if (!userId) return;
+    const legacy = takeLegacyLocalStorageJson<unknown>('agor:recentBoardIds');
+    if (!Array.isArray(legacy)) return;
+    const ids = legacy.filter((id): id is string => typeof id === 'string').slice(0, MAX_RECENT);
+    if (ids.length) setRecentIds((prev) => (prev.length ? prev : ids));
+  }, [userId, setRecentIds]);
 
   const trackBoardVisit = useCallback(
     (boardId: string) => {

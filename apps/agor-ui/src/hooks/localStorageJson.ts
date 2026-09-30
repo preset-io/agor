@@ -24,15 +24,17 @@ export function writeLocalStorageJson<T>(key: string, value: T): void {
   }
 }
 
-const droppedLegacyKeys = new Set<string>();
+const takenLegacyKeys = new Set<string>();
 
-/** Removes a retired key, at most once per page load; storage errors are ignored. */
-export function dropLegacyLocalStorageKey(key: string): void {
-  if (typeof window === 'undefined' || droppedLegacyKeys.has(key)) return;
-  droppedLegacyKeys.add(key);
+/** Reads and removes a retired key, at most once per page load; storage errors read as absent. */
+export function takeLegacyLocalStorageJson<T>(key: string): T | undefined {
+  if (typeof window === 'undefined' || takenLegacyKeys.has(key)) return undefined;
+  takenLegacyKeys.add(key);
   try {
+    const item = window.localStorage.getItem(key);
     window.localStorage.removeItem(key);
+    return item ? (JSON.parse(item) as T) : undefined;
   } catch {
-    // Blocked storage has nothing to clean up.
+    return undefined;
   }
 }

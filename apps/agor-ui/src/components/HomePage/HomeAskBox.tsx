@@ -78,6 +78,10 @@ function AskTargetSelect({
     userId,
     shared.map((b) => b.branch_id)
   );
+  const emptyText =
+    sharingFailed + accessFailed > 0
+      ? "Couldn't check access for some teammates. Reopen to try again"
+      : 'No teammates you can ask';
   // Reads start on the first open; a later open retries the ones that failed.
   const openList = () => {
     setListed(true);
@@ -129,7 +133,7 @@ function AskTargetSelect({
             )}
           />
           {listed && options.length === 0 && (
-            <Typography.Text type="secondary">No teammates you can ask</Typography.Text>
+            <Typography.Text type="secondary">{emptyText}</Typography.Text>
           )}
         </HomeSheet>
       </>
@@ -145,7 +149,7 @@ function AskTargetSelect({
       options={options}
       optionFilterProp="searchText"
       popupMatchSelectWidth={false}
-      notFoundContent="No teammates you can ask"
+      notFoundContent={emptyText}
       onOpenChange={(open) => open && openList()}
       onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
       labelRender={() => label}
