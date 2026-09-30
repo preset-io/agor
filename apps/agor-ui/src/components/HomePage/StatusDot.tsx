@@ -12,6 +12,9 @@ const STATUS_LABELS: Record<string, string> = {
   completed: 'Completed',
 };
 
+export const getSessionStatusLabel = (status: string) =>
+  STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
+
 const STATUS_ANIMATION: Record<string, string> = {
   running: 'status-dot-run',
   awaiting_permission: 'status-dot-wait',
@@ -39,7 +42,7 @@ export const StatusDot: React.FC<{ status: string; size?: number }> = ({ status,
   })();
 
   const cls = STATUS_ANIMATION[status] ?? '';
-  const label = STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
+  const label = getSessionStatusLabel(status);
   return (
     <Tooltip title={label}>
       <span

@@ -1,6 +1,6 @@
 # Architecture (cheat sheet for agents)
 
-> User-facing reference: [`apps/agor-docs/pages/guide/architecture.mdx`](../../apps/agor-docs/pages/guide/architecture.mdx).
+> User-facing reference: [`apps/agor-docs/content/guide/architecture.mdx`](../../apps/agor-docs/content/guide/architecture.mdx).
 > Source of truth = the code. This file is a fast orientation map.
 
 ## Mental model

@@ -1,5 +1,5 @@
 /**
- * `repos/:id/import-agor-yml` as registered, against PostgreSQL row-level
+ * HTTP and MCP environment import as registered, against PostgreSQL row-level
  * security.
  *
  * The route is classified `identity-only`: tenant identity and write admission
@@ -48,7 +48,11 @@ import type {
   User,
   UserRole,
 } from '@agor/core/types';
+import type { McpServer } from '@modelcontextprotocol/server';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { McpContext } from './mcp/server.js';
+import { tenantScopedToolProxy } from './mcp/tenant-scope.js';
+import { registerRepoTools } from './mcp/tools/repos.js';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
 import { ReposService } from './services/repos.js';
 
@@ -94,9 +98,9 @@ interface TenantFixture {
   branch: Branch;
 }
 
-describe.skipIf(!postgresUrl || !usesPostgresSchema)(
-  'repos/:id/import-agor-yml registration (PostgreSQL/RLS)',
-  () => {
+describe.skipIf(!postgresUrl || !usesPostgresSchema).each(['HTTP', 'MCP'] as const)(
+  'environment import via %s (PostgreSQL/RLS)',
+  (transport) => {
     let rawDb: Database;
     let db: ReturnType<typeof createTenantScopedDatabaseProxy>;
     let app: Application;
@@ -141,6 +145,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           created_by: admin.user_id,
           name: 'agor-yml',
           ref: 'main',
+          environment_variant: 'dev',
+          start_command: 'echo existing branch snapshot',
           branch_unique_id: Math.floor(Math.random() * 1_000_000),
           path: `/tmp/${generateId()}`,
         });
@@ -164,8 +170,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       } as AuthenticatedParams;
     }
 
-    /** Through the real route registration, as the UI calls it. */
-    function importViaRoute(caller: User, tenantId: TenantID, repoId: string, branchId: string) {
+    /** Through the real HTTP route or authenticated MCP registration. */
+    function importViaTransport(
+      caller: User,
+      tenantId: TenantID,
+      repoId: string,
+      branchId: string
+    ) {
+      if (transport === 'MCP') {
+        type Handler = (args: { repoId: string; branchId: string }) => Promise<{
+          content: Array<{ type: string; text: string }>;
+        }>;
+        let handler: Handler | undefined;
+        const server = {
+          registerTool(name: string, _config: unknown, callback: Handler) {
+            if (name === 'agor_repos_import_environment') handler = callback;
+          },
+        } as unknown as McpServer;
+        const ctx = {
+          app,
+          db,
+          baseServiceParams: { ...callerParams(caller, tenantId), provider: 'mcp' },
+        } as McpContext;
+        registerRepoTools(tenantScopedToolProxy(server, ctx), ctx);
+        if (!handler) throw new Error('Environment import tool missing');
+        return handler({ repoId, branchId }).then((result) => JSON.parse(result.content[0].text));
+      }
       return app.service('/repos/:id/import-agor-yml').create({ branch_id: branchId }, {
         ...callerParams(caller, tenantId),
         route: { id: repoId },
@@ -296,7 +326,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         }
       );
 
-      const updated = await importViaRoute(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id);
+      const updated = await importViaTransport(
+        a.admin,
+        a.tenantId,
+        a.repo.repo_id,
+        a.branch.branch_id
+      );
 
       expect(spawnState).toEqual([{ scope: undefined, tenant: a.tenantId }]);
       expect(tokenTenants).toEqual([a.tenantId]);
@@ -306,6 +341,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         template_overrides: { port: 5000 },
       });
       expect(await readEnvironment(b.tenantId, b.repo.repo_id)).toEqual(EXISTING);
+      const branch = await runWithTenantDatabaseScope(db, a.tenantId, () =>
+        new BranchRepository(db).findById(a.branch.branch_id)
+      );
+      expect(branch).toMatchObject({
+        environment_variant: 'dev',
+        start_command: 'echo existing branch snapshot',
+      });
     });
 
     it("cannot read or write another tenant's repository by id", async () => {
@@ -318,11 +360,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       // Tenant A admin names tenant B's real repo and branch ids.
       await expect(
-        importViaRoute(a.admin, a.tenantId, b.repo.repo_id, b.branch.branch_id)
+        importViaTransport(a.admin, a.tenantId, b.repo.repo_id, b.branch.branch_id)
       ).rejects.toMatchObject({ name: 'NotFound' });
       // Tenant A's own repo, tenant B's branch: RLS hides the branch.
       await expect(
-        importViaRoute(a.admin, a.tenantId, a.repo.repo_id, b.branch.branch_id)
+        importViaTransport(a.admin, a.tenantId, a.repo.repo_id, b.branch.branch_id)
       ).rejects.toMatchObject({ name: 'NotFound' });
 
       expect(executor.requestExecutor).not.toHaveBeenCalled();
@@ -337,9 +379,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         success: true,
         data: { environment: IMPORTED },
       });
-      // Route role hook: a member never reaches the service.
+      // HTTP refuses at the role hook; MCP delegates to the service's admin check.
       await expect(
-        importViaRoute(a.member, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+        importViaTransport(a.member, a.tenantId, a.repo.repo_id, a.branch.branch_id)
       ).rejects.toMatchObject({ name: 'Forbidden' });
       // The service's own admin check, for callers that bypass the route. The
       // branch owner demoted below admin would pass the workspace check by
@@ -353,11 +395,47 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // An admin of the same tenant with no grant on the branch's private board
       // fails the pre-spawn workspace check.
       await expect(
-        importViaRoute(a.outsiderAdmin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+        importViaTransport(a.outsiderAdmin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
       ).rejects.toThrow(/branch view permission required/);
 
       expect(executor.requestExecutor).not.toHaveBeenCalled();
       expect(tokenTenants).toEqual([]);
+      expect(await readEnvironment(a.tenantId, a.repo.repo_id)).toEqual(EXISTING);
+    });
+
+    it('refuses a source branch from another repository in the same tenant', async () => {
+      const a = await seedTenant('a');
+      const other = await runWithTenantDatabaseScope(db, a.tenantId, () =>
+        new RepoRepository(db).create({
+          slug: `other-${generateId()}`,
+          repo_type: 'remote',
+          remote_url: 'https://example.invalid/other.git',
+          local_path: `/tmp/${generateId()}`,
+        })
+      );
+      await expect(
+        importViaTransport(a.admin, a.tenantId, other.repo_id, a.branch.branch_id)
+      ).rejects.toThrow('does not belong to repo');
+      expect(executor.requestExecutor).not.toHaveBeenCalled();
+      expect(await readEnvironment(a.tenantId, a.repo.repo_id)).toEqual(EXISTING);
+    });
+
+    it('preserves imported configuration when the source file cannot be read or has no environment', async () => {
+      const a = await seedTenant('a');
+      executor.requestExecutor.mockResolvedValueOnce({
+        success: false,
+        error: { message: 'Invalid YAML' },
+      });
+      await expect(
+        importViaTransport(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+      ).rejects.toThrow('Invalid YAML');
+      executor.requestExecutor.mockResolvedValueOnce({
+        success: true,
+        data: { environment: null },
+      });
+      await expect(
+        importViaTransport(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+      ).rejects.toThrow('not found or has no environment configuration');
       expect(await readEnvironment(a.tenantId, a.repo.repo_id)).toEqual(EXISTING);
     });
 
@@ -373,7 +451,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       try {
         await expect(
-          importViaRoute(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+          importViaTransport(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
         ).rejects.toThrow(/write-gated/i);
       } finally {
         await releaseTenantWriteGate(rawDb, a.tenantId, { generation });
@@ -384,7 +462,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('re-checks the tenant write gate after the spawn', async () => {
       const a = await seedTenant('a');
-      let generation: number | undefined;
+      let generation: Awaited<ReturnType<typeof acquireTenantWriteGate>>['generation'] | undefined;
       executor.requestExecutor.mockImplementation(async () => {
         // A freeze that begins while the executor is running.
         ({ generation } = await acquireTenantWriteGate(rawDb, a.tenantId, {
@@ -395,7 +473,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       try {
         await expect(
-          importViaRoute(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
+          importViaTransport(a.admin, a.tenantId, a.repo.repo_id, a.branch.branch_id)
         ).rejects.toThrow(/write-gated/i);
       } finally {
         if (generation !== undefined) {

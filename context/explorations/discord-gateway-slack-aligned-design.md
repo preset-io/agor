@@ -314,8 +314,9 @@ never included in history context, and never trusted from inbound metadata.
   reject malformed or non-monotonic provider IDs.
 - REST history is paginated, bounded, and rate-limit aware. Provider limits are
   lower bounds on safety, not permission to make an unbounded transcript read.
-- DMs are not supported at launch. Adding DMs requires a separate authorization,
-  identity, history, and privacy decision.
+- Opt-in 1:1 DMs use live server membership and explicit author allowlists. See
+  the [direct-message contract](../../apps/agor-docs/content/guide/message-gateway.mdx#direct-messages)
+  for session visibility, routing, and history behavior.
 - Public thread visibility and bot permissions are checked for the configured
   parent and the derived thread. A successful token probe is not proof that
   every future thread delivery will succeed.

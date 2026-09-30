@@ -34,6 +34,75 @@ const oauthButton = (name = 'Start OAuth Flow') => buttonLabeled(name);
 describe('MCPServerFormFields OAuth start', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('warns about credentials when editing immutable shared ownership', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form}>
+          <MCPServerFormFields
+            mode="edit"
+            savedOwnership="shared"
+            transport="http"
+            authType="bearer"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.getByText('Shared configuration can share credentials')).toBeVisible();
+    expect(screen.queryByText('Installation ownership')).not.toBeInTheDocument();
+  });
+
+  it.each(['create', 'edit'] as const)('explains private/global reach in %s mode', (mode) => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ ownership: 'private', scope: 'global' }}>
+          <MCPServerFormFields
+            mode={mode}
+            savedOwnership="private"
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="admin:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(
+      screen.getByText(
+        "Private + Global applies only to the owner's sessions, not everyone in the workspace."
+      )
+    ).toBeVisible();
+  });
+
+  it('does not mention Global when the offered scope is session-only', () => {
+    const Harness = () => {
+      const [form] = Form.useForm();
+      return (
+        <Form form={form} initialValues={{ ownership: 'private', scope: 'session' }}>
+          <MCPServerFormFields
+            mode="create"
+            offeredScopes={['session']}
+            transport="http"
+            form={form}
+            client={null}
+            authorityKey="member:1"
+            onPrepareOAuthStart={vi.fn()}
+          />
+        </Form>
+      );
+    };
+    render(<Harness />);
+    expect(screen.queryByText(/Private \+ Global/)).toBeNull();
+  });
+
   it('shows truncation metadata in the discovery result, not the OAuth setup response', () => {
     const Harness = () => {
       const [form] = Form.useForm();

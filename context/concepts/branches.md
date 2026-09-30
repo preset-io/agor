@@ -1,6 +1,6 @@
 # Branches (cheat sheet for agents)
 
-> User-facing reference: [`apps/agor-docs/pages/guide/branches.mdx`](../../apps/agor-docs/pages/guide/branches.mdx).
+> User-facing reference: [`apps/agor-docs/content/guide/branches.mdx`](../../apps/agor-docs/content/guide/branches.mdx).
 
 ## The shape
 

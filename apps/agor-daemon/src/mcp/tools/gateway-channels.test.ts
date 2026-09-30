@@ -11,6 +11,7 @@ import {
 } from '@agor/core/db';
 import {
   buildSlackManifest,
+  DiscordDirectMessageError,
   getConnector,
   requiredBotEvents,
   requiredBotScopes,
@@ -1265,6 +1266,7 @@ describe('agor_gateway_channels MCP tools', () => {
 
     for (const target of [
       'channel:C123',
+      'user:444444444444444444',
       '#project-updates',
       'channel_name:project-updates',
       'user@example.com',
@@ -1376,6 +1378,41 @@ describe('gateway session branch binding (MCP)', () => {
       payload.channels.map((c: { gateway_channel_id: string }) => c.gateway_channel_id)
     ).toEqual(['chan-b1', 'chan-b2']);
     expect(sessionSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('advertises user targets only with DMs enabled (%s)', async (enabled) => {
+    spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+    vi.spyOn(GatewayChannelRepository.prototype, 'findAll').mockResolvedValue([
+      {
+        ...outboundChannelBranch1,
+        channel_type: 'discord',
+        config: { ...outboundChannelBranch1.config, direct_messages_enabled: enabled },
+      },
+    ] as never);
+    const tools = await captureTools('admin');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    expect(JSON.parse(result.content[0].text).channels[0].accepted_target_formats).toEqual(
+      enabled ? ['channel:<snowflake>', 'user:<snowflake>'] : ['channel:<snowflake>']
+    );
+  });
+
+  it.each([
+    'discord_direct_messages_disabled',
+    'discord_dm_target_not_member',
+    'discord_dm_unreachable',
+  ] as const)('passes %s through the MCP handler', async (code) => {
+    const error = new DiscordDirectMessageError(code, 403);
+    const emitMessage = vi.fn().mockRejectedValue(error);
+    const tools = await captureTools('admin', makeFakeApp({ gateway: { emitMessage } }));
+    await expect(
+      tools.agor_gateway_emit_message.handler({
+        gatewayChannelId: 'chan-1',
+        target: 'user:444444444444444444',
+        message: 'hello',
+      })
+    ).rejects.toBe(error);
+    expect(emitMessage).toHaveBeenCalledOnce();
   });
 
   it('hints when no outbound channel targets the session branch', async () => {
@@ -2962,6 +2999,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
         rate_limit_max_total_delay_ms: 10000,
       },
       files: false,
+      direct_messages_enabled: false,
       agent_tools: { channel_history: false },
       outbound_enabled: true,
       default_outbound_target: 'channel:333333333333333333',
@@ -3046,6 +3084,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
 
     const result = await tools.agor_gateway_discord_setup.handler({
       ...base,
+      directMessages: true,
       catchUp: {
         maxPages: 10,
         maxMessages: 500,
@@ -3056,6 +3095,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       },
     });
     const payload = JSON.parse(result.content[0].text);
+    expect(payload.config_hint.direct_messages_enabled).toBe(true);
     expect(payload.config_hint.catch_up).toEqual({
       max_pages: 10,
       max_messages: 500,
@@ -3548,8 +3588,10 @@ describe('Discord channel history agent tool (MCP)', () => {
       allowedUserIds: ['444444444444444444'],
       agorUserId: 'user-1',
       channelHistory: true,
+      directMessages: true,
     });
     const payload = JSON.parse(result.content[0].text);
+    expect(payload.setup_artifact.draft.config.direct_messages_enabled).toBe(true);
     expect(JSON.stringify(payload)).toContain('"agent_tools":{"channel_history":true}');
   });
 });

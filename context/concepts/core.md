@@ -21,7 +21,7 @@ A 2D canvas where branches are arranged as cards. Boards have **zones** (rectang
 
 **Branches are the primary card on a board, not Sessions.** Sessions appear _inside_ a branch card as a genealogy tree.
 
-User-facing reference: [`apps/agor-docs/pages/guide/boards.mdx`](../../apps/agor-docs/pages/guide/boards.mdx).
+User-facing reference: [`apps/agor-docs/content/guide/boards.mdx`](../../apps/agor-docs/content/guide/boards.mdx).
 
 ## 3. Session — agent conversations with genealogy
 
@@ -34,7 +34,7 @@ Two relationship types:
 
 Status: `idle | running | completed | failed`. Tasks within a session can queue (see [`task-queueing.md`](task-queueing.md)).
 
-User-facing reference: [`apps/agor-docs/pages/guide/sessions.mdx`](../../apps/agor-docs/pages/guide/sessions.mdx).
+User-facing reference: [`apps/agor-docs/content/guide/sessions.mdx`](../../apps/agor-docs/content/guide/sessions.mdx).
 
 ## 4. Task — the queueable unit of work
 

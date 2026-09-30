@@ -236,3 +236,12 @@
   flex: 1;
   min-height: 0;
 }
+
+/* Board panel tabs scroll (wheel/touch, with Tabs' edge fade) instead of opening
+   the "…" overflow menu, which Tabs cannot disable. Active tab gets real weight. */
+.agor-panel-tabs > .ant-tabs-nav .ant-tabs-nav-operations {
+  display: none;
+}
+.agor-panel-tabs > .ant-tabs-nav .ant-tabs-tab-active .ant-tabs-tab-btn {
+  font-weight: var(--ant-font-weight-strong);
+}

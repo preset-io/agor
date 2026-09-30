@@ -54,10 +54,16 @@ export class NoopAnalyticsLogger implements AnalyticsLogger {
 export class AnalyticsPackageLogger implements AnalyticsLogger {
   private readonly client: AnalyticsInstance;
   private readonly excludeEvents: readonly string[];
+  private readonly deploymentId: string | undefined;
 
-  constructor(client: AnalyticsInstance, excludeEvents: readonly string[] = []) {
+  constructor(
+    client: AnalyticsInstance,
+    excludeEvents: readonly string[] = [],
+    deploymentId?: string
+  ) {
     this.client = client;
     this.excludeEvents = excludeEvents;
+    this.deploymentId = deploymentId;
   }
 
   isEnabled(): boolean {
@@ -73,19 +79,21 @@ export class AnalyticsPackageLogger implements AnalyticsLogger {
 
     const trackOptions: Record<string, unknown> = {};
     const tenantId = getCurrentTenantId();
-    if (options.context || tenantId) {
+    if (options.context || tenantId || this.deploymentId) {
       // Strip reserved and poison keys before the analytics package can merge options.
       const callerContext = Object.fromEntries(
         Object.entries(options.context ?? {}).filter(
           ([key]) =>
             isSafeAnalyticsKey(key) &&
             key !== 'tenant_id' &&
+            key !== 'deployment_id' &&
             !OPERATOR_OWNED_ANALYTICS_CONTEXT_KEYS.includes(key)
         )
       );
       trackOptions.context = {
         ...callerContext,
         ...(tenantId ? { tenant_id: tenantId } : {}),
+        ...(this.deploymentId ? { deployment_id: this.deploymentId } : {}),
       };
     }
     if (options.userId) trackOptions.userId = options.userId;
@@ -113,13 +121,18 @@ export async function createAnalyticsLogger(
   const resolved = resolveAnalyticsConfig(config);
   if (resolved.enabled !== true) return new NoopAnalyticsLogger();
 
+  // Deployment identity is process configuration, never caller context.
+  // Snapshot before plugin initialization yields, just like operator metadata.
+  const deploymentId = 'daemon' in config ? config.daemon?.deployment_id : undefined;
   const plugins = await resolveAnalyticsPlugins(resolved);
   const client = Analytics({
     ...(resolved.client ?? {}),
     plugins,
   });
 
-  return new AnalyticsPackageLogger(client, resolved.filters?.exclude_events ?? []);
+  // Tenant identity is captured synchronously at track time,
+  // before the analytics package or HTTP transport can queue the event.
+  return new AnalyticsPackageLogger(client, resolved.filters?.exclude_events ?? [], deploymentId);
 }
 
 let globalAnalyticsLogger: AnalyticsLogger = new NoopAnalyticsLogger();

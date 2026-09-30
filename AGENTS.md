@@ -11,7 +11,7 @@ Manage git branches, track AI conversations, visualize work on spatial boards, a
 This file is intentionally high-level. There are three places to look:
 
 1. **The code** — always the ground truth. Open `packages/core/src/types/`, the relevant service in `apps/agor-daemon/src/services/`, or the schema in `packages/core/src/db/schema.{sqlite,postgres}.ts` before assuming behavior.
-2. **`apps/agor-docs/pages/guide/`** — user-facing reference pages (also published at [agor.live](https://agor.live)). This is the canonical source for anything users need to configure or understand.
+2. **`apps/agor-docs/content/guide/`** — user-facing reference pages (also published at [agor.live](https://agor.live)). This is the canonical source for anything users need to configure or understand.
 3. **`context/`** — small set of agent-oriented cheat sheets and design docs (file pointers, gotchas, security contracts). Start with [`context/README.md`](context/README.md).
 
 **Rule of thumb:** If a topic has a guide page, read the guide. `context/` is for orientation, not exposition.
@@ -103,16 +103,17 @@ Terms you'll see across the codebase, UI, and docs:
 | Tasked with...                   | Open this                                                                                                                                                                                                                                               |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Mental model                     | [`context/concepts/core.md`](context/concepts/core.md)                                                                                                                                                                                                  |
-| System shape                     | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)                                                                                   |
-| Boards / branches                | [`context/concepts/branches.md`](context/concepts/branches.md) → [`apps/agor-docs/pages/guide/branches.mdx`](apps/agor-docs/pages/guide/branches.mdx) and [`boards.mdx`](apps/agor-docs/pages/guide/boards.mdx)                                         |
-| Sessions / fork-spawn            | [`apps/agor-docs/pages/guide/sessions.mdx`](apps/agor-docs/pages/guide/sessions.mdx)                                                                                                                                                                    |
+| System shape                     | [`context/concepts/architecture.md`](context/concepts/architecture.md) → [`apps/agor-docs/content/guide/architecture.mdx`](apps/agor-docs/content/guide/architecture.mdx)                                                                               |
+| Boards / branches                | [`context/concepts/branches.md`](context/concepts/branches.md) → [`apps/agor-docs/content/guide/branches.mdx`](apps/agor-docs/content/guide/branches.mdx) and [`boards.mdx`](apps/agor-docs/content/guide/boards.mdx)                                   |
+| Managed environments             | [`apps/agor-docs/content/guide/environment-configuration.mdx`](apps/agor-docs/content/guide/environment-configuration.mdx) → [Railway reference](.railway/README.md)                                                                                    |
+| Sessions / fork-spawn            | [`apps/agor-docs/content/guide/sessions.mdx`](apps/agor-docs/content/guide/sessions.mdx)                                                                                                                                                                |
 | Tasks / queue                    | [`context/concepts/task-queueing.md`](context/concepts/task-queueing.md)                                                                                                                                                                                |
 | Task runtime state               | [`context/concepts/task-runtime-state.md`](context/concepts/task-runtime-state.md) — read before changing lifecycle, heartbeat, pulse/watchdog, Stop, containment, or promptability behavior                                                            |
-| RBAC / Unix isolation            | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/pages/guide/multiplayer-unix-isolation.mdx)                                     |
+| RBAC / Unix isolation            | [`context/guides/rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md) → [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx)                                 |
 | Multi-tenancy / tenant isolation | [`context/concepts/multitenancy.md`](context/concepts/multitenancy.md)                                                                                                                                                                                  |
-| MCP server / tools               | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/pages/guide/internal-mcp.mdx`](apps/agor-docs/pages/guide/internal-mcp.mdx)                                                                         |
-| Real-time UI                     | [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx) (Real-time Data Sync)                                                                                                                                      |
-| Multiplayer / presence           | [`apps/agor-docs/pages/guide/multiplayer-social.mdx`](apps/agor-docs/pages/guide/multiplayer-social.mdx)                                                                                                                                                |
+| MCP server / tools               | [`context/concepts/mcp-session-tools.md`](context/concepts/mcp-session-tools.md) → [`apps/agor-docs/content/guide/internal-mcp.mdx`](apps/agor-docs/content/guide/internal-mcp.mdx)                                                                     |
+| Real-time UI                     | [`apps/agor-docs/content/guide/architecture.mdx`](apps/agor-docs/content/guide/architecture.mdx) (Real-time Data Sync)                                                                                                                                  |
+| Multiplayer / presence           | [`apps/agor-docs/content/guide/multiplayer-social.mdx`](apps/agor-docs/content/guide/multiplayer-social.mdx)                                                                                                                                            |
 | Adding a service                 | [`context/guides/extending-feathers-services.md`](context/guides/extending-feathers-services.md)                                                                                                                                                        |
 | Adding a migration               | [`context/guides/creating-database-migrations.md`](context/guides/creating-database-migrations.md)                                                                                                                                                      |
 | Frontend UI / design system      | [`context/guidelines/frontend.md`](context/guidelines/frontend.md)                                                                                                                                                                                      |
@@ -187,7 +188,7 @@ Terms you'll see across the codebase, UI, and docs:
 
 ### Adding a New Feature
 
-1. Read the relevant guide page in `apps/agor-docs/pages/guide/` and any matching `context/` cheat sheet (see "Where to look first" above)
+1. Read the relevant guide page in `apps/agor-docs/content/guide/` and any matching `context/` cheat sheet (see "Where to look first" above)
 2. Check existing types in `packages/core/src/types/` — never redefine canonical types
 3. Update / add types in `packages/core/src/types/`
 4. Add repository layer in `packages/core/src/db/repositories/`
@@ -587,7 +588,7 @@ cd apps/agor-daemon && pnpm dev
 - `packages/core/src/types/` - Canonical type definitions
 - `packages/core/src/db/schema.{sqlite,postgres}.ts` - Database schemas
 - `apps/agor-daemon/src/services/` - FeathersJS services
-- `apps/agor-docs/pages/guide/` - User-facing reference docs (canonical)
+- `apps/agor-docs/content/guide/` - User-facing reference docs (canonical)
 - `context/` - Agent-oriented cheat sheets and active design docs
 
 ---
@@ -603,4 +604,4 @@ cd apps/agor-daemon && pnpm dev
 ---
 
 _For product vision: [`README.md`](README.md)_
-_For architecture: [`context/concepts/architecture.md`](context/concepts/architecture.md) and [`apps/agor-docs/pages/guide/architecture.mdx`](apps/agor-docs/pages/guide/architecture.mdx)_
+_For architecture: [`context/concepts/architecture.md`](context/concepts/architecture.md) and [`apps/agor-docs/content/guide/architecture.mdx`](apps/agor-docs/content/guide/architecture.mdx)_

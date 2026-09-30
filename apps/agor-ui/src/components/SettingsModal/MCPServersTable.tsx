@@ -55,6 +55,7 @@ import {
   allowedMcpScopes,
   allowedMcpTransports,
   canAddMcpServer,
+  canAddSharedMcpServer,
   canDeleteMcpServer,
   canEditMcpServer,
   explainAddRestriction,
@@ -204,6 +205,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   const transport = chosenTransport ?? offeredTransports[0];
   const [authType, setAuthType] = useState<'none' | 'bearer' | 'jwt' | 'oauth'>('none');
   const [createdServerId, setCreatedServerId] = useState<string | null>(null);
+  const [createdServerOwnership, setCreatedServerOwnership] = useState<'private' | 'shared'>();
   const createdConfigVersion = useRef(1);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -258,7 +260,14 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   }, [mcpServerById, viewingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
+    if (!currentUser?.user_id) throw new Error('Authentication required');
+    if (values.ownership === 'shared' && !canAddSharedMcpServer(capability)) {
+      throw new Error(
+        'You can no longer create shared MCP servers. Choose Private or ask an admin.'
+      );
+    }
     const data: CreateMCPServerInput = {
+      owner_user_id: values.ownership === 'shared' ? null : currentUser.user_id,
       name: values.name as string,
       display_name: values.display_name as string | undefined,
       description: values.description as string | undefined,
@@ -310,11 +319,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         createdConfigVersion.current = (result as MCPServer).config_version ?? 1;
+        setCreatedServerOwnership((result as MCPServer).owner_user_id ? 'private' : 'shared');
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
-      const { name: _name, ...updates } = data;
+      const { name: _name, owner_user_id: _owner, ...updates } = data;
       if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       const updated = await client.service('mcp-servers').patch(createdServerId, {
         ...updates,
@@ -346,6 +356,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
     setChosenTransport(null);
     setAuthType('none');
     setCreatedServerId(null);
+    setCreatedServerOwnership(undefined);
     bumpFormRevision();
   };
 
@@ -744,10 +755,12 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         >
           <MCPServerFormFields
             mode={createdServerId ? 'edit' : 'create'}
+            savedOwnership={createdServerOwnership}
             transport={transport}
             onTransportChange={setChosenTransport}
             offeredTransports={offeredTransports}
             offeredScopes={offeredScopes}
+            allowSharedOwnership={canAddSharedMcpServer(capability)}
             authType={authType}
             onAuthTypeChange={setAuthType}
             form={createForm}
