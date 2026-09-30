@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1113,27 +1113,71 @@ describe('managed executor git/fs commands', () => {
   });
 
   it('realigns an origin from daemon-authoritative inputs without a daemon client', async () => {
-    mocks.ensureGitRemoteUrl.mockResolvedValueOnce({ changed: true });
-    const result = await handleGitRepoRealignOrigin(
-      {
-        command: 'git.repo.realign-origin',
-        params: {
-          repoId,
-          repoPath: '/managed/repo',
-          remoteUrl: 'https://example.com/org/repo.git',
-          repoSlug: 'org/repo',
+    const reposRoot = await mkdtemp(join(tmpdir(), 'agor-realign-root-'));
+    try {
+      const repoPath = join(reposRoot, 'org', 'repo');
+      await mkdir(repoPath, { recursive: true });
+      mocks.ensureGitRemoteUrl.mockResolvedValueOnce({ changed: true });
+      const result = await handleGitRepoRealignOrigin(
+        {
+          command: 'git.repo.realign-origin',
+          params: {
+            repoId,
+            repoPath,
+            remoteUrl: 'https://example.com/org/repo.git',
+            repoSlug: 'org/repo',
+            reposRoot,
+          },
         },
-      },
-      {}
-    );
+        {}
+      );
 
-    expect(result).toMatchObject({ success: true, data: { repoId, changed: true } });
-    expect(mocks.ensureGitRemoteUrl).toHaveBeenCalledWith(
-      '/managed/repo',
-      'origin',
-      'https://example.com/org/repo.git'
-    );
-    expect(mocks.createExecutorClient).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ success: true, data: { repoId, changed: true } });
+      expect(mocks.ensureGitRemoteUrl).toHaveBeenCalledWith(
+        await realpath(repoPath),
+        'origin',
+        'https://example.com/org/repo.git'
+      );
+      expect(mocks.createExecutorClient).not.toHaveBeenCalled();
+    } finally {
+      await rm(reposRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to realign another tenant's repository or branch checkout", async () => {
+    const tenantsBase = await mkdtemp(join(tmpdir(), 'agor-realign-tenants-'));
+    try {
+      const reposRoot = join(tenantsBase, 'attacker', 'repos');
+      const victimRepo = join(tenantsBase, 'victim', 'repos', 'acme', 'private');
+      const victimCheckout = join(tenantsBase, 'victim', 'worktrees', 'acme', 'private', 'main');
+      await mkdir(join(reposRoot, 'attacker'), { recursive: true });
+      await mkdir(victimRepo, { recursive: true });
+      await mkdir(victimCheckout, { recursive: true });
+      await symlink(victimRepo, join(reposRoot, 'attacker', 'alias'));
+
+      for (const repoPath of [victimRepo, victimCheckout, join(reposRoot, 'attacker', 'alias')]) {
+        const result = await handleGitRepoRealignOrigin(
+          {
+            command: 'git.repo.realign-origin',
+            params: {
+              repoId,
+              repoPath,
+              remoteUrl: 'https://attacker.example/drop.git',
+              repoSlug: 'attacker/copy',
+              reposRoot,
+            },
+          },
+          {}
+        );
+        expect(result).toMatchObject({
+          success: false,
+          error: { code: 'GIT_REPO_REALIGN_ORIGIN_FAILED' },
+        });
+      }
+      expect(mocks.ensureGitRemoteUrl).not.toHaveBeenCalled();
+    } finally {
+      await rm(tenantsBase, { recursive: true, force: true });
+    }
   });
 
   it('paginates self-hosted reconciliation and dry-run does not mutate configs', async () => {

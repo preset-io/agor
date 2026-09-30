@@ -261,6 +261,21 @@ export function assertSafeGitRemoteUrl(rawUrl: string): string {
   throw new Error('Unsupported Git remote URL');
 }
 
+/**
+ * Accept only network Git transports (HTTP(S), SSH, git://, SCP syntax).
+ * Hosted tenants share one daemon filesystem, so a `file://` or path remote
+ * would let one tenant read or redirect another tenant's repositories.
+ */
+export function assertNetworkGitRemoteUrl(rawUrl: string): string {
+  const safeUrl = assertSafeGitRemoteUrl(rawUrl);
+  if (/^(?:https?|ssh|git):\/\//i.test(safeUrl)) return safeUrl;
+  // SCP syntax only; `file:///x` would otherwise parse as host `file`.
+  if (!safeUrl.includes('://') && /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:(?!:)\S+$/.test(safeUrl)) {
+    return safeUrl;
+  }
+  throw new Error('Git remote must use a network transport (HTTPS or SSH)');
+}
+
 /** True when an HTTP(S) git URL embeds URL userinfo. */
 export function gitUrlHasUserinfo(rawUrl: string): boolean {
   return httpUrlHasUserinfo(rawUrl);
