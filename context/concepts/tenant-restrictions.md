@@ -88,6 +88,7 @@ not a guard for already-admitted work, stale tokens, sockets, or agents. One
 handshake, socket packet or request shares one read across its strategy, packet
 and hook checks; the share never crosses requests and never outlives one 1 s tick. A database row or an intent write response does not prove connection
 draining, process containment, or current-replica freshness.
+Slack card delivery and OAuth callbacks check admission on entry only; per-dispatch Slack/OAuth freshness fencing is deferred, and provider calls already dispatched are not undone.
 
 ## CLI
 

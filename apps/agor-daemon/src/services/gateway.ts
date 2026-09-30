@@ -1773,6 +1773,8 @@ export class GatewayService {
     attempt = 0,
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    // A restricted tenant posts nothing; the untouched durable marker resumes delivery after release.
+    if (!(await isCurrentTenantRuntimeActive(this.db))) return;
     const claimRef: McpSlackRecoveryClaimRef = {};
     try {
       await this.renderMcpSlackRecoveryNotice(task, attempt, failures, claimRef);
@@ -2211,6 +2213,7 @@ export class GatewayService {
     /** The sweep pass's failure tally, when this notice is one of its items. */
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    if (!(await isCurrentTenantRuntimeActive(this.db))) return;
     const { recoveryEnabled, mode } = await this.readInTenantScope(async (db) => ({
       recoveryEnabled: await isMcpRuntimeRecoveryEnabled(db),
       mode: await getMCPEgressGatewayMode(db),
@@ -2771,6 +2774,7 @@ export class GatewayService {
      */
     failures?: Map<string, McpSlackRepairFailureTally>
   ): Promise<void> {
+    if (!(await isCurrentTenantRuntimeActive(this.db))) return;
     // One ref for the whole delivery, re-entrant calls included, because a
     // claim is held by the DELIVERY and not by a stack frame: the three
     // internal re-renders below hand it down rather than wrapping themselves,
