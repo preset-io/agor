@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
 import { App as AntApp } from 'antd';
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
@@ -21,6 +21,7 @@ export interface PrimaryAssistantSendOptions {
     boardId: string
   ) => Promise<SessionCreationResult | null>;
   buildConfig: (branch: Branch) => NewSessionConfig;
+  /** The caller's gate (disabled, config validity, form fields); also runs for a send resumed by `pick`. */
   validate?: () => Promise<boolean>;
   /** Re-resolves the primary assistant when it changes. */
   refreshKey?: unknown;
@@ -29,8 +30,10 @@ export interface PrimaryAssistantSendOptions {
 }
 
 /**
- * Send a prompt to the caller's primary assistant, in the background or opening
- * the new session. Without a primary, a send is held until `pick` supplies one.
+ * Send a prompt to the caller's primary assistant (or an explicit teammate), in
+ * the background or opening the new session. One send runs at a time. Without a
+ * primary, a send is held until `pick` supplies one. An identity change abandons
+ * any in-flight send and drops a held one.
  */
 export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const latest = useRef(options);
@@ -38,49 +41,83 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const { client, currentUser, authenticationGeneration = 0, refreshKey } = options;
   const { message } = AntApp.useApp();
   const navigation = useAppNavigation();
-  const guard = useIdentityGuardedAsync([currentUser?.user_id, authenticationGeneration]);
   const primary = usePrimaryTeammate(
     client,
     currentUser?.user_id,
     authenticationGeneration,
     refreshKey
   );
-  const [pendingSend, setPendingSend] = useState<ComposeSendMode | null>(null);
+  const runtime = useRef({ primary, message, navigation });
+  runtime.current = { primary, message, navigation };
+
+  const [pendingSend, setPendingSendState] = useState<ComposeSendMode | null>(null);
+  const pendingSendRef = useRef<ComposeSendMode | null>(null);
   const [submitting, setSubmitting] = useState<ComposeSendMode | null>(null);
+  // Refuses a second send synchronously; `submitting` only shows the first one as pending.
+  const inFlightRef = useRef(false);
 
-  const send = async (mode: ComposeSendMode, branch = primary.branch) => {
-    const opts = latest.current;
-    const create = opts.onCreateSession;
-    if (!create) return;
-    if (!branch) {
-      setPendingSend(mode);
-      return;
-    }
-    if (opts.validate && !(await opts.validate())) return;
-    const generation = opts.authenticationGeneration ?? 0;
-    setSubmitting(mode);
-    try {
-      const outcome = await guard.run(() =>
-        create(opts.buildConfig(branch), branch.board_id ?? opts.currentBoardId ?? '')
-      );
-      if (!outcome || opts.isAuthenticationGenerationCurrent?.(generation) === false) return;
-      opts.onSent?.();
-      if (mode === 'background') {
-        message.success(`Sent to ${teammateLabel(branch)} in the background`);
-      } else {
-        (opts.onOpenSession ?? navigation.goToSession)(outcome.sessionId);
-      }
-    } finally {
-      setSubmitting(null);
-    }
-  };
+  const setPendingSend = useCallback((mode: ComposeSendMode | null) => {
+    pendingSendRef.current = mode;
+    setPendingSendState(mode);
+  }, []);
 
-  const pick = (branch: Branch) => {
-    primary.setBranch(branch);
-    if (!pendingSend) return;
+  // An abandoned send never reaches its `finally`, so the identity change releases its state.
+  const guard = useIdentityGuardedAsync([currentUser?.user_id, authenticationGeneration], () => {
+    inFlightRef.current = false;
+    setSubmitting(null);
     setPendingSend(null);
-    void send(pendingSend, branch);
-  };
+  });
+
+  const send = useCallback(
+    async (mode: ComposeSendMode, explicitBranch?: Branch) => {
+      if (inFlightRef.current) return;
+      const { primary: resolved, message: toast, navigation: nav } = runtime.current;
+      if (!explicitBranch && (resolved.resolving || resolved.failed)) return;
+      // A primary that is not this caller's settled answer may be a previous caller's.
+      const branch = explicitBranch ?? (resolved.current ? resolved.branch : null);
+      if (!branch) {
+        setPendingSend(mode);
+        return;
+      }
+      inFlightRef.current = true;
+      try {
+        const opts = latest.current;
+        if (opts.validate && !(await guard.run(opts.validate))) return;
+        const create = opts.onCreateSession;
+        if (!create) return;
+        const generation = opts.authenticationGeneration ?? 0;
+        setSubmitting(mode);
+        const outcome = await guard.run(() =>
+          create(opts.buildConfig(branch), branch.board_id ?? opts.currentBoardId ?? '')
+        );
+        if (!outcome || opts.isAuthenticationGenerationCurrent?.(generation) === false) return;
+        setPendingSend(null);
+        opts.onSent?.();
+        if (mode === 'background') {
+          toast.success(`Sent to ${teammateLabel(branch)} in the background`);
+        } else {
+          (opts.onOpenSession ?? nav.goToSession)(outcome.sessionId);
+        }
+      } finally {
+        inFlightRef.current = false;
+        setSubmitting(null);
+      }
+    },
+    [guard, setPendingSend]
+  );
+
+  const pick = useCallback(
+    (branch: Branch) => {
+      runtime.current.primary.setBranch(branch);
+      const mode = pendingSendRef.current;
+      if (!mode) return;
+      setPendingSend(null);
+      void send(mode, branch);
+    },
+    [send, setPendingSend]
+  );
+
+  const clearPendingSend = useCallback(() => setPendingSend(null), [setPendingSend]);
 
   return {
     primaryBranch: primary.branch,
@@ -89,7 +126,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
     resolveFailed: primary.failed,
     retryResolve: primary.refresh,
     pendingSend,
-    clearPendingSend: () => setPendingSend(null),
+    clearPendingSend,
     submitting,
     send,
     pick,
