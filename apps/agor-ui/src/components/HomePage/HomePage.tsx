@@ -1,5 +1,5 @@
-import type { AgorClient, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
+import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, App as AntApp, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -33,7 +33,7 @@ import {
 import { patchUserPreferences } from '../../utils/userPreferences';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
-import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab, type MyWorkView } from './HomeMyWork';
+import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
 import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './HomeNeedsYou';
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
@@ -46,6 +46,9 @@ const OPENED_FAILURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
+
+const isHomeWorkView = (value: unknown): value is HomeWorkView =>
+  HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
 type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
 
@@ -189,16 +192,17 @@ export const HomePage = memo(function HomePage({
   const [needsExpanded, setNeedsExpanded] = useState(false);
   const [tab, setTab] = useState<MyWorkTab>('recent');
   // This visit's pick wins over the loaded record; keyed by user so it never crosses accounts.
-  const [viewPick, setViewPick] = useState<{ userId?: string; view: MyWorkView }>();
-  const workView: MyWorkView =
+  const [viewPick, setViewPick] = useState<{ userId?: string; view: HomeWorkView }>();
+  const savedView = currentUser?.preferences?.homeWorkView;
+  const workView: HomeWorkView =
     viewPick && viewPick.userId === userId
       ? viewPick.view
-      : currentUser?.preferences?.homeWorkView === 'board'
-        ? 'board'
-        : 'list';
+      : isHomeWorkView(savedView)
+        ? savedView
+        : HOME_WORK_VIEWS[0];
   const viewWrites = useRef(Promise.resolve());
   const changeWorkView = useCallback(
-    (view: MyWorkView) => {
+    (view: HomeWorkView) => {
       setViewPick({ userId, view });
       if (!client || !userId) return;
       // Chained so the last pick lands last; a failed write keeps the pick on this device.
