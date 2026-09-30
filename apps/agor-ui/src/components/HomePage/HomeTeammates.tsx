@@ -13,6 +13,7 @@ import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { getTemplateBySourceBranch } from '../../utils/teammateTemplates';
 import { HomePressable } from './HomeRow';
 import { HomeCard, HomeLink, HomeSection, HomeSkeleton } from './HomeSection';
+import { homeDivider } from './homeLayout';
 
 const RAIL_SIZE = 3;
 
@@ -226,7 +227,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
           {shown.map((branch, index) => (
             <div
               key={branch.branch_id}
-              style={index ? { borderTop: `1px solid ${token.colorSplit}` } : undefined}
+              style={index ? { borderTop: homeDivider(token) } : undefined}
             >
               <TeammateCard
                 branch={branch}

@@ -34,7 +34,7 @@ import {
   HomeSkeleton,
   useHomeCompact,
 } from './HomeSection';
-import { HOME_ROW_LEAD, homeGroupIndent, homeNestedIndent } from './homeLayout';
+import { HOME_ROW_LEAD, homeDivider, homeGroupIndent, homeNestedIndent } from './homeLayout';
 
 export const MY_WORK_PAGE = 20;
 
@@ -252,7 +252,7 @@ export const HomeMyWork = memo(function HomeMyWork({
             data-home-toolbar
             style={{
               padding: `${token.paddingXS}px ${token.paddingSM}px`,
-              borderBottom: `1px solid ${token.colorSplit}`,
+              borderBottom: homeDivider(token),
             }}
           >
             <Segmented<MyWorkTab>
@@ -303,7 +303,7 @@ export const HomeMyWork = memo(function HomeMyWork({
                 <div
                   style={{
                     background: token.colorFillQuaternary,
-                    borderBottom: `1px solid ${token.colorSplit}`,
+                    borderBottom: homeDivider(token),
                   }}
                 >
                   <BoardGroupHeader boardId={boardId || undefined} onOpenBoard={onOpenBoard} />

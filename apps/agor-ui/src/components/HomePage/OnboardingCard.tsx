@@ -28,7 +28,7 @@ export const OnboardingCard: React.FC<OnboardingCardProps> = ({ steps, onDismiss
   return (
     <div
       style={{
-        border: `1px solid ${token.colorBorderSecondary}`,
+        border: `${token.lineWidth}px ${token.lineType} ${token.colorBorderSecondary}`,
         borderRadius: token.borderRadiusLG,
         padding: '16px 20px',
         ...glassCardStyle(token, 0.3),

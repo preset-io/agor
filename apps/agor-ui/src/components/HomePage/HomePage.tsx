@@ -38,6 +38,7 @@ import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './Home
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
 import { HomeTeammatesSection } from './HomeTeammates';
+import { HOME_MAIN_COLUMN_BASIS, HOME_RAIL_BASIS } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
@@ -439,7 +440,11 @@ export const HomePage = memo(function HomePage({
         </div>
       )}
       <Flex gap={token.marginXL} wrap align="flex-start">
-        <Flex vertical gap={token.marginXL} style={{ flex: '999 1 560px', minWidth: 0 }}>
+        <Flex
+          vertical
+          gap={token.marginXL}
+          style={{ flex: `999 1 ${HOME_MAIN_COLUMN_BASIS}px`, minWidth: 0 }}
+        >
           {!newUser && (
             <HomeNeedsYou
               client={client}
@@ -485,7 +490,11 @@ export const HomePage = memo(function HomePage({
           />
         </Flex>
         {railReady && (
-          <Flex vertical gap={token.marginXL} style={{ flex: '1 1 300px', minWidth: 0 }}>
+          <Flex
+            vertical
+            gap={token.marginXL}
+            style={{ flex: `1 1 ${HOME_RAIL_BASIS}px`, minWidth: 0 }}
+          >
             <HomeTeammatesSection
               client={client}
               currentUser={currentUser}
