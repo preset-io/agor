@@ -1,4 +1,5 @@
 import { type BoardID, boardPath, type SessionID, sessionPath } from '@agor-live/client';
+import { matchPath } from 'react-router-dom';
 import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from './urlResolution';
 
@@ -21,6 +22,12 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
 
 /** Directory of AI teammates shared with the caller; `/m` prefixes it on mobile. */
 export const TEAMMATES_ROUTE_PATH = '/teammates';
+export const MOBILE_TEAMMATES_ROUTE_PATH = `/m${TEAMMATES_ROUTE_PATH}`;
+const TEAMMATES_ROUTE_PATHS = [TEAMMATES_ROUTE_PATH, MOBILE_TEAMMATES_ROUTE_PATH] as const;
+
+/** Whether `pathname` is the teammates directory on either shell, trailing slash included. */
+export const isTeammatesRoute = (pathname: string): boolean =>
+  TEAMMATES_ROUTE_PATHS.some((path) => matchPath({ path, end: true }, pathname) !== null);
 
 type ResponsiveRouteEntities = {
   boards: Iterable<{ board_id: string; slug?: string }>;
@@ -33,8 +40,8 @@ export function responsiveRoutePath(
   target: 'mobile' | 'desktop',
   entities: ResponsiveRouteEntities
 ): string {
-  if (pathname === TEAMMATES_ROUTE_PATH || pathname === `/m${TEAMMATES_ROUTE_PATH}`) {
-    return target === 'mobile' ? `/m${TEAMMATES_ROUTE_PATH}` : TEAMMATES_ROUTE_PATH;
+  if (isTeammatesRoute(pathname)) {
+    return target === 'mobile' ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH;
   }
   if (target === 'mobile') {
     const boardToken = pathname.match(/^\/b\/([^/]+)\/?$/)?.[1];

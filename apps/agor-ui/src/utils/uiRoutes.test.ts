@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getRouterBasename, responsiveRoutePath, uiRouteHref } from './uiRoutes';
+import { getRouterBasename, isTeammatesRoute, responsiveRoutePath, uiRouteHref } from './uiRoutes';
 
 describe('uiRoutes', () => {
   it('supports a reverse-proxied Vite preview mounted at /ui', () => {
@@ -23,11 +23,24 @@ describe('uiRoutes', () => {
   });
 });
 
+describe('isTeammatesRoute', () => {
+  it('matches the directory on either shell, with or without a trailing slash', () => {
+    for (const path of ['/teammates', '/teammates/', '/m/teammates', '/m/teammates/']) {
+      expect(isTeammatesRoute(path)).toBe(true);
+    }
+    for (const path of ['/', '/m', '/teammates/x', '/b/teammates', '/m/teammatesx']) {
+      expect(isTeammatesRoute(path)).toBe(false);
+    }
+  });
+});
+
 describe('responsiveRoutePath', () => {
   it('keeps the teammates directory across the shell breakpoint', () => {
     const none = { boards: [], sessions: [] };
     expect(responsiveRoutePath('/teammates', 'mobile', none)).toBe('/m/teammates');
     expect(responsiveRoutePath('/m/teammates', 'desktop', none)).toBe('/teammates');
+    expect(responsiveRoutePath('/teammates/', 'mobile', none)).toBe('/m/teammates');
+    expect(responsiveRoutePath('/m/teammates/', 'desktop', none)).toBe('/teammates');
   });
 
   const entities = {
