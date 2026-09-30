@@ -8,7 +8,7 @@ import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
 import { type TeammateOption, teammateLabel, teammateOption } from '../../utils/teammateLabels';
-import { TeammateOptionLabel } from '../PrimaryAssistantCompose/TeammateOptionLabel';
+import { TeammateOptionLabel } from '../PrimaryAssistantCompose';
 
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
@@ -100,6 +100,8 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
   }, [candidates, boardById, repoById, current]);
 
   const currentOption = current ? teammateOption(current, boardById, repoById) : null;
+  // Skip the closing period when the sentence already ends in punctuation (e.g. "Ambient!").
+  const currentEndsSentence = /[.!?…]$/.test(currentOption?.context ?? currentOption?.label ?? '');
 
   const handleChange = async (branchId: string | null) => {
     if (!client || !currentUserId) return;
@@ -140,7 +142,8 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
       ) : currentOption ? (
         <Typography.Text>
           Currently <Typography.Text strong>{currentOption.label}</Typography.Text>
-          {currentOption.context && ` on ${currentOption.context}`}.
+          {currentOption.context && ` on ${currentOption.context}`}
+          {!currentEndsSentence && '.'}
         </Typography.Text>
       ) : compact ? null : (
         <Typography.Text type="secondary">

@@ -33,7 +33,8 @@ export interface PrimaryAssistantSendOptions {
  * Send a prompt to the caller's primary assistant (or an explicit teammate), in
  * the background or opening the new session. One send runs at a time. Without a
  * primary, a send is held until `pick` supplies one. An identity change abandons
- * any in-flight send and drops a held one.
+ * any in-flight send and drops a held one. `primaryBranch` is null while the
+ * primary belongs to a previous caller, so a held send always shows the picker.
  */
 export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const latest = useRef(options);
@@ -73,8 +74,8 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
       if (inFlightRef.current) return;
       const { primary: resolved, message: toast, navigation: nav } = runtime.current;
       if (!explicitBranch && (resolved.resolving || resolved.failed)) return;
-      // A primary that is not this caller's settled answer may be a previous caller's.
-      const branch = explicitBranch ?? (resolved.current ? resolved.branch : null);
+      // A primary resolved for a previous caller is never sent to.
+      const branch = explicitBranch ?? (resolved.ownedByCaller ? resolved.branch : null);
       if (!branch) {
         setPendingSend(mode);
         return;
@@ -120,7 +121,7 @@ export function usePrimaryAssistantSend(options: PrimaryAssistantSendOptions) {
   const clearPendingSend = useCallback(() => setPendingSend(null), [setPendingSend]);
 
   return {
-    primaryBranch: primary.branch,
+    primaryBranch: primary.ownedByCaller ? primary.branch : null,
     setPrimaryBranch: primary.setBranch,
     resolving: primary.resolving,
     resolveFailed: primary.failed,

@@ -71,6 +71,7 @@ describe('PrimaryTeammatePicker', () => {
     const currently = await screen.findByText(/Currently/);
     expect(currently).toHaveTextContent('Ada');
     expect(currently).toHaveTextContent('Ambient');
+    expect(currently).toHaveTextContent(/\.$/);
   });
 
   it("omits the board from the current primary when it is just the teammate's name", async () => {
@@ -79,7 +80,7 @@ describe('PrimaryTeammatePicker', () => {
     renderPicker(createClient(current).client);
 
     const currently = await screen.findByText(/Currently/);
-    expect(currently).toHaveTextContent(/^Currently Ambient!\.$/);
+    expect(currently).toHaveTextContent(/^Currently Ambient!$/);
   });
 
   it('labels each option with its emoji, name and board', async () => {
