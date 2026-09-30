@@ -129,6 +129,120 @@ describe('hosted repository storage policy canonical boundaries', () => {
     );
   });
 
+  describe('tenant filesystem confinement', () => {
+    const attackerParams = {
+      provider: 'rest',
+      user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
+      tenant: { tenant_id: 'attacker' },
+    } as never;
+    const victimRepo = '/home/agor/.agor/tenants/victim/repos/acme/private-source';
+    const victimCheckout = '/home/agor/.agor/tenants/victim/worktrees/acme/private-source/main';
+
+    function hostedService() {
+      return new ReposService(
+        {} as never,
+        { get: () => ({}), service: vi.fn() } as unknown as Application
+      );
+    }
+
+    it.each([`file://${victimRepo}`, victimRepo])(
+      'rejects a local clone source (%s) before creating any row',
+      async (url) => {
+        const service = hostedService();
+        const create = vi.spyOn(service, 'create');
+
+        await expect(
+          service.cloneRepository({ url, slug: 'attacker/copied-private-source' }, attackerParams)
+        ).rejects.toThrow(/HTTPS or SSH/);
+        expect(create).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects a caller-selected local_path on create', async () => {
+      const adapterCreate = vi.spyOn(DrizzleService.prototype, 'create');
+
+      await expect(
+        hostedService().create(
+          {
+            slug: 'attacker/copy' as never,
+            repo_type: 'remote',
+            remote_url: 'https://forge.example/attacker/copy.git',
+            local_path: victimRepo,
+          },
+          attackerParams
+        )
+      ).rejects.toThrow(/local_path is managed by Agor/);
+      expect(adapterCreate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a local remote_url on create', async () => {
+      await expect(
+        hostedService().create(
+          {
+            slug: 'attacker/copy' as never,
+            repo_type: 'remote',
+            remote_url: `file://${victimRepo}`,
+          },
+          attackerParams
+        )
+      ).rejects.toThrow(/HTTPS or SSH/);
+    });
+
+    it('rejects repointing an owned row at another tenant checkout', async () => {
+      const service = hostedService();
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: 'repo-1',
+        repo_type: 'remote',
+        slug: 'attacker/copy',
+        local_path: '/home/agor/.agor/tenants/attacker/repos/attacker/copy',
+      } as Repo);
+      const adapterPatch = vi.spyOn(DrizzleService.prototype, 'patch');
+      const adapterUpdate = vi.spyOn(DrizzleService.prototype, 'update');
+
+      await expect(
+        service.patch(
+          'repo-1',
+          { local_path: victimCheckout, remote_url: 'https://attacker.example/drop.git' },
+          attackerParams
+        )
+      ).rejects.toThrow(/local_path is managed by Agor/);
+      await expect(
+        service.update('repo-1', { local_path: victimCheckout }, attackerParams)
+      ).rejects.toThrow(/local_path is managed by Agor/);
+      await expect(
+        service.patch(null, { local_path: victimCheckout }, attackerParams)
+      ).rejects.toThrow(/local_path is managed by Agor/);
+      expect(adapterPatch).not.toHaveBeenCalled();
+      expect(adapterUpdate).not.toHaveBeenCalled();
+    });
+
+    it('rejects a local remote_url patch', async () => {
+      await expect(
+        hostedService().patch(
+          'repo-1',
+          { remote_url: 'file:///home/agor/.agor/tenants/attacker/drop.git' },
+          attackerParams
+        )
+      ).rejects.toThrow(/HTTPS or SSH/);
+    });
+
+    it('accepts the executor re-sending the unchanged managed path', async () => {
+      const localPath = '/home/agor/.agor/tenants/attacker/repos/attacker/copy';
+      const service = hostedService();
+      vi.spyOn(service, 'get').mockResolvedValue({
+        repo_id: 'repo-1',
+        repo_type: 'remote',
+        local_path: localPath,
+      } as Repo);
+      const patched = { repo_id: 'repo-1', local_path: localPath } as Repo;
+      vi.spyOn(DrizzleService.prototype, 'patch').mockResolvedValue(patched);
+
+      await expect(
+        service.patch('repo-1', { local_path: localPath, clone_status: 'cloning' }, attackerParams)
+      ).resolves.toBe(patched);
+    });
+  });
+
   it('allows unrelated updates to historical local repository rows', async () => {
     const patched = { repo_id: 'repo-1', repo_type: 'local', slug: 'renamed' } as Repo;
     const adapterPatch = vi.spyOn(DrizzleService.prototype, 'patch').mockResolvedValue(patched);

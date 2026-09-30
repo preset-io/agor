@@ -12,7 +12,6 @@ import {
   AppstoreOutlined,
   BranchesOutlined,
   CheckOutlined,
-  CloseOutlined,
   CommentOutlined,
   DeleteOutlined,
   SendOutlined,
@@ -34,6 +33,7 @@ import {
 } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { commentMentionsUser } from '../../utils/commentMentions';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
@@ -42,7 +42,7 @@ import { MetaRow } from '../MetaRow';
 import { ZONE_CONTENT_OPACITY } from '../SessionCanvas/canvas/BoardObjectNodes';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 
 export interface CommentsPanelProps {
   client: AgorClient | null;
@@ -54,9 +54,6 @@ export interface CommentsPanelProps {
   branchById?: Map<string, Branch>; // For branch names
   loading?: boolean;
   collapsed?: boolean;
-  onToggleCollapse?: () => void;
-  /** Hide the internal "Comments" header (mobile already shows a board header). */
-  hideHeader?: boolean;
   onSendComment: (content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
   onResolveComment?: (commentId: string) => void;
@@ -538,8 +535,6 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   branchById,
   loading = false,
   collapsed = false,
-  onToggleCollapse,
-  hideHeader = false,
   onSendComment,
   onReplyComment,
   onResolveComment,
@@ -550,6 +545,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   alwaysShowActions,
 }) => {
   const { token } = theme.useToken();
+  const isMobile = useIsMobileViewport();
   const [filter, setFilter] = useState<FilterMode>('active');
   const [commentInputValue, setCommentInputValue] = useState('');
 
@@ -732,48 +728,10 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
         flexDirection: 'column',
       }}
     >
-      {/* Header — hidden on mobile, where the board header already titles the view */}
-      {!hideHeader && (
-        <div
-          style={{
-            padding: 12,
-            borderBottom: `1px solid ${token.colorBorder}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-          }}
-        >
-          <Space>
-            <CommentOutlined />
-            <Title level={5} style={{ margin: 0 }}>
-              Comments
-            </Title>
-            <Badge
-              count={filteredThreads.length}
-              showZero={false}
-              style={{
-                backgroundColor: filteredThreads.some(threadMentionsUser)
-                  ? token.colorError
-                  : token.colorPrimaryBgHover,
-              }}
-            />
-          </Space>
-          {onToggleCollapse && (
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined />}
-              onClick={onToggleCollapse}
-              danger
-            />
-          )}
-        </div>
-      )}
-
       {/* Filter Tabs */}
       <div
         style={{
-          padding: 12,
+          padding: `${token.paddingSM}px ${token.padding}px`,
           borderBottom: `1px solid ${token.colorBorder}`,
           backgroundColor: token.colorBgContainer,
         }}
@@ -809,7 +767,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
               color: token.colorTextSecondary,
               // On mobile the panel fills the screen, so centre the empty state
               // instead of clustering it at the top.
-              ...(hideHeader
+              ...(isMobile
                 ? {
                     height: '100%',
                     display: 'flex',
@@ -904,7 +862,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
       {/* Input Box for new top-level comment */}
       <div
         style={{
-          padding: 12,
+          padding: `${token.paddingSM}px ${token.padding}px`,
           borderTop: `1px solid ${token.colorBorder}`,
           backgroundColor: token.colorBgContainer,
           display: 'flex',

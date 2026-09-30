@@ -768,6 +768,8 @@ export const GitRepoRealignOriginPayloadSchema = BasePayloadSchema.extend({
     remoteUrl: z.string().min(1),
     /** Redacted human-readable identifier for the security log. */
     repoSlug: z.string().min(1),
+    /** Tenant-scoped managed repositories root that must contain `repoPath`. */
+    reposRoot: z.string().min(1),
   }),
 });
 

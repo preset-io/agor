@@ -439,6 +439,13 @@ describe('isValidSlug', () => {
       expect(isValidSlug('org/sub/repo')).toBe(false);
     });
 
+    it('should reject dot path segments that escape a filesystem root', () => {
+      for (const slug of ['../repo', './repo', 'org/..', 'org/.', '../..']) {
+        expect(isValidSlug(slug)).toBe(false);
+      }
+      expect(isValidSlug('..org/repo..')).toBe(true);
+    });
+
     it('should reject slug with spaces', () => {
       expect(isValidSlug('my org/my repo')).toBe(false);
     });
