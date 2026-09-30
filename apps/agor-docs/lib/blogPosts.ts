@@ -17,6 +17,7 @@ export const blogPosts: BlogPost[] = [
       'Why agent modeling is the discipline that decides how much of its potential AI actually delivers, and how to scope, staff, and grow a team of AI teammates without duplicated context, access spillover, and confusion.',
     author: 'Maxime Beauchemin',
     date: '2026-10-07',
+    image: '/images/blog/agent-modeling-201.png',
   },
   {
     slug: 'meet-bug-basher',
