@@ -58,6 +58,13 @@ function renderSend(initial: Props = {}) {
 describe('usePrimaryAssistantSend', () => {
   beforeEach(() => goToSession.mockClear());
 
+  it('keeps the primary while it re-resolves for the same caller', async () => {
+    const { result, rerender } = renderSend({ refreshKey: false });
+    await waitFor(() => expect(result.current.primaryBranch).toBe(ada));
+    rerender({ refreshKey: true });
+    expect(result.current.primaryBranch).toBe(ada);
+  });
+
   it('creates one session for two rapid sends', async () => {
     const creation = deferred<SessionCreationResult | null>();
     const onCreateSession = vi.fn(() => creation.promise);
