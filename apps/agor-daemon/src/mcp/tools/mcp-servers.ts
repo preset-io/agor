@@ -1,6 +1,6 @@
 import { NotFound } from '@agor/core/feathers';
-import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import { isUserEnvPlaceholder } from '@agor/core/mcp';
+import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
 import { redactMCPEnvSecrets } from '@agor/core/tools/mcp/env-secrets';
 import {

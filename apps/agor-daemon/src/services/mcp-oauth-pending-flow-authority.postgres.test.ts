@@ -35,6 +35,8 @@ import type {
   MCPOAuthClientRegistrationID,
   MCPOAuthPendingFlowSealedMaterial,
   MCPServerID,
+  SessionID,
+  TaskID,
   UserID,
 } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
@@ -159,8 +161,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         configFingerprint: 'a'.repeat(64),
         slackRecovery: {
           notice_id: 'notice-peer-callback',
-          task_id: 'task-peer-callback',
-          session_id: 'session-peer-callback',
+          task_id: 'task-peer-callback' as TaskID,
+          session_id: 'session-peer-callback' as SessionID,
           mcp_server_id: bound.serverId,
           recovery_generation: 7,
           recovery_request_id: 'request-peer-callback',
@@ -187,6 +189,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       if (!isMCPOAuthGrantBindingVersion(claimed.flow.configFingerprintVersion)) {
         throw new Error('Expected a supported grant binding version');
       }
+      const configFingerprintVersion = claimed.flow.configFingerprintVersion;
       const opened = authorityB.openClaim(claimed.flow, context.state);
       expect(opened.slackRecovery).toEqual({
         notice_id: 'notice-peer-callback',
@@ -208,7 +211,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             expiresAt: new Date(Date.now() + 3_600_000),
             grantBinding: {
               generation: claimed.flow.grantGeneration,
-              version: claimed.flow.configFingerprintVersion,
+              version: configFingerprintVersion,
               fingerprint: claimed.flow.configFingerprint,
               metadataUri: opened.context.metadataUrl,
               resourceUri: opened.context.resourceUri,
@@ -319,41 +322,67 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       } satisfies DurableMCPOAuthFlowCreate);
     }
 
-    it('seals a Slack connect binding at version 3 and returns it to the callback claimant', async () => {
-      const bound = await seed('connect-binding');
-      const context = flowContext(crypto.randomUUID());
-      const slackConnect = {
-        delivery_id: 'delivery-connect-binding',
-        delivery_generation: 4,
-        widget_id: 'widget-connect-binding' as never,
-        session_id: 'session-connect-binding' as never,
-        mcp_server_id: bound.serverId,
-        gateway_channel_id: 'gateway-connect-binding',
-        gateway_config_generation: 7,
-        mcp_server_config_version: 3,
-      };
-      const attemptId = await startFlow(bound, context, slackConnect);
+    it.each([3, 4])(
+      'opens a version %s Slack connect binding for the callback claimant',
+      async (version) => {
+        const bound = await seed('connect-binding');
+        const context = flowContext(crypto.randomUUID());
+        const slackConnect = {
+          delivery_id: 'delivery-connect-binding',
+          delivery_generation: 4,
+          widget_id: 'widget-connect-binding' as never,
+          session_id: 'session-connect-binding' as never,
+          mcp_server_id: bound.serverId,
+          gateway_channel_id: 'gateway-connect-binding',
+          gateway_config_generation: 7,
+          mcp_server_config_version: 3,
+        };
+        const attemptId = await startFlow(bound, context, slackConnect);
+        await resealMaterial(bound, attemptId, (material) => {
+          expect(material.version).toBe(4);
+          return { ...material, version };
+        });
 
-      const stored = await runWithTenantDatabaseScope(
-        dbB,
-        bound.tenantId,
-        async (scoped) =>
-          rowsOf(
-            await executeRaw(
-              scoped,
-              sql`SELECT sealed_material FROM ${mcpOauthPendingFlows}
+        const stored = await runWithTenantDatabaseScope(
+          dbB,
+          bound.tenantId,
+          async (scoped) =>
+            rowsOf(
+              await executeRaw(
+                scoped,
+                sql`SELECT sealed_material FROM ${mcpOauthPendingFlows}
                 WHERE attempt_id = ${attemptId}`
-            )
-          )[0]
-      );
-      // The routing is sealed, not stored in the clear beside the row.
-      expect(JSON.stringify(stored)).not.toContain('widget-connect-binding');
+              )
+            )[0]
+        );
+        // The routing is sealed, not stored in the clear beside the row.
+        expect(JSON.stringify(stored)).not.toContain('widget-connect-binding');
 
+        const claimed = await authorityB.claimForCallback(context.state);
+        if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+        const opened = authorityB.openClaim(claimed.flow, context.state);
+        expect(opened.slackConnect).toEqual(slackConnect);
+        expect(opened.slackRecovery).toBeUndefined();
+      }
+    );
+
+    it('seals the relay binding at v4 so pre-relay daemons cannot treat it as direct', async () => {
+      const bound = await seed('relay-v4');
+      const context = {
+        ...flowContext(crypto.randomUUID()),
+        relay: { cellId: 'cell-relay', cloudUserId: 'cloud-user-relay' },
+      };
+      const attemptId = await startFlow(bound, context);
+      await resealMaterial(bound, attemptId, (material) => {
+        expect(material.version).toBe(4);
+        expect(material.relay).toEqual(context.relay);
+        return { ...material };
+      });
       const claimed = await authorityB.claimForCallback(context.state);
       if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
-      const opened = authorityB.openClaim(claimed.flow, context.state);
-      expect(opened.slackConnect).toEqual(slackConnect);
-      expect(opened.slackRecovery).toBeUndefined();
+      expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toEqual(
+        context.relay
+      );
     });
 
     it('still opens an in-flight version 2 envelope written by an older daemon', async () => {
@@ -374,7 +403,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(opened.slackConnect).toBeUndefined();
     });
 
-    it.each([
+    it.each<
+      readonly [string, (material: MCPOAuthPendingFlowSealedMaterial) => Record<string, unknown>]
+    >([
       [
         'a version 2 envelope that claims a connect binding',
         (material: MCPOAuthPendingFlowSealedMaterial) => ({
@@ -394,8 +425,19 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ],
       [
         'an unknown future envelope version',
-        (material: MCPOAuthPendingFlowSealedMaterial) => ({ ...material, version: 4 }),
+        (material: MCPOAuthPendingFlowSealedMaterial) => ({ ...material, version: 5 }),
       ],
+      ...[2, 3].map(
+        (version) =>
+          [
+            `a version ${version} envelope that claims a relay binding`,
+            (material: MCPOAuthPendingFlowSealedMaterial) => ({
+              ...material,
+              version,
+              relay: { cellId: 'cell-smuggled', cloudUserId: 'user-smuggled' },
+            }),
+          ] as const
+      ),
       [
         'a connect binding missing its delivery generation',
         (material: MCPOAuthPendingFlowSealedMaterial) => ({
@@ -899,6 +941,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       const pending = await authorityA.getForUser(bound.tenantId, bound.userId, attemptId);
       if (!pending) throw new Error('Expected pending-flow fixture');
+      if (!isMCPOAuthGrantBindingVersion(pending.configFingerprintVersion)) {
+        throw new Error('Expected a supported grant binding version');
+      }
+      const configFingerprintVersion = pending.configFingerprintVersion;
       await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           bound.userId,
@@ -910,7 +956,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             clientSecret: context.clientSecret,
             grantBinding: {
               generation: pending.grantGeneration,
-              version: pending.configFingerprintVersion,
+              version: configFingerprintVersion,
               fingerprint,
               metadataUri: context.metadataUrl,
               resourceUri: context.resourceUri,

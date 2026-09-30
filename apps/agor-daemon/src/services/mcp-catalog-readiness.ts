@@ -55,6 +55,7 @@ export class MCPCatalogReadinessService {
     // Connect still authorizes the current caller and row after probing.
     const sharedConfiguration =
       entry.auth_type !== 'credentials' &&
+      !entry.oauth?.configured_client &&
       inventory.some((candidate) =>
         isUsableSharedCatalogCandidate(
           candidate,
@@ -107,7 +108,7 @@ export class MCPCatalogReadinessService {
       return {
         catalog_key: catalogKey,
         ...sharedAvailability,
-          ...setup,
+        ...setup,
         state: 'oauth_required',
         ...(selection.currentCatalog ? { reusable_configuration: true } : {}),
       };

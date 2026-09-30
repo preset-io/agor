@@ -319,11 +319,11 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import { MCPOAuthRelay } from './services/mcp-oauth-relay.js';
 import {
   MCP_OAUTH_START_BUDGET_MS,
   mcpOAuthStartPhaseRunner,
 } from './services/mcp-oauth-start-phases.js';
-import { MCPOAuthRelay } from './services/mcp-oauth-relay.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
 import {
   acquireMCPOAuthGrant,

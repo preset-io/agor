@@ -326,7 +326,9 @@ app's client ID and, for confidential apps, its client secret in the secure
 Catalog form. These are not PATs or Agor service credentials. The recipe includes
 the provider's setup documentation; register the exact callback shown in the
 form before connecting. Agor saves the configured app, then each user separately
-consents to their own provider grant. An administrator can also configure one
+consents to their own provider grant. Catalog keeps configured-app installations
+private; its shared-install option accepts no embedded credentials. An administrator
+can instead configure one
 shared server definition with **Per User** OAuth; sharing an app is not sharing
 its users' access tokens.
 
@@ -372,7 +374,7 @@ mcp_oauth_relay:
   callback_origin: https://<trusted-cloud-console-origin>
   cell_id: <existing-cell-id>
   credential_id: <existing-cell-service-credential-id>
-  private_key_env: AGOR_CELL_SERVICE_PRIVATE_KEY
+  private_key_env: AGOR_CLOUD_RUNTIME_SIGNING_KEY
   key_id: <existing-cell-service-key-id> # optional when Cloud permits no kid
 ```
 
@@ -380,6 +382,54 @@ Use the deployment's existing secret provisioning for the named PEM variable;
 never put its value in the file, chat, or a tool call. The existing
 `external_launch` configuration supplies Cloud's issuer/JWKS (or pinned public
 key). No browser or MCP-server setting can override these trust anchors.
+
+Put this block in the **daemon's** `AGOR_HOME/config.yaml` (`~/.agor/config.yaml`
+by default), not a branch's `.agor.yml`. Keep the existing `external_launch`
+`enabled`, `exchange_url`, `issuer`, `audience`, and `jwks_url` (or `public_key`)
+settings; relay delivery requires RS256, not the development shared secret.
+The service credential must belong to the named cell, be active in Cloud, and
+allow `mcp_oauth:relay` with audience `agor-cloud:executor-runs`. The existing
+launch-exchange bearer and customer OAuth app secret are **not** substitutes.
+Cell ID, credential ID and key ID above are literal non-secret identifiers;
+only `private_key_env` names an environment variable. There is no automatic
+projection from the `AGOR_CLOUD_*` environment into this config block.
+
+For the Cloud runtime Helm chart, `daemon.config.mcp_oauth_relay` renders this
+block into `/home/agor/.agor/config.yaml`; `runtimeServiceCredential.existingSecret`
+can supply the existing cell's `AGOR_CLOUD_RUNTIME_SIGNING_KEY`. Normal managed
+cell specs do not automatically set the relay block. An image bump alone does
+not enable it. Use the Cloud operator's supported configuration route, preserving
+all existing values; a one-off pod/ConfigMap edit is not durable across cell
+reapply. Never put a PEM or provider secret into Helm values or commands.
+
+Upgrade all callback-serving replicas before enabling relay. New attempts use
+sealed-envelope v4; older replicas reject them instead of silently dropping
+relay bindings. Valid older v2/v3 direct attempts remain readable. This feature
+adds no runtime schema migration, but normal main-version migrations still apply.
+
+### Small sandbox check and rollback
+
+After both halves and their configuration are deployed by the operator:
+
+1. In Catalog, open Asana, copy the **displayed exact callback**, and register it
+   on the provider MCP app. Save its client ID/secret only in the secure form.
+2. Connect as one user, confirm the matching Cloud identity, and complete provider
+   consent. Confirm **Connected** in the workspace; a popup redirect alone is not
+   success. Make one permitted read-only MCP request.
+3. Repeat as a different user: they must consent independently. After the first
+   grant expires, repeat the read to verify refresh without sharing grants.
+4. On failure, inspect only sanitized status/reason fields. Do not capture callback
+   query strings, request bodies or Authorization headers. Reconnect after expired,
+   ambiguous or interrupted attempts; do not replay a callback.
+
+To turn off the feature, stop new connections, disable the runtime relay block and
+Cloud relay setting together through their managed configuration routes, then
+restart the affected services. Existing grants are not revoked by this switch;
+disconnect/revoke them explicitly if that is intended. Allow pending attempts to
+expire and reconnect using the chosen callback registration. Do not downgrade a
+shared database schema or remove the deployment master secret as a rollback step.
+Fake-provider tests cover exchange and refresh; they are not evidence of live
+Asana consent or of a sandbox deployment having been performed.
 
 For issuer `https://provider.example`, the callback is exactly:
 
