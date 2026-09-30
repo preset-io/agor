@@ -316,6 +316,8 @@ interface HomeSessionRowProps {
   reason?: HomeSessionNeed['reason'];
   /** Reads what a permission request asks or why a run failed; pass only for visible previews. */
   client?: AgorClient | null;
+  /** An already-read detail, so a failure group's header and newest run share one read. */
+  detail?: string;
   /** Replaces the session title (grouped rows). */
   title?: string;
   /** Grouped rows already show branch and board in their headers. */
@@ -328,13 +330,13 @@ interface HomeSessionRowProps {
   onOpen: (sessionId: string) => void;
   onMarkRead?: (sessionId: string) => void;
   onArchive?: (sessionId: string) => void;
-  archiveLabel?: string;
 }
 
 export const HomeSessionRow = memo(function HomeSessionRow({
   session,
   reason,
   client,
+  detail: sharedDetail,
   title = getSessionDisplayTitle(session, { includeAgentFallback: true }),
   showContext = true,
   showLogo = true,
@@ -343,14 +345,14 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   onOpen,
   onMarkRead,
   onArchive,
-  archiveLabel = 'Archive',
 }: HomeSessionRowProps) {
   const { token } = theme.useToken();
   const compact = useHomeCompact();
   // Without hover (phones, touch tablets) every row action lives in the ⋯ menu.
   const canHover = useMediaQuery('(hover: hover)');
   const inMenu = compact || !canHover;
-  const detail = useNeedDetail(client, session, reason);
+  const readDetail = useNeedDetail(client, session, reason);
+  const detail = sharedDetail ?? readDetail;
   const reasonLabel =
     reason === 'failed' && session.status === 'timed_out'
       ? 'Timed out'
@@ -381,7 +383,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
       ? [
           {
             key: 'archive',
-            label: archiveLabel,
+            label: 'Archive',
             icon: <InboxOutlined />,
             onClick: () => onArchive(id),
           },
@@ -446,7 +448,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
                     icon={<InboxOutlined />}
                     onClick={() => onArchive(id)}
                   >
-                    {archiveLabel}
+                    Archive
                   </Button>
                 )}
               </Flex>
@@ -528,14 +530,15 @@ interface HomeNeedRowProps {
   need: HomeSessionNeed;
   /** Reads what a permission request asks or why a run failed; pass only for visible previews. */
   client?: AgorClient | null;
+  detail?: string;
   showContext?: boolean;
   indent?: number;
   onOpenSession: (sessionId: string) => void;
   /** Gets the whole need, so every run a failure row stands for is recorded as opened. */
   onOpenFailure: (need: HomeSessionNeed) => void;
   onMarkRead: (sessionId: string) => void;
-  /** A failure group's header passes all of its runs; omitted while changes can't be made. */
-  onArchive?: (sessionIds: string | readonly string[]) => void;
+  /** Each failure row archives only its own session; omitted while changes can't be made. */
+  onArchive?: (sessionId: string) => void;
 }
 
 /** A Needs you session row; a branch's grouped finished or failed runs render as one group row. */
@@ -550,6 +553,7 @@ export const HomeNeedRow = memo(function HomeNeedRow(props: HomeNeedRowProps) {
 function HomeSingleNeedRow({
   need,
   client,
+  detail,
   showContext,
   indent,
   onOpenSession,
@@ -564,6 +568,7 @@ function HomeSingleNeedRow({
       session={need.session}
       reason={need.reason}
       client={client}
+      detail={detail}
       showContext={showContext}
       indent={indent}
       onOpen={failed ? openFailure : onOpenSession}
@@ -574,8 +579,8 @@ function HomeSingleNeedRow({
 }
 
 /**
- * "N finished on {branch}" or "N failed on {branch}": opens the latest run, acts on
- * every run (mark as read, archive all), and expands to each run with its own actions.
+ * "N finished on {branch}" or "N failed on {branch}": opens the latest run, marks every
+ * finished run read, and expands to each run with its own actions (a failure's Archive included).
  */
 function HomeNeedGroupRow({
   need,
@@ -608,12 +613,14 @@ function HomeNeedGroupRow({
   );
   const openGroup = useCallback(() => onOpenFailure(need), [onOpenFailure, need]);
   const ids = runs.map((run) => run.session.session_id);
+  // Read once here: the header and the newest expanded run show the same cause.
+  const detail = useNeedDetail(client, session, reason);
   return (
     <>
       <HomeSessionRow
         session={session}
         reason={reason}
-        client={client}
+        detail={detail}
         title={`${runs.length} ${failed ? 'failed' : 'finished'} on ${name}`}
         onOpen={failed ? openGroup : onOpenSession}
         onMarkRead={
@@ -623,8 +630,6 @@ function HomeNeedGroupRow({
                 for (const id of ids) onMarkRead(id);
               }
         }
-        onArchive={failed && onArchive ? () => onArchive(ids) : undefined}
-        archiveLabel={`Archive all ${runs.length}`}
         expand={{ expanded, count: runs.length, onToggle: () => setExpanded(!expanded) }}
       />
       {expanded && (
@@ -636,7 +641,8 @@ function HomeNeedGroupRow({
               failed ? (
                 <HomeNeedRow
                   need={run}
-                  client={client}
+                  client={run.session === session ? undefined : client}
+                  detail={run.session === session ? detail : undefined}
                   showContext={false}
                   indent={token.paddingLG}
                   onOpenSession={onOpenSession}

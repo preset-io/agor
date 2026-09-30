@@ -10,6 +10,7 @@ import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useStableCallback } from '../../hooks/useStableCallback';
 import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
@@ -207,7 +208,7 @@ export const HomePage = memo(function HomePage({
   const { connected, connecting } = useConnectionState();
   const mutationDisabled = useConnectionDisabled();
   const railReady = useIdleReady();
-  const confirmArchive = useConfirmArchiveSession(client);
+  const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
   const userId = currentUser?.user_id;
 
   const [needsFilter, setNeedsFilter] = useState<NeedsFilter>('all');
@@ -389,10 +390,7 @@ export const HomePage = memo(function HomePage({
     }
   }, [client, userId, showError]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
-  const archive = useCallback(
-    (sessionIds: string | readonly string[]) => confirmArchive(sessionIds),
-    [confirmArchive]
-  );
+  const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
   const showRunning = useCallback(() => {
     setTab('running');
     scrollToSection('mywork');

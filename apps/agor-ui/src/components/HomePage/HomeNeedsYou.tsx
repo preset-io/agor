@@ -54,8 +54,8 @@ interface HomeNeedsYouProps {
   markingAllRead?: boolean;
   /** While the connection can't take changes. */
   markAllReadDisabled?: boolean;
-  /** Omitted while the connection can't take changes; a failure group archives all of its runs. */
-  onArchive?: (sessionIds: string | readonly string[]) => void;
+  /** Omitted while the connection can't take changes. */
+  onArchive?: (sessionId: string) => void;
 }
 
 export const HomeNeedsYou = memo(function HomeNeedsYou({
