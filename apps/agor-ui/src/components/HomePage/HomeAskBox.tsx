@@ -184,6 +184,8 @@ export const HomeAskBox = memo(function HomeAskBox({
     authenticationGeneration: authGeneration,
     onCreateSession,
     onOpenSession,
+    // Also gates a held send resumed by a pick after the box was emptied.
+    canSend: () => prompt.trim().length > 0,
     buildConfig: (branch) => {
       sentRef.current = { prompt, target };
       return buildNewSessionConfig({

@@ -22,6 +22,7 @@ import {
   compareHomeNeeds,
   type HomeCommentNeed,
   isUnreadResult,
+  lastRunStartedAt,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -44,7 +45,8 @@ import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
-const OPENED_FAILURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// Kept past the 7-day failure window: entries hold run starts, and a later patch can keep an old run's failure in view.
+const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
@@ -315,9 +317,12 @@ export const HomePage = memo(function HomePage({
   const openFailure = useCallback(
     (sessionId: string) => {
       const cutoff = Date.now() - OPENED_FAILURES_WINDOW_MS;
+      const session = agorStore.getState().sessionById.get(sessionId);
+      // The run the person saw, on the server clock, so only a newer run brings the failure back.
+      const seenRun = session ? lastRunStartedAt(session) : Date.now();
       setOpenedFailures((prev) => ({
         ...Object.fromEntries(Object.entries(prev).filter(([, at]) => at > cutoff)),
-        [sessionId]: Date.now(),
+        [sessionId]: seenRun,
       }));
       onSessionClick(sessionId);
     },

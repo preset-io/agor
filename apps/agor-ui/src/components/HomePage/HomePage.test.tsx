@@ -1,6 +1,7 @@
 import type { AgorClient, Board, Branch, Session, User } from '@agor-live/client';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { buildSessionMaps } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
@@ -105,6 +106,31 @@ describe('HomePage', () => {
     ).toBeInTheDocument();
     fireEvent.click(within(needs).getByRole('radio', { name: 'Comments 5' }));
     expect(within(needs).getByRole('button', { name: '2 more · 2 comments' })).toBeInTheDocument();
+  });
+
+  it('keeps an opened failure out of Needs you through a rename, until the session runs again', async () => {
+    const failed = session('f1', {
+      status: 'failed',
+      created_at: recent(120),
+      title: 'Broken run',
+    });
+    seed({ sessions: [failed] });
+    const onSessionClick = vi.fn();
+    renderHome({ onSessionClick });
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    fireEvent.click(within(needs).getByText('Broken run'));
+    expect(onSessionClick).toHaveBeenCalledWith('f1');
+    await waitFor(() => expect(within(needs).queryByText('Broken run')).not.toBeInTheDocument());
+
+    act(() => agorStore.setState(buildSessionMaps([{ ...failed, last_updated: recent(0) }])));
+    expect(within(needs).queryByText('Broken run')).not.toBeInTheDocument();
+
+    const hex = (Date.now() + 60_000).toString(16).padStart(12, '0');
+    const task = `${hex.slice(0, 8)}-${hex.slice(8)}-7000-8000-000000000000`;
+    act(() =>
+      agorStore.setState(buildSessionMaps([{ ...failed, last_updated: recent(0), tasks: [task] }]))
+    );
+    await waitFor(() => expect(within(needs).getByText('Broken run')).toBeInTheDocument());
   });
 
   it('offers starter chips to new users only', () => {
