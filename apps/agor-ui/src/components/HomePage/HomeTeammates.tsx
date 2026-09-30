@@ -127,8 +127,8 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
     shown.map((b) => b.branch_id)
   );
   const retry = () => {
-    retrySharing();
-    retryAccess();
+    if (sharingFailed > 0) retrySharing();
+    if (accessFailed > 0) retryAccess();
   };
   if (hydrated && teammates.length === 0 && sharingFailed === 0) return null;
   return (

@@ -1,7 +1,7 @@
 import type { AgorClient, CapabilityPolicyDraft, User } from '@agor-live/client';
 import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { useBoardsSharedWithMe } from './useBoardsSharedWithMe';
+import { useBoardSharing, useBoardsSharedWithMe } from './useBoardsSharedWithMe';
 
 const ME = 'me';
 const superadmin = { user_id: ME, name: 'Kasia', role: 'superadmin' } as User;
@@ -116,5 +116,22 @@ describe('useBoardsSharedWithMe', () => {
     const second = renderHook(() => useBoardsSharedWithMe(client, superadmin, ['b']));
     await waitFor(() => expect(second.result.current('b')).toBe(true));
     expect(find).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows a failed board as pending again once a grown board set re-reads it', async () => {
+    const find = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue({ primary_owner_user_id: ME, board_access: policy('private') });
+    const client = clientFor({}, find);
+    const { result, rerender } = renderHook(({ ids }) => useBoardSharing(client, superadmin, ids), {
+      initialProps: { ids: ['a'] },
+    });
+    await waitFor(() => expect(result.current.status('a')).toBe('failed'));
+
+    rerender({ ids: ['a', 'b'] });
+    expect(result.current.status('a')).toBe('pending');
+    await waitFor(() => expect(result.current.status('a')).toBe('shared'));
+    await waitFor(() => expect(result.current.settled).toBe(true));
   });
 });

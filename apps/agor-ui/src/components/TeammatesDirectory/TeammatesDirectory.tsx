@@ -74,18 +74,20 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
   // Under "You can ask" a card waits for every match before it, so late answers only append.
   const visible: Branch[] = [];
   let pending = 0;
+  let accessFailures = 0;
   for (const branch of teammates.filter(matches)) {
     const id = branch.branch_id;
     if (!asking) visible.push(branch);
     else if (id in access) {
       if (access[id] && !pending) visible.push(branch);
-    } else if (!failedIds.has(id)) pending++;
+    } else if (failedIds.has(id)) accessFailures++;
+    else pending++;
   }
   const checking = pending > 0;
-  const failed = sharingFailed + (asking ? accessFailed : 0);
+  const failed = sharingFailed + accessFailures;
   const retry = () => {
-    retrySharing();
-    retryAccess();
+    if (sharingFailed > 0) retrySharing();
+    if (accessFailed > 0) retryAccess();
   };
   const emptyText =
     teammates.length === 0

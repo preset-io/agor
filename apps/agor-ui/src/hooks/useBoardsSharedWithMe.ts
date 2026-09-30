@@ -93,14 +93,16 @@ export function useBoardSharing(
   const key = bypasses ? [...new Set(boardIds)].sort().join(',') : '';
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);
-  const [failed, setFailed] = useState({ scope, ids: NO_FAILURES });
-  const failedIds = failed.scope === scope ? failed.ids : NO_FAILURES;
+  const [failed, setFailed] = useState({ scope, key, ids: NO_FAILURES });
+  // A new board set re-reads every failure, so those show as pending again.
+  const failedIds = failed.scope === scope && failed.key === key ? failed.ids : NO_FAILURES;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry
+  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt re-runs the reads on retry; boardIds only orders the reads its sorted key names
   useEffect(() => {
     if (!client || !key || !userId) return;
     const controller = new AbortController();
-    for (const boardId of key.split(',')) {
+    // Read in display order: cards reveal in order, so an early card mustn't queue behind later ones.
+    for (const boardId of new Set(boardIds)) {
       readAccess(
         client,
         scope,
@@ -113,7 +115,8 @@ export function useBoardSharing(
           if (controller.signal.aborted) return;
           setFailed((prev) => ({
             scope,
-            ids: new Set([...(prev.scope === scope ? prev.ids : []), boardId]),
+            key,
+            ids: new Set([...(prev.scope === scope && prev.key === key ? prev.ids : []), boardId]),
           }));
         }
       );
@@ -121,9 +124,9 @@ export function useBoardSharing(
     return () => controller.abort();
   }, [client, key, scope, userId, attempt]);
   const retry = useCallback(() => {
-    setFailed({ scope, ids: NO_FAILURES });
+    setFailed({ scope, key, ids: NO_FAILURES });
     setAttempt((a) => a + 1);
-  }, [scope]);
+  }, [scope, key]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: version re-reads the cache after a read settles
   return useMemo(() => {

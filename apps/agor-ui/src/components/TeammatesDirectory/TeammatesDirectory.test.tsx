@@ -49,6 +49,18 @@ const clientWith = (find: Find, boardPolicy?: Find) =>
 
 const answer = (can: 'session' | 'view') => ({ can, is_owner: false, source: 'others' });
 
+/** A board policy every member can view. */
+const openPolicy = () => ({
+  primary_owner_user_id: 'owner-1',
+  board_access: {
+    schema_version: 1,
+    policy_kind: 'board_access',
+    sharing_mode: 'shared',
+    entries: [],
+    others: { preset: 'viewer', capabilities: ['board.view'], fs_access: 'none' },
+  },
+});
+
 /** Access reads that resolve only when the test says so. */
 function deferredReads() {
   const waiting = new Map<string, (value: unknown) => void>();
@@ -272,6 +284,72 @@ describe('TeammatesDirectory', () => {
     await act(async () => {
       for (const id of [...reads.waiting.keys()]) reads.resolve(id, answer('view'));
     });
+  });
+
+  it('counts only failed checks that match the search', async () => {
+    seed(
+      [teammate('alpha', 'b1'), teammate('beta', 'b2'), teammate('gamma', 'b3')],
+      [board('b1', 'Writes specs'), board('b2', 'Writes specs'), board('b3', 'Ships builds')]
+    );
+    renderDirectory({
+      client: clientWith(async () => Promise.reject(new Error('offline'))),
+      checkAccess: true,
+    });
+    fireEvent.click(screen.getByText('You can ask'));
+    expect(await screen.findByText(/Couldn’t check access for 3 teammates/)).toBeInTheDocument();
+
+    search('specs');
+    expect(screen.getByText(/Couldn’t check access for 2 teammates/)).toBeInTheDocument();
+    search('builds');
+    expect(screen.getByText(/Couldn’t check access for 1 teammate /)).toBeInTheDocument();
+  });
+
+  it('reads a superadmin’s policies in list order, so the first card needn’t wait', async () => {
+    // Board ids sort opposite to the list, and only four reads run at once.
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    seed(
+      ids.map((id, i) => teammate(id, `b-${5 - i}`)),
+      ids.map((_, i) => board(`b-${5 - i}`))
+    );
+    const reads = deferredReads();
+    renderDirectory({ client: clientWith(vi.fn(), reads.find), currentUser: superadmin });
+    await waitFor(() => expect(reads.find).toHaveBeenCalledTimes(4));
+
+    await act(async () => reads.resolve('b-5', openPolicy()));
+    expect(await screen.findByText('Teammate a')).toBeInTheDocument();
+    expect(screen.queryByText('Teammate b')).not.toBeInTheDocument();
+    // Free the shared read slots for the next test.
+    await waitFor(() => expect(reads.find).toHaveBeenCalledTimes(5));
+    await act(async () => {
+      for (const id of [...reads.waiting.keys()]) reads.resolve(id, openPolicy());
+    });
+    expect(await screen.findByText('Teammate e')).toBeInTheDocument();
+  });
+
+  it('retries only access checks when no policy read failed', async () => {
+    seed([teammate('alpha', 'b1'), teammate('beta', 'b2')], [board('b1'), board('b2')]);
+    const policy = vi.fn<Find>(async () => openPolicy());
+    const find = vi
+      .fn<Find>()
+      .mockImplementation(async ({ route }) =>
+        route.id === 'beta' ? Promise.reject(new Error('offline')) : answer('session')
+      );
+    renderDirectory({
+      client: clientWith(find, policy),
+      currentUser: superadmin,
+      checkAccess: true,
+    });
+    fireEvent.click(screen.getByText('You can ask'));
+    expect(await screen.findByText(/Couldn’t check access for 1 teammate/)).toBeInTheDocument();
+    expect(policy).toHaveBeenCalledTimes(2);
+
+    // Past the cache's freshness, a policy re-read would reach the server.
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120_000);
+    find.mockImplementation(async () => answer('session'));
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Teammate beta')).toBeInTheDocument();
+    expect(policy).toHaveBeenCalledTimes(2);
+    now.mockRestore();
   });
 
   it('keeps list order: a late answer never lands above cards already shown', async () => {
