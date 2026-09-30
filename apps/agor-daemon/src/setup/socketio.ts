@@ -1,5 +1,6 @@
 import type { TenantRestrictionState } from '@agor/core/db';
 import {
+  endTenantRestrictionRequest,
   TENANT_RESTRICTION_OBSERVATION_MS,
   withTenantRestrictionRequest,
 } from '../auth/tenant-access.js';
@@ -844,9 +845,14 @@ export function createSocketIOConfig(
         next(publicError);
       }
     };
-    // The strategy's generation check and tenant admission share one restriction read.
+    // The strategy's generation check and tenant admission share one read; the connection handler never inherits it.
     io.use((socket, next) =>
-      withTenantRestrictionRequest(() => authenticateHandshake(socket, next))
+      withTenantRestrictionRequest(() =>
+        authenticateHandshake(socket, (error) => {
+          endTenantRestrictionRequest();
+          next(error);
+        })
+      )
     );
 
     // One input-target executor socket per process-local terminal attachment.

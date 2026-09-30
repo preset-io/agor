@@ -2,6 +2,7 @@ import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import {
   assertRuntimeTenantAccess,
+  endTenantRestrictionRequest,
   readRequestTenantRestriction,
   withTenantRestrictionRequest,
 } from './auth/tenant-access.js';
@@ -841,10 +842,17 @@ async function authenticateBearerHttp(input: {
   return params;
 }
 
-/** The strategy's generation check and tenant admission share one restriction read. */
+/** The strategy's generation check and tenant admission share one read; route work reads fresh. */
 export const authenticateBearerHttpRequest = (
   input: Parameters<typeof authenticateBearerHttp>[0]
-) => withTenantRestrictionRequest(() => authenticateBearerHttp(input));
+) =>
+  withTenantRestrictionRequest(async () => {
+    try {
+      return await authenticateBearerHttp(input);
+    } finally {
+      endTenantRestrictionRequest();
+    }
+  });
 
 export function createExecutorUploadContentHandler(input: {
   db: TenantScopeAwareDatabase;

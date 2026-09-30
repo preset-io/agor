@@ -126,6 +126,7 @@ describe('browser upload route boundary ordering', () => {
     new Unavailable('Tenant access cannot be verified'),
   ])('denies upload before parsing when tenant admission fails: %s', async (error) => {
     const admission = vi.spyOn(tenantAccess, 'assertRuntimeTenantAccess').mockRejectedValue(error);
+    const ended = vi.spyOn(tenantAccess, 'endTenantRestrictionRequest');
     const middleware = createUploadAuthMiddleware({
       db: { run: vi.fn() } as never,
       authentication: { create: vi.fn(async () => ({ user: { user_id: 'user' } as User })) },
@@ -138,6 +139,7 @@ describe('browser upload route boundary ordering', () => {
     expect(status).toHaveBeenCalledWith(error.code);
     expect(json).toHaveBeenCalledWith({ error: error.message });
     expect(next).not.toHaveBeenCalled();
+    expect(ended).toHaveBeenCalledOnce();
     expect(admission).toHaveBeenCalledWith(
       expect.anything(),
       'tenant-a',

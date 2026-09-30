@@ -43,6 +43,7 @@ import {
   attachExecutorConnectionCandidate,
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-admission.js';
+import { endTenantRestrictionRequest } from '../auth/tenant-access.js';
 import type { DaemonOperationalMetrics } from '../metrics/operational';
 import {
   boardPresenceAssociationRoomName,
@@ -68,6 +69,11 @@ import {
   parseTerminalChannel,
   type SocketIOOptions,
 } from './socketio';
+
+vi.mock('../auth/tenant-access.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/tenant-access.js')>();
+  return { ...actual, endTenantRestrictionRequest: vi.fn(actual.endTenantRestrictionRequest) };
+});
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -846,6 +852,20 @@ describe('Socket.IO lifecycle logging', () => {
     const logCountAfterClose = logSpy.mock.calls.length;
     vi.advanceTimersByTime(5 * 60 * 1000);
     expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
+  });
+
+  it('ends the shared restriction read before the handshake continues', async () => {
+    const { io } = buildHarness();
+    const ended = vi.mocked(endTenantRestrictionRequest);
+    ended.mockClear();
+    let endedBeforeNext = -1;
+    await new Promise<void>((resolve) =>
+      io.middlewares[0]?.(makeSocket('scoped-handshake'), () => {
+        endedBeforeNext = ended.mock.calls.length;
+        resolve();
+      })
+    );
+    expect(endedBeforeNext).toBe(1);
   });
 
   it('tracks authenticated user clients separately from executor/service transports', async () => {
