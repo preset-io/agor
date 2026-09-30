@@ -82,7 +82,7 @@ export interface HomeBucketsOptions {
   boardsLimit?: number;
   query?: string;
   onlyStartedByMe?: boolean;
-  /** Failed sessions the user already opened (id → epoch ms when opened). */
+  /** Failed sessions the user already opened (id → `lastRunStartedAt` of the run they saw). */
   openedFailures?: Readonly<Record<string, number>>;
 }
 
@@ -107,8 +107,8 @@ const uuidV7Ms = (id: string) =>
   // shortid-guard:ignore reads the 48-bit timestamp, not a display short id
   id[14] === '7' ? Number.parseInt(id.slice(0, 8) + id.slice(9, 13), 16) : Number.NaN;
 
-/** When the session's latest run started: its newest task's id timestamp, else its creation. */
-function lastRunStartedAt(session: Session): number {
+/** When the session's latest run started (server clock): its newest task's id timestamp, else its creation. */
+export function lastRunStartedAt(session: Session): number {
   const tasks = session.tasks ?? [];
   // Ids carry queue time, not start: later runs read early, which errs toward keeping the failure.
   const taskMs = tasks.length ? uuidV7Ms(tasks[tasks.length - 1]) : Number.NaN;
@@ -152,21 +152,35 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
 }
 
 /**
- * The same person started a run on the branch after the failed run started and
- * it ran cleanly, so the failure no longer needs them. Run start times ignore
- * renames and other metadata edits that move `last_updated`.
+ * The person started this session and every fork ancestor: no spawn, schedule or
+ * delegation in its lineage. An ancestor missing from the store counts as not.
+ * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
  */
-function supersededFailure(session: Session, s: AgorState) {
-  const failedRunAt = lastRunStartedAt(session);
-  return (s.sessionsByBranch.get(session.branch_id) ?? []).some(
-    (other) =>
-      other !== session &&
-      !other.archived &&
-      other.created_by === session.created_by &&
-      ranCleanly(other) &&
-      lastRunStartedAt(other) > failedRunAt
-  );
+function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, boolean>): boolean {
+  const path: string[] = [];
+  let result = false;
+  for (let cur: Session | undefined = session; cur; ) {
+    const known = memo.get(cur.session_id);
+    if (known !== undefined) {
+      result = known;
+      break;
+    }
+    if (path.includes(cur.session_id) || !isSessionStartedByUser(cur)) break;
+    path.push(cur.session_id);
+    const from = cur.genealogy?.forked_from_session_id;
+    if (!from) {
+      result = true;
+      break;
+    }
+    cur = s.sessionById.get(from);
+  }
+  for (const id of path) memo.set(id, result);
+  return result;
 }
+
+/** Failures that need the person: sessions they started, including their scheduled runs, never spawned or delegated children. */
+const ownsFailure = (session: Session): boolean =>
+  !session.genealogy?.parent_session_id && !session.remote_relationships?.as_target?.length;
 
 /**
  * Home's session needs and My work in one pass over the caller's sessions.
@@ -241,6 +255,12 @@ export function makeHomeBucketsSelector(
       insertTopK(needs, sessionNeed(session, reason, earlier), needsLimit, needBefore);
     };
 
+    const failures: Session[] = [];
+    // Newest clean run start per branch among the caller's user-started lineages.
+    const cleanRunByBranch = new Map<string, number>();
+    // Newest clean scheduled run per branch: it supersedes only scheduled failures.
+    const cleanScheduledRunByBranch = new Map<string, number>();
+    const lineageMemo = new Map<string, boolean>();
     const failedByBranch = new Map<string, Session>();
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of userId ? s.sessionById.values() : []) {
@@ -257,21 +277,29 @@ export function makeHomeBucketsSelector(
           insertTopK(running, session, recentLimit, updatedBefore);
         }
       }
+      if (ranCleanly(session)) {
+        const cleanRuns = session.scheduled_from_branch
+          ? cleanScheduledRunByBranch
+          : startedByUserLineage(session, s, lineageMemo)
+            ? cleanRunByBranch
+            : undefined;
+        const runAt = lastRunStartedAt(session);
+        if (cleanRuns && runAt > (cleanRuns.get(session.branch_id) ?? 0))
+          cleanRuns.set(session.branch_id, runAt);
+      }
       if (session.status === SessionStatus.AWAITING_PERMISSION) {
         addNeed(session, 'permission');
       } else if (
         isFailure(session) &&
+        ownsFailure(session) &&
         updatedAt(session) >= now - HOME_FAILED_WINDOW_MS &&
-        updatedAt(session) > (openedFailures[session.session_id] ?? 0) &&
-        !supersededFailure(session, s)
+        // Opening records the run it saw, so only a newer run brings it back (not a rename or fork patch).
+        !(
+          lastRunStartedAt(session) <=
+          (openedFailures[session.session_id] ?? Number.NEGATIVE_INFINITY)
+        )
       ) {
-        const shown = failedByBranch.get(session.branch_id);
-        if (shown && !updatedBefore(session, shown)) {
-          addRecent(session);
-        } else {
-          failedByBranch.set(session.branch_id, session);
-          if (shown) addRecent(shown);
-        }
+        failures.push(session);
       } else if (isUnreadResult(session)) {
         unreadCount++;
         const finished = finishedByBranch.get(session.branch_id);
@@ -279,6 +307,25 @@ export function makeHomeBucketsSelector(
         else finishedByBranch.set(session.branch_id, [session]);
       } else {
         addRecent(session);
+      }
+    }
+    for (const session of failures) {
+      // Superseded by a clean user-started run after the failure settled; any later patch (rename, fork) re-settles it, erring toward keeping it.
+      const settledAt = updatedAt(session);
+      if (
+        (cleanRunByBranch.get(session.branch_id) ?? 0) > settledAt ||
+        (session.scheduled_from_branch &&
+          (cleanScheduledRunByBranch.get(session.branch_id) ?? 0) > settledAt)
+      ) {
+        addRecent(session);
+        continue;
+      }
+      const shown = failedByBranch.get(session.branch_id);
+      if (shown && !updatedBefore(session, shown)) {
+        addRecent(session);
+      } else {
+        failedByBranch.set(session.branch_id, session);
+        if (shown) addRecent(shown);
       }
     }
     for (const session of failedByBranch.values()) addNeed(session, 'failed');
