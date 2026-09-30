@@ -307,9 +307,9 @@ heartbeat authority recorded durably claims `authorization_revoked`, and the
 repository decides under the Task row lock whether it replaces a suspension cause.
 
 A task completing as the tenant closes (including a close between the admission
-check and the session write) still returns its session to idle through a hook-free
-projection. Everything else in completion is skipped and not replayed: origin
-alignment, auto-title, completion callbacks, BTW archive and result injection, the
+check and the session write), or while that check cannot read restriction state,
+still returns its session to idle through a hook-free projection. Everything else
+in completion is skipped and not replayed: origin alignment, auto-title, completion callbacks, BTW archive and result injection, the
 queue trigger, and the sessions after-patch hook, whose gateway outbound flush and
 progress `done` do not run. A buffered final gateway reply is therefore never
 posted, and a Slack thread status can stay `working` until that session's next

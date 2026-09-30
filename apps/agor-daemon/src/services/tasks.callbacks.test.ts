@@ -5,7 +5,7 @@ vi.mock('../auth/tenant-access.js', async (importOriginal) => ({
 }));
 
 import { runWithTenantDatabaseScope, SessionRepository, shortId } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
+import { Forbidden, Unavailable } from '@agor/core/feathers';
 import {
   type Session,
   type Task,
@@ -209,6 +209,33 @@ describe('TasksService completion callbacks', () => {
       .spyOn(SessionRepository.prototype, 'update')
       .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
     vi.mocked(isCurrentTenantRuntimeActive).mockResolvedValueOnce(false);
+    try {
+      await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
+        service.patch(taskId, { status: TaskStatus.COMPLETED })
+      );
+      expect(projected).toHaveBeenCalledWith(childSessionId, {
+        status: 'idle',
+        ready_for_prompt: true,
+      });
+      expect(sessionsPatch).not.toHaveBeenCalled();
+      expect(createPending).not.toHaveBeenCalled();
+      expect(triggerQueueProcessing).not.toHaveBeenCalled();
+    } finally {
+      projected.mockRestore();
+    }
+  });
+
+  it('returns the session to idle but runs no automation when the admission read fails', async () => {
+    const { service, createPending, sessionsPatch, triggerQueueProcessing, childSession } =
+      makeService();
+    const db = { run() {} };
+    (service as unknown as { db: unknown }).db = db;
+    const projected = vi
+      .spyOn(SessionRepository.prototype, 'update')
+      .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
+    vi.mocked(isCurrentTenantRuntimeActive).mockRejectedValueOnce(
+      new Unavailable('Tenant access cannot be verified')
+    );
     try {
       await runWithTenantDatabaseScope(db as never, 'tenant-1', () =>
         service.patch(taskId, { status: TaskStatus.COMPLETED })

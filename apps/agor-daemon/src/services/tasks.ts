@@ -861,7 +861,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!task.session_id || !this.app) return false;
     try {
       // Settlement is committed; while restricted, skip completion automation (not replayed on release).
-      let automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
+      let automationAdmitted: boolean;
+      try {
+        automationAdmitted = await isCurrentTenantRuntimeActive(this.db);
+      } catch {
+        // Unverifiable: still project the terminal session hook-free, which is always correct, and run no automation.
+        automationAdmitted = false;
+      }
       const readSettledSession = () =>
         readTerminationEntity(
           this.app,
