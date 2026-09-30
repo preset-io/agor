@@ -34,6 +34,9 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
   onBack,
 }: TeammatesDirectoryProps) {
   const { token } = theme.useToken();
+  // The status region mounts empty and gains its text after, since readers may skip text a live region starts with.
+  const [announce, setAnnounce] = useState(false);
+  useEffect(() => setAnnounce(true), []);
   const hydrated = useAgorStore((s) => s.branchesHydrated);
   const {
     teammates,
@@ -202,7 +205,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
               : VISUALLY_HIDDEN_STYLE
           }
         >
-          {status}
+          {announce ? status : ''}
         </Typography.Text>
       </HomeCard>
     </HomeFrame>

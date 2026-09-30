@@ -123,7 +123,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
-import { getRouterBasename } from './utils/uiRoutes';
+import { getRouterBasename, isMobileShellPath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -281,7 +281,7 @@ const routeModuleLoaders = {
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
 
 function getRouteModuleKey(surfaceId: RouteSurfaceId, pathname: string): RouteModuleKey {
-  if (pathname.startsWith('/m')) return 'mobile';
+  if (isMobileShellPath(pathname)) return 'mobile';
   return surfaceId;
 }
 
@@ -304,7 +304,7 @@ function AppContent() {
   // static surface can't forget to wire it.
   useSurfaceBranding(currentSurface);
   const sharedSurfaceOwnsUserSettings =
-    currentSurface.usesSharedUserSettings || location.pathname.startsWith('/m');
+    currentSurface.usesSharedUserSettings || isMobileShellPath(location.pathname);
   const routeModuleKey = getRouteModuleKey(currentSurface.id, location.pathname);
   const [routeModuleReady, setRouteModuleReady] = useState(() =>
     loadedRouteModuleKeys.has(routeModuleKey)
@@ -2229,7 +2229,7 @@ function AppContent() {
           />
         )}
 
-        {location.pathname.startsWith('/m') && (
+        {isMobileShellPath(location.pathname) && (
           <SettingsModal
             open={settingsTabToOpen !== null}
             onClose={handleSettingsClose}

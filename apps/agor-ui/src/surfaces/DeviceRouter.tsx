@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useIsMobileViewport } from '../hooks/useIsMobileViewport';
 import { agorStore } from '../store/agorStore';
-import { responsiveRoutePath } from '../utils/uiRoutes';
+import { isMobileShellPath, responsiveRoutePath } from '../utils/uiRoutes';
 import { routeUsesDeviceRouter } from './surfaceRegistry';
 
 /** Redirects between the mobile and desktop shells as the viewport crosses the shell breakpoint. */
@@ -13,7 +13,7 @@ export function DeviceRouter() {
 
   useEffect(() => {
     if (!routeUsesDeviceRouter(pathname)) return;
-    const isOnMobilePath = pathname.startsWith('/m');
+    const isOnMobilePath = isMobileShellPath(pathname);
     if (isMobile === isOnMobilePath) return;
 
     const state = agorStore.getState();

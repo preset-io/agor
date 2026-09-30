@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   getRouterBasename,
+  hasInAppHistory,
   isMobileShellPath,
   isTeammatesRoute,
   responsiveRoutePath,
@@ -108,5 +109,22 @@ describe('responsiveRoutePath', () => {
     expect(
       responsiveRoutePath('/m/board/01a012d8-9999-7909-b6f4-2024dfc7c51e', 'desktop', entities)
     ).toBe('/b/01a012d899997909b6f42024/');
+  });
+});
+
+describe('hasInAppHistory', () => {
+  afterEach(() => window.history.replaceState(null, ''));
+
+  it('trusts the browser router index, even after a replace gave the first entry a new key', () => {
+    window.history.replaceState({ idx: 0, key: 'redirected' }, '');
+    expect(hasInAppHistory('redirected')).toBe(false);
+    window.history.replaceState({ idx: 2, key: 'later' }, '');
+    expect(hasInAppHistory('later')).toBe(true);
+  });
+
+  it('falls back to the location key without a browser router index', () => {
+    window.history.replaceState(null, '');
+    expect(hasInAppHistory('default')).toBe(false);
+    expect(hasInAppHistory('abc123')).toBe(true);
   });
 });

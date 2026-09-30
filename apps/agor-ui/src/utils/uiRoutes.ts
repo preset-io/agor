@@ -20,6 +20,15 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
   return `${getRouterBasename(baseUrl)}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/**
+ * Whether Back stays inside Agor. The browser router keeps `idx` in history state across
+ * replaces, so a redirected deep link still counts as the first entry; other routers fall back to the key.
+ */
+export function hasInAppHistory(locationKey: string): boolean {
+  const idx = (typeof window === 'undefined' ? undefined : window.history.state)?.idx;
+  return typeof idx === 'number' ? idx > 0 : locationKey !== 'default';
+}
+
 /** Whether `pathname` belongs to the mobile shell (`/m` and below). */
 export const isMobileShellPath = (pathname: string): boolean =>
   matchPath({ path: '/m', end: false }, pathname) !== null;

@@ -31,6 +31,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { agorStore } from '../store/agorStore';
 import {
+  hasInAppHistory,
   isMobileShellPath,
   MOBILE_TEAMMATES_ROUTE_PATH,
   TEAMMATES_ROUTE_PATH,
@@ -155,7 +156,7 @@ export function useAppNavigation({
   );
 
   const goBack = useCallback(() => {
-    if (locationKeyRef.current !== 'default') navigate(-1);
+    if (hasInAppHistory(locationKeyRef.current)) navigate(-1);
     else pushPath(isMobileShellPath(locationPathnameRef.current) ? '/m' : '/');
   }, [navigate, pushPath]);
 
