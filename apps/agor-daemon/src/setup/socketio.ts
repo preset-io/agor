@@ -804,10 +804,7 @@ export function createSocketIOConfig(
           message?: string;
           data?: { name?: string };
         };
-        // A restricted tenant presented a valid credential, so it is neither an
-        // authentication failure for the gauge below nor a refreshable
-        // rejection for the client. Give it its own stable code and let the
-        // client stop reconnecting instead of rotating a token that is fine.
+        // A restricted tenant's credential is valid: send the stable code, not a refreshable 401, and skip the failure gauge.
         const restricted = restrictedSocketHandshakeError(error);
         if (restricted) {
           console.warn(

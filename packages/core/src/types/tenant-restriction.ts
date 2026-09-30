@@ -1,12 +1,4 @@
-/**
- * Durable intent protocol for a controller-owned tenant restriction.
- *
- * These records are NOT proof of enforcement or process containment. A serving
- * adapter must separately enforce admission, drain its connections, settle
- * execution, and report generation-bound evidence before an orchestrator may
- * describe a tenant as suspended. No transport or customer-facing API is
- * exposed by this protocol.
- */
+/** Durable controller-owned restriction intent; records are not proof of enforcement, draining or containment. */
 import { z } from 'zod';
 
 const identity = z
@@ -55,34 +47,7 @@ export class TenantRestrictionConflictError extends Error {
   }
 }
 
-/**
- * Pure transition policy. Restrict and prepare_release can create a CLOSED row. A new release
- * uses a higher revision and stays closed until a separate activation of that
- * exact operation. Active records remain as revision watermarks; never delete
- * them as a release operation. Controller and placement identities cannot be
- * changed.
- *
- * `seed_active` is the one action that writes an OPEN record without a prepared
- * release, and it is deliberately the narrowest: it WRITES only when this runtime
- * holds no record at all for the controller. It exists because the restriction
- * table is deployment-bound and never portable, so a tenant moved to a fresh
- * runtime arrives with an empty history that the launch-revision check reads as
- * a missing watermark. The orchestrator that moved the tenant restates the
- * watermark it already knows; it can never CHANGE a runtime that recorded
- * anything.
- *
- * An EXACT replay of a seed this runtime already accepted — the same placement,
- * operation and revision, still `active` — is a no-op returning `changed: false`,
- * exactly like a replayed restrict/prepare/activate. The transport is
- * at-least-once, so a delivery whose reply was lost must be able to ask again and
- * be told the truth; reporting it as a conflict made a correct runtime look like
- * a failed one. It writes nothing, so the safety argument is untouched. Every
- * other existing record — a different operation or revision, a different
- * placement, or any closed phase — is rejected with `revision_conflict`.
- *
- * Caller must authenticate and bind the controller, tenant and placement before
- * invoking this policy. Knowing an identity string is not authorization.
- */
+/** Pure transition policy (see context/concepts/tenant-restrictions.md); the caller must authenticate and bind controller, tenant and placement. */
 export function transitionTenantRestriction(
   current: TenantRestrictionRecord | null,
   input: TenantRestrictionCommand
@@ -91,8 +56,7 @@ export function transitionTenantRestriction(
   if (command.action === 'seed_active') {
     if (current) {
       const recorded = TenantRestrictionRecordSchema.parse(current);
-      // Idempotent replay of THIS seed: same binding, same watermark, still open.
-      // Nothing is written, so this cannot repair, override or reopen anything.
+      // Exact replay of this seed writes nothing, so it cannot repair, override or reopen anything.
       if (
         recorded.placementId === command.placementId &&
         recorded.operationId === command.operationId &&
@@ -152,10 +116,7 @@ export function transitionTenantRestriction(
   if (command.action === 'activate') {
     throw new TenantRestrictionConflictError('release_not_prepared');
   }
-  // Empty history may be prepared CLOSED when a prior restriction never arrived.
-  // This installs the newer fence before any activation; a delayed restrict is stale.
-  // A higher revision may restrict again or supersede a pending suspension with
-  // a prepared release. Both remain closed. Only exact-revision activate opens.
+  // A higher (or first) revision restricts or prepares a release; both stay closed until exact-revision activate.
   const { action, ...binding } = command;
   return {
     record: { ...binding, phase: action === 'restrict' ? 'restricted' : 'release_prepared' },
@@ -168,14 +129,5 @@ export function isTenantRestrictionClosed(record: TenantRestrictionRecord): bool
   return TenantRestrictionRecordSchema.parse(record).phase !== 'active';
 }
 
-/**
- * Stable machine-readable code carried in the `data` of the neutral tenant
- * admission denial, both on the REST/Feathers `Forbidden` and on the Socket.IO
- * handshake rejection. Clients branch on this value instead of matching the
- * user-facing message text.
- *
- * It says only that this tenant is currently closed to ordinary access. It
- * carries no controller, placement, operation, revision, phase or reason, and
- * it is not evidence of containment.
- */
+/** Stable client-facing code for the neutral restriction denial; it discloses nothing else and is not containment evidence. */
 export const TENANT_RESTRICTED_ERROR_CODE = 'tenant_restricted';

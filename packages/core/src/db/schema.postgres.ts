@@ -1664,8 +1664,7 @@ export const boardGroupGrants = pgTable(
   })
 );
 
-// Controller-owned runtime intent. No application CRUD service is registered.
-// Release keeps the revision watermark; re-home must reassert destination intent.
+// Controller-owned runtime intent with no CRUD service; release keeps the revision watermark.
 export const tenantRestrictions = pgTable(
   'tenant_restrictions',
   {

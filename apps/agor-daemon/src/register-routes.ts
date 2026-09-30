@@ -1424,8 +1424,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const requestedExpiry = data.expiry_ms ?? maxExpiry;
       const expiryMs = Math.min(requestedExpiry, maxExpiry);
 
-      // Preserve a JWT caller's verified epoch, never upgrade stale authority
-      // across the awaited target lookup. Fresh auth uses current admission.
+      // Keep a JWT caller's verified epoch across the target lookup; fresh auth uses current admission.
       const impersonationTenant = authParams.tenant?.tenant_id;
       const impersonationEpoch = impersonationTenant
         ? authParams.authentication?.strategy === 'jwt'

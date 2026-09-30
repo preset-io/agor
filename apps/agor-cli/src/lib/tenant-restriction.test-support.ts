@@ -1,9 +1,4 @@
-/**
- * Spawn the real CLI the way an in-Cell Job does, so exit codes and the
- * stdout/stderr split are observed from outside the process rather than
- * simulated. Test-only helper; it lives outside `src/commands` so oclif never
- * mistakes it for a command.
- */
+/** Test-only: spawn the real CLI as an in-Cell Job does; lives outside `src/commands` so oclif never loads it. */
 
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
@@ -17,10 +12,7 @@ export interface TenantRestrictionCliResult {
   stderr: string;
 }
 
-/**
- * Variables the runner's own environment may carry that would otherwise let a
- * test pass without the database configuration the Job actually supplies.
- */
+/** Runner variables that could otherwise let a test pass without the Job's database configuration. */
 const DATABASE_ENV_TO_CLEAR = [
   'AGOR_DB_DIALECT',
   'AGOR_DB_PATH',

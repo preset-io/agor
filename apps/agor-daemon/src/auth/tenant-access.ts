@@ -127,11 +127,7 @@ export function gatewayOccurrenceTime(timestamp: string): number {
   return /^\d{10}(?:\.\d+)?$/.test(timestamp) ? Number(timestamp) * 1000 : Date.parse(timestamp);
 }
 
-/**
- * True only for the neutral restriction denial raised above. An unverifiable
- * read (503) and a rejected credential (401) are deliberately excluded: a
- * client must not present either of those as a suspended workspace.
- */
+/** True only for the neutral restriction denial; an unverifiable read (503) or rejected credential (401) never is. */
 export function isTenantRestrictedRejection(error: unknown): boolean {
   const data = (error as { data?: unknown } | null | undefined)?.data;
   if (!data || typeof data !== 'object') return false;

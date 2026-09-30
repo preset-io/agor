@@ -1688,8 +1688,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (conditionChanged) return { outcome: 'condition_changed', task: current };
 
       const existing = current.termination_request;
-      // A later genuine credential withdrawal must not inherit a suspension's
-      // benign Stopped classification. Other existing-cause precedence is unchanged.
+      // A later genuine credential withdrawal must not inherit a suspension's benign Stopped classification.
       const replacesSuspension =
         existing?.cause === 'tenant_suspension' && input.cause === 'authorization_revoked';
       const cause =

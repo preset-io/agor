@@ -26,8 +26,7 @@ export function assertTenantLaunchRevision(
     if (parsed && configuredController && parsed.controllerId !== configuredController)
       throw new Error('controller');
     if (!records.length) {
-      // Legacy baseline only. Managed placement readiness is a separate gate;
-      // a missing/rolled-back DB must never accept a positive signed revision.
+      // Legacy baseline only: a missing or rolled-back DB never accepts a positive signed revision.
       if ((parsed?.revision ?? 0) !== 0) throw new Error('missing watermark');
       return;
     }

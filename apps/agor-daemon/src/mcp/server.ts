@@ -757,8 +757,7 @@ export function setupMCPRoutes(
         });
       }
 
-      // MCP can call repositories without traversing a Feathers service hook.
-      // Revalidate on every request, including an already-issued session token.
+      // MCP reaches repositories without service hooks, so revalidate every request, issued tokens included.
       try {
         await assertRuntimeTenantAccess(db, tenant.tenant_id);
       } catch (error) {

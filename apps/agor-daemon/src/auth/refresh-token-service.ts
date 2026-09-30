@@ -93,13 +93,7 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           user: redactUserAuthMetadata(user),
         };
       } catch (error) {
-        // The generic rejection stays generic: a bad signature, a wrong token
-        // type, a missing user and a stale generation are all "invalid or
-        // expired" and nothing more. The one exception is the closed-tenant
-        // code raised by the credential-epoch read, which the holder of this
-        // signed refresh token is already entitled to (it is the same tenant
-        // the 403 would name) and which the browser needs to tell a suspended
-        // workspace from a dead session. The refresh is refused either way.
+        // Only the closed-tenant code survives (its holder is entitled to it); everything else stays "invalid or expired".
         if (isTenantRestrictedRejection(error)) {
           throw new NotAuthenticated('Invalid or expired refresh token', {
             code: TENANT_RESTRICTED_ERROR_CODE,

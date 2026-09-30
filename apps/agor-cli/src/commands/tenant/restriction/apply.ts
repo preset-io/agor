@@ -1,12 +1,4 @@
-/**
- * `agor tenant restriction apply` — record one controller-owned restriction
- * command for a tenant in the runtime database. Invoked by the Data Plane Agent
- * as a non-interactive in-Cell Job; it needs only the runtime database
- * configuration (`DATABASE_URL`) and never contacts the daemon.
- *
- * It writes INTENT. It does not authenticate the controller, drain connections,
- * stop processes, or prove that anything already admitted has stopped.
- */
+/** `agor tenant restriction apply`: records one controller command (intent only) using just `DATABASE_URL`. */
 
 import { applyTenantRestrictionIntent, createDatabase, getDatabaseUrl } from '@agor/core/db';
 import type { TenantRestrictionRecord } from '@agor/core/types';
@@ -88,8 +80,7 @@ export default class TenantRestrictionApply extends Command {
     try {
       const db = createDatabase({ url: getDatabaseUrl() });
       result = await applyTenantRestrictionIntent(db, tenantId, command, {
-        // stdout is the machine-readable contract; the writer's operational
-        // line belongs on stderr with the rest of the audit output.
+        // stdout is the machine-readable contract; the writer's audit line goes to stderr.
         log: (line) => this.logToStderr(chalk.dim(line)),
       });
     } catch (error) {

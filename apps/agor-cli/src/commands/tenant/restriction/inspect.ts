@@ -1,12 +1,4 @@
-/**
- * `agor tenant restriction inspect` — read back every controller's recorded
- * restriction intent for one tenant. Read-only proof Job for the Data Plane
- * Agent; needs only the runtime database configuration (`DATABASE_URL`).
- *
- * An empty array means no controller has recorded intent for this tenant in
- * THIS database. It is not proof that the tenant may be served: a fresh or
- * restored runtime must receive its own authoritative restriction first.
- */
+/** `agor tenant restriction inspect`: read every controller's recorded intent; an empty array never means the tenant may be served. */
 
 import { createDatabase, getDatabaseUrl, readTenantRestrictionState } from '@agor/core/db';
 import type { TenantRestrictionRecord } from '@agor/core/types';

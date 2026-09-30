@@ -1,14 +1,4 @@
-/**
- * Shared helpers for `agor tenant restriction apply|inspect`.
- *
- * These commands are the runtime side of a controller-owned restriction: an
- * external control plane runs them as a non-interactive in-Cell Job against the
- * runtime database. They record and read INTENT. Neither command authenticates
- * its caller, proves containment, drains connections, or settles running work.
- *
- * stdout is a single machine-readable JSON line; stderr carries one bounded
- * `{ "error": <code> }` line on failure plus human audit text.
- */
+/** Shared helpers for `agor tenant restriction apply|inspect`: they record and read intent only; stdout is one JSON line. */
 
 import {
   type TenantRestrictionCommand,
@@ -55,11 +45,7 @@ export interface TenantRestrictionApplyFlags {
   action: string;
 }
 
-/**
- * Build the version-1 protocol command from parsed flags. Validation is the
- * schema's, not the flag parser's, so the CLI cannot accept an identity or
- * revision the writer would later reject.
- */
+/** Build the version-1 command; the schema validates, so the CLI cannot accept what the writer would reject. */
 export function buildTenantRestrictionCommand(
   flags: TenantRestrictionApplyFlags
 ): TenantRestrictionCommand {
@@ -73,11 +59,7 @@ export function buildTenantRestrictionCommand(
   });
 }
 
-/**
- * Map a failure to its exit code and bounded stderr code. Conflict codes come
- * from the protocol so an orchestrator can branch on them; every other failure
- * collapses to a category. Error messages never cross this boundary.
- */
+/** Map a failure to its exit code and bounded stderr code; error messages never cross this boundary. */
 export function tenantRestrictionFailure(error: unknown): {
   exitCode: number;
   code: TenantRestrictionStderrCode;

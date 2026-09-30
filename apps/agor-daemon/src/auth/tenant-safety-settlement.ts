@@ -20,11 +20,7 @@ export const TENANT_SAFETY_TASK_METHODS: readonly string[] = [
   'reportSdkHealthFailure',
 ];
 
-/**
- * Authenticate exact lifecycle capabilities BEFORE treating a request as safety
- * traffic. Service schemas and durable operation/generation checks still run.
- * This grants no general read, start, claim, role or provider exemption.
- */
+/** Authenticate exact lifecycle capabilities before treating a request as safety traffic; no general exemption. */
 export async function isTenantSafetySettlement(context: HookContext): Promise<boolean> {
   if (context.path === 'tasks' && TENANT_SAFETY_TASK_METHODS.includes(context.method)) {
     await requireTaskScopedExecutorRuntimeToken()(context);

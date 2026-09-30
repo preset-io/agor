@@ -79,10 +79,7 @@ export type AuthorityCycleLoginResult =
   | { status: 'obsolete' };
 
 interface UseAuthReturn extends AuthState {
-  /**
-   * The daemon answered an authentication attempt with the closed-workspace
-   * code. The stored credential is intact and deliberately retained.
-   */
+  /** The daemon answered with the closed-workspace code; the stored credential is deliberately retained. */
   tenantRestricted: boolean;
   /** Monotonic owner for caller-scoped async work. Routine token refresh does not advance it. */
   authenticationGeneration: number;
@@ -138,9 +135,7 @@ export function useAuth(): UseAuthReturn {
   });
   const authStateRef = useRef(state);
   authStateRef.current = state;
-  // Separate from AuthState on purpose: this is the daemon's answer about the
-  // workspace, not about this browser's credential, and it must survive the
-  // unauthenticated state that every rejection path writes.
+  // Separate from AuthState: it describes the workspace, not the credential, and survives unauthenticated writes.
   const [tenantRestricted, setTenantRestricted] = useState(false);
   const restrictionProbeAttemptRef = useRef(0);
   const noteAuthFailure = useCallback((error: unknown) => {
@@ -148,12 +143,7 @@ export function useAuth(): UseAuthReturn {
       setTenantRestricted(true);
       return;
     }
-    // A plain credential rejection is still the daemon answering, and it is no
-    // longer "this workspace is closed" — which is exactly what a reopened
-    // workspace says to the parked tab whose generation the release moved.
-    // Leave the suspended state so sign-in can take over. An unreachable
-    // daemon or any other failure never overturns the last authoritative
-    // answer; only the daemon may.
+    // A plain credential rejection (a reopened workspace's moved generation) hands over to sign-in; other failures change nothing.
     if (isDefiniteAuthFailure(error)) setTenantRestricted(false);
   }, []);
   const previousDraftAuthorityRef = useRef<{ userId: string; role: string } | null>(null);
@@ -176,8 +166,7 @@ export function useAuth(): UseAuthReturn {
 
   const noteAuthenticatedUser = useCallback(
     (user: User) => {
-      // An accepted credential is the daemon's answer that the workspace is
-      // open again; nothing else clears the suspended state.
+      // Only an accepted credential clears the suspended state.
       setTenantRestricted(false);
       restrictionProbeAttemptRef.current = 0;
       const previous = activeAuthorityRef.current;
@@ -489,10 +478,7 @@ export function useAuth(): UseAuthReturn {
     if (!hasTokens) return;
 
     if (tenantRestricted) {
-      // A closed workspace is an operator decision the daemon will hold until
-      // it changes, not a restarting daemon. Probe on the same widening
-      // schedule the socket uses rather than three times a second per tab; the
-      // loading flip from each attempt re-runs this effect for the next one.
+      // Probe a closed workspace on the socket's widening schedule; each attempt's loading flip re-runs this effect.
       const probe = setTimeout(
         () => {
           reAuthenticate();
@@ -542,9 +528,7 @@ export function useAuth(): UseAuthReturn {
 
         console.error('Failed to auto-refresh token:', error);
         if (isTenantRestrictedError(error)) {
-          // The credential is fine and the workspace is closed. Keep both
-          // tokens: the probe above re-authenticates with them when the
-          // workspace reopens, and "Session expired" would be a lie.
+          // The credential is fine: keep both tokens for the probe to re-authenticate when the workspace reopens.
           noteAuthFailure(error);
           noteUnauthenticated();
           setState({

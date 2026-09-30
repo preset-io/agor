@@ -347,8 +347,7 @@ export class SessionTokenService {
       throw new Error('Missing trusted tenant context for executor token issuance');
     }
 
-    // Command recovery credentials may still be minted for exact safety work
-    // while closed; they do not gain ordinary post-reactivation authority.
+    // Recovery credentials for exact safety work may be minted while closed; they gain no ordinary authority.
     const epoch =
       this.db && tenantId && issuance !== 'safety-recovery'
         ? await readTenantCredentialEpoch(this.db, tenantId)

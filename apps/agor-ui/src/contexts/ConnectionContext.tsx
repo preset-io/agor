@@ -86,8 +86,7 @@ export function useMutationGate(): MutationGate {
   const { connected, connecting, outOfSync, tenantRestricted } =
     useContext(ConnectionContext) ?? DEFAULT_CONNECTION_CONTEXT;
 
-  // Checked first: while the workspace is suspended no mutation can succeed,
-  // and offering "Reconnecting…" would promise a reconnect we are not making.
+  // Checked first: a suspended workspace neither accepts mutations nor is reconnecting.
   if (tenantRestricted) {
     return {
       canMutate: false,

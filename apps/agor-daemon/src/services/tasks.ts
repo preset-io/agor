@@ -836,9 +836,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
-      // Durable task/session settlement already committed. Do not convert it
-      // into callbacks, repo alignment, title generation or queue replay while
-      // restricted. Skipped completion automation is not replayed on release.
+      // Settlement is committed; while restricted, skip completion automation (not replayed on release).
       if (!(await isCurrentTenantRuntimeActive(this.db))) return true;
       const session = await this.app.service('sessions').get(task.session_id, params);
 
@@ -1781,8 +1779,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Do not let a wrong-scope credential stop somebody else's runtime.
       throw new Forbidden('Executor task authority does not match this runtime');
     }
-    // Restricted telemetry is control traffic, never callback automation. Install
-    // the durable Stop even if the restriction observer has not reached this task.
+    // Restricted telemetry installs the durable Stop even before the restriction observer reaches this task.
     try {
       await assertRuntimeTenantAccess(
         this.db,

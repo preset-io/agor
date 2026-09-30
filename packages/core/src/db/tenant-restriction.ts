@@ -1,5 +1,4 @@
-// Restriction INTENT, not enforcement proof; the only writer is the in-Cell `agor tenant restriction apply` Job.
-// The writer authenticates nobody: never call it from tenant-controlled request parameters.
+// Restriction intent, not enforcement proof; the only writer is the unauthenticated in-Cell `agor tenant restriction apply` Job.
 import { sql } from 'drizzle-orm';
 import {
   isTenantRestrictionClosed,

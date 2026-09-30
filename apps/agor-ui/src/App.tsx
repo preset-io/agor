@@ -1153,14 +1153,7 @@ function AppContent() {
     typeof window !== 'undefined' &&
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
 
-  // The daemon has closed this tenant. Replace the whole shell before any
-  // sign-in, connection or loading state can render: the socket is
-  // deliberately closed, so "Reconnecting to daemon…" would be both wrong and
-  // never-ending, a mounted workspace would offer prompts, terminals and
-  // uploads that all fail, and a sign-in form would invite a member to fix a
-  // credential that is not the problem. Either half of the app can be the one
-  // that saw the code — the socket handshake, or the authentication attempt
-  // that runs before a socket exists.
+  // A closed tenant (seen by the socket or by authentication) replaces the shell before sign-in, connection or loading UI.
   if (tenantRestricted || authTenantRestricted) {
     return <WorkspaceSuspended />;
   }

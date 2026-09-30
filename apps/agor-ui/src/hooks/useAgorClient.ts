@@ -29,19 +29,7 @@ interface UseAgorClientResult {
   retryConnection: () => void;
 }
 
-/**
- * Re-probe schedule while the workspace is suspended: 30s, 1m, 2m, 4m, then a
- * 5m ceiling.
- *
- * The first probe is short because the common case is a short hold that an
- * administrator clears in minutes, and the acceptance contract is that release
- * restores the workspace without a manual refresh. The ceiling exists because
- * an unattended suspended tab may sit open for days: at 5 minutes a whole
- * suspended team costs the daemon one rejected handshake per tab per 5 minutes
- * instead of one per second. No jitter — a probe is a single handshake that the
- * daemon rejects before any tenant work, so spreading them buys nothing that
- * would justify making the recovery window non-deterministic.
- */
+/** Suspended re-probe schedule: short first for quick releases, 5m ceiling so idle tabs cost one handshake per 5 minutes. */
 export const TENANT_RESTRICTION_PROBE_DELAYS_MS = [
   30_000, 60_000, 120_000, 240_000, 300_000,
 ] as const;
@@ -155,8 +143,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       }, DISCONNECT_GRACE_MS);
     };
 
-    // Suspended-workspace state. `restricted` is the effect-local mirror of the
-    // rendered flag so socket callbacks can branch without a stale closure.
+    // Effect-local mirror of the rendered suspended flag, so socket callbacks avoid stale closures.
     let restricted = false;
     let restrictionProbes = 0;
     let restrictionProbeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -167,14 +154,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       }
     };
 
-    /**
-     * Enter (or stay in) the suspended state and stop reconnecting.
-     *
-     * Socket.IO's own reconnection would keep retrying every 1–5s forever, and
-     * the manual 'io server disconnect' path would race it. Both are wrong for
-     * a decision the daemon will hold until an operator changes it, so the
-     * socket is closed and only the slow probe reopens it.
-     */
+    /** Enter the suspended state: close the socket so only the slow probe, not Socket.IO's fast retry, reopens it. */
     const enterTenantRestricted = () => {
       if (!mounted) return;
       restricted = true;
@@ -182,8 +162,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       setConnecting(false);
       clearDisconnectGrace();
       setConnected(false);
-      // The suspended screen is the message; a connection banner would only
-      // contradict it.
+      // The suspended screen is the message; a connection banner would only contradict it.
       setError(null);
       clearManualReconnectTimer();
       manualReconnectAttempts = 0;
@@ -195,8 +174,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       restrictionProbeTimer = setTimeout(() => {
         restrictionProbeTimer = null;
         if (!mounted || !restricted) return;
-        // One handshake. Success clears the state in the `connect` handler;
-        // any rejection lands back here and schedules the next, longer probe.
+        // One handshake: `connect` clears the state, any rejection schedules the next, longer probe.
         client?.io.connect();
       }, delay);
     };
@@ -301,11 +279,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         (window as unknown as { __agorClient: AgorClient }).__agorClient = socketClient;
       }
 
-      // Setup socket event listeners BEFORE connecting
-      // Single client-side chokepoint for service calls: any Feathers request
-      // the daemon rejects with the restriction code flips the app into the
-      // suspended state, without waiting for the socket to be retired. The hook
-      // only observes — the rejection still reaches its caller unchanged.
+      // Setup socket event listeners BEFORE connecting; a restriction-coded service rejection enters the suspended state (observe only).
       socketClient.hooks({
         error: [
           (context: { error?: unknown }) => {
@@ -320,8 +294,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         manualReconnectAttempts = 0;
         clearManualReconnectTimer();
         clearDisconnectGrace();
-        // An accepted handshake is the daemon's answer that the tenant is open
-        // again; nothing else clears the suspended state.
+        // Only an accepted handshake clears the suspended state.
         restricted = false;
         restrictionProbes = 0;
         clearRestrictionProbeTimer();
@@ -409,12 +382,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             enterTenantRestricted();
             return;
           }
-          // Credential recovery still runs while suspended. The daemon checks
-          // the credential before tenant access, so a restricted tenant is
-          // currently far more likely to answer 401 here than with the code
-          // above; either way, a rejected credential must recover or fail over
-          // to sign-in rather than leave the member parked on a suspended
-          // screen for a workspace that may already be open again.
+          // Credential recovery still runs while suspended: a rejected credential recovers or falls back to sign-in.
           if (isDefiniteAuthFailure(err)) {
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
@@ -431,10 +399,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             });
             return;
           }
-          // Any other probe failure (daemon restarting, network down) keeps the
-          // suspended state and the slow cadence rather than falling back into
-          // Socket.IO's fast retry: the last authoritative answer is still
-          // "restricted", and only an accepted handshake may overturn it.
+          // Any other probe failure keeps the suspended state and slow cadence; only an accepted handshake overturns it.
           if (restricted) {
             enterTenantRestricted();
             return;
@@ -477,9 +442,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
           socketClient.io.once('connect_error', (err) => {
             clearTimeout(timeout);
-            // The persistent handler above already entered the suspended state.
-            // Settle quietly so the initial load does not also raise a
-            // "daemon is not running" error over the suspended screen.
+            // The persistent handler already entered the suspended state; settle without a "daemon is not running" error.
             if (isTenantRestrictedError(err) || restricted) {
               resolve();
               return;
@@ -558,8 +521,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
   return {
     client: visibleBinding?.client ?? null,
     connected: !!visibleBinding && connected,
-    // A suspended workspace is not "reconnecting": the socket is closed on
-    // purpose and the suspended screen, not a connection banner, owns the UI.
+    // A suspended workspace is not "reconnecting"; the suspended screen owns the UI.
     connecting: hasToken && !tenantRestricted ? !visibleBinding || connecting : false,
     authGeneration,
     tenantRestricted: !!visibleBinding && tenantRestricted,
