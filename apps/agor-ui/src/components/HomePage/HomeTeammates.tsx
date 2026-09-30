@@ -7,7 +7,7 @@ import { useConnectionState } from '../../contexts/ConnectionContext';
 import { useBoardsSharedWithMe } from '../../hooks/useBoardsSharedWithMe';
 import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
 import { makeTeammatesSelector } from '../../store/selectors';
-import { peekAccess, readAccess } from '../../utils/accessCache';
+import { accessScope, peekAccess, readAccess } from '../../utils/accessCache';
 import { canStartSessions } from '../../utils/branchAccess';
 import { teammateEmoji, teammateLabel } from '../../utils/teammateLabels';
 import { getTemplateBySourceBranch } from '../../utils/teammateTemplates';
@@ -44,11 +44,12 @@ const NO_FAILURES: ReadonlySet<string> = new Set();
  */
 export function useSessionAccess(
   client: AgorClient | null,
-  userId: string | undefined,
+  user: User | null | undefined,
   branchIds: string[]
 ) {
   const { authGeneration } = useConnectionState();
-  const scope = `${userId}:${authGeneration}`;
+  const userId = user?.user_id;
+  const scope = accessScope(user, authGeneration);
   const key = branchIds.join(',');
   const [version, setVersion] = useState(0);
   const [attempt, setAttempt] = useState(0);
@@ -197,7 +198,7 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
   );
   const { access, failed, retry } = useSessionAccess(
     checkAccess ? client : null,
-    currentUser?.user_id,
+    currentUser,
     shown.map((b) => b.branch_id)
   );
   if (hydrated && teammates.length === 0) return null;

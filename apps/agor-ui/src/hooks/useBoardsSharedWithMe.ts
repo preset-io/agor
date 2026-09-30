@@ -10,54 +10,43 @@ import type {
 import { hasMinimumRole, ROLES, resolveCapabilityPolicyAccess } from '@agor-live/client';
 import { useEffect, useMemo, useState } from 'react';
 import { useConnectionState } from '../contexts/ConnectionContext';
-import { ACCESS_TTL_MS, peekAccess, readAccess } from '../utils/accessCache';
+import { accessScope, peekAccess, readAccess } from '../utils/accessCache';
 
 const allowAll = () => true;
 
-const groupReads = new WeakMap<
-  object,
-  { scope: string; at: number; groupIds: Promise<GroupID[]> }
->();
-
-/** The caller's unarchived group memberships, cached like access answers; a failure is forgotten. */
-function activeGroupIds(client: AgorClient, scope: string, userId: string): Promise<GroupID[]> {
-  const cached = groupReads.get(client);
-  if (cached?.scope === scope && Date.now() - cached.at < ACCESS_TTL_MS) return cached.groupIds;
-  const groupIds = Promise.all([
-    client.service('group-memberships').findAll({ query: { user_id: userId } }),
-    client.service('groups').findAll({ query: { archived: false } }),
-  ]).then(([memberships, groups]) => {
-    const active = new Set((groups as Group[]).map((group) => group.group_id));
-    return (memberships as GroupMembership[])
-      .filter((membership) => membership.user_id === userId && active.has(membership.group_id))
-      .map((membership) => membership.group_id);
-  });
-  groupReads.set(client, { scope, at: Date.now(), groupIds });
-  groupIds.catch(() => {
-    if (groupReads.get(client)?.groupIds === groupIds) groupReads.delete(client);
-  });
-  return groupIds;
+/** The caller's unarchived group memberships; no groups read when the caller is in none. */
+async function activeGroupIds(client: AgorClient, userId: string): Promise<GroupID[]> {
+  const memberships = (await client
+    .service('group-memberships')
+    .findAll({ query: { user_id: userId } })) as GroupMembership[];
+  const mine = new Set(memberships.filter((m) => m.user_id === userId).map((m) => m.group_id));
+  if (!mine.size) return [];
+  // The groups service filters only by `archived`, so the caller's ids are matched here.
+  const groups = (await client
+    .service('groups')
+    .findAll({ query: { archived: false } })) as Group[];
+  return groups.map((group) => group.group_id).filter((id) => mine.has(id));
 }
 
 /** Whether the board's own policy lets the caller view it, ignoring any role bypass. */
 async function boardPolicyGrantsView(
   client: AgorClient,
-  scope: string,
   userId: string,
-  boardId: string
+  boardId: string,
+  groupIds: Promise<GroupID[]>
 ): Promise<boolean> {
-  const [policies, groupIds] = await Promise.all([
+  const [policies, activeGroups] = await Promise.all([
     client
       .service('boards/:id/permissions')
       .find({ route: { id: boardId } }) as unknown as Promise<BoardCapabilityPolicies>,
-    activeGroupIds(client, scope, userId),
+    groupIds,
   ]);
   return resolveCapabilityPolicyAccess({
     policy: policies.board_access,
     primary_owner_user_id: policies.primary_owner_user_id,
     user_id: userId as UserID,
     user_status: 'active',
-    active_group_ids: groupIds,
+    active_group_ids: activeGroups,
   }).capabilities.includes('board.view');
 }
 
@@ -77,19 +66,24 @@ export function useBoardsSharedWithMe(
   const { authGeneration } = useConnectionState();
   const bypasses = hasMinimumRole(user?.role, ROLES.SUPERADMIN);
   const userId = user?.user_id;
-  const scope = `${userId}:${authGeneration}`;
+  const scope = accessScope(user, authGeneration);
   const key = bypasses ? [...new Set(boardIds)].sort().join(',') : '';
   const [version, setVersion] = useState(0);
 
   useEffect(() => {
     if (!client || !key || !userId) return;
     const controller = new AbortController();
+    // Requested before the board reads, so it holds a read slot ahead of every read awaiting it.
+    const groupIds = readAccess(client, scope, `groups:${userId}`, () =>
+      activeGroupIds(client, userId)
+    );
+    groupIds.catch(() => {});
     for (const boardId of key.split(',')) {
       readAccess(
         client,
         scope,
         `board:${boardId}`,
-        () => boardPolicyGrantsView(client, scope, userId, boardId),
+        () => boardPolicyGrantsView(client, userId, boardId, groupIds),
         { signal: controller.signal }
       ).then(
         () => setVersion((v) => v + 1),

@@ -66,7 +66,7 @@ function AskTargetSelect({
   const shared = useSharedTeammates(client, listed ? currentUser : null);
   const { access, failed, retry } = useSessionAccess(
     listed ? client : null,
-    userId,
+    currentUser,
     shared.map((b) => b.branch_id)
   );
   // Reads start on the first open; a later open retries the ones that failed.

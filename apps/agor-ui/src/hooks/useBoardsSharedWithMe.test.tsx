@@ -31,10 +31,11 @@ const policy = (
 
 const VIEW = ['board.view'];
 
-/** Boards keyed by id; the caller belongs to `crew` and to the archived `old-crew`. */
+/** Boards keyed by id; the caller belongs to `crew` and to the archived `old-crew` unless `groupless`. */
 function clientFor(
   boards: Record<string, { owner?: string; board_access: CapabilityPolicyDraft }>,
-  permissionsFind?: (id: string) => Promise<unknown>
+  permissionsFind?: (id: string) => Promise<unknown>,
+  { groupless = false, groupsFindAll = vi.fn() } = {}
 ) {
   const find =
     permissionsFind ??
@@ -48,13 +49,21 @@ function clientFor(
         return { find: ({ route }: { route: { id: string } }) => find(route.id) };
       if (name === 'group-memberships')
         return {
-          findAll: async () => [
-            { group_id: 'crew', user_id: ME },
-            { group_id: 'old-crew', user_id: ME },
-          ],
+          findAll: async () =>
+            groupless
+              ? []
+              : [
+                  { group_id: 'crew', user_id: ME },
+                  { group_id: 'old-crew', user_id: ME },
+                ],
         };
       if (name === 'groups')
-        return { findAll: async () => [{ group_id: 'crew', archived: false }] };
+        return {
+          findAll: async (params: unknown) => {
+            groupsFindAll(params);
+            return [{ group_id: 'crew', archived: false }];
+          },
+        };
       throw new Error(`unexpected service ${name}`);
     },
   } as unknown as AgorClient;
@@ -91,6 +100,25 @@ describe('useBoardsSharedWithMe', () => {
     expect(result.current('archived-group')).toBe(false);
     expect(result.current('someone-else')).toBe(false);
     expect(result.current('explicit-none')).toBe(false);
+  });
+
+  it('reads the caller’s groups once for every board, and skips groups for the groupless', async () => {
+    const groupsFindAll = vi.fn();
+    const boards = {
+      a: { board_access: policy('shared', [{ group: 'crew', capabilities: VIEW }]) },
+      b: { board_access: policy('shared', [], VIEW) },
+    };
+    const client = clientFor(boards, undefined, { groupsFindAll });
+    const { result } = renderHook(() => useBoardsSharedWithMe(client, superadmin, ['a', 'b']));
+    await waitFor(() => expect(result.current('a')).toBe(true));
+    expect(groupsFindAll).toHaveBeenCalledTimes(1);
+
+    const groupless = vi.fn();
+    const alone = clientFor(boards, undefined, { groupless: true, groupsFindAll: groupless });
+    const second = renderHook(() => useBoardsSharedWithMe(alone, superadmin, ['a', 'b']));
+    await waitFor(() => expect(second.result.current('b')).toBe(true));
+    expect(second.result.current('a')).toBe(false);
+    expect(groupless).not.toHaveBeenCalled();
   });
 
   it('skips policy reads for everyone else, whose board lists are already scoped', () => {

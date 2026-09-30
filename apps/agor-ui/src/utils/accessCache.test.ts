@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ACCESS_TTL_MS, peekAccess, readAccess } from './accessCache';
+import { ACCESS_TTL_MS, accessScope, peekAccess, readAccess } from './accessCache';
 
 const deferred = () => {
   let resolve!: (value: boolean) => void;
@@ -124,10 +124,25 @@ describe('readAccess', () => {
       name: 'AbortError',
     });
     // A new sign-in replaces the scope before the queued read starts.
-    expect(peekAccess(client, 'u:2', 'k')).toBeUndefined();
+    const next = readAccess(client, 'u:2', 'other', async () => true);
     await slots.release();
     await stale;
     expect(read).not.toHaveBeenCalled();
+    expect(await next).toBe(true);
+  });
+
+  it('peeks without changing the scope, so a stale render keeps the live answers', async () => {
+    const client = {};
+    await readAccess(client, 'u:2', 'k', async () => true);
+    expect(peekAccess(client, 'u:1', 'k')).toBeUndefined();
+    expect(peekAccess(client, 'u:2', 'k')).toBe(true);
+  });
+
+  it('scopes answers to the role too, so a demotion re-reads without a new sign-in', () => {
+    const admin = { user_id: 'u', role: 'admin' };
+    expect(accessScope(admin, 1)).toBe(accessScope({ ...admin }, 1));
+    expect(accessScope({ ...admin, role: 'member' }, 1)).not.toBe(accessScope(admin, 1));
+    expect(accessScope(admin, 2)).not.toBe(accessScope(admin, 1));
   });
 
   it('answers from cache until the TTL, then re-reads while peek keeps the last answer', async () => {
