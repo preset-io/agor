@@ -18,6 +18,8 @@ import { hasTerminationReadAuthority } from './termination-read-authority.js';
 
 /** Freshness bound shared by the socket monitor tick, request memo and publisher epoch cache. */
 export const TENANT_RESTRICTION_OBSERVATION_MS = 1000;
+/** Longest wait on one restriction observation before the monitor or publisher skips a tick. */
+export const TENANT_RESTRICTION_READ_TIMEOUT_MS = 2000;
 
 const requestReads = new AsyncLocalStorage<{
   until: number;

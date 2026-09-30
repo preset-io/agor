@@ -5,7 +5,10 @@ import {
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   TENANT_RESTRICTED_ERROR_CODE,
 } from '@agor/core/types';
-import { isTenantRestrictedRejection } from './tenant-access.js';
+import {
+  isTenantRestrictedRejection,
+  TENANT_RESTRICTION_READ_TIMEOUT_MS,
+} from './tenant-access.js';
 import { TENANT_SAFETY_TASK_METHODS } from './tenant-safety-settlement.js';
 
 /** This only preserves transport to authenticated service safety guards, never authorizes an RPC. */
@@ -69,7 +72,7 @@ export class TenantSocketRestrictionMonitor {
   private lastWarning?: { at: number; suppressed: number };
   constructor(
     private readonly observe: (tenantId: string) => Promise<void>,
-    private readonly timeoutMs = 2000,
+    private readonly timeoutMs = TENANT_RESTRICTION_READ_TIMEOUT_MS,
     private readonly now = Date.now
   ) {}
 

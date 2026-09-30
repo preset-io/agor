@@ -196,7 +196,8 @@ saturated read skips that tenant until the next tick with a rate-limited warning
 it cannot open anything, because every RPC still reads admission itself and fails
 closed. Ordinary publications and Redis relays recheck the generation through a
 per-replica, per-tenant single-flight read reused for at most one tick (a failed
-read, or one still pending after 2 s, suppresses delivery for that tick), so suspension or reactivation reaches
+read suppresses delivery for that tick; while a read stays pending past 2 s, that tenant's
+publications are suppressed until it settles), so suspension or reactivation reaches
 publications within about one tick; the exact task termination signal retains its
 narrowly scoped channel. Socket retirement does not prove process exit. Terminal creation also rechecks execution
 admission before branch admission, but the transaction does not span process spawn.

@@ -37,7 +37,10 @@ import {
   type UserID,
 } from '@agor/core/types';
 import { getAuthenticatedConnectionCredentialPayload } from '../auth/authenticated-connection-authority.js';
-import { TENANT_RESTRICTION_OBSERVATION_MS } from '../auth/tenant-access.js';
+import {
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  TENANT_RESTRICTION_READ_TIMEOUT_MS,
+} from '../auth/tenant-access.js';
 import {
   assertTenantCredentialEpochValue,
   readTenantCredentialEpoch,
@@ -913,9 +916,6 @@ function resolveRealtimeTenantId(
  * at least `view` permission for the event's branch. Service executor sockets
  * remain trusted so prompt/permission plumbing keeps working.
  */
-/** Matches the socket monitor's observation bound. */
-const PUBLICATION_EPOCH_READ_TIMEOUT_MS = 2000;
-
 export function configureRealtimePublish(options: RealtimePublishOptions): void {
   const {
     app,
@@ -965,7 +965,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     if (entry.until !== Number.POSITIVE_INFINITY) return entry.epoch;
     // A stuck shared read suppresses this tick's delivery instead of holding it until statement_timeout.
     const timeout = new Error('Publication restriction read timed out');
-    const remaining = entry.startedAt + PUBLICATION_EPOCH_READ_TIMEOUT_MS - now;
+    const remaining = entry.startedAt + TENANT_RESTRICTION_READ_TIMEOUT_MS - now;
     if (remaining <= 0) return Promise.reject(timeout);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_, reject) => {
