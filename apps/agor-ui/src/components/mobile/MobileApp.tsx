@@ -35,6 +35,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
 import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
@@ -331,8 +332,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [navigate]
   );
   const openHomeSession = useCallback(
-    (sessionId: string) => navigate(`/m/session/${sessionId}`),
-    [navigate]
+    (sessionId: string) => {
+      clearOpenedSessionFlags(client, sessionId);
+      navigate(`/m/session/${sessionId}`);
+    },
+    [client, navigate]
   );
   const openHomeBranch = useCallback(
     (branchId: string) => {
