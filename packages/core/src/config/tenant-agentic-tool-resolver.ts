@@ -17,6 +17,7 @@ import type {
 import {
   canonicalTenantAgenticTool,
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
+  isProviderConnectionTool,
   PROVIDER_CONNECTION_FIELDS,
   PROVIDER_CREDENTIAL_FIELDS,
 } from '../types';
@@ -54,8 +55,6 @@ const PROVIDER_AMBIENT_ENV: Record<
     prefixes: [],
   },
   cursor: { keys: [], prefixes: [] },
-  // Hosted OpenCode keys reach only a scratch auth.json, never the environment.
-  opencode: { keys: [], prefixes: [] },
 };
 
 export type ProviderConnectionSource = 'user' | 'tenant' | 'none';
@@ -159,6 +158,9 @@ export async function resolveProviderConnection(
   context: { userId?: UserID; db?: Database } = {}
 ): Promise<ResolvedProviderConnection> {
   const canonical = canonicalTenantAgenticTool(requestedTool);
+  if (!isProviderConnectionTool(canonical)) {
+    throw new Error(`Tool ${requestedTool} does not use a provider connection`);
+  }
 
   const repository = context.db ? new TenantAgenticToolSettingsRepository(context.db) : null;
   // Resolve policy and its credential from one request-local snapshot, not two
@@ -257,14 +259,16 @@ export function stripProviderCredentialEnvironment<T extends Record<string, stri
   const canonical = canonicalTenantAgenticTool(tool);
   const stripKeys = new Set<string>();
   const stripPrefixes: string[] = [];
-  for (const field of PROVIDER_CONNECTION_FIELDS[canonical]) {
-    stripKeys.add(field);
+  if (isProviderConnectionTool(canonical)) {
+    for (const field of PROVIDER_CONNECTION_FIELDS[canonical]) {
+      stripKeys.add(field);
+    }
+    const ambient = PROVIDER_AMBIENT_ENV[canonical];
+    for (const key of ambient.keys) {
+      stripKeys.add(key);
+    }
+    stripPrefixes.push(...ambient.prefixes);
   }
-  const ambient = PROVIDER_AMBIENT_ENV[canonical];
-  for (const key of ambient.keys) {
-    stripKeys.add(key);
-  }
-  stripPrefixes.push(...ambient.prefixes);
 
   const output: Record<string, string> = {};
   for (const [key, value] of Object.entries(input)) {

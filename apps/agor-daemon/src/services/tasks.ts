@@ -5,7 +5,10 @@
  * Uses DrizzleService adapter with TaskRepository.
  */
 
-import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
+import {
+  isHostedOpenCodeProvider,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type ChildCompletionContext,
@@ -41,6 +44,7 @@ import {
   type TerminationClaimResult,
   type TerminationSettlementInput,
   type TerminationSettlementResult,
+  UsersRepository,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
@@ -1807,7 +1811,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     taskId: string,
     holderId: unknown,
     params?: TaskParams
-  ): Promise<string> {
+  ): Promise<{ userId: string; sessionId: string }> {
     if (typeof holderId !== 'string' || !isValidUUID(holderId)) {
       throw new BadRequest('holder_instance_id must be a UUID');
     }
@@ -1822,23 +1826,34 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       taskId as TaskID,
       await this.runtimeAuthorityScope(authority)
     );
-    return authority.userId;
+    return { userId: authority.userId, sessionId: authority.sessionId };
   }
 
   async beginOpenCodeCheckpoint(
     data: OpenCodeCheckpointBeginInput,
     params?: TaskParams
   ): Promise<OpenCodeCheckpointAdmission> {
-    const actor = await this.openCodeCheckpointAuthority(
+    const { userId, sessionId } = await this.openCodeCheckpointAuthority(
       data.task_id,
       data.holder_instance_id,
       params
     );
-    return new OpenCodeCheckpointRepository(this.db).begin(
+    const admission = await new OpenCodeCheckpointRepository(this.db).begin(
       data.task_id,
       data.holder_instance_id,
-      actor
+      userId
     );
+    if (admission.outcome !== 'admitted') return admission;
+    // Only the selected provider's key is decrypted, and only for its owner's admitted executor.
+    const session = await new SessionRepository(this.db).findById(sessionId);
+    const provider = session?.model_config?.provider?.trim();
+    const key =
+      provider && isHostedOpenCodeProvider(provider)
+        ? (
+            await new UsersRepository(this.db).getToolConfigField(userId, 'opencode', provider)
+          )?.trim()
+        : undefined;
+    return { ...admission, providerKey: provider && key ? { providerId: provider, key } : null };
   }
 
   async acknowledgeOpenCodeCleanup(

@@ -37,6 +37,10 @@ enforces `minimumReleaseAge`.
 
 Then run `pnpm install` and confirm the `pnpm-lock.yaml` diff touches only the bumped packages.
 
+For OpenCode, then run `pnpm --filter @agor-live/opencode generate:hosted-providers` to refresh the
+hosted provider snapshot (`packages/agentic-tool-opencode/src/daemon/hosted-providers.generated.ts`);
+its test fails until the snapshot matches `OPENCODE_VERSION`.
+
 ## 3. Prove the runtime does what the bump is for
 
 Tests mock the SDK, so they cannot show that a new model or fix works. For a model bump:

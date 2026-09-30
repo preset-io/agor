@@ -227,7 +227,7 @@ describe('OpenCode model catalog service', () => {
 });
 
 describe('OpenCode model catalog service (hosted)', () => {
-  it('derives availability from saved curated keys without any executor', async () => {
+  it('derives availability from saved keys without any executor', async () => {
     loadConfig.mockReturnValue({
       multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
       execution: {
@@ -241,7 +241,7 @@ describe('OpenCode model catalog service (hosted)', () => {
       return {
         findById: vi.fn(async () => ({
           user_id: 'same-user',
-          agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: true } },
+          agentic_tools: { opencode: { anthropic: true } },
         })),
       };
     } as never);
@@ -249,9 +249,9 @@ describe('OpenCode model catalog service (hosted)', () => {
     const result = await runWithTenantContext('tenant-a', () => service().find(params));
 
     expect(result.unsupported).toBeUndefined();
-    expect(result.suggestedSelection).toMatchObject({ providerId: 'openai' });
-    expect(result.providers.find((p) => p.id === 'openai')?.availableForSelection).toBe(true);
-    expect(result.providers.find((p) => p.id === 'anthropic')?.availableForSelection).toBe(false);
+    expect(result.suggestedSelection).toMatchObject({ providerId: 'anthropic' });
+    expect(result.providers.find((p) => p.id === 'anthropic')?.availableForSelection).toBe(true);
+    expect(result.providers.find((p) => p.id === 'openai')?.availableForSelection).toBe(false);
     expect(runCommand).not.toHaveBeenCalled();
   });
 });

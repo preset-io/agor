@@ -1113,7 +1113,7 @@ export const users = sqliteTable(
           copilot?: {
             COPILOT_GITHUB_TOKEN?: string;
           };
-          opencode?: import('../types/user').OpenCodeConfig;
+          opencode?: Record<string, string>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
         agentic_credential_sources?: import('../types/user').AgenticCredentialSources;

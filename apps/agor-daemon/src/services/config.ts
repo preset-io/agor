@@ -21,14 +21,13 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import {
-  type AgenticToolName,
-  type AuthenticatedParams,
-  type DeepReadonly,
-  type Params,
-  PROVIDER_CONNECTION_FIELDS,
-  type TaskID,
-  type UserID,
+import type {
+  AgenticToolName,
+  AuthenticatedParams,
+  DeepReadonly,
+  Params,
+  TaskID,
+  UserID,
 } from '@agor/core/types';
 import {
   authenticatedTaskExecutorRuntimeAuthority,
@@ -56,9 +55,6 @@ const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   GEMINI_API_KEY: true,
   COPILOT_GITHUB_TOKEN: true,
   CURSOR_API_KEY: true,
-  OPENCODE_API_KEY_ANTHROPIC: true,
-  OPENCODE_API_KEY_OPENAI: true,
-  OPENCODE_API_KEY_KIMI_FOR_CODING: true,
 };
 
 function isResolvableApiKeyName(value: string): value is ApiKeyName {
@@ -182,12 +178,8 @@ export class ConfigService {
       if (!tool) {
         throw new BadRequest('Tool is required for executor API key resolution');
       }
-      // A tool may resolve its canonical key or a field of its own provider connection.
       const expectedKeyName = TOOL_API_KEY_NAMES[tool];
-      const connectionFields: readonly string[] = Object.hasOwn(PROVIDER_CONNECTION_FIELDS, tool)
-        ? PROVIDER_CONNECTION_FIELDS[tool as keyof typeof PROVIDER_CONNECTION_FIELDS]
-        : [];
-      if (expectedKeyName !== keyName && !connectionFields.includes(keyName)) {
+      if (!expectedKeyName || expectedKeyName !== keyName) {
         throw new Forbidden('Executor token is not valid for this API key');
       }
       const sessionsService = this.app?.service('sessions');
@@ -278,13 +270,7 @@ export class ConfigService {
     // Map KeyResolutionResult to service response type
     return {
       apiKey: result.apiKey ?? null,
-      // Hosted OpenCode receives only the key for the provider it asked for.
-      connection:
-        tool === 'opencode'
-          ? result.connection && {
-              [keyName]: (result.connection as Record<string, string>)[keyName],
-            }
-          : (result.connection as Record<string, string> | undefined),
+      connection: result.connection as Record<string, string> | undefined,
       source: result.source,
       useNativeAuth: result.useNativeAuth,
       ...(result.credentialExpiresAt ? { credentialExpiresAt: result.credentialExpiresAt } : {}),

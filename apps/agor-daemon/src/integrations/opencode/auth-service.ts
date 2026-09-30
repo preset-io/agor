@@ -1,9 +1,9 @@
+import { OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import {
-  createOpenCodeHostedProviderDiscovery,
-  hostedCredentialFieldForProvider,
-  OPENCODE_VERSION,
-} from '@agor/agentic-tool-opencode';
-import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
+  hostedOpenCodeProviderDiscovery,
+  isHostedOpenCodeProvider,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
 import type { AgorConfig } from '@agor/core/config';
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { BadRequest, NotFound } from '@agor/core/feathers';
@@ -123,26 +123,28 @@ export class OpenCodeAuthService {
   constructor(
     private readonly db: TenantScopeAwareDatabase,
     private readonly config: DeepReadonly<AgorConfig>,
-    private readonly host?: UsersPatchHost
+    private readonly host: UsersPatchHost
   ) {}
 
   private managedSettings(subject: ManagedOpenCodeSubject): OpenCodeProviderSettings {
     return {
-      ...createOpenCodeHostedProviderDiscovery(subject.savedProviderIds),
+      ...hostedOpenCodeProviderDiscovery(subject.savedProviderIds),
       isolation: { mode: 'managed-projection', boundary: 'executor-run' },
     };
   }
 
-  /** Save or clear one curated provider key on the caller's own encrypted credential bucket. */
+  /** Save or clear one provider key on the caller's own encrypted credential bucket. */
   private async patchManagedKey(
     providerId: string,
     value: string | null,
     params?: AuthenticatedParams
   ): Promise<OpenCodeProviderSettings> {
     const subject = await resolveManagedOpenCodeSubject(this.db, params);
-    const field = hostedCredentialFieldForProvider(providerId);
-    if (!field) throw new BadRequest('That provider is not available for hosted OpenCode.');
-    if (!this.host) throw new BadRequest('OpenCode credential storage is not available.');
+    // Save needs a hosted provider; removal may also clear the caller's key for a retired one.
+    const saved = subject.savedProviderIds.has(providerId);
+    if (!isHostedOpenCodeProvider(providerId) && (value !== null || !saved)) {
+      throw new BadRequest('That provider is not available for hosted OpenCode.');
+    }
     const { query: _query, ...callerParams } = (params ?? {}) as AuthenticatedParams & {
       query?: unknown;
     };
@@ -150,13 +152,13 @@ export class OpenCodeAuthService {
       .service('users')
       .patch(
         subject.subjectUserId,
-        { agentic_tools: { opencode: { [field]: value } } },
+        { agentic_tools: { opencode: { [providerId]: value } } },
         callerParams as AuthenticatedParams
       );
-    const saved = new Set(subject.savedProviderIds);
-    if (value === null) saved.delete(providerId);
-    else saved.add(providerId);
-    return this.managedSettings({ ...subject, savedProviderIds: saved });
+    const next = new Set(subject.savedProviderIds);
+    if (value === null) next.delete(providerId);
+    else next.add(providerId);
+    return this.managedSettings({ ...subject, savedProviderIds: next });
   }
 
   private credentialContext(
@@ -480,7 +482,7 @@ export class OpenCodeAuthService {
 export function createOpenCodeAuthService(
   db: TenantScopeAwareDatabase,
   config: DeepReadonly<AgorConfig>,
-  host?: UsersPatchHost
+  host: UsersPatchHost
 ) {
   return new OpenCodeAuthService(db, config, host);
 }

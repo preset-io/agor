@@ -4,12 +4,20 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const checkpoints = vi.hoisted(() => ({
   begin: vi.fn(),
   acknowledgeCleanup: vi.fn(),
+  provider: 'anthropic',
+  keyField: vi.fn(),
 }));
 vi.mock('@agor/core/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/db')>()),
   OpenCodeCheckpointRepository: class {
     begin = checkpoints.begin;
     acknowledgeCleanup = checkpoints.acknowledgeCleanup;
+  },
+  SessionRepository: class {
+    findById = async () => ({ model_config: { provider: checkpoints.provider } });
+  },
+  UsersRepository: class {
+    getToolConfigField = checkpoints.keyField;
   },
 }));
 
@@ -69,10 +77,12 @@ function harness(config: unknown = hosted) {
 beforeEach(() => {
   vi.clearAllMocks();
   checkpoints.begin.mockResolvedValue({ outcome: 'admitted', input: null, cleanup: [] });
+  checkpoints.keyField.mockResolvedValue(' sk-owner ');
+  checkpoints.provider = 'anthropic';
 });
 
 describe('TasksService hosted OpenCode checkpoints', () => {
-  it('admits the live task executor as the token principal', async () => {
+  it('admits the live task executor and returns only its selected provider key', async () => {
     const { service, taskRepo } = harness();
 
     await expect(
@@ -80,13 +90,40 @@ describe('TasksService hosted OpenCode checkpoints', () => {
         { task_id: taskId, holder_instance_id: holderId },
         runtimeParams()
       )
-    ).resolves.toEqual({ outcome: 'admitted', input: null, cleanup: [] });
+    ).resolves.toEqual({
+      outcome: 'admitted',
+      input: null,
+      cleanup: [],
+      providerKey: { providerId: 'anthropic', key: 'sk-owner' },
+    });
+    expect(checkpoints.keyField).toHaveBeenCalledWith(ownerId, 'opencode', 'anthropic');
 
     expect(taskRepo.assertRuntimeCredentialAuthority).toHaveBeenCalledWith(
       taskId,
       expect.objectContaining({ principal_user_id: ownerId, standalone_token_current: true })
     );
     expect(checkpoints.begin).toHaveBeenCalledWith(taskId, holderId, ownerId);
+  });
+
+  it('never decrypts a key for a provider hosted OpenCode cannot run', async () => {
+    checkpoints.provider = 'amazon-bedrock';
+    await expect(
+      harness().service.beginOpenCodeCheckpoint(
+        { task_id: taskId, holder_instance_id: holderId },
+        runtimeParams()
+      )
+    ).resolves.toMatchObject({ outcome: 'admitted', providerKey: null });
+    expect(checkpoints.keyField).not.toHaveBeenCalled();
+  });
+
+  it('returns no key when the owner has none saved or it cannot be decrypted', async () => {
+    checkpoints.keyField.mockResolvedValue(null);
+    await expect(
+      harness().service.beginOpenCodeCheckpoint(
+        { task_id: taskId, holder_instance_id: holderId },
+        runtimeParams()
+      )
+    ).resolves.toMatchObject({ outcome: 'admitted', providerKey: null });
   });
 
   it('refuses another task token, a malformed holder, or a deployment without hosted mode', async () => {

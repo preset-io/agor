@@ -11,6 +11,7 @@ import type {
 } from '../../types';
 import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
+  isProviderConnectionTool,
   PROVIDER_RESOLUTION_POLICIES,
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
@@ -29,7 +30,7 @@ import { AppVariableRepository } from './app-variables';
 export const TENANT_AGENTIC_TOOLS_NAMESPACE = 'agentic_tools';
 
 function allowedFields(tool: TenantAgenticToolName): readonly AgenticToolConfigField[] {
-  return TENANT_PROVIDER_CONNECTION_FIELDS[tool];
+  return isProviderConnectionTool(tool) ? TENANT_PROVIDER_CONNECTION_FIELDS[tool] : [];
 }
 
 function parseSettings(

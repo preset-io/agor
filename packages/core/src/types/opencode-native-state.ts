@@ -28,6 +28,8 @@ export type OpenCodeCheckpointAdmission =
       input: OpenCodeCheckpointManifest | null;
       /** Exact superseded or abandoned attempts of this owner whose files may be removed. */
       cleanup: OpenCodeCheckpointObject[];
+      /** The owner's saved key for the Session's hosted provider, or null when none is usable. */
+      providerKey?: { providerId: string; key: string } | null;
     }
   /** Another executor already holds this Task; the caller must exit without side effects. */
   | { outcome: 'duplicate' };

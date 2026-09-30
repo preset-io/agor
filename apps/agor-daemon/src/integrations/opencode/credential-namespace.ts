@@ -1,5 +1,4 @@
 import { homedir } from 'node:os';
-import { hostedProviderIdsFromConnection } from '@agor/agentic-tool-opencode';
 import {
   assertOpenCodeNativeAuthSupported,
   type OpenCodeCredentialNamespace,
@@ -41,9 +40,8 @@ export type AuthenticatedOpenCodeSubjectContext = OpenCodeCredentialNamespace & 
 
 /** The hosted (managed-projection) caller: identity plus saved-key presence, no filesystem. */
 export type ManagedOpenCodeSubject = {
-  tenantId: string;
   subjectUserId: UserID;
-  /** Reviewed provider ids whose encrypted key field is present for this user. */
+  /** Provider ids with a saved encrypted key for this user. */
   savedProviderIds: Set<string>;
 };
 
@@ -65,9 +63,8 @@ export async function resolveManagedOpenCodeSubject(
   // Presence flags only: the public DTO never carries decrypted values.
   const presence = (user.agentic_tools?.opencode ?? {}) as Record<string, boolean | undefined>;
   return {
-    tenantId,
     subjectUserId: callerId,
-    savedProviderIds: hostedProviderIdsFromConnection(presence),
+    savedProviderIds: new Set(Object.keys(presence).filter((providerId) => presence[providerId])),
   };
 }
 

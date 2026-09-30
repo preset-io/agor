@@ -1,7 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  resolveApiKey: vi.fn(),
   restore: vi.fn(),
   remove: vi.fn(),
   prepare: vi.fn(),
@@ -15,11 +14,6 @@ vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
   prepareOpenCodeScratch: mocks.prepare,
   restoreOpenCodeCheckpoint: mocks.restore,
   removeOpenCodeCheckpoints: mocks.remove,
-}));
-
-vi.mock('./base-executor.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./base-executor.js')>()),
-  resolveApiKeyForTask: mocks.resolveApiKey,
 }));
 
 import { completeManagedOpenCodeTurn, prepareManagedOpenCodeTurn } from './opencode-managed.js';
@@ -41,10 +35,6 @@ function client(begin: unknown) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.resolveApiKey.mockResolvedValue({
-    connection: { OPENCODE_API_KEY_OPENAI: 'sk-owner' },
-    source: 'user',
-  });
   mocks.remove.mockImplementation(async (_layout, objects) => objects);
 });
 
@@ -54,12 +44,16 @@ describe('prepareManagedOpenCodeTurn', () => {
     await expect(
       prepareManagedOpenCodeTurn({ client: state.value, sessionId, taskId, provider: 'openai' })
     ).resolves.toBeNull();
-    expect(mocks.resolveApiKey).not.toHaveBeenCalled();
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
-  it('projects only the owner key for the selected curated provider', async () => {
-    const state = client({ outcome: 'admitted', input: accepted, cleanup: [stale] });
+  it('writes the admitted owner key for the selected provider only', async () => {
+    const state = client({
+      outcome: 'admitted',
+      input: accepted,
+      cleanup: [stale],
+      providerKey: { providerId: 'openai', key: 'sk-owner' },
+    });
     const turn = await prepareManagedOpenCodeTurn({
       client: state.value,
       sessionId,
@@ -67,12 +61,6 @@ describe('prepareManagedOpenCodeTurn', () => {
       provider: 'openai',
     });
 
-    expect(mocks.resolveApiKey).toHaveBeenCalledWith(
-      'OPENCODE_API_KEY_OPENAI',
-      state.value,
-      taskId,
-      'opencode'
-    );
     expect(JSON.parse(turn?.authContent ?? '{}')).toEqual({
       openai: { type: 'api', key: 'sk-owner' },
     });
@@ -89,7 +77,12 @@ describe('prepareManagedOpenCodeTurn', () => {
     mocks.restore.mockRejectedValueOnce(new Error('saved conversation failed verification'));
     await expect(
       prepareManagedOpenCodeTurn({
-        client: client({ outcome: 'admitted', input: accepted, cleanup: [] }).value,
+        client: client({
+          outcome: 'admitted',
+          input: accepted,
+          cleanup: [],
+          providerKey: { providerId: 'openai', key: 'k' },
+        }).value,
         sessionId,
         taskId,
         provider: 'openai',
@@ -98,16 +91,7 @@ describe('prepareManagedOpenCodeTurn', () => {
     expect(mocks.discard).toHaveBeenCalledOnce();
   });
 
-  it('refuses providers outside the curated set and missing keys', async () => {
-    await expect(
-      prepareManagedOpenCodeTurn({
-        client: client({ outcome: 'admitted', input: null, cleanup: [] }).value,
-        sessionId,
-        taskId,
-        provider: 'openrouter',
-      })
-    ).rejects.toThrow(/not available in hosted workspaces/);
-    mocks.resolveApiKey.mockResolvedValue({ connection: {}, source: 'none' });
+  it('refuses a turn without a usable saved key before touching scratch', async () => {
     await expect(
       prepareManagedOpenCodeTurn({
         client: client({ outcome: 'admitted', input: null, cleanup: [] }).value,
@@ -115,7 +99,24 @@ describe('prepareManagedOpenCodeTurn', () => {
         taskId,
         provider: 'anthropic',
       })
-    ).rejects.toThrow(/Save an API key for anthropic/);
+    ).rejects.toThrow(/No usable API key for anthropic/);
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
+
+  it('refuses a key delivered for a different provider than the one this turn runs', async () => {
+    await expect(
+      prepareManagedOpenCodeTurn({
+        client: client({
+          outcome: 'admitted',
+          input: null,
+          cleanup: [],
+          providerKey: { providerId: 'openai', key: 'sk-other' },
+        }).value,
+        sessionId,
+        taskId,
+        provider: 'anthropic',
+      })
+    ).rejects.toThrow(/No usable API key for anthropic/);
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 });

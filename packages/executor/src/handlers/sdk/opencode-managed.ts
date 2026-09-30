@@ -1,7 +1,6 @@
 /** Hosted OpenCode turn lifecycle: admission, restore, cleanup, and checkpointed completion. */
 
 import { randomUUID } from 'node:crypto';
-import { hostedCredentialFieldForProvider } from '@agor/agentic-tool-opencode';
 import {
   assertOpenCodeCheckpointRuntime,
   discardOpenCodeScratch,
@@ -21,7 +20,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
-import { MissingCredentialError, resolveApiKeyForTask } from './base-executor.js';
+import { MissingCredentialError } from './base-executor.js';
 
 const WRITE_ATTEMPTS = 4;
 const RETRY_DELAY_MS = 1_000;
@@ -67,26 +66,13 @@ export async function prepareManagedOpenCodeTurn(input: {
   );
   if (admission.outcome === 'duplicate') return null;
 
-  const field = hostedCredentialFieldForProvider(input.provider);
-  if (!field) {
+  const key = admission.providerKey?.key;
+  if (!key || admission.providerKey?.providerId !== input.provider.trim()) {
     throw new MissingCredentialError(
-      `OpenCode provider ${input.provider} is not available in hosted workspaces.`
+      `No usable API key for ${input.provider}. Save one in Settings > OpenCode; hosted workspaces offer API-key providers only.`
     );
   }
-  const resolution = await resolveApiKeyForTask(field, client, taskId, 'opencode');
-  if (resolution.decryptionFailed) {
-    throw new Error(
-      'A saved OpenCode provider key could not be decrypted. Re-enter it in Settings.'
-    );
-  }
-  const connection = resolution.connection as Record<string, string | undefined> | undefined;
-  const key = (connection?.[field] ?? resolution.apiKey)?.trim();
-  if (!key) {
-    throw new MissingCredentialError(
-      `Save an API key for ${input.provider} in Settings > OpenCode to use it here.`
-    );
-  }
-  const authContent = JSON.stringify({ [input.provider]: { type: 'api', key } });
+  const authContent = JSON.stringify({ [input.provider.trim()]: { type: 'api', key } });
 
   await prepareOpenCodeScratch(layout);
   try {

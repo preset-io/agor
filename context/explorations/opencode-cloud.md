@@ -11,10 +11,14 @@ structured reason.
 
 - **Owner only.** The prompting user must be the Session creator (unchanged local
   rule). Branch-scoped OpenCode Sessions stay refused.
-- **Curated providers.** `anthropic`, `openai`, `kimi-for-coding` keys live in the
-  caller's encrypted `users.data.agentic_tools.opencode` fields. The executor
-  resolves only the Task actor's key for the selected provider and writes it to a
-  mode-0600 `auth.json` on scratch, never into a process environment.
+- **Single-key providers.** `hosted-providers.generated.ts` is a snapshot of the pinned
+  OpenCode's providers that need exactly one API key, a bundled SDK, and no local URL,
+  keeping only tool-calling text models
+  (`packages/agor-opencode/scripts/generate-hosted-providers.mjs`, rerun on every bump).
+  Keys live in the caller's encrypted `users.data.agentic_tools.opencode[<provider id>]`.
+  `beginOpenCodeCheckpoint` returns only the owner's key for the Session's selected
+  provider; the executor writes it to a mode-0600 `auth.json` on scratch, never into a
+  process environment.
 - **Sealed configuration.** All XDG roots and `OPENCODE_DB` point at Job-local
   scratch (`AGOR_OPENCODE_SCRATCH_ROOT`, no fallback). Project/home/system config
   discovery, plugins, provider overrides, and local MCP commands are refused.
@@ -26,7 +30,8 @@ network filesystem behind the owner's home. Each turn:
 
 1. `tasks.beginOpenCodeCheckpoint` admits one holder per Task (a duplicate
    executor gets `duplicate` and exits without side effects) and returns the
-   Session's accepted checkpoint plus a bounded cleanup list.
+   Session's accepted checkpoint, a bounded cleanup list, and the owner's key for the
+   Session's selected provider.
 2. The executor copies the accepted file to scratch and verifies its digest.
    Missing or altered state fails the turn; it never starts an empty conversation.
 3. OpenCode runs on scratch. After the server exits, `node:sqlite` folds the WAL,
@@ -50,6 +55,6 @@ guarantee.
 
 ## Out of scope
 
-Shared prompting, OAuth or custom endpoints, providers beyond the curated set,
+Shared prompting, OAuth or custom endpoints, providers needing more than one key,
 explicit erasure of native state, closure proof, and fork/import of native state.
 Cloud supplies only the scratch volume and its pinned environment variable.

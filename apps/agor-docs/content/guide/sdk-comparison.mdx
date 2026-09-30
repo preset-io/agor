@@ -802,10 +802,13 @@ OpenCode supports MCP servers via its REST API:
 With `agentic_tools.opencode_hosted_native_state: checkpointed` (see
 [config.yaml](/guide/config-yaml)), hosted workspaces run OpenCode like this:
 
-- **Providers:** Anthropic, OpenAI, and Kimi for Coding, with an API key saved in
-  Settings → OpenCode. Keys are encrypted for your account and delivered only to
-  your own executor runs; a key is verified by your first prompt. OAuth sign-in,
-  custom endpoints, and other providers are not offered.
+- **Providers:** every OpenCode provider that needs only an API key (more than 180,
+  including Anthropic, OpenAI, Google Gemini, OpenRouter, xAI, Mistral, and DeepSeek).
+  Save the key in Settings → OpenCode. Keys are encrypted for your account, only the
+  selected provider's key is delivered to your own executor run, and a key is verified
+  by your first prompt. Providers that need OAuth sign-in, several credentials (Azure,
+  Bedrock, Vertex), a custom endpoint, or a server on your own machine are not offered,
+  and only models that support tool calls are listed.
 - **Owner only:** only the session creator can prompt an OpenCode session, and it
   runs in the creator's own executor home.
 - **Conversation state:** each successful turn saves an immutable copy of

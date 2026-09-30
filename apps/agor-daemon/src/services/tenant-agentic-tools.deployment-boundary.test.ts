@@ -38,14 +38,6 @@ describe('tenant agentic tool deployment boundary', () => {
     );
   });
 
-  it('refuses workspace-level policies for per-user OpenCode keys', async () => {
-    const service = new TenantAgenticToolSettingsService({} as TenantScopeAwareDatabase);
-
-    await expect(
-      service.patch('opencode', { resolution_policy: 'tenant_required' })
-    ).rejects.toThrow(/keys are per user/);
-  });
-
   it('publishes the durable revision without exposing the rotated credential', async () => {
     const syntheticSecret = 'synthetic-workspace-secret-must-not-leak';
     vi.spyOn(TenantAgenticToolSettingsRepository.prototype, 'find').mockResolvedValue({

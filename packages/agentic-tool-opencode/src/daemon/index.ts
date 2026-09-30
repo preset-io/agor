@@ -28,6 +28,11 @@ export {
   resolveOpenCodeTaskCredentialNamespace,
 } from './credential-namespace.js';
 export { assertOpenCodeExecutionAllowed } from './execution-admission.js';
+export {
+  hostedOpenCodeModelCatalog,
+  hostedOpenCodeProviderDiscovery,
+  isHostedOpenCodeProvider,
+} from './hosted-providers.js';
 
 export const OPENCODE_DAEMON_CONTRIBUTION = {
   name: 'opencode',

@@ -84,7 +84,7 @@ const discovery = {
 };
 
 function service() {
-  return createOpenCodeAuthService(db, loadConfigSync());
+  return createOpenCodeAuthService(db, loadConfigSync(), {} as never);
 }
 
 beforeEach(() => {
@@ -948,13 +948,16 @@ describe('OpenCode provider auth service (hosted)', () => {
     agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
   };
 
-  function hostedService(patch = vi.fn(async () => ({}))) {
+  function hostedService(
+    patch = vi.fn(async () => ({})),
+    saved: Record<string, boolean> = { openai: true }
+  ) {
     loadConfig.mockReturnValue(hostedConfig as never);
     usersRepository.mockImplementation(function repository() {
       return {
         findById: vi.fn(async () => ({
           user_id: 'same-user',
-          agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: true } },
+          agentic_tools: { opencode: saved },
         })),
       };
     } as never);
@@ -962,7 +965,7 @@ describe('OpenCode provider auth service (hosted)', () => {
     return { service: createOpenCodeAuthService(db, loadConfigSync(), host as never), patch };
   }
 
-  it('reports saved-key presence on the curated provider list without an executor', async () => {
+  it('reports saved-key presence on the hosted provider list without an executor', async () => {
     const { service } = hostedService();
     const settings = await runWithTenantContext('tenant-a', () => service.find(params));
     if (settings.runtime !== 'available') throw new Error('expected available settings');
@@ -977,7 +980,7 @@ describe('OpenCode provider auth service (hosted)', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it('saves and clears a curated provider key through the users service as the caller', async () => {
+  it('saves and clears a provider key through the users service as the caller', async () => {
     const { service, patch } = hostedService();
     await runWithTenantContext('tenant-a', async () => {
       const saved = await service.create({ providerId: 'anthropic', apiKey: ' sk-ant-test ' }, {
@@ -993,24 +996,43 @@ describe('OpenCode provider auth service (hosted)', () => {
     expect(patch).toHaveBeenNthCalledWith(
       1,
       'same-user',
-      { agentic_tools: { opencode: { OPENCODE_API_KEY_ANTHROPIC: 'sk-ant-test' } } },
+      { agentic_tools: { opencode: { anthropic: 'sk-ant-test' } } },
       expect.not.objectContaining({ query: expect.anything() })
     );
     expect(patch).toHaveBeenNthCalledWith(
       2,
       'same-user',
-      { agentic_tools: { opencode: { OPENCODE_API_KEY_OPENAI: null } } },
+      { agentic_tools: { opencode: { openai: null } } },
       expect.anything()
     );
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  it('refuses providers outside the curated set, metadata, and OAuth', async () => {
-    const { service, patch } = hostedService();
+  it('clears a saved key for a provider that left the snapshot but refuses unsaved ones', async () => {
+    const patch = vi.fn(async () => ({}));
+    const { service } = hostedService(patch, { 'retired-provider': true });
     await runWithTenantContext('tenant-a', async () => {
-      await expect(service.create({ providerId: 'zhipuai', apiKey: 'k' }, params)).rejects.toThrow(
+      const removed = await service.remove('retired-provider', params);
+      if (removed.runtime !== 'available') throw new Error('unexpected');
+      expect(removed.providers.some((p) => p.id === 'retired-provider')).toBe(false);
+      await expect(service.remove('other-retired', params)).rejects.toThrow(
         /not available for hosted OpenCode/
       );
+    });
+    expect(patch).toHaveBeenCalledOnce();
+    expect(patch).toHaveBeenCalledWith(
+      'same-user',
+      { agentic_tools: { opencode: { 'retired-provider': null } } },
+      expect.anything()
+    );
+  });
+
+  it('refuses non-hosted providers, metadata, and OAuth', async () => {
+    const { service, patch } = hostedService();
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(
+        service.create({ providerId: 'amazon-bedrock', apiKey: 'k' }, params)
+      ).rejects.toThrow(/not available for hosted OpenCode/);
       await expect(
         service.create({ providerId: 'openai', apiKey: 'k', metadata: { region: 'us' } }, params)
       ).rejects.toThrow(/API key only/);

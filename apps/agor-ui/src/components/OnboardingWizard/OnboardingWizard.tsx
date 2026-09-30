@@ -711,7 +711,7 @@ export function OnboardingWizard({
       }
       if (agent === 'gemini') return !!(gemini?.GEMINI_API_KEY || user.env_vars?.GEMINI_API_KEY);
       if (agent === 'opencode') {
-        // Hosted OpenCode stores one key per curated provider; local mode keeps none here.
+        // Hosted OpenCode stores one key per provider id; local mode keeps none here.
         return Object.values(user.agentic_tools?.opencode ?? {}).some(Boolean);
       }
       return false;

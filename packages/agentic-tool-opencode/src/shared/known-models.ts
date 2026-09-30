@@ -2,39 +2,9 @@ import type {
   OpenCodeCatalogModel,
   OpenCodeCatalogProvider,
   OpenCodeModelCatalog,
-  OpenCodeProviderConnection,
-  OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 
 export const OPENCODE_VERSION = '1.18.31';
-
-/** Curated hosted providers and the encrypted user field that stores each key. */
-export const OPENCODE_HOSTED_PROVIDER_FIELDS = Object.freeze({
-  anthropic: 'OPENCODE_API_KEY_ANTHROPIC',
-  openai: 'OPENCODE_API_KEY_OPENAI',
-  'kimi-for-coding': 'OPENCODE_API_KEY_KIMI_FOR_CODING',
-} as const);
-
-type HostedProviderId = keyof typeof OPENCODE_HOSTED_PROVIDER_FIELDS;
-
-export function hostedCredentialFieldForProvider(
-  providerId: string
-): (typeof OPENCODE_HOSTED_PROVIDER_FIELDS)[HostedProviderId] | undefined {
-  return Object.hasOwn(OPENCODE_HOSTED_PROVIDER_FIELDS, providerId)
-    ? OPENCODE_HOSTED_PROVIDER_FIELDS[providerId as HostedProviderId]
-    : undefined;
-}
-
-/** Curated provider ids whose key is saved, from the user's public presence flags. */
-export function hostedProviderIdsFromConnection(
-  presence: Readonly<Record<string, boolean | undefined>>
-): Set<string> {
-  return new Set(
-    Object.entries(OPENCODE_HOSTED_PROVIDER_FIELDS)
-      .filter(([, field]) => presence[field])
-      .map(([providerId]) => providerId)
-  );
-}
 
 interface KnownProvider {
   id: string;
@@ -140,31 +110,23 @@ function hasActiveSuggestedModel(provider: KnownProvider): boolean {
  * Configured providers outside the curated list remain visible for exact entry.
  */
 export function createOpenCodeKnownModelCatalog(
-  credentialProviderIds: ReadonlySet<string> | null,
-  options: {
-    /** Hosted mode passes false: every turn needs a saved key, so Zen is never offered. */
-    allowCredentialless?: boolean;
-  } = {}
+  credentialProviderIds: ReadonlySet<string> | null
 ): Omit<OpenCodeModelCatalog, 'runtimeVersion'> {
-  const allowCredentialless = options.allowCredentialless ?? true;
   const configuredProvider = credentialProviderIds
     ? KNOWN_PROVIDERS.find(
         (provider) => credentialProviderIds.has(provider.id) && hasActiveSuggestedModel(provider)
       )
     : undefined;
-  const fallbackProvider = allowCredentialless
-    ? KNOWN_PROVIDERS.find(
-        (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
-      )
-    : undefined;
+  const fallbackProvider = KNOWN_PROVIDERS.find(
+    (provider) => provider.availableWithoutCredentials && hasActiveSuggestedModel(provider)
+  );
   const suggestedProvider = configuredProvider ?? fallbackProvider;
   const knownIds = new Set<string>(KNOWN_PROVIDERS.map(({ id }) => id));
   const providers: OpenCodeCatalogProvider[] = KNOWN_PROVIDERS.map((provider) => ({
     id: provider.id,
     name: provider.name,
     availableForSelection:
-      (allowCredentialless && provider.availableWithoutCredentials) ||
-      credentialProviderIds?.has(provider.id) === true,
+      provider.availableWithoutCredentials || credentialProviderIds?.has(provider.id) === true,
     suggestedModel: provider.suggestedModel,
     models: provider.models.map((model) => ({ ...model })),
   }));
@@ -184,36 +146,6 @@ export function createOpenCodeKnownModelCatalog(
           },
         }
       : {}),
-    providers,
-  };
-}
-
-/** Hosted provider settings from saved-key presence: API keys only, verified by the first prompt. */
-export function createOpenCodeHostedProviderDiscovery(
-  savedProviderIds: ReadonlySet<string>
-): OpenCodeProviderDiscovery {
-  const providers: OpenCodeProviderConnection[] = KNOWN_PROVIDERS.map((provider) => {
-    const hostedField = hostedCredentialFieldForProvider(provider.id);
-    const saved = savedProviderIds.has(provider.id);
-    return {
-      id: provider.id,
-      name: provider.name,
-      // Managed projection requires a saved curated key for every turn; a
-      // credential-less provider is therefore not available in hosted mode.
-      runtimeAvailable: saved,
-      credentialPresence: saved ? 'present' : 'absent',
-      authMethods: hostedField ? [{ index: 0, type: 'api', label: 'API key' }] : [],
-      suggestedModel: provider.suggestedModel,
-      models: provider.models.map((model) => ({ ...model })),
-    };
-  });
-  const catalog = createOpenCodeKnownModelCatalog(savedProviderIds, {
-    allowCredentialless: false,
-  });
-  return {
-    runtime: 'available',
-    runtimeVersion: OPENCODE_VERSION,
-    ...(catalog.suggestedSelection ? { suggestedSelection: catalog.suggestedSelection } : {}),
     providers,
   };
 }
