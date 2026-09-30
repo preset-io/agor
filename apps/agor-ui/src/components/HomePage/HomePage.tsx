@@ -2,7 +2,7 @@ import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, App as AntApp, Button, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
@@ -23,6 +23,7 @@ import {
   isUnreadResult,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
+import { runWithLimit } from '../../utils/promisePool';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
   OPEN_GLOBAL_SEARCH_EVENT,
@@ -40,6 +41,9 @@ import { OnboardingCard } from './OnboardingCard';
 const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 const OPENED_FAILURES_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
+const MARK_ALL_CONCURRENCY = 4;
+const NO_BOARD_IDS: string[] = [];
 
 type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
 
@@ -74,7 +78,7 @@ const scrollToSection = (id: string) =>
 
 const focusAsk = () => {
   scrollToSection('ask');
-  document.querySelector<HTMLInputElement>('#ask input')?.focus();
+  document.querySelector<HTMLTextAreaElement>('#ask textarea')?.focus();
 };
 
 function greeting(date = new Date()) {
@@ -87,10 +91,12 @@ const selectHydrated = (s: AgorState) => s.sessionsHydrated && s.branchesHydrate
 /** Onboarding steps the caller can perform, subscribed only while the card can still show. */
 const HomeOnboarding: React.FC<{
   isAdmin: boolean;
+  /** Without it there is no ask box, so the session step hides. */
+  canStartSessions: boolean;
   onOpenCreateDialog?: HomePageProps['onOpenCreateDialog'];
   onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>;
   onDismiss: () => void;
-}> = ({ isAdmin, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+}> = ({ isAdmin, canStartSessions, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
   const done = useStoreWithEqualityFn(
     agorStore,
     (s) => ({
@@ -116,13 +122,17 @@ const HomeOnboarding: React.FC<{
       done: done.board,
       onClick: onOpenCreateDialog && (() => onOpenCreateDialog('board')),
     },
-    {
-      id: 'session',
-      label: 'Launch an AI session',
-      cta: 'Start',
-      done: false,
-      onClick: onOpenCreateDialog ? () => onOpenCreateDialog('teammate') : focusAsk,
-    },
+    ...(canStartSessions
+      ? [
+          {
+            id: 'session',
+            label: 'Launch an AI session',
+            cta: 'Start',
+            done: false,
+            onClick: onOpenCreateDialog ? () => onOpenCreateDialog('teammate') : focusAsk,
+          },
+        ]
+      : []),
     ...(isAdmin ? adminSteps(done, onOpenSettings) : []),
   ];
   if (steps.every((step) => step.done)) return null;
@@ -153,7 +163,7 @@ const adminSteps = (
 export const HomePage = memo(function HomePage({
   client,
   currentUser,
-  recentBoardIds = [],
+  recentBoardIds = NO_BOARD_IDS,
   onBoardClick,
   onBranchClick,
   onSessionClick,
@@ -166,6 +176,7 @@ export const HomePage = memo(function HomePage({
   const { token } = theme.useToken();
   const { message } = AntApp.useApp();
   const location = useLocation();
+  const navigate = useNavigate();
   const isMobile = useIsMobileViewport();
   const { connected, connecting } = useConnectionState();
   const railReady = useIdleReady();
@@ -214,6 +225,19 @@ export const HomePage = memo(function HomePage({
   const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
 
   const hydrated = useAgorStore(selectHydrated);
+  // Visit history that still names live boards; when none do, recent sessions stand in.
+  const visitedBoardIds = useStoreWithEqualityFn(
+    agorStore,
+    useMemo(
+      () => (s: AgorState) =>
+        recentBoardIds.filter((id) => {
+          const board = s.boardById.get(id);
+          return !!board && !board.archived;
+        }),
+      [recentBoardIds]
+    ),
+    shallow
+  );
   const buckets = useStoreWithEqualityFn(
     agorStore,
     useMemo(
@@ -223,7 +247,7 @@ export const HomePage = memo(function HomePage({
           now,
           needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
-          boardsLimit: recentBoardIds.length ? 0 : RECENT_BOARDS,
+          boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
           query: deferredQuery,
           onlyStartedByMe,
           openedFailures,
@@ -233,7 +257,7 @@ export const HomePage = memo(function HomePage({
         now,
         needsExpanded,
         workLimit,
-        recentBoardIds.length,
+        visitedBoardIds.length,
         deferredQuery,
         onlyStartedByMe,
         openedFailures,
@@ -258,13 +282,17 @@ export const HomePage = memo(function HomePage({
     if (!comments.length) setNeedsFilter('all');
   }, [comments.length]);
 
-  const routeState = location.state as HomeLocationState | null;
+  // A landing filter applies once there is something to show, then leaves the history entry.
+  const routeFilter = (location.state as HomeLocationState | null)?.needsFilter;
+  const { pathname, search } = location;
   useEffect(() => {
-    if (routeState?.needsFilter) {
-      setNeedsFilter(routeState.needsFilter);
-      requestAnimationFrame(() => scrollToSection('needs'));
-    }
-  }, [routeState]);
+    if (!routeFilter) return;
+    const applicable = routeFilter !== 'comments' || comments.length > 0;
+    if (!applicable && !hydrated) return;
+    if (applicable) setNeedsFilter(routeFilter);
+    requestAnimationFrame(() => scrollToSection('needs'));
+    navigate(`${pathname}${search}`, { replace: true, state: null });
+  }, [routeFilter, comments.length, hydrated, navigate, pathname, search]);
 
   const openComment = useCallback(
     ({ thread }: HomeCommentNeed) => {
@@ -294,12 +322,24 @@ export const HomePage = memo(function HomePage({
     },
     [client, message]
   );
-  const markAllRead = useCallback(() => {
-    for (const session of agorStore.getState().sessionById.values()) {
-      if (session.created_by === userId && !session.archived && isUnreadResult(session))
-        markRead(session.session_id);
+  const [markingAll, setMarkingAll] = useState(false);
+  const markAllRead = useCallback(async () => {
+    if (!client) return;
+    const ids = [...agorStore.getState().sessionById.values()]
+      .filter((s) => s.created_by === userId && !s.archived && isUnreadResult(s))
+      .map((s) => s.session_id);
+    setMarkingAll(true);
+    try {
+      const failed = await runWithLimit(ids, MARK_ALL_CONCURRENCY, (id) =>
+        client.service('sessions').patch(id, { ready_for_prompt: false })
+      );
+      if (failed.length === ids.length && failed.length) message.error('Couldn’t mark as read');
+      else if (failed.length)
+        message.error(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
+    } finally {
+      setMarkingAll(false);
     }
-  }, [userId, markRead]);
+  }, [client, userId, message]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
   const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
   const showRunning = useCallback(() => {
@@ -321,6 +361,7 @@ export const HomePage = memo(function HomePage({
   const onboarding = !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
     <HomeOnboarding
       isAdmin={isAdmin}
+      canStartSessions={!!onCreateSession}
       onOpenCreateDialog={onOpenCreateDialog}
       onOpenSettings={onOpenSettings}
       onDismiss={() => setOnboardingHidden(true)}
@@ -376,7 +417,7 @@ export const HomePage = memo(function HomePage({
         )}
       </div>
       <HomeRecentBoards
-        recentBoardIds={recentBoardIds.length ? recentBoardIds : buckets.boardIds}
+        recentBoardIds={visitedBoardIds.length ? visitedBoardIds : buckets.boardIds}
         onBoardClick={onBoardClick}
         onAllBoards={allBoards}
       />
@@ -410,7 +451,9 @@ export const HomePage = memo(function HomePage({
               onOpenFailure={openFailure}
               onOpenComment={openComment}
               onMarkRead={markRead}
-              onMarkAllRead={buckets.unreadCount > 0 ? markAllRead : undefined}
+              onMarkAllRead={client && buckets.unreadCount > 0 ? markAllRead : undefined}
+              markingAllRead={markingAll}
+              markAllReadDisabled={!connected}
               onArchive={archive}
             />
           )}
@@ -418,6 +461,7 @@ export const HomePage = memo(function HomePage({
           <HomeMyWork
             recent={buckets.recent}
             recentCount={buckets.recentCount}
+            limit={workLimit}
             running={buckets.running}
             runningCount={buckets.runningCount}
             hydrated={hydrated}

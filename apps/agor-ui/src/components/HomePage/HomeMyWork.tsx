@@ -44,7 +44,10 @@ interface HomeMyWorkProps {
   recent: Session[];
   recentCount: number;
   running: Session[];
+  /** Every running session, before the filters. */
   runningCount: number;
+  /** Rows per list: `recent` and `running` are capped here. */
+  limit: number;
   hydrated: boolean;
   tab: MyWorkTab;
   onTabChange: (tab: MyWorkTab) => void;
@@ -143,6 +146,7 @@ export const HomeMyWork = memo(function HomeMyWork({
   recentCount,
   running,
   runningCount,
+  limit,
   hydrated,
   tab,
   onTabChange,
@@ -161,7 +165,15 @@ export const HomeMyWork = memo(function HomeMyWork({
   const compact = useHomeCompact();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const sessions = tab === 'running' ? running : recent;
-  const total = tab === 'running' ? runningCount : recentCount;
+  const filtered = !!query.trim() || onlyStartedByMe;
+  // Recent's count is already filtered. Running's is not: under a filter the capped list is exact
+  // until it fills its page, and past that only "more" is known.
+  const runningTotal = !filtered
+    ? runningCount
+    : running.length < limit || running.length === runningCount
+      ? running.length
+      : undefined;
+  const total = tab === 'running' ? runningTotal : recentCount;
   const grouped = tab === 'recent' && view === 'board';
   const homes = useStoreWithEqualityFn(
     agorStore,
@@ -175,14 +187,19 @@ export const HomeMyWork = memo(function HomeMyWork({
   const showLogo = sessions.some((s) => s.agentic_tool !== sessions[0]?.agentic_tool);
   const activeFilters = Number(onlyStartedByMe);
 
+  const clearFilters = () => {
+    onQueryChange('');
+    onOnlyStartedByMeChange(false);
+  };
   const empty =
-    tab === 'running' ? (
-      'No agents running right now.'
-    ) : query ? (
+    filtered && (tab === 'recent' || runningCount > 0) ? (
       <>
-        No sessions match “{query}”.{' '}
-        <HomeLink onClick={() => onQueryChange('')}>Clear filter</HomeLink>
+        No {tab === 'running' ? 'running sessions' : 'sessions'} match{' '}
+        {query.trim() ? `“${query}”` : 'your filters'}.{' '}
+        <HomeLink onClick={clearFilters}>Clear filters</HomeLink>
       </>
+    ) : tab === 'running' ? (
+      'No agents running right now.'
     ) : (
       'Nothing here yet.'
     );
@@ -343,9 +360,13 @@ export const HomeMyWork = memo(function HomeMyWork({
               )}
             />
           )}
-          {total > sessions.length && (
+          {(total === undefined || total > sessions.length) && (
             <HomeShowMore
-              label={`Show ${Math.min(total - sessions.length, MY_WORK_PAGE)} more`}
+              label={
+                total === undefined
+                  ? 'Show more'
+                  : `Show ${Math.min(total - sessions.length, MY_WORK_PAGE)} more`
+              }
               onClick={onShowMore}
             />
           )}

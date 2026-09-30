@@ -326,7 +326,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '');
+  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
   const openHomeBoard = useCallback(
     (boardId: string) => navigate(`/m/board/${boardId}`),
     [navigate]
@@ -503,6 +503,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 firstTaskAssistantName={primaryTeammateName}
                 commentsBadge={boardCommentsBadge}
                 onOpenComments={openBoardComments}
+                userId={user?.user_id}
               />
             }
           />

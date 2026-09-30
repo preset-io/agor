@@ -678,7 +678,11 @@ export const App: React.FC<AppProps> = ({
   // and the localStorage-backed recents list keeps both in sync. The boards arg
   // only shapes `recentBoards`, which the shell does not consume — passing the
   // stable empty list avoids a whole-map subscription here.
-  const { recentBoardIds, trackBoardVisit } = useRecentBoards(EMPTY_BOARDS, currentBoardId);
+  const { recentBoardIds, trackBoardVisit } = useRecentBoards(
+    EMPTY_BOARDS,
+    currentBoardId,
+    user?.user_id
+  );
 
   // Persist current board to localStorage when it changes
   useEffect(() => {

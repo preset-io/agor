@@ -50,6 +50,9 @@ interface HomeNeedsYouProps {
   onMarkRead: (sessionId: string) => void;
   /** Shown while any finished result is unopened. */
   onMarkAllRead?: () => void;
+  markingAllRead?: boolean;
+  /** While offline. */
+  markAllReadDisabled?: boolean;
   onArchive: (sessionId: string) => void;
 }
 
@@ -69,6 +72,8 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
   onOpenComment,
   onMarkRead,
   onMarkAllRead,
+  markingAllRead,
+  markAllReadDisabled,
   onArchive,
 }: HomeNeedsYouProps) {
   const total = Math.min(filter === 'comments' ? commentCount : needsCount, NEEDS_MAX);
@@ -83,7 +88,15 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
       info={NEEDS_INFO}
       extra={
         <>
-          {onMarkAllRead && <HomeLink onClick={onMarkAllRead}>Mark all as read</HomeLink>}
+          {onMarkAllRead && (
+            <HomeLink
+              loading={markingAllRead}
+              disabled={markAllReadDisabled || markingAllRead}
+              onClick={onMarkAllRead}
+            >
+              Mark all as read
+            </HomeLink>
+          )}
           {commentCount > 0 && (
             <Segmented<NeedsFilter>
               size="small"

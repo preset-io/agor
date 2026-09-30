@@ -204,7 +204,11 @@ export const HomeAskBox = memo(function HomeAskBox({
     ),
     shallow
   );
-  const busy = disabled || compose.resolving || (!target && compose.resolveFailed);
+  const busy =
+    disabled ||
+    compose.submitting !== null ||
+    compose.resolving ||
+    (!target && compose.resolveFailed);
   const focusInput = () => requestAnimationFrame(() => inputRef.current?.focus({ cursor: 'end' }));
   const send = (mode: ComposeSendMode) => {
     if (busy) return;

@@ -34,13 +34,17 @@ export function useLocalStorage<T>(
 ): [T, (value: T | ((val: T) => T)) => void] {
   const readValue = useCallback(() => readLocalStorageJson(key, initialValue), [initialValue, key]);
 
-  // State to store our value
-  // Pass initial state function to useState so logic is only executed once
-  const [storedValue, setStoredValue] = useState<T>(readValue);
-
   // Keep key in a ref so the callback doesn't depend on it
   const keyRef = useRef(key);
   keyRef.current = key;
+
+  // State to store our value
+  // Pass initial state function to useState so logic is only executed once
+  const [stored, setStored] = useState(() => ({ key, value: readValue() }));
+  // A new key (e.g. a per-user key after sign-in) reads its own value instead of keeping the old one.
+  if (stored.key !== key) setStored({ key, value: readValue() });
+  const storedValue = stored.key === key ? stored.value : readValue();
+  const setStoredValue = useCallback((value: T) => setStored({ key: keyRef.current, value }), []);
 
   // Mirror the latest value into a ref so the functional form of `setValue` can
   // resolve against it WITHOUT persisting + dispatching from inside the
@@ -52,23 +56,26 @@ export function useLocalStorage<T>(
   storedValueRef.current = storedValue;
 
   // Stable setter that persists to localStorage
-  const setValue = useCallback((value: T | ((val: T) => T)) => {
-    try {
-      const valueToStore =
-        value instanceof Function ? (value as (val: T) => T)(storedValueRef.current) : value;
-      writeLocalStorageJson(keyRef.current, valueToStore);
-      setStoredValue(valueToStore);
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(
-          new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_CHANGE_EVENT, {
-            detail: { key: keyRef.current, value: valueToStore },
-          })
-        );
+  const setValue = useCallback(
+    (value: T | ((val: T) => T)) => {
+      try {
+        const valueToStore =
+          value instanceof Function ? (value as (val: T) => T)(storedValueRef.current) : value;
+        writeLocalStorageJson(keyRef.current, valueToStore);
+        setStoredValue(valueToStore);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent<LocalStorageChangeDetail>(LOCAL_STORAGE_CHANGE_EVENT, {
+              detail: { key: keyRef.current, value: valueToStore },
+            })
+          );
+        }
+      } catch (error) {
+        console.error(`Error setting localStorage key "${keyRef.current}":`, error);
       }
-    } catch (error) {
-      console.error(`Error setting localStorage key "${keyRef.current}":`, error);
-    }
-  }, []);
+    },
+    [setStoredValue]
+  );
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -95,7 +102,7 @@ export function useLocalStorage<T>(
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener(LOCAL_STORAGE_CHANGE_EVENT, handleLocalStorageChange);
     };
-  }, [key, readValue]);
+  }, [key, readValue, setStoredValue]);
 
   return [storedValue, setValue];
 }

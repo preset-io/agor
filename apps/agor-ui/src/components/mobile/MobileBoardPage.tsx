@@ -77,6 +77,8 @@ interface MobileBoardPageProps {
   commentsBadge?: number;
   /** Opens comments/mentions from the header bell. */
   onOpenComments?: () => void;
+  /** Keys the visit history this page records to the signed-in user. */
+  userId?: string;
 }
 
 function statusColor(status: Branch['filesystem_status']): string {
@@ -113,6 +115,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   firstTaskAssistantName,
   commentsBadge,
   onOpenComments,
+  userId,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -121,7 +124,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     ? boardId
     : resolveBoardFromUrlPure(boardId, boardById);
   const board = resolvedBoardId ? boardById.get(resolvedBoardId) : undefined;
-  const { trackBoardVisit } = useRecentBoards(NO_BOARDS, '');
+  const { trackBoardVisit } = useRecentBoards(NO_BOARDS, '', userId);
   const visitedBoardId = board?.board_id;
   useEffect(() => {
     if (visitedBoardId) trackBoardVisit(visitedBoardId);

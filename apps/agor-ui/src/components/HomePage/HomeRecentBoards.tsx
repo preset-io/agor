@@ -45,7 +45,7 @@ const RecentBoardPill: React.FC<{ board: Board; onClick: (boardId: string) => vo
   );
 };
 
-/** One slim row of the caller's last visited boards. */
+/** One slim row of the caller's last visited boards, and always the way to all of them. */
 export const HomeRecentBoards = memo(function HomeRecentBoards({
   recentBoardIds,
   onBoardClick,
@@ -67,10 +67,9 @@ export const HomeRecentBoards = memo(function HomeRecentBoards({
         .slice(0, limit),
     [boardById, recentBoardIds, limit]
   );
-  if (boards.length === 0) return null;
   return (
     <Flex align="center" gap={token.marginXS} wrap aria-label="Recent boards" role="group">
-      {!isMobile && (
+      {!isMobile && boards.length > 0 && (
         <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
           Recent boards
         </Typography.Text>
