@@ -45,6 +45,7 @@ import {
   Conflict,
   Forbidden,
   NotAuthenticated,
+  Unavailable,
 } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -122,6 +123,11 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.FAILED,
   TaskStatus.STOPPED,
 ]);
+
+/** A closed or unverifiable (503) tenant: completion projects the session hook-free and runs no automation. */
+function isCompletionAdmissionRefusal(error: unknown): boolean {
+  return isTenantRestrictedRejection(error) || error instanceof Unavailable;
+}
 
 function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
   return isTerminalTaskStatus(status);
@@ -882,8 +888,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           ? await this.app.service('sessions').get(task.session_id, params)
           : await readSettledSession();
       } catch (error) {
-        // The tenant closed after the check: continue on the restricted, automation-free path.
-        if (!automationAdmitted || !isTenantRestrictedRejection(error)) throw error;
+        // The tenant closed after the check, or the read became unverifiable: continue without automation.
+        if (!automationAdmitted || !isCompletionAdmissionRefusal(error)) throw error;
         automationAdmitted = false;
         session = await readSettledSession();
       }
@@ -938,8 +944,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             `✅ [TasksService] Session ${shortId(task.session_id)} status updated after terminal task (task ${shortId(task.task_id)} ${status})`
           );
         } catch (error) {
-          // Closed between the check and this write: project hook-free so the session still leaves RUNNING.
-          if (!isTenantRestrictedRejection(error)) throw error;
+          // Closed or unverifiable at this write: project hook-free so the session still leaves RUNNING.
+          if (!isCompletionAdmissionRefusal(error)) throw error;
           automationAdmitted = false;
           await this.projectRestrictedTerminalSession(task, status, params);
         }

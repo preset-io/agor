@@ -15,10 +15,10 @@ const hook = createSessionMcpTokenHook({
   app: { settings: { authentication: { secret: 'secret' } } } as never,
   config: {},
 });
-const run = (method = 'get') =>
+const run = (method = 'get', provider: string | null = 'socketio') =>
   hook({
     method,
-    params: { user: { user_id: 'user-1', role: 'member' } },
+    params: { user: { user_id: 'user-1', role: 'member' }, provider: provider ?? undefined },
     result: session,
   } as never);
 const readFailure = () => new NotAuthenticated('Tenant credential cannot be verified');
@@ -39,6 +39,13 @@ describe('sessions MCP-token hook restriction reads', () => {
   it('fails an ordinary session read as unavailable instead of returning it without a token', async () => {
     generateSessionToken.mockRejectedValueOnce(readFailure());
     await expect(run()).rejects.toBeInstanceOf(Unavailable);
+  });
+
+  it('returns an internal session read without a token when the restriction read fails', async () => {
+    generateSessionToken.mockRejectedValueOnce(readFailure());
+    const context = await run('get', null);
+    expect(context.result).toBe(session);
+    expect(context.result).not.toHaveProperty('mcp_token');
   });
 
   it('returns a committed create without a token when the restriction read fails', async () => {

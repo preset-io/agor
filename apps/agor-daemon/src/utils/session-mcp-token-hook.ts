@@ -63,8 +63,13 @@ export function createSessionMcpTokenHook(options: SessionMcpTokenHookOptions) {
       // A closed tenant mints no MCP credential; the session read itself still succeeds.
       if (isTenantRestrictedRejection(error)) return context;
       if (!(error instanceof NotAuthenticated)) throw error;
-      // A failed read (codeless 401) spares a committed create and termination reads; other reads fail visibly (503) rather than start an agent without MCP.
-      if (context.method !== 'get' || hasTerminationReadAuthority(context)) return context;
+      // A failed read (codeless 401) fails only a transport get visibly (503), so no agent starts without MCP; internal, create and termination reads go on without a token.
+      if (
+        context.method !== 'get' ||
+        !context.params.provider ||
+        hasTerminationReadAuthority(context)
+      )
+        return context;
       throw new Unavailable('Tenant access cannot be verified');
     }
 

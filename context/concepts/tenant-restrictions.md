@@ -319,8 +319,9 @@ too: the read holds only current records and the task credential only the
 generation hash, so a seeded record cannot be told from a reactivated one.
 
 A task completing as the tenant closes (including a close between the admission
-check and the session write), or while that check cannot read restriction state,
-still returns its session to idle through a hook-free projection. Everything else
+check and the session write), or while that check, the session read or the session
+write cannot verify admission (503), still returns its session to idle through a
+hook-free projection. Everything else
 in completion is skipped and not replayed: origin alignment, auto-title, completion callbacks, BTW archive and result injection, the
 queue trigger, and the sessions after-patch hook, whose gateway outbound flush and
 progress `done` do not run. A buffered final gateway reply is therefore never
@@ -333,9 +334,9 @@ turn updates it; reactivation does not repair it.
 revision vector and tenant identity. It is not a clock cutoff or maximum revision.
 Runtime access/refresh tokens, MCP session tokens and MCP egress capabilities retain
 the generation validated at issuance (a closed tenant is minted no MCP session token and its session read returns without one;
-issuance reuses the read that admitted the request, within its tick; when issuance's own read fails, only a termination
-read or a committed create returns without a token, and an ordinary session read fails with a 503, so an executor launch fails visibly
-rather than starting an agent without Agor MCP; the `/mcp` route compares it on every request and answers a stale one 401); refresh and JWT re-login never replace an old generation
+issuance reuses the read that admitted the request, within its tick; when issuance's own read fails, a session get over
+a transport (the executor's or a browser's) fails with a 503, so an executor launch fails visibly rather than starting an agent
+without Agor MCP, while internal daemon reads, termination reads and a committed create return without a token; the `/mcp` route compares it on every request and answers a stale one 401); refresh and JWT re-login never replace an old generation
 with the current one. Missing legacy claims work only without retained history.
 Fresh primary authentication (including existing API keys) is not permanent key
 revocation. Standalone SQLite remains outside hosted restriction support.

@@ -252,9 +252,14 @@ describe('TasksService completion callbacks', () => {
     }
   });
 
-  it.each(['session read', 'session projection'] as const)(
-    'falls back to the hook-free projection when the tenant closes before the %s',
-    async (refusedAt) => {
+  it.each([
+    ['session read', 'closed'],
+    ['session projection', 'closed'],
+    ['session read', 'unverifiable'],
+    ['session projection', 'unverifiable'],
+  ] as const)(
+    'falls back to the hook-free projection when the %s finds the tenant %s',
+    async (refusedAt, state) => {
       const {
         service,
         createPending,
@@ -268,9 +273,10 @@ describe('TasksService completion callbacks', () => {
       const projected = vi
         .spyOn(SessionRepository.prototype, 'update')
         .mockImplementation(async (_id, updates) => ({ ...childSession, ...updates }) as Session);
-      const refusal = new Forbidden('Tenant access is restricted', {
-        code: TENANT_RESTRICTED_ERROR_CODE,
-      });
+      const refusal =
+        state === 'closed'
+          ? new Forbidden('Tenant access is restricted', { code: TENANT_RESTRICTED_ERROR_CODE })
+          : new Unavailable('Tenant access cannot be verified');
       if (refusedAt === 'session read') sessionsGet.mockRejectedValueOnce(refusal);
       else sessionsPatch.mockRejectedValueOnce(refusal);
       try {

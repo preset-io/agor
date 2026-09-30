@@ -335,7 +335,8 @@ admission/UI projection:
   queue processing and other side effects run after commit;
 - a Task completing through the ordinary patch path while its tenant is
   restricted (or becomes restricted before the session read or write, or
-  whose restriction read fails) is projected by a hook-free session write
+  whose restriction read, session read or session write cannot verify
+  admission) is projected by a hook-free session write
   instead, so the session still leaves `running`; the sessions after-patch hooks and completion automation do not
   run and are not replayed after reactivation (see
   [tenant-restrictions.md](tenant-restrictions.md));
