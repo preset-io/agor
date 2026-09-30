@@ -320,14 +320,17 @@ A task completing as the tenant closes (including a close between the admission
 check and the session write), or while that check, the session read or the session
 write cannot verify admission (503), still returns its session to idle through a
 hook-free projection. Everything else
-in completion is skipped and not replayed: origin alignment, auto-title, completion callbacks, BTW archive and result injection, the
-queue trigger, and the sessions after-patch hook, whose gateway outbound flush and
+in completion is skipped and not replayed: origin alignment, auto-title, completion callbacks, BTW archive and result injection,
+and the sessions after-patch hook, whose gateway outbound flush and
 progress `done` do not run. A buffered final gateway reply is therefore never
 posted, and a Slack thread status can stay `working` until that session's next
-turn updates it; reactivation does not repair it. No durable path retries completion
+turn updates it; reactivation does not repair it. The queue trigger is skipped only
+for a closed tenant; an unverifiable read still triggers it, because dispatch
+re-checks the restriction under the execution fence. No durable path retries completion
 callbacks, so a parent session whose child completed while its tenant was merely
 unverifiable (never restricted) permanently misses that callback. Each skip logs
-one `[tasks.completion] automation skipped reason=restricted|unverifiable` line.
+one `[tasks.completion] automation skipped reason=restricted|unverifiable` line
+(`kept=queue` on the unverifiable one).
 
 ## Credential generations
 

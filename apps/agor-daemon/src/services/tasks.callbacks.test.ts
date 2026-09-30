@@ -230,7 +230,7 @@ describe('TasksService completion callbacks', () => {
     }
   });
 
-  it('returns the session to idle but runs no automation when the admission read fails', async () => {
+  it('returns the session to idle and drains the queue, but runs no other automation, when the admission read fails', async () => {
     const { service, createPending, sessionsPatch, triggerQueueProcessing, childSession } =
       makeService();
     const db = { run() {} };
@@ -247,7 +247,7 @@ describe('TasksService completion callbacks', () => {
         service.patch(taskId, { status: TaskStatus.COMPLETED })
       );
       expect(warn).toHaveBeenCalledWith(
-        `[tasks.completion] automation skipped reason=unverifiable task=${shortId(taskId)}`
+        `[tasks.completion] automation skipped reason=unverifiable kept=queue task=${shortId(taskId)}`
       );
       expect(projected).toHaveBeenCalledWith(childSessionId, {
         status: 'idle',
@@ -255,7 +255,9 @@ describe('TasksService completion callbacks', () => {
       });
       expect(sessionsPatch).not.toHaveBeenCalled();
       expect(createPending).not.toHaveBeenCalled();
-      expect(triggerQueueProcessing).not.toHaveBeenCalled();
+      // Dispatch re-checks the restriction under the execution fence, so a failed read never strands the queue.
+      expect(triggerQueueProcessing).toHaveBeenCalledOnce();
+      expect(triggerQueueProcessing.mock.calls[0]).toEqual([childSessionId, undefined]);
     } finally {
       projected.mockRestore();
       warn.mockRestore();
@@ -299,7 +301,7 @@ describe('TasksService completion callbacks', () => {
         });
         expect(sessionsPatch).toHaveBeenCalledTimes(refusedAt === 'session read' ? 0 : 1);
         expect(createPending).not.toHaveBeenCalled();
-        expect(triggerQueueProcessing).not.toHaveBeenCalled();
+        expect(triggerQueueProcessing).toHaveBeenCalledTimes(state === 'closed' ? 0 : 1);
       } finally {
         projected.mockRestore();
       }

@@ -124,7 +124,7 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.STOPPED,
 ]);
 
-/** A closed or unverifiable (503) tenant: completion projects the session hook-free and runs no automation. */
+/** A closed or unverifiable (503) tenant: completion projects the session hook-free; only an unverifiable one still drains the queue. */
 function isCompletionAdmissionRefusal(error: unknown): boolean {
   return isTenantRestrictedRejection(error) || error instanceof Unavailable;
 }
@@ -866,12 +866,16 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   ): Promise<boolean> {
     if (!task.session_id || !this.app) return false;
     try {
-      // Settlement is committed; while restricted or unverifiable, skip completion automation (no durable retry replays it).
+      // Settlement is committed; while restricted or unverifiable, skip completion automation (no durable retry replays it) except an unverifiable queue drain.
       let automationAdmitted = true;
+      let restrictionObserved = false;
       const skipAutomation = (reason: 'restricted' | 'unverifiable') => {
         automationAdmitted = false;
+        if (reason === 'restricted') restrictionObserved = true;
+        // Unverifiable drops callbacks and gateway flush for good; only the queue drain still runs.
+        const kept = reason === 'unverifiable' ? ' kept=queue' : '';
         console.warn(
-          `[tasks.completion] automation skipped reason=${reason} task=${shortId(task.task_id)}`
+          `[tasks.completion] automation skipped reason=${reason}${kept} task=${shortId(task.task_id)}`
         );
       };
       try {
@@ -959,7 +963,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         // The session must still leave RUNNING, or it stays stuck after reactivation.
         await this.projectRestrictedTerminalSession(task, status, params);
       }
-      if (!automationAdmitted) return true;
+      if (!automationAdmitted) {
+        // A failed read is not a closure: dispatch re-checks the restriction under the execution fence.
+        if (!restrictionObserved && !params?.suppressTerminalQueueProcessing)
+          await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+        return true;
+      }
 
       // Defensive fallback for tasks created before create-time auto-title
       // ran (or after a transient title-patch failure). Later completed
