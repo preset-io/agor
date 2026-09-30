@@ -185,7 +185,7 @@ export const HomeAskBox = memo(function HomeAskBox({
     onCreateSession,
     onOpenSession,
     // Also gates a held send resumed by a pick after the box was emptied.
-    canSend: () => prompt.trim().length > 0,
+    canSend: () => !disabled && prompt.trim().length > 0,
     buildConfig: (branch) => {
       sentRef.current = { prompt, target };
       return buildNewSessionConfig({
@@ -201,6 +201,7 @@ export const HomeAskBox = memo(function HomeAskBox({
     },
     onSent: () => {
       const sent = sentRef.current;
+      sentRef.current = null;
       if (!sent) return;
       setPrompt((current) => (current === sent.prompt ? '' : current));
       setTarget((current) => (current === sent.target ? null : current));
