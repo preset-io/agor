@@ -3270,6 +3270,34 @@ describe('TaskRepository.createPending', () => {
   });
 
   dbTest(
+    'direct admission is not blocked by prompts held by a tenant restriction',
+    async ({ db }) => {
+      const repo = new TaskRepository(db);
+      const hold = { reason: 'tenant_restricted' as const, held_at: new Date().toISOString() };
+      for (const status of [TaskStatus.QUEUED, TaskStatus.CREATED]) {
+        const sessionId = await createSessionWithDeps(db);
+        const held = await repo.create(
+          createTaskData({
+            session_id: sessionId,
+            status,
+            ...(status === TaskStatus.QUEUED ? { queue_position: 1 } : {}),
+            tenant_restriction_hold: hold,
+          })
+        );
+        const next = await repo.createPending({
+          ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+          dispatchIfIdle: dispatchFields(),
+        });
+        expect(next.status).toBe(TaskStatus.DISPATCHING);
+        expect(await repo.findById(held.task_id)).toMatchObject({
+          status,
+          tenant_restriction_hold: hold,
+        });
+      }
+    }
+  );
+
+  dbTest(
     'queue mutations preserve direct dispatch and subsequent admission order',
     async ({ db }) => {
       const repo = new TaskRepository(db);

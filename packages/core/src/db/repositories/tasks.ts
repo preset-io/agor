@@ -2801,12 +2801,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           ) {
             // Include CREATED handoffs as well as executor-owned states.
             // Queue emptiness alone cannot authorize another executor.
+            // A restriction-held prompt can never dispatch, so it does not keep later prompts queued.
             const unfinished = await select(txDb, { task_id: tasks.task_id })
               .from(tasks)
               .where(
                 and(
                   eq(tasks.session_id, input.session_id),
-                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES])
+                  inArray(tasks.status, [...NONTERMINAL_TASK_STATUSES]),
+                  this.runnablePromptPredicate()
                 )
               )
               .limit(1)
