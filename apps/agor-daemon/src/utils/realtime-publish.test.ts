@@ -3120,6 +3120,13 @@ describe('publication restriction observation', () => {
         stuck.push(pending);
         return pending.promise;
       });
+      // A wall-clock jump alone never makes a pending read look wedged.
+      const early = relayBoard();
+      vi.setSystemTime(Date.now() + 3_600_000);
+      const afterJump = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.all([early, afterJump]);
+      expect(read).toHaveBeenCalledOnce();
       for (let round = 0; round < 5; round++) {
         const relayed = relayBoard();
         await vi.advanceTimersByTimeAsync(2 * 2000);

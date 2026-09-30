@@ -295,6 +295,25 @@ describe('socket restriction monitor', () => {
     }
   });
 
+  it('times reads on a monotonic clock, so a wall-clock jump abandons nothing', async () => {
+    vi.useFakeTimers();
+    const warn = warnings();
+    try {
+      const observe = vi.fn(() => new Promise<void>(() => undefined));
+      const monitor = new TenantSocketRestrictionMonitor(observe, { timeoutMs: 20 });
+      for (let sweep = 0; sweep < 2; sweep++) {
+        const checking = monitor.check(['a']);
+        await vi.advanceTimersByTimeAsync(20);
+        await checking;
+        vi.setSystemTime(Date.now() + 3_600_000);
+      }
+      expect(observe).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a rolling pool, so one slow read does not hold back the tenants queued behind it', async () => {
     vi.useFakeTimers();
     try {

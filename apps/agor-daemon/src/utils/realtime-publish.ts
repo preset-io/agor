@@ -952,7 +952,8 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     database: TenantScopeAwareDatabase,
     tenantId: string
   ): Promise<string | undefined> => {
-    const now = Date.now();
+    // Monotonic, so a wall-clock step cannot abandon a read early or keep a wedged one forever.
+    const now = performance.now();
     if (now >= nextEviction) {
       // Settled entries past their tick are dropped; in-flight reads are only replaced on lookup.
       for (const [id, stale] of epochReads) if (now >= stale.until) epochReads.delete(id);
