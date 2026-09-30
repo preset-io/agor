@@ -7,10 +7,11 @@ import { useBoardSharing } from './useBoardsSharedWithMe';
 /**
  * Others' teammates whose home board reaches the caller through its policy.
  * `settled` once every board's policy answer is in (only superadmins wait).
- * The list grows at the bottom: a teammate shows once every one before it has
- * an answer. `failed` counts teammates whose policy read failed; `retry` reads
- * them again, keeping them failed (not pending) until they answer, `retrying`
- * meanwhile.
+ * A teammate shows once none before it is still pending, so answers mostly
+ * append; a failed one doesn't hold later ones back, so one that answers on a
+ * retry can appear above them. `failed` counts teammates whose policy read
+ * failed; `retry` reads them again, keeping them failed (not pending) until
+ * they answer, `retrying` meanwhile.
  */
 export function useSharedTeammates(client: AgorClient | null, user: User | null | undefined) {
   const candidates = useStoreWithEqualityFn(

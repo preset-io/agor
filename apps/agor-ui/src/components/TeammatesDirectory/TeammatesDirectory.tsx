@@ -79,7 +79,7 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
       owner?.email,
     ].some((text) => text && fold(text).includes(q));
   };
-  // Under "You can ask" a card waits for every match before it, so late answers only append.
+  // Under "You can ask" a card waits while a match before it is pending; failed ones don't block, so a retried answer can land above.
   const visible: Branch[] = [];
   let pending = 0;
   let accessFailures = 0;
