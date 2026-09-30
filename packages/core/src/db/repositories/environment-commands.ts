@@ -42,7 +42,9 @@ export class EnvironmentCommandRepository {
     return runDatabaseTransaction(
       this.db,
       async (tx) => {
-        const boundary = requireExecutionAdmission ? await assertTenantExecutionAdmission(tx) : {};
+        const resumeAfter = requireExecutionAdmission
+          ? (await assertTenantExecutionAdmission(tx)).resumeAfter
+          : undefined;
         await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, id));
         const row = await select(tx).from(branches).where(eq(branches.branch_id, id)).one();
         if (!row) throw new EntityNotFoundError('Branch', id);
@@ -58,7 +60,7 @@ export class EnvironmentCommandRepository {
           data.environment_instance ?? { status: 'stopped' },
           now,
           row,
-          boundary.resumeAfter
+          resumeAfter
         );
         if (result.environment) {
           await update(tx, branches)

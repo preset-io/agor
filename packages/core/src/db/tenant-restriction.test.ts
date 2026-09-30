@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createDatabase } from './client';
 import {
   applyTenantRestrictionIntent,
-  readTenantRestrictionIntents,
+  readTenantRestrictionState,
   TenantRestrictionUnsupportedError,
 } from './tenant-restriction';
 import { createTenantScopedDatabaseProxy } from './tenant-scope';
@@ -11,9 +11,9 @@ describe('tenant restriction dialect contract', () => {
   it('refuses SQLite instead of claiming an unenforced tenant restriction', async () => {
     const db = createDatabase({ url: ':memory:' });
     await expect(
-      readTenantRestrictionIntents(createTenantScopedDatabaseProxy(db), 'one')
+      readTenantRestrictionState(createTenantScopedDatabaseProxy(db), 'one')
     ).rejects.toBeInstanceOf(TenantRestrictionUnsupportedError);
-    await expect(readTenantRestrictionIntents(db, 'one')).rejects.toBeInstanceOf(
+    await expect(readTenantRestrictionState(db, 'one')).rejects.toBeInstanceOf(
       TenantRestrictionUnsupportedError
     );
     await expect(

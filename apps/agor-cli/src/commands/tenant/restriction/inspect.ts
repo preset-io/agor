@@ -8,7 +8,7 @@
  * restored runtime must receive its own authoritative restriction first.
  */
 
-import { createDatabase, getDatabaseUrl, readTenantRestrictionIntents } from '@agor/core/db';
+import { createDatabase, getDatabaseUrl, readTenantRestrictionState } from '@agor/core/db';
 import type { TenantRestrictionRecord } from '@agor/core/types';
 import { Command, Flags } from '@oclif/core';
 import chalk from 'chalk';
@@ -51,7 +51,7 @@ export default class TenantRestrictionInspect extends Command {
     let records: TenantRestrictionRecord[];
     try {
       const db = createDatabase({ url: getDatabaseUrl() });
-      records = await readTenantRestrictionIntents(db, tenantId);
+      records = (await readTenantRestrictionState(db, tenantId)).records;
     } catch (error) {
       const { exitCode, code } = tenantRestrictionFailure(error);
       this.logToStderr(tenantRestrictionErrorLine(code));

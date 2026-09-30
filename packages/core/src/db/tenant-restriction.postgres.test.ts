@@ -15,9 +15,7 @@ import {
 } from './tenant-portability-manifest';
 import {
   applyTenantRestrictionIntent,
-  assertTenantUnrestricted,
-  readTenantExecutionBoundary,
-  readTenantRestrictionIntents,
+  readTenantRestrictionState,
   TenantRestrictedError,
   TenantRestrictionDataError,
 } from './tenant-restriction';
@@ -40,6 +38,11 @@ const command = (patch: Partial<TenantRestrictionCommand> = {}): TenantRestricti
   ...patch,
 });
 
+const recordsOf = async (db: Database, tenant: string) =>
+  (await readTenantRestrictionState(db, tenant)).records;
+const isClosed = async (db: Database, tenant: string) =>
+  (await readTenantRestrictionState(db, tenant)).closed;
+
 async function close(db: Database) {
   await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
 }
@@ -59,9 +62,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const tenant = `restriction-missing-${generateId()}`;
     const release = command({ action: 'prepare_release', revision: 2, operationId: 'release-two' });
     expect((await applyTenantRestrictionIntent(db, tenant, release)).changed).toBe(true);
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, tenant)).toBe(true);
     await expect(applyTenantRestrictionIntent(db, tenant, command())).rejects.toThrow();
     await expect(
       applyTenantRestrictionIntent(db, tenant, {
@@ -70,25 +71,21 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         operationId: 'different-release',
       })
     ).rejects.toThrow();
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, tenant)).toBe(true);
     await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
-    await expect(assertTenantUnrestricted(db, tenant)).resolves.toBeUndefined();
+    expect(await isClosed(db, tenant)).toBe(false);
   });
 
   it('persists through connection replacement; prepares closed, retains release watermark and rejects stale replay', async () => {
     const tenant = `restriction-${generateId()}`;
-    await expect(assertTenantUnrestricted(db, tenant)).resolves.toBeUndefined();
-    expect(await readTenantExecutionBoundary(db, tenant)).toEqual({ allowed: true });
+    expect(await isClosed(db, tenant)).toBe(false);
+    expect(await readTenantRestrictionState(db, tenant)).toEqual({ records: [], closed: false });
     const first = await applyTenantRestrictionIntent(db, tenant, command());
     expect(first.changed).toBe(true);
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, tenant)).toBe(true);
     const other = createDatabase({ url: postgresUrl! });
     try {
-      expect(await readTenantRestrictionIntents(other, tenant)).toEqual([first.record]);
+      expect(await recordsOf(other, tenant)).toEqual([first.record]);
       expect((await applyTenantRestrictionIntent(other, tenant, command())).changed).toBe(false);
       const release = command({
         action: 'prepare_release',
@@ -96,20 +93,18 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         operationId: 'release-two',
       });
       await applyTenantRestrictionIntent(other, tenant, release);
-      await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-        TenantRestrictedError
-      );
+      expect(await isClosed(db, tenant)).toBe(true);
       await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
-      await expect(assertTenantUnrestricted(other, tenant)).resolves.toBeUndefined();
-      expect(await readTenantExecutionBoundary(other, tenant)).toEqual({
-        allowed: true,
+      expect(await isClosed(other, tenant)).toBe(false);
+      expect(await readTenantRestrictionState(other, tenant)).toMatchObject({
+        closed: false,
         resumeAfter: expect.any(Number),
       });
       expect((await applyTenantRestrictionIntent(other, tenant, release)).changed).toBe(false);
       await expect(applyTenantRestrictionIntent(other, tenant, command())).rejects.toThrow(
         'stale_revision'
       );
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([
+      expect(await recordsOf(db, tenant)).toEqual([
         { ...first.record, operationId: 'release-two', revision: 2, phase: 'active' },
       ]);
     } finally {
@@ -178,10 +173,8 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const tenant = `restriction-${generateId()}`;
     const guarded = createTenantScopedDatabaseProxy(db);
     const first = await applyTenantRestrictionIntent(guarded, tenant, command());
-    expect(await readTenantRestrictionIntents(guarded, tenant)).toEqual([first.record]);
-    await expect(assertTenantUnrestricted(guarded, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await recordsOf(guarded, tenant)).toEqual([first.record]);
+    expect(await isClosed(guarded, tenant)).toBe(true);
   });
 
   it('serializes conflicting first writers and same-operation replay on an absent row', async () => {
@@ -192,7 +185,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     ]);
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
-    expect(await readTenantRestrictionIntents(db, tenant)).toHaveLength(1);
+    expect(await recordsOf(db, tenant)).toHaveLength(1);
     const replayTenant = `restriction-${generateId()}`;
     const replays = await Promise.all([
       applyTenantRestrictionIntent(db, replayTenant, command()),
@@ -206,14 +199,14 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const seed = command({ action: 'seed_active', revision: 4, operationId: 'reactivate-four' });
     const written = await applyTenantRestrictionIntent(db, seeded, seed);
     expect(written).toMatchObject({ changed: true, record: { phase: 'active', revision: 4 } });
-    await expect(assertTenantUnrestricted(db, seeded)).resolves.toBeUndefined();
-    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    expect(await isClosed(db, seeded)).toBe(false);
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
     // An at-least-once transport replay of THIS seed is a no-op, not a conflict: the
     // row is untouched and the caller is told the truth instead of being handed a
     // failure for a runtime that is already correct.
     const replayed = await applyTenantRestrictionIntent(db, seeded, seed);
     expect(replayed).toEqual({ record: written.record, changed: false });
-    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
     // Every other recorded state still refuses it — the seed writes on empty history only.
     for (const patch of [
       { operationId: 'other-operation' },
@@ -223,25 +216,21 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
       await expect(
         applyTenantRestrictionIntent(db, seeded, command({ ...seed, ...patch }))
       ).rejects.toThrow('revision_conflict');
-    expect(await readTenantRestrictionIntents(db, seeded)).toEqual([written.record]);
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
     // A CLOSED row at the seed's own revision is never reopened by a replay.
     const closed = `restriction-${generateId()}`;
     await applyTenantRestrictionIntent(db, closed, command({ revision: 4 }));
     await expect(applyTenantRestrictionIntent(db, closed, seed)).rejects.toThrow(
       'revision_conflict'
     );
-    await expect(assertTenantUnrestricted(db, closed)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, closed)).toBe(true);
     // A runtime that already recorded anything is never seeded open.
     const recorded = `restriction-${generateId()}`;
     await applyTenantRestrictionIntent(db, recorded, command());
     await expect(applyTenantRestrictionIntent(db, recorded, seed)).rejects.toThrow(
       'revision_conflict'
     );
-    await expect(assertTenantUnrestricted(db, recorded)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, recorded)).toBe(true);
     // Concurrent seeds on one empty history: serialized by the advisory lock into
     // exactly one WRITE and one replay no-op, leaving exactly one row.
     const raced = `restriction-${generateId()}`;
@@ -250,7 +239,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
       applyTenantRestrictionIntent(db, raced, seed),
     ]);
     expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
-    expect(await readTenantRestrictionIntents(db, raced)).toMatchObject([{ phase: 'active' }]);
+    expect(await recordsOf(db, raced)).toMatchObject([{ phase: 'active' }]);
   });
 
   it('never lets release races reopen a newer restriction', async () => {
@@ -266,12 +255,8 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         command({ operationId: 'suspend-three', revision: 3 })
       ),
     ]);
-    expect(await readTenantRestrictionIntents(db, tenant)).toMatchObject([
-      { phase: 'restricted', revision: 3 },
-    ]);
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await recordsOf(db, tenant)).toMatchObject([{ phase: 'restricted', revision: 3 }]);
+    expect(await isClosed(db, tenant)).toBe(true);
   });
 
   it('composes controller restrictions without modifying the portability gate', async () => {
@@ -282,9 +267,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const release = command({ action: 'prepare_release', operationId: 'release-two', revision: 2 });
     await applyTenantRestrictionIntent(db, tenant, release);
     await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
-      TenantRestrictedError
-    );
+    expect(await isClosed(db, tenant)).toBe(true);
     expect(await readTenantWriteGate(db, tenant)).toMatchObject({
       active: true,
       generation: gate.generation,
@@ -295,7 +278,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     const a = `restriction-${generateId()}`;
     const b = `restriction-${generateId()}`;
     await applyTenantRestrictionIntent(db, a, command());
-    await expect(assertTenantUnrestricted(db, b)).resolves.toBeUndefined();
+    expect(await isClosed(db, b)).toBe(false);
     await runWithTenantDatabaseScope(db, b, async (scoped) => {
       expect(
         await executeRaw(
@@ -309,7 +292,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
           sql`UPDATE public.tenant_restrictions SET phase = 'active' WHERE tenant_id = ${a} RETURNING *`
         )
       ).toHaveLength(0);
-      await expect(readTenantRestrictionIntents(scoped, a)).rejects.toThrow();
+      await expect(readTenantRestrictionState(scoped, a)).rejects.toThrow();
     });
     await expect(
       runWithTenantDatabaseScope(db, b, (scoped) =>
@@ -322,11 +305,11 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         )
       )
     ).rejects.toThrow();
-    await expect(assertTenantUnrestricted(db, a)).rejects.toBeInstanceOf(TenantRestrictedError);
+    expect(await isClosed(db, a)).toBe(true);
     await expect(
       applyTenantRestrictionIntent(db, a, command({ placementId: 'wrong-placement', revision: 2 }))
     ).rejects.toThrow('identity_mismatch');
-    expect(await readTenantRestrictionIntents(db, a)).toHaveLength(1);
+    expect(await recordsOf(db, a)).toHaveLength(1);
   });
 
   it('rolls back on transaction failure and rejects corrupt persisted authority', async () => {
@@ -337,7 +320,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
         throw new Error('rollback-fixture');
       })
     ).rejects.toThrow('rollback-fixture');
-    expect(await readTenantRestrictionIntents(db, tenant)).toEqual([]);
+    expect(await recordsOf(db, tenant)).toEqual([]);
     await applyTenantRestrictionIntent(db, tenant, command());
     await runWithTenantDatabaseScope(db, tenant, (scoped) =>
       executeRaw(
@@ -347,7 +330,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     `
       )
     );
-    await expect(assertTenantUnrestricted(db, tenant)).rejects.toBeInstanceOf(
+    await expect(readTenantRestrictionState(db, tenant)).rejects.toBeInstanceOf(
       TenantRestrictionDataError
     );
     await expect(
@@ -375,7 +358,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
           sql`SELECT * FROM public.tenant_restrictions WHERE controller_id = ${c.controllerId}`
         )
       ).toHaveLength(0);
-      await expect(assertTenantUnrestricted(scoped, 'default')).rejects.toBeInstanceOf(
+      await expect(readTenantRestrictionState(scoped, 'default')).rejects.toBeInstanceOf(
         TenantRestrictionDataError
       );
       await expect(applyTenantRestrictionIntent(scoped, 'default', c)).rejects.toBeInstanceOf(
@@ -384,12 +367,12 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     });
     await expect(
       runWithSystemDatabaseScope(db, 'restriction-test', (scoped) =>
-        assertTenantUnrestricted(scoped, 'default')
+        readTenantRestrictionState(scoped, 'default')
       )
     ).rejects.toThrow('Cannot enter tenant scope');
     await runWithTenantDatabaseScope(db, 'default', async (scoped) => {
       await executeRaw(scoped, sql`SELECT set_config('agor.tenant_id', 'different', true)`);
-      await expect(assertTenantUnrestricted(scoped, 'default')).rejects.toBeInstanceOf(
+      await expect(readTenantRestrictionState(scoped, 'default')).rejects.toBeInstanceOf(
         TenantRestrictionDataError
       );
     });
@@ -401,8 +384,8 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
     await applyTenantRestrictionIntent(db, a, command());
     await applyTenantRestrictionIntent(db, b, command());
     await deleteTenantData(db, a);
-    expect(await readTenantRestrictionIntents(db, a)).toEqual([]);
-    expect(await readTenantRestrictionIntents(db, b)).toHaveLength(1);
+    expect(await recordsOf(db, a)).toEqual([]);
+    expect(await recordsOf(db, b)).toHaveLength(1);
   });
 
   it('is tenant-owned for erasure but does not export deployment-bound controller authority', () => {

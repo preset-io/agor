@@ -66,14 +66,14 @@ export async function lockTenantExecutionFence(db: Database, tenantId: string): 
 /** Short persistence admission only; never hold this lock across executor I/O. */
 export async function assertTenantExecutionAdmission(
   db: Database
-): Promise<{ resumeAfter?: number }> {
-  if (!isPostgresDatabaseHandle(db)) return {};
+): Promise<TenantRestrictionState> {
+  if (!isPostgresDatabaseHandle(db)) return { records: [], closed: false };
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new TenantRestrictionDataError();
   await lockTenantExecutionFence(db, tenantId);
-  const boundary = await readTenantExecutionBoundary(db, tenantId);
-  if (!boundary.allowed) throw new TenantRestrictedError();
-  return boundary;
+  const state = await readTenantRestrictionState(db, tenantId);
+  if (state.closed) throw new TenantRestrictedError();
+  return state;
 }
 
 /** A hidden row is not proof of absence when RLS context disagrees with ALS. */
@@ -181,61 +181,50 @@ export async function applyTenantRestrictionIntent(
   return outcome;
 }
 
-/** Read all owners: clearing one owner's claim must not lift another's. */
-export async function readTenantRestrictionIntents(
-  db: Database,
-  tenantId: string
-): Promise<TenantRestrictionRecord[]> {
-  requirePostgres(db, tenantId);
-  return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    await assertRestrictionScope(scoped, tenantId);
-    return rows(
-      await executeRaw(
-        scoped,
-        sql`
-      SELECT protocol_version, controller_id, placement_id, operation_id, revision, phase
-      FROM public.tenant_restrictions WHERE tenant_id = ${tenantId}
-      ORDER BY controller_id
-    `
-      )
-    ).map(parseRow);
-  });
-}
-
-/** Uncached admission read for serving adapters; DB errors and invalid rows reject the caller. */
-export async function assertTenantUnrestricted(db: Database, tenantId: string): Promise<void> {
-  const records = await readTenantRestrictionIntents(db, tenantId);
-  if (records.some(isTenantRestrictionClosed)) throw new TenantRestrictedError();
-}
-
-/** Durable event cutoff: reactivation permits future events, never a missed backlog. */
-export async function readTenantExecutionBoundary(
-  db: Database,
-  tenantId: string
-): Promise<{
-  allowed: boolean;
+export interface TenantRestrictionState {
+  /** Every controller's record, ordered by controller id. */
+  records: TenantRestrictionRecord[];
+  /** OR across controllers: any non-active record closes the tenant. */
+  closed: boolean;
+  /** Latest retained row update (ms): the durable event cutoff after reactivation. */
   resumeAfter?: number;
-}> {
+}
+
+/** The one uncached restriction read; DB errors and invalid rows reject rather than read as open. */
+export async function readTenantRestrictionState(
+  db: Database,
+  tenantId: string
+): Promise<TenantRestrictionState> {
   requirePostgres(db, tenantId);
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    await assertRestrictionScope(scoped, tenantId);
+    // The scope check rides the same statement: a hidden row is not proof of absence.
     const stored = rows(
       await executeRaw(
         scoped,
         sql`
-      SELECT protocol_version, controller_id, placement_id, operation_id, revision, phase, updated_at
-      FROM public.tenant_restrictions WHERE tenant_id = ${tenantId}
+      SELECT current_setting('agor.tenant_id', true) AS scope_tenant_id,
+        COALESCE(current_setting('agor.system_scope', true), '') AS scope_system,
+        r.protocol_version, r.controller_id, r.placement_id, r.operation_id, r.revision,
+        r.phase, r.updated_at
+      FROM (SELECT 1) AS scope
+      LEFT JOIN public.tenant_restrictions AS r ON r.tenant_id = ${tenantId}
+      ORDER BY r.controller_id
     `
       )
     );
-    let resumeAfter: number | undefined;
-    let allowed = true;
+    if (stored[0]?.scope_tenant_id !== tenantId || stored[0].scope_system !== '') {
+      throw new TenantRestrictionDataError();
+    }
+    const state: TenantRestrictionState = { records: [], closed: false };
     for (const row of stored) {
-      if (isTenantRestrictionClosed(parseRow(row))) allowed = false;
+      if (row.controller_id == null) continue;
+      const record = parseRow(row);
       const at = new Date(row.updated_at as string | Date).getTime();
       if (!Number.isFinite(at)) throw new TenantRestrictionDataError();
-      resumeAfter = Math.max(resumeAfter ?? -Infinity, at);
+      state.records.push(record);
+      state.closed ||= isTenantRestrictionClosed(record);
+      state.resumeAfter = Math.max(state.resumeAfter ?? -Infinity, at);
     }
-    return { allowed, ...(resumeAfter !== undefined ? { resumeAfter } : {}) };
+    return state;
   });
 }

@@ -7,7 +7,7 @@
 import {
   createDatabase,
   type Database,
-  readTenantRestrictionIntents,
+  readTenantRestrictionState,
   runMigrations,
 } from '@agor/core/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -91,7 +91,9 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         },
         changed: true,
       });
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([restrictedPayload.record]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
+        restrictedPayload.record,
+      ]);
 
       // A retried Job must not look like a new transition.
       const retried = await apply(tenant, 'susp-1', 1, 'restrict');
@@ -104,7 +106,9 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       expect(preparedPayload.changed).toBe(true);
       expect(preparedPayload.record.phase).toBe('release_prepared');
       // Preparing a release does not open admission.
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([preparedPayload.record]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
+        preparedPayload.record,
+      ]);
 
       const activated = await apply(tenant, 'rel-2', 2, 'activate');
       expect(activated.code).toBe(0);
@@ -120,7 +124,9 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
         },
         changed: true,
       });
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([activatedPayload.record]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
+        activatedPayload.record,
+      ]);
 
       // The activated revision is a watermark: a delayed restrict at an older
       // revision is rejected with a machine-readable conflict code.
@@ -128,7 +134,9 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
       expect(stale.code).toBe(2);
       expect(stale.stdout).toBe('');
       expect(stale.stderr).toContain('{"error":"stale_revision"}');
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([activatedPayload.record]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([
+        activatedPayload.record,
+      ]);
 
       const inspected = await runTenantRestrictionCli(['inspect', '--tenant-id', tenant], jobEnv());
       expect(inspected.code).toBe(0);
@@ -181,7 +189,7 @@ describe.skipIf(!postgresUrl || !usesPostgres)(
 
       expect(inspected.code).toBe(0);
       expect(JSON.parse(inspected.stdout)).toEqual([]);
-      expect(await readTenantRestrictionIntents(db, tenant)).toEqual([]);
+      expect((await readTenantRestrictionState(db, tenant)).records).toEqual([]);
     }, 60_000);
 
     it('refuses a second controller identity for a recorded placement', async () => {

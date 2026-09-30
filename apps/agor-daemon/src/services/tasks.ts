@@ -1,4 +1,3 @@
-import { assertTenantCredentialEpoch } from '../auth/tenant-credential-epoch.js';
 import { readTerminationEntity } from '../auth/termination-read-authority.js';
 /**
  * Tasks Service
@@ -723,7 +722,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   private async handleExecutorHeartbeat(task: Task, heartbeatAt: string): Promise<void> {
-    if (!(await isCurrentTenantRuntimeActive(this.db))) return;
     const payload: ExecutorHeartbeatCallbackPayload = {
       event: 'executor_heartbeat',
       task_id: task.task_id,
@@ -741,6 +739,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
 
+    // One restriction read, immediately before the callback it gates.
     if (await isCurrentTenantRuntimeActive(this.db)) this.heartbeatCallbackRunner.run(payload);
   }
 
@@ -1785,14 +1784,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     // Restricted telemetry is control traffic, never callback automation. Install
     // the durable Stop even if the restriction observer has not reached this task.
     try {
-      await assertRuntimeTenantAccess(this.db, authority.tenantId);
-      if (params?.authentication?.strategy === 'jwt') {
-        await assertTenantCredentialEpoch(
-          this.db,
-          authority.tenantId,
-          params.authentication.payload
-        );
-      }
+      await assertRuntimeTenantAccess(
+        this.db,
+        authority.tenantId,
+        params?.authentication?.strategy === 'jwt'
+          ? { payload: params.authentication.payload }
+          : undefined
+      );
     } catch (error) {
       if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
       const suspended =

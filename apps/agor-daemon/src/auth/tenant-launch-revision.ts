@@ -1,9 +1,4 @@
-import {
-  isPostgresDatabaseHandle,
-  readTenantRestrictionIntents,
-  type TenantScopeAwareDatabase,
-  type TenantScopedDatabase,
-} from '@agor/core/db';
+import type { TenantRestrictionState } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
 import { z } from 'zod';
 
@@ -18,24 +13,16 @@ const launchRestrictionClaim = z
   })
   .strict();
 
-/**
- * Assertion-generation anti-replay only, NOT placement or bootstrap attestation.
- * Call after signature/issuer/audience/tenant verification under the execution
- * fence and before projection writes. Provider config, never a signed selector,
- * chooses the controller whose revision the issuer is allowed to attest.
- */
-export async function assertTenantLaunchRevision(
-  db: TenantScopeAwareDatabase | TenantScopedDatabase,
-  tenantId: string,
+/** Assertion-generation anti-replay only, not attestation; state is read under the execution fence and config, never the claim, picks the controller. */
+export function assertTenantLaunchRevision(
+  state: TenantRestrictionState,
   claim: unknown,
   configuredController?: string
-): Promise<void> {
+): void {
   try {
     const parsed = claim === undefined ? undefined : launchRestrictionClaim.parse(claim);
-    const records = isPostgresDatabaseHandle(db)
-      ? await readTenantRestrictionIntents(db, tenantId)
-      : [];
-    if (records.some((record) => record.phase !== 'active')) throw new Error('closed');
+    const { records } = state;
+    if (state.closed) throw new Error('closed');
     if (parsed && configuredController && parsed.controllerId !== configuredController)
       throw new Error('controller');
     if (!records.length) {

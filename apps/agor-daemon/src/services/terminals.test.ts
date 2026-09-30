@@ -60,6 +60,7 @@ vi.mock('@agor/core/config', () => ({
 
 vi.mock('@agor/core/db', () => ({
   assertTenantExecutionAdmission: mocks.assertTenantExecutionAdmission,
+  readTenantRestrictionState: vi.fn(),
   isPostgresDatabaseHandle: (db: unknown) =>
     typeof db === 'object' && db !== null && !('run' in db),
   BranchRepository: class {
