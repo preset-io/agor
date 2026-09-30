@@ -1414,6 +1414,8 @@ export class GatewayService {
         // that makes this sweep safe to run every tick.
         let cursor: MCPSlackConnectDueCursor | undefined;
         for (let pageIndex = 0; pageIndex < MCP_SLACK_CONNECT_REPAIR_PAGES; pageIndex += 1) {
+          // Items skip their own read, so a pass that began before a restriction re-checks per page.
+          if (!(await isCurrentTenantRuntimeActive(this.db))) break;
           const cards = await this.messagesRepo.findMcpSlackConnectDuePage({
             limit: MCP_SLACK_REPAIR_BATCH,
             now,
