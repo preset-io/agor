@@ -655,14 +655,25 @@ describe('HomePage privacy for superadmins', () => {
           ? {
               find: async ({ route }: { route: { id: string } }) => ({
                 primary_owner_user_id: 'owner-1',
-                board_access: { sharing_mode: sharing[route.id], entries: [] },
+                board_access: {
+                  policy_kind: 'board_access',
+                  sharing_mode: sharing[route.id],
+                  entries: [],
+                  others: {
+                    preset: 'viewer',
+                    capabilities: sharing[route.id] === 'shared' ? ['board.view'] : [],
+                    fs_access: 'none',
+                  },
+                },
               }),
             }
-          : {
-              getPrimaryTeammate: async () => null,
-              find: async () => ({ can: 'view' }),
-              get: () => new Promise(() => {}),
-            },
+          : name === 'group-memberships' || name === 'groups'
+            ? { findAll: async () => [] }
+            : {
+                getPrimaryTeammate: async () => null,
+                find: async () => ({ can: 'view' }),
+                get: () => new Promise(() => {}),
+              },
     }) as unknown as AgorClient;
 
   it('never lists teammates or comments from boards private to others', async () => {
