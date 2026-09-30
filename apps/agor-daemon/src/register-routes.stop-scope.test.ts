@@ -19,6 +19,12 @@ describe('Stop route transaction scope', () => {
     expect(stop).toContain('resolveSessionPromptAccess({');
     expect(stop).toContain("app.service('sessions').get(id, withoutSessionMcpToken(params))");
     expect(stop).toContain('body.force_unverified !== true');
+    // Every Stop path reads the session for authorization only, so none mints an MCP token.
+    expect(stop).not.toContain("app.service('sessions').get(id, params)");
+    const forceUnverified = stop.slice(stop.indexOf('if (body.force_unverified === true)'));
+    expect(forceUnverified).toContain(
+      "app.service('sessions').get(id, withoutSessionMcpToken(params))"
+    );
     const stopAccessScope = stop.slice(
       stop.indexOf('const access = await inCurrentTenantDatabaseScope'),
       stop.indexOf(

@@ -3336,7 +3336,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
             const target = await inCurrentTenantDatabaseScope(async () => {
-              const session = await app.service('sessions').get(id, params);
+              const session = await app.service('sessions').get(id, withoutSessionMcpToken(params));
               return authorizeForceFailRoute({
                 session,
                 params,
