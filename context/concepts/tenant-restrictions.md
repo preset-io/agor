@@ -207,7 +207,9 @@ its registry entry is containment evidence.
 ## Pending work and occurrence cutoffs
 
 Restriction transitions and task enqueue/dispatch use a tenant execution advisory
-lock before branch/session/task locks. Any closing transition atomically places a
+lock before branch/session/task locks. Admissions take it shared, so they never
+serialize on each other; only a transition takes it exclusively, waiting for
+in-flight admissions to commit, and admissions after it read the new state. Any closing transition atomically places a
 server-owned `tenant_restriction_hold` on pending prompts. Ordinary metadata edits
 and activation preserve it. Queue inspection still shows held prompts, but runnable
 selection/discovery/dispatch skip them. Explicit resubmission creates a new task.

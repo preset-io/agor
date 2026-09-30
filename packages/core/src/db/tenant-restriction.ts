@@ -52,13 +52,20 @@ function rows(result: unknown): Record<string, unknown>[] {
 }
 
 /** Acquire before branch/session/task locks; caller must hold a transaction. */
-async function lockTenantExecutionFence(db: Database, tenantId: string): Promise<void> {
+async function lockTenantExecutionFence(
+  db: Database,
+  tenantId: string,
+  mode: 'admission' | 'transition'
+): Promise<void> {
   if (!isPostgresDatabaseHandle(db)) return;
   await assertRestrictionScope(db, tenantId);
   const key = JSON.stringify(['tenant-execution-v1', tenantId]);
+  // Admissions share the fence; only a restriction transition excludes (and waits for) them.
   await executeRaw(
     db,
-    sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`
+    mode === 'transition'
+      ? sql`SELECT pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(${key}, 0))`
+      : sql`SELECT pg_catalog.pg_advisory_xact_lock_shared(pg_catalog.hashtextextended(${key}, 0))`
   );
 }
 
@@ -69,7 +76,7 @@ export async function assertTenantExecutionAdmission(
   if (!isPostgresDatabaseHandle(db)) return { records: [], closed: false };
   const tenantId = getCurrentTenantId();
   if (!tenantId) throw new TenantRestrictionDataError();
-  await lockTenantExecutionFence(db, tenantId);
+  await lockTenantExecutionFence(db, tenantId, 'admission');
   const state = await readTenantRestrictionState(db, tenantId);
   if (state.closed) throw new TenantRestrictedError();
   return state;
@@ -125,7 +132,7 @@ export async function applyTenantRestrictionIntent(
   requirePostgres(db, tenantId);
   const command = TenantRestrictionCommandSchema.parse(input);
   const outcome = await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    await lockTenantExecutionFence(scoped, tenantId);
+    await lockTenantExecutionFence(scoped, tenantId, 'transition');
     const lockKey = JSON.stringify(['tenant-restriction-v1', tenantId, command.controllerId]);
     await executeRaw(
       scoped,

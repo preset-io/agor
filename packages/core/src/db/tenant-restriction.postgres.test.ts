@@ -15,6 +15,7 @@ import {
 } from './tenant-portability-manifest';
 import {
   applyTenantRestrictionIntent,
+  assertTenantExecutionAdmission,
   readTenantRestrictionState,
   TenantRestrictedError,
   TenantRestrictionDataError,
@@ -192,6 +193,39 @@ describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (Postg
       applyTenantRestrictionIntent(db, replayTenant, command()),
     ]);
     expect(replays.map((r) => r.changed).sort()).toEqual([false, true]);
+  });
+
+  it('shares the execution fence between admissions; a transition waits for in-flight ones', async () => {
+    const tenant = `restriction-fence-${generateId()}`;
+    const settled = (promise: Promise<unknown>) =>
+      Promise.race([promise.then(() => true), new Promise((r) => setTimeout(() => r(false), 750))]);
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstAdmitted!: () => void;
+    const firstIn = new Promise<void>((resolve) => {
+      firstAdmitted = resolve;
+    });
+    const first = runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      await assertTenantExecutionAdmission(scoped);
+      firstAdmitted();
+      await firstHeld;
+    });
+    await firstIn;
+    // A second admission for the same tenant must not queue behind the open one.
+    const second = runWithTenantDatabaseScope(db, tenant, (scoped) =>
+      assertTenantExecutionAdmission(scoped)
+    );
+    expect(await settled(second)).toBe(true);
+    const restrict = applyTenantRestrictionIntent(db, tenant, command());
+    expect(await settled(restrict)).toBe(false);
+    releaseFirst();
+    await first;
+    expect((await restrict).changed).toBe(true);
+    await expect(
+      runWithTenantDatabaseScope(db, tenant, (scoped) => assertTenantExecutionAdmission(scoped))
+    ).rejects.toBeInstanceOf(TenantRestrictedError);
   });
 
   it('seeds a re-home destination open at the watermark, once, and never repairs a recorded runtime', async () => {
