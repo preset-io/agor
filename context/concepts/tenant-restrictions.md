@@ -92,7 +92,7 @@ release barrier first. `readTenantRestrictionState` is the single uncached
 read (records, closed, event cutoff) every admission check derives from; it is
 not a guard for already-admitted work, stale tokens, sockets, or agents. One
 handshake, socket packet or request shares one read across its strategy, packet
-and hook checks; the share never crosses requests and never outlives one 1 s tick.
+and hook checks; the share never crosses requests and never outlives one tick (1 s).
 Nested internal service calls read afresh on purpose: a nested call may be the
 write that has to observe a new restriction, so no cross-call cache is added.
 The socket monitor likewise reads each connected tenant separately: the only
@@ -279,7 +279,7 @@ with a non-active row and nothing else; a direct table read under it sees no row
 then pages live tasks of those tenants only, so
 a runtime with nothing restricted pages nothing. Each tenant's own scoped read still
 decides before the existing Stop coordinator is invoked; both reads are shared across
-a saturated drain for at most one 1 s tick. Because that observation may be a tick
+a saturated drain for at most one tick (1 s). Because that observation may be a tick
 old, the Stop claim itself re-reads closure under the shared execution fence in the
 claim transaction and does nothing for a tenant that has since reopened. An empty discovery is not proof that a
 tenant is open: admission and restricted telemetry fail closed independently. It does
@@ -289,11 +289,20 @@ acknowledgement, containment and unverified outcomes; the runtime reconciler rel
 candidates through termination reads, so dispatch-timeout, stale-heartbeat and
 stranded-Stop recovery continue while a tenant is restricted.
 
-A suspension Stop keeps its `tenant_suspension` cause (settling Stopped) when
-reactivation makes the old executor's generation stale; only a durable revocation
-replaces it. A task completing as the tenant closes still returns its session to
-idle; only completion automation (callbacks, queue trigger, fork result) is skipped
-and not replayed.
+Restricted telemetry claims `tenant_suspension` (settling Stopped) for a closed
+tenant and for a codeless stale generation, which moves only with restriction
+records, so a Stop keeps that cause across reactivation. Only a revocation the
+heartbeat authority recorded durably claims `authorization_revoked`, and the
+repository decides under the Task row lock whether it replaces a suspension cause.
+
+A task completing as the tenant closes (including a close between the admission
+check and the session write) still returns its session to idle through a hook-free
+projection. Everything else in completion is skipped and not replayed: origin
+alignment, auto-title, completion callbacks, BTW archive and result injection, the
+queue trigger, and the sessions after-patch hook, whose gateway outbound flush and
+progress `done` do not run. A buffered final gateway reply is therefore never
+posted, and a Slack thread status can stay `working` until that session's next
+turn updates it; reactivation does not repair it.
 
 ## Credential generations
 
