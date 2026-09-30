@@ -106,6 +106,8 @@ describe('readAccess', () => {
     const slots = occupySlots(client);
     const read = vi.fn(async () => true);
     const queued = readAccess(client, 's', 'queued', read);
+    // Let the four busy reads start: a reset forgets the scope, so a read not yet started aborts.
+    await flush();
     resetAccessCacheForTests();
     await expect(queued).rejects.toMatchObject({ name: 'AbortError' });
 
@@ -122,6 +124,14 @@ describe('readAccess', () => {
     await fresh.release();
     expect(await fifth).toBe(true);
     expect(read).not.toHaveBeenCalled();
+  });
+
+  it('forgets cached answers on a test reset', async () => {
+    const client = {};
+    await readAccess(client, 's', 'k', async () => true);
+    expect(peekAccess(client, 's', 'k')).toBe(true);
+    resetAccessCacheForTests();
+    expect(peekAccess(client, 's', 'k')).toBeUndefined();
   });
 
   it('rejects at once when the signal has already aborted', async () => {

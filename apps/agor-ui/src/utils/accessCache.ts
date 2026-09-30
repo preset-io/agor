@@ -38,7 +38,7 @@ interface ScopedReads {
   known: Map<string, Known>;
 }
 
-const byClient = new WeakMap<object, ScopedReads>();
+let byClient = new WeakMap<object, ScopedReads>();
 const abortError = () => new DOMException('The access read was aborted.', 'AbortError');
 // Slots belong to a generation; a test reset starts a new one, so older releases can't miscount.
 let generation = 0;
@@ -78,8 +78,9 @@ export function withoutFailure<T extends { ids: ReadonlySet<string> }>(failed: T
   return { ...failed, ids };
 }
 
-/** Test-only: frees every read slot, ignores releases from reads already running and aborts queued ones. */
+/** Test-only: forgets every answer, frees every read slot, ignores releases from reads already running and aborts queued ones. */
 export function resetAccessCacheForTests() {
+  byClient = new WeakMap();
   generation++;
   inFlight = 0;
   for (const dropped of waiting.splice(0)) dropped.drop();
