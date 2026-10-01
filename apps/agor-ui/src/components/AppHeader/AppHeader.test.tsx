@@ -231,3 +231,24 @@ describe('AppHeader settings dropdown', () => {
     expect(onThemeEditorClick).toHaveBeenCalledOnce();
   });
 });
+
+describe('AppHeader instance label', () => {
+  it('bounds a long label with an ellipsis and keeps the full text in the title', () => {
+    const label = `Data team sandbox ${'x'.repeat(62)}`;
+    renderHeader({ instanceLabel: label });
+
+    const tag = screen.getByText(label);
+    expect(tag).toHaveAttribute('title', label);
+    // Inline style: jsdom cannot compute antd's CSS-variable border shorthands.
+    expect(tag.style).toMatchObject({
+      maxWidth: '200px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+  });
+
+  it('renders no badge without a label', () => {
+    renderHeader({ instanceLabel: undefined });
+    expect(document.querySelector('.ant-tag-cyan')).toBeNull();
+  });
+});

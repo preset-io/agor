@@ -39,7 +39,7 @@ export interface AuthConfig {
   };
 }
 
-interface InstanceConfig {
+export interface InstanceConfig {
   label?: string;
   description?: string;
 }

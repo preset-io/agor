@@ -3,7 +3,7 @@ import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { BulbOutlined, ShopOutlined } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Divider, Layout, Popover, Space, Tag, Tooltip, theme } from 'antd';
-import { memo, useMemo } from 'react';
+import { type CSSProperties, memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
@@ -27,6 +27,15 @@ import { NavbarComposeButton } from './NavbarComposeButton';
 import { SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
+
+/** Labels can be up to 80 characters; the full text stays in the title/popover. */
+const INSTANCE_LABEL_STYLE: CSSProperties = {
+  marginLeft: 8,
+  maxWidth: 200,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  verticalAlign: 'middle',
+};
 
 export interface AppHeaderProps {
   user?: User | null;
@@ -249,12 +258,12 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
               trigger="hover"
               placement="bottomLeft"
             >
-              <Tag color="cyan" style={{ cursor: 'help', marginLeft: 8 }}>
+              <Tag color="cyan" style={{ ...INSTANCE_LABEL_STYLE, cursor: 'help' }}>
                 {instanceLabel}
               </Tag>
             </Popover>
           ) : (
-            <Tag color="cyan" style={{ marginLeft: 8 }}>
+            <Tag color="cyan" title={instanceLabel} style={INSTANCE_LABEL_STYLE}>
               {instanceLabel}
             </Tag>
           ))}

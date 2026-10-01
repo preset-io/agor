@@ -211,6 +211,8 @@ Optional claims:
   query or fragment. This claim is origin-only: a trailing `/` is accepted, but
   path prefixes and entity paths are rejected. Static configured base paths are
   unaffected.
+- `workspace_display_name`: an optional tenant display label for the header
+  badge. See [Tenant display label](#tenant-display-label).
 
 Required when `external_launch.instance_id` is configured:
 
@@ -246,6 +248,23 @@ Static/single-tenant installations retain their configured `AGOR_BASE_URL`,
 OAuth callback URLs and internal executor endpoints remain separate and are not
 changed by this claim. Knowledge reader links need no `mode=edit` query; both
 `/ui/kb/...` and `/ui/knowledge/...` are supported routes.
+
+### Tenant display label
+
+A verified launch can carry `workspace_display_name`, which Agor stores per
+tenant (reserved `app_variables` metadata, same transaction, tenant binding, and
+`iat` ordering as `public_base_url`) and shows as the header badge to
+authenticated users of that tenant. Precedence is the tenant label, then
+`daemon.instanceLabel`, then no badge. The public pre-login `GET /health` keeps
+returning only `daemon.instanceLabel`, so the tenant label is never disclosed
+before sign-in.
+
+The value is trimmed and must be 1–80 characters with no control characters.
+Because it is cosmetic, an invalid value does not fail the launch: Agor drops it
+and logs only the warning code `launch_workspace_display_name_invalid`, never the
+value. A malformed stored label reads as absent and is replaced by the next
+valid launch. Omitting the claim keeps the last stored label; the badge updates
+on the next launch and page load.
 
 ## Compatibility and upgrade notes
 
