@@ -51,6 +51,7 @@ export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
 export * from './tenant-agentic-tools';
+export * from './tenant-display';
 export * from './tenant-public-routing';
 export * from './thread-session-map';
 export * from './uploads';
