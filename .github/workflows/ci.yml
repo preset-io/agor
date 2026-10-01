@@ -199,9 +199,9 @@ jobs:
   browser:
     name: Browser layout tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    # Include dependency/browser setup and the production retention check as well
-    # as the full viewport shard; ten minutes can expire after tests pass.
-    timeout-minutes: 15
+    # Cold Ubuntu dependency downloads can consume ten minutes before Chromium
+    # starts. Leave time for the full viewport shard and retention check too.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
