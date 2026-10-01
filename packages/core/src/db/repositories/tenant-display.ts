@@ -9,6 +9,10 @@ import { AppVariableRepository } from './app-variables';
 // Reserved server-owned metadata. Never expose this through preference APIs.
 export const TENANT_DISPLAY_NAMESPACE = 'tenant.display';
 export const TENANT_DISPLAY_LABEL_KEY = 'label';
+/**
+ * Measured in UTF-16 code units (JavaScript `string.length`) after
+ * `String.prototype.trim()`, so 40 astral characters such as emoji fill it.
+ */
 export const TENANT_DISPLAY_LABEL_MAX_LENGTH = 80;
 
 /** Trimmed display label, or a throw that never reflects the rejected value. */

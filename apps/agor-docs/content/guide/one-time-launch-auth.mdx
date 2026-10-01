@@ -259,10 +259,14 @@ authenticated users of that tenant. Precedence is the tenant label, then
 returning only `daemon.instanceLabel`, so the tenant label is never disclosed
 before sign-in.
 
-The value is trimmed and must be 1–80 characters with no control characters.
-Because it is cosmetic, an invalid value does not fail the launch: Agor drops it
-and logs only the warning code `launch_workspace_display_name_invalid`, never the
-value. A malformed stored label reads as absent and is replaced by the next
+The value is trimmed with JavaScript `String.prototype.trim()` and must then be
+1–80 UTF-16 code units long (JavaScript string length, so a character outside
+the Basic Multilingual Plane, such as an emoji, counts as 2) with no control
+characters. The label also requires `iat` to be a nonnegative integer
+NumericDate, independently of whether `public_base_url` is present.
+Because it is cosmetic, an invalid value or a missing/invalid `iat` does not
+fail the launch: Agor drops the label and logs only the warning code
+`launch_workspace_display_name_invalid`, never the value. A malformed stored label reads as absent and is replaced by the next
 valid launch. Omitting the claim keeps the last stored label; the badge updates
 on the next launch and page load.
 

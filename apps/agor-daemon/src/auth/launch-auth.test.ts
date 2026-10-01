@@ -329,6 +329,53 @@ execution:
     }
   );
 
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['non-integer', Math.floor(Date.now() / 1000) + 0.5],
+  ])(
+    'ignores a valid display label whose iat is %s, without public_base_url',
+    async (_case, iat) => {
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {})
+      );
+      try {
+        // An explicit exp keeps jsonwebtoken from deriving it from the bad iat.
+        mockExchange(
+          jwt.sign(
+            {
+              sub: 'external-user-1',
+              email: 'person@example.test',
+              instance_id: 'instance-1',
+              workspace_display_name: 'Iat Dependent Label',
+              exp: Math.floor(Date.now() / 1000) + 300,
+              ...(iat === undefined ? {} : { iat }),
+            },
+            ASSERTION_SECRET,
+            {
+              algorithm: 'HS256',
+              noTimestamp: iat === undefined,
+              issuer: 'https://issuer.example.test',
+              audience: 'runtime:test',
+            }
+          )
+        );
+        const result = await service().create({ launchCode: 'label-iat' });
+        expect(result.accessToken).toBeTruthy();
+        await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          expect(new TenantDisplayRepository(scoped).find()).resolves.toBeNull()
+        );
+        expect(spies[2].mock.calls).toEqual([
+          ['[auth/launch] launch_workspace_display_name_invalid'],
+        ]);
+        const logged = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
+        expect(logged).not.toContain('Iat Dependent Label');
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
+
   it('rejects when disabled', async () => {
     await expect(
       service({ external_launch: { ...baseConfig().external_launch, enabled: false } }).create({

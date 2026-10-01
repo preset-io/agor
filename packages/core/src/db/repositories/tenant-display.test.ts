@@ -21,6 +21,15 @@ describe('tenant display label', () => {
     expect(validateTenantDisplayLabel(label)).toBe(expected);
   });
 
+  it('bounds length in UTF-16 code units, not code points', () => {
+    const forty = '😀'.repeat(40);
+    expect(forty.length).toBe(80);
+    expect(validateTenantDisplayLabel(forty)).toBe(forty);
+    const fortyOne = '😀'.repeat(41);
+    expect(fortyOne.length).toBe(82);
+    expect(() => validateTenantDisplayLabel(fortyOne)).toThrow(/^Invalid tenant display label$/);
+  });
+
   it.each([
     '',
     '   ',
