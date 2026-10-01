@@ -1,9 +1,12 @@
+import type { AgorClient } from '@agor/core/client';
 import { generateId } from '@agor/core/ids/browser';
 import {
   type Message,
   MessageRole,
   type ReactiveSessionHandle,
   type ReactiveSessionState,
+  releaseReactiveSession,
+  retainReactiveSession,
   type Task,
   TaskStatus,
 } from '@agor-live/client';
@@ -893,4 +896,82 @@ it('collapses tall low-character history and medium prose with shorter previews'
   expect(articles[0].textContent).toContain('Word49');
   await userEvent.click(screen.getByRole('button', { name: 'show more' }));
   expect(screen.getByText(prose)).toBeInTheDocument();
+});
+
+it('keeps synthetic streamed and persisted text visible while settling the thinking cache', async () => {
+  const task = { ...tasks[0], status: TaskStatus.RUNNING };
+  const saved: Message[] = [];
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const service = (name: string, methods: Record<string, unknown>) => ({
+    ...methods,
+    on: (event: string, handler: (...args: unknown[]) => void) =>
+      handlers.set(`${name}:${event}`, handler),
+    removeListener: (event: string) => handlers.delete(`${name}:${event}`),
+  });
+  const services: Record<string, unknown> = {
+    sessions: service('sessions', {
+      get: async () => ({ session_id: sessionId, tasks: [task.task_id] }),
+    }),
+    tasks: service('tasks', { findAll: async () => [task] }),
+    messages: service('messages', { findAll: async () => saved }),
+    'session-streams': {
+      create: async () => ({ session_id: sessionId }),
+      remove: async () => ({}),
+    },
+  };
+  const client = {
+    io: { connected: true, on: () => {}, off: () => {} },
+    service: (name: string) =>
+      name.includes('/tasks/queue') ? { find: async () => ({ data: [] }) } : services[name],
+  } as unknown as AgorClient;
+  const live = retainReactiveSession(client, sessionId, { taskHydration: 'lazy' });
+  await live.ready();
+  currentHandle = live;
+  state = live.state;
+  const unsubscribe = live.subscribe(() => update(live.state));
+  const emit = (event: string, messageId: string, extra = {}) =>
+    act(() => {
+      handlers.get(`messages:${event}`)?.({
+        session_id: sessionId,
+        task_id: task.task_id,
+        message_id: messageId,
+        role: MessageRole.ASSISTANT,
+        timestamp: task.created_at,
+        ...extra,
+      });
+    });
+  try {
+    const thoughtId = generateId();
+    const textId = generateId();
+    emit('thinking:start', thoughtId);
+    emit('thinking:chunk', thoughtId, { chunk: 'Invented violet pebble' });
+    // Thinking-only live payloads are not currently rendered by AgentChain /
+    // MessageBlock (empty text). This fixture proves client activity and the
+    // real transcript text handoff, not thinking-only UI visibility.
+    expect(live.getStreamingMessage(thoughtId)?.isThinking).toBe(true);
+    emit('thinking:end', thoughtId);
+    expect(live.getStreamingMessage(thoughtId)?.isStreaming).toBe(false);
+    render(<ConversationView client={null} sessionId={sessionId} />);
+    emit('streaming:start', textId);
+    emit('streaming:chunk', textId, { chunk: 'Invented amber square' });
+    expect(screen.getByText('Invented amber square')).toBeVisible();
+    emit('streaming:end', textId);
+    const message = {
+      ...messages.get(task.task_id)![1],
+      message_id: textId,
+      content: 'Invented amber square',
+    };
+    saved.push(message);
+    act(() => handlers.get('messages:created')?.(message));
+    act(() => handlers.get('tasks:patched')?.({ ...task, status: TaskStatus.COMPLETED }));
+    expect(live.state.streamingMessages.size).toBe(0);
+    expect(screen.getByText('Invented amber square')).toBeVisible();
+    expect(screen.queryByText(/Extended Thinking/)).not.toBeInTheDocument();
+    await page.screenshot({
+      path: `./.vitest/synthetic-stream-lifecycle-${window.innerWidth}.png`,
+    });
+  } finally {
+    unsubscribe();
+    releaseReactiveSession(client, sessionId, { taskHydration: 'lazy' });
+  }
 });

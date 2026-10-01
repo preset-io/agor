@@ -102,7 +102,12 @@ import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
 import socketio from '@feathersjs/socketio-client';
 import io, { type Socket } from 'socket.io-client';
-import { DAEMON, MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
+import {
+  BROWSER_FEATHERS_ACK_TIMEOUT_MS,
+  DAEMON,
+  MESSAGE_PAGINATION,
+  PAGINATION,
+} from '../config/constants';
 
 /**
  * Default daemon URL for client connections
@@ -1594,7 +1599,10 @@ export function createClient(
     verbose?: boolean;
     /** Limit reconnection attempts (useful for CLI to avoid hanging) */
     reconnectionAttempts?: number;
-    /** Reject acknowledged service calls when Socket.IO does not receive an acknowledgement. */
+    /**
+     * Reject acknowledged service calls when Socket.IO does not receive an
+     * acknowledgement. Browsers default to BROWSER_FEATHERS_ACK_TIMEOUT_MS.
+     */
     ackTimeout?: number;
     /** Authenticate each Socket.IO connection before the server accepts it. */
     socketAuthentication?: SocketConnectionAuthentication;
@@ -1603,6 +1611,12 @@ export function createClient(
   // Detect if running in browser vs Node.js (CLI)
   // Use 'in' operator to avoid TypeScript index signature errors during DTS build
   const isBrowser = typeof globalThis !== 'undefined' && 'window' in globalThis;
+
+  // Without an ack deadline Socket.IO discards, rather than rejects, the
+  // callback of a call in flight at disconnect, so the caller's promise never
+  // settles. Browser tabs drop sockets routinely (sleep, backgrounding).
+  const ackTimeout =
+    options?.ackTimeout ?? (isBrowser ? BROWSER_FEATHERS_ACK_TIMEOUT_MS : undefined);
 
   // Configure socket.io with better defaults for React StrictMode and reconnection
   const socketAuthentication = options?.socketAuthentication;
@@ -1618,7 +1632,7 @@ export function createClient(
       options?.reconnectionAttempts ?? (isBrowser ? Number.POSITIVE_INFINITY : 2),
     // Timeout settings
     timeout: 20000, // 20s timeout for initial connection
-    ...(options?.ackTimeout === undefined ? {} : { ackTimeout: options.ackTimeout }),
+    ...(ackTimeout === undefined ? {} : { ackTimeout }),
     // Transports (WebSocket preferred, fallback to polling)
     transports: ['websocket', 'polling'],
     // Connection lifecycle settings

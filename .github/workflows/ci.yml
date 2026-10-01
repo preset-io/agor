@@ -219,6 +219,11 @@ jobs:
 
       - run: node scripts/ci-test-matrix.mjs install ui-1
       - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
+      - name: Test production search retention and concurrency
+        run: |
+          if [[ "${{ matrix.shard }}" == "1" ]]; then
+            pnpm --filter agor-ui test:search-retention
+          fi
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
 
   # Do not rename this job: branch protection currently requires the generated
