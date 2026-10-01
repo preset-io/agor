@@ -13,7 +13,7 @@ export const blogPosts: BlogPost[] = [
     slug: 'agor-cloud-open-beta',
     title: 'Announcing Agor Cloud Open Beta',
     description:
-      'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta makes shared AI workflows available without running the hosting infrastructure.',
+      'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta gives you shared AI workflows without running the infrastructure yourself.',
     author: 'Agor team',
     date: '2026-10-06',
     image: '/images/blog/agor-cloud-open-beta.webp',
