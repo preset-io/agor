@@ -10,11 +10,14 @@ function repo(clone_status: Repo['clone_status'], repo_id = 'repo-fw'): Repo {
 function setup(initial: Repo[]) {
   let repoById = new Map(initial.map((r) => [r.repo_id, r]));
   const listeners = new Set<() => void>();
-  const notify = () => {
+  let serverRepos: Repo[] = [];
+  let current = true;
+  const put = (r: Repo) => {
+    repoById = new Map(repoById).set(r.repo_id, r);
     for (const listener of [...listeners]) listener();
   };
-  let serverRepos: Repo[] = [];
   const fetchRepos = vi.fn(async () => serverRepos);
+  const applyRepo = vi.fn(put);
   const wait = () =>
     waitForFrameworkRepoReady({
       getRepoById: () => repoById,
@@ -23,28 +26,27 @@ function setup(initial: Repo[]) {
         return () => listeners.delete(listener);
       },
       fetchRepos,
-      applyRepo: (r) => {
-        repoById = new Map(repoById).set(r.repo_id, r);
-        notify();
-      },
+      applyRepo,
+      isCurrent: () => current,
       deadlineMs: 20_000,
     });
   return {
-    listeners,
+    applyRepo,
     fetchRepos,
+    listeners,
+    put,
     wait,
     getRepoById: () => repoById,
     setServerRepos: (repos: Repo[]) => {
       serverRepos = repos;
     },
-    put: (r: Repo) => {
-      repoById = new Map(repoById).set(r.repo_id, r);
-      notify();
-    },
     remove: (id: string) => {
       repoById = new Map(repoById);
       repoById.delete(id);
-      notify();
+      for (const listener of [...listeners]) listener();
+    },
+    leave: () => {
+      current = false;
     },
   };
 }
@@ -61,11 +63,12 @@ describe('waitForFrameworkRepoReady', () => {
   });
 
   // #2941: the server had the repo ready but the store never saw it, so completion gave up after 20s.
-  it('reads the server when the store missed the ready event', async () => {
-    const { setServerRepos, wait } = setup([repo('cloning')]);
+  it('reads the server when the store missed the ready event, and refreshes the stale row', async () => {
+    const { getRepoById, setServerRepos, wait } = setup([repo('cloning')]);
     setServerRepos([repo('ready')]);
 
     await expect(wait()).resolves.toEqual(repo('ready'));
+    expect(getRepoById().get('repo-fw')?.clone_status).toBe('ready');
   });
 
   it('resolves when the store sees readiness during the wait', async () => {
@@ -93,6 +96,44 @@ describe('waitForFrameworkRepoReady', () => {
     expect(fetchRepos).toHaveBeenCalledTimes(2);
   });
 
+  it('reads the server once more at the deadline', async () => {
+    const { setServerRepos, wait } = setup([repo('cloning')]);
+    setServerRepos([repo('cloning')]);
+
+    const pending = wait();
+    await vi.advanceTimersByTimeAsync(16_000);
+    setServerRepos([repo('ready')]);
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    await expect(pending).resolves.toEqual(repo('ready'));
+  });
+
+  it('makes a fresh read at the deadline while a slow earlier read is still outstanding', async () => {
+    const { fetchRepos, setServerRepos, wait } = setup([repo('cloning')]);
+    setServerRepos([repo('cloning')]);
+
+    const pending = wait();
+    await vi.advanceTimersByTimeAsync(14_000);
+    let respondSlow: (repos: Repo[]) => void = () => {};
+    fetchRepos.mockReturnValueOnce(new Promise<Repo[]>((r) => (respondSlow = r)));
+    await vi.advanceTimersByTimeAsync(1_000);
+    setServerRepos([repo('ready')]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    respondSlow([repo('cloning')]);
+
+    await expect(pending).resolves.toEqual(repo('ready'));
+    expect(fetchRepos).toHaveBeenCalledTimes(5);
+  });
+
+  it('adds the ready row when the store never received it', async () => {
+    const { applyRepo, getRepoById, setServerRepos, wait } = setup([]);
+    setServerRepos([repo('ready')]);
+
+    await expect(wait()).resolves.toEqual(repo('ready'));
+    expect(applyRepo).toHaveBeenCalledWith(repo('ready'));
+    expect(getRepoById().get('repo-fw')?.clone_status).toBe('ready');
+  });
+
   it('resolves undefined at the deadline when the clone is still running, even if reads fail', async () => {
     const { fetchRepos, listeners, wait } = setup([repo('cloning')]);
     fetchRepos.mockRejectedValue(new Error('offline'));
@@ -105,18 +146,18 @@ describe('waitForFrameworkRepoReady', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('keeps the deadline hard when a server read never settles', async () => {
+  it('caps the wait at the deadline plus the final read when a server read never settles', async () => {
     const { fetchRepos, wait } = setup([repo('cloning')]);
     fetchRepos.mockReturnValue(new Promise<Repo[]>(() => {}));
 
     const pending = wait();
-    await vi.advanceTimersByTimeAsync(20_000);
+    await vi.advanceTimersByTimeAsync(22_000);
 
     await expect(pending).resolves.toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('stops waiting once the server confirms the clone failed', async () => {
+  it('stops waiting once the server shows the clone failed', async () => {
     const { setServerRepos, wait } = setup([repo('cloning')]);
     setServerRepos([repo('failed')]);
 
@@ -139,19 +180,31 @@ describe('waitForFrameworkRepoReady', () => {
   });
 
   it('does not restore a row the store removed while the read was in flight', async () => {
-    const { fetchRepos, getRepoById, remove, wait } = setup([
-      repo('failed', 'repo-old'),
-      repo('cloning'),
-    ]);
+    const { applyRepo, fetchRepos, getRepoById, remove, wait } = setup([repo('cloning')]);
     let respond: (repos: Repo[]) => void = () => {};
     fetchRepos.mockReturnValueOnce(new Promise<Repo[]>((r) => (respond = r)));
 
     const pending = wait();
     await vi.advanceTimersByTimeAsync(0);
-    remove('repo-old');
-    respond([repo('failed', 'repo-old'), repo('ready')]);
+    remove('repo-fw');
+    respond([repo('ready')]);
 
     await expect(pending).resolves.toEqual(repo('ready'));
-    expect(getRepoById().has('repo-old')).toBe(false);
+    expect(applyRepo).not.toHaveBeenCalled();
+    expect(getRepoById().has('repo-fw')).toBe(false);
+  });
+
+  it('stops polling once the caller is no longer current', async () => {
+    const { fetchRepos, leave, setServerRepos, wait } = setup([repo('cloning')]);
+    setServerRepos([repo('cloning')]);
+
+    const pending = wait();
+    await vi.advanceTimersByTimeAsync(0);
+    leave();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(fetchRepos).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -180,23 +180,13 @@ export function repoCreated(repo: Repo) {
     return next;
   });
 }
-// Repo events and refetched snapshots can arrive out of order (#2941); `last_updated` is the server write time.
-function isStaleRepo(current: Repo | undefined, incoming: Repo): boolean {
-  if (!current) return false;
-  const currentAt = Date.parse(current.last_updated);
-  const incomingAt = Date.parse(incoming.last_updated);
-  if (Number.isNaN(currentAt) || Number.isNaN(incomingAt)) return false;
-  if (incomingAt !== currentAt) return incomingAt < currentAt;
-  // Same-millisecond writes: a finished clone does not go back to cloning within one tick.
-  return (
-    incoming.clone_status === 'cloning' &&
-    (current.clone_status === 'ready' || current.clone_status === 'failed')
-  );
-}
 export function repoPatched(repo: Repo) {
-  setMap('repoById', (prev) =>
-    isStaleRepo(prev.get(repo.repo_id), repo) ? prev : replaceIfChanged(prev, repo.repo_id, repo)
-  );
+  setMap('repoById', (prev) => {
+    // Events can arrive out of order and last_updated does not prove write order; a retry gets a new row.
+    const status = prev.get(repo.repo_id)?.clone_status;
+    if ((status === 'ready' || status === 'failed') && repo.clone_status === 'cloning') return prev;
+    return replaceIfChanged(prev, repo.repo_id, repo);
+  });
 }
 export function repoRemoved(repo: Repo) {
   setMap('repoById', (prev) => {
