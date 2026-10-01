@@ -857,8 +857,9 @@ function AppContent() {
         subscribe: (listener) => agorStore.subscribe(listener),
         fetchRepos: () =>
           client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        applyRepo: repoPatched,
-        isCurrent: isCurrentUser,
+        applyRepo: (repo) => {
+          if (isCurrentUser()) repoPatched(repo);
+        },
         deadlineMs: 20_000,
       });
     }

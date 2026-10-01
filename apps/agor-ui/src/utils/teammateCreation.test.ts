@@ -98,7 +98,7 @@ describe('createTeammateBranch', () => {
     expect(onUpdateBranch).not.toHaveBeenCalled();
   });
 
-  it('joins an existing board as its primary without a welcome note when asked', async () => {
+  it('joins an existing board without a welcome note or replacing its primary when asked', async () => {
     const repo = makeRepo();
     const branch = makeBranch({ board_id: 'board-existing' as BoardID });
     const onCreateBranch = vi.fn().mockResolvedValue(branch);
@@ -115,6 +115,7 @@ describe('createTeammateBranch', () => {
         repoId: repo.repo_id,
         boardId: 'board-existing',
         welcomeNote: false,
+        keepExistingPrimary: true,
       },
       {
         client: client as never,
@@ -130,10 +131,8 @@ describe('createTeammateBranch', () => {
       repo.repo_id,
       expect.objectContaining({ boardId: 'board-existing' })
     );
-    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
-      boardId: 'board-existing',
-      branchId: branch.branch_id,
-    });
+    // The server already made the branch primary if the board had none; a client call would overwrite a concurrent one.
+    expect(boardsService.setPrimaryTeammate).not.toHaveBeenCalled();
   });
 
   it('qualifies a template ref with its source remote while keeping the private repo as destination', async () => {

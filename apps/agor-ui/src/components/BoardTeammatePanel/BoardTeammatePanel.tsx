@@ -130,6 +130,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
+  // A primary whose branch or repo is not loaded yet must not be offered for replacement.
+  const canCreateTeammate =
+    canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -421,16 +424,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           }
           style={{ padding: '24px 0 16px' }}
         >
-          {canEditBoard && onCreateTeammate && (
+          {canCreateTeammate && (
             <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate}>
               Create AI teammate
             </Button>
           )}
         </Empty>
-        {canEditBoard && (!onCreateTeammate || teammateOptions.length > 0) && (
+        {canEditBoard && (!canCreateTeammate || teammateOptions.length > 0) && (
           <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Typography.Text strong>
-              {onCreateTeammate ? 'Or assign an existing teammate' : 'Assign an existing teammate'}
+              {canCreateTeammate ? 'Or assign an existing teammate' : 'Assign an existing teammate'}
             </Typography.Text>
             <Select
               showSearch
@@ -449,7 +452,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </Typography.Text>
             )}
             <Button
-              type={onCreateTeammate ? 'default' : 'primary'}
+              type={canCreateTeammate ? 'default' : 'primary'}
               onClick={handleAssignTeammate}
               loading={assigningTeammate}
               disabled={!selectedTeammateId || !board || !client}

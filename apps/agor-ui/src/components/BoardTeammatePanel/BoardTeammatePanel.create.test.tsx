@@ -24,11 +24,12 @@ const teammate: Branch = makeTeammateBranch(
 );
 const client = { service: () => ({}) } as unknown as AgorClient;
 
-function renderPanel(onCreateTeammate?: () => void) {
+function renderPanel(onCreateTeammate?: () => void, primary?: { board: Board; branch: Branch }) {
   return render(
     <AntApp>
       <BoardTeammatePanel
-        board={board}
+        board={primary?.board ?? board}
+        primaryTeammateBranch={primary?.branch}
         currentUserId="user-1"
         activeTab="teammate"
         onTabChange={vi.fn()}
@@ -79,5 +80,17 @@ describe('BoardTeammatePanel empty state', () => {
     expect(screen.queryByRole('button', { name: /create ai teammate/i })).toBeNull();
     expect(screen.getByText('Assign an existing teammate')).toBeInTheDocument();
     expect(screen.getByText(/no existing teammates are available/i)).toBeInTheDocument();
+  });
+
+  it('does not offer creating over a primary whose repo is not loaded', () => {
+    setBranches([teammate]);
+    renderPanel(vi.fn(), {
+      board: { ...board, primary_teammate_id: teammate.branch_id },
+      branch: teammate,
+    });
+
+    expect(screen.getByText(/does not have a primary teammate yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create ai teammate/i })).toBeNull();
+    expect(screen.queryByText('Or assign an existing teammate')).toBeNull();
   });
 });

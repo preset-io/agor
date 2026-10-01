@@ -1056,6 +1056,7 @@ export const App: React.FC<AppProps> = ({
         ...(teammateTargetBoardId
           ? {
               boardId: teammateTargetBoardId,
+              keepExistingPrimary: true,
               // An existing board with branches already has its own layout; skip the welcome note.
               welcomeNote: ![...agorStore.getState().branchById.values()].some(
                 (branch) => branch.board_id === teammateTargetBoardId

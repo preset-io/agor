@@ -7,12 +7,9 @@ export interface WaitForFrameworkRepoReadyOptions {
   subscribe: (listener: () => void) => () => void;
   /** Reads the server's current repo rows. */
   fetchRepos: () => Promise<Repo[]>;
-  /** Writes the server's ready row over the store's stale copy. */
+  /** Writes a server row over the store's stale copy. */
   applyRepo: (repo: Repo) => void;
-  /** False once the caller no longer wants the result. */
-  isCurrent: () => boolean;
   deadlineMs: number;
-  refreshEveryMs?: number;
   /** Cap on the server read made at the deadline. */
   finalReadMs?: number;
 }
@@ -20,25 +17,20 @@ export interface WaitForFrameworkRepoReadyOptions {
 const readyIn = (repoById: Map<string, Repo>) =>
   findFrameworkRepo(repoById, { readyOnly: true })?.[1];
 
-const allFailedIn = (repoById: Map<string, Repo>) =>
-  !findFrameworkRepo(repoById, { excludeFailed: true }) && !!findFrameworkRepo(repoById);
-
 /**
  * Resolve the framework repo once it is `ready`, or `undefined` once the server
- * shows every framework clone failed, the caller is no longer current, or the
- * deadline (plus at most `finalReadMs` for one last server read) elapses. The
- * store can miss a clone's realtime outcome (#2941), so the server is re-read
- * while waiting. Used at onboarding completion so a user whose clone finished
- * still gets their first teammate.
+ * shows every framework clone failed or the deadline (plus at most `finalReadMs`
+ * for one last server read) elapses. The store can miss a clone's realtime
+ * outcome (#2941), so the server is read before waiting and again at the
+ * deadline. Used at onboarding completion so a user whose clone finished still
+ * gets their first teammate.
  */
 export function waitForFrameworkRepoReady({
   getRepoById,
   subscribe,
   fetchRepos,
   applyRepo,
-  isCurrent,
   deadlineMs,
-  refreshEveryMs = 5_000,
   finalReadMs = 2_000,
 }: WaitForFrameworkRepoReadyOptions): Promise<Repo | undefined> {
   const readyNow = readyIn(getRepoById());
@@ -46,69 +38,51 @@ export function waitForFrameworkRepoReady({
 
   return new Promise<Repo | undefined>((resolve) => {
     let settled = false;
-    let seen = getRepoById();
-    let polling = false;
     let finalTimer: ReturnType<typeof setTimeout> | undefined;
-    // Rows the store dropped during the wait; an older server copy must not bring them back.
-    const removed = new Set<string>();
 
-    const evaluate = (repos: Repo[]) => {
-      if (settled) return;
-      if (!isCurrent()) return finish(undefined);
-      const server = new Map(repos.map((repo) => [repo.repo_id, repo]));
-      const ready = readyIn(server);
-      if (ready) {
-        if (!removed.has(ready.repo_id)) applyRepo(ready);
-        finish(ready);
-      } else if (allFailedIn(server)) {
-        finish(undefined);
-      }
-    };
-    const read = () => {
-      if (!isCurrent()) {
-        finish(undefined);
-        return Promise.resolve();
-      }
-      return fetchRepos()
-        .then(evaluate)
-        .catch(() => undefined);
-    };
-    // Polls skip while a read is outstanding; the deadline read below always fetches fresh.
-    const pollOnce = () => {
-      if (polling) return;
-      polling = true;
-      void read().finally(() => {
-        polling = false;
-      });
-    };
-    const onStoreChange = () => {
-      if (!isCurrent()) return finish(undefined);
-      const repoById = getRepoById();
-      if (repoById === seen) return;
-      for (const id of seen.keys()) if (!repoById.has(id)) removed.add(id);
-      seen = repoById;
-      const ready = readyIn(repoById);
+    const check = () => {
+      const ready = readyIn(getRepoById());
       if (ready) finish(ready);
     };
+    // A server read only updates framework rows the store still holds; it never adds or restores rows.
+    const read = () =>
+      Promise.resolve()
+        .then(fetchRepos)
+        .then((repos) => {
+          if (settled) return;
+          const store = getRepoById();
+          const server = new Map(
+            repos.filter((repo) => store.has(repo.repo_id)).map((repo) => [repo.repo_id, repo])
+          );
+          const ready = readyIn(server);
+          if (ready) {
+            applyRepo(ready);
+            finish(ready);
+          } else if (
+            findFrameworkRepo(server) &&
+            !findFrameworkRepo(server, { excludeFailed: true })
+          ) {
+            finish(undefined);
+          }
+        })
+        .catch(() => undefined);
 
-    const unsubscribe = subscribe(onStoreChange);
-    // Registered before the poll so a tick at the deadline is replaced by the fresh final read.
+    const unsubscribe = subscribe(check);
     const deadline = setTimeout(() => {
-      clearInterval(poll);
       const settleFromStore = () => finish(readyIn(getRepoById()));
       finalTimer = setTimeout(settleFromStore, finalReadMs);
       void read().then(settleFromStore);
     }, deadlineMs);
-    const poll = setInterval(pollOnce, refreshEveryMs);
     function finish(repo: Repo | undefined) {
       if (settled) return;
       settled = true;
       unsubscribe();
-      clearInterval(poll);
       clearTimeout(deadline);
       clearTimeout(finalTimer);
       resolve(repo);
     }
-    pollOnce();
+    // Re-check in case readiness landed between the check above and subscribing.
+    check();
+    void read();
   });
 }
