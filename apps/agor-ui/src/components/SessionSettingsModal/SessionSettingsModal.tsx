@@ -29,7 +29,13 @@ import {
   isAgenticToolName,
   mapToCodexPermissionConfig,
 } from '@agor-live/client';
-import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  DownOutlined,
+  KeyOutlined,
+  LoadingOutlined,
+  SettingOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
 import { Alert, Button, Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
 import React from 'react';
@@ -462,6 +468,12 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
             (details unavailable)
           </Typography.Text>
         )}
+        {fullDetails.status === 'loading' && (
+          <Typography.Text type="secondary" style={{ marginLeft: token.marginXS }}>
+            <LoadingOutlined style={{ marginRight: token.marginXXS }} />
+            (loading…)
+          </Typography.Text>
+        )}
       </>
     ),
     children: (
@@ -483,8 +495,17 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
             }
           />
         )}
+        {/* The read-only editor below still holds the lean row's context, which
+            looks complete; say plainly that it is not. */}
         {fullDetails.status === 'loading' && (
-          <Typography.Paragraph type="secondary">Loading full custom context…</Typography.Paragraph>
+          <Alert
+            type="info"
+            showIcon
+            icon={<LoadingOutlined />}
+            style={{ marginBottom: token.marginSM }}
+            title="Loading full session context…"
+            description="Custom context is read-only until it loads. Scheduled-run and SDK command/skill fields are not shown yet."
+          />
         )}
         <AdvancedSettingsForm showHelpText disabled={!customContextReady} />
       </ErrorBoundary>

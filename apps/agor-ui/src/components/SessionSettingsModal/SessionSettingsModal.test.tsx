@@ -326,8 +326,9 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
         />
       );
       expect(get).toHaveBeenCalledWith('s1');
+      expect(screen.getByText('(loading…)')).toBeInTheDocument();
       resolve(fullSession);
-      await waitFor(() => expect(screen.queryByText(/Loading full custom context/)).toBeNull());
+      await waitFor(() => expect(screen.queryByText('(loading…)')).toBeNull());
 
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
@@ -387,9 +388,12 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
       expect(field.readOnly).toBe(true);
+      // The lean JSON in the read-only editor is labelled as incomplete.
+      expect(screen.getByText('Loading full session context…')).toBeInTheDocument();
 
       resolve({ ...leanSession, custom_context: fullContext } as Session);
       await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(screen.queryByText('Loading full session context…')).toBeNull();
       expect(JSON.parse(field.value)).toEqual(fullContext);
 
       fireEvent.change(field, {
