@@ -2645,3 +2645,53 @@ describe('lazy resync stranded by a disconnect', () => {
     handle.dispose();
   });
 });
+
+describe('bootstrap stranded by a disconnect', () => {
+  it.each(['lazy', 'eager'] as const)(
+    '%s: starts no hydration after abandonment and leaves no fetch token behind',
+    async (taskHydration) => {
+      const opts: MockClientOptions = {
+        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+        messagesByTask: {
+          'task-1': [makeMessage('task-1', 0)],
+          'task-2': [makeMessage('task-2', 0)],
+        },
+      };
+      const mock = createMockClient(opts);
+      // Session and Task reads resolve; the queue read is still in flight when
+      // the socket drops and then rejects with the transport.
+      const queueFind = vi.mocked(mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find);
+      let rejectQueue: (() => void) | undefined;
+      queueFind.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectQueue = () => reject(new Error('socket has been disconnected'));
+          })
+      );
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      const internals = handle as unknown as FetchInternals;
+      await vi.waitFor(() => expect(rejectQueue).toBeDefined());
+      expect(mock.taskFindAll).toHaveBeenCalledTimes(1);
+
+      mock.fireIo('disconnect');
+      rejectQueue!();
+      await vi.waitFor(() => expect(handle.state.loading).toBe(false));
+      expect(mock.messageFindAll).not.toHaveBeenCalled();
+      expectNoStrandedFetches(internals);
+
+      const newer = makeMessage('task-2', 1);
+      opts.messagesByTask['task-2'] = [...opts.messagesByTask['task-2'], newer];
+      mock.fireIo('connect');
+      await vi.waitFor(() => expect(handle.getTaskMessages('task-2')).toHaveLength(2));
+      for (let beat = 0; beat < 50; beat++) {
+        mock.emitServiceEvent('tasks', 'patched', makeTask('task-2', TaskStatus.RUNNING));
+        mock.emitServiceEvent('messages', 'patched', newer);
+      }
+      expectNoStrandedFetches(internals);
+      expect(handle.state.tasks.map((task) => task.task_id)).toEqual(['task-1', 'task-2']);
+      expect(handle.isTaskLoaded('task-2')).toBe(true);
+      expect(handle.state.error).toBeNull();
+      handle.dispose();
+    }
+  );
+});

@@ -1216,6 +1216,7 @@ export class ReactiveSessionHandle {
       // The fetched row's id is canonical even when we asked by short id — the
       // authoritative source for event matching.
       if (session?.session_id) this.canonicalSessionId = session.session_id;
+      if (!this.taskFetches.has(taskFetchToken)) return this.endAbandonedBootstrap();
 
       // Use journaled Tasks to choose the lazy target, but do not close the
       // journal yet. It stays live through every slower bootstrap request and
@@ -1260,11 +1261,7 @@ export class ReactiveSessionHandle {
         }
       }
 
-      if (!this.taskFetches.has(taskFetchToken)) {
-        // Disconnected mid-bootstrap: the reconnect resync owns the data.
-        this.updateState((prev) => ({ ...prev, loading: false }));
-        return;
-      }
+      if (!this.taskFetches.has(taskFetchToken)) return this.endAbandonedBootstrap();
       this.updateState((prev) =>
         this.commitBootstrapState({
           previous: prev,
@@ -1277,11 +1274,7 @@ export class ReactiveSessionHandle {
           lazyMessageSnapshot,
         })
       );
-      this.cancelTaskFetch(taskFetchToken);
-      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     } catch (error) {
-      this.cancelTaskFetch(taskFetchToken);
-      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
       // Mirror doResync()'s terminal classification — a 403/404 on the
       // initial mount is just as "doomed to retry" as on reconnect, and
       // without this the UI's auto-retry loop would keep poking a deleted/
@@ -1295,7 +1288,15 @@ export class ReactiveSessionHandle {
         error: error instanceof Error ? error.message : 'Failed to bootstrap reactive session',
         terminal: prev.terminal || terminal,
       }));
+    } finally {
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     }
+  }
+
+  /** Disconnected mid-bootstrap: the reconnect resync owns the data. */
+  private endAbandonedBootstrap(): void {
+    this.updateState((prev) => ({ ...prev, loading: false }));
   }
 
   private attachListeners(): void {
@@ -1881,6 +1882,7 @@ export class ReactiveSessionHandle {
 
       // The fetched row's id is canonical even when we asked by short id.
       if (session?.session_id) this.canonicalSessionId = session.session_id;
+      if (this.disposed || !this.taskFetches.has(taskFetchToken)) return;
 
       const provisionalTasks = this.reconcileTaskFetch(taskFetchToken, taskSnapshot);
       let eagerMessageSnapshot: Message[] | null = null;
@@ -1914,11 +1916,7 @@ export class ReactiveSessionHandle {
         }
       }
 
-      if (this.disposed || !this.taskFetches.has(taskFetchToken)) {
-        this.cancelTaskFetch(taskFetchToken);
-        if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
-        return;
-      }
+      if (this.disposed || !this.taskFetches.has(taskFetchToken)) return;
       this.updateState((prev) => {
         const sessionChanged = this.sessionMutationSequence > sessionFetchSequence;
         if (sessionChanged && prev.session === null && prev.terminal) return prev;
@@ -1994,14 +1992,9 @@ export class ReactiveSessionHandle {
           lastSyncedAt: new Date().toISOString(),
         };
       });
-      this.cancelTaskFetch(taskFetchToken);
-      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     } catch (error) {
       // An abandoned resync failed with its transport; the reconnect retries.
-      const abandoned = !this.taskFetches.has(taskFetchToken);
-      this.cancelTaskFetch(taskFetchToken);
-      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
-      if (this.disposed || abandoned) return;
+      if (this.disposed || !this.taskFetches.has(taskFetchToken)) return;
       const status = errorStatusCode(error);
       // 403 (forbidden) and 404 (not found) mean this session is gone
       // from the user's perspective — retrying will keep failing. Mark
@@ -2014,6 +2007,9 @@ export class ReactiveSessionHandle {
         error: error instanceof Error ? error.message : 'Failed to resync reactive session',
         terminal: prev.terminal || terminal,
       }));
+    } finally {
+      this.cancelTaskFetch(taskFetchToken);
+      if (messageFetchToken !== null) this.cancelMessageFetch(messageFetchToken);
     }
   }
 }
