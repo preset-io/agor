@@ -216,7 +216,6 @@ export function missingSocketTenant(): Error {
   return new Forbidden('Tenant access cannot be verified');
 }
 
-/** Handshake rejection carrying the stable code in `data`, only for the restriction denial itself. */
 /** A codeless 503 from a restriction or generation read: transient, never a rejected credential. */
 export function unavailableSocketHandshakeError(
   error: unknown
@@ -231,6 +230,7 @@ export function unavailableSocketHandshakeError(
   return rejection;
 }
 
+/** Handshake rejection carrying the stable code in `data`, only for the restriction denial itself. */
 export function restrictedSocketHandshakeError(
   error: unknown
 ): (Error & { data: { code: string } }) | null {
