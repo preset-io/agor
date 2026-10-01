@@ -55,13 +55,13 @@ export function waitForFrameworkRepoReady({
             repos.filter((repo) => store.has(repo.repo_id)).map((repo) => [repo.repo_id, repo])
           );
           const ready = readyIn(server);
+          const best = findFrameworkRepo(server)?.[1];
           if (ready) {
             applyRepo(ready);
             finish(ready);
-          } else if (
-            findFrameworkRepo(server) &&
-            !findFrameworkRepo(server, { excludeFailed: true })
-          ) {
+          } else if (best && !findFrameworkRepo(server, { excludeFailed: true })) {
+            // Every held framework clone failed; apply the row the UI shows so it stops reading as cloning.
+            applyRepo(best);
             finish(undefined);
           }
         })

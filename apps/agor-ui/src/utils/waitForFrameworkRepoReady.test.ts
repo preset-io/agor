@@ -126,14 +126,15 @@ describe('waitForFrameworkRepoReady', () => {
     await expect(pending).resolves.toBeUndefined();
   });
 
-  it('stops waiting once the server shows the clone failed', async () => {
-    const { setServerRepos, wait } = setup([repo('cloning')]);
+  it('stops waiting once the server shows the clone failed, and refreshes the stale row', async () => {
+    const { getRepoById, setServerRepos, wait } = setup([repo('cloning')]);
     setServerRepos([repo('failed')]);
 
     const pending = wait();
     await vi.advanceTimersByTimeAsync(0);
 
     await expect(pending).resolves.toBeUndefined();
+    expect(getRepoById().get('repo-fw')?.clone_status).toBe('failed');
     expect(vi.getTimerCount()).toBe(0);
   });
 
