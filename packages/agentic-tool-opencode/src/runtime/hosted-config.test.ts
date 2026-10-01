@@ -27,6 +27,7 @@ describe('hosted OpenCode configuration', () => {
       OPENCODE_DB: layout.liveDbPath,
       OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
       OPENCODE_TEST_HOME: layout.scratchRoot,
+      TMPDIR: layout.scratchRoot,
     });
     expect(env.OPENCODE_CONFIG).toBeUndefined();
     expect(env.OPENCODE_AUTH_CONTENT).toBeUndefined();

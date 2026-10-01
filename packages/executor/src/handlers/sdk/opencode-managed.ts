@@ -1,6 +1,5 @@
 /** Hosted OpenCode turn lifecycle: admission, restore, cleanup, and checkpointed completion. */
 
-import { randomUUID } from 'node:crypto';
 import {
   assertOpenCodeCheckpointRuntime,
   discardOpenCodeScratch,
@@ -10,6 +9,7 @@ import {
   resolveOpenCodeNativeStateLayout,
   restoreOpenCodeCheckpoint,
 } from '@agor/agentic-tool-opencode/runtime';
+import { generateId } from '@agor/core/db';
 import {
   isTerminalTaskStatus,
   type OpenCodeCheckpointAdmission,
@@ -57,7 +57,7 @@ export async function prepareManagedOpenCodeTurn(input: {
   // Fail on an unusable image before admission or any credential read.
   await assertOpenCodeCheckpointRuntime();
   const layout = resolveOpenCodeNativeStateLayout({ sessionId: input.sessionId, taskId });
-  const holderId = randomUUID();
+  const holderId = generateId();
   // A retry after a lost response replays the same admission for this holder.
   const admission: OpenCodeCheckpointAdmission = await withRetries(() =>
     client

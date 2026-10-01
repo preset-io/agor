@@ -28,6 +28,8 @@ export function hostedOpenCodeEnvironment(
     XDG_CONFIG_HOME: layout.xdg.config,
     XDG_CACHE_HOME: layout.xdg.cache,
     XDG_STATE_HOME: layout.xdg.state,
+    // OpenCode's temp dir defaults to os.tmpdir(); keep it on bounded Job-local scratch.
+    TMPDIR: layout.scratchRoot,
     OPENCODE_DB: layout.liveDbPath,
     OPENCODE_DISABLE_PROJECT_CONFIG: 'true',
     OPENCODE_PURE: 'true',

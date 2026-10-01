@@ -66,6 +66,10 @@ describe('prepareManagedOpenCodeTurn', () => {
     });
     expect(turn?.authSecrets).toContain('sk-owner');
     expect(mocks.restore).toHaveBeenCalledWith(expect.anything(), accepted);
+    // The daemon accepts only UUIDv7 holder ids.
+    expect(turn?.holderId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+    );
     expect(state.tasks.acknowledgeOpenCodeCleanup).toHaveBeenCalledWith({
       task_id: taskId,
       holder_instance_id: turn?.holderId,
