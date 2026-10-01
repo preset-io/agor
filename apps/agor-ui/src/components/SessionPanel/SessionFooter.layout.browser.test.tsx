@@ -31,6 +31,7 @@ const session = {
 } as Session;
 const noop = () => {};
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+const bottomInset = theme.getDesignToken().sizeUnit * 2;
 
 beforeEach(async () => {
   localStorage.clear();
@@ -96,7 +97,7 @@ it.each([false, true])(
       const rect = control.getBoundingClientRect();
       expect(rect.left).toBeGreaterThanOrEqual(bounds.left);
       expect(rect.right).toBeLessThanOrEqual(bounds.right);
-      expect(rect.bottom).toBeLessThanOrEqual(bounds.bottom - 12);
+      expect(rect.bottom).toBeLessThanOrEqual(bounds.bottom - bottomInset);
       expect(rect.top).toBeGreaterThanOrEqual(bounds.top);
       expect(
         document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
@@ -150,7 +151,7 @@ it.each([false, true])(
     expect(screen.queryByRole('status', { name: 'Agent is working' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     expect(send.getBoundingClientRect().right).toBe(buttonBounds.right);
-    expect(send.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom - 12);
+    expect(send.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom - bottomInset);
     await page.screenshot({ path: `./.vitest/footer-idle-${window.innerWidth}-${embedded}.png` });
   }
 );
@@ -162,6 +163,6 @@ it('retains the bottom inset when resizing from mobile to desktop', async () => 
   await waitFor(() => {
     const bounds = screen.getByTestId('panel').getBoundingClientRect();
     const send = screen.getByRole('button', { name: 'Send' }).getBoundingClientRect();
-    expect(bounds.bottom - send.bottom).toBeGreaterThanOrEqual(12);
+    expect(bounds.bottom - send.bottom).toBeGreaterThanOrEqual(bottomInset);
   });
 });

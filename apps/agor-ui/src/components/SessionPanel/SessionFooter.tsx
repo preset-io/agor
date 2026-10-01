@@ -1357,8 +1357,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         paddingTop: token.paddingXS,
         paddingInline: isMobile ? token.padding : token.paddingLG,
         paddingBottom: isMobile
-          ? `max(${token.paddingSM}px, env(safe-area-inset-bottom))`
-          : token.paddingSM,
+          ? `max(${token.sizeUnit * 2}px, env(safe-area-inset-bottom))`
+          : token.sizeUnit * 2,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}

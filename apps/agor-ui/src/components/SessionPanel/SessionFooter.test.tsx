@@ -161,12 +161,12 @@ describe('SessionFooter', () => {
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280);
     try {
       render(
-        <ConfigProvider theme={{ token: { paddingSM: 18 } }}>
+        <ConfigProvider theme={{ token: { sizeUnit: 6 } }}>
           <SessionFooter {...baseProps} />
         </ConfigProvider>
       );
       const footer = screen.getByTestId('prompt-input').parentElement!.parentElement!;
-      expect(footer).toHaveStyle({ paddingBottom: '18px', flexShrink: '0' });
+      expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
     } finally {
       vi.restoreAllMocks();
     }
