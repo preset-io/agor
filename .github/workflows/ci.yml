@@ -199,7 +199,9 @@ jobs:
   browser:
     name: Browser layout tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Include dependency/browser setup and the production retention check as well
+    # as the full viewport shard; ten minutes can expire after tests pass.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
