@@ -37,10 +37,15 @@ LANGUAGE sql STABLE PARALLEL SAFE AS $$
     ),
     'constraints', (
       SELECT COALESCE(jsonb_agg(jsonb_build_array(
-        con.conname, con.contype, con.condeferrable, con.condeferred,
+        -- PostgreSQL 18 catalogs NOT NULL constraints with table-derived names.
+        -- Compare their column identity, not the real/temp relation's name;
+        -- retain validation/inheritance flags and the complete definition.
+        CASE WHEN con.contype = 'n' THEN 'not_null:' || con.conkey::text ELSE con.conname END,
+        con.contype, con.condeferrable, con.condeferred,
         con.convalidated, con.conislocal, con.coninhcount, con.connoinherit,
+        COALESCE((to_jsonb(con)->>'conenforced')::boolean, true),
         pg_temp.agor_0102_norm(pg_get_constraintdef(con.oid, false))
-      ) ORDER BY con.conname), '[]'::jsonb)
+      ) ORDER BY CASE WHEN con.contype = 'n' THEN 'not_null:' || con.conkey::text ELSE con.conname END), '[]'::jsonb)
       FROM pg_constraint con
       WHERE con.conrelid = relation AND con.contype <> 'f'
     ),

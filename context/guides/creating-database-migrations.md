@@ -193,6 +193,25 @@ grant/refresh fences and never changes attribution. Keep this ordering when
 adding writers; taking a user lock after a token-row lock reverses the cascade
 order. No provider round-trip is held inside the persistence transaction.
 
+### Repairs to blocked historical migrations
+
+The owner fallback in PostgreSQL `0095` / SQLite `0098` and the PostgreSQL `0103`
+NOT NULL fingerprint repair intentionally edit the blocked migration, not a new
+suffix which the blocked database could never reach. Journal watermarks are
+unchanged. Drizzle records SQL hashes but selects pending work by timestamp;
+it does not re-run or checksum-reject an already-applied migration. Release
+packaging copies these SQL files into the packaged migrations directory.
+Do not rewrite an operator's ledger. The authenticated archived-head hash used
+by `0103` to authorize destructive reconciliation is a separate provenance
+check and remains unchanged.
+
+PostgreSQL 18 catalogs NOT NULL constraints with table-derived names. `0103`
+compares their column identity instead of the real/reference table name, while
+retaining their definition, validation, enforcement, and inheritance metadata.
+Other constraint names, indexes, policies, columns, FKs and the destructive
+legacy-shape/ledger protections remain validated. Both the fresh and historical
+migration paths exercise this guard; a fresh install is not exempt.
+
 ### Schemas drifting
 
 If you only update one schema, generation succeeds for that dialect and silently leaves the other one stale. Catch it before merge:

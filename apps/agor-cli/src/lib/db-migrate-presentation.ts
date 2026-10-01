@@ -2,6 +2,7 @@ import {
   type DatabaseDialect,
   formatSanitizedDbError,
   OfflineMigrationCutoverRequiredError,
+  OWNER_ATTRIBUTION_SQLSTATE,
   sanitizeDbError,
 } from '@agor/core/db';
 import { extractDbFilePath } from '@agor/core/utils/path';
@@ -95,5 +96,11 @@ export function migrationFailureMessage(error: unknown): string {
   ) {
     return `Failed to run migrations: ${error.message}`;
   }
-  return `Failed to run migrations: ${formatSanitizedDbError(sanitizeDbError(error))}`;
+  const diagnostic = sanitizeDbError(error);
+  if (diagnostic.code === OWNER_ATTRIBUTION_SQLSTATE) {
+    // Static guidance only: driver messages, hints and resource names are not
+    // safe to print. The SQL exception retains IDs for offline DBA inspection.
+    return 'Failed to run migrations: ownership backfill has no existing owner, creator, or same-tenant Admin/Superadmin. Preserve the data and keep daemons stopped. Explicitly attribute affected boards/branches to a real user in their own tenant through board_owners/branch_owners, then retry. A zero-user tenant needs an operator identity/ownership decision, not deletion or another tenant’s admin. See https://agor.live/guide/multiplayer-unix-isolation#capability-policy-upgrade';
+  }
+  return `Failed to run migrations: ${formatSanitizedDbError(diagnostic)}`;
 }

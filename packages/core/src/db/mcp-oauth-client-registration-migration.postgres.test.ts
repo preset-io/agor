@@ -521,6 +521,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         `DROP POLICY mcp_oauth_client_registration_maintenance_delete
          ON mcp_oauth_client_registrations`,
       ],
+      [
+        'nullability',
+        'ALTER TABLE mcp_oauth_client_registrations ALTER COLUMN binding_version DROP NOT NULL',
+      ],
     ])('rejects a malformed final DCR %s', async (_label, mutation) => {
       if (!db || !isPostgresDatabase(db)) {
         throw new Error('PostgreSQL test database was not initialized');

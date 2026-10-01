@@ -29,24 +29,35 @@ UPDATE "boards" b SET "primary_owner_user_id" = COALESCE(
   (SELECT bo.user_id FROM board_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
    WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id
    ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
-  (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by)
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by),
+  -- Last resort only: an existing administrator in THIS tenant. Row existence
+  -- is the persisted active-user contract; there is no user soft-delete flag.
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.role IN ('admin','superadmin')
+   ORDER BY u.created_at NULLS LAST,u.user_id COLLATE "C" LIMIT 1)
 );
 --> statement-breakpoint
 UPDATE "branches" br SET "primary_owner_user_id" = COALESCE(
   (SELECT bo.user_id FROM branch_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
    WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id
    ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
-  (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.user_id=br.created_by)
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.user_id=br.created_by),
+  -- Last resort only: an existing administrator in THIS tenant. Row existence
+  -- is the persisted active-user contract; there is no user soft-delete flag.
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.role IN ('admin','superadmin')
+   ORDER BY u.created_at NULLS LAST,u.user_id COLLATE "C" LIMIT 1)
 );
 --> statement-breakpoint
 DO $$
 DECLARE failures text;
 BEGIN
-  SELECT string_agg(kind||':'||id, ', ' ORDER BY kind,id) INTO failures FROM (
-    SELECT 'board' kind, board_id id FROM boards WHERE primary_owner_user_id IS NULL
-    UNION ALL SELECT 'branch', branch_id FROM branches WHERE primary_owner_user_id IS NULL
+  SELECT string_agg('tenant='||tenant_id||' '||kind||':'||id, ', ' ORDER BY tenant_id,kind,id) INTO failures FROM (
+    SELECT tenant_id, 'board' kind, board_id id FROM boards WHERE primary_owner_user_id IS NULL
+    UNION ALL SELECT tenant_id, 'branch', branch_id FROM branches WHERE primary_owner_user_id IS NULL
   ) missing;
-  IF failures IS NOT NULL THEN RAISE EXCEPTION 'RBAC migration cannot attribute primary owners: %', failures; END IF;
+  IF failures IS NOT NULL THEN
+    RAISE EXCEPTION 'RBAC migration cannot attribute primary owners: %', failures
+      USING ERRCODE = 'P0095', HINT = 'No existing owner, creator, or same-tenant admin/superadmin is available. Preserve the data: explicitly attribute each resource to a real user in its tenant using board_owners/branch_owners, then retry the offline migration. A zero-user tenant requires an operator identity/ownership decision; do not borrow another tenant''s user or delete data to bypass this check.';
+  END IF;
 END $$;
 --> statement-breakpoint
 ALTER TABLE "boards" ALTER COLUMN "primary_owner_user_id" SET NOT NULL;
