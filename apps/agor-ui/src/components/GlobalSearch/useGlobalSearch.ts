@@ -27,6 +27,20 @@ interface UseGlobalSearchInput extends GlobalSearchEntityMaps {
   currentUserId?: string;
 }
 
+// A memoized flush/timer must not share a closure context with entity maps.
+function useDebouncedSearchQuery(query: string) {
+  const [debouncedQuery, setDebouncedQuery] = useState(query);
+
+  useEffect(() => {
+    const handle = setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [query]);
+
+  const flush = useCallback(() => setDebouncedQuery(query), [query]);
+
+  return { debouncedQuery, flush };
+}
+
 /**
  * Global-search client-side filter over the in-memory entity maps from useAgorData.
  *
@@ -57,14 +71,7 @@ export function useGlobalSearch({
    * the Enter handler to honor the design doc's "immediate dispatch on Enter". */
   flush: () => void;
 } {
-  const [debouncedQuery, setDebouncedQuery] = useState(query);
-
-  useEffect(() => {
-    const handle = setTimeout(() => setDebouncedQuery(query), SEARCH_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
-  }, [query]);
-
-  const flush = useCallback(() => setDebouncedQuery(query), [query]);
+  const { debouncedQuery, flush } = useDebouncedSearchQuery(query);
 
   const { results, counts } = useMemo<{ results: ResultsByType; counts: SearchCounts }>(() => {
     const trimmed = debouncedQuery.trim();

@@ -217,6 +217,26 @@ function createMockClient(opts: MockClientOptions) {
   };
 }
 
+interface FetchInternals {
+  messageFetches: Map<number, number>;
+  taskFetches: Map<number, number>;
+  messageMutations: unknown[];
+  taskMutations: unknown[];
+  queueInflight: Promise<void> | null;
+  leanSyncInflight: Promise<void> | null;
+  resyncInflight: Promise<void> | null;
+}
+
+function expectNoStrandedFetches(internals: FetchInternals) {
+  expect(internals.messageFetches.size).toBe(0);
+  expect(internals.taskFetches.size).toBe(0);
+  expect(internals.messageMutations).toHaveLength(0);
+  expect(internals.taskMutations).toHaveLength(0);
+  expect(internals.queueInflight).toBeNull();
+  expect(internals.leanSyncInflight).toBeNull();
+  expect(internals.resyncInflight).toBeNull();
+}
+
 async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydrationMode) {
   const { client, messageFindAll } = createMockClient(opts);
   const handle = new ReactiveSessionHandle(client, SESSION_ID, { taskHydration });
@@ -1316,7 +1336,9 @@ describe('snapshot reconciliation of persisted streams', () => {
     async (taskHydration) => {
       const message = makeMessage('task-2', 1);
       const opts: MockClientOptions = {
-        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.RUNNING)],
+        // Both are nonterminal: this test exercises unloaded/active streams,
+        // not late events for a task whose executor has already settled.
+        tasks: [makeTask('task-1', TaskStatus.RUNNING), makeTask('task-2', TaskStatus.RUNNING)],
         messagesByTask: { 'task-1': [makeMessage('task-1', 1)], 'task-2': [message] },
       };
       const mock = createMockClient(opts);
@@ -2014,6 +2036,60 @@ describe('lean transcript POC hydration', () => {
     expect(handle.state.tasks).toEqual([]);
     expect(handle.state.loadedTaskIds.has('task-023')).toBe(false);
   });
+
+  it('retires journals and single-flight markers stranded by a disconnect mid-sync', async () => {
+    const opts: MockClientOptions = history();
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    // Twenty reached Tasks: a resync refreshes the ten outside the latest page one by one.
+    await handle.loadOlderTasks();
+    const internals = handle as unknown as FetchInternals;
+    // Without an ack deadline, Socket.IO drops the callback of a request that
+    // was in flight at disconnect; the awaiting call never settles.
+    const taskGet = vi.mocked(mock.client.service('tasks').get);
+    const answer = taskGet.getMockImplementation()!;
+    let settleStranded: (() => void) | undefined;
+    taskGet.mockImplementationOnce(
+      (id: string) =>
+        new Promise((resolve) => {
+          settleStranded = () => resolve(answer(id));
+        })
+    );
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(settleStranded).toBeDefined());
+    expect(internals.taskFetches.size).toBe(1);
+    expect(internals.messageFetches.size).toBe(1);
+
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+
+    opts.tasks.push(makeTask('task-024', TaskStatus.COMPLETED));
+    mock.fireIo('connect');
+    await vi.waitFor(() =>
+      expect(handle.state.tasks.some((task) => task.task_id === 'task-024')).toBe(true)
+    );
+    expect(handle.state.tasks).toHaveLength(21);
+    expect(handle.state.error).toBeNull();
+
+    // Executor heartbeats and message patches keep arriving on the new connection.
+    const running = makeTask('task-024', TaskStatus.RUNNING);
+    const message = makeMessage('task-024', 0);
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', running);
+      mock.emitServiceEvent('messages', 'patched', message);
+    }
+    expectNoStrandedFetches(internals);
+
+    // A stranded request that settles after the reconnect is discarded.
+    settleStranded!();
+    await stranded;
+    expect(handle.state.tasks).toHaveLength(21);
+    expect(handle.getTask('task-024')?.status).toBe(TaskStatus.RUNNING);
+    expect(handle.state.error).toBeNull();
+    expectNoStrandedFetches(internals);
+    handle.dispose();
+  });
 });
 
 it('retains consecutive tool activity across partial persistence, duplicate events and reconciliation', async () => {
@@ -2058,4 +2134,623 @@ it('retains consecutive tool activity across partial persistence, duplicate even
   } finally {
     handle.dispose();
   }
+});
+
+// Only invented payloads and a fake transport; all lifecycle handlers are real.
+describe.each(['lean', 'lazy'] as const)('stream lifecycle (%s)', (taskHydration) => {
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = attachReactiveSessionApi(mock.client).session(SESSION_ID, {
+      taskHydration,
+    });
+    await handle.ready();
+    const task = (id: string, status: TaskStatus = TaskStatus.RUNNING) => {
+      const row = makeTask(id, status);
+      opts.tasks = [...opts.tasks.filter((t) => t.task_id !== id), row];
+      mock.emitServiceEvent('tasks', 'patched', row);
+    };
+    const event = (name: string, id: string, taskId: string, extra = {}) =>
+      mock.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: id,
+        task_id: taskId,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    const thinking = (id: string, taskId: string) => {
+      event('thinking:start', id, taskId);
+      event('thinking:chunk', id, taskId, { chunk: 'synthetic violet pebble '.repeat(64) });
+    };
+    const persist = (id: string, taskId: string) => {
+      const row = {
+        ...makeMessage(taskId, (opts.messagesByTask[taskId] ?? []).length),
+        message_id: id as Message['message_id'],
+        role: 'assistant',
+        content: [{ type: 'text', text: 'invented amber square' }],
+      } as Message;
+      opts.messagesByTask[taskId] = [...(opts.messagesByTask[taskId] ?? []), row];
+      mock.emitServiceEvent('messages', 'created', row);
+    };
+    return { ...mock, opts, handle, task, event, thinking, persist };
+  }
+
+  it.each(['separate', 'same', 'thinking-only'] as const)(
+    'releases 40 completed turns (%s IDs), including reconnect and resync',
+    async (ids) => {
+      const f = await fixture();
+      const retained: number[] = [];
+      for (let n = 0; n < 40; n++) {
+        const t = `turn-${String(n).padStart(2, '0')}`;
+        const thought = `${t}-thought`;
+        const text = ids === 'separate' ? `${t}-text` : thought;
+        f.task(t);
+        f.thinking(thought, t);
+        f.event('thinking:end', thought, t);
+        if (ids !== 'thinking-only') {
+          f.event('streaming:start', text, t);
+          f.event('streaming:chunk', text, t, { chunk: 'invented amber square' });
+          f.event('streaming:end', text, t);
+        }
+        f.persist(text, t);
+        f.task(t, TaskStatus.COMPLETED);
+        if ([10, 20, 40].includes(n + 1)) retained.push(f.handle.state.streamingMessages.size);
+      }
+      expect(retained).toEqual([0, 0, 0]);
+      f.fireIo('disconnect');
+      f.fireIo('connect');
+      await f.handle.ready();
+      await f.handle.resync();
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('does not mistake earlier assistant persistence for newer thinking completion', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('newer', 'turn');
+    f.persist('earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.isThinking).toBe(true);
+    f.event('thinking:end', 'newer', 'turn');
+    expect(f.handle.getStreamingMessage('newer')).toMatchObject({
+      isThinking: false,
+      isStreaming: false,
+    });
+    // Even ended thinking may belong to a later, not-yet-persisted message.
+    f.persist('another-earlier', 'turn');
+    expect(f.handle.getStreamingMessage('newer')?.thinkingContent).toContain('violet');
+    f.task('turn', TaskStatus.COMPLETED);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('cleans many blocks at the task boundary without sweeping another active task', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('live', 'second');
+    for (let n = 0; n < 40; n++) {
+      f.thinking(`block-${n}`, 'first');
+      f.event('thinking:end', `block-${n}`, 'first');
+      f.persist(`saved-${n}`, 'first');
+    }
+    f.task('first', TaskStatus.COMPLETED);
+    expect([...f.handle.state.streamingMessages.keys()]).toEqual(['live']);
+    expect(f.handle.getStreamingMessage('live')?.isThinking).toBe(true);
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it.each([TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'clears stale activity on %s before persistence and ignores late thinking events',
+    async (status) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('thought', 'turn'); // no end was delivered
+      f.event('streaming:start', 'text', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'synthetic partial' });
+      f.event('streaming:start', 'error', 'turn');
+      f.event('streaming:error', 'error', 'turn', { error: 'invented failure' });
+      f.task('turn', status);
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')).toMatchObject({
+        content: 'synthetic partial',
+        isStreaming: false,
+        isThinking: false,
+      });
+      expect(f.handle.getStreamingMessage('error')?.error).toBe('invented failure');
+      f.task('next');
+      f.event('thinking:chunk', 'thought', 'turn', { chunk: 'late synthetic' });
+      f.thinking('thought', 'turn');
+      f.event('thinking:end', 'thought', 'turn');
+      f.event('streaming:chunk', 'text', 'turn', { chunk: 'late synthetic' });
+      expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+      expect(f.handle.getStreamingMessage('text')?.content).toBe('synthetic partial');
+      f.persist('text', 'turn');
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['error']);
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['thinking', 'streaming'] as const)(
+    'preserves overlapping same-ID activity when %s ends first',
+    async (first) => {
+      const f = await fixture();
+      f.task('turn');
+      f.thinking('both', 'turn');
+      f.event('streaming:start', 'both', 'turn');
+      f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+      f.event(`${first}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')).toMatchObject({
+        content: 'synthetic text',
+        isStreaming: true,
+      });
+      expect(f.handle.getStreamingMessage('both')?.thinkingContent).toContain('violet');
+      f.event(`${first === 'thinking' ? 'streaming' : 'thinking'}:end`, 'both', 'turn');
+      expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+      f.persist('both', 'turn');
+      expect(f.handle.state.streamingMessages.size).toBe(0);
+      f.handle.dispose();
+    }
+  );
+
+  it('ends thinking-only activity but does not turn stopping into terminal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.STOPPING);
+    expect(f.handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    expect(f.handle.getStreamingMessage('thought')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('recovers a missed terminal event through resync and reconnect', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.opts.tasks = [makeTask('turn', TaskStatus.COMPLETED)];
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    await f.handle.resync();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('retains 40 intended partial errors, not 40 additional thinking orphans', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 40; n++) {
+      const t = `error-turn-${n}`;
+      f.task(t);
+      f.thinking(`thought-${n}`, t);
+      f.event('thinking:end', `thought-${n}`, t);
+      f.event('streaming:start', `error-${n}`, t);
+      f.event('streaming:chunk', `error-${n}`, t, { chunk: 'invented partial square' });
+      f.event('streaming:error', `error-${n}`, t, { error: 'invented failure' });
+      f.task(t, TaskStatus.FAILED);
+    }
+    const streams = [...f.handle.state.streamingMessages.values()];
+    expect(streams).toHaveLength(40);
+    expect(streams.every((s) => s.error && s.content && !s.isStreaming && !s.isThinking)).toBe(
+      true
+    );
+    f.handle.dispose();
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+  });
+
+  it('preserves text-first same-ID streams and duplicate starts without losing payloads', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('streaming:chunk', 'both', 'turn', { chunk: 'synthetic text' });
+    f.thinking('both', 'turn');
+    f.event('streaming:start', 'both', 'turn');
+    f.event('thinking:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')).toMatchObject({
+      content: 'synthetic text',
+      isStreaming: true,
+    });
+    f.event('streaming:end', 'both', 'turn');
+    expect(f.handle.getStreamingMessage('both')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('uses the chunk task attribution instead of the latest task after reconnect', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('latest');
+    f.event('thinking:chunk', 'thought', 'first', { chunk: 'synthetic early pebble' });
+    f.event('streaming:chunk', 'text', 'first', { chunk: 'synthetic early square' });
+    expect(f.handle.getStreamingMessage('thought')?.task_id).toBe('first');
+    expect(f.handle.getStreamingMessage('text')?.task_id).toBe('first');
+    f.task('first', TaskStatus.COMPLETED);
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(f.handle.getStreamingMessage('text')?.isStreaming).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('ignores mismatched-task end/chunk/error events for the same stream ID', async () => {
+    const f = await fixture();
+    f.task('first');
+    f.task('second');
+    f.thinking('thought', 'first');
+    const before = f.handle.getStreamingMessage('thought');
+    f.event('thinking:end', 'thought', 'second');
+    f.event('thinking:chunk', 'thought', 'second', { chunk: 'foreign synthetic' });
+    f.event('streaming:end', 'thought', 'second');
+    f.event('streaming:error', 'thought', 'second', { error: 'foreign synthetic' });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
+
+  it('settles late/duplicate chunks and ends after persistence and terminal-before-persistence', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('thinking:chunk', 'thought', 'turn', { chunk: 'delayed synthetic pebble' });
+    f.event('thinking:end', 'thought', 'turn');
+    f.task('turn', TaskStatus.COMPLETED);
+    f.persist('text', 'turn');
+    f.event('thinking:end', 'thought', 'turn');
+    f.event('streaming:end', 'text', 'turn');
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+
+  it('rejects foreign-session lifecycle events even with colliding task/message IDs', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    const before = f.handle.getStreamingMessage('thought');
+    f.emitServiceEvent('tasks', 'patched', {
+      ...makeTask('turn', TaskStatus.COMPLETED),
+      session_id: 'foreign-session',
+    });
+    f.event('thinking:end', 'thought', 'turn', { session_id: 'foreign-session' });
+    f.event('thinking:chunk', 'thought', 'turn', {
+      session_id: 'foreign-session',
+      chunk: 'foreign synthetic',
+    });
+    expect(f.handle.getStreamingMessage('thought')).toBe(before);
+    f.handle.dispose();
+  });
+
+  it('refreshes the stream task index on replacement and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('first', 'turn');
+    const originalTasks = f.handle.state.tasks;
+    f.task('turn', TaskStatus.FAILED);
+    expect(originalTasks[0].status).toBe(TaskStatus.RUNNING);
+    expect(f.handle.getStreamingMessage('first')).toBeUndefined();
+    f.task('turn');
+    f.thinking('fresh', 'turn');
+    expect(f.handle.getStreamingMessage('fresh')?.isThinking).toBe(true);
+    f.opts.tasks = [makeTask('replacement', TaskStatus.RUNNING)];
+    await f.handle.resync();
+    f.event('streaming:chunk', 'replacement-text', 'replacement', { chunk: 'synthetic square' });
+    expect(f.handle.getStreamingMessage('replacement-text')?.isStreaming).toBe(true);
+    // Inspect only the bounded memoization lifetime, not a public API contract.
+    const index = () => Reflect.get(f.handle, 'streamTaskIndex');
+    expect(index().tasks).toBe(f.handle.state.tasks);
+    expect(index().byId.has('turn')).toBe(false);
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(index()).toBeUndefined();
+    f.handle.dispose();
+    expect(index()).toBeUndefined();
+  });
+
+  it.each([300, 3000])(
+    'does not rescan %i task rows during warmed real chunk updates',
+    async (count) => {
+      const f = await fixture();
+      f.opts.tasks = Array.from({ length: count }, (_, n) =>
+        makeTask(`history-${String(n).padStart(5, '0')}`, TaskStatus.COMPLETED)
+      );
+      // Load history through the real hydration path (lean intentionally pages).
+      await f.handle.resync();
+      f.task('zz-live');
+      f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      const tasks = f.handle.state.tasks;
+      const reads = tasks.flatMap((task) => {
+        const taskId = task.task_id;
+        const status = task.status;
+        Object.defineProperty(task, 'task_id', { configurable: true, get: () => taskId });
+        Object.defineProperty(task, 'status', { configurable: true, get: () => status });
+        return [vi.spyOn(task, 'task_id', 'get'), vi.spyOn(task, 'status', 'get')];
+      });
+      for (let n = 0; n < 2000; n++) {
+        f.event('streaming:chunk', 'text', 'zz-live', { chunk: 'x' });
+      }
+      expect(f.handle.state.tasks).toBe(tasks);
+      expect(f.handle.getStreamingMessage('text')?.content.length).toBe(2001);
+      expect(reads.reduce((sum, spy) => sum + spy.mock.calls.length, 0)).toBe(0);
+      for (const spy of reads) spy.mockRestore();
+      f.handle.dispose();
+    }
+  );
+
+  it.each(['empty', 'thinking'] as const)(
+    'retains an attributed late error after terminal settlement (%s)',
+    async (kind) => {
+      const f = await fixture();
+      f.task('turn');
+      if (kind === 'thinking') f.thinking('retired', 'turn');
+      else f.event('streaming:start', 'retired', 'turn');
+      f.task('turn', TaskStatus.FAILED);
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.task('next');
+      f.thinking('active', 'next');
+      const active = f.handle.getStreamingMessage('active');
+      f.event('streaming:error', 'retired', 'turn', {
+        session_id: 'foreign-session',
+        error: 'synthetic foreign failure',
+      });
+      f.event('streaming:error', 'retired', 'next', { error: 'synthetic wrong task' });
+      f.event('streaming:error', 'retired', 'unknown-task', { error: 'synthetic unknown task' });
+      f.event('streaming:error', 'unknown-message', 'turn', { error: 'synthetic unknown message' });
+      expect([...f.handle.state.streamingMessages.keys()]).toEqual(['active']);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      expect(f.handle.getStreamingMessage('retired')).toMatchObject({
+        task_id: 'turn',
+        content: '',
+        error: 'synthetic late failure',
+        isStreaming: false,
+        isThinking: false,
+        isTextStreaming: false,
+      });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('active')).toBe(active);
+      f.event('streaming:error', 'retired', 'turn', { error: 'synthetic late failure' });
+      f.event('thinking:chunk', 'retired', 'turn', { chunk: 'synthetic discarded' });
+      expect(f.handle.getStreamingMessage('retired')?.thinkingContent || '').toBe('');
+      expect(f.handle.getStreamingMessage('retired')?.isStreaming).toBe(false);
+      f.persist('retired', 'turn');
+      expect(f.handle.getStreamingMessage('retired')).toBeUndefined();
+      f.handle.dispose();
+    }
+  );
+
+  it('preserves late-error attribution across reconnect/resync but not persistence or task replacement', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.event('streaming:start', 'partial', 'turn');
+    f.event('streaming:chunk', 'partial', 'turn', { chunk: 'synthetic partial' });
+    f.task('turn', TaskStatus.FAILED);
+    f.fireIo('disconnect');
+    f.fireIo('connect');
+    await f.handle.ready();
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic failure' });
+    f.event('streaming:error', 'partial', 'turn', { error: 'synthetic failure' });
+    expect(f.handle.getStreamingMessage('thought')?.error).toBe('synthetic failure');
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'synthetic partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    f.task('next');
+    f.thinking('saved', 'next');
+    f.thinking('removed', 'next');
+    f.task('next', TaskStatus.FAILED);
+    f.persist('saved', 'next');
+    f.event('streaming:error', 'saved', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('saved')).toBeUndefined();
+    f.task('next'); // reactivation discards the previous retirement window
+    f.event('streaming:error', 'removed', 'next', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('removed')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('bounds retired attribution, drops unknown/evicted IDs, and clears it on reset/dispose', async () => {
+    const f = await fixture();
+    f.task('turn');
+    for (let n = 0; n < 300; n++) f.thinking(`thought-${n}`, 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    const retired = () => Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>;
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect(retired().size).toBe(256);
+    expect([...retired().values()].every((value) => value === 'turn')).toBe(true);
+    f.event('streaming:error', 'thought-0', 'turn', { error: 'synthetic evicted' });
+    f.event('streaming:error', 'thought-299', 'turn', {
+      task_id: undefined,
+      error: 'synthetic untagged',
+    });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.event('streaming:error', 'thought-299', 'turn', { error: 'synthetic late failure' });
+    expect(f.handle.getStreamingMessage('thought-299')?.error).toBe('synthetic late failure');
+    f.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(retired().size).toBe(0);
+    f.handle.dispose();
+    expect(retired().size).toBe(0);
+  });
+
+  it('clears a retired ID when persistence is learned through resync with no live streams', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    f.opts.messagesByTask.turn = [
+      {
+        ...makeMessage('turn', 0),
+        message_id: 'thought' as Message['message_id'],
+      },
+    ];
+    await f.handle.resync();
+    f.event('streaming:error', 'thought', 'turn', { error: 'synthetic obsolete' });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    f.handle.dispose();
+  });
+
+  it('releases both populated memoization and retired attribution on direct disposal', async () => {
+    const f = await fixture();
+    f.task('turn');
+    f.thinking('thought', 'turn');
+    f.task('turn', TaskStatus.FAILED);
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeDefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(1);
+    f.handle.dispose();
+    expect(Reflect.get(f.handle, 'streamTaskIndex')).toBeUndefined();
+    expect(Reflect.get(f.handle, 'retiredStreamTasks').size).toBe(0);
+  });
+});
+
+describe('lazy resync stranded by a disconnect', () => {
+  it('stops journaling, reconnects without waiting on it, and discards its late snapshot', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+      messagesByTask: {
+        'task-1': [makeMessage('task-1', 0)],
+        'task-2': [makeMessage('task-2', 0)],
+      },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const internals = handle as unknown as FetchInternals;
+
+    opts.deferTaskMessageFetch = 'task-2';
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(internals.messageFetches.size).toBe(1));
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+
+    opts.deferTaskMessageFetch = undefined;
+    const newer = makeMessage('task-2', 1);
+    opts.messagesByTask['task-2'] = [...opts.messagesByTask['task-2'], newer];
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(handle.getTaskMessages('task-2')).toHaveLength(2));
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', makeTask('task-2', TaskStatus.RUNNING));
+      mock.emitServiceEvent('messages', 'patched', newer);
+    }
+    expectNoStrandedFetches(internals);
+
+    mock.releaseMessageFetch();
+    await stranded;
+    expect(handle.getTaskMessages('task-2').map((message) => message.message_id)).toEqual([
+      'task-2-msg-0',
+      newer.message_id,
+    ]);
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
+  });
+});
+
+describe('bootstrap stranded by a disconnect', () => {
+  it.each(['lazy', 'eager'] as const)(
+    '%s: starts no hydration after abandonment and leaves no fetch token behind',
+    async (taskHydration) => {
+      const opts: MockClientOptions = {
+        tasks: [makeTask('task-1', TaskStatus.COMPLETED), makeTask('task-2', TaskStatus.COMPLETED)],
+        messagesByTask: {
+          'task-1': [makeMessage('task-1', 0)],
+          'task-2': [makeMessage('task-2', 0)],
+        },
+      };
+      const mock = createMockClient(opts);
+      // Session and Task reads resolve; the queue read is still in flight when
+      // the socket drops and then rejects with the transport.
+      const queueFind = vi.mocked(mock.client.service(`/sessions/${SESSION_ID}/tasks/queue`).find);
+      let rejectQueue: (() => void) | undefined;
+      queueFind.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectQueue = () => reject(new Error('socket has been disconnected'));
+          })
+      );
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration });
+      const internals = handle as unknown as FetchInternals;
+      await vi.waitFor(() => expect(rejectQueue).toBeDefined());
+      expect(mock.taskFindAll).toHaveBeenCalledTimes(1);
+
+      mock.fireIo('disconnect');
+      rejectQueue!();
+      await vi.waitFor(() => expect(handle.state.loading).toBe(false));
+      expect(mock.messageFindAll).not.toHaveBeenCalled();
+      expectNoStrandedFetches(internals);
+
+      const newer = makeMessage('task-2', 1);
+      opts.messagesByTask['task-2'] = [...opts.messagesByTask['task-2'], newer];
+      mock.fireIo('connect');
+      await vi.waitFor(() => expect(handle.getTaskMessages('task-2')).toHaveLength(2));
+      for (let beat = 0; beat < 50; beat++) {
+        mock.emitServiceEvent('tasks', 'patched', makeTask('task-2', TaskStatus.RUNNING));
+        mock.emitServiceEvent('messages', 'patched', newer);
+      }
+      expectNoStrandedFetches(internals);
+      expect(handle.state.tasks.map((task) => task.task_id)).toEqual(['task-1', 'task-2']);
+      expect(handle.isTaskLoaded('task-2')).toBe(true);
+      expect(handle.state.error).toBeNull();
+      handle.dispose();
+    }
+  );
+});
+
+describe('disconnect cleanup alongside terminal stream settlement', () => {
+  it('keeps retired thinking attribution across a stranded resync and reconnect', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [makeMessage('task-1', 0)] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const internals = handle as unknown as FetchInternals;
+    const retired = () => Reflect.get(handle, 'retiredStreamTasks') as Map<string, string>;
+    const thought = { message_id: 'thought', session_id: SESSION_ID, task_id: 'task-1' };
+    mock.emitServiceEvent('messages', 'thinking:start', {
+      ...thought,
+      timestamp: new Date().toISOString(),
+    });
+    mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'Considering' });
+    expect(handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+
+    // The terminal boundary retires the payload-free thinking stream.
+    opts.tasks = [makeTask('task-1', TaskStatus.COMPLETED)];
+    mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = 'task-1';
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(internals.messageFetches.size).toBe(1));
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Disconnect is not disposal: the bounded attribution window survives.
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = undefined;
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(internals.resyncInflight).toBeNull());
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+      mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'late' });
+    }
+    expectNoStrandedFetches(internals);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+
+    mock.emitServiceEvent('messages', 'streaming:error', { ...thought, error: 'late failure' });
+    expect(handle.getStreamingMessage('thought')).toMatchObject({
+      task_id: 'task-1',
+      error: 'late failure',
+      isStreaming: false,
+      isThinking: false,
+    });
+
+    mock.releaseMessageFetch();
+    await stranded;
+    expect(handle.getStreamingMessage('thought')?.error).toBe('late failure');
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
+  });
 });
