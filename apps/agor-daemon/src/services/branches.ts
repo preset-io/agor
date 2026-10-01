@@ -2106,7 +2106,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
     if (externalExecutor && config.execution?.delegated_branch_deletion !== true) {
       throw new Conflict(
-        'Permanent deletion requires a supported local storage executor. Delegated/external deletion containment is not available.'
+        'Permanent deletion is not enabled for this delegated/external executor. ' +
+          'An operator must verify the deletion storage mount contract before enabling ' +
+          'execution.delegated_branch_deletion. No deletion was started.'
       );
     }
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
@@ -2193,6 +2195,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             preparedEnv: context.env,
+            delegatedHomeKey: context.delegatedHomeKey,
             logPrefix: `[Branch.delete ${branch.branch_id}]`,
             templateVariables: {
               branch_id: branch.branch_id,
