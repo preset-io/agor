@@ -13,6 +13,8 @@ interface CloudInviteCTAProps {
   showPrimary?: boolean;
   /** Render the "Book a Demo" button. Set false for a primary-only CTA. */
   showDemo?: boolean;
+  /** Append a trailing arrow to button labels. */
+  arrow?: boolean;
 }
 
 export function CloudInviteCTA({
@@ -21,7 +23,9 @@ export function CloudInviteCTA({
   primaryHref = AGOR_CLOUD_INVITE_URL,
   showPrimary = true,
   showDemo = true,
+  arrow = true,
 }: CloudInviteCTAProps) {
+  const suffix = arrow ? ' →' : '';
   const isInPageAnchor = primaryHref.startsWith('#') || primaryHref.startsWith('/');
   // The scheduler opens in an on-site modal instead of linking out to the
   // (Preset-branded) meetings.hubspot.com page.
@@ -34,7 +38,8 @@ export function CloudInviteCTA({
           {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
           className={styles.primary}
         >
-          {primaryLabel} →
+          {primaryLabel}
+          {suffix}
         </a>
       )}
       {showDemo && (
@@ -45,7 +50,8 @@ export function CloudInviteCTA({
             style={{ cursor: 'pointer', font: 'inherit' }}
             onClick={() => setIsDemoOpen(true)}
           >
-            {demoLabel} →
+            {demoLabel}
+            {suffix}
           </button>
           <HubSpotMeetingModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
         </>
