@@ -488,7 +488,16 @@ export function useAgorData(
       if (!client || !enabled || !fetchAuthorityScope) {
         return false;
       }
-      const authorityIsCurrent = () => authorityScopeKeyRef.current === fetchAuthorityScope;
+      // Load-lifetime cancellation token, captured BEFORE the first await.
+      // Every cancellation path (unmount, authority change, logout) bumps the
+      // hydration epoch, and an unmount leaves `authorityScopeKeyRef` as it
+      // was — so the scope check alone would let a load suspended in the
+      // light/heavy batch resume after teardown, retain a transcript prefetch,
+      // repopulate the singleton store and start deferred hydrations.
+      const loadEpoch = getHydrationCancellationEpoch();
+      const authorityIsCurrent = () =>
+        authorityScopeKeyRef.current === fetchAuthorityScope &&
+        getHydrationCancellationEpoch() === loadEpoch;
       const runAuthorityHydration = (
         name: string,
         revisions: Parameters<typeof runHydration>[1],
@@ -777,6 +786,8 @@ export function useAgorData(
             ? resolveSessionFromShortIdPure(directSessionId, interimSessionById)
             : null;
         let openedTranscriptReady: Promise<void> | null = null;
+        // The direct-session get above awaited; never retain after teardown.
+        if (!authorityIsCurrent()) return false;
         if (openedSessionId) {
           // Retain before releasing any earlier prefetch: for the same session
           // the shared handle stays warm instead of dropping to zero refs.
@@ -1161,12 +1172,12 @@ export function useAgorData(
           }
         };
         // On a session route, the global sets wait for the opened transcript
-        // (bounded by the prefetch timeout). A cancellation in the meantime
-        // (unmount, authority change, logout) skips the deferred start.
+        // (bounded by the prefetch timeout). A cancellation at any point of
+        // this load (unmount, authority change, logout) skips the deferred
+        // start — `authorityIsCurrent` includes the load's epoch.
         if (openedTranscriptReady) {
-          const epoch = getHydrationCancellationEpoch();
           void openedTranscriptReady.then(() => {
-            if (epoch !== getHydrationCancellationEpoch() || !authorityIsCurrent()) return;
+            if (!authorityIsCurrent()) return;
             hydrateGlobalSets();
           });
         } else {

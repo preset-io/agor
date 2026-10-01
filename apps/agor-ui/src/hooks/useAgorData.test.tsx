@@ -1444,6 +1444,61 @@ describe('useAgorData — opened session transcript priority', () => {
     expect(fetchCount('branches', 'findAll')).toBe(0);
   });
 
+  it('abandons a load unmounted during the light batch (no prefetch, no maps, no hydration)', async () => {
+    transcriptPrefetch.prefetchOpenedTranscript.mockClear();
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount, onFetch } = makeMockClient({ 'sessions:find': [session] });
+    const light = deferred();
+    onFetch('sessions', 'find', () => light.promise);
+
+    const { unmount } = renderHook(() => useAgorData(client, { directSessionId: OPEN_ID }));
+    await waitFor(() => expect(fetchCount('sessions', 'find')).toBe(1));
+    unmount();
+    await act(async () => {
+      light.resolve();
+      await new Promise((done) => setTimeout(done, 100));
+      await flush();
+    });
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).not.toHaveBeenCalled();
+    expect(fetchCount('cards', 'findAll')).toBe(0); // heavy batch never started
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+  });
+
+  it('abandons a load unmounted during the heavy batch (prefetch released, nothing applied)', async () => {
+    transcriptPrefetch.prefetchOpenedTranscript.mockClear();
+    const session = makeSession({ session_id: OPEN_ID });
+    const { client, fetchCount, onFetch } = makeMockClient({ 'sessions:find': [session] });
+    const heavy = deferred();
+    onFetch('cards', 'findAll', () => heavy.promise);
+    const release = vi.fn();
+    // `ready` settles at once, so a resumed load would start the global sets.
+    transcriptPrefetch.prefetchOpenedTranscript.mockReturnValueOnce({
+      ready: Promise.resolve(),
+      release,
+    });
+
+    const { unmount } = renderHook(() => useAgorData(client, { directSessionId: OPEN_ID }));
+    await waitFor(() => expect(fetchCount('cards', 'findAll')).toBe(1));
+    expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(release).toHaveBeenCalled();
+    await act(async () => {
+      heavy.resolve();
+      // Let a resumed load pass its requestAnimationFrame yield and the
+      // deferred hydration start.
+      await new Promise((done) => setTimeout(done, 100));
+      await flush();
+    });
+
+    expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenCalledTimes(1);
+    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    expect(fetchCount('branches', 'findAll')).toBe(0);
+  });
+
   it('does not prefetch or defer without a session route', async () => {
     transcriptPrefetch.prefetchOpenedTranscript.mockClear();
     const { client, fetchCount } = makeMockClient({ sessions: [makeSession()] });
