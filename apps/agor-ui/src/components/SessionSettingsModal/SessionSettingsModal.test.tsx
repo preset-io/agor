@@ -56,6 +56,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
         </button>
         <button
           type="button"
+          data-testid="pick-effort"
+          onClick={() => form.setFieldValue('effort', 'xhigh')}
+        >
+          effort
+        </button>
+        <button
+          type="button"
           data-testid="save-default"
           onClick={() => form.setFieldValue('saveAsDefault', true)}
         >
@@ -195,6 +202,50 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(props.onClose).toHaveBeenCalledTimes(2));
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
+  });
+
+  describe('model_config on save', () => {
+    const modelSession = {
+      ...claudeSession,
+      model_config: {
+        mode: 'alias',
+        model: 'opus',
+        effort: 'medium',
+        updated_at: '2026-09-01T00:00:00.000Z',
+      },
+    } as unknown as Session;
+    const renderModal = (onUpdate: ReturnType<typeof vi.fn>) =>
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={modelSession}
+          client={null}
+          currentUser={null}
+          onUpdate={onUpdate}
+        />
+      );
+
+    it('is not sent when the model and effort were not changed', async () => {
+      const onUpdate = vi.fn();
+      renderModal(onUpdate);
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('model_config');
+    });
+
+    it('is sent, with the folded effort, when the effort changed', async () => {
+      const onUpdate = vi.fn();
+      renderModal(onUpdate);
+      fireEvent.click(screen.getByTestId('pick-effort'));
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1].model_config).toMatchObject({
+        mode: 'alias',
+        model: 'opus',
+        effort: 'xhigh',
+      });
+    });
   });
 
   describe('custom_context from a lean session row', () => {

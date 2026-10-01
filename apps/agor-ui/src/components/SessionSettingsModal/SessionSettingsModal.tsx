@@ -61,7 +61,7 @@ import { ErrorBoundary } from '../ErrorBoundary';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
-import { buildCustomContextPatch } from './customContextPatch';
+import { buildCustomContextPatch, jsonEqual } from './customContextPatch';
 
 export interface SessionSettingsModalProps {
   open: boolean;
@@ -142,11 +142,21 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
   };
 }
 
-function buildUpdates(
-  values: FormValues,
-  session: Session,
-  initialCustomContext: string
-): Partial<Session> {
+/** Model config as the form folds it, without the server-stamped `updated_at`. */
+function comparableModelConfig(values: Pick<FormValues, 'modelConfig' | 'effort'>) {
+  const modelConfig = buildModelConfigFromFormValues({
+    modelConfig: values.modelConfig ?? undefined,
+    effort: values.effort,
+  });
+  if (!modelConfig) return undefined;
+  const { updated_at: _updatedAt, ...rest } = modelConfig as typeof modelConfig & {
+    updated_at?: string;
+  };
+  return rest;
+}
+
+function buildUpdates(values: FormValues, session: Session, initial: FormValues): Partial<Session> {
+  const initialCustomContext = initial.custom_context;
   const updates: Partial<Session> = {};
 
   if (values.title !== session.title) {
@@ -159,7 +169,13 @@ function buildUpdates(
     updates.agentic_tool_preset_id = presetId as Session['agentic_tool_preset_id'];
   }
 
-  if (!presetId && values.modelConfig) {
+  // Only send model_config when the model or effort was changed from what the
+  // form was seeded with; the daemon keeps the stored value otherwise.
+  if (
+    !presetId &&
+    values.modelConfig &&
+    !jsonEqual(comparableModelConfig(values), comparableModelConfig(initial))
+  ) {
     const modelConfig = buildModelConfigFromFormValues({
       modelConfig: values.modelConfig,
       effort: values.effort,
@@ -352,7 +368,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
       const values = form.getFieldsValue(true) as FormValues;
-      const updates = buildUpdates(values, session, initialValues.custom_context);
+      const updates = buildUpdates(values, session, initialValues);
 
       if (Object.keys(updates).length > 0 && onUpdate) {
         onUpdate(session.session_id, updates);
