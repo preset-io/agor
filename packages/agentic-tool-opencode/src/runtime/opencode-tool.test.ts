@@ -284,3 +284,82 @@ describe('OpenCodeTool prompt variants', () => {
     expect(request?.body?.system).toContain('Agor Session Context');
   });
 });
+
+describe('OpenCodeTool provider failures', () => {
+  async function failedTurn(events: unknown[]) {
+    const stream = (async function* () {
+      for (const event of events) yield event;
+      await new Promise(() => undefined);
+    })();
+    const client = {
+      event: { subscribe: vi.fn(async () => ({ stream })) },
+      session: {
+        messages: vi.fn(async () => ({ data: [], error: undefined })),
+        // OpenCode's prompt call blocks while it retries the provider.
+        prompt: vi.fn(() => new Promise(() => undefined)),
+      },
+    };
+    const runtime = new OpenCodeTool({}) as unknown as {
+      executeTask(...args: unknown[]): Promise<unknown>;
+    };
+    const started = Date.now();
+    const result = runtime.executeTask(
+      client,
+      {
+        agorSessionId: 'session-1',
+        taskId: 'task-1',
+        prompt: 'hi',
+        agorAssistantMessageId: 'message-1',
+        signal: new AbortController().signal,
+        title: 'Test',
+        directory: '/workspace',
+        persistOpenCodeSessionId: vi.fn(),
+      },
+      {
+        opencodeSessionId: 'opencode-session-1',
+        provider: 'any-provider',
+        model: 'any-model',
+        branchPath: '/workspace',
+      },
+      undefined,
+      () => undefined,
+      { error: (value: unknown) => (value instanceof Error ? value : new Error(String(value))) }
+    );
+    return { result, started };
+  }
+
+  const retry = (attempt: number, message: string) => ({
+    type: 'session.status',
+    properties: {
+      sessionID: 'opencode-session-1',
+      status: { type: 'retry', attempt, message, next: Date.now() + 1_000 },
+    },
+  });
+
+  it('fails fast with the provider reason once the retry budget is spent', async () => {
+    const { result, started } = await failedTurn([
+      retry(1, 'Insufficient balance'),
+      retry(2, 'Insufficient balance'),
+      retry(3, 'Insufficient balance'),
+    ]);
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: gave up after 3 provider retries: Insufficient balance'
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('surfaces the provider error message instead of a generic reconnect hint', async () => {
+    const { result } = await failedTurn([
+      {
+        type: 'session.error',
+        properties: {
+          sessionID: 'opencode-session-1',
+          error: { name: 'APIError', data: { message: 'model not found', statusCode: 404 } },
+        },
+      },
+    ]);
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: model not found'
+    );
+  });
+});

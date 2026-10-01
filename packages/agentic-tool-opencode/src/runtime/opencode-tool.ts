@@ -190,6 +190,7 @@ export type OpenCodeToolDependencies = {
   readinessTimeoutMs?: number;
   shutdownTimeoutMs?: number;
   eventDrainMs?: number;
+  retryBudget?: OpenCodeRetryBudget;
 };
 
 function automaticallyAllowsOpenCodePermission(
@@ -388,6 +389,16 @@ async function applyPermissionEffect(input: {
   }
 }
 
+/** How long a turn waits out provider retries before failing with the provider's reason. */
+export type OpenCodeRetryBudget = { maxRetries: number; maxWaitMs: number };
+const DEFAULT_RETRY_BUDGET: OpenCodeRetryBudget = { maxRetries: 2, maxWaitMs: 30_000 };
+
+function openCodeErrorMessage(error: unknown): string | undefined {
+  const value = error as { data?: { message?: unknown }; message?: unknown } | undefined;
+  const message = value?.data?.message ?? value?.message;
+  return typeof message === 'string' ? message : undefined;
+}
+
 function createOpenCodeEffectConsumer(input: {
   client: OpenCodeClient;
   turn: RunOpenCodeTurnInput;
@@ -395,9 +406,11 @@ function createOpenCodeEffectConsumer(input: {
   streamingCallbacks?: OpenCodeStreamingCallbacks;
   canUseTool?: OpenCodeCanUseToolCallback;
   settle: (error?: Error) => void;
-  promptFailure: () => Error;
+  promptFailure: (detail?: string) => Error;
+  retryBudget: OpenCodeRetryBudget;
 }) {
   let textStarted = false;
+  let firstRetryAt: number | undefined;
   let thinkingStarted = false;
   let sequence = 0;
 
@@ -473,8 +486,26 @@ function createOpenCodeEffectConsumer(input: {
           case 'idle':
             input.settle();
             break;
+          case 'provider-retry': {
+            input.streamingCallbacks?.onPulse?.('progress', 'session.status.retry');
+            const now = Date.now();
+            firstRetryAt ??= now;
+            const nextAt = effect.next > now ? effect.next : now;
+            // Provider-agnostic: a turn waits out at most a few retries, then fails with the provider's reason.
+            if (
+              effect.attempt > input.retryBudget.maxRetries ||
+              nextAt - firstRetryAt > input.retryBudget.maxWaitMs
+            ) {
+              input.settle(
+                input.promptFailure(
+                  `gave up after ${effect.attempt} provider retries: ${effect.message || 'no reason given'}`
+                )
+              );
+            }
+            break;
+          }
           case 'error':
-            input.settle(input.promptFailure());
+            input.settle(input.promptFailure(effect.message));
             break;
         }
       }
@@ -572,6 +603,7 @@ export class OpenCodeTool {
     readinessTimeoutMs: number;
     shutdownTimeoutMs: number;
     eventDrainMs: number;
+    retryBudget: OpenCodeRetryBudget;
   };
 
   constructor(dependencies: OpenCodeToolDependencies) {
@@ -601,6 +633,7 @@ export class OpenCodeTool {
       readinessTimeoutMs: dependencies.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
       shutdownTimeoutMs: dependencies.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS,
       eventDrainMs: dependencies.eventDrainMs ?? DEFAULT_EVENT_DRAIN_MS,
+      retryBudget: dependencies.retryBudget ?? DEFAULT_RETRY_BUDGET,
     };
   }
 
@@ -1052,9 +1085,11 @@ export class OpenCodeTool {
     registerStopEventCollector: (stop: () => Promise<void>) => void,
     sanitizer: OpenCodeSanitizer
   ): Promise<OpenCodeTurnResult['finalMessage']> {
-    const promptFailure = (): Error =>
+    const promptFailure = (detail?: string): Error =>
       new Error(
-        `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
+        detail?.trim()
+          ? `OpenCode prompt failed for ${context.provider}/${context.model}: ${detail.trim().slice(0, 500)}`
+          : `OpenCode prompt failed for ${context.provider}/${context.model}. Reconnect ${context.provider} in OpenCode settings or choose another provider/model.`
       );
     // Carry the shared Agor orientation on every turn. `system` appends to
     // OpenCode's provider baseline; the managed agent's own prompt would
@@ -1114,6 +1149,7 @@ export class OpenCodeTool {
         settle(error);
       },
       promptFailure,
+      retryBudget: this.dependencies.retryBudget,
     });
     const eventCollector = createOpenCodeEventCollector({
       client,
@@ -1132,8 +1168,13 @@ export class OpenCodeTool {
     try {
       await eventCollector.start();
 
-      const promptResponse = await client.session.prompt(request);
-      if (promptResponse.error) throw promptFailure();
+      // The prompt call blocks through provider retries; a terminal error (e.g. exhausted retry budget) ends the turn first.
+      const terminalFailure = terminal.then((result) =>
+        result.error ? Promise.reject(result.error) : new Promise<never>(() => undefined)
+      );
+      terminalFailure.catch(() => undefined);
+      const promptResponse = await Promise.race([client.session.prompt(request), terminalFailure]);
+      if (promptResponse.error) throw promptFailure(openCodeErrorMessage(promptResponse.error));
 
       const terminalResult = await terminal;
       if (terminalResult.error) throw terminalResult.error;
