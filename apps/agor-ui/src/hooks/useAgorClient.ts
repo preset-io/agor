@@ -473,7 +473,10 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
               return;
             }
             if (isDefiniteAuthFailure(err)) {
-              recoverRejectedHandshake(err).then(resolve, reject);
+              // A refreshed handshake that meets an outage settles quietly; the persistent handler already scheduled a backoff reconnect.
+              recoverRejectedHandshake(err).then(resolve, (recoveryError) =>
+                isUnavailableHandshakeError(recoveryError) ? resolve() : reject(recoveryError)
+              );
             } else {
               reject(err);
             }

@@ -478,6 +478,49 @@ describe('useAgorClient unavailable handshake', () => {
     const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
     expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-401');
   });
+
+  it('backs off without an error when the handshake retried after a refresh is unavailable', async () => {
+    vi.useFakeTimers();
+    const { client, io, rejectNextConnect } = makeSeamClient();
+    const restClient = { service: vi.fn() };
+    vi.mocked(createClient).mockReturnValue(client as never);
+    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
+    refreshTokensMock.mockResolvedValue({
+      accessToken: 'fresh-after-401',
+      refreshToken: 'next-refresh',
+      user: { user_id: 'u1' },
+    });
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    rejectNextConnect(
+      Object.assign(new Error('Invalid or expired authentication token'), {
+        data: { code: 401, className: 'not-authenticated' },
+      })
+    );
+    rejectNextConnect(unavailableHandshake());
+    const errors: Array<string | null> = [];
+
+    const { result } = renderHook(() => {
+      const state = useAgorClient({
+        url: 'http://daemon.test',
+        accessToken: 'stale',
+        authorityGeneration: 1,
+      });
+      errors.push(state.error);
+      return state;
+    });
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(refreshTokensMock).toHaveBeenCalledExactlyOnceWith(restClient, 'stored-refresh');
+    expect(io.connect).toHaveBeenCalledTimes(2);
+    expect(result.current.error).toBeNull();
+    expect(result.current.connecting).toBe(true);
+
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(io.connect).toHaveBeenCalledTimes(3);
+    expect(result.current.connected).toBe(true);
+    expect(errors.every((error) => error === null)).toBe(true);
+    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-401');
+  });
 });
 
 describe('useAgorClient suspended workspace lifecycle', () => {
