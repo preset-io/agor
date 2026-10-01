@@ -25,8 +25,9 @@ import {
 import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
+import { TaskDetailRetention } from '../../hooks/useTaskDetailRetention';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
@@ -105,6 +106,8 @@ interface TaskBlockProps {
   taskMessages: Message[];
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
+  /** Pin this turn's full detail while a disclosure shows it; returns the release. */
+  onRetainTaskDetails?: (taskId: string) => (() => void) | undefined;
   teammateEmoji?: string;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
@@ -682,6 +685,32 @@ function blocksHaveSameComposition(a: Block, b: Block): boolean {
   return aMessages.every((msg, i) => msg === bMessages[i]);
 }
 
+/**
+ * Built outside TaskBlock's render scope on purpose: V8 shares one closure
+ * context per scope, so a stable callback created there would keep the first
+ * render's messages alive after the cache has released them.
+ */
+function useTaskDetailRetainer(
+  taskId: string,
+  retain: TaskBlockProps['onRetainTaskDetails']
+): () => (() => void) | undefined {
+  return useCallback(() => retain?.(taskId), [retain, taskId]);
+}
+
+/**
+ * When cached detail is released, memoized children that bail out keep their
+ * previous props (the full payload) on React's alternate fibers. One more
+ * commit replaces them without remounting the turn or resetting its state.
+ */
+function useReleaseDetailAlternates(hasDetail: boolean): void {
+  const hadDetail = useRef(hasDetail);
+  const [, setRevision] = useState(0);
+  useEffect(() => {
+    if (hadDetail.current && !hasDetail) setRevision((revision) => revision + 1);
+    hadDetail.current = hasDetail;
+  }, [hasDetail]);
+}
+
 export const TaskBlock = React.memo<TaskBlockProps>(
   ({
     task,
@@ -698,6 +727,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessages,
     taskMessagesLoaded,
     onLoadTaskMessages,
+    onRetainTaskDetails,
     teammateEmoji,
     onOpenAgenticToolSettings,
     isLatestTask = false,
@@ -984,6 +1014,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       (message) =>
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
+    const retainDetails = useTaskDetailRetainer(task.task_id, onRetainTaskDetails);
+    useReleaseDetailAlternates(hasTools || hasReasoning);
     const toolDisclosure = (task.recorded_tool_count !== 0 ||
       hasDeferredReasoning ||
       hasReasoning ||
@@ -1276,7 +1308,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         )}
       </div>
     );
-    return (
+    const turn = (
       // A turn boundary is the biggest break in the transcript, so it gets more
       // room than the gaps between blocks inside one. Collapses against the
       // neighbouring turn rather than summing with it.
@@ -1308,6 +1340,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           ) : null
         )}
       </div>
+    );
+    return (
+      <TaskDetailRetention.Provider value={retainDetails}>{turn}</TaskDetailRetention.Provider>
     );
   }
 );

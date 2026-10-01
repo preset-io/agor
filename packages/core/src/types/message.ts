@@ -356,6 +356,56 @@ export const LEAN_TRANSCRIPT_METADATA_FIELDS = [
   'persistence_omission',
 ] as const;
 
+const LEAN_TRANSCRIPT_OMITTED_BLOCKS = ['tool_use', 'tool_result', 'thinking'];
+
+/**
+ * Browser-side counterpart of MessagesRepository's SQL lean projection, used to
+ * release cached detail without a refetch. Keep the two in step; persisted
+ * history is unchanged and the full message can be reloaded on demand.
+ */
+export function leanMessage(message: Message): Message {
+  const { content } = message;
+  const hasThinking = Array.isArray(content) && content.some((block) => block.type === 'thinking');
+  const permission =
+    message.type === 'permission_request' &&
+    content &&
+    typeof content === 'object' &&
+    !Array.isArray(content) &&
+    'tool_name' in content
+      ? content
+      : undefined;
+  return {
+    message_id: message.message_id,
+    session_id: message.session_id,
+    task_id: message.task_id,
+    type: message.type,
+    role: message.role,
+    index: message.index,
+    timestamp: message.timestamp,
+    content_preview: '',
+    content: Array.isArray(content)
+      ? content.filter((block) => !LEAN_TRANSCRIPT_OMITTED_BLOCKS.includes(block.type))
+      : permission
+        ? {
+            ...permission,
+            // Never ask for approval of hidden arguments.
+            tool_input:
+              permission.status === PermissionStatus.PENDING ? (permission.tool_input ?? {}) : {},
+          }
+        : content,
+    ...(message.has_deferred_reasoning || hasThinking ? { has_deferred_reasoning: true } : {}),
+    tool_uses: undefined,
+    parent_tool_use_id: message.parent_tool_use_id || undefined,
+    metadata: Object.fromEntries(
+      Object.entries(message.metadata ?? {}).filter(
+        ([key]) =>
+          LEAN_TRANSCRIPT_METADATA_FIELDS.some((field) => field === key) &&
+          (key !== 'widget' || message.type === 'widget_request')
+      )
+    ),
+  };
+}
+
 /**
  * Message creation input (without generated fields)
  */

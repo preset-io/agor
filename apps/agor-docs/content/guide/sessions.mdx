@@ -39,6 +39,12 @@ Collapsed messages show a shortened preview. Expand the message to use code or
 table export controls. The message copy action still copies the full source;
 collapsing is a display preference, not a reduction in saved content.
 
+An open conversation keeps tool output and reasoning in memory for the ten most
+recently loaded or live turns, plus the latest turn, running turns, and any tool or
+reasoning section you have expanded. Older turns keep their text; opening their tool
+calls again reloads the details from saved history. The limit counts turns, not
+bytes, so one very large turn can still use a lot of memory.
+
 ---
 
 ## Three ways to branch

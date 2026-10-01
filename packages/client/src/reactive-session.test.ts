@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
+  LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT,
   ReactiveSessionHandle,
   releaseReactiveSession,
   retainReactiveSession,
@@ -2752,5 +2753,217 @@ describe('disconnect cleanup alongside terminal stream settlement', () => {
     expect(handle.getStreamingMessage('thought')?.error).toBe('late failure');
     expect(handle.state.error).toBeNull();
     handle.dispose();
+  });
+});
+
+describe('lean transcript detail retention', () => {
+  const turnId = (n: number) => `turn-${String(n).padStart(3, '0')}`;
+  const fullMessage = (taskId: string, n: number) =>
+    ({
+      ...makeMessage(taskId, n),
+      role: 'assistant',
+      content: [
+        { type: 'text', text: `Answer ${n}` },
+        { type: 'thinking', text: `Reasoning ${n}` },
+        { type: 'tool_use', id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } },
+        { type: 'tool_result', tool_use_id: `tool-${n}`, content: `TOOL_OUTPUT_${n}` },
+      ],
+      tool_uses: [{ id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } }],
+      metadata: { model: 'synthetic', raw_sdk_message: `RAW_${n}` },
+    }) as unknown as Message;
+
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    /** One live turn as the executor delivers it: running → payload → completed. */
+    const runTurn = (n: number) => {
+      const taskId = turnId(n);
+      const running = makeTask(taskId, TaskStatus.RUNNING);
+      opts.tasks = [...opts.tasks.filter((task) => task.task_id !== taskId), running];
+      mock.emitServiceEvent('tasks', 'created', running);
+      opts.messagesByTask[taskId] = [fullMessage(taskId, n)];
+      mock.emitServiceEvent('messages', 'created', fullMessage(taskId, n));
+      const completed = makeTask(taskId, TaskStatus.COMPLETED);
+      opts.tasks = opts.tasks.map((task) => (task.task_id === taskId ? completed : task));
+      mock.emitServiceEvent('tasks', 'patched', completed);
+    };
+    const fullIds = () =>
+      [...handle.state.messagesByTask]
+        .filter(([, messages]) => JSON.stringify(messages).includes('TOOL_OUTPUT_'))
+        .map(([taskId]) => taskId)
+        .sort();
+    return { ...mock, opts, handle, runTurn, fullIds };
+  }
+
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => turnId(from + i));
+
+  it('keeps recent and pinned turns full, projects older turns, and reloads them on demand', async () => {
+    const f = await fixture();
+    const releaseA = f.handle.retainTaskDetails(turnId(0));
+    const releaseB = f.handle.retainTaskDetails(turnId(0));
+    for (let n = 0; n < 30; n++) f.runTurn(n);
+    expect(LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT).toBe(10);
+    // History is projected, never deleted.
+    expect(f.handle.state.messagesByTask.size).toBe(30);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(20, 29)]);
+    expect(f.handle.getTaskMessages(turnId(5))).toEqual([
+      {
+        message_id: `${turnId(5)}-msg-5`,
+        session_id: SESSION_ID,
+        task_id: turnId(5),
+        index: 5,
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Answer 5' }],
+        content_preview: '',
+        has_deferred_reasoning: true,
+        tool_uses: undefined,
+        parent_tool_use_id: undefined,
+        metadata: { model: 'synthetic' },
+      },
+    ]);
+
+    // One consumer's release (even repeated) cannot unpin another reader.
+    releaseA();
+    releaseA();
+    await Promise.resolve();
+    expect(f.fullIds()).toContain(turnId(0));
+    releaseB();
+    expect(f.fullIds()).toContain(turnId(0)); // deferred past React effect replacement
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual(range(20, 29));
+
+    // A late persisted patch for an evicted turn lands projected.
+    f.emitServiceEvent('messages', 'patched', fullMessage(turnId(0), 0));
+    expect(f.fullIds()).toEqual(range(20, 29));
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toEqual([
+      { type: 'text', text: 'Answer 0' },
+    ]);
+
+    // Re-expanding reloads from persisted history and becomes the newest recent turn.
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.handle.getTaskMessages(turnId(0))).toEqual([fullMessage(turnId(0), 0)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    expect(f.handle.isTaskLoaded(turnId(20))).toBe(false);
+
+    // Reconnect refetches only retained detail; evicted live turns come back lean.
+    f.messageFindAll.mockClear();
+    await f.handle.resync();
+    const fullFetches = f.messageFindAll.mock.calls
+      .filter(([params]) => params.query.transcript !== 'lean')
+      .map(([params]) => params.query.task_id as string)
+      .sort();
+    expect(fullFetches).toEqual([turnId(0), ...range(21, 29)]);
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    f.handle.dispose();
+    for (const name of ['recentDetailTaskIds', 'detailPins', 'detailTaskIds', 'leanLiveTaskIds'])
+      expect((Reflect.get(f.handle, name) as Set<string>).size).toBe(0);
+    // Late React cleanups/effects after disposal are harmless no-ops.
+    f.handle.retainTaskDetails(turnId(0))();
+    releaseB();
+  });
+
+  it('keeps executing, latest and early-payload turns full regardless of age', async () => {
+    const f = await fixture();
+    const active = makeTask('active-old', TaskStatus.RUNNING);
+    f.opts.tasks.push(active);
+    f.emitServiceEvent('tasks', 'created', active);
+    f.emitServiceEvent('messages', 'created', fullMessage(active.task_id, 99));
+    for (let n = 0; n < 15; n++) f.runTurn(n);
+    expect(f.fullIds()).toEqual(['active-old', ...range(5, 14)]);
+    // A payload ahead of its Task is charged to the recent budget, not dropped.
+    f.emitServiceEvent('messages', 'created', fullMessage('early', 100));
+    expect(f.fullIds()).toContain('early');
+    f.emitServiceEvent('tasks', 'created', makeTask('early', TaskStatus.RUNNING));
+    expect(f.fullIds()).toContain('early');
+    // The latest turn stays full even when the recent budget is spent elsewhere.
+    for (let n = 15; n < 26; n++) await f.handle.loadTaskMessages(turnId(n % 15));
+    expect(f.fullIds()).toEqual(expect.arrayContaining(['active-old', 'early', turnId(14)]));
+    f.handle.dispose();
+  });
+
+  it('leaves terminal stream settlement intact for evicted turns', async () => {
+    const f = await fixture();
+    const event = (name: string, id: string, taskId: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: id,
+        task_id: taskId,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    const failed = makeTask('failed', TaskStatus.RUNNING);
+    f.emitServiceEvent('tasks', 'created', failed);
+    event('thinking:start', 'thought', 'failed');
+    event('thinking:chunk', 'thought', 'failed', { chunk: 'considering' });
+    event('streaming:start', 'partial', 'failed');
+    event('streaming:chunk', 'partial', 'failed', { chunk: 'unpersisted partial' });
+    event('streaming:error', 'partial', 'failed', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask('failed', TaskStatus.FAILED));
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain('failed');
+    // The partial has no persisted reload path, so detail eviction keeps it.
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'unpersisted partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    // Retired thinking attribution still accepts an exact late error only.
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    event('thinking:chunk', 'thought', 'failed', { chunk: 'late' });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    event('streaming:error', 'thought', 'failed', { error: 'late failure' });
+    expect(f.handle.getStreamingMessage('thought')).toMatchObject({
+      task_id: 'failed',
+      error: 'late failure',
+    });
+    // Persistence replaces the partial and lands projected for the evicted turn.
+    f.emitServiceEvent('messages', 'created', {
+      ...fullMessage('failed', 50),
+      message_id: 'partial',
+    });
+    expect(f.handle.getStreamingMessage('partial')).toBeUndefined();
+    expect(f.handle.getTaskMessages('failed').map((message) => message.content)).toEqual([
+      [{ type: 'text', text: 'Answer 50' }],
+    ]);
+    f.handle.dispose();
+  });
+
+  it('strands no fetch tokens or journal entries across disconnect, eviction and reconnect', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    const release = f.handle.retainTaskDetails(turnId(0));
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const abandoned = f.handle.loadTaskMessages(turnId(0));
+    expect(internals.messageFetches.size).toBe(1);
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Live traffic and evictions while offline neither journal nor regrow detail.
+    for (let n = 12; n < 30; n++) f.runTurn(n);
+    expect(internals.messageMutations).toHaveLength(0);
+    expect(f.fullIds()).toEqual(range(20, 29));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.fireIo('connect');
+    await f.handle.ready();
+    f.releaseMessageFetch();
+    expect(await abandoned).toEqual([]);
+    expectNoStrandedFetches(internals);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    // A fresh expansion on the new connection commits as the newest recent turn.
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual([turnId(0), ...range(21, 29)]);
+    expectNoStrandedFetches(internals);
+    expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).size).toBeLessThanOrEqual(
+      LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT
+    );
+    f.handle.dispose();
   });
 });

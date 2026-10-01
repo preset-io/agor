@@ -224,6 +224,11 @@ jobs:
           if [[ "${{ matrix.shard }}" == "1" ]]; then
             pnpm --filter agor-ui test:search-retention
           fi
+      - name: Test production transcript retention
+        run: |
+          if [[ "${{ matrix.shard }}" == "2" ]]; then
+            pnpm --filter agor-ui test:transcript-retention
+          fi
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
 
   # Do not rename this job: branch protection currently requires the generated

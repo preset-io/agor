@@ -1,0 +1,180 @@
+import {
+  type AgorClient,
+  type Message,
+  type MessageID,
+  MessageRole,
+  retainReactiveSession,
+  type SessionID,
+  type Task,
+  type TaskID,
+  TaskStatus,
+} from '@agor-live/client';
+import { createRoot } from 'react-dom/client';
+import { ConversationView } from './ConversationView';
+
+// Production-browser fixture: the real lean ReactiveSessionHandle, shared-session
+// hook and ConversationView over a fake transport. The fake database keeps only
+// turn numbers and mints fresh payloads per read, so it never retains one.
+const SESSION_ID = '0199a000-0000-7000-8000-000000000000' as SessionID;
+const PAYLOAD_BYTES = 256 * 1024;
+const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
+let turns = 0;
+
+function task(n: number, status: Task['status']): Task {
+  const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
+  return {
+    task_id: taskId(n),
+    session_id: SESSION_ID,
+    created_by: 'fixture-user',
+    full_prompt: `Prompt ${n}`,
+    status,
+    created_at: createdAt,
+    message_range: { start_index: n * 10, end_index: n * 10 + 2, start_timestamp: createdAt },
+    git_state: { ref_at_start: 'main', sha_at_start: 'unknown' },
+    recorded_tool_count: 1,
+  } as Task;
+}
+
+function messages(n: number): Message[] {
+  const base = {
+    session_id: SESSION_ID,
+    task_id: taskId(n),
+    timestamp: task(n, TaskStatus.COMPLETED).created_at,
+  };
+  const prefix = `TRANSCRIPT_RETENTION_${n}_`;
+  return [
+    {
+      ...base,
+      message_id: `${taskId(n)}-tool` as MessageID,
+      index: n * 10,
+      role: MessageRole.ASSISTANT,
+      type: 'assistant',
+      content_preview: '',
+      content: [
+        { type: 'tool_use', id: `read-${n}`, name: 'Read', input: { file_path: `/turn-${n}.txt` } },
+      ],
+    },
+    {
+      ...base,
+      message_id: `${taskId(n)}-result` as MessageID,
+      index: n * 10 + 1,
+      role: MessageRole.USER,
+      type: 'user',
+      content_preview: '',
+      // Materialize an independent flat string, not a rope sharing the prefix.
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: `read-${n}`,
+          content: JSON.parse(JSON.stringify(prefix + 'x'.repeat(PAYLOAD_BYTES - prefix.length))),
+        },
+      ],
+    },
+    {
+      ...base,
+      message_id: `${taskId(n)}-answer` as MessageID,
+      index: n * 10 + 2,
+      role: MessageRole.ASSISTANT,
+      type: 'assistant',
+      content_preview: '',
+      content: [{ type: 'text', text: `Answer ${n}` }],
+    },
+  ] as Message[];
+}
+
+const project = (message: Message): Message => ({
+  ...message,
+  content: Array.isArray(message.content)
+    ? message.content.filter(
+        (block) => !['tool_use', 'tool_result', 'thinking'].includes(block.type)
+      )
+    : message.content,
+});
+
+type Handler = (payload: unknown) => void;
+function events() {
+  const handlers = new Map<string, Set<Handler>>();
+  return {
+    on(event: string, handler: Handler) {
+      if (!handlers.has(event)) handlers.set(event, new Set());
+      handlers.get(event)!.add(handler);
+    },
+    off(event: string, handler: Handler) {
+      handlers.get(event)?.delete(handler);
+    },
+    removeListener(event: string, handler: Handler) {
+      handlers.get(event)?.delete(handler);
+    },
+    emit(event: string, payload?: unknown) {
+      for (const handler of [...(handlers.get(event) ?? [])]) handler(payload);
+    },
+  };
+}
+
+const io = Object.assign(events(), { connected: true });
+const tasks = Object.assign(events(), {
+  find: async ({ query }: { query: { task_id?: { $lte?: string } } }) => {
+    const rows = Array.from({ length: turns }, (_, n) => task(n, TaskStatus.COMPLETED))
+      .filter((row) => !query.task_id?.$lte || row.task_id <= query.task_id.$lte)
+      .reverse();
+    return { data: rows, total: rows.length };
+  },
+  get: async (id: string) => task(Number(id.slice(-12)), TaskStatus.COMPLETED),
+});
+const messageService = Object.assign(events(), {
+  findAll: async ({
+    query,
+  }: {
+    query: { task_id: string | { $in: string[] }; transcript?: string };
+  }) => {
+    const ids = typeof query.task_id === 'string' ? [query.task_id] : query.task_id.$in;
+    const rows = ids.flatMap((id) => messages(Number(id.slice(-12))));
+    return query.transcript === 'lean' ? rows.map(project) : rows;
+  },
+});
+const services: Record<string, unknown> = {
+  sessions: Object.assign(events(), {
+    get: async () => ({ session_id: SESSION_ID, tasks: [] }),
+  }),
+  tasks,
+  messages: messageService,
+  'session-streams': {
+    create: async () => ({ session_id: SESSION_ID }),
+    remove: async () => ({ session_id: SESSION_ID }),
+  },
+};
+const queue = { find: async () => ({ data: [] }) };
+const client = {
+  io,
+  service: (name: string) => (name.endsWith('/tasks/queue') ? queue : services[name]),
+} as unknown as AgorClient;
+
+const root = createRoot(document.getElementById('root')!);
+
+export const fixture = {
+  /** Like the opened-transcript prefetch: the reader binds an already-live handle. */
+  async prehydrate() {
+    await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
+  },
+  mount() {
+    root.render(
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+        <ConversationView client={client} sessionId={SESSION_ID} />
+      </div>
+    );
+  },
+  /** One live turn as the daemon publishes it: created, payloads, completed. */
+  addTurn() {
+    const n = turns++;
+    tasks.emit('created', task(n, TaskStatus.RUNNING));
+    for (const message of messages(n)) messageService.emit('created', message);
+    tasks.emit('patched', task(n, TaskStatus.COMPLETED));
+    return taskId(n);
+  },
+  unmount() {
+    root.unmount();
+  },
+};
+
+// Keep the test driver local to this entry point, not in the app's Window type.
+Object.assign(window, { transcriptRetentionFixture: fixture });

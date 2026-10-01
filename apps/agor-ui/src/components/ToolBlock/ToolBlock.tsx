@@ -19,6 +19,7 @@ import { Button, Tag, Typography, theme } from 'antd';
 import type React from 'react';
 import { useState } from 'react';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
 
 /** Shared disclosure for both lazy task hydration and already-loaded tool groups.
  * A button keeps keyboard semantics without requiring a fixed Collapse body:
@@ -136,6 +137,9 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   const [expanded, setExpanded] = useState(expandedByDefault);
   const { token } = theme.useToken();
   const hasBody = !!children;
+  // Only a reader's expansion pins the turn. Default-open bodies (file edits)
+  // would otherwise keep every such turn's detail for as long as it is mounted.
+  useRetainTaskDetailsWhile(expanded && hasBody && !expandedByDefault);
 
   const statusColor =
     status === 'error'
