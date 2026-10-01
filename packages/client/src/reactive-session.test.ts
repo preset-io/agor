@@ -2695,3 +2695,62 @@ describe('bootstrap stranded by a disconnect', () => {
     }
   );
 });
+
+describe('disconnect cleanup alongside terminal stream settlement', () => {
+  it('keeps retired thinking attribution across a stranded resync and reconnect', async () => {
+    const opts: MockClientOptions = {
+      tasks: [makeTask('task-1', TaskStatus.RUNNING)],
+      messagesByTask: { 'task-1': [makeMessage('task-1', 0)] },
+    };
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await handle.ready();
+    const internals = handle as unknown as FetchInternals;
+    const retired = () => Reflect.get(handle, 'retiredStreamTasks') as Map<string, string>;
+    const thought = { message_id: 'thought', session_id: SESSION_ID, task_id: 'task-1' };
+    mock.emitServiceEvent('messages', 'thinking:start', {
+      ...thought,
+      timestamp: new Date().toISOString(),
+    });
+    mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'Considering' });
+    expect(handle.getStreamingMessage('thought')?.isThinking).toBe(true);
+
+    // The terminal boundary retires the payload-free thinking stream.
+    opts.tasks = [makeTask('task-1', TaskStatus.COMPLETED)];
+    mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = 'task-1';
+    const stranded = handle.resync();
+    await vi.waitFor(() => expect(internals.messageFetches.size).toBe(1));
+    mock.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Disconnect is not disposal: the bounded attribution window survives.
+    expect(retired().get('thought')).toBe('task-1');
+
+    opts.deferTaskMessageFetch = undefined;
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(internals.resyncInflight).toBeNull());
+    for (let beat = 0; beat < 50; beat++) {
+      mock.emitServiceEvent('tasks', 'patched', opts.tasks[0]);
+      mock.emitServiceEvent('messages', 'thinking:chunk', { ...thought, chunk: 'late' });
+    }
+    expectNoStrandedFetches(internals);
+    expect(handle.getStreamingMessage('thought')).toBeUndefined();
+
+    mock.emitServiceEvent('messages', 'streaming:error', { ...thought, error: 'late failure' });
+    expect(handle.getStreamingMessage('thought')).toMatchObject({
+      task_id: 'task-1',
+      error: 'late failure',
+      isStreaming: false,
+      isThinking: false,
+    });
+
+    mock.releaseMessageFetch();
+    await stranded;
+    expect(handle.getStreamingMessage('thought')?.error).toBe('late failure');
+    expect(handle.state.error).toBeNull();
+    handle.dispose();
+  });
+});
