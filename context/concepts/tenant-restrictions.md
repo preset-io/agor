@@ -372,7 +372,9 @@ parked credential is rejected codelessly and the browser falls back to sign-in.
 
 Ordinary service admission, bearer authentication (executor-session upload and
 Slack upload bearers included), socket packets/publications,
-and egress dispatch compare the watermark. The bounded socket monitor also retires
+and egress dispatch compare the watermark. Session MCP projection compares it only for
+signed runtime JWTs; an API-key caller, which carries no generation, gets the closed-tenant
+check only, as on `/mcp`. The bounded socket monitor also retires
 stale nonexecutor connections after a rapid restriction/release cycle. Old executor
 credentials retain only exact safety settlement, including after activation;
 telemetry cannot use this exception to restart callback automation. Fresh command

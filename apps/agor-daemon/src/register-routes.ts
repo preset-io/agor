@@ -443,6 +443,19 @@ export async function authorizeTaskExecutorSessionMcpRead(
   return true;
 }
 
+/** Only signed runtime JWTs carry the generation claim; an API key gets the closed-tenant check only, as on /mcp. */
+export async function assertMcpProjectionTenantCredential(
+  db: Parameters<typeof assertRuntimeTenantAccess>[0],
+  tenantId: string,
+  authentication: RouteParams['authentication']
+): Promise<string | undefined> {
+  if (authentication?.strategy === 'api-key') {
+    await assertRuntimeTenantAccess(db, tenantId);
+    return undefined;
+  }
+  return assertTenantCredentialEpoch(db, tenantId, authentication?.payload);
+}
+
 /**
  * Resolve the durable actor of a queued Task.
  *
@@ -4824,10 +4837,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       (params as RouteParams & { tenant?: { tenant_id?: string } }).tenant?.tenant_id ??
       getCurrentTenantId();
     if (!tenantId) throw new NotAuthenticated('MCP gateway projection requires tenant identity');
-    const credentialEpoch = await assertTenantCredentialEpoch(
+    const credentialEpoch = await assertMcpProjectionTenantCredential(
       db,
       tenantId,
-      params.authentication?.payload
+      params.authentication
     );
     const mode = await getMCPEgressGatewayMode(db);
     if (!executorScope) {
