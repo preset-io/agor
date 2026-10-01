@@ -244,13 +244,17 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   // visible error + Retry (never the lean row) if it cannot.
   const fullDetails = useFullSessionDetails(client, session, open);
   const fullSession = fullDetails.status === 'ready' ? fullDetails.session : null;
-  const customContextReady = fullSession !== null;
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(fullSession ?? session, sessionMcpServerIds)
   );
   const initialValuesRef = React.useRef(initialValues);
   initialValuesRef.current = initialValues;
-  const seededFullSessionRef = React.useRef<Session | null>(null);
+  // The full record whose context the field currently holds. The editor
+  // unlocks only once the field is seeded, never on the render the record
+  // arrives in (the seed effect runs after that commit).
+  const [seededFullSession, setSeededFullSession] = React.useState<Session | null>(null);
+  const seededFullSessionRef = React.useRef(seededFullSession);
+  const customContextReady = fullSession !== null && seededFullSession === fullSession;
   const [envSelections, setEnvSelections] = React.useState<string[]>([]);
   const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
   const prevOpenRef = React.useRef(false);
@@ -277,6 +281,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       if (fullSession?.session_id === session.session_id) {
         values.custom_context = formatCustomContext(fullSession.custom_context);
         seededFullSessionRef.current = fullSession;
+        setSeededFullSession(fullSession);
       }
       setInitialValues(values);
       form.setFieldsValue(values);
@@ -295,6 +300,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       form.getFieldValue('custom_context') === initialValuesRef.current.custom_context;
     setInitialValues((previous) => ({ ...previous, custom_context: text }));
     if (unedited) form.setFieldValue('custom_context', text);
+    setSeededFullSession(fullSession);
   }, [open, fullSession, session.session_id, form]);
 
   // Load current env selections when the modal opens.
