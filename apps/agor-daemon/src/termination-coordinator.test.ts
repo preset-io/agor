@@ -26,7 +26,7 @@ function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) 
   return { task_id: taskId, session_id: sessionId, status, created_at: '2026-01-01', ...extra };
 }
 
-function appDouble(tool = 'codex', options: { getDelayMs?: number } = {}) {
+function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unknown } = {}) {
   let current = task();
   const getCurrent = async () => {
     if (options.getDelayMs) await new Promise((resolve) => setTimeout(resolve, options.getDelayMs));
@@ -61,7 +61,8 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number } = {}) {
             settleTermination,
           }
         : { get: sessionGet },
-    get: () => ({ instanceId: 'daemon-a', bootId: 'boot-a' }),
+    get: (key: string) =>
+      key === 'config' ? options.config : { instanceId: 'daemon-a', bootId: 'boot-a' },
   } as never;
   const claim = (value: ReturnType<typeof task>, outcome = 'claimed') => {
     claimTermination.mockImplementationOnce(async () => {
@@ -164,6 +165,39 @@ describe('termination coordinator', () => {
       task: { status: TaskStatus.STOPPED },
     });
     expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  it('settles a quiesced hosted OpenCode executor without the blanket unverified reason', async () => {
+    const state = appDouble('opencode', {
+      config: {
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launch {task_id}',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      },
+    });
+    const remoteStopping = {
+      ...stopping('user_stop'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00.000Z',
+      termination_request: {
+        ...stopping('user_stop').termination_request,
+        executor_quiesced_at: '2026-01-01T00:00:01.100Z',
+      },
+    };
+    state.claim(remoteStopping);
+    state.settle(task(TaskStatus.STOPPED));
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'terminal',
+      task: { status: TaskStatus.STOPPED },
+    });
+    expect(state.settleTermination).not.toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.anything()
+    );
   });
 
   it('observes a remote socket-stop report during the cooperative grace window', async () => {
