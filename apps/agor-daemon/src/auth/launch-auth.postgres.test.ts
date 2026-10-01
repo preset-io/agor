@@ -15,11 +15,13 @@ import {
   runWithTenantDatabaseScope,
   select,
   sql,
+  TenantDisplayRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Params, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { authenticatedHealthInstance } from '../health/instance.js';
 import { UsersService } from '../services/users.js';
 import { createLaunchAuthService } from './launch-auth.js';
 
@@ -46,7 +48,12 @@ function config(): AgorConfig {
   };
 }
 
-function signClaims(input: { subject: string; email: string; tenantId: string }): string {
+function signClaims(input: {
+  subject: string;
+  email: string;
+  tenantId: string;
+  displayName?: string;
+}): string {
   return jwt.sign(
     {
       sub: input.subject,
@@ -54,6 +61,7 @@ function signClaims(input: { subject: string; email: string; tenantId: string })
       role: 'member',
       tenant_id: input.tenantId,
       instance_id: 'instance-1',
+      ...(input.displayName ? { workspace_display_name: input.displayName } : {}),
     },
     ASSERTION_SECRET,
     {
@@ -116,8 +124,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       };
     }
 
-    function service(db: TenantScopeAwareDatabase) {
-      const launchConfig = config();
+    function service(db: TenantScopeAwareDatabase, launchConfig = config()) {
       const { settings } = resolveExternalLaunchSettings(launchConfig);
       return createLaunchAuthService({
         db,
@@ -198,6 +205,59 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           primary_owner_user_id: first.user.user_id,
         });
       });
+    });
+
+    it('stores display labels per tenant; each tenant sees only its own', async () => {
+      const launchConfig: AgorConfig = { ...config(), daemon: { instanceLabel: 'config-label' } };
+      const tenantA = `display-a-${generateId()}`;
+      const tenantB = `display-b-${generateId()}`;
+      const tenantC = `display-c-${generateId()}`;
+      const assertions = new Map([
+        [
+          'a',
+          signClaims({
+            subject: 'a',
+            email: 'a@example.invalid',
+            tenantId: tenantA,
+            displayName: 'Acme',
+          }),
+        ],
+        [
+          'b',
+          signClaims({
+            subject: 'b',
+            email: 'b@example.invalid',
+            tenantId: tenantB,
+            displayName: 'Data team',
+          }),
+        ],
+        ['c', signClaims({ subject: 'c', email: 'c@example.invalid', tenantId: tenantC })],
+      ]);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as { launch_code?: string };
+          return Response.json({ assertion: assertions.get(body.launch_code ?? '') });
+        })
+      );
+      await Promise.all([
+        service(dbA, launchConfig).create({ launchCode: 'a' }),
+        service(dbB, launchConfig).create({ launchCode: 'b' }),
+        service(dbA, launchConfig).create({ launchCode: 'c' }),
+      ]);
+
+      const healthLabel = async (tenantId: string, db: TenantScopeAwareDatabase) =>
+        (
+          await authenticatedHealthInstance(launchConfig, () =>
+            runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+              new TenantDisplayRepository(scoped).find()
+            )
+          )
+        ).label;
+      // Replica-independent: each tenant reads its own label through either pool.
+      await expect(healthLabel(tenantA, dbB)).resolves.toBe('Acme');
+      await expect(healthLabel(tenantB, dbA)).resolves.toBe('Data team');
+      await expect(healthLabel(tenantC, dbB)).resolves.toBe('config-label');
     });
   }
 );
