@@ -1,4 +1,5 @@
 /** v0.25.2's journal/SQL through 0087 is byte-identical to the current prefix. */
+import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -35,6 +36,23 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         tag: '0087_knowledge_teammate_attribution',
         when: 1787184000000,
       });
+      // Pin the shipped order, tags, watermarks and exact SQL, not just the last
+      // watermark. Derived from v0.25.2 (ca14396c), not today's migration files.
+      // If a historical repair changes this prefix, preserve an archived fixture
+      // rather than updating the digest and silently testing a different history.
+      const history = await Promise.all(
+        journal.entries.map(async ({ idx, tag, when }) => [
+          idx,
+          tag,
+          when,
+          createHash('sha256')
+            .update(await readFile(join(oldFolder, `${tag}.sql`)))
+            .digest('hex'),
+        ])
+      );
+      expect(createHash('sha256').update(JSON.stringify(history)).digest('hex')).toBe(
+        '92cd3a9a067b411bd45d0d40c2ca2c06a47ec409adb10c102fc8a09c79a02c0e'
+      );
       await writeFile(journalPath, JSON.stringify(journal));
       await migratePostgres(db as never, { migrationsFolder: oldFolder });
       // Every fixture write uses its own tenant context, never an RLS bypass.
