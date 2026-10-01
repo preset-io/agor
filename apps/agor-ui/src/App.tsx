@@ -44,11 +44,11 @@ import { uploadFilesToSession } from './components/FileUpload/upload';
 import { ForcePasswordChangeModal } from './components/ForcePasswordChangeModal';
 import { InitialLoadingScreen } from './components/InitialLoadingScreen';
 import { LoginPage } from './components/LoginPage';
+import { lazyWhenOpened } from './components/lazyWhenOpened';
 import { MCPCatalogModalHost } from './components/Marketplace/MCPCatalogModalHost';
 import { OnboardingBanners } from './components/OnboardingBanners';
-import { type OnboardingCompletionResult, OnboardingWizard } from './components/OnboardingWizard';
+import type { OnboardingCompletionResult } from './components/OnboardingWizard';
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
-import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
@@ -88,7 +88,6 @@ import { useUnarchiveBranch } from './hooks/useUnarchiveBranch';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { DeviceRouter } from './surfaces/DeviceRouter';
-import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
@@ -123,6 +122,7 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
+import { afterStartupSignInDispatched } from './utils/startupSignIn';
 import { getRouterBasename } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -260,6 +260,18 @@ const RbacPolicyPrototypePage = import.meta.env.DEV
     )
   : null;
 
+// Modal surfaces the shell mounts but rarely shows: loaded on first open so
+// their dependency graphs stay out of the boot bundle.
+const OnboardingWizard = lazyWhenOpened(() =>
+  import('./components/OnboardingWizard').then((module) => module.OnboardingWizard)
+);
+const SettingsModal = lazyWhenOpened(() =>
+  import('./components/SettingsModal').then((module) => module.SettingsModal)
+);
+const SharedUserSettingsModal = lazyWhenOpened(() =>
+  import('./surfaces/SharedUserSettingsModal').then((module) => module.SharedUserSettingsModal)
+);
+
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
 const ArtifactFullscreenPage = lazy(loadArtifactFullscreenPage);
@@ -313,17 +325,25 @@ function AppContent() {
   useEffect(() => {
     let cancelled = false;
 
-    if (!loadedRouteModuleKeys.has(routeModuleKey)) {
-      setRouteModuleReady(false);
-    }
+    const preload = () =>
+      preloadRouteModule(routeModuleKey)
+        .catch(() => {
+          // Let React.lazy/ErrorBoundary surface the route-load failure.
+        })
+        .finally(() => {
+          if (!cancelled) setRouteModuleReady(true);
+        });
 
-    preloadRouteModule(routeModuleKey)
-      .catch(() => {
-        // Let React.lazy/ErrorBoundary surface the route-load failure.
-      })
-      .finally(() => {
-        if (!cancelled) setRouteModuleReady(true);
+    if (loadedRouteModuleKeys.has(routeModuleKey)) {
+      void preload();
+    } else {
+      setRouteModuleReady(false);
+      // Let the startup sign-in request queue ahead of this route's chunks
+      // (see utils/startupSignIn): the socket and all data wait on sign-in.
+      void afterStartupSignInDispatched().then(() => {
+        if (!cancelled) void preload();
       });
+    }
 
     return () => {
       cancelled = true;
@@ -536,7 +556,7 @@ function AppContent() {
 
   const workspaceLoadingFallback = (
     <InitialLoadingScreen
-      phase={loaderPhase === 'done' ? 'fading' : loaderPhase}
+      phase={loaderPhase}
       connecting={connecting}
       loadingStage={loadingStage}
       items={initialLoadItems}
@@ -1193,7 +1213,7 @@ function AppContent() {
 
   // Show loading state ONLY on initial load, not during reconnections
   // Once data is loaded, keep UI mounted and show connection status in header instead
-  if (workspaceSurfaceShouldRun && (loaderPhase !== 'done' || !routeModuleReady)) {
+  if (workspaceSurfaceShouldRun && (loaderPhase === 'loading' || !routeModuleReady)) {
     return workspaceLoadingFallback;
   }
 
@@ -2331,6 +2351,14 @@ function AppContent() {
         </ConfigProvider>
 
         <DeviceRouter />
+        {workspaceSurfaceShouldRun && loaderPhase === 'fading' && (
+          <InitialLoadingScreen
+            overlay
+            phase="fading"
+            loadingStage={loadingStage}
+            items={initialLoadItems}
+          />
+        )}
         <Suspense fallback={routeFallback}>
           <Routes>
             {/* Demo routes */}

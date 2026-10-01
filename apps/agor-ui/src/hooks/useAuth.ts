@@ -25,6 +25,7 @@ import {
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
+import { markStartupSignInDispatched } from '../utils/startupSignIn';
 import {
   clearTokens,
   getStoredAccessToken,
@@ -264,6 +265,8 @@ export function useAuth(): UseAuthReturn {
 
     try {
       const client = await createRestClient(getDaemonUrl());
+      // Every path below sends its first request within this task.
+      markStartupSignInDispatched();
 
       if (activeLaunchCode) {
         attemptedLaunch = true;
@@ -332,6 +335,8 @@ export function useAuth(): UseAuthReturn {
           : null,
       });
     } catch (error) {
+      // Never hold the workspace chunks back behind a failed sign-in.
+      markStartupSignInDispatched();
       // Connection or authentication error - retry if daemon just restarted
       const isConnectionError = isTransientConnectionError(error);
 
