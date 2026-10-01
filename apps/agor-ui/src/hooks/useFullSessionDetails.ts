@@ -6,7 +6,8 @@
  * renders the whole `custom_context` (session settings, zone triggers) must
  * not treat such a row as complete, so it resolves the full record here:
  *
- * - a full store row is used as is (`ready` on the first render);
+ * - a full store row is used as is (`ready` on the first render), also when
+ *   it arrives while a fetch is pending or has failed (that fetch is dropped);
  * - a lean row is fetched with `sessions.get`;
  * - a failed fetch is a visible `error` with `retry`, and is retried
  *   automatically when the socket re-authenticates (reconnect);
@@ -59,8 +60,9 @@ export function useFullSessionDetails(
   currentRef.current = current;
   const rowRef = useRef(row);
   rowRef.current = row;
+  const rowIsFull = !!row && hasFullSessionDetails(row);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the retry trigger
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` is the retry trigger; `rowIsFull` cancels a pending fetch once the store row is full
   useEffect(() => {
     // Disabled (e.g. the modal closed): forget, so the next open reloads.
     if (!sessionId) {
@@ -100,7 +102,7 @@ export function useFullSessionDetails(
       settled = true;
       clearTimeout(timer);
     };
-  }, [sessionId, client, attempt, timeoutMs]);
+  }, [sessionId, client, attempt, timeoutMs, rowIsFull]);
 
   // A reconnect (new socket-auth generation) retries a failed load.
   const authGenerationRef = useRef(authGeneration);
@@ -114,9 +116,9 @@ export function useFullSessionDetails(
 
   let state: FullSessionDetailsState;
   if (!sessionId) state = IDLE;
-  else if (current) state = current;
-  else if (row && hasFullSessionDetails(row)) state = { status: 'ready', session: row };
-  else state = LOADING;
+  else if (current?.status === 'ready') state = current;
+  else if (rowIsFull && row) state = { status: 'ready', session: row };
+  else state = current ?? LOADING;
   return { ...state, retry };
 }
 
