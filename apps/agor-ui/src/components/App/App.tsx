@@ -540,6 +540,9 @@ export const App: React.FC<AppProps> = ({
   const currentBoard = useAgorStore(
     useMemo(() => makeBoardSelector(currentBoardId), [currentBoardId])
   );
+  const teammateTargetBoard = useAgorStore(
+    useMemo(() => makeBoardSelector(teammateTargetBoardId), [teammateTargetBoardId])
+  );
   const isHomeSurface = isRootHomePath && !hasExplicitEntityTarget;
   const headerBoardId = isHomeSurface ? '' : currentBoardId;
   const wasHomeSurfaceRef = useRef(isHomeSurface);
@@ -1867,7 +1870,7 @@ export const App: React.FC<AppProps> = ({
           }}
           defaultTab={createDialogDefaultTab}
           teammateTargetBoardName={
-            teammateTargetBoardId ? (currentBoard?.name ?? 'this board') : undefined
+            teammateTargetBoardId ? (teammateTargetBoard?.name ?? 'this board') : undefined
           }
           currentBoardId={currentBoardId}
           defaultPosition={newBranchDefaultPosition || undefined}

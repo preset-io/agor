@@ -855,11 +855,10 @@ function AppContent() {
       readyFrameworkRepo = await waitForFrameworkRepoReady({
         getRepoById: () => agorStore.getState().repoById,
         subscribe: (listener) => agorStore.subscribe(listener),
-        refreshRepos: async () => {
-          const repos = await client
-            .service('repos')
-            .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } });
-          if (isCurrentUser()) for (const repo of repos) repoPatched(repo);
+        fetchRepos: () =>
+          client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        applyRepo: (repo) => {
+          if (isCurrentUser()) repoPatched(repo);
         },
         deadlineMs: 20_000,
       });
