@@ -11,6 +11,12 @@ function branch(id: string, others_can: Branch['others_can'] = 'none'): Branch {
   return { branch_id: id, others_can } as Branch;
 }
 
+function cacheSizes(cache: RealtimeAccessCache): number[] {
+  return ['branchVisibility', 'sessionBranches', 'sessionOwners'].map(
+    (key) => (Reflect.get(cache, key) as Map<string, unknown>).size
+  );
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -247,5 +253,149 @@ describe('RealtimeAccessCache', () => {
 
     await expect(pending).resolves.toBeNull();
     expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(2);
+  });
+
+  it('reclaims expired entries in every map on the next lookup without a timer', async () => {
+    let now = 1_000;
+    const cache = new RealtimeAccessCache({
+      branchRepository: {
+        findRealtimeVisibilityBranch: vi.fn(async (id: string) => branch(id)),
+        findRealtimeViewUserIds: vi.fn(async () => []),
+      },
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(async () => null),
+        findCreatedByBySessionId: vi.fn(async () => null),
+      },
+      branchVisibilityTtlMs: 10,
+      sessionBranchTtlMs: 100,
+      now: () => now,
+    });
+
+    for (let i = 0; i < 500; i++) {
+      await cache.getBranchVisibility(`b${i}` as BranchID);
+      await cache.getBranchIdForSession(`s${i}`);
+      await cache.getSessionOwnerId(`s${i}`);
+    }
+    expect(cacheSizes(cache)).toEqual([500, 500, 500]);
+
+    // Only branch visibility has expired; the session maps keep their entries.
+    now += 11;
+    await cache.getSessionOwnerId('s0');
+    expect(cacheSizes(cache)).toEqual([0, 500, 500]);
+
+    now += 100;
+    await cache.getBranchVisibility('fresh' as BranchID);
+    expect(cacheSizes(cache)).toEqual([1, 0, 0]);
+  });
+
+  it('bounds every map under many distinct keys, evicting oldest first', async () => {
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async (id: string) => branch(id)),
+      findRealtimeViewUserIds: vi.fn(async () => []),
+    } as unknown as RealtimeAccessBranchRepository;
+    const sessionsRepository = {
+      findBranchIdBySessionId: vi.fn(async () => 'b1'),
+      findCreatedByBySessionId: vi.fn(async () => 'u1'),
+    } as unknown as RealtimeAccessSessionRepository;
+    const cache = new RealtimeAccessCache({ branchRepository, sessionsRepository, maxEntries: 32 });
+
+    for (let i = 0; i < 10_000; i++) {
+      await cache.getBranchVisibility(`b${i}` as BranchID);
+      await cache.getBranchIdForSession(`s${i}`);
+      await cache.getSessionOwnerId(`s${i}`);
+    }
+    expect(cacheSizes(cache)).toEqual([32, 32, 32]);
+
+    // The newest 32 keys are still hits; the oldest was evicted and is reread.
+    await cache.getBranchIdForSession('s9968');
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(10_000);
+    await cache.getBranchIdForSession('s0');
+    expect(sessionsRepository.findBranchIdBySessionId).toHaveBeenCalledTimes(10_001);
+    expect(cacheSizes(cache)).toEqual([32, 32, 32]);
+  });
+
+  it('applies default capacity bounds without configuration', async () => {
+    const cache = new RealtimeAccessCache({
+      branchRepository: {
+        findRealtimeVisibilityBranch: vi.fn(async (id: string) => branch(id)),
+        findRealtimeViewUserIds: vi.fn(async () => []),
+      },
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(async () => null),
+        findCreatedByBySessionId: vi.fn(async () => null),
+      },
+    });
+
+    for (let i = 0; i < 10_050; i++) {
+      if (i < 2_050) await cache.getBranchVisibility(`b${i}` as BranchID);
+      await cache.getBranchIdForSession(`s${i}`);
+      await cache.getSessionOwnerId(`s${i}`);
+    }
+    expect(cacheSizes(cache)).toEqual([2_000, 10_000, 10_000]);
+  });
+
+  it('rereads current authority for an evicted branch instead of serving a stale grant', async () => {
+    let viewers = ['u1'];
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async (id: string) => branch(id)),
+      findRealtimeViewUserIds: vi.fn(async (id: string) => (id === 'b1' ? viewers : [])),
+    } as unknown as RealtimeAccessBranchRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository,
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(),
+        findCreatedByBySessionId: vi.fn(),
+      },
+      maxEntries: 2,
+    });
+
+    await expect(cache.getBranchVisibility('b1')).resolves.toEqual({
+      mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+      userIds: new Set(['u1']),
+    });
+    await cache.getBranchVisibility('b2');
+    await cache.getBranchVisibility('b3');
+
+    // Revoked in the repository without a cache invalidation reaching us.
+    viewers = [];
+    await expect(cache.getBranchVisibility('b1')).resolves.toEqual({
+      mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+      userIds: new Set(),
+    });
+    expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps the invalidation fence when eviction and expiry run during an in-flight read', async () => {
+    let now = 1_000;
+    const oldGrant = deferred<string[]>();
+    const branchRepository = {
+      findRealtimeVisibilityBranch: vi.fn(async (id: string) => branch(id)),
+      findRealtimeViewUserIds: vi
+        .fn()
+        .mockImplementationOnce(() => oldGrant.promise)
+        .mockResolvedValue([]),
+    } as unknown as RealtimeAccessBranchRepository;
+    const cache = new RealtimeAccessCache({
+      branchRepository,
+      sessionsRepository: {
+        findBranchIdBySessionId: vi.fn(),
+        findCreatedByBySessionId: vi.fn(),
+      },
+      ttlMs: 10,
+      maxEntries: 1,
+      now: () => now,
+    });
+
+    const pending = cache.getBranchVisibility('revoked' as BranchID);
+    await vi.waitFor(() => expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalled());
+    cache.invalidateBranch('revoked');
+    await cache.getBranchVisibility('other' as BranchID);
+    now += 11;
+    await cache.getBranchVisibility('third' as BranchID);
+    oldGrant.resolve(['old-authorized-user']);
+
+    const revoked = { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: new Set() };
+    await expect(pending).resolves.toEqual(revoked);
+    await expect(cache.getBranchVisibility('revoked' as BranchID)).resolves.toEqual(revoked);
   });
 });
