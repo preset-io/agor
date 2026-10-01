@@ -465,19 +465,23 @@ function bearerTokenFromHeader(value: string | string[] | undefined): string | u
  *   zlib overhead outweighs the saving.
  * - No context takeover in either direction: each message is compressed
  *   independently, so no compression dictionary spans two messages.
+ * - No `serverMaxWindowBits` / `clientMaxWindowBits`: ws turns a numeric
+ *   value into a hard requirement on the offer and answers a mismatch with
+ *   HTTP 400 instead of declining compression. A numeric client limit
+ *   rejects the parameterless `permessage-deflate` offer Firefox sends; a
+ *   numeric server limit rejects any client asking for a smaller server
+ *   window. Leaving both unset accepts every valid offer.
  * - Cost: ws keeps a socket's zlib streams allocated (reset, not freed)
- *   until it closes once it has compressed a frame. A 13-bit window and
- *   memLevel 7 bound that to ~96 KiB deflate + 8 KiB inflate per socket
- *   (vs ~256 KiB + 32 KiB at zlib defaults) for ~4.8x instead of ~5.2x on
- *   real session lists. Broadcasts above the threshold are compressed once
- *   per recipient (engine.io cannot reuse a pre-encoded frame).
+ *   until it closes once it has compressed a frame. With memLevel 7 and the
+ *   default 15-bit windows that is ~192 KiB deflate + up to 32 KiB inflate
+ *   per socket (less when a client requests smaller windows). Broadcasts
+ *   above the threshold are compressed once per recipient (engine.io cannot
+ *   reuse a pre-encoded frame).
  */
 export const SOCKET_IO_PER_MESSAGE_DEFLATE = {
   threshold: 1024,
   serverNoContextTakeover: true,
   clientNoContextTakeover: true,
-  serverMaxWindowBits: 13,
-  clientMaxWindowBits: 13,
   zlibDeflateOptions: { memLevel: 7 },
 } as const;
 
