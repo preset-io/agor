@@ -28,7 +28,11 @@ import {
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
-import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
+import {
+  hasSecureLocalCredentialOverlay,
+  resolveSdkHomeConfig,
+  usesExecutionHomeOnly,
+} from './branch-sdk-home.js';
 import type {
   Application,
   ReposServiceImpl,
@@ -853,6 +857,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',
     sdkHomeMode: resolveSdkHomeConfig(config).mode,
     secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+    executionHomeOnly: (tool) => usesExecutionHomeOnly(tool, config),
     // Static mode keeps the historical single-tenant scope. Auth-resolved
     // multi-tenant mode leaves this undefined so the scheduler discovers due
     // schedule tenant metadata at the DB boundary on each tick.

@@ -304,6 +304,8 @@ export interface SchedulerConfig {
   sdkHomeMode?: SdkHomeMode;
   /** Local executor can project caller auth with a pinned sandbox file bind. */
   secureLocalCredentialOverlay?: boolean;
+  /** Tools whose Sessions never use a branch SDK home in this deployment. */
+  executionHomeOnly?: (tool: AgenticToolName) => boolean;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
@@ -336,6 +338,7 @@ interface ResolvedSchedulerConfig {
   unixUserMode: UnixUserMode;
   sdkHomeMode: SdkHomeMode;
   secureLocalCredentialOverlay: boolean;
+  executionHomeOnly: (tool: AgenticToolName) => boolean;
   tenantId?: TenantID | string;
   scanBatchSize: number;
   maxIdleInterval: number;
@@ -385,6 +388,7 @@ export class SchedulerService {
       unixUserMode: config.unixUserMode ?? 'simple',
       sdkHomeMode: config.sdkHomeMode ?? 'inherit',
       secureLocalCredentialOverlay: config.secureLocalCredentialOverlay ?? false,
+      executionHomeOnly: config.executionHomeOnly ?? (() => false),
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
           ? config.tenantId.trim()
@@ -967,6 +971,7 @@ export class SchedulerService {
         const sdkHomeAdmission = resolveNewSessionSdkHomeScope({
           branchSdkHomeIntent: currentBranch.sdk_home ?? null,
           enabledForNewSessions: this.config.sdkHomeMode === 'per_branch',
+          executionHomeOnly: this.config.executionHomeOnly(resolvedConfig.activeTool),
         });
         if (sdkHomeAdmission.scope === 'branch') {
           const unsupportedReason = branchSdkHomeIncompatibility;

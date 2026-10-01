@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { AgorConfig, KeyResolutionContext } from '@agor/core/config';
 import { getBranchHomePath, resolveApiKey } from '@agor/core/config';
@@ -63,7 +64,10 @@ export function resolveNewSessionSdkHomeScope(input: {
   branchSdkHomeIntent: 'per_branch' | null;
   enabledForNewSessions: boolean;
   inheritedScope?: SessionSdkHomeScope;
+  /** The tool keeps no native state in any SDK home, so it never joins or adopts a branch. */
+  executionHomeOnly?: boolean;
 }): { scope: SessionSdkHomeScope; adoptBranch: boolean } {
+  if (input.executionHomeOnly) return { scope: 'execution_home', adoptBranch: false };
   if (input.inheritedScope) {
     return { scope: input.inheritedScope, adoptBranch: false };
   }
@@ -115,6 +119,14 @@ const ENV_VAR_SUBDIR: Readonly<Record<string, string>> = Object.freeze({
   COPILOT_HOME: 'copilot',
   COPILOT_CACHE_HOME: 'copilot-cache',
 });
+
+/** Hosted OpenCode restores per-Session checkpoints on Job scratch, so no SDK home is ever shared. */
+export function usesExecutionHomeOnly(
+  tool: AgenticToolName,
+  config: Parameters<typeof resolveOpenCodeCapabilities>[0]
+): boolean {
+  return tool === 'opencode' && resolveOpenCodeCapabilities(config).mode === 'managed-projection';
+}
 
 /** Why a tool must be refused before a branch adopts shared SDK state. */
 export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | undefined {

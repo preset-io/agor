@@ -9,6 +9,10 @@ structured reason.
 
 ## Boundaries
 
+- **No branch SDK home.** Hosted OpenCode Sessions are stamped `execution_home` even
+  when the deployment uses `sdk_home_mode: per_branch` (`usesExecutionHomeOnly` in
+  `apps/agor-daemon/src/branch-sdk-home.ts`): native state lives in per-Session
+  checkpoints, so there is nothing to share and the branch is never adopted.
 - **Owner only.** The prompting user must be the Session creator (unchanged local
   rule). Branch-scoped OpenCode Sessions stay refused.
 - **Single-key providers.** `hosted-providers.generated.ts` is a snapshot of the pinned

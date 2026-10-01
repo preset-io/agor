@@ -89,6 +89,7 @@ import {
   resolveBranchSdkHomeIncompatibility,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
+  usesExecutionHomeOnly,
 } from '../branch-sdk-home.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -595,6 +596,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         branchSdkHomeIntent: branch.sdk_home ?? null,
         enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
         inheritedScope: params?._sdkHomeScope,
+        executionHomeOnly: usesExecutionHomeOnly(agenticTool, config),
       });
       if (admission.scope === 'branch') {
         // Admission must reject credential/state combinations before it
