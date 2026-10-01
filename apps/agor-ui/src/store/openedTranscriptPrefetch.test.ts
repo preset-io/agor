@@ -81,6 +81,21 @@ describe('prefetchOpenedTranscript', () => {
     expect(onReady).toHaveBeenCalled();
   });
 
+  it('drops the speculative reference at its maximum lifetime if loading never settles', async () => {
+    reactive.ready.mockReturnValue(new Promise(() => {}));
+    const prefetch = prefetchOpenedTranscript(client, SESSION_ID, {
+      timeoutMs: 1_000,
+      maxRetentionMs: 4_000,
+    });
+
+    await vi.advanceTimersByTimeAsync(3_999);
+    expect(reactive.releaseReactiveSession).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(reactive.releaseReactiveSession).toHaveBeenCalledTimes(1);
+    prefetch.release();
+    expect(reactive.releaseReactiveSession).toHaveBeenCalledTimes(1);
+  });
+
   it('treats a failed load as ready and releases early exactly once', async () => {
     reactive.ready.mockRejectedValue(new Error('denied'));
     const prefetch = prefetchOpenedTranscript(client, SESSION_ID);
