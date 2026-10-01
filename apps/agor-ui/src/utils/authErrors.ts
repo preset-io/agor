@@ -65,6 +65,13 @@ export function isTenantRestrictedError(err: unknown): boolean {
   return (data as { code?: unknown }).code === TENANT_RESTRICTED_ERROR_CODE;
 }
 
+/** The daemon's handshake answer when it cannot read the credential generation: keep tokens, reconnect with backoff. */
+export function isUnavailableHandshakeError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const data = (err as FeathersLikeError).data as { code?: unknown; className?: unknown } | null;
+  return data?.code === 503 && data.className === 'unavailable';
+}
+
 /**
  * True when the error looks like a transient connection/server issue
  * (network drop, 5xx, timeout, rate-limit) rather than a rejected

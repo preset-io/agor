@@ -13,6 +13,7 @@ import {
 import {
   admitTenantSocketPacket,
   createOrderedTenantPacketGate,
+  createRateLimitedSocketWarning,
   createRejectedPacketLog,
   isStreamingRelayPacket,
   isTenantSocketPacketRejection,
@@ -21,6 +22,7 @@ import {
   restrictedSocketHandshakeError,
   TenantSocketRestrictionMonitor,
   tenantSocketPacketNeedsAdmission,
+  unavailableSocketHandshakeError,
 } from '../auth/tenant-socket-admission.js';
 /**
  * Socket.io Configuration
@@ -545,6 +547,7 @@ export function createSocketIOConfig(
     // Intentionally system-global: the aggregate keeps only a saturated count,
     // never socket, user, tenant, channel, or client metadata.
     let authenticationFailures = 0;
+    const logUnavailableHandshake = createRateLimitedSocketWarning('socket handshake unavailable');
     // Machine and impersonation sockets are bounded capabilities and retire at
     // their verified bearer expiry. Ordinary user sockets keep the immutable
     // identity accepted at the handshake until disconnect or explicit
@@ -822,6 +825,14 @@ export function createSocketIOConfig(
           );
           retireSocketConnectionAuthority(app, fs.feathers);
           next(restricted);
+          return;
+        }
+        // An unreadable restriction/generation is transient: no refreshable 401, no failure gauge, one warning per minute.
+        const unavailable = unavailableSocketHandshakeError(error);
+        if (unavailable) {
+          logUnavailableHandshake(socket.id);
+          retireSocketConnectionAuthority(app, fs.feathers);
+          next(unavailable);
           return;
         }
         const expected =

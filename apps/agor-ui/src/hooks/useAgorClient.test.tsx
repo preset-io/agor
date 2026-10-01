@@ -389,6 +389,97 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
   });
 });
 
+describe('useAgorClient unavailable handshake', () => {
+  const unavailableHandshake = () =>
+    Object.assign(new Error('Authentication cannot be verified right now'), {
+      data: { code: 503, className: 'unavailable' },
+    });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+    refreshTokensMock.mockReset();
+    resetRefreshFailureState();
+    localStorage.clear();
+  });
+
+  it('reconnects with backoff after two 503 handshakes without refreshing or signing out', async () => {
+    vi.useFakeTimers();
+    const { client, io, rejectNextConnect } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    rejectNextConnect(unavailableHandshake());
+    rejectNextConnect(unavailableHandshake());
+    const unrecoverable = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    try {
+      const { result } = renderHook(() =>
+        useAgorClient({ url: 'http://daemon.test', accessToken: 'kept', authorityGeneration: 1 })
+      );
+
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(io.connect).toHaveBeenCalledTimes(1);
+      expect(result.current.connecting).toBe(true);
+      expect(result.current.error).toBeNull();
+
+      await act(() => vi.advanceTimersByTimeAsync(500));
+      expect(io.connect).toHaveBeenCalledTimes(2);
+      expect(result.current.connected).toBe(false);
+      expect(result.current.error).toBeNull();
+
+      await act(() => vi.advanceTimersByTimeAsync(999));
+      expect(io.connect).toHaveBeenCalledTimes(2);
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(io.connect).toHaveBeenCalledTimes(3);
+      expect(result.current.connected).toBe(true);
+      expect(result.current.error).toBeNull();
+
+      expect(refreshTokensMock).not.toHaveBeenCalled();
+      expect(createRestClient).not.toHaveBeenCalled();
+      expect(unrecoverable).not.toHaveBeenCalled();
+      expect(localStorage.getItem('agor-refresh-token')).toBe('stored-refresh');
+      const tokenSource =
+        vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+      expect((tokenSource as () => string | null | undefined)()).toBe('kept');
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    }
+  });
+
+  it('still refreshes over REST when a later handshake is a real 401', async () => {
+    vi.useFakeTimers();
+    const { client, io, rejectNextConnect } = makeSeamClient();
+    const restClient = { service: vi.fn() };
+    vi.mocked(createClient).mockReturnValue(client as never);
+    vi.mocked(createRestClient).mockResolvedValue(restClient as never);
+    refreshTokensMock.mockResolvedValue({
+      accessToken: 'fresh-after-401',
+      refreshToken: 'next-refresh',
+      user: { user_id: 'u1' },
+    });
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    rejectNextConnect(unavailableHandshake());
+    rejectNextConnect(
+      Object.assign(new Error('Invalid or expired authentication token'), {
+        data: { code: 401, className: 'not-authenticated' },
+      })
+    );
+
+    const { result } = renderHook(() =>
+      useAgorClient({ url: 'http://daemon.test', accessToken: 'stale', authorityGeneration: 1 })
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(refreshTokensMock).not.toHaveBeenCalled();
+
+    await act(() => vi.advanceTimersByTimeAsync(500));
+    expect(refreshTokensMock).toHaveBeenCalledExactlyOnceWith(restClient, 'stored-refresh');
+    expect(io.connect).toHaveBeenCalledTimes(3);
+    expect(result.current.connected).toBe(true);
+    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-401');
+  });
+});
+
 describe('useAgorClient suspended workspace lifecycle', () => {
   const restrictedHandshake = () =>
     Object.assign(new Error('Tenant access is restricted'), {

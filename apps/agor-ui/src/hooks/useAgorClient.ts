@@ -8,7 +8,11 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient, createRestClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isDefiniteAuthFailure, isTenantRestrictedError } from '../utils/authErrors';
+import {
+  isDefiniteAuthFailure,
+  isTenantRestrictedError,
+  isUnavailableHandshakeError,
+} from '../utils/authErrors';
 import {
   markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
@@ -179,6 +183,33 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       }, delay);
     };
 
+    // Manual reconnect with exponential backoff + cap. Previously we
+    // called `client.io.connect()` immediately on every disconnect;
+    // when the server repeatedly closed the socket (auth rejection,
+    // crash loop, server-side kick) this created a tight reconnect
+    // loop at network speed and a page refresh was the only way out.
+    const scheduleManualReconnect = () => {
+      if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
+        setConnecting(false);
+        // Give-up path — flip connected immediately; the grace period
+        // is only for quick reconnects we expect to recover from.
+        clearDisconnectGrace();
+        setConnected(false);
+        setError('Lost connection to daemon after multiple attempts. Please reload the page.');
+        return;
+      }
+      setConnecting(true);
+      const attempt = manualReconnectAttempts++;
+      // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
+      const delay = Math.min(500 * 2 ** attempt, 30_000);
+      clearManualReconnectTimer();
+      manualReconnectTimer = setTimeout(() => {
+        manualReconnectTimer = null;
+        if (!mounted) return;
+        client?.io.connect();
+      }, delay);
+    };
+
     let authenticatedReconnect: Promise<void> | null = null;
     const reconnectWithAuthenticatedHandshake = (nextAccessToken?: string): Promise<void> => {
       if (nextAccessToken) connectionAccessTokenRef.current = nextAccessToken;
@@ -343,30 +374,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         // "Reconnecting" immediately rather than flashing "Disconnected" for
         // the gap before the first connect_error fires.
         if (reason === 'io server disconnect') {
-          // Manual reconnect with exponential backoff + cap. Previously we
-          // called `client.io.connect()` immediately on every disconnect;
-          // when the server repeatedly closed the socket (auth rejection,
-          // crash loop, server-side kick) this created a tight reconnect
-          // loop at network speed and a page refresh was the only way out.
-          if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
-            setConnecting(false);
-            // Give-up path — flip connected immediately; the grace period
-            // is only for quick reconnects we expect to recover from.
-            clearDisconnectGrace();
-            setConnected(false);
-            setError('Lost connection to daemon after multiple attempts. Please reload the page.');
-            return;
-          }
-          setConnecting(true);
-          const attempt = manualReconnectAttempts++;
-          // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
-          const delay = Math.min(500 * 2 ** attempt, 30_000);
-          clearManualReconnectTimer();
-          manualReconnectTimer = setTimeout(() => {
-            manualReconnectTimer = null;
-            if (!mounted) return;
-            socketClient.io.connect();
-          }, delay);
+          scheduleManualReconnect();
         } else if (
           reason === 'transport close' ||
           reason === 'transport error' ||
@@ -387,6 +395,8 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
               if (!mounted) return;
+              // The refreshed handshake met an outage: the connect_error handler already scheduled a backoff reconnect.
+              if (isUnavailableHandshakeError(recoveryError)) return;
               // Still suspended after recovery: keep (or reschedule) the slow probe instead of an error.
               if (
                 !(recoveryError instanceof RefreshUnrecoverableError) &&
@@ -410,6 +420,13 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           // Any other probe failure keeps the suspended state and slow cadence; only an accepted handshake overturns it.
           if (restricted) {
             enterTenantRestricted();
+            return;
+          }
+          // A middleware-rejected handshake never auto-reconnects; an unreadable generation keeps tokens and backs off.
+          if (isUnavailableHandshakeError(err)) {
+            setError(null);
+            setConnected(false);
+            scheduleManualReconnect();
             return;
           }
           // Only show error on initial connection failure, not during reconnection attempts
@@ -451,7 +468,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           socketClient.io.once('connect_error', (err) => {
             clearTimeout(timeout);
             // The persistent handler already entered the suspended state; settle without a "daemon is not running" error.
-            if (isTenantRestrictedError(err) || restricted) {
+            if (isTenantRestrictedError(err) || restricted || isUnavailableHandshakeError(err)) {
               resolve();
               return;
             }

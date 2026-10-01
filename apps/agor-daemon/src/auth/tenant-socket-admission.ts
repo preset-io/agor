@@ -184,8 +184,9 @@ export function isTenantSocketPacketRejection(error: unknown): boolean {
   return error instanceof Error && packetRejections.has(error);
 }
 
-/** One warning per interval per replica for refused ack-less packets, carrying how many it stands for. */
-export function createRejectedPacketLog(
+/** One warning per interval per replica, carrying how many occurrences it stands for. */
+export function createRateLimitedSocketWarning(
+  event: string,
   intervalMs = 60_000,
   now: () => number = () => performance.now()
 ): (socketId: string) => void {
@@ -197,12 +198,18 @@ export function createRejectedPacketLog(
       suppressed++;
       return;
     }
-    console.warn(
-      `[tenant.restriction] socket packet refused socket=${socketId} suppressed=${suppressed}`
-    );
+    console.warn(`[tenant.restriction] ${event} socket=${socketId} suppressed=${suppressed}`);
     lastAt = at;
     suppressed = 0;
   };
+}
+
+/** One warning per interval per replica for refused ack-less packets. */
+export function createRejectedPacketLog(
+  intervalMs = 60_000,
+  now: () => number = () => performance.now()
+): (socketId: string) => void {
+  return createRateLimitedSocketWarning('socket packet refused', intervalMs, now);
 }
 
 export function missingSocketTenant(): Error {
@@ -210,6 +217,20 @@ export function missingSocketTenant(): Error {
 }
 
 /** Handshake rejection carrying the stable code in `data`, only for the restriction denial itself. */
+/** A codeless 503 from a restriction or generation read: transient, never a rejected credential. */
+export function unavailableSocketHandshakeError(
+  error: unknown
+): (Error & { data: { code: number; className: string } }) | null {
+  if (isTenantRestrictedRejection(error)) return null;
+  const candidate = error as { code?: unknown; className?: unknown } | null;
+  if (candidate?.code !== 503 && candidate?.className !== 'unavailable') return null;
+  const rejection = new Error('Authentication cannot be verified right now') as Error & {
+    data: { code: number; className: string };
+  };
+  rejection.data = { code: 503, className: 'unavailable' };
+  return rejection;
+}
+
 export function restrictedSocketHandshakeError(
   error: unknown
 ): (Error & { data: { code: string } }) | null {

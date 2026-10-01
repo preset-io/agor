@@ -25,7 +25,7 @@ import {
   type ResolvedMultiTenancyConfig,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
-import { type Application, NotAuthenticated } from '@agor/core/feathers';
+import { type Application, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   type BranchID,
   MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
@@ -856,6 +856,57 @@ describe('Socket.IO lifecycle logging', () => {
     expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
   });
 
+  it('keeps unverifiable handshakes out of the failure gauge and logs them once per minute', async () => {
+    vi.useFakeTimers();
+    const operationalMetrics: DaemonOperationalMetrics = {
+      enabled: true,
+      start: vi.fn(),
+      stop: vi.fn(),
+      beginExternalRequest: vi.fn(() => vi.fn()),
+      recordSocketClientConnection: vi.fn(() => vi.fn()),
+      recordSocketAuthenticationFailure: vi.fn(),
+    };
+    const { app, io } = buildHarness(
+      {
+        multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+        assertTenantAccess: vi.fn(async () => {
+          throw new Unavailable('Tenant access cannot be verified');
+        }),
+      },
+      undefined,
+      operationalMetrics
+    );
+    const authentication = app.service('authentication') as { authenticate: () => unknown };
+    vi.spyOn(authentication, 'authenticate').mockRejectedValueOnce(
+      new Unavailable('Invalid or expired authentication token')
+    );
+    const errors: (Error | undefined)[] = [];
+    for (const id of ['strategy-outage', 'admission-outage']) {
+      const socket = makeSocket(id, io);
+      socket.handshake.auth = { token: 'signed-token' };
+      socket.feathers = {
+        pendingAuthenticationResult: {
+          user: { user_id: ALICE },
+          authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+        },
+      };
+      errors.push(
+        await new Promise<Error | undefined>((resolve) => io.middlewares[0]?.(socket, resolve))
+      );
+    }
+
+    expect(errors.map((error) => (error as Error & { data?: unknown }).data)).toEqual([
+      { code: 503, className: 'unavailable' },
+      { code: 503, className: 'unavailable' },
+    ]);
+    expect(operationalMetrics.recordSocketAuthenticationFailure).not.toHaveBeenCalled();
+    expect(warnSpy.mock.calls).toEqual([
+      ['[tenant.restriction] socket handshake unavailable socket=strategy-outage suppressed=0'],
+    ]);
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
+  });
+
   it('ends the shared restriction read before the handshake continues', async () => {
     const { io } = buildHarness();
     const ended = vi.mocked(endTenantRestrictionRequest);
@@ -1166,11 +1217,20 @@ describe('Socket.IO handshake credential extraction', () => {
       expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
     },
     {
-      name: 'an unverifiable read keeps the generic refreshable rejection',
-      rejection: Object.assign(new Error('Tenant access cannot be verified'), { code: 503 }),
+      name: 'an unverifiable admission read is a transient 503, never a refreshable rejection',
+      rejection: new Unavailable('Tenant access cannot be verified'),
       expected: {
-        message: 'Invalid or expired authentication token',
-        data: { code: 401, className: 'not-authenticated' },
+        message: 'Authentication cannot be verified right now',
+        data: { code: 503, className: 'unavailable' },
+      },
+    },
+    {
+      name: 'an unverifiable strategy generation read is a transient 503, never a refreshable rejection',
+      rejection: new Unavailable('Invalid or expired authentication token'),
+      fromStrategy: true,
+      expected: {
+        message: 'Authentication cannot be verified right now',
+        data: { code: 503, className: 'unavailable' },
       },
     },
   ])('$name', async ({ rejection, expected, fromStrategy }) => {

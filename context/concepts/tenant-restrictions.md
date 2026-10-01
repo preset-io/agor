@@ -362,8 +362,10 @@ check runs ahead of tenant admission on each JWT path, so the browser could
 otherwise not tell a suspended workspace from an expired session. Only a holder
 of a signed runtime credential or valid primary credentials for that tenant can
 reach it. The refresh service preserves that one code and the codeless 503; every
-other refresh failure stays "invalid or expired". The browser treats the 503 as
-transient and keeps its stored credential. After activation the watermark moves, so a
+other refresh failure stays "invalid or expired". The Socket.IO handshake answers it
+with `connect_error` data `{ code: 503, className: 'unavailable' }` (rate-limited warning,
+not counted as an authentication failure). The browser treats the 503 as transient,
+keeps its stored credential and reconnects with backoff, without a refresh. After activation the watermark moves, so a
 parked credential is rejected codelessly and the browser falls back to sign-in.
 
 Ordinary service admission, bearer authentication (executor-session upload and
