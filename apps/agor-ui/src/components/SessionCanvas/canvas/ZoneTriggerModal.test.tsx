@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { type ReactNode, StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
+import { FULL_SESSION_DETAILS_TIMEOUT_MS } from '../../../hooks/useFullSessionDetails';
 import { renderTemplate } from '../../../utils/templates';
 import { ZoneTriggerModal } from './ZoneTriggerModal';
 
@@ -300,6 +301,45 @@ describe('ZoneTriggerModal action snapshot', () => {
         session?: { custom_context?: unknown };
       };
       expect(context.session?.custom_context).toEqual(fullRow.custom_context);
+    });
+
+    it('times out an unanswered request into the same error + Retry state', async () => {
+      renderTemplateMock.mockResolvedValue('Run 3');
+      const hung = deferred<Session>();
+      const get = vi.fn().mockReturnValueOnce(hung.promise).mockResolvedValueOnce(fullRow);
+      vi.useFakeTimers();
+      try {
+        render(modal({ service: () => ({ get }) } as unknown as AgorClient));
+        await act(async () => {
+          vi.advanceTimersByTime(1_000);
+        });
+        expect(screen.getByText('Rendering template…')).toBeInTheDocument();
+
+        await act(async () => {
+          vi.advanceTimersByTime(FULL_SESSION_DETAILS_TIMEOUT_MS);
+        });
+        expect(
+          screen.getByText('Could not load full session details: the request timed out after 15 s')
+        ).toBeInTheDocument();
+        expect(screen.queryByText('Rendering template…')).toBeNull();
+        expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeDisabled();
+
+        // A late answer to the timed-out attempt does not change the state.
+        await act(async () => {
+          hung.resolve(fullRow);
+          await hung.promise;
+        });
+        expect(screen.getByText(/the request timed out/)).toBeInTheDocument();
+        expect(renderTemplateMock).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+      await waitFor(() => expect(prompt).toHaveValue('Run 3'));
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeEnabled();
     });
 
     it('retries after a socket reconnect', async () => {

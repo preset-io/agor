@@ -10,6 +10,8 @@
  * - a lean row is fetched with `sessions.get`;
  * - a failed fetch is a visible `error` with `retry`, and is retried
  *   automatically when the socket re-authenticates (reconnect);
+ * - a fetch that does not answer within `timeoutMs` is the same `error`
+ *   (a late answer to that attempt is ignored; Retry starts a new one);
  * - once `ready` for a session id, the result is kept while enabled — a later
  *   store downgrade or client change does not reload it under the user;
  *   disabling (closing the surface) forgets it so the next use reloads.
@@ -27,13 +29,25 @@ export type FullSessionDetailsState =
 
 type StoredResult = FullSessionDetailsState & { sessionId: string };
 
+/** How long a `sessions.get` may stay unanswered before it counts as failed. */
+export const FULL_SESSION_DETAILS_TIMEOUT_MS = 15_000;
+
+/** The full-record request did not answer in time. */
+export class FullSessionDetailsTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`the request timed out after ${Math.round(timeoutMs / 1000)} s`);
+    this.name = 'FullSessionDetailsTimeoutError';
+  }
+}
+
 const IDLE: FullSessionDetailsState = { status: 'idle' };
 const LOADING: FullSessionDetailsState = { status: 'loading' };
 
 export function useFullSessionDetails(
   client: AgorClient | null | undefined,
   row: Session | null | undefined,
-  enabled = true
+  enabled = true,
+  timeoutMs = FULL_SESSION_DETAILS_TIMEOUT_MS
 ): FullSessionDetailsState & { retry: () => void } {
   const sessionId = enabled ? (row?.session_id ?? null) : null;
   const [stored, setStored] = useState<StoredResult | null>(null);
@@ -60,20 +74,33 @@ export function useFullSessionDetails(
       return;
     }
     if (!client) return;
-    let cancelled = false;
+    // Settled by the first of: the answer, a failure, the timeout, cleanup.
+    let settled = false;
+    const settle = (next: StoredResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      setStored(next);
+    };
     setStored({ sessionId, status: 'loading' });
+    const timer = setTimeout(
+      () =>
+        settle({
+          sessionId,
+          status: 'error',
+          error: new FullSessionDetailsTimeoutError(timeoutMs),
+        }),
+      timeoutMs
+    );
     (client.service('sessions').get(sessionId) as Promise<Session>).then(
-      (session) => {
-        if (!cancelled) setStored({ sessionId, status: 'ready', session });
-      },
-      (error: unknown) => {
-        if (!cancelled) setStored({ sessionId, status: 'error', error });
-      }
+      (session) => settle({ sessionId, status: 'ready', session }),
+      (error: unknown) => settle({ sessionId, status: 'error', error })
     );
     return () => {
-      cancelled = true;
+      settled = true;
+      clearTimeout(timer);
     };
-  }, [sessionId, client, attempt]);
+  }, [sessionId, client, attempt, timeoutMs]);
 
   // A reconnect (new socket-auth generation) retries a failed load.
   const authGenerationRef = useRef(authGeneration);
