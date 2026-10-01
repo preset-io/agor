@@ -71,13 +71,18 @@ Session rows carry a few large, single-session `custom_context` values. A list t
 does not need them can ask for lean rows:
 
 ```ts
-import { hasFullSessionDetails, SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
+import { isSessionListRow } from '@agor-live/client';
 
-const page = await client.service('sessions').find({
+const result = await client.service('sessions').find({
   query: { archived: false, $sort: { updated_at: -1 }, $limit: 50, lean: true },
 });
-for (const row of page.data) {
-  row.read_shape === SESSION_LIST_ROW_SHAPE; // 'session-list-v1' on every lean row
+// `find` returns a page ({ data, total, ... }) or, without pagination, an array.
+const rows = Array.isArray(result) ? result : result.data;
+for (const row of rows) {
+  if (isSessionListRow(row)) {
+    // read_shape === 'session-list-v1': scheduled_run, slash_commands and
+    // skills are withheld here, not absent. Use sessions.get(row.session_id).
+  }
 }
 ```
 
@@ -91,7 +96,8 @@ filtering or pagination. On each row it:
   template fields, is kept.
 - **marks** the row with `read_shape: 'session-list-v1'`. The mark is there even when
   the session never had those keys, so "withheld" and "absent" can't be confused.
-  Full records never carry it.
+  Full records never carry it, and only the server sets it: `create`, `patch`, and
+  `update` reject a `read_shape` field with 400.
 
 Use `isSessionListRow(row)` / `hasFullSessionDetails(row)` (types: `SessionListRow`)
 before trusting a missing withheld key. To get the complete record, call
