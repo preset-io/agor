@@ -37,8 +37,8 @@ describe('browser socket client acknowledgement on disconnect', () => {
             if (event === 'get' && path === 'stranded') {
               // The request reaches the daemon, then the transport drops
               // before any acknowledgement is written.
-              packet[packet.length - 1] = () => {};
-              setImmediate(() => socket.disconnect(true));
+              socket.disconnect(true);
+              return;
             }
             next();
           });
