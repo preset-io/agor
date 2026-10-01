@@ -1,8 +1,9 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { message } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionsTab } from './SessionsTab';
 
 const overview: MCPMarketplaceOverview = {
@@ -38,6 +39,16 @@ const overview: MCPMarketplaceOverview = {
 };
 
 describe('Marketplace session attachments', () => {
+  afterEach(async () => {
+    await act(async () => {
+      cleanup();
+      // Static antd messages live outside RTL's roots. Dispose their timers and
+      // flush React work before jsdom removes window at worker teardown.
+      message.destroy();
+    });
+    expect(document.querySelector('.ant-message-notice')).not.toBeInTheDocument();
+  });
+
   it('renders a dedicated empty state when no visible session uses a server', () => {
     render(
       <MemoryRouter>
@@ -157,6 +168,7 @@ describe('Marketplace session attachments', () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(remove).toHaveBeenCalledWith('server-1'));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+    expect(await screen.findByText('Server detached')).toBeVisible();
   });
 
   it('closes confirmation and fails closed when session-write authority is lost', async () => {

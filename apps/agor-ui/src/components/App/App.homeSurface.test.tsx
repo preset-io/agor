@@ -16,6 +16,7 @@ import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { App } from './App';
 
 const canvasCommit = vi.hoisted(() => vi.fn<(boardName: string | null) => void>());
@@ -151,6 +152,25 @@ function seedStore() {
       [BRANCH_B, [session2]],
     ]),
     userById: new Map([[user.user_id, user]]),
+    sessionsHydrated: true,
+    branchesHydrated: true,
+  } as never);
+}
+
+/** Someone else's teammate on Alpha, so Home's rail shows "See all 1". */
+function seedSharedTeammate() {
+  const shared = {
+    branch_id: '019e8888-0000-7000-8000-00000000000c',
+    repo_id: 'repo-1',
+    board_id: BOARD_A,
+    name: 'scout',
+    created_by: 'someone-else',
+    archived: false,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+  } as unknown as Branch;
+  const { branchById } = agorStore.getState();
+  agorStore.setState({
+    branchById: new Map([...branchById, [shared.branch_id, shared]]),
   } as never);
 }
 
@@ -241,7 +261,7 @@ async function settle() {
   });
 }
 
-const homeIsShowing = () => !!screen.queryByText(/Hi, Tester/);
+const homeIsShowing = () => !!screen.queryByText(/Good (morning|afternoon|evening), Tester/);
 const canvasBoardName = () =>
   screen.queryByTestId('session-canvas')?.getAttribute('data-board') ?? null;
 const openSessionId = () =>
@@ -268,6 +288,7 @@ async function pickBoardFromSwitcher(name: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  resetAccessCacheForTests();
   seedStore();
   canvasCommit.mockClear();
 });
@@ -292,6 +313,65 @@ describe('Settings opens as an overlay, not a navigation', () => {
     expect(currentPath).toBe('/');
     expect(homeIsShowing()).toBe(true);
     expect(screen.queryByTestId('settings-modal')).toBeNull();
+  });
+
+  it.each(['/teammates', '/teammates/'])(
+    'renders the teammates directory at %s without canonicalizing to Home',
+    async (path) => {
+      renderApp(path);
+      await settle();
+      expect(currentPath).toBe(path);
+      expect(screen.getByRole('heading', { name: 'AI teammates' })).toBeTruthy();
+      expect(screen.queryByTestId('session-canvas')).toBeNull();
+    }
+  );
+
+  it('opens the teammates directory from the Home rail and returns Home from it', async () => {
+    seedSharedTeammate();
+    renderApp('/');
+    // Text queries: role queries trip jsdom's CSS parser on AntD's button styles here.
+    fireEvent.click(await screen.findByText('See all 1'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+    expect(document.querySelector('[aria-label="Scout, open Alpha"]')).toBeTruthy();
+
+    // The directory's back link, by its icon: "Home" text appears elsewhere in the shell.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    // It went back in history rather than pushing Home, so Forward returns to the directory.
+    fireEvent.click(screen.getByTestId('forward'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+  });
+
+  it('returns Home, not Settings, from the directory after a Settings round trip', async () => {
+    seedSharedTeammate();
+    renderApp('/');
+    fireEvent.click(await screen.findByText('See all 1'));
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+    fireEvent.click(screen.getByTestId('close-settings'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+
+    // Closing Settings pushed the directory again, so the entry before it is Settings, not Home.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    expect(screen.queryByTestId('settings-modal')).toBeNull();
+  });
+
+  it('returns Home from a deep-linked teammates directory', async () => {
+    renderApp('/teammates');
+    await settle();
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
   });
 
   it('keeps the board canvas rendered behind the settings modal', async () => {

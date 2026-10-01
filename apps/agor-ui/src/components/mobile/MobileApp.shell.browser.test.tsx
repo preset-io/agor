@@ -6,8 +6,8 @@ import { MobileApp } from './MobileApp';
 
 // Home renders a deliberately over-wide child; the shell root must clip it so
 // it can never widen the document and drag the in-flow bottom nav off-screen.
-vi.mock('./MobileHomePage', () => ({
-  MobileHomePage: () => <div style={{ width: 2000, height: 200 }}>too wide on purpose</div>,
+vi.mock('../HomePage', () => ({
+  HomePage: () => <div style={{ width: 2000, height: 200 }}>too wide on purpose</div>,
 }));
 // Keep the browser bundle light: mock the heavy routed pages / modals.
 vi.mock('./SessionPage', () => ({ SessionPage: () => null }));

@@ -1,5 +1,6 @@
 import type { theme } from 'antd';
 import type React from 'react';
+import { isDarkTheme } from '../../utils/theme';
 
 export const withAlpha = (color: string, alpha: number): string => {
   if (color.startsWith('#')) {
@@ -56,3 +57,18 @@ export const glassSurfaceStyle = (
   backdropFilter: 'blur(20px) saturate(180%)',
   WebkitBackdropFilter: 'blur(20px) saturate(180%)',
 });
+
+/**
+ * Glass for page content cards over the app backdrop (Home and its directories).
+ * The light backdrop needs a denser fill and a visible edge to separate cards;
+ * dark keeps the default glass alpha. Spread onto a `GlassPanel`.
+ */
+export const pageGlassPanelProps = (
+  token: ReturnType<typeof theme.useToken>['token']
+): { surfaceAlpha: number; style?: React.CSSProperties } =>
+  isDarkTheme(token)
+    ? { surfaceAlpha: 0.3 }
+    : {
+        surfaceAlpha: 0.65,
+        style: { border: `${token.lineWidth}px ${token.lineType} ${token.colorBorder}` },
+      };

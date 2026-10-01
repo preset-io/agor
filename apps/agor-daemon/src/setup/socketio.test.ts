@@ -735,6 +735,19 @@ describe('Socket.IO transport ceiling', () => {
       maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     });
   });
+
+  it('compresses WebSocket frames without cross-message context', () => {
+    const { config } = buildHarness();
+
+    // Exact match: a numeric serverMaxWindowBits/clientMaxWindowBits makes ws
+    // reject browser offers (Firefox) with HTTP 400 instead of declining.
+    expect((config.serverOptions as { perMessageDeflate: unknown }).perMessageDeflate).toEqual({
+      threshold: 1024,
+      serverNoContextTakeover: true,
+      clientNoContextTakeover: true,
+      zlibDeflateOptions: { memLevel: 7 },
+    });
+  });
 });
 
 describe('Socket.IO lifecycle logging', () => {

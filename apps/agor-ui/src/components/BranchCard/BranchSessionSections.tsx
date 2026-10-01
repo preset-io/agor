@@ -15,7 +15,6 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import {
-  App,
   Button,
   Collapse,
   ConfigProvider,
@@ -29,11 +28,11 @@ import {
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
-import { ARCHIVE_REFRESH_WARNING, useSessionActions } from '../../hooks/useSessionActions';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import {
   type BranchSectionKey,
@@ -392,8 +391,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   client,
 }) => {
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
-  const { showSuccess, showError, showWarning } = useThemedMessage();
+  const { showSuccess, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const isMobileViewport = useIsMobileViewport();
   // One idle flag per list mounts every row's hover toolbar in a single commit.
@@ -424,9 +422,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
     }),
     [rowGap]
   );
-  const { archiveSession: archiveSessionUnstable } = useSessionActions(client);
-  // useSessionActions returns a new function per render; keep row handlers memo-stable.
-  const archiveSession = useStableCallback(archiveSessionUnstable);
+  // The confirm helper is recreated per render; keep row handlers memo-stable.
+  const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
 
   const [forkSpawnModal, setForkSpawnModal] = useState<{
     open: boolean;
@@ -650,35 +647,17 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const handleArchiveSession = useCallback(
     (sessionId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-
-      modal.confirm({
-        title: 'Archive session and same-branch children?',
-        content:
-          'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
-        okText: 'Archive',
-        cancelText: 'Cancel',
-        onOk: async () => {
-          setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
-          try {
-            const result = await archiveSession(sessionId as SessionID);
-            if (result?.reconciliation === 'refresh-required') {
-              showWarning(ARCHIVE_REFRESH_WARNING);
-            } else if (result) {
-              showSuccess('Session and same-branch children archived');
-            } else {
-              showError('Failed to archive session');
-            }
-          } finally {
-            setArchivingSessionIds((prev) => {
-              const next = new Set(prev);
-              next.delete(sessionId);
-              return next;
-            });
-          }
-        },
+      confirmArchive(sessionId, {
+        onStart: () => setArchivingSessionIds((prev) => new Set(prev).add(sessionId)),
+        onSettled: () =>
+          setArchivingSessionIds((prev) => {
+            const next = new Set(prev);
+            next.delete(sessionId);
+            return next;
+          }),
       });
     },
-    [archiveSession, modal, showSuccess, showError, showWarning]
+    [confirmArchive]
   );
 
   const getGatewaySource = useCallback(

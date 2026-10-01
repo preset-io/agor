@@ -167,7 +167,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   // store-derived `boards`, so unrelated App re-renders can't hand us a fresh
   // recents array and defeat React.memo. The localStorage-backed recents list is
   // shared across hook instances, so this stays in sync with App's visit tracker.
-  const { recentBoards } = useRecentBoards(boards, currentBoardId ?? '');
+  const { recentBoards } = useRecentBoards(boards, currentBoardId ?? '', user?.user_id);
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.

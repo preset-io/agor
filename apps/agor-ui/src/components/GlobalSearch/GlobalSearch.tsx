@@ -1,8 +1,9 @@
 import { CloseOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Input, type InputRef, Tooltip, theme } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useInsertionEffect, useMemo, useRef, useState } from 'react';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { OPEN_GLOBAL_SEARCH_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { GLOBAL_SEARCH_LISTBOX_ID, GlobalSearchDropdown, rowDomId } from './GlobalSearchDropdown';
 import { SearchChipRow } from './SearchChipRow';
 import {
@@ -25,6 +26,90 @@ interface GlobalSearchProps extends GlobalSearchEntityMaps {
   onSettingsClick?: () => void;
 }
 
+// Third-party controls may retain their first handler. The stable wrapper's
+// separate scope contains only a ref, not the callback captured by the effect.
+function createSearchCallback<T extends (...args: never[]) => unknown>(ref: React.RefObject<T>): T {
+  return ((...args: never[]) => ref.current(...args)) as T;
+}
+
+function useSearchCallback<T extends (...args: never[]) => unknown>(callback: T): T {
+  const ref = useRef(callback);
+  // Publish only committed renders, before even child layout effects can invoke
+  // a handler. Render-time writes leak suspended work; layout effects are too late.
+  // Keep this local rather than using useStableCallback's layout-time wrapper.
+  // Capture this render's callback directly, never via a render-written pending ref.
+  useInsertionEffect(() => {
+    ref.current = callback;
+  }, [callback]);
+  return useMemo(() => createSearchCallback(ref), []);
+}
+
+/** Keep native listeners and stable close state outside entity-bearing render scopes. */
+function useSearchPopover(
+  setQuery: React.Dispatch<React.SetStateAction<string>>,
+  setActiveChip: React.Dispatch<React.SetStateAction<ChipFilter>>
+) {
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<InputRef | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Global Cmd+K / Ctrl+K opens + focuses the input.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        setOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  useEffect(
+    () =>
+      onShellPicker(OPEN_GLOBAL_SEARCH_EVENT, (chip) => {
+        setActiveChip(chip ?? 'all');
+        setOpen(true);
+      }),
+    [setActiveChip]
+  );
+
+  // Focus the input whenever the popover opens — covers both icon click
+  // and Cmd+K. Uses rAF because the Input mounts in the same render tick.
+  useEffect(() => {
+    if (open) {
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [open]);
+
+  // Click outside closes the dropdown.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const handleClose = () => {
+    setOpen(false);
+    setQuery('');
+    inputRef.current?.blur();
+  };
+
+  // Tooltip can retain its original child's handler. Keep that handler in
+  // this data-free scope too, rather than closing over the search render.
+  const handleToggle = () => {
+    if (open) handleClose();
+    else setOpen(true);
+  };
+
+  return { open, setOpen, inputRef, containerRef, handleClose, handleToggle };
+}
+
 /**
  * Navbar global-search input + dropdown.
  *
@@ -42,12 +127,12 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   onSettingsClick,
 }) => {
   const { token } = theme.useToken();
-  const inputRef = useRef<InputRef | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
   const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
   const [activeChip, setActiveChip] = useState<ChipFilter>('all');
+  const { open, setOpen, inputRef, containerRef, handleClose, handleToggle } = useSearchPopover(
+    setQuery,
+    setActiveChip
+  );
   const [ownedByMe, setOwnedByMe] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -108,73 +193,32 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     document.getElementById(rowDomId(target))?.scrollIntoView({ block: 'nearest' });
   }, [selectedIndex, visibleRows, open]);
 
-  // Global Cmd+K / Ctrl+K opens + focuses the input.
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
-        e.preventDefault();
-        setOpen(true);
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
-
-  // Focus the input whenever the popover opens — covers both icon click
-  // and Cmd+K. Uses rAF because the Input mounts in the same render tick.
-  useEffect(() => {
-    if (open) {
-      requestAnimationFrame(() => inputRef.current?.focus());
+  const navigateToResult = useSearchCallback((result: SearchResultItem) => {
+    switch (result.type) {
+      case 'board':
+        navigation.goToBoard(result.item.board_id);
+        break;
+      case 'branch':
+      case 'teammate':
+        navigation.goToBranch(result.item.branch_id);
+        break;
+      case 'session':
+        navigation.goToSession(result.item.session_id);
+        break;
+      case 'artifact':
+        navigation.goToArtifact(result.item.artifact_id);
+        break;
+      case 'mcp':
+        // MCP servers don't live on the canvas — fall back to opening
+        // Settings. V2 will deep-link to the MCP tab + scroll-into-view.
+        onSettingsClick?.();
+        break;
     }
-  }, [open]);
-
-  // Click outside closes the dropdown.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (!containerRef.current?.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
-
-  const navigateToResult = useCallback(
-    (result: SearchResultItem) => {
-      switch (result.type) {
-        case 'board':
-          navigation.goToBoard(result.item.board_id);
-          break;
-        case 'branch':
-        case 'teammate':
-          navigation.goToBranch(result.item.branch_id);
-          break;
-        case 'session':
-          navigation.goToSession(result.item.session_id);
-          break;
-        case 'artifact':
-          navigation.goToArtifact(result.item.artifact_id);
-          break;
-        case 'mcp':
-          // MCP servers don't live on the canvas — fall back to opening
-          // Settings. V2 will deep-link to the MCP tab + scroll-into-view.
-          onSettingsClick?.();
-          break;
-      }
-      setOpen(false);
-      setQuery('');
-    },
-    [navigation, onSettingsClick]
-  );
-
-  const handleClose = useCallback(() => {
     setOpen(false);
     setQuery('');
-    inputRef.current?.blur();
-  }, []);
+  });
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = useSearchCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       if (query) {
@@ -196,7 +240,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
       return;
     }
     // Enter is handled by `<Input.Search>`'s onSearch — see handleSubmit.
-  };
+  });
 
   // Fired by `<Input.Search>` on both Enter keypress and click of the
   // built-in search-icon button. If the user submits before the 220ms
@@ -209,7 +253,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
   // to a "random" board any time they hit Enter/click search on an empty
   // field. Clicking a recent row directly still navigates via its own
   // onClick in GlobalSearchDropdown, unaffected by this guard.
-  const handleSubmit = (value: string) => {
+  const handleSubmit = useSearchCallback((value: string) => {
     if (!value.trim()) return;
     if (value.trim() !== debouncedQuery.trim()) {
       flush();
@@ -217,7 +261,20 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
     }
     const target = visibleRows[selectedIndex];
     if (target) navigateToResult(target);
-  };
+  });
+
+  const handleChange = useSearchCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    setQuery(e.target.value);
+    setSelectedIndex(0);
+  });
+  const handleChipChange = useSearchCallback((chip: ChipFilter) => {
+    setActiveChip(chip);
+    setSelectedIndex(0);
+  });
+  const handleOwnedByMeToggle = useSearchCallback(() => {
+    setOwnedByMe((v) => !v);
+    setSelectedIndex(0);
+  });
 
   return (
     <div ref={containerRef} style={{ position: 'relative' }}>
@@ -226,13 +283,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
           type="text"
           icon={<SearchOutlined style={{ fontSize: token.fontSizeLG }} />}
           aria-label="Open search"
-          onClick={() => {
-            if (open) {
-              handleClose();
-            } else {
-              setOpen(true);
-            }
-          }}
+          onClick={handleToggle}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
         />
       </Tooltip>
@@ -259,10 +310,7 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
               ref={inputRef}
               placeholder="Search…"
               value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                setSelectedIndex(0);
-              }}
+              onChange={handleChange}
               onKeyDown={handleKeyDown}
               onSearch={handleSubmit}
               allowClear
@@ -293,15 +341,9 @@ export const GlobalSearch: React.FC<GlobalSearchProps> = ({
           </div>
           <SearchChipRow
             activeChip={activeChip}
-            onChipChange={(chip) => {
-              setActiveChip(chip);
-              setSelectedIndex(0);
-            }}
+            onChipChange={handleChipChange}
             ownedByMe={ownedByMe}
-            onOwnedByMeToggle={() => {
-              setOwnedByMe((v) => !v);
-              setSelectedIndex(0);
-            }}
+            onOwnedByMeToggle={handleOwnedByMeToggle}
             counts={showRecents ? undefined : counts}
           />
           <GlobalSearchDropdown

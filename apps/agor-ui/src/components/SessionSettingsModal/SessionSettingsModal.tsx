@@ -95,6 +95,10 @@ interface FormValues {
 // depends on it) doesn't re-fire on unrelated store patches.
 const EMPTY_MCP_SERVER_IDS: string[] = [];
 
+function formatCustomContext(customContext: Session['custom_context']): string {
+  return customContext ? JSON.stringify(customContext, null, 2) : '';
+}
+
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
   const permissionMode: PermissionMode =
     session.permission_config?.mode ??
@@ -118,7 +122,7 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
     codexNetworkAccess:
       session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
     saveAsDefault: false,
-    custom_context: session.custom_context ? JSON.stringify(session.custom_context, null, 2) : '',
+    custom_context: formatCustomContext(session.custom_context),
     callbackConfig: {
       enabled: session.callback_config?.enabled ?? true,
       includeLastMessage: session.callback_config?.include_last_message ?? true,
@@ -127,7 +131,11 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
   };
 }
 
-function buildUpdates(values: FormValues, session: Session): Partial<Session> {
+function buildUpdates(
+  values: FormValues,
+  session: Session,
+  initialCustomContext: string
+): Partial<Session> {
   const updates: Partial<Session> = {};
 
   if (values.title !== session.title) {
@@ -177,14 +185,19 @@ function buildUpdates(values: FormValues, session: Session): Partial<Session> {
     };
   }
 
-  if (values.custom_context) {
-    try {
-      updates.custom_context = JSON.parse(values.custom_context);
-    } catch {
-      // Don't update if JSON is invalid
+  // Only send custom_context when the JSON was actually edited: echoing an
+  // unedited copy back would overwrite newer server-side values (arrays such
+  // as SDK-reported slash_commands replace rather than merge on patch).
+  if (values.custom_context !== initialCustomContext) {
+    if (values.custom_context) {
+      try {
+        updates.custom_context = JSON.parse(values.custom_context);
+      } catch {
+        // Don't update if JSON is invalid
+      }
+    } else if (values.custom_context === '') {
+      updates.custom_context = undefined;
     }
-  } else if (values.custom_context === '') {
-    updates.custom_context = undefined;
   }
 
   if (values.callbackConfig) {
@@ -224,6 +237,11 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
     buildInitialValues(session, sessionMcpServerIds)
   );
+  // The `session` prop comes from a lean session list that omits bulky
+  // custom_context keys. Seed the editable JSON from the full record so the
+  // user edits what is actually stored; read-only only while it loads.
+  const [fullContextSessionId, setFullContextSessionId] = React.useState<string | null>(null);
+  const customContextReady = !client || fullContextSessionId === session.session_id;
   const [envSelections, setEnvSelections] = React.useState<string[]>([]);
   const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
   const prevOpenRef = React.useRef(false);
@@ -251,6 +269,31 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       form.setFieldsValue(values);
     }
   }, [open, session, sessionMcpServerIds, form]);
+
+  // Load the full custom_context when the modal opens (or retargets).
+  React.useEffect(() => {
+    if (!open || !client) return;
+    let cancelled = false;
+    setFullContextSessionId(null);
+    (async () => {
+      try {
+        const full = (await client.service('sessions').get(session.session_id)) as Session;
+        if (cancelled) return;
+        const text = formatCustomContext(full.custom_context);
+        setFullContextSessionId(session.session_id);
+        setInitialValues((previous) => ({ ...previous, custom_context: text }));
+        // The field is read-only until now, so there is no edit to preserve.
+        form.setFieldValue('custom_context', text);
+      } catch {
+        // Fall back to the row's (possibly lean) context. Patches deep-merge
+        // objects, so keys absent from an edit are kept server-side.
+        if (!cancelled) setFullContextSessionId(session.session_id);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, session.session_id, form]);
 
   // Load current env selections when the modal opens.
   React.useEffect(() => {
@@ -289,7 +332,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
       const values = form.getFieldsValue(true) as FormValues;
-      const updates = buildUpdates(values, session);
+      const updates = buildUpdates(values, session, initialValues.custom_context);
 
       if (Object.keys(updates).length > 0 && onUpdate) {
         onUpdate(session.session_id, updates);
@@ -405,7 +448,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         fallbackTitle="Failed to load Advanced settings."
         resetKey={session.session_id}
       >
-        <AdvancedSettingsForm showHelpText />
+        <AdvancedSettingsForm showHelpText disabled={!customContextReady} />
       </ErrorBoundary>
     ),
   });

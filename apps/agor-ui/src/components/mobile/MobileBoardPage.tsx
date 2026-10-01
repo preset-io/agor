@@ -39,10 +39,12 @@ import {
   Typography,
   theme,
 } from 'antd';
+import { useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { isSafeExternalUrl } from '@/utils/safeExternalUrl';
 import { sortSessions } from '@/utils/sessionSearch';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
+import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -72,6 +74,8 @@ interface MobileBoardPageProps {
   commentsBadge?: number;
   /** Opens comments/mentions from the header bell. */
   onOpenComments?: () => void;
+  /** Keys the visit history this page records to the signed-in user. */
+  userId?: string;
 }
 
 function statusColor(status: Branch['filesystem_status']): string {
@@ -108,6 +112,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   firstTaskAssistantName,
   commentsBadge,
   onOpenComments,
+  userId,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
@@ -116,6 +121,11 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     ? boardId
     : resolveBoardFromUrlPure(boardId, boardById);
   const board = resolvedBoardId ? boardById.get(resolvedBoardId) : undefined;
+  const trackBoardVisit = useTrackBoardVisit(userId);
+  const visitedBoardId = board?.board_id;
+  useEffect(() => {
+    if (visitedBoardId) trackBoardVisit(visitedBoardId);
+  }, [visitedBoardId, trackBoardVisit]);
 
   const boardSwitcher = {
     boards: Array.from(boardById.values())

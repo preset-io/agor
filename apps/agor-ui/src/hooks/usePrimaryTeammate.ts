@@ -3,8 +3,8 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 
 interface PrimaryTeammate {
   branch: Branch | null;
-  /** False from the render an identity change or a new resolve begins until its answer (or an explicit pick) lands, and after a failure. */
-  current: boolean;
+  /** Whether `branch` was resolved or picked for this client and caller; a `refreshKey` re-resolve keeps it true. */
+  ownedByCaller: boolean;
   setBranch: (branch: Branch | null) => void;
   resolving: boolean;
   failed: boolean;
@@ -20,13 +20,16 @@ export function usePrimaryTeammate(
   refreshKey?: unknown
 ): PrimaryTeammate {
   const [branch, setResolvedBranch] = useState<Branch | null>(null);
-  const [branchRequest, setBranchRequest] = useState(0);
+  const [branchCaller, setBranchCaller] = useState<readonly unknown[] | null>(null);
   const [resolving, setResolving] = useState(false);
   const [failed, setFailed] = useState(false);
   const requestRef = useRef(0);
   // Invalidate during render, as useIdentityGuardedAsync does: a response landing right after an identity change commits must not be accepted.
   const identity = [client, userId, authenticationGeneration, refreshKey];
   const renderedIdentityRef = useRef(identity);
+  const caller = [client, userId, authenticationGeneration] as const;
+  const callerRef = useRef(caller);
+  callerRef.current = caller;
   if (renderedIdentityRef.current.some((value, index) => !Object.is(value, identity[index]))) {
     requestRef.current += 1;
     renderedIdentityRef.current = identity;
@@ -44,22 +47,29 @@ export function usePrimaryTeammate(
   const setBranch = useCallback((next: Branch | null) => {
     requestRef.current += 1;
     setResolvedBranch(next);
-    setBranchRequest(requestRef.current);
+    setBranchCaller(callerRef.current);
     setResolving(false);
     setFailed(false);
   }, []);
 
   const refresh = useCallback(async () => {
-    if (!client) return null;
+    // A refresh captured before a client swap is superseded; it must not tag the old client's answer as the new caller's.
+    if (callerRef.current[0] !== client) return undefined;
+    if (!client) {
+      // A resolve abandoned when the client went away never reaches its `finally`.
+      setResolving(false);
+      return null;
+    }
     requestRef.current += 1;
     const request = requestRef.current;
+    const requestCaller = callerRef.current;
     setResolving(true);
     setFailed(false);
     try {
       const next = await client.service('users').getPrimaryTeammate();
       if (requestRef.current !== request) return undefined;
       setResolvedBranch(next);
-      setBranchRequest(request);
+      setBranchCaller(requestCaller);
       return next;
     } catch {
       if (requestRef.current !== request) return undefined;
@@ -75,6 +85,7 @@ export function usePrimaryTeammate(
     void refresh();
   }, [refresh, userId, authenticationGeneration, refreshKey]);
 
-  const current = branchRequest === requestRef.current;
-  return { branch, current, setBranch, resolving, failed, refresh };
+  const ownedByCaller =
+    !!branchCaller && branchCaller.every((value, index) => Object.is(value, caller[index]));
+  return { branch, ownedByCaller, setBranch, resolving, failed, refresh };
 }

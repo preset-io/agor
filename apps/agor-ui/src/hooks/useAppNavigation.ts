@@ -30,6 +30,13 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
 import { agorStore } from '../store/agorStore';
+import {
+  backOr,
+  hasInAppHistory,
+  isMobileShellPath,
+  MOBILE_TEAMMATES_ROUTE_PATH,
+  TEAMMATES_ROUTE_PATH,
+} from '../utils/uiRoutes';
 import { buildBoardPath } from './useUrlState';
 
 interface UseAppNavigationOptions {
@@ -68,6 +75,10 @@ export interface AppNavigation {
   goToBoard: (boardId: string, opts?: NavigationOpts) => void;
   /** Navigate to Home (`/`) with no board selected. */
   goHome: (opts?: NavigationOpts) => void;
+  /** Navigate to the teammates directory on the current shell: `/teammates` or `/m/teammates`. */
+  goToTeammates: (opts?: NavigationOpts) => void;
+  /** Home on the current shell: back one entry when this one was opened from Home, else replacing this entry. */
+  goBack: () => void;
 }
 
 /** Normalize a path to its trailing-slash canonical form so equality
@@ -75,6 +86,11 @@ export interface AppNavigation {
 function canonical(path: string): string {
   return `${path.replace(/\/$/, '')}/`;
 }
+
+/** Location state on an entry pushed from Home, so the way back can pop to it. */
+const FROM_HOME = { from: 'home' } as const;
+const cameFromHome = (state: unknown) => (state as { from?: unknown } | null)?.from === 'home';
+const homePathFor = (pathname: string) => (isMobileShellPath(pathname) ? '/m' : '/');
 
 export function useAppNavigation({
   boardById,
@@ -106,13 +122,17 @@ export function useAppNavigation({
   boardByIdRef.current = boardById;
   const locationPathnameRef = useRef(location.pathname);
   locationPathnameRef.current = location.pathname;
+  const locationKeyRef = useRef(location.key);
+  locationKeyRef.current = location.key;
+  const locationStateRef = useRef(location.state);
+  locationStateRef.current = location.state;
 
   /** Navigate to a target path (push by default, replace on opts).
    *  Returns `true` if the URL changed, `false` when target === current path. */
   const pushPath = useCallback(
-    (target: string, opts?: NavigationOpts): boolean => {
+    (target: string, opts?: NavigationOpts, state?: unknown): boolean => {
       if (canonical(target) === canonical(locationPathnameRef.current)) return false;
-      navigate(target, { replace: opts?.replace ?? false });
+      navigate(target, { replace: opts?.replace ?? false, state });
       return true;
     },
     [navigate]
@@ -134,6 +154,27 @@ export function useAppNavigation({
     },
     [pushPath]
   );
+
+  const goToTeammates = useCallback(
+    (opts?: NavigationOpts) => {
+      const pathname = locationPathnameRef.current;
+      const mobile = isMobileShellPath(pathname);
+      const fromHome = canonical(pathname) === canonical(homePathFor(pathname));
+      pushPath(
+        mobile ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH,
+        opts,
+        fromHome ? FROM_HOME : undefined
+      );
+    },
+    [pushPath]
+  );
+
+  // Only an entry pushed from Home pops: after a Settings round trip the previous entry is Settings.
+  const goBack = useCallback(() => {
+    const canPop =
+      cameFromHome(locationStateRef.current) && hasInAppHistory(locationKeyRef.current);
+    backOr(navigate, canPop, homePathFor(locationPathnameRef.current));
+  }, [navigate]);
 
   const goToSession = useCallback(
     (sessionId: string, opts?: NavigationOpts) => {
@@ -204,7 +245,7 @@ export function useAppNavigation({
   );
 
   return useMemo(
-    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome }),
-    [goToSession, goToBranch, goToArtifact, goToBoard, goHome]
+    () => ({ goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates, goBack }),
+    [goToSession, goToBranch, goToArtifact, goToBoard, goHome, goToTeammates, goBack]
   );
 }

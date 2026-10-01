@@ -29,6 +29,7 @@ import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client'
 import { useCallback, useEffect, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
+import { isTeammatesRoute } from '../utils/uiRoutes';
 import {
   resolveArtifactFromShortIdPure,
   resolveBoardFromUrlPure,
@@ -288,7 +289,10 @@ export function useUrlState(options: UseUrlStateOptions) {
     // paths also have no params, but should canonicalize to Home instead of
     // clearing board state and rendering a no-board canvas at that path.
     if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
-      const isHomePath = location.pathname === '/' || location.pathname === '';
+      const isHomePath =
+        location.pathname === '/' ||
+        location.pathname === '' ||
+        isTeammatesRoute(location.pathname);
       if (!isSettingsRoute && !isHomePath) {
         syncingRef.current = true;
         navigate('/', { replace: true });
