@@ -234,11 +234,10 @@ under 1 KiB are sent raw and no context is kept between messages) and cannot be 
 What it costs:
 
 - **Memory:** once a socket has compressed a frame, it keeps its zlib state until the socket
-  closes. The exact size depends on the window sizes negotiated with each client. With a
-  13-bit window in both directions it is about 104 KiB (~96 KiB deflate + ~8 KiB inflate), or
-  roughly 100 MiB per 1,000 connected sockets. A client that negotiates a larger window
-  (up to the 15-bit default) raises the inflate side to as much as ~32 KiB, so budget about
-  128 KiB per socket in the worst case.
+  closes. The exact size depends on the window sizes negotiated with each client. With the
+  default 15-bit windows it is about 224 KiB (~192 KiB deflate + up to ~32 KiB inflate), or
+  roughly 220 MiB per 1,000 connected sockets. A client that requests smaller windows uses less,
+  so treat ~224 KiB per socket as the budget.
 - **CPU:** a broadcast larger than the threshold is compressed separately for each recipient.
   Engine.IO cannot reuse one compressed frame across sockets, so busy rooms cost more CPU.
 - **Rollout:** compression is agreed when a socket connects. Changing the setting (then

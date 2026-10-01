@@ -1,4 +1,5 @@
-import type { Server } from 'node:http';
+import { randomBytes } from 'node:crypto';
+import { request, type Server } from 'node:http';
 import type { Socket as NetSocket } from 'node:net';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
@@ -23,6 +24,40 @@ function listSnapshot(rows: number) {
   }));
 }
 
+interface UpgradeResult {
+  status: number;
+  extensions: string | undefined;
+}
+
+// Raw RFC 6455 opening handshake so the test controls the exact
+// Sec-WebSocket-Extensions offer a browser would send.
+function upgrade(port: number, extensionsOffer: string | undefined): Promise<UpgradeResult> {
+  return new Promise((resolve, reject) => {
+    const req = request({
+      host: '127.0.0.1',
+      port,
+      path: '/socket.io/?EIO=4&transport=websocket',
+      headers: {
+        Connection: 'Upgrade',
+        Upgrade: 'websocket',
+        'Sec-WebSocket-Version': '13',
+        'Sec-WebSocket-Key': randomBytes(16).toString('base64'),
+        ...(extensionsOffer === undefined ? {} : { 'Sec-WebSocket-Extensions': extensionsOffer }),
+      },
+    });
+    req.on('upgrade', (res, socket) => {
+      socket.destroy();
+      resolve({ status: res.statusCode ?? 0, extensions: res.headers['sec-websocket-extensions'] });
+    });
+    req.on('response', (res) => {
+      res.resume();
+      resolve({ status: res.statusCode ?? 0, extensions: undefined });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 describe('Socket.IO WebSocket compression', () => {
   let server: Server | undefined;
   let client: AgorClient | undefined;
@@ -38,11 +73,10 @@ describe('Socket.IO WebSocket compression', () => {
     }
   });
 
-  async function bytesToFetchSnapshot(
-    serverOptions: object | ((app: ReturnType<typeof feathersExpress>) => object)
-  ) {
+  type ServerOptions = object | ((app: ReturnType<typeof feathersExpress>) => object);
+
+  async function listen(serverOptions: ServerOptions, snapshot: unknown[] = []) {
     const app = feathersExpress(feathers());
-    const snapshot = listSnapshot(2_000);
     app.use('snapshots', {
       async find() {
         return snapshot;
@@ -55,12 +89,18 @@ describe('Socket.IO WebSocket compression', () => {
     server = await new Promise<Server>((resolve) => {
       const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
     });
-    const tcpSockets: NetSocket[] = [];
-    server.on('connection', (socket: NetSocket) => tcpSockets.push(socket));
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('Expected a TCP test server');
+    return { server, port: address.port };
+  }
 
-    client = createClient(`http://127.0.0.1:${address.port}`, true, { reconnectionAttempts: 0 });
+  async function bytesToFetchSnapshot(serverOptions: ServerOptions) {
+    const snapshot = listSnapshot(2_000);
+    const { server, port } = await listen(serverOptions, snapshot);
+    const tcpSockets: NetSocket[] = [];
+    server.on('connection', (socket: NetSocket) => tcpSockets.push(socket));
+
+    client = createClient(`http://127.0.0.1:${port}`, true, { reconnectionAttempts: 0 });
     await waitForSocketConnect(client);
 
     const written = () => tcpSockets.reduce((total, socket) => total + socket.bytesWritten, 0);
@@ -121,5 +161,55 @@ describe('Socket.IO WebSocket compression', () => {
     const { wire, json } = await bytesToFetchSnapshot({ transports: ['websocket'] });
 
     expect(wire).toBeGreaterThanOrEqual(json);
+  });
+
+  // A browser offer the server cannot honour must decline compression, never
+  // fail the upgrade: the UI client is websocket-first with no polling retry.
+  it.each([
+    // Firefox (WebSocketChannel.cpp) and Safari: no parameters at all.
+    ['plain (Firefox)', 'permessage-deflate'],
+    ['client_max_window_bits (Chromium)', 'permessage-deflate; client_max_window_bits'],
+    ['client asks for a small server window', 'permessage-deflate; server_max_window_bits=10'],
+    [
+      'all parameters',
+      'permessage-deflate; client_max_window_bits=15; server_max_window_bits=15; ' +
+        'client_no_context_takeover; server_no_context_takeover',
+    ],
+  ])('accepts the %s offer and negotiates compression', async (_name, offer) => {
+    const { port } = await listen({
+      transports: ['websocket'],
+      perMessageDeflate: SOCKET_IO_PER_MESSAGE_DEFLATE,
+    });
+
+    const result = await upgrade(port, offer);
+
+    expect(result.status).toBe(101);
+    expect(result.extensions).toMatch(/^permessage-deflate\b/);
+  });
+
+  it('accepts a handshake that offers no extensions, uncompressed', async () => {
+    const { port } = await listen({
+      transports: ['websocket'],
+      perMessageDeflate: SOCKET_IO_PER_MESSAGE_DEFLATE,
+    });
+
+    const result = await upgrade(port, undefined);
+
+    expect(result).toEqual({ status: 101, extensions: undefined });
+  });
+
+  it('answers the plain (Firefox) offer per daemon.websocket_compression', async () => {
+    const on = await listen(daemonServerOptions(true));
+    expect((await upgrade(on.port, 'permessage-deflate')).extensions).toMatch(
+      /^permessage-deflate\b/
+    );
+    await new Promise<void>((resolve) => server?.close(() => resolve()));
+    server = undefined;
+
+    const off = await listen(daemonServerOptions(false));
+    expect(await upgrade(off.port, 'permessage-deflate')).toEqual({
+      status: 101,
+      extensions: undefined,
+    });
   });
 });

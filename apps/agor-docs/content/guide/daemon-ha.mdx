@@ -120,9 +120,9 @@ The Compose IP hash is deliberately minimal and testable, not a recommendation f
 Each daemon compresses its own sockets with `permessage-deflate` unless
 `daemon.websocket_compression: false` (or `AGOR_WEBSOCKET_COMPRESSION=0`) is set. See
 [WebSocket compression](/guide/config-yaml#websocket-compression). When sizing replicas, plan for
-about 104 KiB of zlib state per compressing socket (roughly 100 MiB per 1,000 sockets on that
-replica). This figure depends on the window each client negotiates; budget up to ~128 KiB per
-socket for clients that negotiate a larger window. Also plan for compression CPU on every replica that sends a large broadcast, because
+up to about 224 KiB of zlib state per compressing socket (~192 KiB deflate + up to ~32 KiB
+inflate; roughly 220 MiB per 1,000 sockets on that replica). This figure depends on the window
+each client negotiates; clients that request smaller windows use less. Also plan for compression CPU on every replica that sends a large broadcast, because
 each recipient's copy is compressed separately. Use the same setting on every replica so a
 reconnect to another replica behaves the same way. A change applies to new connections only.
 After rolling it out, confirm through the real ingress, not just against a daemon port, that the
