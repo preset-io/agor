@@ -1,7 +1,9 @@
 import type { AgorClient, BranchID, Session } from '@agor-live/client';
+import { SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { StrictMode } from 'react';
+import { type ReactNode, StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { renderTemplate } from '../../../utils/templates';
 import { ZoneTriggerModal } from './ZoneTriggerModal';
 
@@ -198,9 +200,11 @@ describe('ZoneTriggerModal action snapshot', () => {
     const row = {
       ...makeSession('s-1', 'completed', '2026-06-01T00:00:00.000Z', 'Session'),
       custom_context: { teamName: 'Backend' },
+      read_shape: SESSION_LIST_ROW_SHAPE,
     } as Session;
     const fullContext = { teamName: 'Backend', slash_commands: ['/review'] };
-    const get = vi.fn().mockResolvedValue({ ...row, custom_context: fullContext });
+    const { read_shape: _shape, ...full } = row as Session & { read_shape?: string };
+    const get = vi.fn().mockResolvedValue({ ...full, custom_context: fullContext });
 
     render(
       <ZoneTriggerModal
@@ -224,6 +228,96 @@ describe('ZoneTriggerModal action snapshot', () => {
       session?: { custom_context?: unknown };
     };
     expect(context.session?.custom_context).toEqual(fullContext);
+  });
+
+  describe('when the full session record cannot load', () => {
+    const leanRow = {
+      ...makeSession('s-1', 'completed', '2026-06-01T00:00:00.000Z', 'Session'),
+      custom_context: { teamName: 'Backend' },
+      read_shape: SESSION_LIST_ROW_SHAPE,
+    } as Session;
+    const fullRow = {
+      ...makeSession('s-1', 'completed', '2026-06-01T00:00:00.000Z', 'Session'),
+      custom_context: { teamName: 'Backend', scheduled_run: { run_index: 3 } },
+    } as Session;
+    const modal = (client: AgorClient, onExecute = vi.fn()) => (
+      <ZoneTriggerModal
+        actionId={1}
+        open
+        onCancel={() => {}}
+        client={client}
+        branch={undefined}
+        sessions={[leanRow]}
+        zoneName="Review"
+        trigger={{
+          template: 'Run {{ session.context.scheduled_run.run_index }}',
+          behavior: 'show_picker',
+        }}
+        availableAgents={[]}
+        mcpServerById={new Map()}
+        onExecute={onExecute}
+      />
+    );
+    const withConnection = (authGeneration: number, node: ReactNode) => (
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        {node}
+      </ConnectionProvider>
+    );
+
+    it('shows an error, never renders from the lean row, and recovers on Retry', async () => {
+      renderTemplateMock.mockResolvedValue('Run 3');
+      const get = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('timeout'))
+        .mockResolvedValueOnce(fullRow);
+      const onExecute = vi.fn().mockResolvedValue(undefined);
+      render(modal({ service: () => ({ get }) } as unknown as AgorClient, onExecute));
+
+      expect(
+        await screen.findByText(/Could not load full session details: timeout/)
+      ).toBeInTheDocument();
+      const execute = screen.getByRole('button', { name: 'Execute Trigger' });
+      expect(execute).toBeDisabled();
+      fireEvent.click(execute);
+      expect(onExecute).not.toHaveBeenCalled();
+      expect(renderTemplateMock).not.toHaveBeenCalled();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+      await waitFor(() => expect(prompt).toHaveValue('Run 3'));
+      expect(execute).toBeEnabled();
+      expect(screen.queryByText(/Could not load full session details/)).toBeNull();
+      const context = renderTemplateMock.mock.calls[0][2] as {
+        session?: { custom_context?: unknown };
+      };
+      expect(context.session?.custom_context).toEqual(fullRow.custom_context);
+    });
+
+    it('retries after a socket reconnect', async () => {
+      renderTemplateMock.mockResolvedValue('Run 3');
+      const get = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('socket closed'))
+        .mockResolvedValueOnce(fullRow);
+      const client = { service: () => ({ get }) } as unknown as AgorClient;
+      const { rerender } = render(withConnection(1, modal(client)));
+      expect(await screen.findByText(/socket closed/)).toBeInTheDocument();
+
+      rerender(withConnection(2, modal(client)));
+      const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
+      await waitFor(() => expect(prompt).toHaveValue('Run 3'));
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeEnabled();
+    });
   });
 
   it('starts a clean render exactly once for a new zone action or reopened action', async () => {

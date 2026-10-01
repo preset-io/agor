@@ -31,8 +31,12 @@ import {
 } from '@agor-live/client';
 import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
-import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
+import { Alert, Button, Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
 import React from 'react';
+import {
+  fullSessionDetailsErrorMessage,
+  useFullSessionDetails,
+} from '../../hooks/useFullSessionDetails';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -234,14 +238,19 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
-  const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
-    buildInitialValues(session, sessionMcpServerIds)
-  );
-  // The `session` prop comes from a lean session list that omits bulky
+  // The `session` prop may be a lean list row that withholds bulky
   // custom_context keys. Seed the editable JSON from the full record so the
-  // user edits what is actually stored; read-only only while it loads.
-  const [fullContextSessionId, setFullContextSessionId] = React.useState<string | null>(null);
-  const customContextReady = !client || fullContextSessionId === session.session_id;
+  // user edits what is actually stored; read-only until it has loaded, and a
+  // visible error + Retry (never the lean row) if it cannot.
+  const fullDetails = useFullSessionDetails(client, session, open);
+  const fullSession = fullDetails.status === 'ready' ? fullDetails.session : null;
+  const customContextReady = fullSession !== null;
+  const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
+    buildInitialValues(fullSession ?? session, sessionMcpServerIds)
+  );
+  const initialValuesRef = React.useRef(initialValues);
+  initialValuesRef.current = initialValues;
+  const seededFullSessionRef = React.useRef<Session | null>(null);
   const [envSelections, setEnvSelections] = React.useState<string[]>([]);
   const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
   const prevOpenRef = React.useRef(false);
@@ -265,35 +274,28 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 
     if ((open && !wasOpen) || (open && sessionChanged)) {
       const values = buildInitialValues(session, sessionMcpServerIds);
+      if (fullSession?.session_id === session.session_id) {
+        values.custom_context = formatCustomContext(fullSession.custom_context);
+        seededFullSessionRef.current = fullSession;
+      }
       setInitialValues(values);
       form.setFieldsValue(values);
     }
-  }, [open, session, sessionMcpServerIds, form]);
+  }, [open, session, sessionMcpServerIds, form, fullSession]);
 
-  // Load the full custom_context when the modal opens (or retargets).
+  // Seed custom_context once the full record arrives (on open, retarget,
+  // Retry, or a reconnect retry). The field is read-only until then; an
+  // unedited field is replaced, an edit in progress is kept.
   React.useEffect(() => {
-    if (!open || !client) return;
-    let cancelled = false;
-    setFullContextSessionId(null);
-    (async () => {
-      try {
-        const full = (await client.service('sessions').get(session.session_id)) as Session;
-        if (cancelled) return;
-        const text = formatCustomContext(full.custom_context);
-        setFullContextSessionId(session.session_id);
-        setInitialValues((previous) => ({ ...previous, custom_context: text }));
-        // The field is read-only until now, so there is no edit to preserve.
-        form.setFieldValue('custom_context', text);
-      } catch {
-        // Fall back to the row's (possibly lean) context. Patches deep-merge
-        // objects, so keys absent from an edit are kept server-side.
-        if (!cancelled) setFullContextSessionId(session.session_id);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, client, session.session_id, form]);
+    if (!open || !fullSession || fullSession.session_id !== session.session_id) return;
+    if (seededFullSessionRef.current === fullSession) return;
+    seededFullSessionRef.current = fullSession;
+    const text = formatCustomContext(fullSession.custom_context);
+    const unedited =
+      form.getFieldValue('custom_context') === initialValuesRef.current.custom_context;
+    setInitialValues((previous) => ({ ...previous, custom_context: text }));
+    if (unedited) form.setFieldValue('custom_context', text);
+  }, [open, fullSession, session.session_id, form]);
 
   // Load current env selections when the modal opens.
   React.useEffect(() => {
@@ -438,16 +440,40 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   secondaryItems.push({
     key: 'advanced',
     label: (
-      <Typography.Text strong>
-        <SettingOutlined style={{ marginRight: 8 }} />
-        Advanced
-      </Typography.Text>
+      <>
+        <Typography.Text strong>
+          <SettingOutlined style={{ marginRight: 8 }} />
+          Advanced
+        </Typography.Text>
+        {fullDetails.status === 'error' && (
+          <Typography.Text type="danger" style={{ marginLeft: token.marginXS }}>
+            (details unavailable)
+          </Typography.Text>
+        )}
+      </>
     ),
     children: (
       <ErrorBoundary
         fallbackTitle="Failed to load Advanced settings."
         resetKey={session.session_id}
       >
+        {fullDetails.status === 'error' && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: token.marginSM }}
+            title={fullSessionDetailsErrorMessage(fullDetails.error)}
+            description="Custom context stays read-only: this view omits scheduled-run and SDK command/skill fields until the full record loads."
+            action={
+              <Button size="small" onClick={fullDetails.retry}>
+                Retry
+              </Button>
+            }
+          />
+        )}
+        {fullDetails.status === 'loading' && (
+          <Typography.Paragraph type="secondary">Loading full custom context…</Typography.Paragraph>
+        )}
         <AdvancedSettingsForm showHelpText disabled={!customContextReady} />
       </ErrorBoundary>
     ),
