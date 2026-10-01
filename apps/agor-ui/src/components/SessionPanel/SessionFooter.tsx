@@ -1752,12 +1752,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               style={{ width: token.controlHeightXS, flexShrink: 0 }}
             >
               {showActivity && (
-                <span role="status" aria-label="Agent is working">
+                <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
                   <Spin size="small" aria-hidden="true" />
                 </span>
               )}
             </Flex>
-            <Space size={4}>
+            {/* Flex avoids inline baseline/descender space around the controls. */}
+            <Flex align="center" gap={token.sizeUnit}>
               {showStop && (
                 <Tooltip title={stopTooltip}>
                   <Button
@@ -1781,6 +1782,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                   size="small"
                   offset={[-2, 2]}
+                  styles={{ root: { display: 'inline-flex' } }}
                   style={{
                     boxShadow: 'none',
                     backgroundColor: token.colorTextTertiary,
@@ -1800,7 +1802,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   </Button>
                 </Badge>
               </Tooltip>
-            </Space>
+            </Flex>
           </Flex>
         </div>
       </div>

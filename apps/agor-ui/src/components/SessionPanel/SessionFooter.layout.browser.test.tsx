@@ -104,9 +104,16 @@ it.each([false, true])(
       ).toSatisfy((element: Element | null) => !!element && control.contains(element));
     }
     expect(activity.getBoundingClientRect().right).toBeLessThan(stop.getBoundingClientRect().left);
-    expect(activity.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      stop.getBoundingClientRect().top
-    );
+    const expectCenteredActivity = () => {
+      // Measure the visible indicator, not its status wrapper's line box.
+      const indicator = activity.querySelector('.ant-spin-dot-holder')!.getBoundingClientRect();
+      const center = indicator.top + indicator.height / 2;
+      for (const button of [stop, send]) {
+        const rect = button.getBoundingClientRect();
+        expect(Math.abs(center - (rect.top + rect.height / 2))).toBeLessThanOrEqual(1);
+      }
+    };
+    expectCenteredActivity();
     expect(send).toBeDisabled();
 
     history.scrollTop = history.scrollHeight;
@@ -131,6 +138,7 @@ it.each([false, true])(
       )
     );
     expect(activity).toBeVisible();
+    expectCenteredActivity();
 
     // Stopping retains both buttons; removing activity must not shift either.
     const stopBounds = stop.getBoundingClientRect();
