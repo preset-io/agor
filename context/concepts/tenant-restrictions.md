@@ -224,7 +224,9 @@ every executor-socket packet), sharing that read with the service hook; it retai
 executor safety RPC transport only, and service guards still authorize each
 operation. Executor streaming relay chunks (`messages/streaming` and `tasks/streaming`
 creates) instead share one per-tenant single-flight read for at most one tick from its
-start, which also serves their service hook: for an executor they only re-emit through the
+start, which also serves their service hook (each check takes the observation current when it
+runs, so a chunk dispatched late or behind a slow read joins the next tick's read instead of reading
+privately): for an executor they only re-emit through the
 publication gate, which drops closed or stale deliveries itself. Every other executor RPC
 still reads per call. Executor safety RPCs do no packet read at all, since they pass whatever
 it says; they only keep their place in arrival order. Raw terminal/presence/cursor packets never read, and every packet on a

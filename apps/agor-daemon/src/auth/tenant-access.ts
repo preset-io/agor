@@ -26,12 +26,14 @@ const requestReads = new AsyncLocalStorage<{
   /** Deadline of the scope that admission ended, for credential issuance only. */
   admittedUntil?: number;
   reads: Map<string, Promise<TenantRestrictionState>>;
+  /** Streaming relay packet: its checks take the per-tenant shared observation current at each check. */
+  shared?: { tenantId: string; observe: (tenantId: string) => SharedTenantRestrictionObservation };
 }>();
 
 /** Share one restriction read across a handshake/packet/request's admission checks; reuse never exceeds one tick. */
 export function withTenantRestrictionRequest<T>(work: () => T, reuse = false): T {
   const current = requestReads.getStore();
-  if (reuse && current && performance.now() < current.until) return work();
+  if (reuse && current && (current.shared || performance.now() < current.until)) return work();
   const until = performance.now() + TENANT_RESTRICTION_OBSERVATION_MS;
   return requestReads.run({ until, reads: new Map() }, work);
 }
@@ -40,6 +42,7 @@ export function withTenantRestrictionRequest<T>(work: () => T, reuse = false): T
 export function endTenantRestrictionRequest(): void {
   const current = requestReads.getStore();
   if (!current) return;
+  current.shared = undefined;
   if (current.until) current.admittedUntil = current.until;
   current.until = 0;
 }
@@ -47,6 +50,7 @@ export function endTenantRestrictionRequest(): void {
 /** Memoized within an open request scope only; uncached across requests. */
 export const readRequestTenantRestriction: TenantRestrictionReader = (db, tenantId) => {
   const current = requestReads.getStore();
+  if (current?.shared?.tenantId === tenantId) return current.shared.observe(tenantId).state;
   if (!current || performance.now() >= current.until)
     return readTenantRestrictionState(db, tenantId);
   let read = current.reads.get(tenantId);
@@ -87,18 +91,14 @@ export function createSharedTenantRestrictionObservation(
   };
 }
 
-/** Seed this request scope with a shared observation, shortening the scope so reuse still ends one tick after that read began. */
+/** Route this packet's checks, service hook included, through the shared observation: at most one read per tenant per tick, each under a tick old when used. */
 export function shareTenantRestrictionRead(
   tenantId: string,
-  observation: SharedTenantRestrictionObservation
+  observe: (tenantId: string) => SharedTenantRestrictionObservation
 ): void {
   const current = requestReads.getStore();
   if (!current || performance.now() >= current.until || current.reads.has(tenantId)) return;
-  current.reads.set(tenantId, observation.state);
-  current.until = Math.min(
-    current.until,
-    observation.startedAt + TENANT_RESTRICTION_OBSERVATION_MS
-  );
+  current.shared = { tenantId, observe };
 }
 
 /** Credential issuance after admission reuses the read that admitted this request within its tick; never an admission check. */

@@ -285,18 +285,64 @@ describe('per-request memoization', () => {
     await second.state;
     expect(source).toHaveBeenCalledTimes(3);
 
-    // A seeded scope ends one tick after the shared read began, then reads fresh.
+    // A shared scope serves each check the observation under a tick old at that check, never a private read.
     read.mockResolvedValue(state());
     const seeded = observe('a');
     vi.advanceTimersByTime(TENANT_RESTRICTION_OBSERVATION_MS - 10);
     await withTenantRestrictionRequest(async () => {
-      shareTenantRestrictionRead('a', seeded);
+      shareTenantRestrictionRead('a', observe);
       expect(readRequestTenantRestriction(db, 'a')).toBe(seeded.state);
-      expect(read).not.toHaveBeenCalled();
       vi.advanceTimersByTime(10);
-      await readRequestTenantRestriction(db, 'a');
+      const next = readRequestTenantRestriction(db, 'a');
+      expect(next).not.toBe(seeded.state);
+      expect(readRequestTenantRestriction(db, 'a')).toBe(next);
+      await next;
+      expect(source).toHaveBeenCalledTimes(4);
+      // Another tenant in the same scope still reads privately.
+      await readRequestTenantRestriction(db, 'b');
       expect(read).toHaveBeenCalledOnce();
+      endTenantRestrictionRequest();
+      await readRequestTenantRestriction(db, 'a');
+      expect(read).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it('serves late and slow-read relay chunks their hook check from the shared read, one read per tick', async () => {
+    vi.useFakeTimers();
+    read.mockResolvedValue(state(owner()));
+    const payload = tenantCredentialEpochClaims(await readTenantCredentialEpoch(db, 'a'));
+    read.mockClear();
+    // Each shared read takes longer than a tick.
+    const startedAt: number[] = [];
+    const source = vi.fn(() => {
+      startedAt.push(performance.now());
+      return new Promise<TenantRestrictionState>((resolve) =>
+        setTimeout(() => resolve(state(owner())), 1500)
+      );
+    });
+    const observe = createSharedTenantRestrictionObservation(source);
+    const chunk = () =>
+      withTenantRestrictionRequest(async () => {
+        shareTenantRestrictionRead('a', observe);
+        await assertRuntimeTenantAccess(db, 'a', { payload }, readRequestTenantRestriction);
+        await hookFor(payload)(context(payload));
+      });
+
+    const chunks = [chunk()];
+    await vi.advanceTimersByTimeAsync(990);
+    // Joins the first read 10 ms before its tick ends; both dispatch only after it settles at 1.5 s.
+    chunks.push(chunk());
+    await vi.advanceTimersByTimeAsync(5000);
+    await Promise.all(chunks);
+
+    expect(read).not.toHaveBeenCalled();
+    // Admission at 0 s, then the hook's strategy and access checks, each shared by both chunks.
+    expect(startedAt).toHaveLength(3);
+    for (let i = 1; i < startedAt.length; i++) {
+      expect(startedAt[i] - startedAt[i - 1]).toBeGreaterThanOrEqual(
+        TENANT_RESTRICTION_OBSERVATION_MS
+      );
+    }
   });
 
   it('bounds request reuse on the monotonic clock, not the wall clock', async () => {

@@ -1040,7 +1040,7 @@ export function createSocketIOConfig(
               current.principal.kind === 'executor' &&
               isStreamingRelayPacket(packet)
             ) {
-              shareTenantRestrictionRead(tenantId, streamingRelayObservation(tenantId));
+              shareTenantRestrictionRead(tenantId, streamingRelayObservation);
             }
             await admitTenantSocketPacket({
               tenantId,
