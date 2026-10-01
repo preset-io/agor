@@ -228,15 +228,17 @@ daemon:
 ```
 
 `AGOR_WEBSOCKET_COMPRESSION=0` (or `false`) overrides the file; `1`/`true` forces it on. This is
-only an on/off switch: the compression settings are fixed by the daemon (frames under 1 KiB
-are sent raw, no context is kept between messages, 13-bit window, zlib `memLevel` 7) and
-cannot be tuned.
+only an on/off switch: the compression settings are fixed by the daemon (for example, frames
+under 1 KiB are sent raw and no context is kept between messages) and cannot be tuned.
 
 What it costs:
 
-- **Memory:** once a socket has compressed a frame, it keeps about 104 KiB of zlib state
-  (~96 KiB deflate + ~8 KiB inflate) until the socket closes. That is roughly 100 MiB per
-  1,000 connected sockets.
+- **Memory:** once a socket has compressed a frame, it keeps its zlib state until the socket
+  closes. The exact size depends on the window sizes negotiated with each client. With a
+  13-bit window in both directions it is about 104 KiB (~96 KiB deflate + ~8 KiB inflate), or
+  roughly 100 MiB per 1,000 connected sockets. A client that negotiates a larger window
+  (up to the 15-bit default) raises the inflate side to as much as ~32 KiB, so budget about
+  128 KiB per socket in the worst case.
 - **CPU:** a broadcast larger than the threshold is compressed separately for each recipient.
   Engine.IO cannot reuse one compressed frame across sockets, so busy rooms cost more CPU.
 - **Rollout:** compression is agreed when a socket connects. Changing the setting (then

@@ -121,7 +121,8 @@ Each daemon compresses its own sockets with `permessage-deflate` unless
 `daemon.websocket_compression: false` (or `AGOR_WEBSOCKET_COMPRESSION=0`) is set. See
 [WebSocket compression](/guide/config-yaml#websocket-compression). When sizing replicas, plan for
 about 104 KiB of zlib state per compressing socket (roughly 100 MiB per 1,000 sockets on that
-replica). Also plan for compression CPU on every replica that sends a large broadcast, because
+replica). This figure depends on the window each client negotiates; budget up to ~128 KiB per
+socket for clients that negotiate a larger window. Also plan for compression CPU on every replica that sends a large broadcast, because
 each recipient's copy is compressed separately. Use the same setting on every replica so a
 reconnect to another replica behaves the same way. A change applies to new connections only.
 After rolling it out, confirm through the real ingress, not just against a daemon port, that the

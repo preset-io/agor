@@ -145,7 +145,8 @@ export interface AgorDaemonSettings {
   /**
    * Compress Socket.IO WebSocket frames with RFC 7692 permessage-deflate
    * (default: true). The zlib profile is fixed by the daemon; this is only an
-   * on/off switch. Each compressing socket holds ~104 KiB of zlib state, and a
+   * on/off switch. Each compressing socket holds ~104–128 KiB of zlib state
+   * (depending on the window each client negotiates), and a
    * broadcast is compressed once per recipient. A change applies to new
    * connections only. Env override: `AGOR_WEBSOCKET_COMPRESSION`.
    */
