@@ -122,8 +122,9 @@ Each daemon compresses its own sockets with `permessage-deflate` unless
 [WebSocket compression](/guide/config-yaml#websocket-compression). When sizing replicas, plan for
 up to about 224 KiB of zlib state per compressing socket (~192 KiB deflate + up to ~32 KiB
 inflate; roughly 220 MiB per 1,000 sockets on that replica). This figure depends on the window
-each client negotiates; clients that request smaller windows use less. Also plan for compression CPU on every replica that sends a large broadcast, because
-each recipient's copy is compressed separately. Use the same setting on every replica so a
+each client negotiates; clients that request smaller windows use less. It is zlib state only:
+frame buffers and per-socket bookkeeping come on top. Also plan for compression CPU on every
+replica that sends a large broadcast, because each recipient's copy is compressed separately. Use the same setting on every replica so a
 reconnect to another replica behaves the same way. A change applies to new connections only.
 After rolling it out, confirm through the real ingress, not just against a daemon port, that the
 `Sec-WebSocket-Extensions` handshake header reaches the browser (present when on, absent when

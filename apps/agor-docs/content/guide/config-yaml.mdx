@@ -237,7 +237,8 @@ What it costs:
   closes. The exact size depends on the window sizes negotiated with each client. With the
   default 15-bit windows it is about 224 KiB (~192 KiB deflate + up to ~32 KiB inflate), or
   roughly 220 MiB per 1,000 connected sockets. A client that requests smaller windows uses less,
-  so treat ~224 KiB per socket as the budget.
+  so treat ~224 KiB per socket as the budget. That figure is zlib state only; frame buffers and
+  per-socket bookkeeping come on top.
 - **CPU:** a broadcast larger than the threshold is compressed separately for each recipient.
   Engine.IO cannot reuse one compressed frame across sockets, so busy rooms cost more CPU.
 - **Rollout:** compression is agreed when a socket connects. Changing the setting (then
