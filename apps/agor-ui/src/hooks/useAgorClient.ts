@@ -188,8 +188,9 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
     // when the server repeatedly closed the socket (auth rejection,
     // crash loop, server-side kick) this created a tight reconnect
     // loop at network speed and a page refresh was the only way out.
-    const scheduleManualReconnect = () => {
-      if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
+    const scheduleManualReconnect = (unavailable = false) => {
+      const pastCap = manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS;
+      if (pastCap && !unavailable) {
         setConnecting(false);
         // Give-up path — flip connected immediately; the grace period
         // is only for quick reconnects we expect to recover from.
@@ -200,8 +201,14 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       }
       setConnecting(true);
       const attempt = manualReconnectAttempts++;
-      // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
-      const delay = Math.min(500 * 2 ** attempt, 30_000);
+      if (pastCap) {
+        clearDisconnectGrace();
+        setConnected(false);
+      }
+      // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap; a lasting outage then keeps tokens and probes on the suspended cadence.
+      const delay = pastCap
+        ? tenantRestrictionProbeDelay(attempt - MAX_MANUAL_RECONNECT_ATTEMPTS)
+        : Math.min(500 * 2 ** attempt, 30_000);
       clearManualReconnectTimer();
       manualReconnectTimer = setTimeout(() => {
         manualReconnectTimer = null;
@@ -426,7 +433,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           if (isUnavailableHandshakeError(err)) {
             setError(null);
             setConnected(false);
-            scheduleManualReconnect();
+            scheduleManualReconnect(true);
             return;
           }
           // Only show error on initial connection failure, not during reconnection attempts

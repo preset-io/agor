@@ -446,6 +446,62 @@ describe('useAgorClient unavailable handshake', () => {
     }
   });
 
+  it('falls back to a slow probe instead of giving up while handshakes stay unavailable', async () => {
+    vi.useFakeTimers();
+    const { client, io, rejectNextConnect } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    for (let i = 0; i < 12; i++) rejectNextConnect(unavailableHandshake());
+
+    const { result } = renderHook(() =>
+      useAgorClient({ url: 'http://daemon.test', accessToken: 'kept', authorityGeneration: 1 })
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    // Ten backoff attempts: 500ms, 1s, 2s, 4s, 8s, 16s, then 30s four times.
+    await act(() => vi.advanceTimersByTimeAsync(151_500));
+    expect(io.connect).toHaveBeenCalledTimes(11);
+    expect(result.current.error).toBeNull();
+    expect(result.current.connecting).toBe(true);
+    expect(result.current.connected).toBe(false);
+
+    await act(() => vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_PROBE_DELAYS_MS[0] - 1));
+    expect(io.connect).toHaveBeenCalledTimes(11);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(io.connect).toHaveBeenCalledTimes(12);
+    expect(result.current.error).toBeNull();
+
+    await act(() => vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_PROBE_DELAYS_MS[1]));
+    expect(io.connect).toHaveBeenCalledTimes(13);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(refreshTokensMock).not.toHaveBeenCalled();
+    expect(localStorage.getItem('agor-refresh-token')).toBe('stored-refresh');
+    const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('kept');
+  });
+
+  it('keeps the reload error after repeated server disconnects', async () => {
+    vi.useFakeTimers();
+    const { client, fireIo, io } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+
+    const { result } = renderHook(() =>
+      useAgorClient({ url: 'http://daemon.test', accessToken: 'kept', authorityGeneration: 1 })
+    );
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.connected).toBe(true);
+
+    act(() => {
+      io.connected = false;
+      for (let i = 0; i < 11; i++) fireIo('disconnect', 'io server disconnect');
+    });
+    expect(result.current.error).toBe(
+      'Lost connection to daemon after multiple attempts. Please reload the page.'
+    );
+    expect(result.current.connecting).toBe(false);
+    expect(result.current.connected).toBe(false);
+  });
+
   it('still refreshes over REST when a later handshake is a real 401', async () => {
     vi.useFakeTimers();
     const { client, io, rejectNextConnect } = makeSeamClient();
