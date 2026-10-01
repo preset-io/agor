@@ -6656,6 +6656,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         instance: {
           label: config.daemon?.instanceLabel,
           description: config.daemon?.instanceDescription,
+          navbarLogoLink: config.daemon?.navbarLogoLink,
+          navbarLogoTooltip: config.daemon?.navbarLogoTooltip,
         },
         realtime: realtimeRuntime
           ? { required: true, ready: realtimeRuntime.isReady() }

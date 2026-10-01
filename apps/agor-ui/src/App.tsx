@@ -2156,6 +2156,8 @@ function AppContent() {
       onRetryConnection={retryConnection}
       instanceLabel={instanceConfig?.label}
       instanceDescription={instanceConfig?.description}
+      navbarLogoLink={instanceConfig?.navbarLogoLink}
+      navbarLogoTooltip={instanceConfig?.navbarLogoTooltip}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}

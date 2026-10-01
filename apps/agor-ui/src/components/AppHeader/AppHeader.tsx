@@ -28,6 +28,17 @@ import { SettingsDropdown } from './SettingsDropdown';
 
 const { Header } = Layout;
 
+const logoStyle: React.CSSProperties = {
+  height: 54,
+  padding: 0,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  background: 'transparent',
+  border: 0,
+  cursor: 'pointer',
+};
+
 export interface AppHeaderProps {
   user?: User | null;
   authenticationGeneration?: number;
@@ -61,6 +72,9 @@ export interface AppHeaderProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Navbar logo destination (e.g. a hosting console); the logo goes Home when unset */
+  navbarLogoLink?: string;
+  navbarLogoTooltip?: string;
   /** Session-creation seam behind the navbar compose affordance. */
   onCreateSession?: (
     config: NewSessionConfig,
@@ -144,6 +158,8 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   onUserClick,
   instanceLabel,
   instanceDescription,
+  navbarLogoLink,
+  navbarLogoTooltip,
   onCreateSession,
 }) => {
   const { token } = theme.useToken();
@@ -172,6 +188,16 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
   const mutationDisabled = useConnectionDisabled();
+
+  // Deployment-configured logo destination; only absolute http(s) URLs are honored.
+  const logoLink =
+    navbarLogoLink && /^https?:\/\//i.test(navbarLogoLink) ? navbarLogoLink : undefined;
+  const logo = (
+    <>
+      <BrandMark size={50} />
+      <BrandLogo level={3} style={{ marginTop: -6 }} />
+    </>
+  );
 
   const settingsItems: MenuProps['items'] = [
     ...(eventStreamEnabled
@@ -219,24 +245,17 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
       }}
     >
       <Space size={16} align="center">
-        <button
-          type="button"
-          aria-label="Go to Home"
-          onClick={onHomeClick}
-          style={{
-            height: 54,
-            padding: 0,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            background: 'transparent',
-            border: 0,
-            cursor: 'pointer',
-          }}
-        >
-          <BrandMark size={50} />
-          <BrandLogo level={3} style={{ marginTop: -6 }} />
-        </button>
+        {logoLink ? (
+          <Tooltip title={navbarLogoTooltip} placement="bottomLeft">
+            <a href={logoLink} aria-label={navbarLogoTooltip || 'Agor'} style={logoStyle}>
+              {logo}
+            </a>
+          </Tooltip>
+        ) : (
+          <button type="button" aria-label="Go to Home" onClick={onHomeClick} style={logoStyle}>
+            {logo}
+          </button>
+        )}
         {instanceLabel &&
           (instanceDescription ? (
             <Popover
