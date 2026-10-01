@@ -83,8 +83,9 @@ import {
 } from './buildSessionTree';
 import { PagedSessions } from './PagedSessions';
 
-// Stable theme object so the ConfigProvider context value doesn't churn.
-const NO_MOTION_THEME = { token: { motion: false } };
+/** A cssVar scope shared by every nested theme `name` under the same parent tokens. */
+const sharedCssVarScope = (name: string, parentTokenKey: string | undefined) =>
+  parentTokenKey ? { cssVar: { key: `agor-${name}-${parentTokenKey}` } } : undefined;
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
 /** Revealed rows animate in with a short stagger; later rows share the last delay. */
@@ -396,14 +397,31 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isMobileViewport = useIsMobileViewport();
   // One idle flag per list mounts every row's hover toolbar in a single commit.
   const rowActionsReady = useIdleReady();
+  const isPanel = mode === 'panel';
+  // A nested theme otherwise gets its own useId cssVar scope, so every card on a board
+  // re-injects the full token and component style set. Keying by the parent's token
+  // hash (stamped by antd's cssinjs) makes cards with identical tokens share one scope,
+  // while any token difference (light/dark, a custom theme) gets its own. Without the
+  // hash, antd falls back to a per-instance scope.
+  const parentTokenKey = (token as { _tokenKey?: string })._tokenKey;
+  // Card mode disables antd motion: 30 cards animating their collapse/tree
+  // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
+  const noMotionTheme = useMemo(
+    () =>
+      isPanel
+        ? undefined
+        : { token: { motion: false }, ...sharedCssVarScope('card', parentTokenKey) },
+    [isPanel, parentTokenKey]
+  );
   // Compact chevron column and nesting step for Tree (its defaults are controlHeightSM).
   const compactTreeTheme = useMemo(
     () => ({
       components: {
         Tree: { switcherSize: token.controlHeightXS, indentSize: token.controlHeightXS },
       },
+      ...sharedCssVarScope(isPanel ? 'session-tree' : 'card-session-tree', parentTokenKey),
     }),
-    [token.controlHeightXS]
+    [token.controlHeightXS, isPanel, parentTokenKey]
   );
   const prefersReducedMotion = usePrefersReducedMotion();
   const [enteringRows, setEnteringRows] = useState(EMPTY_ENTERING_ROWS);
@@ -438,7 +456,6 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
 
-  const isPanel = mode === 'panel';
   const animatePanel = isPanel && token.motion !== false && !prefersReducedMotion;
   const fillPanel = isPanel && fillAvailableHeight;
   const manualTreeSection = useTreeSectionHeight();
@@ -1547,9 +1564,7 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   }
 
   return (
-    // Card mode disables antd motion: 30 cards animating their collapse/tree
-    // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
-    <ConfigProvider theme={isPanel ? undefined : NO_MOTION_THEME}>
+    <ConfigProvider theme={noMotionTheme}>
       {sessionSearchBar}
       {activeSessions.length === 0 ? (
         <div
