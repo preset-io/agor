@@ -1,4 +1,3 @@
-import { cpuUsage } from 'node:process';
 import type { BoardComment, Branch, Session } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { buildSessionMaps, EMPTY_MAPS } from './agorMaps';
@@ -86,22 +85,14 @@ function hotBranch(): AgorState {
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];
 
-// These tests share a runner with component tests. Measure this worker's CPU
-// work, not wall time spent waiting for another worker; assertions stay outside
-// the measured interval so the budgets apply only to the selectors.
-const elapsedCpuMs = (start: ReturnType<typeof cpuUsage>) => {
-  const elapsed = cpuUsage(start);
-  return (elapsed.user + elapsed.system) / 1_000;
-};
-
-/** Median CPU ms of `runs` passes, each on a freshly built state. */
+/** Median ms of `runs` passes, each on a freshly built state. */
 function medianFreshPass(build: () => AgorState, pass: (s: AgorState) => void, runs = 5) {
   const times: number[] = [];
   for (let i = 0; i < runs; i++) {
     const s = build();
-    const t = cpuUsage();
+    const t = performance.now();
     pass(s);
-    times.push(elapsedCpuMs(t));
+    times.push(performance.now() - t);
   }
   return median(times);
 }
@@ -141,13 +132,13 @@ describe('Home selectors on a 7k-session tenant', () => {
     const bucketTimes: number[] = [];
     const commentHitTimes: number[] = [];
     for (const state of patched) {
-      let t = cpuUsage();
+      let t = performance.now();
       const nextBuckets = buckets(state);
-      bucketTimes.push(elapsedCpuMs(t));
+      bucketTimes.push(performance.now() - t);
       expect(nextBuckets).toBe(firstBuckets);
-      t = cpuUsage();
+      t = performance.now();
       const nextComments = comments(state);
-      commentHitTimes.push(elapsedCpuMs(t));
+      commentHitTimes.push(performance.now() - t);
       expect(nextComments).toBe(firstComments);
     }
 
@@ -162,17 +153,17 @@ describe('Home selectors on a 7k-session tenant', () => {
         resolved: false,
       });
       const state = { ...base, commentById };
-      const t = cpuUsage();
+      const t = performance.now();
       const nextComments = comments(state);
-      commentTimes.push(elapsedCpuMs(t));
+      commentTimes.push(performance.now() - t);
       expect(nextComments).not.toBe(firstComments);
     }
 
     console.info(
-      `[home-perf] CPU ms, 7k sessions: first pass ${firstPassMs.toFixed(1)}, per patch buckets ${median(bucketTimes).toFixed(2)}, comments memo hit ${median(commentHitTimes).toFixed(3)}, comments recompute ${median(commentTimes).toFixed(2)}`
+      `[home-perf] 7k sessions: first pass ${firstPassMs.toFixed(1)}ms, per patch buckets ${median(bucketTimes).toFixed(2)}ms, comments memo hit ${median(commentHitTimes).toFixed(3)}ms, comments recompute ${median(commentTimes).toFixed(2)}ms`
     );
     expect(firstComments.length).toBeGreaterThan(0);
-    // Retain the CPU-work budgets even when other CI workers delay wall-clock execution.
+    // Well above local measurements (first pass 0.8ms, 0.24ms, 0.005ms, recompute 0.17ms), for CI headroom.
     expect(firstPassMs).toBeLessThan(20);
     expect(median(bucketTimes)).toBeLessThan(2.5);
     expect(median(commentHitTimes)).toBeLessThan(0.1);
@@ -185,7 +176,7 @@ describe('Home selectors on a 7k-session tenant', () => {
     const passMs = medianFreshPass(hotBranch, (s) => {
       buckets = bucketsSelector()(s);
     });
-    console.info(`[home-perf] CPU ms, 2000 runs on one branch: first pass ${passMs.toFixed(1)}`);
+    console.info(`[home-perf] 2000 runs on one branch: first pass ${passMs.toFixed(1)}ms`);
     // Only the newest run, timed out after the latest clean user-started run, outlives it.
     expect(
       buckets.needs.filter((n) => n.reason === 'failed').map((n) => n.session.session_id)

@@ -1,5 +1,6 @@
 import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
+import * as entityTime from '../utils/entityTime';
 import { buildSessionMaps, EMPTY_MAPS } from './agorMaps';
 import type { AgorState } from './agorStore';
 import {
@@ -522,6 +523,127 @@ describe('makeHomeBucketsSelector', () => {
     const first = selector(state({ sessions: [shown, other] }));
     expect(selector(state({ sessions: [shown, { ...other, title: 'streamed' }] }))).toBe(first);
     expect(selector(state({ sessions: [{ ...shown, title: 'renamed' }, other] }))).not.toBe(first);
+  });
+
+  it('skips bucket derivation for unrelated session patches with unchanged board maps', () => {
+    const mine = session('mine', { status: 'awaiting_permission' });
+    const other = session('other', { created_by: 'user-other' });
+    const base = state({ sessions: [mine, other] });
+    const selector = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 3,
+      recentLimit: 8,
+    });
+    const time = vi.spyOn(entityTime, 'getTimeMs');
+    try {
+      const first = selector(base);
+      expect(time).toHaveBeenCalled();
+      time.mockClear();
+      const sessionById = new Map(base.sessionById);
+      sessionById.set(other.session_id, { ...other, title: 'streamed' });
+      expect(selector({ ...base, sessionById })).toBe(first);
+      expect(selector({ ...base, sessionById })).toBe(first);
+      expect(time).not.toHaveBeenCalled();
+    } finally {
+      time.mockRestore();
+    }
+  });
+
+  it('invalidates cached buckets when sessions change owner, archive, or disappear', () => {
+    const mine = session('mine');
+    const other = session('other', { created_by: 'user-other' });
+    const base = state({ sessions: [mine, other] });
+    const selector = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 3,
+      recentLimit: 8,
+    });
+    const withSessions = (sessions: Session[]) => ({ ...base, ...buildSessionMaps(sessions) });
+    expect(selector(base).recentCount).toBe(1);
+    const acquired = { ...other, created_by: ME } as Session;
+    expect(selector(withSessions([mine, acquired])).recentCount).toBe(2);
+    expect(selector(withSessions([mine, other])).recentCount).toBe(1);
+    expect(selector(withSessions([{ ...mine, archived: true }, other])).hasSessions).toBe(false);
+    expect(selector(withSessions([mine, other])).recentCount).toBe(1);
+    expect(selector(withSessions([other])).hasSessions).toBe(false);
+  });
+
+  it('invalidates cached buckets for branch and board changes', () => {
+    const branch = { branch_id: 'b', board_id: 'board', name: 'target' } as Branch;
+    const homeBoard = { ...board('board'), name: 'Workspace' };
+    const base = state({
+      sessions: [session('mine', { branch_id: 'b' })],
+      branches: [branch],
+      boards: [homeBoard],
+    });
+    const selector = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 3,
+      recentLimit: 8,
+      boardsLimit: 5,
+      query: 'target',
+    });
+    expect(selector(base).recentCount).toBe(1);
+    const renamedBranch = {
+      ...base,
+      branchById: new Map([[branch.branch_id, { ...branch, name: 'unrelated' }]]),
+    };
+    expect(selector(renamedBranch).recentCount).toBe(0);
+    const renamedBoard = {
+      ...renamedBranch,
+      boardById: new Map([[homeBoard.board_id, { ...homeBoard, name: 'target' }]]),
+    };
+    expect(selector(renamedBoard).recentCount).toBe(1);
+    expect(selector(renamedBoard).boardIds).toEqual(['board']);
+    expect(
+      selector({
+        ...renamedBoard,
+        boardById: new Map([[homeBoard.board_id, { ...homeBoard, archived: true }]]),
+      }).boardIds
+    ).toEqual([]);
+  });
+
+  it('invalidates cached buckets when a foreign or missing fork ancestor changes', () => {
+    const failed = session('failed', {
+      branch_id: 'b',
+      status: 'failed',
+      ...ranAt(3),
+      last_updated: hoursAgo(2),
+    });
+    const retry = session('retry', {
+      branch_id: 'b',
+      status: 'completed',
+      ...ranAt(1),
+      genealogy: { children: [], forked_from_session_id: 'middle' } as Session['genealogy'],
+    });
+    const middle = session('middle', {
+      created_by: 'user-other',
+      genealogy: { children: [], forked_from_session_id: 'root' } as Session['genealogy'],
+    });
+    const root = session('root', { created_by: 'user-other' });
+    const base = state({ sessions: [failed, retry, middle] });
+    const selector = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 3,
+      recentLimit: 8,
+    });
+    const failures = (s: typeof base) =>
+      selector(s)
+        .needs.filter((n) => n.reason === 'failed')
+        .map((n) => n.session.session_id);
+    expect(failures(base)).toEqual(['failed']);
+    const withRoot = (ancestor: Session) => ({
+      ...base,
+      sessionById: new Map(base.sessionById).set(ancestor.session_id, ancestor),
+    });
+    expect(failures(withRoot(root))).toEqual([]);
+    expect(failures(withRoot({ ...root, scheduled_from_branch: true }))).toEqual(['failed']);
+    expect(failures(withRoot(root))).toEqual([]);
+    expect(failures(base)).toEqual(['failed']);
   });
 
   it('filters recent by title, branch, teammate or board and by who started it', () => {

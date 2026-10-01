@@ -156,7 +156,12 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
  * gateway run or delegation in its lineage. An ancestor missing from the store counts as not.
  * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
  */
-function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, boolean>): boolean {
+function startedByUserLineage(
+  session: Session,
+  s: AgorState,
+  memo: Map<string, boolean>,
+  dependencies: Map<string, Session | undefined>
+): boolean {
   const path: string[] = [];
   let result = false;
   for (let cur: Session | undefined = session; cur; ) {
@@ -174,6 +179,7 @@ function startedByUserLineage(session: Session, s: AgorState, memo: Map<string, 
       break;
     }
     cur = s.sessionById.get(from);
+    dependencies.set(from, cur);
   }
   for (const id of path) memo.set(id, result);
   return result;
@@ -210,8 +216,30 @@ export function makeHomeBucketsSelector(
   // Need items from the previous pass only, so the cache never outgrows the current needs.
   let itemCache = new Map<string, HomeSessionNeed>();
   let prev: HomeBuckets | null = null;
+  let source: [AgorState['sessionById'], AgorState['branchById'], AgorState['boardById']] | null =
+    null;
+  let ownSessions: Session[] = [];
+  // A clean fork can depend on another user's session or a currently missing ancestor.
+  const lineageDependencies = new Map<string, Session | undefined>();
 
   return (s) => {
+    const sameBoards = source?.[1] === s.branchById && source[2] === s.boardById;
+    if (prev && sameBoards && source?.[0] === s.sessionById) return prev;
+    const nextOwnSessions: Session[] = [];
+    for (const session of userId ? s.sessionById.values() : []) {
+      if (!session.archived && session.created_by === userId) nextOwnSessions.push(session);
+    }
+    source = [s.sessionById, s.branchById, s.boardById];
+    if (
+      prev &&
+      sameBoards &&
+      sameItems(ownSessions, nextOwnSessions) &&
+      [...lineageDependencies].every(([id, session]) => s.sessionById.get(id) === session)
+    ) {
+      return prev;
+    }
+    ownSessions = nextOwnSessions;
+    lineageDependencies.clear();
     const nextItemCache = new Map<string, HomeSessionNeed>();
     const sessionNeed = (
       session: Session,
@@ -269,8 +297,7 @@ export function makeHomeBucketsSelector(
     const lineageMemo = new Map<string, boolean>();
     const failedByBranch = new Map<string, Session[]>();
     const finishedByBranch = new Map<string, Session[]>();
-    for (const session of userId ? s.sessionById.values() : []) {
-      if (session.archived || session.created_by !== userId) continue;
+    for (const session of ownSessions) {
       hasSessions = true;
       const boardId = session.branch_board_id ?? s.branchById.get(session.branch_id)?.board_id;
       const board = boardsLimit && boardId ? s.boardById.get(boardId) : undefined;
@@ -286,7 +313,7 @@ export function makeHomeBucketsSelector(
       if (ranCleanly(session)) {
         const [cleanRuns, key] = session.scheduled_from_branch
           ? [cleanScheduledRuns, scheduleKey(session)]
-          : startedByUserLineage(session, s, lineageMemo)
+          : startedByUserLineage(session, s, lineageMemo, lineageDependencies)
             ? [cleanRunByBranch, session.branch_id]
             : [undefined, ''];
         const runAt = lastRunStartedAt(session);
