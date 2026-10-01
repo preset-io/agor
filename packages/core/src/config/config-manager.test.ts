@@ -1114,19 +1114,22 @@ describe('loadConfig', () => {
     await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
   });
 
-  it('accepts a boolean daemon.websocket_compression and rejects other values', async () => {
+  it('accepts a boolean daemon.websocket_compression', async () => {
     const agorDir = path.join(tempDir, '.agor');
-    const configPath = path.join(agorDir, 'config.yaml');
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(
-      configPath,
+      path.join(agorDir, 'config.yaml'),
       yaml.dump({ daemon: { websocket_compression: false } }),
       'utf-8'
     );
     await expect(loadConfig()).resolves.toMatchObject({ daemon: { websocket_compression: false } });
+  });
 
+  it('rejects a non-boolean daemon.websocket_compression', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(
-      configPath,
+      path.join(agorDir, 'config.yaml'),
       yaml.dump({ daemon: { websocket_compression: 'off' } }),
       'utf-8'
     );
