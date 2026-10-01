@@ -554,3 +554,48 @@ describe('SessionsService.find — lean list projection', () => {
     expect(full).not.toHaveProperty('read_shape');
   });
 });
+
+describe('SessionsService writes — read_shape is never writable', () => {
+  dbTest('rejects the marker on create, patch, and update and never echoes it', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch, {
+      custom_context: { scheduled_run: { schedule_id: 'sched-1' } },
+    });
+    const app = feathers<{ sessions: SessionsService }>();
+    app.use('sessions', createService(db));
+    const patched: unknown[] = [];
+    app.service('sessions').on('patched', (row: unknown) => patched.push(row));
+    const marker = { read_shape: SESSION_LIST_ROW_SHAPE } as unknown as Partial<Session>;
+
+    await expect(
+      app.service('sessions').create({ branch_id: branch, ...marker } as never)
+    ).rejects.toMatchObject({ code: 400, message: expect.stringMatching(/read_shape/) });
+    await expect(
+      app.service('sessions').patch(sessionId, { title: 'x', ...marker })
+    ).rejects.toMatchObject({ code: 400 });
+    await expect(
+      app.service('sessions').update(sessionId, { title: 'x', ...marker } as never)
+    ).rejects.toMatchObject({ code: 400 });
+    expect(patched).toEqual([]);
+
+    const result = await app.service('sessions').patch(sessionId, { title: 'renamed' });
+    for (const row of [result, ...patched]) {
+      expect(row).not.toHaveProperty('read_shape');
+      expect((row as Session).custom_context).toHaveProperty('scheduled_run');
+    }
+    expect(patched).toHaveLength(1);
+  });
+
+  dbTest('the repository drops a marker that reaches it internally', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch);
+
+    const merged = await new SessionRepository(db).update(sessionId, {
+      title: 'internal',
+      read_shape: SESSION_LIST_ROW_SHAPE,
+    } as unknown as Partial<Session>);
+
+    expect(merged.title).toBe('internal');
+    expect(merged).not.toHaveProperty('read_shape');
+  });
+});

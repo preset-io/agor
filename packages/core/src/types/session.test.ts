@@ -239,7 +239,21 @@ describe('toLeanSessionListRow', () => {
       enumerable: true,
       writable: false,
     });
-    expect(toLeanSessionListRow(lean)).toBe(lean);
+    expect(toLeanSessionListRow(lean)).toEqual(lean);
+  });
+
+  it('strips withheld keys from a row that forges the marker', () => {
+    const forged = { ...row(), read_shape: SESSION_LIST_ROW_SHAPE } as unknown as Session;
+    const lean = toLeanSessionListRow(forged);
+
+    expect(lean).not.toBe(forged);
+    expect(lean.custom_context).not.toHaveProperty('scheduled_run');
+    expect(lean.custom_context).not.toHaveProperty('slash_commands');
+    expect(lean.custom_context).not.toHaveProperty('skills');
+    expect(Object.getOwnPropertyDescriptor(lean, 'read_shape')).toMatchObject({
+      value: SESSION_LIST_ROW_SHAPE,
+      writable: false,
+    });
   });
 });
 

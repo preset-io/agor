@@ -829,14 +829,17 @@ export function hasFullSessionDetails(row: Session | SessionListRow): boolean {
  * `custom_context` keys removed and the enumerable, read-only `read_shape`
  * marker set. The copy keeps every own property descriptor, including
  * non-enumerable ones such as the hidden `tenant_id` the daemon's tenant
- * after-hook checks. A row that is already lean is returned as is.
+ * after-hook checks. The withheld keys are always removed, whatever
+ * `read_shape` the input claims, so a forged marker cannot carry them through.
  */
 export function toLeanSessionListRow(session: Session | SessionListRow): SessionListRow {
-  if (isSessionListRow(session)) return session;
-  const copy = Object.create(
-    Object.getPrototypeOf(session),
-    Object.getOwnPropertyDescriptors(session)
-  ) as Record<string, unknown>;
+  const { read_shape: _claimed, ...descriptors } = Object.getOwnPropertyDescriptors(
+    session
+  ) as PropertyDescriptorMap;
+  const copy = Object.create(Object.getPrototypeOf(session), descriptors) as Record<
+    string,
+    unknown
+  >;
   const context = session.custom_context;
   if (context && LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS.some((key) => key in context)) {
     const lean: Record<string, unknown> = { ...context };
