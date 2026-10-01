@@ -5,9 +5,10 @@
  * so an archived branch's sessions kept showing up in search results.
  */
 
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { Artifact, Board, Branch, MCPServer, Session, SessionID } from '@agor-live/client';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { SEARCH_DEBOUNCE_MS } from './types';
 import { useGlobalSearch } from './useGlobalSearch';
 
 const USER_ID = 'user-1';
@@ -42,11 +43,66 @@ function renderSearch(sessions: Session[], query: string) {
 }
 
 describe('useGlobalSearch', () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it('debounces the latest query, flushes it, and cancels superseded/unmounted timers', () => {
+    vi.useFakeTimers();
+    const input = {
+      query: '',
+      ownedByMe: false,
+      activeTypeChip: 'all' as const,
+      sessionById: new Map([['session-1', makeSession()]]),
+      branchById: new Map<string, Branch>(),
+      artifactById: new Map<string, Artifact>(),
+      boardById: new Map<string, Board>(),
+      mcpServerById: new Map<string, MCPServer>(),
+    };
+    const { result, rerender, unmount } = renderHook(useGlobalSearch, { initialProps: input });
+    rerender({ ...input, query: 'stale' });
+    act(() => vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1));
+    expect(result.current.debouncedQuery).toBe('');
+    rerender({ ...input, query: 'deploy' });
+    act(() => result.current.flush());
+    expect(result.current.debouncedQuery).toBe('deploy');
+    expect(result.current.counts.session).toBe(1);
+    act(() => vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS));
+    expect(result.current.debouncedQuery).toBe('deploy');
+    rerender({ ...input, query: 'pending' });
+    unmount();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not return a prior tenant scope after its supplied maps are replaced', () => {
+    const input = {
+      query: 'deploy',
+      ownedByMe: false,
+      activeTypeChip: 'all' as const,
+      sessionById: new Map([
+        ['tenant-a-session', makeSession({ session_id: 'tenant-a-session' as SessionID })],
+      ]),
+      branchById: new Map<string, Branch>(),
+      artifactById: new Map<string, Artifact>(),
+      boardById: new Map<string, Board>(),
+      mcpServerById: new Map<string, MCPServer>(),
+    };
+    // The authenticated data layer supplies the scope; the hook must never
+    // search a captured old map, even with the same query and owner filter off.
+    const { result, rerender } = renderHook(useGlobalSearch, { initialProps: input });
+    expect(result.current.counts.session).toBe(1);
+    rerender({ ...input, sessionById: new Map() });
+    act(() => result.current.flush());
+    expect(result.current.results.session).toEqual([]);
+    expect(result.current.counts.session).toBe(0);
+  });
+
   it('omits archived sessions from results', async () => {
     const { result } = renderSearch(
       [
-        makeSession({ session_id: 'active', title: 'deploy pipeline' }),
-        makeSession({ session_id: 'gone', title: 'deploy pipeline', archived: true }),
+        makeSession({ session_id: 'active' as SessionID, title: 'deploy pipeline' }),
+        makeSession({ session_id: 'gone' as SessionID, title: 'deploy pipeline', archived: true }),
       ],
       'deploy'
     );
@@ -63,8 +119,8 @@ describe('useGlobalSearch', () => {
   it('does not count archived sessions in the chip badge', async () => {
     const { result } = renderSearch(
       [
-        makeSession({ session_id: 'active', title: 'deploy pipeline' }),
-        makeSession({ session_id: 'gone', title: 'deploy pipeline', archived: true }),
+        makeSession({ session_id: 'active' as SessionID, title: 'deploy pipeline' }),
+        makeSession({ session_id: 'gone' as SessionID, title: 'deploy pipeline', archived: true }),
       ],
       'deploy'
     );

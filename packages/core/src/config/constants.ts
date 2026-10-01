@@ -95,6 +95,15 @@ export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 /** Executor Feathers RPC acknowledgement deadline. */
 export const EXECUTOR_FEATHERS_ACK_TIMEOUT_MS = 60_000;
 
+/**
+ * Browser Feathers RPC acknowledgement deadline. Any deadline makes Socket.IO
+ * reject calls in flight at disconnect instead of silently dropping them; the
+ * value only bounds a connected daemon that never replies. It must exceed the
+ * slowest awaited browser call (an environment restart waits on its stop
+ * command for up to ~29 minutes).
+ */
+export const BROWSER_FEATHERS_ACK_TIMEOUT_MS = 60 * 60_000;
+
 /** Extra time for bounded transport cleanup after the executor RPC deadline. */
 export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS = 5_000;
 
