@@ -102,4 +102,38 @@ describe('useFullSessionDetails', () => {
     failed.rerender({ row: leanRow });
     expect(failed.result.current).toMatchObject({ status: 'ready', session: fullRow });
   });
+
+  it('restarts a fetch that is still pending when the socket re-authenticates', async () => {
+    const first = deferred<Session>();
+    const get = vi
+      .fn<(id: string) => Promise<Session>>()
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(fullRow);
+    const { result, reauth } = renderDetails(clientWith(get), leanRow);
+    expect(result.current.status).toBe('loading');
+
+    reauth(leanRow);
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ status: 'ready', session: fullRow })
+    );
+    expect(get).toHaveBeenCalledTimes(2);
+
+    // The attempt made under the old auth failing afterwards is ignored.
+    await act(async () => first.reject(new Error('unauthenticated')));
+    expect(result.current).toMatchObject({ status: 'ready', session: fullRow });
+  });
+
+  it('retries a failed fetch when the socket re-authenticates', async () => {
+    const get = vi
+      .fn<(id: string) => Promise<Session>>()
+      .mockRejectedValueOnce(new Error('unauthenticated'))
+      .mockResolvedValueOnce(fullRow);
+    const { result, reauth } = renderDetails(clientWith(get), leanRow);
+    await waitFor(() => expect(result.current.status).toBe('error'));
+
+    reauth(leanRow);
+    await waitFor(() =>
+      expect(result.current).toMatchObject({ status: 'ready', session: fullRow })
+    );
+  });
 });

@@ -9,8 +9,9 @@
  * - a full store row is used as is (`ready` on the first render), also when
  *   it arrives while a fetch is pending or has failed (that fetch is dropped);
  * - a lean row is fetched with `sessions.get`;
- * - a failed fetch is a visible `error` with `retry`, and is retried
- *   automatically when the socket re-authenticates (reconnect);
+ * - a failed fetch is a visible `error` with `retry`; when the socket
+ *   re-authenticates (reconnect), a failed or still-pending fetch is restarted
+ *   under the new auth (a late answer to the old one is ignored);
  * - a fetch that does not answer within `timeoutMs` is the same `error`
  *   (a late answer to that attempt is ignored; Retry starts a new one);
  * - once `ready` for a session id, the result is kept while enabled — a later
@@ -104,12 +105,14 @@ export function useFullSessionDetails(
     };
   }, [sessionId, client, attempt, timeoutMs, rowIsFull]);
 
-  // A reconnect (new socket-auth generation) retries a failed load.
+  // A reconnect (new socket-auth generation) restarts a failed load, and also
+  // a pending one: its request went out under the old auth and may still fail.
   const authGenerationRef = useRef(authGeneration);
   useEffect(() => {
     if (authGenerationRef.current === authGeneration) return;
     authGenerationRef.current = authGeneration;
-    if (currentRef.current?.status === 'error') setAttempt((value) => value + 1);
+    const status = currentRef.current?.status;
+    if (status === 'error' || status === 'loading') setAttempt((value) => value + 1);
   }, [authGeneration]);
 
   const retry = useCallback(() => setAttempt((value) => value + 1), []);
