@@ -9,11 +9,13 @@
  * which begins subscribing and hydrating immediately, and holds the global
  * full-set hydration until that first page lands or `timeoutMs` passes.
  *
- * The prefetch keeps its reference for `adoptionGraceMs` after the page lands
+ * The prefetch keeps its reference for `adoptionGraceMs` after the priority
+ * barrier settles — the page landed, its load failed, or `timeoutMs` passed —
  * so the panel, which mounts once the first-paint gate opens, adopts the warm
- * handle instead of bootstrapping a second one. Independently, it never holds
- * the reference longer than `maxRetentionMs` from the start, so a load that
- * never settles cannot pin the handle. `release()` drops it early (logout,
+ * handle instead of bootstrapping a second one. Because the grace starts from
+ * that settlement, a load that never settles still releases the handle (its
+ * listeners, stream subscription and transcript state) after
+ * `timeoutMs + adoptionGraceMs`. `release()` drops it early (logout,
  * authority change, unmount); it is idempotent.
  *
  * Transitional: this is a localized `/s/` deferral of the global hydration
@@ -34,8 +36,6 @@ export const OPENED_TRANSCRIPT_REACTIVE_OPTIONS: ReactiveSessionOptions = {
 
 export const OPENED_TRANSCRIPT_PRIORITY_TIMEOUT_MS = 10_000;
 export const OPENED_TRANSCRIPT_ADOPTION_GRACE_MS = 30_000;
-export const OPENED_TRANSCRIPT_MAX_RETENTION_MS =
-  OPENED_TRANSCRIPT_PRIORITY_TIMEOUT_MS + OPENED_TRANSCRIPT_ADOPTION_GRACE_MS;
 
 export interface OpenedTranscriptPrefetch {
   /**
@@ -53,8 +53,7 @@ export function prefetchOpenedTranscript(
   {
     timeoutMs = OPENED_TRANSCRIPT_PRIORITY_TIMEOUT_MS,
     adoptionGraceMs = OPENED_TRANSCRIPT_ADOPTION_GRACE_MS,
-    maxRetentionMs = OPENED_TRANSCRIPT_MAX_RETENTION_MS,
-  }: { timeoutMs?: number; adoptionGraceMs?: number; maxRetentionMs?: number } = {}
+  }: { timeoutMs?: number; adoptionGraceMs?: number } = {}
 ): OpenedTranscriptPrefetch {
   let handle: ReturnType<typeof retainReactiveSession>;
   try {
@@ -68,25 +67,22 @@ export function prefetchOpenedTranscript(
   let released = false;
   let graceTimer: ReturnType<typeof setTimeout> | undefined;
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
-  let retentionTimer: ReturnType<typeof setTimeout> | undefined;
   const release = () => {
     if (released) return;
     released = true;
     clearTimeout(graceTimer);
     clearTimeout(timeoutTimer);
-    clearTimeout(retentionTimer);
     releaseReactiveSession(client, sessionId, OPENED_TRANSCRIPT_REACTIVE_OPTIONS);
   };
-  // Upper bound on the speculative reference, even if loading never settles.
-  retentionTimer = setTimeout(release, maxRetentionMs);
 
   const loaded = handle.ready().catch(() => undefined);
-  void loaded.then(() => {
-    if (!released) graceTimer = setTimeout(release, adoptionGraceMs);
-  });
   const timedOut = new Promise<void>((resolve) => {
     timeoutTimer = setTimeout(resolve, timeoutMs);
   });
-  const ready = Promise.race([loaded, timedOut]).then(() => clearTimeout(timeoutTimer));
+  // Bounded release from the race's settlement, timeout included.
+  const ready = Promise.race([loaded, timedOut]).then(() => {
+    clearTimeout(timeoutTimer);
+    if (!released) graceTimer = setTimeout(release, adoptionGraceMs);
+  });
   return { ready, release };
 }

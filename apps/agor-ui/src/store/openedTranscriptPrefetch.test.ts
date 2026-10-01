@@ -81,19 +81,29 @@ describe('prefetchOpenedTranscript', () => {
     expect(onReady).toHaveBeenCalled();
   });
 
-  it('drops the speculative reference at its maximum lifetime if loading never settles', async () => {
+  it('releases the handle after the grace even if loading never settles', async () => {
     reactive.ready.mockReturnValue(new Promise(() => {}));
     const prefetch = prefetchOpenedTranscript(client, SESSION_ID, {
       timeoutMs: 1_000,
-      maxRetentionMs: 4_000,
+      adoptionGraceMs: 3_000,
     });
 
+    // The timeout releases the priority barrier, then the grace starts.
     await vi.advanceTimersByTimeAsync(3_999);
     expect(reactive.releaseReactiveSession).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(reactive.releaseReactiveSession).toHaveBeenCalledTimes(1);
     prefetch.release();
     expect(reactive.releaseReactiveSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not schedule a release after an early release', async () => {
+    reactive.ready.mockReturnValue(new Promise(() => {}));
+    const prefetch = prefetchOpenedTranscript(client, SESSION_ID, { timeoutMs: 1_000 });
+    prefetch.release();
+    await vi.runAllTimersAsync();
+    expect(reactive.releaseReactiveSession).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('treats a failed load as ready and releases early exactly once', async () => {
