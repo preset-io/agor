@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { LOGO_MARK_PATH, LOGO_PATH } from '../lib/siteMetadata';
+import sharp from 'sharp';
+import { getBasePath, LOGO_MARK_PATH, LOGO_PATH } from '../lib/siteMetadata';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const docsDir = path.resolve(__dirname, '..');
@@ -88,6 +89,72 @@ if (!existsSync(appleTouchIconPath)) {
     }
     if (colorType !== 4 && colorType !== 6) {
       fail('Apple touch icon must retain an alpha channel for the transparent outer canvas');
+    }
+
+    // A valid IHDR does not prove the artwork is complete: the former PNG had
+    // correct dimensions but fully transparent rows 93–179. Decode and compare
+    // the whole image to the canonical badge, including its legitimate alpha.
+    try {
+      const actual = await sharp(png).ensureAlpha().raw().toBuffer();
+      const expected = await sharp(canonicalLogoPath)
+        .resize(180, 180)
+        .ensureAlpha()
+        .raw()
+        .toBuffer();
+      if (actual.length !== expected.length) {
+        fail('Apple touch icon decoded dimensions do not match the canonical render');
+      } else {
+        const difference = actual.reduce(
+          (sum, value, index) => sum + Math.abs(value - expected[index]),
+          0
+        );
+        // Allow minor antialiasing differences across librsvg versions, but
+        // reject clipped, stretched, recolored, or flattened artwork.
+        if (difference / actual.length > 2) {
+          fail('Apple touch icon must render the complete canonical badge with transparency');
+        }
+      }
+    } catch (error) {
+      fail(`Apple touch icon could not be decoded/rendered: ${String(error)}`);
+    }
+  }
+}
+
+// Opt in after next build: check the real exported homepage, not just source
+// strings (App Router file conventions can silently introduce extra icons).
+if (process.argv.includes('--export')) {
+  const outDir = path.join(docsDir, 'out');
+  const homepage = readFileSync(path.join(outDir, 'index.html'), 'utf8');
+  const links = [...homepage.matchAll(/<link\b[^>]*>/g)]
+    .map(([tag]) =>
+      Object.fromEntries(
+        [...tag.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, key, value]) => [key, value])
+      )
+    )
+    .filter(({ rel }) => /\bicon\b|manifest/.test(rel ?? ''));
+  const basePath = getBasePath();
+  if (
+    links.length !== 2 ||
+    !links.some(
+      ({ rel, type, href }) =>
+        rel === 'icon' && type === 'image/svg+xml' && href === `${basePath}${LOGO_PATH}`
+    ) ||
+    !links.some(
+      ({ rel, sizes, href }) =>
+        rel === 'apple-touch-icon' &&
+        sizes === '180x180' &&
+        href === `${basePath}/apple-touch-icon.png`
+    )
+  ) {
+    fail('Exported homepage must advertise only the canonical SVG and 180 × 180 Apple touch icon');
+  }
+  for (const filename of ['logo.svg', 'apple-touch-icon.png']) {
+    if (
+      !readFileSync(path.join(outDir, filename)).equals(
+        readFileSync(path.join(docsDir, 'public', filename))
+      )
+    ) {
+      fail(`Exported ${filename} differs from its validated public asset`);
     }
   }
 }

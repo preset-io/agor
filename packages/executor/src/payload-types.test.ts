@@ -747,11 +747,26 @@ describe('GitRepoRealignOriginPayloadSchema', () => {
         repoPath: '/managed/repos/repo',
         remoteUrl: 'https://example.com/org/repo.git',
         repoSlug: 'org/repo',
+        reposRoot: '/managed/repos',
       },
     });
 
     expect(result).not.toHaveProperty('sessionToken');
     expect(result.params.repoPath).toBe('/managed/repos/repo');
+  });
+
+  it('requires the tenant repos root that bounds repoPath', () => {
+    expect(() =>
+      GitRepoRealignOriginPayloadSchema.parse({
+        command: 'git.repo.realign-origin',
+        params: {
+          repoId: '550e8400-e29b-41d4-a716-446655440000',
+          repoPath: '/managed/repos/repo',
+          remoteUrl: 'https://example.com/org/repo.git',
+          repoSlug: 'org/repo',
+        },
+      })
+    ).toThrow();
   });
 });
 
