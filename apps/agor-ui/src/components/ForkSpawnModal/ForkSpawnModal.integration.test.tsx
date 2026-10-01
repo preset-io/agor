@@ -150,6 +150,8 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
     });
   });
 
+  // This repeated real Ant Design editor flow exceeds 15s on cold CI runners.
+  // Keep every intermediate and transport assertion, with a bounded budget.
   it('preserves advanced choices made in the form while remaining derived fields follow mode', async () => {
     const { submit } = mount();
     await screen.findByRole('switch');
@@ -167,7 +169,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
       codexApprovalPolicy: 'untrusted',
       codexNetworkAccess: false,
     });
-  });
+  }, 30_000);
 
   it.each([
     ['My default', '__user_default__'],
