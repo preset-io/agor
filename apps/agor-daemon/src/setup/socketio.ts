@@ -169,6 +169,11 @@ export interface SocketIOOptions {
   workIdentity?: { instanceId: string; bootId: string };
   /** Enables fail-closed tenant scoping for distributed invalidation messages. */
   multiTenancy?: ResolvedMultiTenancyConfig;
+  /**
+   * `daemon.websocket_compression`: negotiate permessage-deflate with
+   * `SOCKET_IO_PER_MESSAGE_DEFLATE` (default) or, when false, not at all.
+   */
+  websocketCompression?: boolean;
   /** Redis adapter constructor in explicit HA mode. */
   adapter?: ServerOptions['adapter'];
   /** Called as soon as Feathers creates the Socket.IO server. */
@@ -471,6 +476,8 @@ function bearerTokenFromHeader(value: string | string[] | undefined): string | u
  *   (vs ~256 KiB + 32 KiB at zlib defaults) for ~4.8x instead of ~5.2x on
  *   real session lists. Broadcasts above the threshold are compressed once
  *   per recipient (engine.io cannot reuse a pre-encoded frame).
+ * - Operators switch it off with `daemon.websocket_compression: false`
+ *   (`AGOR_WEBSOCKET_COMPRESSION=0`); the profile itself is not configurable.
  */
 export const SOCKET_IO_PER_MESSAGE_DEFLATE = {
   threshold: 1024,
@@ -527,7 +534,8 @@ export function createSocketIOConfig(
     pingInterval: 25000, // How often to ping clients
     maxHttpBufferSize: SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
     transports: ['websocket', 'polling'], // Prefer WebSocket
-    perMessageDeflate: SOCKET_IO_PER_MESSAGE_DEFLATE,
+    perMessageDeflate:
+      options.websocketCompression === false ? false : SOCKET_IO_PER_MESSAGE_DEFLATE,
     ...(options.adapter ? { adapter: options.adapter } : {}),
   };
 

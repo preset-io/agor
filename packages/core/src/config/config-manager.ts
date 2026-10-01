@@ -719,8 +719,15 @@ function validateConfig(config: AgorConfig): void {
     'cors_allow_sandpack',
     'cors_origins',
     'trust_proxy_hops',
+    'websocket_compression',
     ...RETIRED_CONFIG_KEYS.daemon,
   ]);
+  if (
+    config.daemon?.websocket_compression !== undefined &&
+    typeof config.daemon.websocket_compression !== 'boolean'
+  ) {
+    throw new Error('Config error: daemon.websocket_compression must be a boolean');
+  }
   only(config.ui, 'ui', ['base_url', 'port', 'host']);
   only(config.uploads, 'uploads', ['location', 'max_age_days', 'max_file_size_mb']);
   only(config.external_launch, 'external_launch', [
@@ -1519,6 +1526,10 @@ export function resolveEffectiveConfig(
     'AGOR_STATSD_ENABLED'
   );
   const statsdPort = parseOptionalPortEnvironmentValue(env.AGOR_STATSD_PORT, 'AGOR_STATSD_PORT');
+  const websocketCompression = parseOptionalBooleanEnvironmentValue(
+    env.AGOR_WEBSOCKET_COMPRESSION,
+    'AGOR_WEBSOCKET_COMPRESSION'
+  );
   const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
@@ -1597,6 +1608,9 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
       ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
+      ...(websocketCompression !== undefined
+        ? { websocket_compression: websocketCompression }
+        : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
     deployment: {

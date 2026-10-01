@@ -65,6 +65,7 @@ import {
   createTokenBucket,
   getSocketAuthState,
   parseTerminalChannel,
+  SOCKET_IO_PER_MESSAGE_DEFLATE,
   type SocketIOOptions,
 } from './socketio';
 
@@ -749,6 +750,15 @@ describe('Socket.IO transport ceiling', () => {
         zlibDeflateOptions: { memLevel: 7 },
       },
     });
+    expect(buildHarness({ websocketCompression: true }).config.serverOptions).toMatchObject({
+      perMessageDeflate: SOCKET_IO_PER_MESSAGE_DEFLATE,
+    });
+  });
+
+  it('disables WebSocket compression when daemon.websocket_compression is false', () => {
+    const { config } = buildHarness({ websocketCompression: false });
+
+    expect(config.serverOptions).toMatchObject({ perMessageDeflate: false });
   });
 });
 
