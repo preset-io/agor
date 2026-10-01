@@ -398,10 +398,8 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalled());
-      expect(onUpdate.mock.calls[0][1].custom_context).toEqual({
-        ...fullContext,
-        teamName: 'Frontend',
-      });
+      // Only the edited key: untouched arrays (slash_commands) are not echoed.
+      expect(onUpdate.mock.calls[0][1].custom_context).toEqual({ teamName: 'Frontend' });
     });
   });
 });

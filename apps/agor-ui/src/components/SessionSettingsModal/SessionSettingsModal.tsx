@@ -55,6 +55,7 @@ import { ErrorBoundary } from '../ErrorBoundary';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
+import { buildCustomContextPatch } from './customContextPatch';
 
 export interface SessionSettingsModalProps {
   open: boolean;
@@ -189,13 +190,18 @@ function buildUpdates(
     };
   }
 
-  // Only send custom_context when the JSON was actually edited: echoing an
-  // unedited copy back would overwrite newer server-side values (arrays such
-  // as SDK-reported slash_commands replace rather than merge on patch).
+  // Only send custom_context when the JSON was actually edited, and then only
+  // the top-level keys that changed relative to the snapshot the editor was
+  // seeded with: echoing unchanged values would overwrite newer server-side
+  // ones (arrays such as SDK-reported slash_commands replace on patch).
   if (values.custom_context !== initialCustomContext) {
     if (values.custom_context) {
       try {
-        updates.custom_context = JSON.parse(values.custom_context);
+        const patch = buildCustomContextPatch(
+          initialCustomContext ? JSON.parse(initialCustomContext) : {},
+          JSON.parse(values.custom_context)
+        );
+        if (patch !== undefined) updates.custom_context = patch;
       } catch {
         // Don't update if JSON is invalid
       }
