@@ -56,6 +56,8 @@ export interface TeammateTabProps {
   mcpServerById?: Map<string, MCPServer>;
   currentUser?: User | null;
   client?: AgorClient | null;
+  /** Board the teammate joins as primary; undefined creates a fresh board. */
+  targetBoardName?: string;
 }
 
 export const TeammateTab: React.FC<TeammateTabProps> = ({
@@ -67,6 +69,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   mcpServerById = new Map(),
   currentUser,
   client,
+  targetBoardName,
 }) => {
   const repos = Array.from(repoById.values());
   const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
@@ -180,6 +183,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         onDisplayNameChange={handleDisplayNameChange}
         customRepoSelected={customRepoSelected}
         onCustomRepoChange={setCustomRepoSelected}
+        targetBoardName={targetBoardName}
         extraBeforeAdvanced={
           <Collapse
             ghost

@@ -108,6 +108,25 @@ describe('CreateDialog — per-tab validity scoping', { timeout: 60_000 }, () =>
     expect(createButton('Create AI teammate')).toBeDisabled();
   });
 
+  it('says a new teammate gets a fresh board by default', async () => {
+    renderDialog();
+
+    expect(
+      await screen.findByText(
+        /each ai teammate gets a fresh board and becomes that board's primary/i
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('says the teammate joins the board it was created from', async () => {
+    renderDialog({ teammateTargetBoardName: "Rusty's board" });
+
+    expect(
+      await screen.findByText("This AI teammate becomes the primary teammate of Rusty's board.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/fresh board/i)).toBeNull();
+  });
+
   it('enables Create AI teammate once Name is typed', async () => {
     renderDialog({ defaultTab: 'teammate' });
 

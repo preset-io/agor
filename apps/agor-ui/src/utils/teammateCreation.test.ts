@@ -98,6 +98,44 @@ describe('createTeammateBranch', () => {
     expect(onUpdateBranch).not.toHaveBeenCalled();
   });
 
+  it('joins an existing board as its primary without a welcome note when asked', async () => {
+    const repo = makeRepo();
+    const branch = makeBranch({ board_id: 'board-existing' as BoardID });
+    const onCreateBranch = vi.fn().mockResolvedValue(branch);
+    const boardsService = {
+      create: vi.fn(),
+      ensureTeammateWelcomeNote: vi.fn(),
+      setPrimaryTeammate: vi.fn().mockResolvedValue({}),
+    };
+    const client = { service: vi.fn(() => boardsService) };
+
+    await createTeammateBranch(
+      {
+        displayName: 'Rusty',
+        repoId: repo.repo_id,
+        boardId: 'board-existing',
+        welcomeNote: false,
+      },
+      {
+        client: client as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch: vi.fn(),
+      }
+    );
+
+    expect(boardsService.create).not.toHaveBeenCalled();
+    expect(boardsService.ensureTeammateWelcomeNote).not.toHaveBeenCalled();
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({ boardId: 'board-existing' })
+    );
+    expect(boardsService.setPrimaryTeammate).toHaveBeenCalledWith({
+      boardId: 'board-existing',
+      branchId: branch.branch_id,
+    });
+  });
+
   it('qualifies a template ref with its source remote while keeping the private repo as destination', async () => {
     const repo = makeRepo({
       slug: 'preset-io/agor-teammate-private',
