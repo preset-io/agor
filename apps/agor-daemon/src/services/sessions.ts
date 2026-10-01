@@ -1968,7 +1968,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * Note: Last message is NOT included in list operations - only on single GET.
    *
    * `lean: true` is a list-only projection that omits bulky single-session
-   * `custom_context` keys from every row (see `toLeanSessionListRow`). It is not
+   * `custom_context` keys from every row and stamps each row with the
+   * `read_shape` marker (see `toLeanSessionListRow` / `SessionListRow`). It is not
    * a column, so it is removed from the query before any filter sees it, and
    * it never widens visibility: rows come from the same scoped read either way.
    * The result object itself is preserved so its enrichment marker survives.

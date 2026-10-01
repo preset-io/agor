@@ -16,6 +16,7 @@ import type {
 } from '@agor-live/client';
 import {
   getDefaultPermissionMode,
+  hasFullSessionDetails,
   isAgenticToolName,
   mapToCodexPermissionConfig,
   SessionStatus,
@@ -829,16 +830,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // The composer subtree only depends on composer/draft state — memoize it so
   // ordinary SessionPanel re-renders (reactive-session notifies, store
   // patches) hand the memoized SessionFooter a reference-stable slot.
-  // Store rows come from lean session lists that omit the SDK-reported
+  // Store rows may be lean list rows that withhold the SDK-reported
   // slash_commands / skills inventories; the reactive session holds the full
-  // record from `sessions.get` (kept current by realtime patches).
+  // record from `sessions.get` (kept current by realtime patches). Fall back to
+  // the store row only when it is itself a full record.
   const fullSession =
     reactiveSessionState?.session?.session_id === session?.session_id
       ? reactiveSessionState?.session
-      : null;
-  const sessionCustomContext = (fullSession ?? session)?.custom_context as
-    | Record<string, unknown>
-    | undefined;
+      : session && hasFullSessionDetails(session)
+        ? session
+        : null;
+  const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (

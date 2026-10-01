@@ -18,9 +18,13 @@ import type { AgenticToolName } from './agentic-tool';
 import {
   type CreateSessionInput,
   getDefaultPermissionMode,
+  hasFullSessionDetails,
   isSessionExecuting,
+  isSessionListRow,
   isSessionPromptable,
+  SESSION_LIST_ROW_SHAPE,
   type Session,
+  type SessionListRow,
   type SessionUpdate,
   sessionCanStartTask,
   toLeanSessionListRow,
@@ -214,8 +218,50 @@ describe('toLeanSessionListRow', () => {
     expect(Object.keys(lean)).not.toContain('tenant_id');
   });
 
-  it('returns the same row when there is nothing to omit', () => {
+  it('stamps every lean row, also when there was nothing to omit', () => {
     const session = { session_id: 's-2', custom_context: { teamName: 'x' } } as unknown as Session;
-    expect(toLeanSessionListRow(session)).toBe(session);
+    const lean = toLeanSessionListRow(session);
+
+    expect(lean).not.toBe(session);
+    expect(lean.custom_context).toEqual({ teamName: 'x' });
+    expect(lean.read_shape).toBe(SESSION_LIST_ROW_SHAPE);
+    expect(toLeanSessionListRow({ session_id: 's-3' } as unknown as Session).read_shape).toBe(
+      SESSION_LIST_ROW_SHAPE
+    );
+    expect(session).not.toHaveProperty('read_shape');
+  });
+
+  it('makes the marker enumerable (survives JSON) and read-only', () => {
+    const lean = toLeanSessionListRow(row());
+
+    expect(JSON.parse(JSON.stringify(lean))).toMatchObject({ read_shape: SESSION_LIST_ROW_SHAPE });
+    expect(Object.getOwnPropertyDescriptor(lean, 'read_shape')).toMatchObject({
+      enumerable: true,
+      writable: false,
+    });
+    expect(toLeanSessionListRow(lean)).toBe(lean);
+  });
+});
+
+describe('isSessionListRow / hasFullSessionDetails', () => {
+  it('tells a lean summary from a full record', () => {
+    const full = { session_id: 's-1', custom_context: { skills: ['pdf'] } } as unknown as Session;
+    const lean = toLeanSessionListRow(full);
+    // A lean row that went over the wire is a plain object with the marker.
+    const wire = JSON.parse(JSON.stringify(lean)) as Session;
+
+    expect(isSessionListRow(full)).toBe(false);
+    expect(hasFullSessionDetails(full)).toBe(true);
+    for (const candidate of [lean, wire]) {
+      expect(isSessionListRow(candidate)).toBe(true);
+      expect(hasFullSessionDetails(candidate)).toBe(false);
+    }
+  });
+
+  it('types withheld keys as unavailable on a list row', () => {
+    expectTypeOf<SessionListRow>().toExtend<Session>();
+    expectTypeOf<
+      NonNullable<SessionListRow['custom_context']>['scheduled_run']
+    >().toEqualTypeOf<undefined>();
   });
 });

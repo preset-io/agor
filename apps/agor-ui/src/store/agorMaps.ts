@@ -31,6 +31,14 @@ import { shallowEqualEntity } from '../utils/shallowEqual';
  * the store covers every field automatically.
  */
 export type DataMaps = {
+  // Session SUMMARIES. A row is whichever arrived last: a lean list row
+  // (`SessionListRow`, marked by `read_shape`, from every store-feeding
+  // `sessions.find`) or a full record (realtime events, a deep-link `get`).
+  // A lean row replaces a full one as is — its marker makes the downgrade
+  // visible, and merging the old row's withheld keys back in could resurrect
+  // stale values (there is no reliable version to compare). Code that needs a
+  // withheld `custom_context` key must check `hasFullSessionDetails(row)` or
+  // read the full record (`sessions.get` / the reactive session).
   sessionById: Map<string, Session>;
   sessionsByBranch: Map<string, Session[]>;
   boardById: Map<string, Board>;

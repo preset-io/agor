@@ -110,9 +110,11 @@ export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 // single most important cap for first-paint latency on a busy workspace.
 //
 // Every session list read that feeds the store is `lean: true`: rows omit the
-// bulky single-session `custom_context` keys (LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS),
-// so `sessionById` must never be the source for those. The open session reads
-// them from its full `sessions.get` (the reactive session / settings modal).
+// bulky single-session `custom_context` keys (LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS)
+// and carry the `read_shape` marker, so `sessionById` holds summaries and must
+// never be the source for those keys (see `DataMaps.sessionById`). The open
+// session reads them from its full `sessions.get` (the reactive session /
+// settings modal / zone trigger).
 const RECENT_SESSIONS_LIMIT = 50;
 
 // One row in the loading checklist. `count` is captured atomically with
