@@ -15,8 +15,7 @@ export function requiresRedeploy(paths) {
     (path) =>
       path.startsWith('docker/') ||
       path.startsWith('packages/core/drizzle/') ||
-      path.includes('/migrations/') ||
-      path === '.railway/railway.ts'
+      path.includes('/migrations/')
   );
 }
 
