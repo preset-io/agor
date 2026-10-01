@@ -437,10 +437,15 @@ export function useAgorData(
    * One latest-request-wins coordinator for initial hydration and
    * realtime OAuth hints. A later request invalidates every earlier response,
    * preventing an old read from overwriting a newer disconnect/re-auth result.
+   * Like a load, a response is also dropped once the hydration cancellation
+   * epoch moves (unmount, authority change, logout): an unmount leaves
+   * `authorityScopeKeyRef` as it was, so the scope check alone would let a
+   * late answer write one user's OAuth grants into the next user's store.
    */
   const refetchOAuthDurableState = useCallback(
     async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
       if (!client) return false;
+      const requestEpoch = getHydrationCancellationEpoch();
       return runLatestMCPOAuthStatusRequest(
         oauthStatusRequestGenerationRef,
         async () => {
@@ -452,7 +457,9 @@ export function useAgorData(
           ]);
           return { status, freshServer };
         },
-        () => authorityScopeKeyRef.current === requestAuthorityScope,
+        () =>
+          authorityScopeKeyRef.current === requestAuthorityScope &&
+          getHydrationCancellationEpoch() === requestEpoch,
         ({ status, freshServer }) => {
           const ids =
             (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];

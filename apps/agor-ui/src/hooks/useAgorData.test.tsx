@@ -255,6 +255,29 @@ it('does not resurrect deletion from an in-flight OAuth realtime refetch', async
     unmount();
   }
 });
+it('drops an OAuth status answer that lands after unmount, even in the next mount', async () => {
+  const userA = makeMockClient({
+    'mcp-servers/oauth-status': { authenticated_server_ids: ['server-a'] } as never,
+  });
+  const held = deferred();
+  userA.onFetch('mcp-servers/oauth-status', 'find', () => held.promise);
+  const first = renderHook(() => useAgorData(userA.client));
+  await waitFor(() => expect(userA.fetchCount('mcp-servers/oauth-status', 'find')).toBe(1));
+  first.unmount();
+
+  const userB = makeMockClient({
+    'mcp-servers/oauth-status': { authenticated_server_ids: [] } as never,
+  });
+  const second = renderHook(() => useAgorData(userB.client));
+  try {
+    await waitForInitialLoad(second.result);
+    held.resolve();
+    await flush();
+    expect(agorStore.getState().userAuthenticatedMcpServerIds.has('server-a')).toBe(false);
+  } finally {
+    second.unmount();
+  }
+});
 it('does not rescan OAuth grants on an idle 60-second timer', async () => {
   const { client, fetchCount } = makeMockClient();
   const { result, unmount } = renderHook(() => useAgorData(client));
