@@ -244,6 +244,22 @@ if (codespacesWorktreeBuildStarts > 0) {
 }
 
 // Narrow dependency-only exception: trusted main publication, never a PR image.
+assert.match(step('Select Railway image validation'), /id: railway/);
+assert.match(
+  step('Select Railway image validation'),
+  /shouldBuildRailwayImage\(\{ github, context \}\)/
+);
+assert.match(
+  step('Select Railway image validation'),
+  /core\.setOutput\('build', String\(build\)\)/
+);
+for (const name of [
+  'Build preview runtime',
+  'Smoke test preview runtime',
+  'Test warm preview base',
+]) {
+  assert.match(step(name), /if: steps\.railway\.outputs\.build == 'true'/);
+}
 const previewBuild = step('Build preview runtime');
 assert.match(previewBuild, /target: railway-preview/);
 assert.match(previewBuild, /load: true/);

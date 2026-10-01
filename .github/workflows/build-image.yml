@@ -61,6 +61,9 @@ jobs:
         github.event.workflow_run.conclusion == 'success'
       )
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     timeout-minutes: 45
     concurrency:
       group: build-image-${{ github.event.pull_request.number || github.event.workflow_run.head_sha || github.ref }}
@@ -75,6 +78,16 @@ jobs:
 
       - name: Validate image publication policy
         run: node scripts/check-image-publication-policy.mjs
+
+      - name: Select Railway image validation
+        id: railway
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { shouldBuildRailwayImage } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/railway-image-inputs.mjs`);
+            const build = await shouldBuildRailwayImage({ github, context });
+            core.setOutput('build', String(build));
+            core.notice(build ? 'Validating Railway dependency image' : 'Skipping Railway image: no runtime/dependency inputs changed');
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -130,8 +143,10 @@ jobs:
           docker logs agor-smoke
           exit 1
 
-      # PRs validate this target too, but never publish images or caches.
+      # Only runtime/dependency changes need this additional PR validation.
+      # Main/tag/manual runs keep validating; PRs never publish images/caches.
       - name: Build preview runtime
+        if: steps.railway.outputs.build == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -144,6 +159,7 @@ jobs:
           cache-to: ${{ github.event_name == 'workflow_run' && 'type=gha,mode=max,scope=agor-preview' || '' }}
 
       - name: Smoke test preview runtime
+        if: steps.railway.outputs.build == 'true'
         run: |
           docker run --rm --entrypoint sh ${{ env.IMAGE }}:preview-smoke -ec '
             test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)"
@@ -155,6 +171,7 @@ jobs:
 
       # Use the loaded image via Docker's local builder; no registry push/pull.
       - name: Test warm preview base
+        if: steps.railway.outputs.build == 'true'
         timeout-minutes: 10
         run: |
           set -euo pipefail
