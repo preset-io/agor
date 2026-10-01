@@ -11,6 +11,7 @@ import {
   TenantResolutionError,
 } from '@agor/core/config';
 import {
+  assertTenantExecutionAdmission,
   eq,
   generateId,
   hash,
@@ -21,6 +22,7 @@ import {
   seedInitialDataInTransaction,
   select,
   TenantPublicRoutingRepository,
+  TenantRestrictedError,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UserExternalIdentitiesRepository,
@@ -35,6 +37,8 @@ import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebt
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
+import { tenantCredentialEpoch, tenantCredentialEpochClaims } from './tenant-credential-epoch.js';
+import { assertTenantLaunchRevision } from './tenant-launch-revision.js';
 import {
   assertAuthenticationUserAuthMetadata,
   authCredentialGenerationClaim,
@@ -276,7 +280,7 @@ async function projectLaunchUser(
   db: TenantScopedDatabase,
   options: LaunchAuthServiceOptions,
   claims: LaunchClaims
-): Promise<{ userId: UserID; authorizationChanged: boolean }> {
+): Promise<{ userId: UserID; authorizationChanged: boolean; credentialEpoch?: string }> {
   const { config } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
@@ -319,6 +323,25 @@ async function projectLaunchUser(
   // current row so a launch assertion cannot interleave a stale authorization
   // decision on another replica.
   await lockTenantAuthorizationFence(db);
+  let credentialEpoch: string | undefined;
+  try {
+    const restriction = await assertTenantExecutionAdmission(db);
+    const tenantId = resolveTenantContext(resolveMultiTenancyConfig(options.config), {
+      authPayload: claims,
+    }).tenant_id;
+    assertTenantLaunchRevision(
+      restriction,
+      claims.tenant_restriction,
+      settings.restrictionControllerId
+    );
+    // The fenced generation: never upgrade an issuance that raced a restriction transition.
+    credentialEpoch = tenantCredentialEpoch(restriction, tenantId);
+  } catch (error) {
+    if (error instanceof TenantRestrictedError) {
+      throw new NotAuthenticated('Invalid one-time launch assertion');
+    }
+    throw error;
+  }
 
   const identityRepository = new UserExternalIdentitiesRepository(db);
   await identityRepository.lockProvisioningKey(`identity:${key}`);
@@ -389,6 +412,7 @@ async function projectLaunchUser(
     return {
       userId: existing.user_id as UserID,
       authorizationChanged: normalizeRole(existing.role) !== normalizeRole(role),
+      credentialEpoch,
     };
   }
 
@@ -431,8 +455,13 @@ async function projectLaunchUser(
   await identityRepository.bind(userId, identity, now);
   await reattributeLegacyAnonymousRows(db, userId);
 
-  return { userId, authorizationChanged: false };
+  return { userId, authorizationChanged: false, credentialEpoch };
 }
+
+/** Cloud's retryable launch-code exchange refusal: Team-row contention, code left unconsumed. */
+const LAUNCH_EXCHANGE_BUSY_CODE = 'team_busy';
+
+class LaunchExchangeBusyError extends NotAuthenticated {}
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
   const controller = new AbortController();
@@ -440,7 +469,16 @@ async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Pro
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (!response.ok) {
-      throw new NotAuthenticated('Invalid or expired one-time launch code');
+      const busy =
+        response.status === 409 &&
+        (await response.json().then(
+          (body: unknown) =>
+            (body as { error?: unknown } | null)?.error === LAUNCH_EXCHANGE_BUSY_CODE,
+          () => false
+        ));
+      // Same message either way, so failure classification and logs are unchanged.
+      const message = 'Invalid or expired one-time launch code';
+      throw busy ? new LaunchExchangeBusyError(message) : new NotAuthenticated(message);
     }
     return response.json();
   } finally {
@@ -509,11 +547,21 @@ async function exchangeLaunchCode(
     ...(settings.forwardRequestHost && requestHost ? { request_host: requestHost } : {}),
   };
 
-  const json = await fetchJson(
-    settings.exchangeUrl as string,
-    { method: 'POST', headers, body: JSON.stringify(body) },
-    settings.requestTimeoutMs
-  );
+  const exchange = () =>
+    fetchJson(
+      settings.exchangeUrl as string,
+      { method: 'POST', headers, body: JSON.stringify(body) },
+      settings.requestTimeoutMs
+    );
+  let json: unknown;
+  try {
+    json = await exchange();
+  } catch (error) {
+    if (!(error instanceof LaunchExchangeBusyError)) throw error;
+    // One bounded retry after 150-300 ms of jitter; a second busy answer fails like any rejection.
+    await new Promise((resolve) => setTimeout(resolve, 150 + Math.random() * 150));
+    json = await exchange();
+  }
 
   if (!json || typeof json !== 'object') {
     throw new NotAuthenticated('Invalid one-time launch exchange response');
@@ -692,10 +740,12 @@ function issueRuntimeTokens(
   accessTokenTtl: SignOptions['expiresIn'],
   refreshTokenTtl: SignOptions['expiresIn'],
   tenantClaim = 'tenant_id',
-  tenantId?: string
+  tenantId?: string,
+  credentialEpoch?: string
 ): LaunchAuthResult {
   assertAuthenticationUserAuthMetadata(user);
   const tokens = issueRuntimeTokenPair(user, jwtSecret, accessTokenTtl, refreshTokenTtl, {
+    ...tenantCredentialEpochClaims(credentialEpoch),
     ...authCredentialGenerationClaim(user),
     ...authTokenIssuedAtClaim(Date.now(), user),
     ...runtimeTenantClaims(tenantId ?? (user as { tenant_id?: string }).tenant_id, tenantClaim),
@@ -810,7 +860,8 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           options.accessTokenTtl,
           options.refreshTokenTtl,
           tenantClaim,
-          tenant.tenant_id
+          tenant.tenant_id,
+          projection.credentialEpoch
         );
       } catch (error) {
         // Every launch failure — expected or unexpected — emits exactly one

@@ -66,6 +66,9 @@ function migrationTenantTables(): string[] {
   const capabilityPoliciesMigration = readRepoFile(
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
+  const restrictionMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0117_tenant_restrictions.sql'
+  );
   const transferMigration = readRepoFile(
     'packages/core/drizzle/postgres/0112_kb_import_receipts.sql'
   );
@@ -73,6 +76,7 @@ function migrationTenantTables(): string[] {
   return [
     ...new Set(
       [
+        ...restrictionMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...migration.matchAll(/ALTER TABLE "([^"]+)" ADD COLUMN "tenant_id"/g),
         ...presetsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...uploadsMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
@@ -99,6 +103,7 @@ function migrationTenantTables(): string[] {
 function rlsPolicyTables(): string[] {
   const migration = [
     readRepoFile('packages/core/drizzle/postgres/0055_app_level_multitenancy_rls.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0117_tenant_restrictions.sql'),
     readRepoFile('packages/core/drizzle/postgres/0059_agentic_tool_presets.sql'),
     readRepoFile('packages/core/drizzle/postgres/0068_uploads.sql'),
     readRepoFile('packages/core/drizzle/postgres/0075_executor_session_token_authority.sql'),
@@ -172,6 +177,23 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).toContain(`"key" = 'public_url'`);
     expect(migration).not.toContain('WITH CHECK');
     expect(migration).not.toContain('user_api_keys');
+  });
+
+  it('limits tenant restriction discovery to closed rows, read-only, under an explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0118_tenant_restriction_discovery.sql'
+    );
+
+    expect(migration).toContain('FOR SELECT');
+    expect(migration).toContain("= 'tenant_restriction_discovery'");
+    expect(migration).toContain(`"phase" <> 'active'`);
+    expect(migration).not.toContain('WITH CHECK');
+    // Ids only: rows are visible solely inside the function, which returns tenant_id alone.
+    expect(migration).toContain('RETURNS TABLE ("tenant_id" text)');
+    expect(migration).toContain("set_config('agor.tenant_restriction_discovery_ids', 'on', true)");
+    expect(migration).toContain(
+      "current_setting('agor.tenant_restriction_discovery_ids', true) = 'on'"
+    );
   });
 
   it('limits upload maintenance discovery to expired rows and an explicit capability', () => {

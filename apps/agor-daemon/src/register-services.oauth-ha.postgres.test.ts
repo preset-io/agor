@@ -1,6 +1,7 @@
 /** Two-service PostgreSQL proof for the public MCP OAuth start/callback wiring. */
 
 import {
+  applyTenantRestrictionIntent,
   createDatabase,
   createTenantScopedDatabaseProxy,
   executeRaw,
@@ -1128,6 +1129,96 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         releaseStart.resolve();
         await start.catch(() => undefined);
       }
+    });
+
+    it('refuses a restricted tenant callback before exchange and completes after release', async () => {
+      const restrictedTenantId = `${tenantId}-restricted`;
+      const seeded = await runWithTenantDatabaseScope(
+        replicaA.db,
+        restrictedTenantId,
+        async (scoped) => {
+          const admin = await new UsersRepository(scoped).create({
+            email: `${crypto.randomUUID()}@example.test`,
+            name: 'Restricted tenant OAuth admin',
+            role: 'admin',
+          });
+          const server = await new MCPServerRepository(scoped).create({
+            name: `ha-oauth-restricted-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: admin.user_id,
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'per_user',
+              oauth_client_id: 'restricted-tenant-fixture-client',
+              oauth_compatibility_mode: 'strict',
+            },
+          });
+          return { admin, serverId: server.mcp_server_id as MCPServerID };
+        }
+      );
+      const startState = async () => {
+        const started = (await replicaA.app
+          .service('mcp-servers/oauth-start')
+          .create(
+            { mcp_server_id: seeded.serverId },
+            params(seeded.admin, restrictedTenantId)
+          )) as { success: boolean; authorizationUrl: string };
+        expect(started.success).toBe(true);
+        return new URL(started.authorizationUrl).searchParams.get('state')!;
+      };
+      const restriction = (
+        operationId: string,
+        revision: number,
+        action: 'restrict' | 'prepare_release' | 'activate'
+      ) =>
+        applyTenantRestrictionIntent(
+          replicaA.raw,
+          restrictedTenantId,
+          {
+            version: 1,
+            controllerId: 'controller',
+            placementId: 'placement',
+            operationId,
+            revision,
+            action,
+          },
+          { log: () => undefined }
+        );
+      const grant = () =>
+        runWithTenantDatabaseScope(replicaA.db, restrictedTenantId, (scoped) =>
+          new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+            seeded.admin.user_id as UserID,
+            seeded.serverId
+          )
+        );
+
+      const restrictedState = await startState();
+      await restriction('suspend', 1, 'restrict');
+      const exchangesBefore = oauthFixture.exchanges;
+      const refused = await replicaB.callback({
+        code: 'restricted-provider-code',
+        state: restrictedState,
+        iss: 'https://provider.example.test',
+      });
+      expect(refused.status).not.toBe(200);
+      expect(oauthFixture.exchanges).toBe(exchangesBefore);
+      expect(await grant()).toBeFalsy();
+
+      await restriction('reactivate', 2, 'prepare_release');
+      await restriction('reactivate', 2, 'activate');
+      const releasedState = await startState();
+      const completed = await replicaB.callback({
+        code: 'released-provider-code',
+        state: releasedState,
+        iss: 'https://provider.example.test',
+      });
+      expect(completed.status).toBe(200);
+      expect(oauthFixture.exchanges).toBe(exchangesBefore + 1);
+      expect(await grant()).toMatchObject({ oauth_access_token: expect.any(String) });
     });
   }
 );

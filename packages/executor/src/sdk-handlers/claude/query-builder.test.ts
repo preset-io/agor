@@ -1,3 +1,4 @@
+import type { AgorClient } from '@agor/core/api';
 import type {
   BranchID,
   MCPRuntimeRefreshRequest,
@@ -61,6 +62,7 @@ vi.mock('../base/permission-hooks.js', () => ({
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
+import { FeathersSessionsRepository } from '../../db/feathers-repositories.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -740,6 +742,31 @@ describe('setupQuery - Local Settings Support', () => {
     // while masking only credential authority leaves. It must not redirect
     // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
     expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
+  });
+
+  it('fails the launch rather than start fork-less when the parent session read fails', async () => {
+    const deps = createMockDeps();
+    const unavailable = Object.assign(new Error('Tenant access cannot be verified'), {
+      name: 'Unavailable',
+      code: 503,
+    });
+    deps.sessionsRepo = new FeathersSessionsRepository({
+      service: () => ({
+        get: vi.fn(async (id: string) => {
+          if (id === 'parent-session') throw unavailable;
+          return {
+            session_id: 'fork-session',
+            branch_id: 'test-branch',
+            genealogy: { forked_from_session_id: 'parent-session' },
+          };
+        }),
+      }),
+    } as unknown as AgorClient);
+
+    await expect(setupQuery('fork-session' as SessionID, 'continue', deps)).rejects.toBe(
+      unavailable
+    );
+    expect(Claude.query).not.toHaveBeenCalled();
   });
 
   it.each(['root', 'fork', 'nested-fork', 'spawn'])(

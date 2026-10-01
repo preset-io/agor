@@ -472,6 +472,7 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
       : relation.tableName === 'claude_oauth_attempts' ||
           relation.tableName === 'user_provider_oauth_grants' ||
+          relation.tableName === 'tenant_restrictions' ||
           relation.tableName === 'kb_import_receipts'
         ? STRICT_SYSTEM_GUARDED_TENANT_POLICY_EXPRESSION
         : relation.tableName === 'github_install_states'

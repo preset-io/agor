@@ -175,6 +175,27 @@ describe('refreshTokensSingleFlight', () => {
     }
   });
 
+  it('does NOT latch when the refresh is refused because the workspace is closed', async () => {
+    // The refresh token is fine, so latching would wrongly clear it for a reversible workspace decision.
+    const restricted = Object.assign(new Error('Invalid or expired refresh token'), {
+      code: 401,
+      className: 'not-authenticated',
+      data: { code: 'tenant_restricted' },
+    });
+    mockRefresh.mockRejectedValueOnce(restricted);
+
+    const unrecoverableListener = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverableListener);
+    try {
+      // The rejection reaches the caller unchanged so it can enter the suspended state.
+      await expect(refreshTokensSingleFlight(makeClient(), 'rt')).rejects.toBe(restricted);
+      expect(isRefreshUnrecoverable()).toBe(false);
+      expect(unrecoverableListener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverableListener);
+    }
+  });
+
   it('broadcasts once when a refreshed credential still cannot authenticate', () => {
     const listener = vi.fn();
     const cause = Object.assign(new Error('tenant claim rejected'), { code: 401 });

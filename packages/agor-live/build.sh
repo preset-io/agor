@@ -359,12 +359,14 @@ cp -r "$REPO_ROOT/apps/agor-ui/dist/"* "$DIST_STAGE/ui/"
 
 # Build outputs are copied wholesale above, but declarations for the executable
 # application trees, migration snapshots, declaration source maps, compiled
-# tests, incremental compiler state, and editor backups are not runtime assets.
+# tests/helpers/type assertions, incremental compiler state, and editor backups
+# are not runtime assets.
 # Keep them out of the published application without stripping declarations from
 # the materialized internal packages, whose manifests expose TypeScript types.
 echo "  → Removing non-runtime build artifacts..."
 find "$DIST_STAGE" "$INTERNAL_STAGE" -type f \
   \( -name '*.map' -o -name '*.test.js' -o -name '*.test.cjs' -o -name '*.test.d.ts' \
+     -o -name '*.test-support.*' -o -name '*.test-d.*' \
      -o -name '*.tsbuildinfo' -o -name '*.backup' \) -delete
 # agor-live exposes binaries, not a TypeScript API. The daemon, executor, and CLI
 # declarations are build byproducts and have no runtime consumers.

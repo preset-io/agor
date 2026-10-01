@@ -25,23 +25,27 @@ import {
   type ResolvedMultiTenancyConfig,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
-import type { Application } from '@agor/core/feathers';
+import { type Application, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   type BranchID,
   MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
   PRESENCE_SOCKET_EVENTS,
+  TENANT_RESTRICTED_ERROR_CODE,
   type UserID,
 } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   finalizeAuthenticatedConnectionAuthority,
   getAuthenticatedConnectionAuthority,
+  getAuthenticatedConnectionCredentialPayload,
   retireAuthenticatedConnectionAuthority,
 } from '../auth/authenticated-connection-authority.js';
 import {
   attachExecutorConnectionCandidate,
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-admission.js';
+import { endTenantRestrictionRequest } from '../auth/tenant-access.js';
+import { rejectTenantSocketPacket } from '../auth/tenant-socket-admission.js';
 import type { DaemonOperationalMetrics } from '../metrics/operational';
 import {
   boardPresenceAssociationRoomName,
@@ -67,6 +71,11 @@ import {
   parseTerminalChannel,
   type SocketIOOptions,
 } from './socketio';
+
+vi.mock('../auth/tenant-access.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../auth/tenant-access.js')>();
+  return { ...actual, endTenantRestrictionRequest: vi.fn(actual.endTenantRestrictionRequest) };
+});
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -862,6 +871,71 @@ describe('Socket.IO lifecycle logging', () => {
     expect(logSpy).toHaveBeenCalledTimes(logCountAfterClose);
   });
 
+  it('keeps unverifiable handshakes out of the failure gauge and logs them once per minute', async () => {
+    vi.useFakeTimers();
+    const operationalMetrics: DaemonOperationalMetrics = {
+      enabled: true,
+      start: vi.fn(),
+      stop: vi.fn(),
+      beginExternalRequest: vi.fn(() => vi.fn()),
+      recordSocketClientConnection: vi.fn(() => vi.fn()),
+      recordSocketAuthenticationFailure: vi.fn(),
+    };
+    const { app, io } = buildHarness(
+      {
+        multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+        assertTenantAccess: vi.fn(async () => {
+          throw new Unavailable('Tenant access cannot be verified');
+        }),
+      },
+      undefined,
+      operationalMetrics
+    );
+    const authentication = app.service('authentication') as { authenticate: () => unknown };
+    vi.spyOn(authentication, 'authenticate').mockRejectedValueOnce(
+      new Unavailable('Invalid or expired authentication token')
+    );
+    const errors: (Error | undefined)[] = [];
+    for (const id of ['strategy-outage', 'admission-outage']) {
+      const socket = makeSocket(id, io);
+      socket.handshake.auth = { token: 'signed-token' };
+      socket.feathers = {
+        pendingAuthenticationResult: {
+          user: { user_id: ALICE },
+          authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+        },
+      };
+      errors.push(
+        await new Promise<Error | undefined>((resolve) => io.middlewares[0]?.(socket, resolve))
+      );
+    }
+
+    expect(errors.map((error) => (error as Error & { data?: unknown }).data)).toEqual([
+      { code: 503, className: 'unavailable' },
+      { code: 503, className: 'unavailable' },
+    ]);
+    expect(operationalMetrics.recordSocketAuthenticationFailure).not.toHaveBeenCalled();
+    expect(warnSpy.mock.calls).toEqual([
+      ['[tenant.restriction] socket handshake unavailable socket=strategy-outage suppressed=0'],
+    ]);
+    vi.advanceTimersByTime(5 * 60 * 1000);
+    expect(logSpy).toHaveBeenLastCalledWith('ws_active_connections=0 ws_authentication_failures=0');
+  });
+
+  it('ends the shared restriction read before the handshake continues', async () => {
+    const { io } = buildHarness();
+    const ended = vi.mocked(endTenantRestrictionRequest);
+    ended.mockClear();
+    let endedBeforeNext = -1;
+    await new Promise<void>((resolve) =>
+      io.middlewares[0]?.(makeSocket('scoped-handshake'), () => {
+        endedBeforeNext = ended.mock.calls.length;
+        resolve();
+      })
+    );
+    expect(endedBeforeNext).toBe(1);
+  });
+
   it('tracks authenticated user clients separately from executor/service transports', async () => {
     const disconnect = vi.fn();
     const operationalMetrics: DaemonOperationalMetrics = {
@@ -1136,6 +1210,72 @@ describe('Socket.IO handshake credential extraction', () => {
       message: 'Invalid or expired authentication token',
       data: { code: 401, className: 'not-authenticated' },
     });
+    expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+  });
+
+  // Socket.IO preserves a middleware error's `data` on connect_error: that is the whole client contract.
+  it.each([
+    {
+      name: 'a closed tenant gets only the stable code, never a refreshable rejection',
+      rejection: Object.assign(new Error('Tenant access is restricted'), {
+        code: 403,
+        data: { code: TENANT_RESTRICTED_ERROR_CODE },
+      }),
+      expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
+    },
+    {
+      name: 'a coded 401 from the strategy generation check gets only the stable code',
+      rejection: new NotAuthenticated('Tenant credential cannot be verified', {
+        code: TENANT_RESTRICTED_ERROR_CODE,
+      }),
+      fromStrategy: true,
+      expected: { data: { code: TENANT_RESTRICTED_ERROR_CODE } },
+    },
+    {
+      name: 'an unverifiable admission read is a transient 503, never a refreshable rejection',
+      rejection: new Unavailable('Tenant access cannot be verified'),
+      expected: {
+        message: 'Authentication cannot be verified right now',
+        data: { code: 503, className: 'unavailable' },
+      },
+    },
+    {
+      name: 'an unverifiable strategy generation read is a transient 503, never a refreshable rejection',
+      rejection: new Unavailable('Invalid or expired authentication token'),
+      fromStrategy: true,
+      expected: {
+        message: 'Authentication cannot be verified right now',
+        data: { code: 503, className: 'unavailable' },
+      },
+    },
+  ])('$name', async ({ rejection, expected, fromStrategy }) => {
+    const { io, app } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+      assertTenantAccess: vi.fn(async () => {
+        if (!fromStrategy) throw rejection;
+      }),
+    });
+    if (fromStrategy) {
+      const authentication = app.service('authentication') as { authenticate: () => unknown };
+      vi.spyOn(authentication, 'authenticate').mockRejectedValueOnce(rejection);
+    }
+    const socket = makeSocket('restricted-handshake', io);
+    socket.handshake.auth = { token: 'signed-token' };
+    socket.feathers = {
+      pendingAuthenticationResult: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { exp: (Date.now() + 60_000) / 1000 } },
+      },
+    };
+
+    const error = await new Promise<Error | undefined>((resolve) =>
+      io.middlewares[0]?.(socket, resolve)
+    );
+
+    expect(error).toMatchObject(expected);
+    expect(Object.keys((error as Error & { data: object }).data)).toEqual(
+      Object.keys(expected.data)
+    );
     expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
   });
 
@@ -2757,6 +2897,63 @@ describe('configureChannels tenant isolation', () => {
     ).toThrow(/immutable/i);
   });
 
+  it('keeps the verified credential claims for every principal kind, terminal executors included', () => {
+    const { app } = makeChannelHarness();
+    const epoch = 'a'.repeat(64);
+    const claims = { tenant_id: 'tenant-a', tenant_credential_epoch: epoch };
+    const terminalUser = {
+      user_id: 'executor-service',
+      role: 'terminal-executor',
+      _isTerminalExecutor: true,
+      terminal_user_id: ALICE,
+      terminal_id: 'terminal-1',
+      terminal_branch_id: 'branch-1',
+      terminal_owner_boot_id: 'boot-1',
+    };
+    const executorResult = {
+      user: { user_id: ALICE },
+      authentication: {
+        strategy: 'jwt',
+        payload: { ...claims, type: 'executor-session', session_id: 's', task_id: 't' },
+      },
+    };
+    attachTaskExecutorCandidate(app, executorResult, 'tenant-a', 's', 't');
+    const results = {
+      user: { user: { user_id: ALICE }, authentication: { strategy: 'jwt', payload: claims } },
+      impersonation: {
+        user: { user_id: ALICE },
+        authentication: { strategy: 'jwt', payload: { ...claims, is_impersonated: true } },
+      },
+      service: {
+        user: { user_id: 'executor-service', _isServiceAccount: true },
+        authentication: { strategy: 'jwt', payload: { ...claims, type: 'service' } },
+      },
+      'terminal-executor': {
+        user: terminalUser,
+        authentication: { strategy: 'jwt', payload: { ...claims, type: 'service' } },
+      },
+      executor: executorResult,
+    };
+    for (const [kind, authResult] of Object.entries(results)) {
+      const connection = {};
+      const authority = finalizeAuthenticatedConnectionAuthority({
+        connection,
+        authResult,
+        multiTenancy: REQUIRED_TENANCY,
+        executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
+      });
+      expect(authority.principal.kind).toBe(kind === 'impersonation' ? 'user' : kind);
+      const payload = getAuthenticatedConnectionCredentialPayload(connection) as Record<
+        string,
+        unknown
+      >;
+      expect(payload?.tenant_credential_epoch).toBe(epoch);
+      expect(Object.isFrozen(payload)).toBe(true);
+      retireAuthenticatedConnectionAuthority(connection);
+      expect(getAuthenticatedConnectionCredentialPayload(connection)).toBeUndefined();
+    }
+  });
+
   it('ignores caller-controlled login params and joins only from the signed tenant claim', () => {
     const { app, handlers, joins } = makeChannelHarness();
     configureChannels(app);
@@ -2930,5 +3127,124 @@ describe('configureChannels tenant isolation', () => {
 
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-1'))).toBe(false);
     expect(joins.has(executorTaskChannelName('tenant-a', 'task-2'))).toBe(false);
+  });
+});
+
+describe('tenant restriction socket monitor', () => {
+  const active = (revision: number) => ({
+    records: [
+      {
+        version: 1 as const,
+        controllerId: 'control',
+        placementId: 'cell',
+        operationId: 'op',
+        revision,
+        phase: 'active' as const,
+      },
+    ],
+    closed: false,
+  });
+
+  it('aggregates refused ack-less packets instead of logging each as a socket error', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const { io } = buildHarness();
+      const socket = makeSocket('refused-packets', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+      for (let i = 0; i < 100; i++) {
+        rejectTenantSocketPacket(['terminal:input', {}], (refused) =>
+          socket.handlers.get('error')?.(refused)
+        );
+      }
+      socket.handlers.get('error')?.(new Error('unrelated transport fault'));
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('packet refused'))).toEqual([
+        ['[tenant.restriction] socket packet refused socket=refused-packets suppressed=0'],
+      ]);
+      expect(error).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('never lets a late read that began before a socket was admitted retire it', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      let settle!: (state: { records: never[]; closed: boolean }) => void;
+      const readTenantRestriction = vi.fn(
+        () => new Promise<{ records: never[]; closed: boolean }>((resolve) => (settle = resolve))
+      );
+      const { io } = buildHarness({ readTenantRestriction });
+      const early = makeSocket('admitted-before-read', io);
+      asUser(early, ALICE);
+      connect(io, early);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(readTenantRestriction).toHaveBeenCalledOnce();
+
+      // Reactivated meanwhile: a socket admitted now joins later sweeps that share the slow read.
+      await vi.advanceTimersByTimeAsync(1);
+      const late = makeSocket('admitted-after-read', io);
+      asUser(late, BOB);
+      connect(io, late);
+      await vi.advanceTimersByTimeAsync(3500);
+      expect(readTenantRestriction).toHaveBeenCalledOnce();
+
+      settle({ records: [], closed: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(early.connected).toBe(false);
+      expect(late.connected).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps sockets through read errors and stalls, retiring only on a positive observation', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const readTenantRestriction = vi.fn();
+      const { io } = buildHarness({ readTenantRestriction });
+      const socket = makeSocket('monitored', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      readTenantRestriction.mockRejectedValue(new Error('private database address'));
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(socket.connected).toBe(true);
+      // Rate-limited: one bounded line for repeated skips, never the error text.
+      expect(warn.mock.calls.filter(([line]) => String(line).includes('reason=error'))).toEqual([
+        ['[tenant.restriction] socket observation skipped reason=error suppressed=0'],
+      ]);
+
+      readTenantRestriction.mockResolvedValue({ records: [], closed: false });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(socket.connected).toBe(true);
+
+      // A rapid restrict/release cycle leaves the old credential on a stale generation.
+      readTenantRestriction.mockResolvedValue(active(2));
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(socket.connected).toBe(false);
+
+      const closedSocket = makeSocket('closed', io);
+      asUser(closedSocket, BOB);
+      connect(io, closedSocket);
+      readTenantRestriction.mockResolvedValue({ ...active(3), closed: true });
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(closedSocket.connected).toBe(false);
+
+      const stalledSocket = makeSocket('stalled', io);
+      asUser(stalledSocket, ALICE);
+      connect(io, stalledSocket);
+      readTenantRestriction.mockReturnValue(new Promise(() => undefined));
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(stalledSocket.connected).toBe(true);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 });

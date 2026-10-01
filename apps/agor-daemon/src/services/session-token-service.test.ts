@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   fingerprintExecutorSessionToken,
   issueExecutorCommandToken,
+  issueExecutorSafetyCommandToken,
   type SessionTokenAuthorityStore,
   SessionTokenService,
 } from './session-token-service';
@@ -199,6 +200,32 @@ describe('SessionTokenService runtime scoping', () => {
       await expect(service.validateToken(token, { tenantId: 'tenant-a' })).resolves.not.toBeNull();
     }
   );
+
+  it('preserves the requested cleanup lifetime on safety command credentials', async () => {
+    const service = new SessionTokenService(
+      { expiration_ms: 60 * 60_000, max_uses: -1 },
+      { startCleanupTimer: false }
+    );
+    service.setJwtSecret('session-token-test-secret');
+    const token = await runWithTenantDatabaseScope(scopeOnlyDb, 'tenant-a', () =>
+      issueExecutorSafetyCommandToken(
+        { sessionTokenService: service },
+        'environment.stop:attempt',
+        'user-1',
+        'branch-1',
+        30 * 60_000
+      )
+    );
+    const decoded = jwt.verify(token, 'session-token-test-secret') as jwt.JwtPayload;
+    expect(decoded).toMatchObject({
+      purpose: 'executor-command',
+      session_id: 'environment.stop:attempt',
+      tenant_id: 'tenant-a',
+    });
+    expect(decoded.exp! - decoded.iat!).toBe(1800);
+    expect(decoded.provisioning_attempt_id).toBeUndefined();
+    await expect(service.validateToken(token, { tenantId: 'tenant-b' })).resolves.toBeNull();
+  });
 
   it('still rejects invalid provisioning scope when a command lifetime is supplied', async () => {
     const service = new SessionTokenService(

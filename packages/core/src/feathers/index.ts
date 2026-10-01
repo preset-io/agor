@@ -10,6 +10,8 @@
  * - Easy to swap implementations later
  */
 
+import * as feathersModule from '@feathersjs/feathers';
+
 // Authentication
 export {
   AuthenticationBaseStrategy,
@@ -35,6 +37,10 @@ export { default as feathersExpress, errorHandler, rest } from '@feathersjs/expr
 export type { Application, FeathersService, Service, ServiceMethods } from '@feathersjs/feathers';
 // Core Feathers
 export { feathers } from '@feathersjs/feathers';
+// Node ESM cannot detect this CommonJS named export, so read it off the module object.
+export const getServiceOptions: typeof feathersModule.getServiceOptions =
+  feathersModule.getServiceOptions ??
+  (feathersModule as unknown as { default: typeof feathersModule }).default.getServiceOptions;
 // Schema validation
 export { validateQuery } from '@feathersjs/schema';
 // Socket.io Integration

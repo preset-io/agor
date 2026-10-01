@@ -151,6 +151,7 @@ import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import { isCurrentTenantRuntimeActive } from './auth/tenant-access.js';
 import {
   hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeCompatibility,
@@ -3454,6 +3455,12 @@ export async function registerMCPServices(
   ): Promise<void> => {
     const record = pendingFlow.durableRecord;
     try {
+      const flowTenantId = record?.tenantId ?? pendingFlow.tenantId;
+      // Entry check: a restricted tenant's callback neither exchanges the code nor saves a grant.
+      const tenantActive = flowTenantId
+        ? await runWithTenantContext(flowTenantId, () => isCurrentTenantRuntimeActive(db))
+        : await isCurrentTenantRuntimeActive(db);
+      if (!tenantActive) throw new Error('Tenant access is restricted');
       await assertFlowInitiatorStillEntitled(
         record?.userId ?? pendingFlow.userId,
         record?.tenantId ?? pendingFlow.tenantId,

@@ -14,6 +14,7 @@ on:
       - '.github/workflows/postgres-integration.yml'
       - 'apps/agor-daemon/package.json'
       - 'apps/agor-daemon/src/**'
+      - 'apps/agor-cli/**'
       - 'docker/postgres-dev.Dockerfile'
       - 'docker/postgres-init-app-user.sql'
       - 'package.json'
@@ -31,6 +32,7 @@ on:
       - '.github/workflows/postgres-integration.yml'
       - 'apps/agor-daemon/package.json'
       - 'apps/agor-daemon/src/**'
+      - 'apps/agor-cli/**'
       - 'docker/postgres-dev.Dockerfile'
       - 'docker/postgres-init-app-user.sql'
       - 'package.json'
@@ -96,7 +98,7 @@ jobs:
           cache: pnpm
 
       - name: Install PostgreSQL test workspace dependencies
-        run: pnpm install --frozen-lockfile --filter '@agor/core...' --filter '@agor/daemon...'
+        run: pnpm install --frozen-lockfile --filter '@agor/core...' --filter '@agor/daemon...' --filter '@agor/cli...'
 
       - name: Bootstrap and verify the non-superuser app role
         env:

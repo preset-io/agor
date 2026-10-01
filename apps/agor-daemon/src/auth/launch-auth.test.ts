@@ -289,6 +289,32 @@ execution:
     );
   });
 
+  it('retries a busy exchange once, and only for team_busy', async () => {
+    const assertion = signClaims();
+    const answer = (status: number, error?: string) =>
+      status === 200 ? Response.json({ assertion }) : Response.json({ error }, { status });
+    const cases: Array<[Array<[number, string?]>, boolean, number]> = [
+      [[[409, 'team_busy'], [200]], true, 2],
+      [[[409, 'team_busy'], [409, 'team_busy'], [200]], false, 2],
+      [[[409, 'launch_code_already_consumed'], [200]], false, 1],
+      [[[503, 'team_busy'], [200]], false, 1],
+    ];
+    for (const [answers, succeeds, calls] of cases) {
+      const queue = [...answers];
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => {
+        const [status, error] = queue.shift() ?? [500];
+        return answer(status, error);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+      const launched = service().create({ launchCode: 'code' });
+      if (succeeds) await expect(launched).resolves.toHaveProperty('accessToken');
+      else await expect(launched).rejects.toBeInstanceOf(NotAuthenticated);
+      expect(fetchMock).toHaveBeenCalledTimes(calls);
+      if (calls === 2)
+        expect(fetchMock.mock.calls[1]?.[1]?.body).toBe(fetchMock.mock.calls[0]?.[1]?.body);
+    }
+  });
+
   it('rejects invalid issuer, audience, and expired assertions', async () => {
     mockExchange(signClaims(), 200);
     await expect(

@@ -14,6 +14,8 @@ import type { Branch, BranchPermissionLevel, Session, User, UserID } from '@agor
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { TENANT_RESTRICTION_OBSERVATION_MS } from '../auth/tenant-access';
+import { readTenantCredentialEpoch } from '../auth/tenant-credential-epoch';
 import { sessionStreamRoomName, tenantChannelName } from '../realtime/routing';
 import { KNOWLEDGE_REALTIME_SUPPRESSED_CREATE_PATHS } from './knowledge-realtime-publish';
 import type {
@@ -29,6 +31,11 @@ import {
   setBranchRemovalRealtimeVisibility,
 } from './realtime-publish';
 import { isRealtimePublishAllowed, realtimePublishPolicyFor } from './realtime-publish-policy';
+
+vi.mock('../auth/tenant-credential-epoch', async (original) => {
+  const actual = await original<typeof import('../auth/tenant-credential-epoch')>();
+  return { ...actual, readTenantCredentialEpoch: vi.fn(actual.readTenantCredentialEpoch) };
+});
 
 class FakeChannel {
   constructor(
@@ -2922,6 +2929,224 @@ describe('configureRealtimePublish default-deny allowlist', () => {
     // too — the allowlist is meant to be the stricter of the two.
     for (const path of REDIS_FEATHERS_DENIED_PATHS) {
       expect(isRealtimePublishAllowed(path), `${path} may publish`).toBe(false);
+    }
+  });
+});
+
+describe('publication restriction observation', () => {
+  it('shares one epoch read per tenant per tick, stops a closed tenant within it, and keeps termination', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const member = { user: user('member') };
+      const executor = { user: user('executor') };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const relay = {
+        relay: vi.fn(),
+        setRelayHandler: vi.fn((handler) => {
+          remoteHandler = handler;
+        }),
+      };
+      const room = executorTaskChannelName('tenant-a', 'task-1');
+      const app = makeApp([member], {}, { 'tenant:tenant-a': [member], [room]: [executor] });
+      configureRealtimePublish({
+        app,
+        db: scopeOnlyDb,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: relay,
+        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      });
+      const relayBoard = () =>
+        remoteHandler?.({
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path: 'boards',
+          event: 'patched',
+          method: 'patch',
+          id: 'board-a',
+          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+        });
+      const terminate = () =>
+        app.runPublish(
+          { task_id: 'task-1', status: 'stopping' },
+          {
+            path: 'tasks',
+            method: 'patch',
+            event: 'termination_requested',
+            params: { tenant: { tenant_id: 'tenant-a', source: 'explicit' } },
+          }
+        ) as Promise<unknown>;
+
+      // Open tenant without history: concurrent and repeated publications share one read.
+      read.mockImplementation(async () => undefined);
+      await Promise.all([relayBoard(), relayBoard(), relayBoard()]);
+      expect(read).toHaveBeenCalledOnce();
+      expect(app.emit).toHaveBeenCalledTimes(3);
+
+      // Suspension lands: delivery continues for at most one tick, then stops.
+      read.mockImplementation(async () => {
+        throw Object.assign(new Error('restricted'), { data: { code: 'tenant_restricted' } });
+      });
+      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS - 1);
+      await relayBoard();
+      expect(app.emit).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1);
+      await relayBoard();
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).toHaveBeenCalledTimes(4);
+      // The exact termination signal never waits on, or is suppressed by, the observation.
+      const [termination] = (await terminate()) as FakeChannel[];
+      expect(termination?.connections).toEqual([executor]);
+      expect(read).toHaveBeenCalledTimes(2);
+
+      // Reactivation moves the generation: an old credential stops within one more tick.
+      read.mockImplementation(async () => 'e'.repeat(64));
+      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(3);
+      expect(app.emit).toHaveBeenCalledTimes(4);
+    } finally {
+      read.mockReset();
+      vi.useRealTimers();
+    }
+  });
+
+  it('suppresses delivery after a stuck shared read times out and keeps it single-flight', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const member = { user: user('member') };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
+      configureRealtimePublish({
+        app,
+        db: scopeOnlyDb,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: {
+          relay: vi.fn(),
+          setRelayHandler: vi.fn((handler) => {
+            remoteHandler = handler;
+          }),
+        },
+        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      });
+      const relayBoard = async () =>
+        remoteHandler?.({
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path: 'boards',
+          event: 'patched',
+          method: 'patch',
+          id: 'board-a',
+          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+        });
+
+      const stuck = Promise.withResolvers<string | undefined>();
+      read.mockImplementation(() => stuck.promise);
+      const first = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await first;
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // Past the tick (but within two timeouts) the in-flight read is neither evicted nor duplicated.
+      await vi.advanceTimersByTimeAsync(TENANT_RESTRICTION_OBSERVATION_MS);
+      await relayBoard();
+      expect(read).toHaveBeenCalledOnce();
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // A read still pending after two timeouts is abandoned: the next publication reads afresh.
+      read.mockImplementation(async () => undefined);
+      await vi.advanceTimersByTimeAsync(2 * 2000 - 2000 - TENANT_RESTRICTION_OBSERVATION_MS);
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).toHaveBeenCalledOnce();
+
+      // The abandoned read settling late never replaces the fresh entry.
+      stuck.resolve('f'.repeat(64));
+      await relayBoard();
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).toHaveBeenCalledTimes(2);
+    } finally {
+      read.mockReset();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps at most one abandoned read per tenant outstanding during a database outage', async () => {
+    vi.useFakeTimers();
+    const read = vi.mocked(readTenantCredentialEpoch);
+    try {
+      const member = { user: user('member') };
+      let remoteHandler: ((envelope: any) => Promise<void> | void) | undefined;
+      const app = makeApp([member], {}, { 'tenant:tenant-a': [member] });
+      configureRealtimePublish({
+        app,
+        db: scopeOnlyDb,
+        multiTenancy: {
+          mode: 'required_from_auth',
+          static_tenant_id: 'unused' as never,
+          auth_claim: 'tenant_id',
+        },
+        realtimeRelay: {
+          relay: vi.fn(),
+          setRelayHandler: vi.fn((handler) => {
+            remoteHandler = handler;
+          }),
+        },
+        ...repos({ branch: branch('unused'), permissions: {}, boardPermissions: { member: true } }),
+      });
+      const relayBoard = async () =>
+        remoteHandler?.({
+          version: REALTIME_RELAY_VERSION,
+          tenantId: 'tenant-a',
+          path: 'boards',
+          event: 'patched',
+          method: 'patch',
+          id: 'board-a',
+          data: { board_id: 'board-a', tenant_id: 'tenant-a' },
+        });
+      const stuck: Array<PromiseWithResolvers<string | undefined>> = [];
+      read.mockImplementation(() => {
+        const pending = Promise.withResolvers<string | undefined>();
+        stuck.push(pending);
+        return pending.promise;
+      });
+      // A wall-clock jump alone never makes a pending read look wedged.
+      const early = relayBoard();
+      vi.setSystemTime(Date.now() + 3_600_000);
+      const afterJump = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await Promise.all([early, afterJump]);
+      expect(read).toHaveBeenCalledOnce();
+      for (let round = 0; round < 5; round++) {
+        const relayed = relayBoard();
+        await vi.advanceTimersByTimeAsync(2 * 2000);
+        await relayed;
+      }
+      // The original read and one replacement; no further read starts while the abandoned one is outstanding.
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(app.emit).not.toHaveBeenCalled();
+
+      // Once the abandoned read settles, the wedged replacement may itself be abandoned once.
+      stuck[0]?.resolve(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+      const relayed = relayBoard();
+      await vi.advanceTimersByTimeAsync(2000);
+      await relayed;
+      expect(read).toHaveBeenCalledTimes(3);
+      expect(app.emit).not.toHaveBeenCalled();
+    } finally {
+      read.mockReset();
+      vi.useRealTimers();
     }
   });
 });

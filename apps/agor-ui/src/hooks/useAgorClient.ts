@@ -8,7 +8,11 @@ import type { AgorClient } from '@agor-live/client';
 import { createClient, createRestClient } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
 import { getDaemonUrl } from '../config/daemon';
-import { isDefiniteAuthFailure } from '../utils/authErrors';
+import {
+  isDefiniteAuthFailure,
+  isTenantRestrictedError,
+  isUnavailableHandshakeError,
+} from '../utils/authErrors';
 import {
   markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
@@ -23,8 +27,20 @@ interface UseAgorClientResult {
   connecting: boolean;
   /** Monotonic generation of successful authenticated socket handshakes. */
   authGeneration: number;
+  /** The daemon has closed this tenant to ordinary access. */
+  tenantRestricted: boolean;
   error: string | null;
   retryConnection: () => void;
+}
+
+/** Suspended re-probe schedule: short first for quick releases, 5m ceiling so idle tabs cost one handshake per 5 minutes. */
+export const TENANT_RESTRICTION_PROBE_DELAYS_MS = [
+  30_000, 60_000, 120_000, 240_000, 300_000,
+] as const;
+
+export function tenantRestrictionProbeDelay(attempt: number): number {
+  const index = Math.min(Math.max(attempt, 0), TENANT_RESTRICTION_PROBE_DELAYS_MS.length - 1);
+  return TENANT_RESTRICTION_PROBE_DELAYS_MS[index];
 }
 
 interface UseAgorClientOptions {
@@ -52,6 +68,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
   const [connected, setConnected] = useState(false);
   const [connecting, setConnecting] = useState(!!accessToken);
   const [authGeneration, setAuthGeneration] = useState(0);
+  const [tenantRestricted, setTenantRestricted] = useState(false);
   const authGenerationRef = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const clientBindingRef = useRef<BoundAgorClient | null>(null);
@@ -128,6 +145,76 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         if (!mounted) return;
         setConnected(false);
       }, DISCONNECT_GRACE_MS);
+    };
+
+    // Effect-local mirror of the rendered suspended flag, so socket callbacks avoid stale closures.
+    let restricted = false;
+    let restrictionProbes = 0;
+    let restrictionProbeTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearRestrictionProbeTimer = () => {
+      if (restrictionProbeTimer !== null) {
+        clearTimeout(restrictionProbeTimer);
+        restrictionProbeTimer = null;
+      }
+    };
+
+    /** Enter the suspended state: close the socket so only the slow probe, not Socket.IO's fast retry, reopens it. */
+    const enterTenantRestricted = () => {
+      if (!mounted) return;
+      restricted = true;
+      setTenantRestricted(true);
+      setConnecting(false);
+      clearDisconnectGrace();
+      setConnected(false);
+      // The suspended screen is the message; a connection banner would only contradict it.
+      setError(null);
+      clearManualReconnectTimer();
+      manualReconnectAttempts = 0;
+      client?.io.disconnect();
+
+      clearRestrictionProbeTimer();
+      const delay = tenantRestrictionProbeDelay(restrictionProbes);
+      restrictionProbes += 1;
+      restrictionProbeTimer = setTimeout(() => {
+        restrictionProbeTimer = null;
+        if (!mounted || !restricted) return;
+        // One handshake: `connect` clears the state, any rejection schedules the next, longer probe.
+        client?.io.connect();
+      }, delay);
+    };
+
+    // Manual reconnect with exponential backoff + cap. Previously we
+    // called `client.io.connect()` immediately on every disconnect;
+    // when the server repeatedly closed the socket (auth rejection,
+    // crash loop, server-side kick) this created a tight reconnect
+    // loop at network speed and a page refresh was the only way out.
+    const scheduleManualReconnect = (unavailable = false) => {
+      const pastCap = manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS;
+      if (pastCap && !unavailable) {
+        setConnecting(false);
+        // Give-up path — flip connected immediately; the grace period
+        // is only for quick reconnects we expect to recover from.
+        clearDisconnectGrace();
+        setConnected(false);
+        setError('Lost connection to daemon after multiple attempts. Please reload the page.');
+        return;
+      }
+      setConnecting(true);
+      const attempt = manualReconnectAttempts++;
+      if (pastCap) {
+        clearDisconnectGrace();
+        setConnected(false);
+      }
+      // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap; a lasting outage then keeps tokens and probes on the suspended cadence.
+      const delay = pastCap
+        ? tenantRestrictionProbeDelay(attempt - MAX_MANUAL_RECONNECT_ATTEMPTS)
+        : Math.min(500 * 2 ** attempt, 30_000);
+      clearManualReconnectTimer();
+      manualReconnectTimer = setTimeout(() => {
+        manualReconnectTimer = null;
+        if (!mounted) return;
+        client?.io.connect();
+      }, delay);
     };
 
     let authenticatedReconnect: Promise<void> | null = null;
@@ -230,13 +317,26 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         (window as unknown as { __agorClient: AgorClient }).__agorClient = socketClient;
       }
 
-      // Setup socket event listeners BEFORE connecting
+      // Setup socket event listeners BEFORE connecting; a restriction-coded service rejection enters the suspended state (observe only).
+      socketClient.hooks({
+        error: [
+          (context: { error?: unknown }) => {
+            if (isTenantRestrictedError(context.error)) enterTenantRestricted();
+          },
+        ],
+      });
+
       socketClient.io.on('connect', () => {
         if (!mounted) return;
         hasConnectedOnce = true;
         manualReconnectAttempts = 0;
         clearManualReconnectTimer();
         clearDisconnectGrace();
+        // Only an accepted handshake clears the suspended state.
+        restricted = false;
+        restrictionProbes = 0;
+        clearRestrictionProbeTimer();
+        setTenantRestricted(false);
         // Socket.IO emits `connect` only after the daemon has verified the
         // handshake and installed immutable user/tenant authority.
         announceSessionStreamsCapability(socketClient);
@@ -251,6 +351,12 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
       socketClient.io.on('disconnect', (reason) => {
         if (!mounted) return;
+        // Our own close while suspended: the probe timer owns reconnection.
+        if (restricted) {
+          clearDisconnectGrace();
+          setConnected(false);
+          return;
+        }
         // If we've never been connected (initial-load failure), flip
         // immediately — no "reconnect" to wait for. Otherwise defer the
         // flip via the grace timer so quick reconnects don't flicker the
@@ -275,30 +381,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         // "Reconnecting" immediately rather than flashing "Disconnected" for
         // the gap before the first connect_error fires.
         if (reason === 'io server disconnect') {
-          // Manual reconnect with exponential backoff + cap. Previously we
-          // called `client.io.connect()` immediately on every disconnect;
-          // when the server repeatedly closed the socket (auth rejection,
-          // crash loop, server-side kick) this created a tight reconnect
-          // loop at network speed and a page refresh was the only way out.
-          if (manualReconnectAttempts >= MAX_MANUAL_RECONNECT_ATTEMPTS) {
-            setConnecting(false);
-            // Give-up path — flip connected immediately; the grace period
-            // is only for quick reconnects we expect to recover from.
-            clearDisconnectGrace();
-            setConnected(false);
-            setError('Lost connection to daemon after multiple attempts. Please reload the page.');
-            return;
-          }
-          setConnecting(true);
-          const attempt = manualReconnectAttempts++;
-          // 500ms, 1s, 2s, 4s, 8s, 16s, 30s cap.
-          const delay = Math.min(500 * 2 ** attempt, 30_000);
-          clearManualReconnectTimer();
-          manualReconnectTimer = setTimeout(() => {
-            manualReconnectTimer = null;
-            if (!mounted) return;
-            socketClient.io.connect();
-          }, delay);
+          scheduleManualReconnect();
         } else if (
           reason === 'transport close' ||
           reason === 'transport error' ||
@@ -310,10 +393,25 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
       socketClient.io.on('connect_error', (err: Error) => {
         if (mounted) {
+          if (isTenantRestrictedError(err)) {
+            enterTenantRestricted();
+            return;
+          }
+          // Credential recovery still runs while suspended: a rejected credential recovers or falls back to sign-in.
           if (isDefiniteAuthFailure(err)) {
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
               if (!mounted) return;
+              // The refreshed handshake met an outage: the connect_error handler already scheduled a backoff reconnect.
+              if (isUnavailableHandshakeError(recoveryError)) return;
+              // Still suspended after recovery: keep (or reschedule) the slow probe instead of an error.
+              if (
+                !(recoveryError instanceof RefreshUnrecoverableError) &&
+                (restricted || isTenantRestrictedError(recoveryError))
+              ) {
+                if (restrictionProbeTimer === null) enterTenantRestricted();
+                return;
+              }
               if (recoveryError instanceof RefreshUnrecoverableError) {
                 setError('Authentication could not be restored. Please sign in again.');
               } else {
@@ -324,6 +422,18 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
               clearDisconnectGrace();
               setConnected(false);
             });
+            return;
+          }
+          // Any other probe failure keeps the suspended state and slow cadence; only an accepted handshake overturns it.
+          if (restricted) {
+            enterTenantRestricted();
+            return;
+          }
+          // A middleware-rejected handshake never auto-reconnects; an unreadable generation keeps tokens and backs off.
+          if (isUnavailableHandshakeError(err)) {
+            setError(null);
+            setConnected(false);
+            scheduleManualReconnect(true);
             return;
           }
           // Only show error on initial connection failure, not during reconnection attempts
@@ -364,15 +474,23 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
 
           socketClient.io.once('connect_error', (err) => {
             clearTimeout(timeout);
+            // The persistent handler already entered the suspended state; settle without a "daemon is not running" error.
+            if (isTenantRestrictedError(err) || restricted || isUnavailableHandshakeError(err)) {
+              resolve();
+              return;
+            }
             if (isDefiniteAuthFailure(err)) {
-              recoverRejectedHandshake(err).then(resolve, reject);
+              // A refreshed handshake that meets an outage settles quietly; the persistent handler already scheduled a backoff reconnect.
+              recoverRejectedHandshake(err).then(resolve, (recoveryError) =>
+                isUnavailableHandshakeError(recoveryError) ? resolve() : reject(recoveryError)
+              );
             } else {
               reject(err);
             }
           });
         });
       } catch (connectError) {
-        if (mounted) {
+        if (mounted && !restricted) {
           setError(
             connectError instanceof RefreshUnrecoverableError
               ? 'Authentication could not be restored. Please sign in again.'
@@ -392,6 +510,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
       mounted = false;
       clearManualReconnectTimer();
       clearDisconnectGrace();
+      clearRestrictionProbeTimer();
       if (client?.io) {
         // Remove all listeners to prevent memory leaks
         client.io.removeAllListeners();
@@ -437,8 +556,10 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
   return {
     client: visibleBinding?.client ?? null,
     connected: !!visibleBinding && connected,
-    connecting: hasToken ? !visibleBinding || connecting : false,
+    // A suspended workspace is not "reconnecting"; the suspended screen owns the UI.
+    connecting: hasToken && !tenantRestricted ? !visibleBinding || connecting : false,
     authGeneration,
+    tenantRestricted: !!visibleBinding && tenantRestricted,
     error: hasToken && !visibleBinding ? null : error,
     retryConnection,
   };

@@ -5,6 +5,7 @@
 
 import { createHash } from 'node:crypto';
 import {
+  applyTenantRestrictionIntent,
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -19,9 +20,10 @@ import {
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import type { Params, SessionID, TaskID, TenantID, UUID } from '@agor/core/types';
+import type { HookContext, Params, SessionID, TaskID, TenantID, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { assertRuntimeTenantRequestAccess } from '../auth/tenant-access.js';
 import type { Application } from '../declarations.js';
 import { prepareTaskRuntimeStartup, type StartupContext } from '../startup.js';
 import { TaskRuntimeReconciler } from './task-runtime-reconciler.js';
@@ -30,15 +32,29 @@ const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 let branchUnique = (Date.now() % 1_000_000) + 3_000_000;
 
+/** Production tenant admission for hooked reads, as the Feathers auth hook applies it. */
+function admitRead(db: TenantScopeAwareDatabase, path: string) {
+  return (id: string, params?: Params) =>
+    assertRuntimeTenantRequestAccess(
+      db,
+      (params as { tenant?: { tenant_id: string } } | undefined)?.tenant?.tenant_id ?? '',
+      { params: params ?? {}, method: 'get', path, id } as unknown as HookContext
+    );
+}
+
 function createDaemonApp(
   scopedDb: TenantScopeAwareDatabase,
   identity: { instanceId: string; bootId: string },
-  observations: string[]
+  observations: string[],
+  admissionDb?: TenantScopeAwareDatabase
 ) {
   const tasks = new TaskRepository(scopedDb);
   const sessions = new SessionRepository(scopedDb);
+  const admitTask = admissionDb ? admitRead(admissionDb, 'tasks') : async () => {};
+  const admitSession = admissionDb ? admitRead(admissionDb, 'sessions') : async () => {};
   const taskService = {
-    get: async (id: string) => {
+    get: async (id: string, params?: Params) => {
+      await admitTask(id, params);
       const task = await tasks.findById(id);
       if (!task) throw new Error(`Task not found: ${id}`);
       return task;
@@ -96,7 +112,8 @@ function createDaemonApp(
       if (name === 'tasks') return taskService;
       if (name === 'sessions') {
         return {
-          get: async (id: string) => {
+          get: async (id: string, params?: Params) => {
+            await admitSession(id, params);
             const session = await sessions.findById(id);
             if (!session) throw new Error(`Session not found: ${id}`);
             return session;
@@ -273,6 +290,46 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(observations.indexOf('task_settled')).toBeLessThan(
         observations.indexOf('session_projected')
       );
+    });
+
+    it('recovers a stale heartbeat while the tenant is restricted', async () => {
+      const seeded = await seed(db);
+      await applyTenantRestrictionIntent(db, seeded.tenantId, {
+        version: 1,
+        controllerId: 'control-one',
+        placementId: 'placement-one',
+        operationId: 'suspend-one',
+        revision: 1,
+        action: 'restrict',
+      });
+      const scoped = createTenantScopedDatabaseProxy(db, {
+        requireScope: true,
+        label: 'restricted task runtime',
+      });
+      const identity = { instanceId: 'daemon-restricted', bootId: 'boot-restricted' };
+      const reconciler = new TaskRuntimeReconciler({
+        app: createDaemonApp(scoped, identity, [], db),
+        db: scoped,
+        workIdentity: identity,
+        tenantId: seeded.tenantId,
+        startupOffsetMaxMs: 0,
+        config: {
+          enabled: true,
+          interval_ms: 1000,
+          stale_after_ms: 1,
+          callback: { command_template: null, timeout_ms: 3000 },
+        },
+      });
+
+      const stats = await reconciler.checkOnce();
+
+      expect(stats).toMatchObject({ heartbeatCandidates: 1, failures: 0 });
+      await runWithTenantDatabaseScope(db, seeded.tenantId, async (tenantDb) => {
+        expect(await new TaskRepository(tenantDb).findById(seeded.active.task_id)).toMatchObject({
+          status: TaskStatus.FAILED,
+          sdk_failure: { reason: 'heartbeat_lost', termination: 'verified' },
+        });
+      });
     });
 
     it("keeps daemon A's fresh Task and queue intact when daemon B starts", async () => {

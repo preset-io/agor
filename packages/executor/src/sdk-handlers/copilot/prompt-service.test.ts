@@ -100,6 +100,28 @@ describe('CopilotPromptService MCP identity scoping', () => {
     }
   });
 
+  it('configures MCP from the launch session read even when a later session read fails', async () => {
+    const findById = vi
+      .fn()
+      .mockResolvedValueOnce({
+        created_by: 'session-owner',
+        sdk_session_id: 'provider-thread-A',
+        branch_id: 'branch-1',
+        mcp_token: 'test-token',
+      })
+      .mockResolvedValue(null);
+    const service = new CopilotPromptService({} as never, { findById } as never, undefined, {
+      findById: vi.fn().mockResolvedValue({ path: '/workspace' }),
+    } as never);
+    for await (const _event of service.promptSessionStreaming('session-1' as SessionID, 'hi')) {
+      // Consume the provider turn.
+    }
+    expect(mocks.configured.mock.lastCall?.[0].mcpServers).toMatchObject({
+      agor: { headers: { Authorization: 'Bearer test-token' } },
+      external: { url: 'https://example.com/mcp' },
+    });
+  });
+
   it('hydrates OAuth for the task creator while filtering definitions by session owner', async () => {
     const service = new CopilotPromptService(
       {} as never,
@@ -123,9 +145,13 @@ describe('CopilotPromptService MCP identity scoping', () => {
 
     await (
       service as unknown as {
-        buildMcpServers(sessionId: string, taskId: string): Promise<Record<string, unknown>>;
+        buildMcpServers(
+          sessionId: string,
+          taskId: string,
+          session: unknown
+        ): Promise<Record<string, unknown>>;
       }
-    ).buildMcpServers('session-1', 'task-1');
+    ).buildMcpServers('session-1', 'task-1', { created_by: 'session-owner' });
 
     expect(mocks.getMcpServersForSession).toHaveBeenCalledWith(
       'session-1',
