@@ -33,6 +33,16 @@ assert.match(workflow, /^name: Build image$/m);
 assert.match(workflow, /^ {2}pull_request:$/m);
 assert.match(workflow, /^ {4}name: Build & push$/m);
 
+// pull_request workflows run from the merge ref: build that same tree, not
+// an older PR head which may lack Docker targets added by the base workflow.
+// workflow_run must still build the exact main commit that passed CI.
+assert.match(
+  workflow,
+  /^ {2}IMAGE_REVISION: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
+  'image revision must match the PR merge workflow, or the tested main commit on workflow_run'
+);
+assert.match(step('Checkout'), /ref: \$\{\{ env\.IMAGE_REVISION \}\}/);
+
 const validation = step('Validate image publication policy');
 assert.match(validation, /run: node scripts\/check-image-publication-policy\.mjs/);
 
@@ -45,6 +55,7 @@ for (const name of ['Log in to Docker Hub', 'Docker metadata', 'Push image']) {
 }
 
 const build = step('Build image');
+assert.match(build, /AGOR_BUILD_SHA=\$\{\{ env\.IMAGE_REVISION \}\}/);
 assert.match(build, /target: production-source/);
 assert.match(build, /load: true/);
 assert.match(build, /tags: \$\{\{ env\.IMAGE \}\}:smoke/);

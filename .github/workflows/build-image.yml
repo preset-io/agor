@@ -40,10 +40,12 @@ permissions:
 # docker.io is docker/login-action's default registry, so no `registry:` needed.
 env:
   IMAGE: preset/agor
-  # The commit we build, stamp, and tag: the PR head on pull_request events;
+  # The commit we build, stamp, and tag: the PR merge on pull_request events;
   # the tested main commit on workflow_run events; otherwise the pushed commit.
+  # PR workflows come from the merge ref. Checking out only the head mixes a
+  # newer workflow with older source (e.g. newly added Docker targets missing).
   # Keeps the checkout, the :<sha> tag, and the in-app build banner in lockstep.
-  IMAGE_REVISION: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
+  IMAGE_REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build:
@@ -66,7 +68,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Build the exact tested/main, PR-head, or tag commit so image
+          # Build the exact tested/main, PR-merge, or tag commit so image
           # contents match the :<sha> tag.
           ref: ${{ env.IMAGE_REVISION }}
 
