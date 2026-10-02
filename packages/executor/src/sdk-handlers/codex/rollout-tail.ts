@@ -15,13 +15,16 @@
  *   multi-byte characters split across chunk boundaries decode correctly,
  * - lines that lack `marker`, fail to parse, or project to undefined are skipped.
  *
- * Bounded deviations, all of which fail towards "unknown" (undefined):
- * - lines longer than `maxLineBytes` are skipped without being buffered;
- *   genuine `token_count` records are a few hundred bytes,
- * - nothing older than the last `maxScanBytes` of the file is examined,
- * - if the file shrinks while it is being read, the read is abandoned rather
- *   than joining non-contiguous bytes. Bytes appended after the initial size
- *   snapshot are ignored.
+ * Bounded deviations:
+ * - lines longer than `maxLineBytes` are skipped without being buffered and
+ *   the scan continues, so if the newest usable record were oversized an
+ *   OLDER record would be returned instead. Genuine `token_count` records are
+ *   a few hundred bytes, so this does not occur for real rollout files,
+ * - nothing older than the last `maxScanBytes` of the file is examined; when
+ *   that budget runs out without a usable record the result is undefined,
+ * - if the file shrinks while it is being read, the read is abandoned
+ *   (undefined) rather than joining non-contiguous bytes. Bytes appended after
+ *   the initial size snapshot are ignored.
  */
 import { type FileHandle, open } from 'node:fs/promises';
 
@@ -69,6 +72,7 @@ export async function findLatestRolloutRecord<T>(
       if (oversized) return;
       lineBytes += bytes.length;
       if (lineBytes > limits.maxLineBytes) {
+        // Skip this line and keep scanning older ones (see header).
         oversized = true;
         pieces = [];
         return;
