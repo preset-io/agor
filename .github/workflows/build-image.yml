@@ -170,30 +170,36 @@ jobs:
           '
 
       # Use the loaded image via Docker's local builder; no registry push/pull.
+      # These are build checks, not deliverables. Validate inside the final
+      # stage instead of exporting/loading two more large dependency images.
       - name: Test warm preview base
         if: steps.railway.outputs.build == 'true'
         timeout-minutes: 10
         run: |
           set -euo pipefail
           backup="$(mktemp)"
+          dockerfile="$(mktemp)"
           cp package.json "$backup"
-          trap 'cp "$backup" package.json; rm -f "$backup"' EXIT
-          docker buildx build --builder default --load --progress=plain \
+          trap 'cp "$backup" package.json; rm -f "$backup" "$dockerfile"' EXIT
+          cp docker/Dockerfile "$dockerfile"
+          cat >> "$dockerfile" <<'DOCKERFILE'
+
+          FROM railway-preview AS railway-preview-checked
+          RUN test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)" \
+            && cd /app/packages/git \
+            && node -e 'require("simple-git")'
+          DOCKERFILE
+          docker buildx build --builder default --output=type=cacheonly --progress=plain \
             --build-arg AGOR_PREVIEW_BASE=${{ env.IMAGE }}:preview-smoke \
-            --target railway-preview -f docker/Dockerfile -t agor-preview-warm . 2>&1 | tee /tmp/preview-warm.log
+            --target railway-preview-checked -f "$dockerfile" . 2>&1 | tee /tmp/preview-warm.log
           grep -E '^#[0-9]+ [0-9.]+ Reusing preview dependencies$' /tmp/preview-warm.log
           # A manifest-only metadata change invalidates the fingerprint without
           # changing the lockfile resolution. This must run the frozen install.
           node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json")); p.description = "preview dependency fingerprint test"; fs.writeFileSync("package.json", JSON.stringify(p));'
-          docker buildx build --builder default --load --progress=plain \
+          docker buildx build --builder default --output=type=cacheonly --progress=plain \
             --build-arg AGOR_PREVIEW_BASE=${{ env.IMAGE }}:preview-smoke \
-            --target railway-preview -f docker/Dockerfile -t agor-preview-changed . 2>&1 | tee /tmp/preview-changed.log
+            --target railway-preview-checked -f "$dockerfile" . 2>&1 | tee /tmp/preview-changed.log
           grep -E '^#[0-9]+ [0-9.]+ Installing changed preview dependencies$' /tmp/preview-changed.log
-          docker run --rm --entrypoint sh agor-preview-changed -ec '
-            test "$(node /usr/local/lib/agor/runtime-checkout.mjs fingerprint)" = "$(cat /opt/agor-dependency-fingerprint)"
-            cd /app/packages/git
-            node -e "require(\"simple-git\")"
-          '
 
       - name: Push preview runtime
         if: github.event_name == 'workflow_run'

@@ -268,12 +268,17 @@ assert.match(step('Push preview runtime'), /if: github.event_name == 'workflow_r
 assert.match(step('Push preview runtime'), /tags: .*:preview-runtime-\$\{\{ env.IMAGE_REVISION/);
 assert.match(step('Smoke test preview runtime'), /runtime-checkout.mjs fingerprint/);
 const warm = step('Test warm preview base');
-assert.match(warm, /--builder default --load/);
+assert.equal((warm.match(/--builder default --output=type=cacheonly/g) ?? []).length, 2);
+assert.equal((warm.match(/--target railway-preview-checked/g) ?? []).length, 2);
+assert.match(warm, /FROM railway-preview AS railway-preview-checked/);
+assert.match(warm, /RUN test .*runtime-checkout\.mjs fingerprint.*agor-dependency-fingerprint/);
+assert.match(warm, /&& cd \/app\/packages\/git/);
+assert.match(warm, /&& node -e 'require\("simple-git"\)'/);
 assert.match(warm, /--build-arg AGOR_PREVIEW_BASE=/);
 assert.match(warm, /Installing changed preview dependencies/);
 assert.match(warm, /Reusing preview dependencies/);
 assert.match(warm, /trap .*package.json/);
-assert.doesNotMatch(warm, /--push/);
+assert.doesNotMatch(warm, /--push|--load|docker run/);
 assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
 assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
 const resolver = await readFile(
