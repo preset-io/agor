@@ -248,6 +248,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
       codexSandboxMode: current.codexSandboxMode,
       codexApprovalPolicy: current.codexApprovalPolicy,
       codexNetworkAccess: current.codexNetworkAccess,
+      codexIncludePlugins: current.codexIncludePlugins ?? false,
     });
   };
   const ensureCustom = () => {

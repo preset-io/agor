@@ -88,6 +88,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
           sandboxMode: config.codexSandboxMode ?? codexDefaults.sandboxMode,
           approvalPolicy: config.codexApprovalPolicy ?? codexDefaults.approvalPolicy,
           networkAccess: config.codexNetworkAccess ?? codexDefaults.networkAccess,
+          includePlugins: config.codexIncludePlugins ?? false,
         };
       }
 

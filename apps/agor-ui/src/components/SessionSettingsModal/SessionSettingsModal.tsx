@@ -92,6 +92,7 @@ interface FormValues {
   codexSandboxMode: CodexSandboxMode;
   codexApprovalPolicy: CodexApprovalPolicy;
   codexNetworkAccess: boolean;
+  codexIncludePlugins: boolean;
   saveAsDefault?: boolean;
   custom_context: string;
   callbackConfig: {
@@ -130,6 +131,7 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
     codexSandboxMode: session.permission_config?.codex?.sandboxMode ?? codexDefaults.sandboxMode,
     codexApprovalPolicy:
       session.permission_config?.codex?.approvalPolicy ?? codexDefaults.approvalPolicy,
+    codexIncludePlugins: session.permission_config?.codex?.includePlugins ?? false,
     codexNetworkAccess:
       session.permission_config?.codex?.networkAccess ?? codexDefaults.networkAccess,
     saveAsDefault: false,
@@ -206,6 +208,8 @@ function buildUpdates(values: FormValues, session: Session, initial: FormValues)
           values.codexApprovalPolicy ||
           session.permission_config?.codex?.approvalPolicy ||
           'on-request',
+        includePlugins:
+          values.codexIncludePlugins ?? session.permission_config?.codex?.includePlugins ?? false,
         networkAccess:
           values.codexNetworkAccess ?? session.permission_config?.codex?.networkAccess ?? false,
       },
@@ -388,6 +392,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           codexSandboxMode: values.codexSandboxMode,
           codexApprovalPolicy: values.codexApprovalPolicy,
           codexNetworkAccess: values.codexNetworkAccess,
+          codexIncludePlugins: values.codexIncludePlugins,
         };
         void persistUserDefaultFromForm(client, currentUser, activeAgenticTool, formValues).catch(
           () => showError('Failed to save your default configuration')

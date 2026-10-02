@@ -89,6 +89,7 @@ export function resolveChildSessionConfig(
         codexSandboxMode: parent.permission_config?.codex?.sandboxMode,
         codexApprovalPolicy: parent.permission_config?.codex?.approvalPolicy,
         codexNetworkAccess: parent.permission_config?.codex?.networkAccess,
+        codexIncludePlugins: parent.permission_config?.codex?.includePlugins,
       }
     : undefined;
 

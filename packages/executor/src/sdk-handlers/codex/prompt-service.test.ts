@@ -563,7 +563,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
-          features: { goals: false, multi_agent: false },
+          features: { goals: false, multi_agent: false, plugins: false },
           // Agor always opts Codex into its sticky-task-list planning tool.
           tools: { update_plan: { enabled: true } },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
@@ -584,6 +584,71 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
       });
+    }
+  );
+
+  it.each(
+    [undefined, false, true].flatMap((includePlugins) =>
+      [null, 'existing-thread'].map((threadId) => ({ includePlugins, threadId }))
+    )
+  )(
+    'uses session plugins $includePlugins on fresh/resume $threadId and notices toggles',
+    async ({ includePlugins, threadId }) => {
+      const service = new CodexPromptService(
+        mockMessagesRepo,
+        mockSessionsRepo,
+        mockSessionMCPServerRepo,
+        mockBranchesRepo,
+        undefined,
+        'test-key'
+      );
+      const setup = service as unknown as {
+        ensureCodexInstructionsFile: () => Promise<string>;
+        buildMcpServersConfig: () => Promise<{
+          servers: Record<string, { url: string }>;
+          total: number;
+        }>;
+      };
+      setup.ensureCodexInstructionsFile = vi
+        .fn()
+        .mockResolvedValue('/tmp/plugin-policy-instructions.md');
+      setup.buildMcpServersConfig = vi
+        .fn()
+        .mockResolvedValue({ servers: { direct: { url: 'http://localhost:3030/mcp' } }, total: 1 });
+      const session = {
+        session_id: 'plugin-policy',
+        branch_id: 'branch-1',
+        sdk_session_id: threadId,
+        permission_config: { codex: { includePlugins } },
+        model_config: {},
+        mcp_token: 'test-token',
+      };
+      mockSessionsRepo.findById.mockResolvedValue(session);
+      mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1', path: process.cwd() });
+      mockStreamEvents = [
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 1, output_tokens: 1, cached_input_tokens: 0 },
+        },
+      ];
+      for await (const _ of service.promptSessionStreaming('plugin-policy' as SessionID, 'test')) {
+        /* drain */
+      }
+      expect(mockInstanceConfigs.at(-1)).toMatchObject({
+        features: { goals: false, multi_agent: false },
+        mcp_servers: { direct: { url: 'http://localhost:3030/mcp' } },
+      });
+      if (includePlugins) expect(mockInstanceConfigs.at(-1)).not.toHaveProperty('features.plugins');
+      else expect(mockInstanceConfigs.at(-1)).toHaveProperty('features.plugins', false);
+      expect(threadId ? mockResumeThreadOptions : mockStartThreadOptions).toHaveLength(1);
+      session.permission_config.codex.includePlugins = !includePlugins;
+      for await (const _ of service.promptSessionStreaming('plugin-policy' as SessionID, 'again')) {
+        /* drain */
+      }
+      expect(mockInstanceConfigs).toHaveLength(2);
+      if (!includePlugins)
+        expect(mockInstanceConfigs.at(-1)).not.toHaveProperty('features.plugins');
+      else expect(mockInstanceConfigs.at(-1)).toHaveProperty('features.plugins', false);
     }
   );
 
@@ -785,9 +850,13 @@ describe('CodexPromptService - forked sessions', () => {
     appServerMocks.forkCodexThreadViaAppServer.mockReset();
   });
 
-  it.each(['direct', 'nested'])(
-    'forks %s parent history with fresh model-visible and MCP identity on both turns',
-    async (kind) => {
+  it.each(
+    ['direct', 'nested'].flatMap((kind) =>
+      [undefined, false, true].map((includePlugins) => ({ kind, includePlugins }))
+    )
+  )(
+    'forks $kind history with session plugins $includePlugins on both turns',
+    async ({ kind, includePlugins }) => {
       const service = new CodexPromptService(
         mockMessagesRepo,
         mockSessionsRepo,
@@ -811,7 +880,7 @@ describe('CodexPromptService - forked sessions', () => {
         created_at: new Date().toISOString(),
         sdk_session_id: null,
         genealogy: { forked_from_session_id: 'parent-session' },
-        permission_config: { codex: {} },
+        permission_config: { codex: { includePlugins } },
         model_config: { effort: 'max' },
         mcp_token: 'child-test-token',
       };
@@ -883,8 +952,15 @@ describe('CodexPromptService - forked sessions', () => {
         expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledTimes(1);
         expect(appServerMocks.forkCodexThreadViaAppServer).toHaveBeenCalledWith(
           'parent-thread-id',
-          expect.objectContaining({ env: expect.any(Object) })
+          expect.objectContaining({
+            env: expect.any(Object),
+            includePlugins: includePlugins === true,
+          })
         );
+        for (const config of mockInstanceConfigs) {
+          if (includePlugins) expect(config).not.toHaveProperty('features.plugins');
+          else expect(config).toHaveProperty('features.plugins', false);
+        }
         expect(mockSessionsRepo.update).toHaveBeenCalledWith('child-session', {
           sdk_session_id: 'forked-thread-id',
         });

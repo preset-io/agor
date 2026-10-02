@@ -70,6 +70,7 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'on-request',
         networkAccess: false,
+        includePlugins: false,
       });
     });
 
@@ -83,6 +84,7 @@ describe('resolveSessionDefaults', () => {
           sandboxMode: 'workspace-write',
           approvalPolicy: 'never',
           networkAccess: true,
+          includePlugins: false,
         },
       });
     });
@@ -104,6 +106,7 @@ describe('resolveSessionDefaults', () => {
           sandboxMode: 'read-only',
           approvalPolicy: 'untrusted',
           networkAccess: false,
+          includePlugins: false,
         },
       });
     });
@@ -119,6 +122,7 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'read-only',
         approvalPolicy: 'never', // from default mode 'allow-all'
         networkAccess: true, // from default mode 'allow-all'
+        includePlugins: false,
       });
     });
 
@@ -142,6 +146,7 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'read-only',
         approvalPolicy: 'untrusted',
         networkAccess: true,
+        includePlugins: false,
       });
     });
 
@@ -389,6 +394,7 @@ describe('resolveSessionDefaults', () => {
         sandboxMode: 'danger-full-access',
         approvalPolicy: 'never',
         networkAccess: true,
+        includePlugins: false,
       });
       expect(r.mcp_server_ids).toEqual(['gateway-mcp-1', 'gateway-mcp-2']);
     });

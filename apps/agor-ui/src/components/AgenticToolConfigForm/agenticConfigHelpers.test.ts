@@ -1,9 +1,12 @@
 import type { ScheduleAgenticToolConfig } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
+  buildConfigFromFormValues,
   buildModelConfigFromFormValues,
   buildScheduleConfigFromFormValues,
+  getEffectiveCodexFormValues,
   getFormValuesFromConfig,
+  scheduleConfigToDefaultConfig,
 } from './agenticConfigHelpers';
 
 describe('getFormValuesFromConfig', () => {
@@ -74,4 +77,29 @@ describe('buildScheduleConfigFromFormValues', () => {
     expect(result.preset_id).toBeUndefined();
     expect(result.context_files).toEqual(['AGENTS.md']);
   });
+});
+
+describe('Codex plugin form round trips', () => {
+  it.each([undefined, false, true])(
+    'preserves preference %s across defaults, presets and schedules',
+    (codexIncludePlugins) => {
+      const values = getFormValuesFromConfig('codex', { codexIncludePlugins });
+      expect(buildConfigFromFormValues('codex', values).codexIncludePlugins).toBe(
+        codexIncludePlugins ?? false
+      );
+      expect(getEffectiveCodexFormValues({ codexIncludePlugins }).codexIncludePlugins).toBe(
+        codexIncludePlugins ?? false
+      );
+      const schedule = buildScheduleConfigFromFormValues('codex', values);
+      expect(scheduleConfigToDefaultConfig(schedule)?.codexIncludePlugins).toBe(
+        codexIncludePlugins ?? false
+      );
+      expect(
+        buildScheduleConfigFromFormValues('claude-code', values, schedule).codex_include_plugins
+      ).toBeUndefined();
+      expect(buildConfigFromFormValues('claude-code', values)).not.toHaveProperty(
+        'codexIncludePlugins'
+      );
+    }
+  );
 });

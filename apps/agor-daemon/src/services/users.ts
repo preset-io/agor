@@ -1117,6 +1117,10 @@ export class UsersService {
               JSON.stringify(nextDefaultAgenticSelection?.[tool]))
       );
       for (const tool of changedDefaultTools) {
+        const includePlugins = nextDefaultAgenticConfig[tool]?.codexIncludePlugins;
+        if (includePlugins !== undefined && typeof includePlugins !== 'boolean') {
+          throw new BadRequest('codexIncludePlugins must be a boolean');
+        }
         const selection = nextDefaultAgenticSelection?.[tool];
         try {
           if (selection?.source === 'preset' || selection?.source === 'workspace_default') {

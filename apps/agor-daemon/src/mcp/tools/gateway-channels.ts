@@ -365,6 +365,10 @@ const agenticConfigSchema = z
       .optional()
       .describe('Codex approval policy for Codex gateway sessions.'),
     codexNetworkAccess: z.boolean().optional().describe('Allow Codex network access.'),
+    codexIncludePlugins: z
+      .boolean()
+      .optional()
+      .describe('Include native Codex plugins (default off).'),
     envVars: z
       .array(envVarSchema)
       .optional()

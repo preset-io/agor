@@ -464,3 +464,22 @@ describe('UsersService — OpenCode defaults', () => {
     });
   });
 });
+
+describe('UsersService — Codex plugin defaults', () => {
+  dbTest('stores opt-in/opt-out and rejects invalid defaults', async ({ db }) => {
+    const service = new UsersService(db);
+    const id = await makeUser(service);
+    for (const codexIncludePlugins of [true, false]) {
+      await service.patch(id, { default_agentic_config: { codex: { codexIncludePlugins } } });
+      expect((await service.get(id)).default_agentic_config?.codex?.codexIncludePlugins).toBe(
+        codexIncludePlugins
+      );
+    }
+    for (const codexIncludePlugins of ['true', 'false', 0, null]) {
+      await expect(
+        service.patch(id, { default_agentic_config: { codex: { codexIncludePlugins } } } as never)
+      ).rejects.toThrow('codexIncludePlugins must be a boolean');
+    }
+    expect((await service.get(id)).default_agentic_config?.codex?.codexIncludePlugins).toBe(false);
+  });
+});

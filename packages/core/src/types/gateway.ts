@@ -840,6 +840,7 @@ type ReferencedGatewayAgenticConfig = {
   codexSandboxMode?: never;
   codexApprovalPolicy?: never;
   codexNetworkAccess?: never;
+  codexIncludePlugins?: never;
 };
 
 type InlineGatewayAgenticConfig = {
@@ -849,6 +850,7 @@ type InlineGatewayAgenticConfig = {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
 };
 
 export type GatewayAgenticConfig = GatewayAgenticConfigBase &
@@ -863,6 +865,7 @@ export type PersistedGatewayAgenticConfig = GatewayAgenticConfigBase & {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
 };
 
 // ============================================================================

@@ -45,6 +45,7 @@ export interface TeammateTabResult {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
 }
 
 export interface TeammateTabProps {
@@ -99,6 +100,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
         codexNetworkAccess: undefined,
+        codexIncludePlugins: undefined,
       }),
     });
   }, [selectedAgent, currentUser, form]);
@@ -126,6 +128,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
             codexSandboxMode: values.codexSandboxMode,
             codexApprovalPolicy: values.codexApprovalPolicy,
             codexNetworkAccess: values.codexNetworkAccess,
+            codexIncludePlugins: values.codexIncludePlugins,
           })
         : undefined;
 
@@ -160,6 +163,9 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
           (values.codexApprovalPolicy as CodexApprovalPolicy | undefined) ??
           agentDefaults?.codexApprovalPolicy ??
           codexDefaults.approvalPolicy;
+        result.codexIncludePlugins =
+          values.codexIncludePlugins ??
+          (isInline ? false : (agentDefaults?.codexIncludePlugins ?? false));
         result.codexNetworkAccess =
           values.codexNetworkAccess ??
           agentDefaults?.codexNetworkAccess ??

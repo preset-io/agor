@@ -1108,6 +1108,7 @@ export const App: React.FC<AppProps> = ({
       codexSandboxMode: result.codexSandboxMode,
       codexApprovalPolicy: result.codexApprovalPolicy,
       codexNetworkAccess: result.codexNetworkAccess,
+      codexIncludePlugins: result.codexIncludePlugins,
     };
 
     try {

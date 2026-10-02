@@ -1159,6 +1159,7 @@ export const users = sqliteTable(
             codexSandboxMode?: string;
             codexApprovalPolicy?: string;
             codexNetworkAccess?: boolean;
+            codexIncludePlugins?: boolean;
           };
           gemini?: {
             modelConfig?: {

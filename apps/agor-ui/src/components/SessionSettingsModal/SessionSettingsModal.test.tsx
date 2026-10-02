@@ -78,7 +78,20 @@ vi.mock('../SessionMetadataForm', () => ({
 }));
 vi.mock('../SessionIds', () => ({ SessionIdsList: () => <div data-testid="ids" /> }));
 // Secondary-collapse children (lazy, but stub to avoid heavy module work).
-vi.mock('../CodexSettingsForm', () => ({ CodexSettingsForm: () => null }));
+vi.mock('../CodexSettingsForm', () => ({
+  CodexSettingsForm: () => {
+    const form = Form.useFormInstance();
+    return (
+      <button
+        type="button"
+        data-testid="disable-plugins"
+        onClick={() => form.setFieldValue('codexIncludePlugins', false)}
+      >
+        Disable plugins
+      </button>
+    );
+  },
+}));
 vi.mock('../CallbackConfigForm', () => ({ CallbackConfigForm: () => null }));
 vi.mock('../CallbackToggleButton', () => ({ CallbackTargetDisplay: () => null }));
 vi.mock('../AdvancedSettingsForm', () => ({
@@ -457,4 +470,48 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       expect(onUpdate.mock.calls[0][1].custom_context).toEqual({ teamName: 'Frontend' });
     });
   });
+});
+
+it('persists a session-only opt-out without dropping unrelated Codex settings', async () => {
+  const onUpdate = vi.fn();
+  render(
+    <SessionSettingsModal
+      open
+      session={{
+        ...codexSession,
+        permission_config: {
+          mode: 'allow-all',
+          codex: {
+            sandboxMode: 'read-only',
+            approvalPolicy: 'never',
+            networkAccess: true,
+            includePlugins: true,
+          },
+        },
+      }}
+      onClose={vi.fn()}
+      onUpdate={onUpdate}
+      client={null}
+      currentUser={null}
+    />
+  );
+  fireEvent.click(screen.getByText('Codex Sandbox & Policies'));
+  fireEvent.click(await screen.findByTestId('disable-plugins'));
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() =>
+    expect(onUpdate).toHaveBeenCalledWith(
+      's-codex',
+      expect.objectContaining({
+        permission_config: {
+          mode: 'allow-all',
+          codex: {
+            sandboxMode: 'read-only',
+            approvalPolicy: 'never',
+            networkAccess: true,
+            includePlugins: false,
+          },
+        },
+      })
+    )
+  );
 });

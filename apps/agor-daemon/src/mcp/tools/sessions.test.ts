@@ -671,6 +671,31 @@ describe('agor_sessions_create', () => {
     vi.clearAllMocks();
   });
 
+  it.each([false, true])(
+    'transports explicit Codex plugin preference %s on create',
+    async (codexIncludePlugins) => {
+      const create = vi.fn(async (data: Record<string, unknown>) => ({
+        ...data,
+        session_id: 'new',
+      }));
+      const app = makeFakeApp({
+        users: { get: async () => baseUser },
+        branches: { get: async () => baseBranch },
+        sessions: { create },
+      });
+      const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+        'agor_sessions_create',
+      ]);
+      await agor_sessions_create({ branchId: 'wt-1', agenticTool: 'codex', codexIncludePlugins });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          permission_config: { codex: { includePlugins: codexIncludePlugins } },
+        }),
+        expect.anything()
+      );
+    }
+  );
+
   it('threads explicit modelConfig through to session.model_config (Bug 2)', async () => {
     const sessionCreates: unknown[] = [];
     const app = makeFakeApp({

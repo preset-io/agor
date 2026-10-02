@@ -69,6 +69,52 @@ describe('agentic tool preset resolution', () => {
     );
   });
 
+  dbTest(
+    'resolves plugin opt-in from live presets without mixing user or parent settings',
+    async ({ db }) => {
+      const owner = await new UsersRepository(db).create({
+        email: 'plugins@example.com',
+        name: 'Plugins',
+      });
+      const presets = new AgenticToolPresetRepository(db);
+      const preset = await presets.create(
+        { tool: 'codex', name: 'Plugins', configuration: { codexIncludePlugins: true } },
+        owner.user_id as UserID
+      );
+      const args = {
+        tool: 'codex' as const,
+        source: { reference: preset.preset_id },
+        executionOwnerId: owner.user_id as UserID,
+      };
+      expect(
+        (await materializeAgenticToolConfiguration(db, args)).permission_config.codex
+          ?.includePlugins
+      ).toBe(true);
+      await presets.patch(preset.preset_id, { configuration: {} }, owner.user_id as UserID);
+      const resolved = await materializeAgenticToolConfiguration(db, {
+        ...args,
+        parent: {
+          agentic_tool: 'codex',
+          permission_config: {
+            codex: { sandboxMode: 'read-only', approvalPolicy: 'never', includePlugins: true },
+          },
+        },
+      });
+      expect(resolved.permission_config.codex?.includePlugins).toBe(false);
+      const inline = await materializeAgenticToolConfiguration(db, {
+        ...args,
+        source: { configuration: { codexIncludePlugins: false } },
+        parent: {
+          agentic_tool: 'codex',
+          permission_config: {
+            codex: { sandboxMode: 'read-only', approvalPolicy: 'never', includePlugins: true },
+          },
+        },
+      });
+      expect(inline.permission_config.codex?.includePlugins).toBe(false);
+    }
+  );
+
   dbTest('inline policy fails closed', async ({ db }) => {
     await new TenantAgenticToolSettingsRepository(db).patch('codex', {
       inline_configuration_allowed: false,
@@ -313,7 +359,7 @@ describe('agentic tool preset resolution', () => {
     'rejects preset materialization through a retained foreign tenant scope',
     async ({ db }) => {
       const preset = await new AgenticToolPresetRepository(db).create(
-        { tool: 'codex', name: 'Tenant A preset', configuration: {} },
+        { tool: 'codex', name: 'Tenant A preset', configuration: { codexIncludePlugins: true } },
         '00000000-0000-7000-8000-000000000001' as UserID
       );
 

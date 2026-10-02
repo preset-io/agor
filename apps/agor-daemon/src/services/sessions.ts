@@ -127,6 +127,7 @@ function sessionConfigurationSource(
       codexSandboxMode: data.permission_config?.codex?.sandboxMode,
       codexApprovalPolicy: data.permission_config?.codex?.approvalPolicy,
       codexNetworkAccess: data.permission_config?.codex?.networkAccess,
+      codexIncludePlugins: data.permission_config?.codex?.includePlugins,
     },
   };
 }
@@ -1174,7 +1175,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       data.modelConfig !== undefined ||
       data.codexSandboxMode !== undefined ||
       data.codexApprovalPolicy !== undefined ||
-      data.codexNetworkAccess !== undefined;
+      data.codexNetworkAccess !== undefined ||
+      data.codexIncludePlugins !== undefined;
     const inheritedPresetId =
       // Explicit inline selection detaches from the parent's preset. The
       // materializer still enforces the workspace's inline-configuration policy.
@@ -1223,6 +1225,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
                   codexSandboxMode: data.codexSandboxMode,
                   codexApprovalPolicy: data.codexApprovalPolicy,
                   codexNetworkAccess: data.codexNetworkAccess,
+                  codexIncludePlugins: data.codexIncludePlugins,
                 },
               }
             : { reference: USER_DEFAULT_AGENTIC_CONFIGURATION },

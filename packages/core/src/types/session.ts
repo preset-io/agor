@@ -343,7 +343,7 @@ export interface Session {
     /** Permission mode for agent tool execution (Claude/Gemini unified mode)
      *  Tool-level permissions are handled by SDK via settings.json files */
     mode?: PermissionMode;
-    /** Codex-specific dual permission config (sandboxMode + approvalPolicy + networkAccess) */
+    /** Codex-specific runtime settings (sandbox, approvals, network and native plugins). */
     codex?: {
       /** Sandbox mode controls WHERE Codex can write (filesystem boundaries) */
       sandboxMode: CodexSandboxMode;
@@ -351,6 +351,8 @@ export interface Session {
       approvalPolicy: CodexApprovalPolicy;
       /** Network access controls whether outbound HTTP/HTTPS requests are allowed (workspace-write only) */
       networkAccess?: boolean;
+      /** Allow native plugins; false/omitted vetoes loading, true respects native settings. */
+      includePlugins?: boolean;
     };
   } | null;
 
@@ -982,6 +984,7 @@ export interface SpawnConfig {
 
   /** Codex network access (codex only) */
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
 
   /** MCP server IDs to attach to spawned session */
   mcpServerIds?: string[];

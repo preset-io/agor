@@ -665,6 +665,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codexSandboxMode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
         codexApprovalPolicy: z.enum(['untrusted', 'on-failure', 'on-request', 'never']).optional(),
         codexNetworkAccess: z.boolean().optional(),
+        codexIncludePlugins: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include native Codex plugins (default off); true respects native plugin settings.'
+          ),
       }),
     },
     async (args) => {
@@ -686,6 +692,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codexSandboxMode: args.codexSandboxMode,
         codexApprovalPolicy: args.codexApprovalPolicy,
         codexNetworkAccess: args.codexNetworkAccess,
+        codexIncludePlugins: args.codexIncludePlugins,
       };
 
       // spawn/fork are custom methods, not Feathers transport methods. Scope
@@ -1077,6 +1084,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'Explicit MCP server IDs to attach atomically; an unavailable or unauthorized selection rejects creation. [] selects none. Omit to inherit branch config > user defaults; missing inherited servers are skipped with a warning.'
           ),
         modelConfig: modelConfigInputSchema,
+        codexIncludePlugins: z
+          .boolean()
+          .optional()
+          .describe('Include native Codex plugins for this session (default off).'),
       }),
     },
     async (args) => {
@@ -1223,6 +1234,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         created_by: ctx.userId,
         unix_username: user.unix_username,
         ...(modelConfig && { model_config: modelConfig }),
+        ...(agenticTool === 'codex' && args.codexIncludePlugins !== undefined
+          ? { permission_config: { codex: { includePlugins: args.codexIncludePlugins } } }
+          : {}),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         genealogy: {

@@ -20,6 +20,7 @@ export interface NewSessionConfig {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: boolean;
+  codexIncludePlugins?: boolean;
   envVarNames?: string[];
   /** Files are uploaded only after the session exists; never send them in the create payload. */
   attachmentFiles?: File[];

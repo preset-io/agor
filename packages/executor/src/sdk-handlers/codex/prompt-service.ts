@@ -44,7 +44,7 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
+import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer, Session } from '@agor/core/types';
 import {
   getDefaultPermissionMode,
   isGatewaySession,
@@ -511,14 +511,15 @@ export class CodexPromptService {
   private buildCodexOptions(
     apiKey: string | undefined,
     baseUrl: string | undefined,
-    config: CodexConfigObject | undefined
+    config: CodexConfigObject | undefined,
+    includePlugins = false
   ): ConstructorParameters<typeof CodexSdk.Codex>[0] {
     const useSubscription = this.useNativeAuth && !apiKey;
 
     const options: ConstructorParameters<typeof CodexSdk.Codex>[0] = {
       ...(apiKey ? { apiKey } : {}),
       ...(baseUrl ? { baseUrl } : {}),
-      config: applyAgorCodexLaunchPolicy(config),
+      config: applyAgorCodexLaunchPolicy(config, includePlugins),
     };
 
     if (useSubscription) {
@@ -590,12 +591,16 @@ export class CodexPromptService {
    * rotated MCP bearer tokens invalidate the cache even when the config
    * shape stays the same — see `snapshotMcpEnvValues()`.
    */
-  private async ensureCodexClient(config: CodexConfigObject): Promise<void> {
+  private async ensureCodexClient(
+    config: CodexConfigObject,
+    includePlugins = false
+  ): Promise<void> {
     const baseUrl = this.resolveBaseUrl();
     const fingerprint = JSON.stringify({
       apiKey: this.apiKey || '',
       baseUrl: baseUrl ?? '',
       useNativeAuth: this.useNativeAuth,
+      includePlugins,
       config,
       mcpEnv: this.snapshotMcpEnvValues(),
     });
@@ -607,7 +612,9 @@ export class CodexPromptService {
     codexDebug(
       `🔄 [Codex] Per-session config changed, reinitializing SDK (apiKey=${this.apiKey ? 'set' : 'unset'}, useNativeAuth=${this.useNativeAuth})`
     );
-    await this.replaceCodexClient(this.buildCodexOptions(this.apiKey, baseUrl, config));
+    await this.replaceCodexClient(
+      this.buildCodexOptions(this.apiKey, baseUrl, config, includePlugins)
+    );
     this.lastApiKey = this.apiKey || null;
     this.lastBaseUrl = baseUrl ?? null;
     this.lastClientFingerprint = fingerprint;
@@ -1064,6 +1071,7 @@ export class CodexPromptService {
     session: {
       genealogy?: { forked_from_session_id?: SessionID };
       sdk_session_id?: string | null;
+      permission_config?: Session['permission_config'];
     }
   ): Promise<void> {
     if (session.sdk_session_id) return;
@@ -1093,6 +1101,7 @@ export class CodexPromptService {
 
     const forkedThreadId = await forkCodexThreadViaAppServer(parentSession.sdk_session_id, {
       env: appServerEnv,
+      includePlugins: session.permission_config?.codex?.includePlugins === true,
     });
     await this.sessionsRepo.update(sessionId, { sdk_session_id: forkedThreadId });
     session.sdk_session_id = forkedThreadId;
@@ -1234,7 +1243,10 @@ export class CodexPromptService {
 
     // Recreate Codex instance only if the per-session config payload (or
     // apiKey/baseUrl) actually changed — issue #133 protection.
-    await this.ensureCodexClient(codexConfigPayload);
+    await this.ensureCodexClient(
+      codexConfigPayload,
+      session.permission_config?.codex?.includePlugins === true
+    );
 
     codexDebug(
       `   Configured: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}, ${mcpServerCount} MCP server(s)`

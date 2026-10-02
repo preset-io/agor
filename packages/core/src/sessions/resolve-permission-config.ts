@@ -33,6 +33,7 @@ export interface SessionRuntimeOverrides {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: CodexNetworkAccess;
+  codexIncludePlugins?: boolean;
 }
 
 /**
@@ -46,6 +47,7 @@ export interface ParentPermissionLayer {
   codexSandboxMode?: CodexSandboxMode;
   codexApprovalPolicy?: CodexApprovalPolicy;
   codexNetworkAccess?: CodexNetworkAccess;
+  codexIncludePlugins?: boolean;
 }
 
 export interface ResolvePermissionConfigArgs {
@@ -63,17 +65,26 @@ export interface ResolvePermissionConfigArgs {
  * is the final fallback.
  *
  * For `codex` sessions, the sub-config (`sandboxMode` + `approvalPolicy` +
- * `networkAccess`) is ALWAYS emitted. Any field not provided by the
- * override / parent / user layers is filled from `mapToCodexPermissionConfig`
+ * `networkAccess`) is ALWAYS emitted. Missing permission fields in the
+ * override / parent / user layers are filled from `mapToCodexPermissionConfig`
  * keyed off the resolved permission mode. This prevents partial user
  * overrides (e.g. just `codexApprovalPolicy: 'untrusted'`) from being
  * silently dropped and then escalated to the relaxed system default by the
- * executor's last-line fallback.
+ * executor's last-line fallback. Native plugin inclusion is independent of
+ * permission mode and defaults to false.
  */
 export function resolvePermissionConfig(
   args: ResolvePermissionConfigArgs
 ): NonNullable<Session['permission_config']> {
   const { effectiveTool, overrides, userToolDefaults, parentLayer } = args;
+  for (const layer of [overrides, parentLayer, userToolDefaults]) {
+    if (
+      layer?.codexIncludePlugins !== undefined &&
+      typeof layer.codexIncludePlugins !== 'boolean'
+    ) {
+      throw new Error('codexIncludePlugins must be a boolean');
+    }
+  }
 
   const requestedMode: PermissionMode =
     overrides?.permissionMode ??
@@ -105,6 +116,11 @@ export function resolvePermissionConfig(
       sandboxMode: sandboxMode ?? defaults.sandboxMode,
       approvalPolicy: approvalPolicy ?? defaults.approvalPolicy,
       networkAccess: networkAccess ?? defaults.networkAccess,
+      includePlugins:
+        overrides?.codexIncludePlugins ??
+        parentLayer?.codexIncludePlugins ??
+        userToolDefaults?.codexIncludePlugins ??
+        false,
     };
   }
 

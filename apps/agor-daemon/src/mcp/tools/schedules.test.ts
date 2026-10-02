@@ -34,6 +34,33 @@ describe('schedule MCP input schemas', () => {
 
     const createSchema = configs.get('agor_schedules_create')!.inputSchema;
     const patchSchema = configs.get('agor_schedules_patch')!.inputSchema;
+    for (const codex_include_plugins of [false, true]) {
+      const parsed = patchSchema.safeParse({
+        scheduleId: 'schedule-1',
+        agentic_tool_config: { agentic_tool: 'codex', codex_include_plugins },
+      });
+      expect(parsed.success).toBe(true);
+      expect(parsed.data.agentic_tool_config.codex_include_plugins).toBe(codex_include_plugins);
+      expect(
+        patchSchema.safeParse({
+          scheduleId: 'schedule-1',
+          agentic_tool_config: {
+            agentic_tool: 'codex',
+            preset_id: 'preset-1',
+            codex_include_plugins,
+          },
+        }).success
+      ).toBe(false);
+    }
+    for (const codex_include_plugins of ['false', null, 0]) {
+      expect(
+        patchSchema.safeParse({
+          scheduleId: 'schedule-1',
+          agentic_tool_config: { agentic_tool: 'codex', codex_include_plugins },
+        }).success
+      ).toBe(false);
+    }
+
     for (const agenticTool of AGENTIC_TOOL_NAMES) {
       expect(
         createSchema.safeParse({

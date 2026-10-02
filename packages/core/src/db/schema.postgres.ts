@@ -1215,6 +1215,7 @@ export const users = pgTable(
             codexSandboxMode?: string;
             codexApprovalPolicy?: string;
             codexNetworkAccess?: boolean;
+            codexIncludePlugins?: boolean;
           };
           gemini?: {
             modelConfig?: {

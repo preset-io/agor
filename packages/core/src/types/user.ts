@@ -172,6 +172,8 @@ export interface DefaultAgenticToolConfig {
   codexApprovalPolicy?: CodexApprovalPolicy;
   /** Codex-specific: network access */
   codexNetworkAccess?: CodexNetworkAccess;
+  /** Include native Codex plugins. Default false; true respects native plugin settings. */
+  codexIncludePlugins?: boolean;
 }
 
 /**
