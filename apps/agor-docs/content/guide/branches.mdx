@@ -356,7 +356,10 @@ retried. After six minutes without a final report, reads display an unknown outc
 Archive Clean uses the same executor cycle and policy. Archive metadata may already
 be saved when a filesystem command fails; filesystem status changes only after
 verified success. Preserve and explicit workspace deletion retain conversation data
-and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
+and SDK homes. Workspace removal does not delete refs in a separate shared repository
+or on a remote. However, deleting a clone removes its entire checkout, including
+`.git`: clone-local refs, stashes, and unpushed history can be lost. Push any history
+you need to retain before deleting the checkout.
 Permanent deletion remains the separate full-resource workflow.
 
 Agor checks known task, upload and environment activity. Terminal closure is best-effort;
