@@ -252,7 +252,12 @@ describe('Gemini execution-home projection', () => {
       await close();
     `,
         ],
-        { cwd: process.cwd(), env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000 }
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, AGOR_EXECUTOR_SCRATCH_ROOT: undefined, ...env },
+          encoding: 'utf8',
+          timeout: 30000,
+        }
       );
       rmSync(executionHome, { recursive: true, force: true });
       rmSync(branchHome, { recursive: true, force: true });

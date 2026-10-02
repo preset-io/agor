@@ -1,5 +1,8 @@
 import { filterEnv } from '@agor/core/config';
 
+/** Job-local scratch directory a delegated launcher may provide for per-task temporary files. */
+export const EXECUTOR_SCRATCH_ROOT_ENV = 'AGOR_EXECUTOR_SCRATCH_ROOT';
+
 const PAYLOAD_IDENTITY_DENY = new Set([
   'HOME',
   'PATH',
@@ -14,6 +17,7 @@ const PAYLOAD_IDENTITY_DENY = new Set([
   'AGOR_OPENCODE_SCRATCH_ROOT',
   // Pinned by the launcher to the branch SDK home; must not redirect shared checkpoints.
   'AGOR_OPENCODE_CHECKPOINT_ROOT',
+  EXECUTOR_SCRATCH_ROOT_ENV,
 ]);
 
 function isDeniedPayloadEnvironmentName(key: string): boolean {
