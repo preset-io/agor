@@ -14,7 +14,13 @@ import {
   RefreshUnrecoverableError,
   refreshTokensSingleFlight,
 } from '../utils/singleFlightRefresh';
-import { getStoredRefreshToken } from '../utils/tokenRefresh';
+import {
+  captureAuthenticationEpoch,
+  captureTokenAuthority,
+  getStoredAccessToken,
+  getStoredRefreshToken,
+  SupersededAuthenticationError,
+} from '../utils/tokenRefresh';
 import { announceSessionStreamsCapability } from './sessionStreamsCapability';
 
 interface UseAgorClientResult {
@@ -85,6 +91,7 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
   // biome-ignore lint/correctness/useExhaustiveDependencies: token value changes update the credential ref only when URL+authorityGeneration still match; rebuilding would disconnect a healthy same-authority socket
   useEffect(() => {
     let mounted = true;
+    const isAuthorityCurrent = captureAuthenticationEpoch();
     let client: AgorClient | null = null;
     const connectionAccessTokenRef = { current: accessToken };
     let binding: BoundAgorClient | null = null;
@@ -167,6 +174,12 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
     // old post-connect Feathers reauthentication transition is gone.
     let handshakeAuthRecovery: Promise<void> | null = null;
     const recoverRejectedHandshake = (connectError: unknown): Promise<void> => {
+      if (
+        !mounted ||
+        !isAuthorityCurrent() ||
+        getStoredAccessToken() !== connectionAccessTokenRef.current
+      )
+        return Promise.reject(new SupersededAuthenticationError());
       if (!isDefiniteAuthFailure(connectError)) return Promise.reject(connectError);
       if (handshakeAuthRecovery) return handshakeAuthRecovery;
 
@@ -175,12 +188,22 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
         return Promise.reject(markAuthenticationUnrecoverable(connectError));
       }
 
+      const credentialsCurrent = captureTokenAuthority();
       handshakeAuthRecovery = createRestClient(url)
-        .then((restClient) => refreshTokensSingleFlight(restClient, refreshToken))
+        .then((restClient) => {
+          if (!mounted || !isAuthorityCurrent() || !credentialsCurrent()) {
+            throw new SupersededAuthenticationError();
+          }
+          return refreshTokensSingleFlight(restClient, refreshToken);
+        })
         .then(async (result) => {
+          if (!mounted || !isAuthorityCurrent() || getStoredAccessToken() !== result.accessToken)
+            return;
+          const reconnectAuthorityCurrent = captureTokenAuthority();
           try {
             await reconnectWithAuthenticatedHandshake(result.accessToken);
           } catch (error) {
+            if (!mounted || !isAuthorityCurrent() || !reconnectAuthorityCurrent()) return;
             if (isDefiniteAuthFailure(error)) {
               throw markAuthenticationUnrecoverable(error);
             }
@@ -313,7 +336,12 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           if (isDefiniteAuthFailure(err)) {
             setConnecting(true);
             recoverRejectedHandshake(err).catch((recoveryError) => {
-              if (!mounted) return;
+              if (
+                !mounted ||
+                !isAuthorityCurrent() ||
+                recoveryError instanceof SupersededAuthenticationError
+              )
+                return;
               if (recoveryError instanceof RefreshUnrecoverableError) {
                 setError('Authentication could not be restored. Please sign in again.');
               } else {
@@ -372,7 +400,11 @@ export function useAgorClient(options: UseAgorClientOptions): UseAgorClientResul
           });
         });
       } catch (connectError) {
-        if (mounted) {
+        if (
+          mounted &&
+          isAuthorityCurrent() &&
+          !(connectError instanceof SupersededAuthenticationError)
+        ) {
           setError(
             connectError instanceof RefreshUnrecoverableError
               ? 'Authentication could not be restored. Please sign in again.'

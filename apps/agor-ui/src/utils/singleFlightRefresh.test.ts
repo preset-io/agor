@@ -1,17 +1,6 @@
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the underlying refresh call so tests are hermetic — we want to
-// exercise the single-flight and event-dispatch behaviour of this module,
-// not the HTTP call inside `refreshAndStoreTokens`.
-vi.mock('./tokenRefresh', async () => {
-  const actual = await vi.importActual<typeof import('./tokenRefresh')>('./tokenRefresh');
-  return {
-    ...actual,
-    refreshAndStoreTokens: vi.fn(),
-  };
-});
-
 import {
   isRefreshUnrecoverable,
   markAuthenticationUnrecoverable,
@@ -21,9 +10,9 @@ import {
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
   TOKENS_REFRESHED_EVENT,
 } from './singleFlightRefresh';
-import { refreshAndStoreTokens } from './tokenRefresh';
+import { REFRESH_TOKEN_KEY } from './tokenRefresh';
 
-const mockRefresh = refreshAndStoreTokens as unknown as ReturnType<typeof vi.fn>;
+const mockRefresh = vi.fn();
 
 function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
   return {
@@ -34,10 +23,12 @@ function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
 }
 
 function makeClient(): AuthenticatedAgorClient {
-  return { authenticate: vi.fn() } as unknown as AuthenticatedAgorClient;
+  return { service: () => ({ create: mockRefresh }) } as unknown as AuthenticatedAgorClient;
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem(REFRESH_TOKEN_KEY, 'rt');
   mockRefresh.mockReset();
   // The unrecoverable latch is a module-level singleton — reset between
   // tests so order-dependent state doesn't leak.
@@ -82,6 +73,7 @@ describe('refreshTokensSingleFlight', () => {
     const first = await refreshTokensSingleFlight(client, 'rt');
     expect(first.accessToken).toBe('first');
 
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'rt');
     const second = await refreshTokensSingleFlight(client, 'rt');
     expect(second.accessToken).toBe('second');
     expect(mockRefresh).toHaveBeenCalledTimes(2);

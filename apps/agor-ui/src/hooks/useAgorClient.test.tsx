@@ -5,6 +5,7 @@ import {
   resetRefreshFailureState,
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
 } from '../utils/singleFlightRefresh';
+import { clearTokens, invalidateTokenAuthority, storeTokens } from '../utils/tokenRefresh';
 import { useAgorClient } from './useAgorClient';
 
 // Keep every real export; only stub the client factory so the hook wires a
@@ -51,15 +52,15 @@ function makeSeamClient() {
   };
   const nextConnectErrors: Error[] = [];
 
-  const permissive = (target: Record<string, unknown>) =>
-    new Proxy(target, {
+  const permissive = <T extends Record<string, unknown>>(target: T): T & Record<string, unknown> =>
+    new Proxy<Record<string, unknown>>(target, {
       get(current, prop: string) {
         if (prop in current) return current[prop];
         const fn = vi.fn();
         current[prop] = fn;
         return fn;
       },
-    });
+    }) as T & Record<string, unknown>;
 
   const io = permissive({
     connected: false,
@@ -310,16 +311,21 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
   });
 
   it('refreshes over REST and retries when an authenticated handshake is rejected', async () => {
-    const { client, create, rejectNextConnect } = makeSeamClient();
+    const { client, create, rejectNextConnect, fireIo, io } = makeSeamClient();
     const restClient = { service: vi.fn() };
     vi.mocked(createClient).mockReturnValue(client as never);
     vi.mocked(createRestClient).mockResolvedValue(restClient as never);
-    refreshTokensMock.mockResolvedValue({
-      accessToken: 'fresh-after-rejection',
-      refreshToken: 'next-refresh',
-      user: { user_id: 'u1' },
+    refreshTokensMock.mockImplementation(async () => {
+      const result = {
+        accessToken: 'fresh-after-rejection',
+        refreshToken: 'next-refresh',
+        user: { user_id: 'u1' },
+      };
+      storeTokens(result.accessToken, result.refreshToken);
+      return result;
     });
     localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    localStorage.setItem('agor-access-token', 'stale');
     rejectNextConnect(
       Object.assign(new Error('Invalid or expired authentication token'), {
         data: { code: 401, className: 'not-authenticated' },
@@ -340,6 +346,16 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     const tokenSource = vi.mocked(createClient).mock.calls[0][2]?.socketAuthentication?.accessToken;
     expect((tokenSource as () => string | null | undefined)()).toBe('fresh-after-rejection');
     expect(client.authenticate).not.toHaveBeenCalled();
+    // Routine credential rotation keeps the same connection owner, so a
+    // subsequent rejected handshake can still refresh and reconnect it.
+    await act(async () => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', Object.assign(new Error('expired again'), { code: 401 }));
+    });
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(refreshTokensMock).toHaveBeenCalledTimes(2);
+    expect(createClient).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when a refreshed credential is still rejected by the handshake', async () => {
@@ -347,12 +363,17 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
     const restClient = { service: vi.fn() };
     vi.mocked(createClient).mockReturnValue(client as never);
     vi.mocked(createRestClient).mockResolvedValue(restClient as never);
-    refreshTokensMock.mockResolvedValue({
-      accessToken: 'still-rejected',
-      refreshToken: 'next-refresh',
-      user: { user_id: 'u1' },
+    refreshTokensMock.mockImplementation(async () => {
+      const result = {
+        accessToken: 'still-rejected',
+        refreshToken: 'next-refresh',
+        user: { user_id: 'u1' },
+      };
+      storeTokens(result.accessToken, result.refreshToken);
+      return result;
     });
     localStorage.setItem('agor-refresh-token', 'stored-refresh');
+    localStorage.setItem('agor-access-token', 'stale');
     const rejected = () =>
       Object.assign(new Error('Invalid or expired authentication token'), {
         data: { code: 401, className: 'not-authenticated' },
@@ -378,6 +399,104 @@ describe('useAgorClient authenticated handshake lifecycle', () => {
       expect(refreshTokensMock).toHaveBeenCalledTimes(1);
       expect(unrecoverable).toHaveBeenCalledTimes(1);
       expect(result.current.connected).toBe(false);
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    }
+  });
+  it('ignores old socket auth errors immediately after logout, before effect cleanup', async () => {
+    const { client, fireIo, create } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    storeTokens('old-access', 'old-refresh');
+    renderHook(() => useAgorClient({ accessToken: 'old-access', authorityGeneration: 1 }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const unrecoverable = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    try {
+      await act(async () => {
+        clearTokens();
+        fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+      });
+      expect(createRestClient).not.toHaveBeenCalled();
+      expect(refreshTokensMock).not.toHaveBeenCalled();
+      expect(unrecoverable).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    }
+  });
+  it('does not start old recovery when REST creation finishes after a same-byte replacement', async () => {
+    const { client, fireIo, create } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    storeTokens('old-access', 'old-refresh');
+    let finish!: (value: Awaited<ReturnType<typeof createRestClient>>) => void;
+    vi.mocked(createRestClient).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    renderHook(() => useAgorClient({ accessToken: 'old-access', authorityGeneration: 1 }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+    });
+    await act(async () => {
+      invalidateTokenAuthority();
+      storeTokens('old-access', 'old-refresh');
+      finish({ service: vi.fn() } as never);
+    });
+    expect(refreshTokensMock).not.toHaveBeenCalled();
+  });
+  it('does not expire replacement credentials on a held recovered-handshake failure', async () => {
+    const { client, io, fireIo, create } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    vi.mocked(createRestClient).mockResolvedValue({ service: vi.fn() } as never);
+    storeTokens('old-access', 'old-refresh');
+    refreshTokensMock.mockImplementation(async () => {
+      storeTokens('rotated-access', 'rotated-refresh');
+      return {
+        accessToken: 'rotated-access',
+        refreshToken: 'rotated-refresh',
+        user: { user_id: 'alice' },
+      };
+    });
+    renderHook(() => useAgorClient({ accessToken: 'old-access', authorityGeneration: 1 }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    vi.mocked(io.connect).mockImplementation(() => {});
+    await act(async () => {
+      fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+    });
+    await waitFor(() => expect(io.connect).toHaveBeenCalledTimes(2));
+    const unrecoverable = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    try {
+      await act(async () => {
+        invalidateTokenAuthority();
+        storeTokens('rotated-access', 'replacement-refresh');
+        fireIo('connect_error', Object.assign(new Error('late auth failure'), { code: 401 }));
+      });
+      expect(unrecoverable).not.toHaveBeenCalled();
+      expect(localStorage.getItem('agor-refresh-token')).toBe('replacement-refresh');
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    }
+  });
+  it('does not let an old socket refresh or expire another tab credentials', async () => {
+    const { client, create, fireIo } = makeSeamClient();
+    vi.mocked(createClient).mockReturnValue(client as never);
+    storeTokens('tenant-a-access', 'tenant-a-refresh');
+    renderHook(() => useAgorClient({ accessToken: 'tenant-a-access', authorityGeneration: 1 }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    const unrecoverable = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
+    try {
+      await act(async () => {
+        localStorage.setItem('agor-access-token', 'tenant-b-access');
+        localStorage.setItem('agor-refresh-token', 'tenant-b-refresh');
+        fireIo('connect_error', Object.assign(new Error('old A socket rejected'), { code: 401 }));
+      });
+      expect(createRestClient).not.toHaveBeenCalled();
+      expect(refreshTokensMock).not.toHaveBeenCalled();
+      expect(unrecoverable).not.toHaveBeenCalled();
+      expect(localStorage.getItem('agor-access-token')).toBe('tenant-b-access');
     } finally {
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, unrecoverable);
     }

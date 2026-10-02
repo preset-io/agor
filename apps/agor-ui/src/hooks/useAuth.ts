@@ -26,10 +26,13 @@ import {
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import {
+  captureTokenAuthority,
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
+  invalidateTokenAuthority,
   type RefreshResult,
+  SupersededAuthenticationError,
   storeTokens,
 } from '../utils/tokenRefresh';
 import type { AuthorityOperation } from './useAuthorityOperationGuard';
@@ -133,6 +136,7 @@ export function useAuth(): UseAuthReturn {
   // global loading bit. Other auth establishments explicitly supersede it.
   const localLoginAttemptRef = useRef<object | null>(null);
   const authenticationGenerationRef = useRef(0);
+  const reauthenticationAttemptRef = useRef<object | null>(null);
   const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
   const activeAuthorityRef = useRef<{ userId: UserID; role: User['role'] } | null>(null);
 
@@ -142,6 +146,7 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const invalidateAuthentication = useCallback(() => {
+    invalidateTokenAuthority();
     activeAuthorityRef.current = null;
     advanceAuthenticationGeneration();
   }, [advanceAuthenticationGeneration]);
@@ -192,6 +197,14 @@ export function useAuth(): UseAuthReturn {
   // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
+    const attempt = {};
+    reauthenticationAttemptRef.current = attempt;
+    const generation = authenticationGenerationRef.current;
+    let credentialsCurrent = captureTokenAuthority();
+    const isCurrent = () =>
+      reauthenticationAttemptRef.current === attempt &&
+      authenticationGenerationRef.current === generation &&
+      credentialsCurrent();
     localLoginAttemptRef.current = null;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
@@ -207,6 +220,7 @@ export function useAuth(): UseAuthReturn {
     async function authenticateWithStoredTokens(
       client: Awaited<ReturnType<typeof createRestClient>>
     ) {
+      if (!isCurrent()) return true;
       if (!storedAccessToken && !storedRefreshToken) return false;
 
       // Try to authenticate with stored access token first
@@ -217,6 +231,7 @@ export function useAuth(): UseAuthReturn {
             accessToken: storedAccessToken,
           });
 
+          if (!isCurrent()) return true;
           noteAuthenticatedUser(result.user);
           setState({
             user: result.user,
@@ -228,6 +243,7 @@ export function useAuth(): UseAuthReturn {
 
           return true;
         } catch (accessTokenError) {
+          if (!isCurrent()) return true;
           // Access token expired or invalid, try refresh token
           if (!isDefiniteAuthFailure(accessTokenError)) throw accessTokenError;
         }
@@ -238,6 +254,7 @@ export function useAuth(): UseAuthReturn {
         try {
           const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
 
+          if (!isCurrent()) return true;
           noteAuthenticatedUser(refreshResult.user);
           setState({
             user: refreshResult.user,
@@ -249,6 +266,7 @@ export function useAuth(): UseAuthReturn {
 
           return true;
         } catch (refreshError) {
+          if (!isCurrent() || refreshError instanceof SupersededAuthenticationError) return true;
           // Refresh token also expired or invalid
           if (
             !isDefiniteAuthFailure(refreshError) &&
@@ -264,6 +282,7 @@ export function useAuth(): UseAuthReturn {
 
     try {
       const client = await createRestClient(getDaemonUrl());
+      if (!isCurrent()) return;
 
       if (activeLaunchCode) {
         attemptedLaunch = true;
@@ -272,7 +291,15 @@ export function useAuth(): UseAuthReturn {
         removeLaunchCodeFromCurrentUrl();
 
         try {
-          const result = await exchangeLaunchCode(client, activeLaunchCode);
+          const result = await exchangeLaunchCode(client, activeLaunchCode, isCurrent);
+          if (
+            reauthenticationAttemptRef.current !== attempt ||
+            authenticationGenerationRef.current !== generation ||
+            getStoredAccessToken() !== result.accessToken ||
+            (result.refreshToken && getStoredRefreshToken() !== result.refreshToken)
+          )
+            return;
+          credentialsCurrent = captureTokenAuthority();
           resetRefreshFailureState();
           noteAuthenticatedUser(result.user);
 
@@ -287,10 +314,12 @@ export function useAuth(): UseAuthReturn {
 
           return;
         } catch (launchError) {
+          if (!isCurrent() || launchError instanceof SupersededAuthenticationError) return;
           const isConnectionError = isTransientConnectionError(launchError);
           if (isConnectionError && retryCount < MAX_RETRIES) {
             const delay = Math.min(2000 * 1.5 ** retryCount, 10000);
             await new Promise((resolve) => setTimeout(resolve, delay));
+            if (!isCurrent()) return;
             return reAuthenticate(retryCount + 1, activeLaunchCode);
           }
 
@@ -319,6 +348,7 @@ export function useAuth(): UseAuthReturn {
 
       if (await authenticateWithStoredTokens(client)) return;
 
+      if (!isCurrent()) return;
       // Both tokens invalid or expired — expected when refresh token hits its TTL.
       clearTokens();
       noteUnauthenticated();
@@ -332,12 +362,14 @@ export function useAuth(): UseAuthReturn {
           : null,
       });
     } catch (error) {
+      if (!isCurrent() || error instanceof SupersededAuthenticationError) return;
       // Connection or authentication error - retry if daemon just restarted
       const isConnectionError = isTransientConnectionError(error);
 
       if (isConnectionError && retryCount < MAX_RETRIES) {
         const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
         await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!isCurrent()) return;
         return reAuthenticate(
           retryCount + 1,
           attemptedLaunch ? activeLaunchCode || undefined : undefined
@@ -354,6 +386,7 @@ export function useAuth(): UseAuthReturn {
       ) {
         console.error('Authentication failure, clearing tokens:', error);
         clearTokens();
+        credentialsCurrent = captureTokenAuthority();
       }
 
       if (attemptedLaunch && hasStoredTokens) {
@@ -368,6 +401,7 @@ export function useAuth(): UseAuthReturn {
         }
       }
 
+      if (!isCurrent()) return;
       noteUnauthenticated();
       setState({
         user: null,
@@ -396,7 +430,10 @@ export function useAuth(): UseAuthReturn {
   // state visible. Also retries auth if we woke up in the unauthenticated-
   // with-tokens state (e.g. daemon was down when we last tried).
   useEffect(() => {
+    const effectGeneration = authenticationGeneration;
     const handleVisibilityChange = async () => {
+      if (effectGeneration !== authenticationGenerationRef.current || localLoginAttemptRef.current)
+        return;
       if (document.visibilityState !== 'visible') return;
 
       // Case 1: we think we're unauthenticated but have tokens — retry auth.
@@ -419,12 +456,21 @@ export function useAuth(): UseAuthReturn {
       const refreshToken = getStoredRefreshToken();
       if (!refreshToken) return;
 
+      const generation = authenticationGenerationRef.current;
+      const credentialsCurrent = captureTokenAuthority();
       try {
         const client = await createRestClient(getDaemonUrl());
+        if (generation !== authenticationGenerationRef.current || !credentialsCurrent()) return;
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below —
         // no need to setState here.
       } catch (error) {
+        if (
+          generation !== authenticationGenerationRef.current ||
+          error instanceof SupersededAuthenticationError ||
+          !credentialsCurrent()
+        )
+          return;
         // Unrecoverable failures are handled by the unrecoverable-event
         // listener (clearTokens + unauthenticated). Bail out so we don't
         // kick off a reAuthenticate that will immediately fail again.
@@ -440,7 +486,7 @@ export function useAuth(): UseAuthReturn {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state.authenticated, reAuthenticate]);
+  }, [state.authenticated, authenticationGeneration, reAuthenticate]);
 
   // Poll for daemon availability when we have tokens but aren't authenticated.
   // This handles the case where the daemon restarts and we need to reconnect
@@ -453,12 +499,15 @@ export function useAuth(): UseAuthReturn {
     const hasTokens = getStoredAccessToken() || getStoredRefreshToken();
     if (!hasTokens) return;
 
+    const effectGeneration = authenticationGeneration;
     const pollInterval = setInterval(() => {
+      if (effectGeneration !== authenticationGenerationRef.current || localLoginAttemptRef.current)
+        return;
       reAuthenticate();
     }, 3000); // Poll every 3 seconds
 
     return () => clearInterval(pollInterval);
-  }, [state.authenticated, state.loading, reAuthenticate]);
+  }, [state.authenticated, state.loading, authenticationGeneration, reAuthenticate]);
 
   // Auto-refresh the access token before it expires.
   //
@@ -468,7 +517,9 @@ export function useAuth(): UseAuthReturn {
   // schedules the next tick. This removes the historic drift bug where the
   // refresh interval was hardcoded independently of the server's TTL.
   useEffect(() => {
-    if (!state.authenticated || !state.accessToken) return;
+    if (!state.authenticated || !state.accessToken || state.loading || localLoginAttemptRef.current)
+      return;
+    const effectGeneration = authenticationGeneration;
 
     const REFRESH_BUFFER_MS = 60_000; // refresh this many ms before exp
     const MIN_DELAY_MS = 1_000; // never schedule tighter than this
@@ -479,14 +530,25 @@ export function useAuth(): UseAuthReturn {
       untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
 
     const timer = setTimeout(async () => {
+      if (effectGeneration !== authenticationGenerationRef.current || localLoginAttemptRef.current)
+        return;
       const refreshToken = getStoredRefreshToken();
       if (!refreshToken) return;
 
+      const generation = authenticationGenerationRef.current;
+      const credentialsCurrent = captureTokenAuthority();
       try {
         const client = await createRestClient(getDaemonUrl());
+        if (generation !== authenticationGenerationRef.current || !credentialsCurrent()) return;
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
+        if (
+          generation !== authenticationGenerationRef.current ||
+          error instanceof SupersededAuthenticationError ||
+          !credentialsCurrent()
+        )
+          return;
         // Unrecoverable: the unrecoverable-event listener already cleared
         // tokens and flipped to unauthenticated. Avoid double-handling.
         if (error instanceof RefreshUnrecoverableError) return;
@@ -513,7 +575,13 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
+  }, [
+    state.authenticated,
+    state.accessToken,
+    state.loading,
+    authenticationGeneration,
+    noteUnauthenticated,
+  ]);
 
   // When the single-flight refresh helper completes from a non-React path
   // (e.g. the socket-client 401-retry hook, or a concurrent refresh in

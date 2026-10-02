@@ -2,7 +2,7 @@
  * Token refresh helpers shared across auth paths in the UI.
  *
  * {@link refreshTokensSingleFlight} is a single-flight wrapper around
- *    `refreshAndStoreTokens`. Multiple code paths can trigger a refresh
+ *    `refreshAccessToken`. Multiple code paths can trigger a refresh
  *    concurrently (the proactive timer in useAuth, visibility recovery, and
  *    rejected-handshake recovery in useAgorClient). Without
  *    deduping, a burst of 401s — say, five parallel service calls on a stale
@@ -30,7 +30,14 @@
 
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { isDefiniteAuthFailure } from './authErrors';
-import { type RefreshResult, refreshAndStoreTokens } from './tokenRefresh';
+import {
+  captureTokenAuthority,
+  getStoredRefreshToken,
+  type RefreshResult,
+  refreshAccessToken,
+  SupersededAuthenticationError,
+  storeTokens,
+} from './tokenRefresh';
 
 /** Custom DOM event fired after tokens have been successfully refreshed. */
 export const TOKENS_REFRESHED_EVENT = 'agor:tokens-refreshed';
@@ -52,7 +59,11 @@ export function dispatchTokensRefreshed(result: RefreshResult): void {
  */
 export const TOKENS_REFRESH_UNRECOVERABLE_EVENT = 'agor:tokens-refresh-unrecoverable';
 
-let inflight: Promise<RefreshResult> | null = null;
+let inflight: {
+  promise: Promise<RefreshResult>;
+  refreshToken: string;
+  isCurrent: () => boolean;
+} | null = null;
 
 /**
  * Latched once the refresh endpoint returns a definite auth failure. While
@@ -120,6 +131,9 @@ export function refreshTokensSingleFlight(
   client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
+  if (getStoredRefreshToken() !== refreshToken) {
+    return Promise.reject(new SupersededAuthenticationError());
+  }
   // Fast-fail if we already know the refresh token is dead. Without this,
   // every recovery caller would trigger a brand-new POST
   // to /authentication/refresh that also 401s, producing a tight loop as
@@ -129,10 +143,14 @@ export function refreshTokensSingleFlight(
     return Promise.reject(new RefreshUnrecoverableError());
   }
 
-  if (inflight) return inflight;
+  if (inflight?.refreshToken === refreshToken && inflight.isCurrent()) return inflight.promise;
 
-  inflight = refreshAndStoreTokens(client, refreshToken)
+  const isCurrent = captureTokenAuthority();
+  const promise = refreshAccessToken(client, refreshToken)
     .then((result) => {
+      if (!isCurrent()) throw new SupersededAuthenticationError();
+      // Commit storage and notify clients in the same authority-checked turn.
+      storeTokens(result.accessToken, result.refreshToken);
       // Successful refresh clears any prior unrecoverable state — e.g. if
       // the user logged out and back in, or a transient failure was
       // misclassified, resume normal operation.
@@ -153,14 +171,18 @@ export function refreshTokensSingleFlight(
       // unrecoverable-event listener that just cleared tokens. Wrapping with
       // `cause` preserves diagnostics. Subsequent callers fast-fail with the
       // same type via the `unrecoverable` guard above.
+      // A retiring refresh cannot expire a replacement account, latch its
+      // refresh token as dead, or broadcast logout to its clients.
+      if (!isCurrent()) throw new SupersededAuthenticationError();
       if (isDefiniteAuthFailure(err)) {
         throw markAuthenticationUnrecoverable(err);
       }
       throw err;
     })
     .finally(() => {
-      inflight = null;
+      if (inflight?.promise === promise) inflight = null;
     });
 
-  return inflight;
+  inflight = { promise, refreshToken, isCurrent };
+  return promise;
 }
