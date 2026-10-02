@@ -111,7 +111,7 @@ export function publishCommittedServiceEvent(context: HookContext): HookContext 
   const event = context.event;
   if (!event) return context;
   context.event = null;
-  const data = context.dispatch ?? context.result;
+  const data = context.dispatch !== undefined ? context.dispatch : context.result;
   for (const row of Array.isArray(data) ? data : [data]) {
     emitServiceEvent(context.app, {
       path: context.path,

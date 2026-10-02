@@ -141,6 +141,40 @@ describe('publishCommittedServiceEvent', () => {
     }
   });
 
+  it('preserves explicit null dispatch without publishing the private result', async () => {
+    const app = feathers();
+    const row = { branch_id: 'a', private: true };
+    app.use('branches', {
+      async create() {
+        return row;
+      },
+    });
+    app.service('branches').hooks({
+      after: {
+        create: [
+          (context: HookContext) => {
+            context.dispatch = null;
+            return context;
+          },
+          publishCommittedServiceEvent,
+        ],
+      },
+    });
+    const received = vi.fn();
+    app.service('branches').on('created', received);
+    await runWithTenantDatabaseScope({ run() {} } as never, 'tenant-a', async () => {
+      expect(await app.service('branches').create({})).toBe(row);
+      expect(received).not.toHaveBeenCalled();
+    });
+    expect(received).toHaveBeenCalledOnce();
+    const [payload, hook] = received.mock.calls[0];
+    expect(payload).toBeNull();
+    expect(hook).toMatchObject({
+      result: null,
+      params: { tenant: { tenant_id: 'tenant-a' } },
+    });
+  });
+
   it('does not re-enable a suppressed event', () => {
     const context = { event: null, result: { branch_id: 'a' } } as HookContext;
     expect(publishCommittedServiceEvent(context)).toBe(context);
