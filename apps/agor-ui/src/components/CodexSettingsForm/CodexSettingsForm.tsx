@@ -11,11 +11,12 @@
  */
 
 import type { DefaultAgenticToolConfig } from '@agor-live/client';
-import { Form, Select, Switch } from 'antd';
+import { Form, Select } from 'antd';
 import type React from 'react';
 import { getEffectiveCodexFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES } from '../PermissionModeSelector';
+import { CodexPluginsField } from './CodexPluginsField';
 
 export interface CodexSettingsFormProps {
   showHelpText?: boolean;
@@ -89,18 +90,7 @@ export const CodexSettingsForm: React.FC<CodexSettingsFormProps> = ({
       >
         <CodexNetworkAccessToggle showWarning={showHelpText} />
       </Form.Item>
-      <Form.Item
-        name="codexIncludePlugins"
-        label="Include native Codex plugins"
-        valuePropName="checked"
-        help={
-          showHelpText
-            ? 'Off by default. When on, native Codex settings decide which plugins load. Direct MCP connections and standalone skills are unaffected. Existing caches are retained.'
-            : undefined
-        }
-      >
-        <Switch />
-      </Form.Item>
+      <CodexPluginsField showHelpText={showHelpText} />
     </>
   );
 };

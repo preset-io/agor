@@ -18,8 +18,9 @@ import { AGENTIC_TOOL_CAPABILITIES, getAgenticToolModelSelectionError } from '@a
 import { getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
 import type { AgenticToolName, AgorClient } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
-import { Form, Select, Switch } from 'antd';
+import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
+import { CodexPluginsField } from '../CodexSettingsForm/CodexPluginsField';
 import { EffortSelector } from '../EffortSelector';
 import { ModelSelector } from '../ModelSelector';
 import {
@@ -187,20 +188,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           <CodexNetworkAccessToggle showWarning={showHelpText} />
         </Form.Item>
       )}
-      {showCodexFields && (
-        <Form.Item
-          name="codexIncludePlugins"
-          label="Include native Codex plugins"
-          valuePropName="checked"
-          help={
-            showHelpText
-              ? 'Off by default. When on, native Codex settings decide which plugins load. Direct MCP connections and standalone skills are unaffected. Existing caches are retained.'
-              : undefined
-          }
-        >
-          <Switch />
-        </Form.Item>
-      )}
+      {showCodexFields && <CodexPluginsField showHelpText={showHelpText} />}
     </>
   );
 };
