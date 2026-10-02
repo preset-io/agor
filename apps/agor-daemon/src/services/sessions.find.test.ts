@@ -22,7 +22,7 @@ import {
 import { type Application, feathers } from '@agor/core/feathers';
 import { sessionQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SESSION_LIST_ROW_SHAPE, SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
@@ -486,6 +486,11 @@ describe('SessionsService.find — lean list projection', () => {
     return new Map(data.map((s) => [s.session_id, s.custom_context]));
   }
 
+  function readShapes(result: Awaited<ReturnType<SessionsService['find']>>) {
+    const data = Array.isArray(result) ? result : result.data;
+    return data.map((s) => (s as { read_shape?: unknown }).read_shape);
+  }
+
   dbTest(
     'omits single-session context through transport validation without widening visibility',
     async ({ db }) => {
@@ -521,6 +526,10 @@ describe('SessionsService.find — lean list projection', () => {
         expect(contextsById(full).get(visible)).toEqual(heavyContext);
         expect(contextsById(lean).get(visible)).toEqual(leanContext);
         expect(contextsById(lean).get(plain)).toEqual(contextsById(full).get(plain));
+        // Every lean row is marked, including one that had nothing to omit;
+        // full rows never are.
+        expect(readShapes(lean)).toEqual([SESSION_LIST_ROW_SHAPE, SESSION_LIST_ROW_SHAPE]);
+        expect(readShapes(full)).toEqual([undefined, undefined]);
       }
     }
   );
@@ -536,9 +545,57 @@ describe('SessionsService.find — lean list projection', () => {
       query: { board_id: board, session_id: { $in: [session] }, lean: true, $limit: 10 },
     });
     expect(contextsById(lean).get(session)).toEqual(leanContext);
-    expect(
-      contextsById(await service.find({ query: { lean: false, $limit: 10 } })).get(session)
-    ).toEqual(heavyContext);
-    expect((await service.get(session)).custom_context).toEqual(heavyContext);
+    expect(readShapes(lean)).toEqual([SESSION_LIST_ROW_SHAPE]);
+    const notLean = await service.find({ query: { lean: false, $limit: 10 } });
+    expect(contextsById(notLean).get(session)).toEqual(heavyContext);
+    expect(readShapes(notLean)).toEqual([undefined]);
+    const full = await service.get(session);
+    expect(full.custom_context).toEqual(heavyContext);
+    expect(full).not.toHaveProperty('read_shape');
+  });
+});
+
+describe('SessionsService writes — read_shape is never writable', () => {
+  dbTest('rejects the marker on create, patch, and update and never echoes it', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch, {
+      custom_context: { scheduled_run: { schedule_id: 'sched-1' } },
+    });
+    const app = feathers<{ sessions: SessionsService }>();
+    app.use('sessions', createService(db));
+    const patched: unknown[] = [];
+    app.service('sessions').on('patched', (row: unknown) => patched.push(row));
+    const marker = { read_shape: SESSION_LIST_ROW_SHAPE } as unknown as Partial<Session>;
+
+    await expect(
+      app.service('sessions').create({ branch_id: branch, ...marker } as never)
+    ).rejects.toMatchObject({ code: 400, message: expect.stringMatching(/read_shape/) });
+    await expect(
+      app.service('sessions').patch(sessionId, { title: 'x', ...marker })
+    ).rejects.toMatchObject({ code: 400 });
+    await expect(
+      app.service('sessions').update(sessionId, { title: 'x', ...marker } as never)
+    ).rejects.toMatchObject({ code: 400 });
+    expect(patched).toEqual([]);
+
+    const result = await app.service('sessions').patch(sessionId, { title: 'renamed' });
+    for (const row of [result, ...patched]) {
+      expect(row).not.toHaveProperty('read_shape');
+      expect((row as Session).custom_context).toHaveProperty('scheduled_run');
+    }
+    expect(patched).toHaveLength(1);
+  });
+
+  dbTest('the repository drops a marker that reaches it internally', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch);
+
+    const merged = await new SessionRepository(db).update(sessionId, {
+      title: 'internal',
+      read_shape: SESSION_LIST_ROW_SHAPE,
+    } as unknown as Partial<Session>);
+
+    expect(merged.title).toBe('internal');
+    expect(merged).not.toHaveProperty('read_shape');
   });
 });

@@ -7,7 +7,7 @@ import type {
   SpawnConfig,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   Badge,
@@ -78,6 +78,8 @@ interface BoardTeammatePanelProps {
   unreadCommentsCount?: number;
   hasUserMentions?: boolean;
   onCollapse?: () => void;
+  /** Opens teammate creation targeted at this board (it becomes the primary). */
+  onCreateTeammate?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
   client: AgorClient | null;
@@ -108,6 +110,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   unreadCommentsCount = 0,
   hasUserMentions = false,
   onCollapse,
+  onCreateTeammate,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
   client,
@@ -127,6 +130,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
+  // A primary whose branch or repo is not loaded yet must not be offered for replacement.
+  const canCreateTeammate =
+    canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -417,10 +423,18 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
-        />
-        {canEditBoard && (
+        >
+          {canCreateTeammate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate}>
+              Create AI teammate
+            </Button>
+          )}
+        </Empty>
+        {canEditBoard && (!canCreateTeammate || teammateOptions.length > 0) && (
           <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-            <Typography.Text strong>Assign an existing teammate</Typography.Text>
+            <Typography.Text strong>
+              {canCreateTeammate ? 'Or assign an existing teammate' : 'Assign an existing teammate'}
+            </Typography.Text>
             <Select
               showSearch
               aria-label="Select a teammate"
@@ -438,7 +452,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </Typography.Text>
             )}
             <Button
-              type="primary"
+              type={canCreateTeammate ? 'default' : 'primary'}
               onClick={handleAssignTeammate}
               loading={assigningTeammate}
               disabled={!selectedTeammateId || !board || !client}

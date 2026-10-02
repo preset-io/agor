@@ -1336,12 +1336,13 @@ describe('managed executor git/fs commands', () => {
       expect(process.env.GIT_CONFIG_PARAMETERS).toContain(
         "'safe.directory=/safe/repos/smoke/agor-assistant-pr1258'"
       );
-      expect(patchedRepos).toContainEqual(
+      // One patch: separate metadata and ready patches can reach clients out of order (#2941).
+      expect(patchedRepos).toEqual([
         expect.objectContaining({
           local_path: '/safe/repos/smoke/agor-assistant-pr1258',
-        })
-      );
-      expect(patchedRepos.at(-1)).toMatchObject({ clone_status: 'ready' });
+          clone_status: 'ready',
+        }),
+      ]);
     } finally {
       if (previousGitConfigParameters === undefined) {
         delete process.env.GIT_CONFIG_PARAMETERS;

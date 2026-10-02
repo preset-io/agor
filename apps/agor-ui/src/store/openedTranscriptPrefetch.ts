@@ -9,10 +9,17 @@
  * which begins subscribing and hydrating immediately, and holds the global
  * full-set hydration until that first page lands or `timeoutMs` passes.
  *
- * The prefetch keeps its reference for `adoptionGraceMs` after the page lands
+ * The prefetch keeps its reference for `adoptionGraceMs` after the priority
+ * barrier settles — the page landed, its load failed, or `timeoutMs` passed —
  * so the panel, which mounts once the first-paint gate opens, adopts the warm
- * handle instead of bootstrapping a second one. `release()` drops it early
- * (logout, authority change, unmount); it is idempotent.
+ * handle instead of bootstrapping a second one. Because the grace starts from
+ * that settlement, a load that never settles still releases the handle (its
+ * listeners, stream subscription and transcript state) after
+ * `timeoutMs + adoptionGraceMs`. `release()` drops it early (logout,
+ * authority change, unmount); it is idempotent.
+ *
+ * Transitional: this is a localized `/s/` deferral of the global hydration
+ * gate, expected to go away with that gate.
  */
 
 import {
@@ -31,7 +38,11 @@ export const OPENED_TRANSCRIPT_PRIORITY_TIMEOUT_MS = 10_000;
 export const OPENED_TRANSCRIPT_ADOPTION_GRACE_MS = 30_000;
 
 export interface OpenedTranscriptPrefetch {
-  /** Settles when the first transcript page lands, fails, or times out. Never rejects. */
+  /**
+   * Priority barrier released: the global hydration may start. Settles when
+   * the first transcript page lands, when its load fails, or at the timeout —
+   * so it does NOT mean the transcript loaded. Never rejects.
+   */
   ready: Promise<void>;
   release: () => void;
 }
@@ -65,12 +76,13 @@ export function prefetchOpenedTranscript(
   };
 
   const loaded = handle.ready().catch(() => undefined);
-  void loaded.then(() => {
-    if (!released) graceTimer = setTimeout(release, adoptionGraceMs);
-  });
   const timedOut = new Promise<void>((resolve) => {
     timeoutTimer = setTimeout(resolve, timeoutMs);
   });
-  const ready = Promise.race([loaded, timedOut]).then(() => clearTimeout(timeoutTimer));
+  // Bounded release from the race's settlement, timeout included.
+  const ready = Promise.race([loaded, timedOut]).then(() => {
+    clearTimeout(timeoutTimer);
+    if (!released) graceTimer = setTimeout(release, adoptionGraceMs);
+  });
   return { ready, release };
 }

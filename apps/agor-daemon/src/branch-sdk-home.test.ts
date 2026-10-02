@@ -10,6 +10,7 @@ import {
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
   sessionUsesBranchSdkHome,
+  usesExecutionHomeOnly,
 } from './branch-sdk-home.js';
 
 // getBranchHomePath derives from AGOR_DATA_HOME → make the root deterministic.
@@ -39,6 +40,37 @@ describe('sessionUsesBranchSdkHome', () => {
     expect(() =>
       sessionUsesBranchSdkHome({ sessionScope: 'branch', branchSdkHomeIntent: null })
     ).toThrow(/refusing fallback/);
+  });
+});
+
+describe('usesExecutionHomeOnly', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch {task_id}',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+      sandbox: { sdk_home_mode: 'per_branch' as const },
+    },
+  };
+
+  it('keeps hosted OpenCode out of branch SDK homes, even on an adopted branch', () => {
+    expect(usesExecutionHomeOnly('opencode', hosted)).toBe(true);
+    expect(
+      resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: 'per_branch',
+        enabledForNewSessions: true,
+        inheritedScope: 'branch',
+        executionHomeOnly: true,
+      })
+    ).toEqual({ scope: 'execution_home', adoptBranch: false });
+  });
+
+  it('leaves other tools and local OpenCode to the branch SDK-home policy', () => {
+    expect(usesExecutionHomeOnly('claude-code', hosted)).toBe(false);
+    expect(usesExecutionHomeOnly('opencode', { execution: { unix_user_mode: 'sandbox' } })).toBe(
+      false
+    );
   });
 });
 

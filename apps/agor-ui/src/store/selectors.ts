@@ -13,7 +13,24 @@
  */
 import type { Board, BoardEntityObject, Branch, Repo, Session } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
+import { commentMentionsUser } from '../utils/commentMentions';
 import type { AgorState } from './agorStore';
+
+// Home selectors live in homeSelectors.ts; re-exported so store selectors have one import surface.
+export {
+  compareHomeNeeds,
+  type HomeBucketsOptions,
+  type HomeCommentNeed,
+  type HomeNeed,
+  type HomeSessionNeed,
+  isSessionStartedByUser,
+  isUnreadResult,
+  lastRunStartedAt,
+  makeCommentsForYouSelector,
+  makeHomeBucketsSelector,
+  makeLatestOwnSessionSelector,
+  makeTeammatesSelector,
+} from './homeSelectors';
 
 export const selectSessionById = (s: AgorState) => s.sessionById;
 export const selectSessionsByBranch = (s: AgorState) => s.sessionsByBranch;
@@ -161,11 +178,10 @@ export function makeCommentMentionSelector(
   return (s) => {
     if (!boardId || !userName) return false;
     for (const c of s.commentById.values()) {
-      if (c.board_id !== boardId || c.resolved) continue;
-      if (c.content.includes(`@${userName}`) || c.content.includes(`@"${userName}"`)) return true;
       if (
-        userEmail &&
-        (c.content.includes(`@${userEmail}`) || c.content.includes(`@"${userEmail}"`))
+        c.board_id === boardId &&
+        !c.resolved &&
+        commentMentionsUser(c.content, userName, userEmail)
       )
         return true;
     }

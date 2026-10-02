@@ -554,6 +554,21 @@ rejected by default; operators may set `execution.delegated_branch_deletion: tru
 only when every deletion executor mounts the tenant's worktrees, base repositories,
 and `branch-homes` from the same persistent volume. The executor verifies that
 these roots are mounted separately from its container filesystem before deleting.
+Mount roots must be real directories, not symlink aliases, and the SDK-home target
+must be exactly `<tenantDataRoot>/branch-homes/<branchId>`. Deletion runs with the
+requesting Manager's delegated home key and credentials, not the branch creator's.
+The caller's shared execution home is not a deletion target.
+
+If deletion reports that it is **not enabled for this delegated/external executor**,
+the request was refused before deletion started. This is a deployment capability
+gate, not a missing branch permission. An operator must first deploy a compatible
+launcher and executor with the mount contract above, then enable the opt-in through
+the deployment's configuration owner. Enabling the flag alone does not provide
+storage or prove containment. Generic command-template and HA external executors
+also hit this gate; being able to run prompts or environment commands does not prove
+that a deletion executor can remove persistent branch storage. Archive is not a
+substitute for permanent deletion.
+
 Historical SDK sessions using a shared execution home also block deletion until
 their owned storage is reconciled; the shared user home is never recursively
 removed. Remote Git refs and

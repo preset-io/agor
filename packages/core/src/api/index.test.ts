@@ -807,6 +807,8 @@ describe('createClient', () => {
         'reportTerminationComplete',
         'reportRuntimeTelemetry',
         'reportSdkHealthFailure',
+        'beginOpenCodeCheckpoint',
+        'acknowledgeOpenCodeCleanup',
         'cancelQueued',
         'reorderQueued'
       );

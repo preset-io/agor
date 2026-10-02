@@ -4,6 +4,7 @@ import { ExclamationCircleOutlined, LoadingOutlined } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
 import { theme } from 'antd';
 import type React from 'react';
+import { isSessionFailed } from '../../utils/sessionStatus';
 import { ToolIcon } from '../ToolIcon';
 
 /**
@@ -15,8 +16,7 @@ import { ToolIcon } from '../ToolIcon';
 export const SESSION_ROW_LOGO_SIZE = 16;
 const SESSION_STATUS_DOT_SIZE = 6;
 
-export const isSessionFailed = (session: Pick<Session, 'status'>): boolean =>
-  session.status === SessionStatus.FAILED;
+export { isSessionFailed };
 
 /** A failed row that is not running again gets the error tint and failure mark. */
 export const isSessionRowFailed = (session: Session): boolean =>

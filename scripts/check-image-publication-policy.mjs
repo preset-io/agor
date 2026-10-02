@@ -33,6 +33,16 @@ assert.match(workflow, /^name: Build image$/m);
 assert.match(workflow, /^ {2}pull_request:$/m);
 assert.match(workflow, /^ {4}name: Build & push$/m);
 
+// pull_request workflows run from the merge ref: build that same tree, not
+// an older PR head which may lack Docker targets added by the base workflow.
+// workflow_run must still build the exact main commit that passed CI.
+assert.match(
+  workflow,
+  /^ {2}IMAGE_REVISION: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
+  'image revision must match the PR merge workflow, or the tested main commit on workflow_run'
+);
+assert.match(step('Checkout'), /ref: \$\{\{ env\.IMAGE_REVISION \}\}/);
+
 const validation = step('Validate image publication policy');
 assert.match(validation, /run: node scripts\/check-image-publication-policy\.mjs/);
 
@@ -45,6 +55,7 @@ for (const name of ['Log in to Docker Hub', 'Docker metadata', 'Push image']) {
 }
 
 const build = step('Build image');
+assert.match(build, /AGOR_BUILD_SHA=\$\{\{ env\.IMAGE_REVISION \}\}/);
 assert.match(build, /target: production-source/);
 assert.match(build, /load: true/);
 assert.match(build, /tags: \$\{\{ env\.IMAGE \}\}:smoke/);
@@ -233,6 +244,22 @@ if (codespacesWorktreeBuildStarts > 0) {
 }
 
 // Narrow dependency-only exception: trusted main publication, never a PR image.
+assert.match(step('Select Railway image validation'), /id: railway/);
+assert.match(
+  step('Select Railway image validation'),
+  /shouldBuildRailwayImage\(\{ github, context \}\)/
+);
+assert.match(
+  step('Select Railway image validation'),
+  /core\.setOutput\('build', String\(build\)\)/
+);
+for (const name of [
+  'Build preview runtime',
+  'Smoke test preview runtime',
+  'Test warm preview base',
+]) {
+  assert.match(step(name), /if: steps\.railway\.outputs\.build == 'true'/);
+}
 const previewBuild = step('Build preview runtime');
 assert.match(previewBuild, /target: railway-preview/);
 assert.match(previewBuild, /load: true/);
@@ -241,12 +268,17 @@ assert.match(step('Push preview runtime'), /if: github.event_name == 'workflow_r
 assert.match(step('Push preview runtime'), /tags: .*:preview-runtime-\$\{\{ env.IMAGE_REVISION/);
 assert.match(step('Smoke test preview runtime'), /runtime-checkout.mjs fingerprint/);
 const warm = step('Test warm preview base');
-assert.match(warm, /--builder default --load/);
+assert.equal((warm.match(/--builder default --output=type=cacheonly/g) ?? []).length, 2);
+assert.equal((warm.match(/--target railway-preview-checked/g) ?? []).length, 2);
+assert.match(warm, /FROM railway-preview AS railway-preview-checked/);
+assert.match(warm, /RUN test .*runtime-checkout\.mjs fingerprint.*agor-dependency-fingerprint/);
+assert.match(warm, /&& cd \/app\/packages\/git/);
+assert.match(warm, /&& node -e 'require\("simple-git"\)'/);
 assert.match(warm, /--build-arg AGOR_PREVIEW_BASE=/);
 assert.match(warm, /Installing changed preview dependencies/);
 assert.match(warm, /Reusing preview dependencies/);
 assert.match(warm, /trap .*package.json/);
-assert.doesNotMatch(warm, /--push/);
+assert.doesNotMatch(warm, /--push|--load|docker run/);
 assert.match(promotion, /--tag "\$\{IMAGE\}:preview-runtime-main"/);
 assert.match(promotion, /"\$\{IMAGE\}:preview-runtime-\$\{IMAGE_REVISION\}"/);
 const resolver = await readFile(

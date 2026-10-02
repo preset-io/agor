@@ -789,25 +789,70 @@ export const LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS = [
   'skills',
 ] as const;
 
+export type LeanSessionListOmittedContextKey =
+  (typeof LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS)[number];
+
+/** `read_shape` stamped on every row of `sessions.find({ lean: true })`. */
+export const SESSION_LIST_ROW_SHAPE = 'session-list-v1';
+
 /**
- * Project a session row for a lean list. Returns the same row when there is
- * nothing to omit; otherwise a shallow copy with a trimmed `custom_context`.
- * The copy keeps every own property descriptor, including non-enumerable ones
- * such as the hidden `tenant_id` the daemon's tenant after-hook checks.
+ * A row from `sessions.find({ lean: true })`: a session summary whose
+ * `custom_context` has the `LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS` withheld.
+ *
+ * Every lean row carries `read_shape` — also when the stored context never had
+ * those keys — so a consumer can tell "withheld" from "absent". Full rows
+ * (`sessions.get`, a find without `lean`, realtime events) never carry it.
+ * Read withheld keys only after `hasFullSessionDetails`, or from `sessions.get`.
  */
-export function toLeanSessionListRow<T extends Pick<Session, 'custom_context'>>(session: T): T {
+export type SessionListRow = Omit<Session, 'custom_context'> & {
+  custom_context?: Record<string, unknown> & {
+    gateway_source?: GatewaySource;
+  } & { [K in LeanSessionListOmittedContextKey]?: never };
+  readonly read_shape: typeof SESSION_LIST_ROW_SHAPE;
+};
+
+/** True when `row` is a lean list row (its withheld context keys are unknown). */
+export function isSessionListRow(row: Session | SessionListRow): row is SessionListRow {
+  return (row as { read_shape?: unknown }).read_shape === SESSION_LIST_ROW_SHAPE;
+}
+
+/**
+ * True when `row` is a full session record, so a missing withheld
+ * `custom_context` key (e.g. `scheduled_run`) really is absent.
+ */
+export function hasFullSessionDetails(row: Session | SessionListRow): boolean {
+  return !isSessionListRow(row);
+}
+
+/**
+ * Project a session row for a lean list: a copy with the withheld
+ * `custom_context` keys removed and the enumerable, read-only `read_shape`
+ * marker set. The copy keeps every own property descriptor, including
+ * non-enumerable ones such as the hidden `tenant_id` the daemon's tenant
+ * after-hook checks. The withheld keys are always removed, whatever
+ * `read_shape` the input claims, so a forged marker cannot carry them through.
+ */
+export function toLeanSessionListRow(session: Session | SessionListRow): SessionListRow {
+  const { read_shape: _claimed, ...descriptors } = Object.getOwnPropertyDescriptors(
+    session
+  ) as PropertyDescriptorMap;
+  const copy = Object.create(Object.getPrototypeOf(session), descriptors) as Record<
+    string,
+    unknown
+  >;
   const context = session.custom_context;
-  if (!context || !LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS.some((key) => key in context)) {
-    return session;
+  if (context && LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS.some((key) => key in context)) {
+    const lean: Record<string, unknown> = { ...context };
+    for (const key of LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS) delete lean[key];
+    copy.custom_context = lean;
   }
-  const lean: Record<string, unknown> = { ...context };
-  for (const key of LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS) delete lean[key];
-  const copy = Object.create(
-    Object.getPrototypeOf(session),
-    Object.getOwnPropertyDescriptors(session)
-  ) as T;
-  copy.custom_context = lean;
-  return copy;
+  Object.defineProperty(copy, 'read_shape', {
+    value: SESSION_LIST_ROW_SHAPE,
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
+  return copy as unknown as SessionListRow;
 }
 
 /**

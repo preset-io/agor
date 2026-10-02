@@ -11,6 +11,8 @@ import type { TenantDisplay } from '@agor/core/types';
 export interface HealthInstance {
   label?: string;
   description?: string;
+  navbarLogoLink?: string;
+  navbarLogoTooltip?: string;
 }
 
 /** Pre-login instance identity: deployment config, never tenant data. */
@@ -18,6 +20,8 @@ export function publicHealthInstance(config: AgorConfig): HealthInstance {
   return {
     label: config.daemon?.instanceLabel,
     description: config.daemon?.instanceDescription,
+    navbarLogoLink: config.daemon?.navbarLogoLink,
+    navbarLogoTooltip: config.daemon?.navbarLogoTooltip,
   };
 }
 

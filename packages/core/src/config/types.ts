@@ -19,6 +19,9 @@ export interface AgorAgenticToolsSettings {
    * Default: enabled; false is an explicit opt-out. Provider approval remains a release prerequisite.
    */
   claude_subscription_oauth?: boolean;
+
+  /** Hosted OpenCode with checkpointed native state. Default: enabled when every hosted prerequisite holds; 'disabled' opts out. */
+  opencode_hosted_native_state?: 'checkpointed' | 'disabled';
 }
 
 /**
@@ -109,6 +112,12 @@ export interface AgorDaemonSettings {
    * Displayed as a popover around the instance label Tag. */
   instanceDescription?: string;
 
+  /** Navbar logo destination (e.g. a hosting console); the logo goes Home when unset. */
+  navbarLogoLink?: string;
+
+  /** Tooltip shown on the navbar logo when `navbarLogoLink` is set. */
+  navbarLogoTooltip?: string;
+
   /** Maximum expiry for impersonation tokens in ms (default: 3600000 = 1 hour, capped at 1 hour) */
   impersonation_token_expiry_ms?: number;
 
@@ -141,6 +150,16 @@ export interface AgorDaemonSettings {
    * Default: 0 (do not trust X-Forwarded-* headers).
    */
   trust_proxy_hops?: number;
+
+  /**
+   * Compress Socket.IO WebSocket frames with RFC 7692 permessage-deflate
+   * (default: true). The zlib profile is fixed by the daemon; this is only an
+   * on/off switch. Each compressing socket holds up to ~224 KiB of zlib state
+   * (~192 KiB deflate + up to ~32 KiB inflate, depending on the window each
+   * client negotiates; buffers and bookkeeping excluded), and a broadcast is
+   * compressed once per recipient. A change applies to new connections only. Env override: `AGOR_WEBSOCKET_COMPRESSION`.
+   */
+  websocket_compression?: boolean;
 }
 
 /**

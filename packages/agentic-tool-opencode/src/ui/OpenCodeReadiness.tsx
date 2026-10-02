@@ -28,6 +28,8 @@ export function OpenCodeReadiness({
     status = { tone: 'neutral', label: 'Checking availability' };
   } else if (!Array.isArray(catalog?.providers)) {
     status = { tone: 'neutral', label: 'Status unavailable' };
+  } else if (catalog.unsupported) {
+    status = { tone: 'neutral', label: 'Not available in this workspace' };
   } else if (catalog.providers.some((provider) => provider.availableForSelection)) {
     status = { tone: 'positive', label: 'Available' };
   } else {

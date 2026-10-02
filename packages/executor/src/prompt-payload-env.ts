@@ -10,6 +10,8 @@ const PAYLOAD_IDENTITY_DENY = new Set([
   'BASH_ENV',
   'ENV',
   'AGOR_MASTER_SECRET',
+  // Pinned by the execution pod to Job-local scratch; must not move live OpenCode state.
+  'AGOR_OPENCODE_SCRATCH_ROOT',
 ]);
 
 function isDeniedPayloadEnvironmentName(key: string): boolean {

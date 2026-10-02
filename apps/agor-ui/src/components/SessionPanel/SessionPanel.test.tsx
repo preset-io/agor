@@ -1,5 +1,6 @@
 import type { AgorClient, Branch, Session, Task, User } from '@agor-live/client';
-import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -309,6 +310,27 @@ describe('SessionPanel search control', () => {
         state: { tasks: reactive.tasks },
       }));
     }
+  });
+
+  it('reads composer inventories from a full store row but never from a lean one', () => {
+    const fullRow = {
+      ...session,
+      agentic_tool: 'claude-code',
+      custom_context: { slash_commands: ['/full'], skills: ['full-skill'] },
+    } as unknown as Session;
+    // The reactive session has not loaded yet.
+    renderPanel({ activeSession: fullRow });
+    expect(autocomplete.props?.slashCommands).toEqual(['/full']);
+    expect(autocomplete.props?.skills).toEqual(['full-skill']);
+    cleanup();
+
+    // A lean row is a summary: even if it somehow still carried the keys, the
+    // composer waits for the full record instead of trusting it.
+    renderPanel({
+      activeSession: { ...fullRow, read_shape: SESSION_LIST_ROW_SHAPE } as unknown as Session,
+    });
+    expect(autocomplete.props?.slashCommands).toBeUndefined();
+    expect(autocomplete.props?.skills).toBeUndefined();
   });
 
   it('retains the same lean reactive-session cache key as ConversationView', () => {

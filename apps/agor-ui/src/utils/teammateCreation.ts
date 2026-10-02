@@ -20,6 +20,10 @@ export interface TeammateCreationInput {
   boardId?: string;
   /** Tags the teammate as onboarding-seeded so its card shows the right copy. */
   createdViaOnboarding?: boolean;
+  /** Add the board welcome note (default true); skipped for boards that already hold work. */
+  welcomeNote?: boolean;
+  /** Never replace the board's primary; the server makes the new branch primary only if unset. */
+  keepExistingPrimary?: boolean;
 }
 
 export interface TeammateCreationDeps {
@@ -86,13 +90,15 @@ export async function createTeammateBranch(
   }
 
   if (!shouldContinue()) return null;
-  await ensureTeammateWelcomeNote({
-    client: deps.client,
-    boardId,
-    teammateName: displayName,
-    teammateEmoji: input.emoji,
-  });
-  if (!shouldContinue()) return null;
+  if (input.welcomeNote !== false) {
+    await ensureTeammateWelcomeNote({
+      client: deps.client,
+      boardId,
+      teammateName: displayName,
+      teammateEmoji: input.emoji,
+    });
+    if (!shouldContinue()) return null;
+  }
 
   const teammateConfig: TeammateConfig = {
     kind: 'teammate',
@@ -126,7 +132,7 @@ export async function createTeammateBranch(
       });
       if (!shouldContinue()) return null;
     }
-    if (boardId) {
+    if (boardId && !input.keepExistingPrimary) {
       if (!shouldContinue()) return null;
       await deps.client
         ?.service('boards')

@@ -195,7 +195,9 @@ async function findInstalledPackageDirectory(
 export async function resolveManagedAgenticToolPackageDirectory(
   tool: InstallableAgenticTool,
   agorVersion: string,
-  packageName: string
+  packageName: string,
+  /** Dependency that owns `packageName`; isolated (pnpm) layouts keep it beside that package only. */
+  via?: string
 ): Promise<string> {
   const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
   const installDir = getAgenticToolInstallDir(tool, agorVersion);
@@ -205,8 +207,17 @@ export async function resolveManagedAgenticToolPackageDirectory(
   if (!isContainedPath(realInstallDir, integrationEntry)) {
     throw new Error('integration wrapper resolved outside the managed directory');
   }
+  const searchFrom = via
+    ? join(
+        await findInstalledPackageDirectory(integrationEntry, via, realInstallDir),
+        'package.json'
+      )
+    : integrationEntry;
+  if (!isContainedPath(realInstallDir, searchFrom)) {
+    throw new Error(`${via} resolved outside the managed directory`);
+  }
   const packageDirectory = await findInstalledPackageDirectory(
-    integrationEntry,
+    searchFrom,
     packageName,
     realInstallDir
   );

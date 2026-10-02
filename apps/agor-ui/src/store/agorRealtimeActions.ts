@@ -181,7 +181,12 @@ export function repoCreated(repo: Repo) {
   });
 }
 export function repoPatched(repo: Repo) {
-  setMap('repoById', (prev) => replaceIfChanged(prev, repo.repo_id, repo));
+  setMap('repoById', (prev) => {
+    // Events can arrive out of order and last_updated does not prove write order; a retry gets a new row.
+    const status = prev.get(repo.repo_id)?.clone_status;
+    if ((status === 'ready' || status === 'failed') && repo.clone_status === 'cloning') return prev;
+    return replaceIfChanged(prev, repo.repo_id, repo);
+  });
 }
 export function repoRemoved(repo: Repo) {
   setMap('repoById', (prev) => {

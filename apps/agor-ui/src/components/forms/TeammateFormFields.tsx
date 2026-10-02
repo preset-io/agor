@@ -17,6 +17,8 @@ export interface TeammateFormFieldsProps {
   onCustomRepoChange: (selected: boolean) => void;
   /** Optional section inserted before the repo/branch advanced settings collapse. */
   extraBeforeAdvanced?: React.ReactNode;
+  /** Board the teammate joins as primary; undefined creates a fresh board. */
+  targetBoardName?: string;
 }
 
 /**
@@ -36,6 +38,7 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
   customRepoSelected,
   onCustomRepoChange,
   extraBeforeAdvanced,
+  targetBoardName,
 }) => {
   const { token } = theme.useToken();
   const repoId = Form.useWatch('repoId', form);
@@ -95,7 +98,9 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
         style={{ marginBottom: 16 }}
         title={
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Each AI teammate gets a fresh board and becomes that board&apos;s primary teammate.
+            {targetBoardName !== undefined
+              ? `This AI teammate becomes the primary teammate of ${targetBoardName || 'this board'}.`
+              : "Each AI teammate gets a fresh board and becomes that board's primary teammate."}
           </Typography.Text>
         }
       />

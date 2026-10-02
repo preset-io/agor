@@ -39,7 +39,11 @@ enableMapSet();
 export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
 /** Background-hydrated collections that gate UI reads on their first apply. */
-export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+export type GatedHydrationFlag =
+  | 'sessionsHydrated'
+  | 'branchesHydrated'
+  | 'mcpServersHydrated'
+  | 'gatewayChannelsHydrated';
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
@@ -49,6 +53,10 @@ interface AgorMeta {
   loadingStage: InitialLoadingStage;
   error: string | null;
   itemCounts: ItemCounts;
+  /** Set once the full active-session set replaces the recent first-paint slice. */
+  sessionsHydrated: boolean;
+  /** Set once the full active-branch set lands (Home starts with none). */
+  branchesHydrated: boolean;
   /** Set once the background mcp-servers hydration first applies (empty result included). */
   mcpServersHydrated: boolean;
   /** Set once the background gateway-channels hydration first applies (empty result included). */
@@ -160,6 +168,8 @@ const INITIAL_META: AgorMeta = {
   loadingStage: 'idle',
   error: null,
   itemCounts: {},
+  sessionsHydrated: false,
+  branchesHydrated: false,
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
   agenticToolSettingsByName: new Map(),
@@ -181,6 +191,8 @@ export const agorStore = createStore<AgorState>()(
       set({
         ...EMPTY_MAPS,
         deletedMcpServerIds: new Set(),
+        sessionsHydrated: false,
+        branchesHydrated: false,
         agenticToolSettingsByName: new Map(),
         agenticToolSettingsHydrated: false,
       }),

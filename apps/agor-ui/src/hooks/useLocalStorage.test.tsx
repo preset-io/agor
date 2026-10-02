@@ -22,6 +22,20 @@ describe('useLocalStorage', () => {
     expect(JSON.parse(window.localStorage.getItem(KEY) ?? 'null')).toBe('oldest');
   });
 
+  it('reads the new key when the key changes, and writes there', () => {
+    window.localStorage.setItem(`${KEY}:a`, JSON.stringify('a-value'));
+    window.localStorage.setItem(`${KEY}:b`, JSON.stringify('b-value'));
+    const { result, rerender } = renderHook(({ key }) => useLocalStorage<string>(key, 'none'), {
+      initialProps: { key: `${KEY}:a` },
+    });
+    expect(result.current[0]).toBe('a-value');
+    rerender({ key: `${KEY}:b` });
+    expect(result.current[0]).toBe('b-value');
+    act(() => result.current[1]('b-next'));
+    expect(JSON.parse(window.localStorage.getItem(`${KEY}:a`) ?? 'null')).toBe('a-value');
+    expect(JSON.parse(window.localStorage.getItem(`${KEY}:b`) ?? 'null')).toBe('b-next');
+  });
+
   it('falls back to the initial value for malformed stored JSON', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     window.localStorage.setItem(KEY, '{not-json');

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { type ComponentProps, Suspense, startTransition, useLayoutEffect, useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OPEN_GLOBAL_SEARCH_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { GlobalSearch } from './GlobalSearch';
 
 const { goToBoard, goToSession, recentsState, layoutSubmit } = vi.hoisted(() => ({
@@ -136,6 +137,18 @@ describe('GlobalSearch', () => {
     fireEvent.click(button);
     await vi.advanceTimersByTimeAsync(16);
     expect(screen.queryByRole('combobox', { name: 'Global search' })).toBeNull();
+  });
+
+  it('opens on the shell event with the requested type chip selected', async () => {
+    renderSearch();
+
+    act(() => {
+      requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'session');
+    });
+    await vi.advanceTimersByTimeAsync(16);
+
+    expect(screen.getByRole('combobox', { name: 'Global search' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Session' })).toBeChecked();
   });
 
   it('Cmd+K opens the popover from closed state', async () => {

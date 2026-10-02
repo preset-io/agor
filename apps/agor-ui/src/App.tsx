@@ -1,7 +1,6 @@
 import { AgorLocalAuthMode } from '@agor/core/config/browser';
 import type {
   AgenticToolName,
-  AgorClient,
   Artifact,
   AuthCheckResult,
   Board,
@@ -29,6 +28,7 @@ import {
   ENTITY_PATH_SEGMENTS,
   hasMinimumRole,
   isAgenticToolName,
+  PAGINATION,
   ROLES,
   sessionPath,
 } from '@agor-live/client';
@@ -86,7 +86,7 @@ import {
 } from './hooks/useOnboardingLifecycle';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { useUnarchiveBranch } from './hooks/useUnarchiveBranch';
-import { sessionCreated } from './store/agorRealtimeActions';
+import { repoPatched, sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
 import { DeviceRouter } from './surfaces/DeviceRouter';
 import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
@@ -124,7 +124,8 @@ import {
   type LatestSessionUpdateRequests,
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
-import { getRouterBasename } from './utils/uiRoutes';
+import { getRouterBasename, isMobileShellPath } from './utils/uiRoutes';
+import { waitForFrameworkRepoReady } from './utils/waitForFrameworkRepoReady';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -143,41 +144,6 @@ const ONBOARDING_DARK_THEME = { algorithm: theme.darkAlgorithm };
 // Stable empty-repo array so the onboarding framework-repo memo keeps a constant
 // identity while the wizard is closed (no framework repo resolved yet).
 const EMPTY_REPOS: Repo[] = [];
-
-/**
- * Resolve the framework repo once it reaches `clone_status: 'ready'`, up to a
- * hard deadline. Resolves with the ready repo, or `undefined` if the deadline
- * elapses first — it never hangs. Used at onboarding completion so a fresh user
- * whose background clone is just-barely-not-done still gets their first teammate.
- */
-function waitForFrameworkRepoReady(
-  client: AgorClient,
-  deadlineMs: number
-): Promise<Repo | undefined> {
-  const readyNow = findFrameworkRepo(agorStore.getState().repoById, { readyOnly: true })?.[1];
-  if (readyNow) return Promise.resolve(readyNow);
-
-  return new Promise<Repo | undefined>((resolve) => {
-    const reposService = client.service('repos');
-    let settled = false;
-    const finish = (repo: Repo | undefined) => {
-      if (settled) return;
-      settled = true;
-      reposService.removeListener('patched', onPatched);
-      clearTimeout(timer);
-      resolve(repo);
-    };
-    const onPatched = () => {
-      const ready = findFrameworkRepo(agorStore.getState().repoById, { readyOnly: true })?.[1];
-      if (ready) finish(ready);
-    };
-    const timer = setTimeout(() => finish(undefined), deadlineMs);
-    reposService.on('patched', onPatched);
-    // Re-check in case readiness landed between the initial read and the listener
-    // attaching above.
-    onPatched();
-  });
-}
 
 const ENV_ACTION_COPY: Record<EnvironmentAction, { present: string; gerund: string }> = {
   start: { present: 'start', gerund: 'Starting' },
@@ -282,7 +248,7 @@ const routeModuleLoaders = {
 } satisfies Record<RouteModuleKey, () => Promise<unknown>>;
 
 function getRouteModuleKey(surfaceId: RouteSurfaceId, pathname: string): RouteModuleKey {
-  if (pathname.startsWith('/m')) return 'mobile';
+  if (isMobileShellPath(pathname)) return 'mobile';
   return surfaceId;
 }
 
@@ -305,7 +271,7 @@ function AppContent() {
   // static surface can't forget to wire it.
   useSurfaceBranding(currentSurface);
   const sharedSurfaceOwnsUserSettings =
-    currentSurface.usesSharedUserSettings || location.pathname.startsWith('/m');
+    currentSurface.usesSharedUserSettings || isMobileShellPath(location.pathname);
   const routeModuleKey = getRouteModuleKey(currentSurface.id, location.pathname);
   const [routeModuleReady, setRouteModuleReady] = useState(() =>
     loadedRouteModuleKeys.has(routeModuleKey)
@@ -896,8 +862,18 @@ function AppContent() {
     // for readiness with a HARD deadline before falling back to the warning, so
     // the common near-miss still yields a teammate. The wizard stays in its
     // loading state throughout, so a short wait reads as part of setup.
+    // The wait re-reads the server: the store can miss the clone's ready event (#2941).
     if (!readyFrameworkRepo && result.teammateName?.trim() && client) {
-      readyFrameworkRepo = await waitForFrameworkRepoReady(client, 20_000);
+      readyFrameworkRepo = await waitForFrameworkRepoReady({
+        getRepoById: () => agorStore.getState().repoById,
+        subscribe: (listener) => agorStore.subscribe(listener),
+        fetchRepos: () =>
+          client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+        applyRepo: (repo) => {
+          if (isCurrentUser()) repoPatched(repo);
+        },
+        deadlineMs: 20_000,
+      });
     }
     if (!isCurrentUser()) return;
 
@@ -2192,6 +2168,8 @@ function AppContent() {
       onRetryConnection={retryConnection}
       instanceLabel={headerInstanceConfig?.label}
       instanceDescription={headerInstanceConfig?.description}
+      navbarLogoLink={headerInstanceConfig?.navbarLogoLink}
+      navbarLogoTooltip={headerInstanceConfig?.navbarLogoTooltip}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}
@@ -2241,7 +2219,7 @@ function AppContent() {
           />
         )}
 
-        {location.pathname.startsWith('/m') && (
+        {isMobileShellPath(location.pathname) && (
           <SettingsModal
             open={settingsTabToOpen !== null}
             onClose={handleSettingsClose}

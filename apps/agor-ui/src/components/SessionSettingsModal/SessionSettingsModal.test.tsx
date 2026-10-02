@@ -1,9 +1,12 @@
 /** Session settings configuration regressions. */
 
 import type { AgorClient, Session, User } from '@agor-live/client';
+import { SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
+import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { SessionSettingsModal } from './SessionSettingsModal';
 
 const persistUserDefaultFromForm = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -50,6 +53,13 @@ vi.mock('../AgenticConfigChipRow', () => ({
           onClick={() => form.setFieldValue('mcpServerIds', ['mcp-1'])}
         >
           mcp
+        </button>
+        <button
+          type="button"
+          data-testid="pick-effort"
+          onClick={() => form.setFieldValue('effort', 'xhigh')}
+        >
+          effort
         </button>
         <button
           type="button"
@@ -194,6 +204,50 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     expect(persistUserDefaultFromForm).toHaveBeenCalledTimes(1);
   });
 
+  describe('model_config on save', () => {
+    const modelSession = {
+      ...claudeSession,
+      model_config: {
+        mode: 'alias',
+        model: 'opus',
+        effort: 'medium',
+        updated_at: '2026-09-01T00:00:00.000Z',
+      },
+    } as unknown as Session;
+    const renderModal = (onUpdate: ReturnType<typeof vi.fn>) =>
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={modelSession}
+          client={null}
+          currentUser={null}
+          onUpdate={onUpdate}
+        />
+      );
+
+    it('is not sent when the model and effort were not changed', async () => {
+      const onUpdate = vi.fn();
+      renderModal(onUpdate);
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('model_config');
+    });
+
+    it('is sent, with the folded effort, when the effort changed', async () => {
+      const onUpdate = vi.fn();
+      renderModal(onUpdate);
+      fireEvent.click(screen.getByTestId('pick-effort'));
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1].model_config).toMatchObject({
+        mode: 'alias',
+        model: 'opus',
+        effort: 'xhigh',
+      });
+    });
+  });
+
   describe('custom_context from a lean session row', () => {
     const fullContext = {
       teamName: 'Backend',
@@ -203,10 +257,24 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
     const leanSession = {
       ...claudeSession,
       custom_context: { teamName: 'Backend' },
+      read_shape: SESSION_LIST_ROW_SHAPE,
     } as unknown as Session;
+    const fullSession = { ...claudeSession, custom_context: fullContext } as unknown as Session;
+
+    const connection = (authGeneration: number) => ({
+      connected: true,
+      connecting: false,
+      authGeneration,
+      outOfSync: false,
+      capturedSha: null,
+      currentSha: null,
+    });
+    const withConnection = (authGeneration: number, node: React.ReactNode) => (
+      <ConnectionProvider value={connection(authGeneration)}>{node}</ConnectionProvider>
+    );
 
     function clientReturning(session: Partial<Session>) {
-      const get = vi.fn().mockResolvedValue({ ...leanSession, ...session });
+      const get = vi.fn().mockResolvedValue({ ...claudeSession, ...session });
       return { client: { service: () => ({ get }) } as unknown as AgorClient, get };
     }
 
@@ -231,8 +299,74 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('custom_context');
     });
 
-    it('unlocks the field with the row context when the full record cannot load', async () => {
-      const get = vi.fn().mockRejectedValue(new Error('offline'));
+    it('shows a degraded state and stays read-only when the full record cannot load', async () => {
+      const onUpdate = vi.fn();
+      const get = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce(fullSession);
+      render(
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={leanSession}
+          client={{ service: () => ({ get }) } as unknown as AgorClient}
+          currentUser={null}
+          onUpdate={onUpdate}
+        />
+      );
+      expect(await screen.findByText('(details unavailable)')).toBeInTheDocument();
+      fireEvent.click(screen.getByText('Advanced'));
+      const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+      expect(screen.getByText(/Could not load full session details: offline/)).toBeInTheDocument();
+      expect(field.readOnly).toBe(true);
+
+      // Saving other settings while degraded never sends the lean context.
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+      expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('custom_context');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(JSON.parse(field.value)).toEqual(fullContext);
+      expect(screen.queryByText('(details unavailable)')).not.toBeInTheDocument();
+    });
+
+    it('retries a failed load after a socket reconnect', async () => {
+      const get = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('socket closed'))
+        .mockResolvedValueOnce(fullSession);
+      const client = { service: () => ({ get }) } as unknown as AgorClient;
+      const modal = (
+        <SessionSettingsModal
+          open
+          onClose={vi.fn()}
+          session={leanSession}
+          client={client}
+          currentUser={null}
+        />
+      );
+      const { rerender } = render(withConnection(1, modal));
+      expect(await screen.findByText('(details unavailable)')).toBeInTheDocument();
+
+      rerender(withConnection(2, modal));
+      await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByText('Advanced'));
+      const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+      await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(JSON.parse(field.value)).toEqual(fullContext);
+    });
+
+    it('seeds the collapsed editor when the full record arrives late', async () => {
+      // Opened straight from a branch-card row: the panel was never opened.
+      let resolve: (session: Session) => void = () => {};
+      const get = vi.fn(
+        () =>
+          new Promise<Session>((done) => {
+            resolve = done;
+          })
+      );
       render(
         <SessionSettingsModal
           open
@@ -242,11 +376,45 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
           currentUser={null}
         />
       );
+      expect(get).toHaveBeenCalledWith('s1');
+      expect(screen.getByText('(loading…)')).toBeInTheDocument();
+      resolve(fullSession);
+      await waitFor(() => expect(screen.queryByText('(loading…)')).toBeNull());
+
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+      expect(field.readOnly).toBe(false);
+      expect(JSON.parse(field.value)).toEqual(fullContext);
+    });
 
-      await waitFor(() => expect(field.readOnly).toBe(false));
-      expect(JSON.parse(field.value)).toEqual({ teamName: 'Backend' });
+    it('uses a full store row directly and keeps edits across a reconnect', async () => {
+      const get = vi.fn();
+      const client = { service: () => ({ get }) } as unknown as AgorClient;
+      const props = { open: true, onClose: vi.fn(), currentUser: null, session: fullSession };
+      const { rerender } = render(
+        withConnection(1, <SessionSettingsModal {...props} client={client} />)
+      );
+      fireEvent.click(screen.getByText('Advanced'));
+      const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
+      expect(field.readOnly).toBe(false);
+      expect(JSON.parse(field.value)).toEqual(fullContext);
+
+      fireEvent.change(field, { target: { value: '{"edited":true}' } });
+      // Reconnect with a new client while the store row is downgraded to lean.
+      rerender(
+        withConnection(
+          2,
+          <SessionSettingsModal
+            {...props}
+            session={leanSession}
+            client={{ service: () => ({ get }) } as unknown as AgorClient}
+          />
+        )
+      );
+      await new Promise((done) => setTimeout(done, 0));
+      expect(get).not.toHaveBeenCalled();
+      expect(field.value).toBe('{"edited":true}');
+      expect(field.readOnly).toBe(false);
     });
 
     it('edits the full record, read-only until it loads', async () => {
@@ -271,9 +439,12 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
       expect(field.readOnly).toBe(true);
+      // The lean JSON in the read-only editor is labelled as incomplete.
+      expect(screen.getByText('Loading full session context…')).toBeInTheDocument();
 
       resolve({ ...leanSession, custom_context: fullContext } as Session);
       await waitFor(() => expect(field.readOnly).toBe(false));
+      expect(screen.queryByText('Loading full session context…')).toBeNull();
       expect(JSON.parse(field.value)).toEqual(fullContext);
 
       fireEvent.change(field, {
@@ -282,10 +453,8 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
       await waitFor(() => expect(onUpdate).toHaveBeenCalled());
-      expect(onUpdate.mock.calls[0][1].custom_context).toEqual({
-        ...fullContext,
-        teamName: 'Frontend',
-      });
+      // Only the edited key: untouched arrays (slash_commands) are not echoed.
+      expect(onUpdate.mock.calls[0][1].custom_context).toEqual({ teamName: 'Frontend' });
     });
   });
 });

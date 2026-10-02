@@ -758,10 +758,14 @@ async function startDaemonWithOwnedMetrics(
     buildInfo: DAEMON_BUILD_INFO,
     workIdentity: distributedWorkIdentity,
     multiTenancy,
+    websocketCompression: effectiveConfig.daemon?.websocket_compression !== false,
     ...(realtimeRuntime
       ? { adapter: realtimeRuntime.adapter, onServerCreated: (io) => realtimeRuntime.attach(io) }
       : {}),
   });
+  if (effectiveConfig.daemon?.websocket_compression === false) {
+    console.log('WebSocket compression disabled via config (daemon.websocket_compression=false)');
+  }
   app.configure(socketio(socketIOConfig.serverOptions, socketIOConfig.callback));
   configureChannels(app);
   configureSwagger(app, { version: DAEMON_VERSION, port: DAEMON_PORT });

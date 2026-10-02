@@ -77,6 +77,8 @@ export interface CreateDialogProps {
   currentUser?: User | null;
   client?: AgorClient | null;
   defaultTab?: CreateDialogTab;
+  /** Name of the board a new teammate joins as primary; undefined creates a fresh board. */
+  teammateTargetBoardName?: string;
   onCreateBranch: (config: BranchTabConfig) => void | Promise<void>;
   onCreateBoard: (board: Partial<Board>) => void | Promise<void>;
   onCreateRepo: (data: CreateRepoRequest) => unknown;
@@ -106,6 +108,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   currentUser,
   client,
   defaultTab = 'teammate',
+  teammateTargetBoardName,
   onCreateBranch,
   onCreateBoard,
   onCreateRepo,
@@ -252,6 +255,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
             mcpServerById={mcpServerById}
             currentUser={currentUser}
             client={client}
+            targetBoardName={teammateTargetBoardName}
           />
         </div>
       ),

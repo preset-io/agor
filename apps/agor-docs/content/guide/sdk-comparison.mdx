@@ -791,8 +791,34 @@ OpenCode supports MCP servers via its REST API:
 ### Limitations
 
 - **Session forking** not yet supported (OpenCode doesn't provide fork/replay API)
-- **Execution is local-only.** Agor must be able to contain the native writer process safely.
+- **Supported deployments.** Agor must be able to contain the native writer process safely:
+  locally, or in hosted workspaces that meet the prerequisites below. Other multi-tenant,
+  delegated, and templated-executor deployments report OpenCode as "not available" in
+  settings, readiness, session creation, schedules, and prompts.
 - **Only the session owner can prompt.** Shared prompting is disabled until credential identity is end-to-end consistent.
+
+### Hosted workspaces
+
+Hosted workspaces run OpenCode by default when they meet the prerequisites in
+[config.yaml](/guide/config-yaml), like this:
+
+- **Providers:** every OpenCode provider that needs only an API key (more than 180,
+  including Anthropic, OpenAI, Google Gemini, OpenRouter, xAI, Mistral, and DeepSeek).
+  Save the key in Settings → OpenCode. Keys are encrypted for your account, only the
+  selected provider's key is delivered to your own executor run, and a key is verified
+  by your first prompt. Providers that need OAuth sign-in, several credentials (Azure,
+  Bedrock, Vertex), a custom endpoint, or a server on your own machine are not offered,
+  and only models that support tool calls are listed.
+- **Owner only:** only the session creator can prompt an OpenCode session, and it
+  runs in the creator's own executor home.
+- **Conversation state:** each successful turn saves an immutable copy of
+  OpenCode's database in your home (`~/.agor/opencode/sessions/`), and the next
+  turn resumes from the last completed one. A failed or stopped turn keeps the
+  previous state. If saved state is missing or damaged, the turn fails rather
+  than silently starting an empty conversation; start a new session to recover.
+- **Cleanup:** superseded copies and copies from deleted sessions are removed
+  during your later OpenCode turns. Removal is best-effort, not an erasure
+  guarantee.
 
 ---
 

@@ -20,6 +20,15 @@ export const blogPosts: BlogPost[] = [
     image: '/images/blog/agent-modeling-201.png',
   },
   {
+    slug: 'agor-cloud-open-beta',
+    title: 'Announcing Agor Cloud Open Beta',
+    description:
+      'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta gives you shared AI workflows without running the infrastructure yourself.',
+    author: 'Agor team',
+    date: '2026-10-13',
+    image: '/images/blog/agor-cloud-open-beta.webp',
+  },
+  {
     slug: 'meet-bug-basher',
     title: 'Meet Bug Basher: the AI agent that hunts bugs in Apache Superset',
     description:

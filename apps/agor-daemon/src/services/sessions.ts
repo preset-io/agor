@@ -89,6 +89,7 @@ import {
   resolveBranchSdkHomeIncompatibility,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
+  usesExecutionHomeOnly,
 } from '../branch-sdk-home.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -154,6 +155,18 @@ export function assertSessionArchiveStateUsesDedicatedOperation(data: SessionUpd
     throw new BadRequest(
       'Session archive state cannot be changed with patch or update. Use the dedicated archive or unarchive operation.'
     );
+  }
+}
+
+/**
+ * `read_shape` marks a lean `sessions.find` row (`SESSION_LIST_ROW_SHAPE`) and is
+ * set only by that read projection. It is never stored, so a write carrying it
+ * could only echo it back on the response and the realtime event, where it
+ * would mark a full row as lean.
+ */
+function assertSessionReadShapeNotWritten(data: object): void {
+  if (Object.hasOwn(data, 'read_shape')) {
+    throw new BadRequest('read_shape is a read projection marker and cannot be written');
   }
 }
 
@@ -341,10 +354,16 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private deploymentAvailable: (tool: AgenticToolName) => boolean;
+  private deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
 
   private assertDeploymentToolConfigured(tool: AgenticToolName): void {
-    if (this.deploymentAvailable(tool)) return;
-    throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    if (!this.deploymentAvailable(tool)) {
+      throw new BadRequest(deploymentAgenticToolUnavailableMessage(tool));
+    }
+    // An installed tool can still be unsupported by this deployment's topology;
+    // refuse with its structured reason instead of failing the first prompt.
+    const unsupported = this.deploymentToolUnsupported(tool);
+    if (unsupported) throw unsupported;
   }
 
   private assertSupportedModelConfig(
@@ -380,7 +399,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+    deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+    deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
   ) {
     const sessionRepo = new SessionRepository(db);
     super(sessionRepo, {
@@ -396,6 +416,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     this.sessionRepo = sessionRepo;
     this.db = db;
     this.deploymentAvailable = deploymentAvailable;
+    this.deploymentToolUnsupported = deploymentToolUnsupported;
     this.app = app;
     // Custom service-to-service methods such as setMCPServers() can run with
     // tenant identity but without a request-scoped database transaction. Bind
@@ -476,6 +497,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
+    assertSessionReadShapeNotWritten(data);
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
     );
@@ -587,6 +609,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         branchSdkHomeIntent: branch.sdk_home ?? null,
         enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
         inheritedScope: params?._sdkHomeScope,
+        executionHomeOnly: usesExecutionHomeOnly(agenticTool, config),
       });
       if (admission.scope === 'branch') {
         // Admission must reject credential/state combinations before it
@@ -1803,6 +1826,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }
+    assertSessionReadShapeNotWritten(data);
     let replaceAgenticConfig = false;
     if (
       (id === null || Array.isArray(id)) &&
@@ -1968,7 +1992,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * Note: Last message is NOT included in list operations - only on single GET.
    *
    * `lean: true` is a list-only projection that omits bulky single-session
-   * `custom_context` keys from every row (see `toLeanSessionListRow`). It is not
+   * `custom_context` keys from every row and stamps each row with the
+   * `read_shape` marker (see `toLeanSessionListRow` / `SessionListRow`). It is not
    * a column, so it is removed from the query before any filter sees it, and
    * it never widens visibility: rows come from the same scoped read either way.
    * The result object itself is preserved so its enrichment marker survives.
@@ -2135,7 +2160,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 export function createSessionsService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true
+  deploymentAvailable: (tool: AgenticToolName) => boolean = () => true,
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined = () => undefined
 ): SessionsService {
-  return new SessionsService(db, app, deploymentAvailable);
+  return new SessionsService(db, app, deploymentAvailable, deploymentToolUnsupported);
 }

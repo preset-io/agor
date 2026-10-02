@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest';
-import { getRouterBasename, responsiveRoutePath, uiRouteHref } from './uiRoutes';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  backOr,
+  getRouterBasename,
+  hasInAppHistory,
+  isMobileShellPath,
+  isTeammatesRoute,
+  responsiveRoutePath,
+  uiRouteHref,
+} from './uiRoutes';
 
 describe('uiRoutes', () => {
   it('supports a reverse-proxied Vite preview mounted at /ui', () => {
@@ -23,7 +31,37 @@ describe('uiRoutes', () => {
   });
 });
 
+describe('isTeammatesRoute', () => {
+  it('matches the directory on either shell, with or without a trailing slash', () => {
+    for (const path of ['/teammates', '/teammates/', '/m/teammates', '/m/teammates/']) {
+      expect(isTeammatesRoute(path)).toBe(true);
+    }
+    for (const path of ['/', '/m', '/teammates/x', '/b/teammates', '/m/teammatesx']) {
+      expect(isTeammatesRoute(path)).toBe(false);
+    }
+  });
+});
+
+describe('isMobileShellPath', () => {
+  it('matches /m and its descendants only', () => {
+    for (const path of ['/m', '/m/', '/m/teammates', '/m/board/b']) {
+      expect(isMobileShellPath(path)).toBe(true);
+    }
+    for (const path of ['/', '/mcp', '/teammates', '/b/m']) {
+      expect(isMobileShellPath(path)).toBe(false);
+    }
+  });
+});
+
 describe('responsiveRoutePath', () => {
+  it('keeps the teammates directory across the shell breakpoint', () => {
+    const none = { boards: [], sessions: [] };
+    expect(responsiveRoutePath('/teammates', 'mobile', none)).toBe('/m/teammates');
+    expect(responsiveRoutePath('/m/teammates', 'desktop', none)).toBe('/teammates');
+    expect(responsiveRoutePath('/teammates/', 'mobile', none)).toBe('/m/teammates');
+    expect(responsiveRoutePath('/m/teammates/', 'desktop', none)).toBe('/teammates');
+  });
+
   const entities = {
     boards: [{ board_id: '01a012d8-1b9b-7909-b6f4-2024dfc7c51e', slug: 'default' }],
     sessions: [{ session_id: '01a012d8-4f50-7c32-9daa-6e3f70819b2c' }],
@@ -72,5 +110,32 @@ describe('responsiveRoutePath', () => {
     expect(
       responsiveRoutePath('/m/board/01a012d8-9999-7909-b6f4-2024dfc7c51e', 'desktop', entities)
     ).toBe('/b/01a012d899997909b6f42024/');
+  });
+});
+
+describe('hasInAppHistory', () => {
+  afterEach(() => window.history.replaceState(null, ''));
+
+  it('trusts the browser router index, even after a replace gave the first entry a new key', () => {
+    window.history.replaceState({ idx: 0, key: 'redirected' }, '');
+    expect(hasInAppHistory('redirected')).toBe(false);
+    window.history.replaceState({ idx: 2, key: 'later' }, '');
+    expect(hasInAppHistory('later')).toBe(true);
+  });
+
+  it('falls back to the location key without a browser router index', () => {
+    window.history.replaceState(null, '');
+    expect(hasInAppHistory('default')).toBe(false);
+    expect(hasInAppHistory('abc123')).toBe(true);
+  });
+});
+
+describe('backOr', () => {
+  it('steps back when it can pop, else replaces the entry with the fallback', () => {
+    const navigate = vi.fn();
+    backOr(navigate, true, '/');
+    expect(navigate).toHaveBeenLastCalledWith(-1);
+    backOr(navigate, false, '/m');
+    expect(navigate).toHaveBeenLastCalledWith('/m', { replace: true });
   });
 });

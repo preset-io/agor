@@ -119,6 +119,25 @@ describe('resolveEffectiveConfig', () => {
     });
   });
 
+  it('lets AGOR_WEBSOCKET_COMPRESSION override daemon.websocket_compression', () => {
+    expect(resolveEffectiveConfig({}, {}).daemon?.websocket_compression).toBeUndefined();
+    expect(
+      resolveEffectiveConfig(
+        { daemon: { websocket_compression: true } },
+        { AGOR_WEBSOCKET_COMPRESSION: '0' }
+      ).daemon?.websocket_compression
+    ).toBe(false);
+    expect(
+      resolveEffectiveConfig(
+        { daemon: { websocket_compression: false } },
+        { AGOR_WEBSOCKET_COMPRESSION: 'true' }
+      ).daemon?.websocket_compression
+    ).toBe(true);
+    expect(() => resolveEffectiveConfig({}, { AGOR_WEBSOCKET_COMPRESSION: 'off' })).toThrow(
+      /AGOR_WEBSOCKET_COMPRESSION must be one of/
+    );
+  });
+
   it('keeps the fail-safe password profile out of environment-variable override space', () => {
     const resolved = resolveEffectiveConfig(
       { identity: { password_policy: 'secure' } },
@@ -1055,6 +1074,39 @@ describe('loadConfig', () => {
     await expect(loadConfig()).rejects.toThrow(/claude_subscription_oauth must be a boolean/);
   });
 
+  it('accepts only checkpointed or disabled for hosted OpenCode', async () => {
+    const configPath = path.join(tempDir, '.agor', 'config.yaml');
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'checkpointed' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'disabled' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { opencode_hosted_native_state: 'disabled' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'live' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /opencode_hosted_native_state must be 'checkpointed' or 'disabled'/
+    );
+  });
+
   it('rejects unsupported or duplicate configured agentic tools', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
@@ -1093,6 +1145,28 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(configPath, yaml.dump({ daemon: { trust_proxy_hops: 2 } }), 'utf-8');
     await expect(loadConfig()).resolves.toMatchObject({ daemon: { trust_proxy_hops: 2 } });
+  });
+
+  it('accepts a boolean daemon.websocket_compression', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ daemon: { websocket_compression: false } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({ daemon: { websocket_compression: false } });
+  });
+
+  it('rejects a non-boolean daemon.websocket_compression', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({ daemon: { websocket_compression: 'off' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/daemon\.websocket_compression must be a boolean/);
   });
 
   it('reports every unrecognized nested key with its full path', async () => {

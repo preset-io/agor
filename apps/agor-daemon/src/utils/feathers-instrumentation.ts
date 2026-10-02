@@ -56,6 +56,8 @@ const TAGGED_CUSTOM_METHODS: Readonly<Record<string, readonly string[]>> = {
     'reportTerminationComplete',
     'reportRuntimeTelemetry',
     'reportSdkHealthFailure',
+    'beginOpenCodeCheckpoint',
+    'acknowledgeOpenCodeCleanup',
   ],
 };
 

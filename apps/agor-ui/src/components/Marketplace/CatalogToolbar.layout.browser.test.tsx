@@ -301,9 +301,23 @@ it('keeps sheet controls and footer reachable at a short height', async () => {
   await userEvent.tab();
   const sort = within(sheet).getByRole('combobox', { name: 'Sort servers' });
   expect(sort).toHaveFocus();
-  await userEvent.keyboard('{ArrowDown}{ArrowDown}{Enter}');
-  await userEvent.tab();
+  // The popup and its active option mount asynchronously. Send the next key
+  // only once the previous action has committed, including on a busy runner.
+  await userEvent.keyboard('{ArrowDown}');
+  await expect.poll(() => sort.getAttribute('aria-expanded')).toBe('true');
+  await userEvent.keyboard('{ArrowDown}');
+  await expect
+    .poll(() =>
+      document
+        .getElementById(sort.getAttribute('aria-activedescendant') ?? '')
+        ?.getAttribute('aria-label')
+    )
+    .toBe('A–Z');
+  await userEvent.keyboard('{Enter}');
   const reset = within(sheet).getByRole('button', { name: 'Reset' });
+  await expect.poll(() => reset.hasAttribute('disabled')).toBe(false);
+  await expect.poll(() => sort.getAttribute('aria-expanded')).toBe('false');
+  await userEvent.tab();
   expect(reset).toHaveFocus();
   await userEvent.keyboard('{Enter}');
   await userEvent.tab();

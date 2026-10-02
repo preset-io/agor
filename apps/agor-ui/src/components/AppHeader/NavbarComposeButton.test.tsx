@@ -1,5 +1,5 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
@@ -273,8 +273,8 @@ describe('NavbarComposeButton', () => {
     openPopover();
     expect(await screen.findByTestId('compose-prompt')).toBeInTheDocument();
     expect(screen.getByText(/your primary assistant/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Send & Open' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Send in Background' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send & open' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send in background' })).toBeInTheDocument();
   });
 
   it('merges the resolved primary name into the header line', async () => {
@@ -326,7 +326,7 @@ describe('NavbarComposeButton', () => {
     expect(screen.getByTestId('config-chip-row')).toHaveAttribute('data-tool', 'codex');
 
     fireEvent.change(screen.getByTestId('compose-prompt'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ agent: 'codex' });
   });
@@ -361,7 +361,7 @@ describe('NavbarComposeButton', () => {
 
     fireEvent.change(screen.getByTestId('compose-prompt'), { target: { value: 'go' } });
     fireEvent.click(screen.getByTestId('invalidate-config'));
-    expect(screen.getByRole('button', { name: 'Send & Open' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send & open' })).toBeDisabled();
     expect(onCreateSession).not.toHaveBeenCalled();
   });
 
@@ -371,7 +371,7 @@ describe('NavbarComposeButton', () => {
     const { onCreateSession } = renderCompose({ primary: branch, currentUser: user });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'go' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: undefined });
@@ -383,10 +383,10 @@ describe('NavbarComposeButton', () => {
     // Enable the buttons first; AntD tooltips don't fire on disabled controls.
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi' } });
 
-    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & open' }));
     expect(await screen.findByText(/takes you there now, on Ada's board/)).toBeInTheDocument();
 
-    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in Background' }));
+    fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
     expect(await screen.findByText(/in the background, on Ada's board/)).toBeInTheDocument();
   });
 
@@ -399,17 +399,17 @@ describe('NavbarComposeButton', () => {
     await screen.findByTestId('compose-prompt');
     expect(screen.getByTestId('attach-tray')).toHaveAttribute('data-count', '0');
     // Empty prompt + no attachment → send is blocked.
-    expect(screen.getByRole('button', { name: 'Send & Open' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Send & open' })).toBeDisabled();
 
     fireEvent.click(screen.getByTestId('drop-file'));
     expect(screen.getByTestId('attach-tray')).toHaveAttribute('data-count', '1');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0].attachmentFiles).toHaveLength(1);
   });
 
-  it('keeps the navbar trigger neutral (not primary) while Send & Open stays primary', async () => {
+  it('keeps the navbar trigger neutral (not primary) while Send in background is primary', async () => {
     renderCompose({ primary: primaryBranch });
     // The collapsed trigger is a calm default button, not a loud primary CTA.
     expect(
@@ -418,20 +418,20 @@ describe('NavbarComposeButton', () => {
 
     openPopover();
     await screen.findByTestId('compose-prompt');
-    expect(screen.getByRole('button', { name: 'Send & Open' })).toHaveClass('ant-btn-primary');
-    expect(screen.getByRole('button', { name: 'Send in Background' })).not.toHaveClass(
+    expect(screen.getByRole('button', { name: 'Send in background' })).toHaveClass(
       'ant-btn-primary'
     );
+    expect(screen.getByRole('button', { name: 'Send & open' })).not.toHaveClass('ant-btn-primary');
   });
 
-  it('Send & Open navigates to the new session when on a non-primary board', async () => {
+  it('send & open navigates to the new session when on a non-primary board', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: 'board-current',
     });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi Ada' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({
@@ -465,7 +465,7 @@ describe('NavbarComposeButton', () => {
       });
       openPopover();
       fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'slow' } });
-      fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
       await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
 
       liveAuthenticationGeneration = nextGeneration;
@@ -477,37 +477,41 @@ describe('NavbarComposeButton', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(goToSession).not.toHaveBeenCalled();
+      // The abandoned send no longer holds the buttons for the new owner.
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Send & open' })).toBeEnabled()
+      );
     }
   );
 
   it.each([
     ['home', '/'],
     ['Knowledge', '/knowledge'],
-  ])('Send & Open navigates directly from the %s surface', async (_surface, pathname) => {
+  ])('send & open navigates directly from the %s surface', async (_surface, pathname) => {
     renderCompose({ primary: primaryBranch, currentBoardId: '', pathname });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'ping' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
 
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
   });
 
-  it('Send in Background never navigates (board surface)', async () => {
+  it('send in background never navigates (board surface)', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: 'board-current',
     });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'bg' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send in Background' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send in background' }));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(goToSession).not.toHaveBeenCalled();
     expect(screen.queryByText('Session started')).not.toBeInTheDocument();
   });
 
-  it('Send in Background never navigates (non-board surface)', async () => {
+  it('send in background never navigates (non-board surface)', async () => {
     const { onCreateSession } = renderCompose({
       primary: primaryBranch,
       currentBoardId: '',
@@ -515,7 +519,7 @@ describe('NavbarComposeButton', () => {
     });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'bg' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send in Background' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send in background' }));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(goToSession).not.toHaveBeenCalled();
@@ -537,7 +541,7 @@ describe('NavbarComposeButton', () => {
     fireEvent.change(await screen.findByTestId('compose-prompt'), {
       target: { value: 'keep me' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
     // Nothing created yet — we're waiting on a teammate pick.
     expect(onCreateSession).not.toHaveBeenCalled();
 
@@ -551,12 +555,45 @@ describe('NavbarComposeButton', () => {
     await waitFor(() => expect(goToSession).toHaveBeenCalledWith('session-new'));
   });
 
+  it('does not resume a held send once the prompt was cleared', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    const promptBox = await screen.findByTestId('compose-prompt');
+    fireEvent.change(promptBox, { target: { value: 'draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
+    fireEvent.change(promptBox, { target: { value: '   ' } });
+    expect(screen.getByText('Pick a primary assistant above to send.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('pick-teammate'));
+    await waitFor(() =>
+      expect(screen.queryByText('Pick a primary assistant above to send.')).not.toBeInTheDocument()
+    );
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
+  it('drops a held send when the popover closes, so a pick after reopening does not send', async () => {
+    const { onCreateSession } = renderCompose({ primary: null });
+    openPopover();
+    fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
+    expect(screen.getByText('Pick a primary assistant above to send.')).toBeInTheDocument();
+
+    openPopover();
+    await waitFor(() => expect(screen.queryByTestId('pick-teammate')).not.toBeInTheDocument());
+    openPopover();
+    fireEvent.click(await screen.findByTestId('pick-teammate'));
+    await waitFor(() => expect(screen.queryByTestId('pick-teammate')).not.toBeInTheDocument());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(onCreateSession).not.toHaveBeenCalled();
+  });
+
   it('does not overwrite MCP edits made before choosing a primary assistant', async () => {
     const { onCreateSession } = renderCompose({ primary: null });
     openPopover();
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'keep me' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'Edited MCP' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Send & Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send & open' }));
     fireEvent.click(screen.getByTestId('pick-teammate'));
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));

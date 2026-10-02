@@ -123,3 +123,4 @@ Start with [Using Agor](https://agor.live/guide/features-overview),
 - [WebSocket Events](https://agor.live/api-reference/websockets): Real-time event reference
 - [Security](https://agor.live/security): Deployment modes, RBAC, trust boundaries
 - [FAQ](https://agor.live/faq): Frequently asked questions
+- [Agor Cloud Open Beta](https://agor.live/blog/agor-cloud-open-beta): Multiplayer AI on live spatial boards, shared workflows, and hosted open beta

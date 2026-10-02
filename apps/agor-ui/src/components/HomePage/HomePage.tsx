@@ -1,9 +1,17 @@
-import { AppstoreOutlined, BranchesOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
-import { Button, Dropdown, Layout, Modal, Segmented, Select, Space, Typography, theme } from 'antd';
-import type React from 'react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
+import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
+import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
+import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { useCommentsForYou } from '../../hooks/useCommentsForYou';
+import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
+import { useIdleReady } from '../../hooks/useIdleReady';
+import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
+import { useStableCallback } from '../../hooks/useStableCallback';
+import { useUserLocalStorage } from '../../hooks/useUserLocalStorage';
 import {
   type AgorState,
   agorStore,
@@ -11,519 +19,541 @@ import {
   useAgorStore,
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
-import { selectBoardById, selectBranchById } from '../../store/selectors';
-import { isDarkTheme } from '../../utils/theme';
-import { BoardTile, getBoardEmoji } from '../BoardTile';
-import { HomeActivitySection } from './HomeActivitySection';
-import { HomeBoardsSection } from './HomeBoardsSection';
+import {
+  compareHomeNeeds,
+  type HomeCommentNeed,
+  type HomeSessionNeed,
+  isUnreadResult,
+  lastRunStartedAt,
+  makeHomeBucketsSelector,
+} from '../../store/selectors';
+import { useThemedMessage } from '../../utils/message';
+import { runWithLimit } from '../../utils/promisePool';
+import {
+  OPEN_BOARD_SWITCHER_EVENT,
+  OPEN_GLOBAL_SEARCH_EVENT,
+  requestShellPicker,
+} from '../../utils/shellEvents';
+import { patchUserPreferences } from '../../utils/userPreferences';
+import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
-import { HomeSessionsSection } from './HomeSessionsSection';
-import { HomeStatsBar } from './HomeStatsBar';
-import { glassCardStyle } from './homeStyles';
-import { JumpBackInSection } from './JumpBackInSection';
+import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
+import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './HomeNeedsYou';
+import { HomeRecentBoards } from './HomeRecentBoards';
+import { HomeFrame } from './HomeSection';
+import { HomeTeammatesSection } from './HomeTeammates';
+import { HOME_MAIN_COLUMN_BASIS, HOME_PAGE_TITLE_LEVEL, HOME_RAIL_BASIS } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
-import type { HomePageProps } from './types';
 
-const { Content } = Layout;
-const { Text, Title } = Typography;
-
+const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
-const SIDEBAR_STORAGE_KEY = 'agor:homepage-sidebar-width';
-const SIDEBAR_DEFAULT = 340;
-const SIDEBAR_MIN = 240;
-const SIDEBAR_MAX_RATIO = 0.5;
+// Longer than the 7-day failure window, since a later patch can keep an old failure in view.
+const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+/** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
+const MARK_ALL_CONCURRENCY = 4;
+const NO_BOARD_IDS: string[] = [];
+/** Opened failure → the run it showed (server clock) and when it was opened; a bare number is the older click-time form. */
+type OpenedFailure = number | { run: number; at: number };
+const NO_OPENED_FAILURES: Record<string, OpenedFailure> = {};
+const openedField = (entry: unknown, field: 'run' | 'at'): number => {
+  if (typeof entry === 'number') return entry;
+  const value = entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[field] : 0;
+  return typeof value === 'number' ? value : 0;
+};
+const openedAt = (entry: OpenedFailure) => openedField(entry, 'at');
+const openedRun = (entry: OpenedFailure) => openedField(entry, 'run');
+// A stored container that isn't a plain object (null, a list, a number) reads as empty.
+const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
+  stored && typeof stored === 'object' && !Array.isArray(stored)
+    ? (stored as Record<string, OpenedFailure>)
+    : NO_OPENED_FAILURES;
 
-// Direct map-value iteration with an early exit — avoids materializing an array
-// of every session on each store notify just to test for one visible match.
-function hasVisibleSession(sessionById: AgorState['sessionById'], currentUserId?: string): boolean {
-  for (const s of sessionById.values()) {
-    if (!s.archived && (!currentUserId || s.created_by === currentUserId)) return true;
-  }
-  return false;
+const isHomeWorkView = (value: unknown): value is HomeWorkView =>
+  HOME_WORK_VIEWS.includes(value as HomeWorkView);
+
+type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
+
+/** Route state other surfaces use to land on part of Home. */
+export interface HomeLocationState {
+  needsFilter?: NeedsFilter;
 }
 
-const NEW_MENU_ITEMS: MenuProps['items'] = [
-  { key: 'teammate', label: 'New AI teammate', icon: <RobotOutlined /> },
-  { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
-  { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
-];
+export interface HomePageProps {
+  client: AgorClient | null;
+  currentUser?: User | null;
+  recentBoardIds?: string[];
+  onBoardClick: (boardId: string) => void;
+  /** `boardId` is where the branch lives, for callers that can't find the branch itself. */
+  onBranchClick: (branchId: string, boardId: string) => void;
+  onSessionClick: (sessionId: string) => void;
+  /** Omitted for callers who can't start sessions: the ask box hides. */
+  onCreateSession?: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<SessionCreationResult | null>;
+  /** Board and teammate onboarding steps; phones have no create dialog. */
+  onOpenCreateDialog?: (tab: CreateTab, boardId?: string) => void;
+  onOpenSettings?: (section: 'repos' | 'mcp' | 'users') => void;
+  /** Defaults to the header board switcher. */
+  onAllBoards?: () => void;
+  /** Defaults to header search filtered to sessions. */
+  onSeeAllSessions?: () => void;
+  /** Opens the teammates directory; the rail's "See all" hides without it. */
+  onSeeAllTeammates?: () => void;
+}
 
-/**
- * Gate around OnboardingCard that owns the onboarding-progress subscription,
- * so its per-notification cost (including a session scan for `hasSessions`)
- * exists ONLY while the card can appear. HomePage unmounts this once the card
- * is dismissed — the common case for established users — leaving the page
- * with zero onboarding subscription cost; when every step is done it renders
- * nothing while parked on the (rarely notified) shallow-equal booleans.
- */
+const scrollToSection = (id: string) =>
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+const focusAsk = () => {
+  scrollToSection('ask');
+  document.querySelector<HTMLTextAreaElement>('#ask textarea')?.focus();
+};
+
+function greeting(date = new Date()) {
+  const hour = date.getHours();
+  return hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
+}
+
+const selectHydrated = (s: AgorState) => s.sessionsHydrated && s.branchesHydrated;
+
+/** Onboarding steps the caller can perform, subscribed only while the card can still show. */
 const HomeOnboarding: React.FC<{
-  currentUserId?: string;
-  onNewSession: () => void;
-  onOpenCreateDialog: HomePageProps['onOpenCreateDialog'];
-  onOpenSettings: HomePageProps['onOpenSettings'];
+  isAdmin: boolean;
+  /** Without it there is no ask box, so the session step hides. */
+  canStartSessions: boolean;
+  onOpenCreateDialog?: HomePageProps['onOpenCreateDialog'];
+  onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>;
   onDismiss: () => void;
-}> = ({ currentUserId, onNewSession, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
-  // Booleans with shallow equality: entity patches only re-render this gate
-  // when a step actually flips (e.g. first repo connected). `sessionById`
-  // keeps archived sessions around for deep links, so `hasSessions` must
-  // filter !archived (and scope to the current user when known); `.some`
-  // exits the scan at the first match.
-  const { hasBoards, hasRepos, hasMcp, hasTeammates, hasSessions } = useStoreWithEqualityFn(
+}> = ({ isAdmin, canStartSessions, onOpenCreateDialog, onOpenSettings, onDismiss }) => {
+  const done = useStoreWithEqualityFn(
     agorStore,
-    (state) => ({
-      hasBoards: state.boardById.size > 0,
-      hasRepos: state.repoById.size > 0,
-      hasMcp: state.mcpServerById.size > 0,
-      hasTeammates: state.userById.size > 1,
-      hasSessions: hasVisibleSession(state.sessionById, currentUserId),
+    (s) => ({
+      repo: s.repoById.size > 0,
+      board: s.boardById.size > 0,
+      mcp: s.mcpServerById.size > 0,
+      invite: s.userById.size > 1,
     }),
     shallow
   );
-
-  const steps = useMemo(() => {
-    return [
-      {
-        id: 'repo',
-        label: 'Connect a repository',
-        done: hasRepos,
-        cta: 'Connect →',
-        onClick: () => onOpenSettings('repos'),
-      },
-      {
-        id: 'board',
-        label: 'Create your first board',
-        done: hasBoards,
-        cta: 'Create →',
-        onClick: () => onOpenCreateDialog('board'),
-      },
-      {
-        id: 'session',
-        label: 'Launch an AI session',
-        done: hasSessions,
-        cta: 'Start →',
-        onClick: onNewSession,
-      },
-      {
-        id: 'mcp',
-        label: 'Configure MCP tools',
-        done: hasMcp,
-        cta: 'Set up →',
-        onClick: () => onOpenSettings('mcp'),
-      },
-      {
-        id: 'invite',
-        label: 'Invite a teammate',
-        done: hasTeammates,
-        cta: 'Invite →',
-        onClick: () => onOpenSettings('users'),
-      },
-    ];
-  }, [
-    hasBoards,
-    hasRepos,
-    hasMcp,
-    hasTeammates,
-    hasSessions,
-    onOpenCreateDialog,
-    onOpenSettings,
-    onNewSession,
-  ]);
-
-  if (steps.every((s) => s.done)) return null;
-
+  const steps = [
+    {
+      id: 'repo',
+      label: 'Connect a repository',
+      cta: 'Connect',
+      done: done.repo,
+      onClick: () => onOpenSettings('repos'),
+    },
+    {
+      id: 'board',
+      label: 'Create your first board',
+      cta: 'Create',
+      done: done.board,
+      onClick: onOpenCreateDialog && (() => onOpenCreateDialog('board')),
+    },
+    ...(canStartSessions
+      ? [
+          {
+            id: 'session',
+            label: 'Launch an AI session',
+            cta: 'Start',
+            done: false,
+            onClick: onOpenCreateDialog ? () => onOpenCreateDialog('teammate') : focusAsk,
+          },
+        ]
+      : []),
+    ...(isAdmin ? adminSteps(done, onOpenSettings) : []),
+  ];
+  if (steps.every((step) => step.done)) return null;
   return <OnboardingCard steps={steps} onDismiss={onDismiss} />;
 };
 
-export const HomePage = memo(function HomePage(props: HomePageProps) {
+/** Workspace setup only admins can do. */
+const adminSteps = (
+  done: { mcp: boolean; invite: boolean },
+  onOpenSettings: NonNullable<HomePageProps['onOpenSettings']>
+) => [
+  {
+    id: 'mcp',
+    label: 'Configure MCP tools',
+    cta: 'Set up',
+    done: done.mcp,
+    onClick: () => onOpenSettings('mcp'),
+  },
+  {
+    id: 'invite',
+    label: 'Invite a teammate',
+    cta: 'Invite',
+    done: done.invite,
+    onClick: () => onOpenSettings('users'),
+  },
+];
+
+export const HomePage = memo(function HomePage({
+  client,
+  currentUser,
+  recentBoardIds = NO_BOARD_IDS,
+  onBoardClick,
+  onBranchClick,
+  onSessionClick,
+  onCreateSession,
+  onOpenCreateDialog,
+  onOpenSettings,
+  onAllBoards,
+  onSeeAllSessions,
+  onSeeAllTeammates,
+}: HomePageProps) {
   const { token } = theme.useToken();
-  const homeBackground = DEFAULT_BACKGROUNDS[isDarkTheme(token) ? 'dark' : 'light'];
+  const { showError } = useThemedMessage();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isMobile = useIsMobileViewport();
+  const { connected, connecting } = useConnectionState();
+  const mutationDisabled = useConnectionDisabled();
+  const railReady = useIdleReady();
+  const confirmArchive = useStableCallback(useConfirmArchiveSession(client));
+  const userId = currentUser?.user_id;
 
-  // HomePage deliberately subscribes to NOTHING session-shaped: sections that
-  // display session data subscribe themselves, so a streaming session patch
-  // wakes only those sections — never this whole page. Boards are the one
-  // whole-map subscription left (board options + default board for the create
-  // modal); board patches are rare.
-  const boardById = useAgorStore(selectBoardById);
-  const branchById = useAgorStore(selectBranchById);
-
-  const [onboardingHidden, setOnboardingHidden] = useState(
-    () => localStorage.getItem(ONBOARDING_HIDDEN_KEY) === 'true'
+  const [needsFilter, setNeedsFilter] = useState<NeedsFilter>('all');
+  const [needsExpanded, setNeedsExpanded] = useState(false);
+  const [tab, setTab] = useState<MyWorkTab>('recent');
+  // This visit's pick wins over the loaded record; keyed by user so it never crosses accounts.
+  const [viewPick, setViewPick] = useState<{ userId?: string; view: HomeWorkView }>();
+  const savedView = currentUser?.preferences?.homeWorkView;
+  const workView: HomeWorkView =
+    viewPick && viewPick.userId === userId
+      ? viewPick.view
+      : isHomeWorkView(savedView)
+        ? savedView
+        : HOME_WORK_VIEWS[0];
+  const viewWrites = useRef(Promise.resolve());
+  const changeWorkView = useCallback(
+    (view: HomeWorkView) => {
+      setViewPick({ userId, view });
+      if (!client || !userId) return;
+      // Chained so the last pick lands last; a failed write keeps the pick on this device.
+      viewWrites.current = viewWrites.current
+        .then(async () => {
+          await patchUserPreferences(client, userId, { homeWorkView: view });
+        })
+        .catch(() => {});
+    },
+    [client, userId]
   );
-
-  const currentUserName = useAgorStore((s) =>
-    props.currentUserId ? s.userById.get(props.currentUserId)?.name : undefined
+  const [onlyStartedByMe, setOnlyStartedByMe] = useUserLocalStorage(
+    userId,
+    'home-only-mine',
+    false
   );
-  const username = currentUserName || 'there';
-
-  // Resizable sidebar
-  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
-    try {
-      const stored = Number(localStorage.getItem(SIDEBAR_STORAGE_KEY));
-      if (!Number.isFinite(stored) || stored <= 0) return SIDEBAR_DEFAULT;
-      const maxW =
-        typeof window !== 'undefined'
-          ? window.innerWidth * SIDEBAR_MAX_RATIO
-          : Number.POSITIVE_INFINITY;
-      return Math.min(Math.max(SIDEBAR_MIN, stored), Math.max(SIDEBAR_MIN, maxW));
-    } catch {
-      return SIDEBAR_DEFAULT;
-    }
-  });
-  const [sidebarVisible, setSidebarVisible] = useState(
-    () => typeof window !== 'undefined' && window.innerWidth >= 992
+  const [storedOpenedFailures, setOpenedFailures] = useUserLocalStorage(
+    userId,
+    'home-opened-failures',
+    NO_OPENED_FAILURES
   );
-  const [dragHandleHovered, setDragHandleHovered] = useState(false);
-  const isDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const dragStartW = useRef(0);
-  const dragCleanupRef = useRef<(() => void) | null>(null);
-  const sidebarWidthRef = useRef(sidebarWidth);
-  sidebarWidthRef.current = sidebarWidth;
+  const openedRuns = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(asOpenedFailures(storedOpenedFailures)).map(([id, entry]) => [
+          id,
+          openedRun(entry),
+        ])
+      ),
+    [storedOpenedFailures]
+  );
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+  const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);
+  // Frozen at mount: Home unmounts on navigation, so the 7-day failure window stays fresh enough.
+  const [now] = useState(Date.now);
+  const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
+
+  const hydrated = useAgorStore(selectHydrated);
+  // Visit history that still names live boards; when none do, recent sessions stand in.
+  const visitedBoardIds = useStoreWithEqualityFn(
+    agorStore,
+    useMemo(
+      () => (s: AgorState) =>
+        recentBoardIds.filter((id) => {
+          const board = s.boardById.get(id);
+          return !!board && !board.archived;
+        }),
+      [recentBoardIds]
+    ),
+    shallow
+  );
+  const buckets = useStoreWithEqualityFn(
+    agorStore,
+    useMemo(
+      () =>
+        makeHomeBucketsSelector({
+          userId,
+          now,
+          needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
+          recentLimit: workLimit,
+          boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
+          query: deferredQuery,
+          onlyStartedByMe,
+          openedFailures: openedRuns,
+        }),
+      [
+        userId,
+        now,
+        needsExpanded,
+        workLimit,
+        visitedBoardIds.length,
+        deferredQuery,
+        onlyStartedByMe,
+        openedRuns,
+      ]
+    ),
+    shallow
+  );
+  const comments = useCommentsForYou(client, currentUser);
+  const needsLimit = needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW;
+  const needs = useMemo(
+    () =>
+      (needsFilter === 'comments'
+        ? comments
+        : [...buckets.needs, ...comments].sort(compareHomeNeeds)
+      ).slice(0, needsLimit),
+    [needsFilter, comments, buckets.needs, needsLimit]
+  );
+  const needsCount = buckets.needsCount + comments.length;
+  const newUser = hydrated && !buckets.hasSessions && comments.length === 0;
 
   useEffect(() => {
-    const onResize = () => setSidebarVisible(window.innerWidth >= 992);
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, []);
+    if (!comments.length) setNeedsFilter('all');
+  }, [comments.length]);
 
-  const handleDragStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current = true;
-    dragStartX.current = e.clientX;
-    dragStartW.current = sidebarWidthRef.current;
+  // A landing filter applies once there is something to show, then leaves the history entry.
+  const routeFilter = (location.state as HomeLocationState | null)?.needsFilter;
+  const { pathname, search, hash } = location;
+  useEffect(() => {
+    if (!routeFilter) return;
+    const applicable = routeFilter !== 'comments' || comments.length > 0;
+    if (!applicable && !hydrated) return;
+    if (applicable) setNeedsFilter(routeFilter);
+    requestAnimationFrame(() => scrollToSection('needs'));
+    navigate({ pathname, search, hash }, { replace: true, state: null });
+  }, [routeFilter, comments.length, hydrated, navigate, pathname, search, hash]);
 
-    const onMove = (ev: MouseEvent) => {
-      if (!isDragging.current) return;
-      const maxW = window.innerWidth * SIDEBAR_MAX_RATIO;
-      const newW = Math.max(
-        SIDEBAR_MIN,
-        Math.min(maxW, dragStartW.current - (ev.clientX - dragStartX.current))
-      );
-      setSidebarWidth(newW);
-    };
-    function teardown() {
-      isDragging.current = false;
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      dragCleanupRef.current = null;
-    }
-    function onUp() {
-      setSidebarWidth((w) => {
-        try {
-          localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(w)));
-        } catch {}
-        return w;
-      });
-      teardown();
-    }
-    dragCleanupRef.current = teardown;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  }, []);
-
-  // Tear down an in-progress drag if the page unmounts mid-drag.
-  useEffect(() => () => dragCleanupRef.current?.(), []);
-
-  const defaultBoardId = useMemo(() => {
-    const firstRecent = (props.recentBoardIds ?? []).find(
-      (id) => boardById.get(id)?.archived === false
-    );
-    if (firstRecent) return firstRecent;
-    for (const board of boardById.values()) {
-      if (!board.archived) return board.board_id;
-    }
-    return undefined;
-  }, [boardById, props.recentBoardIds]);
-
-  const boardOptions = useMemo(
-    () =>
-      Array.from(boardById.values())
-        .filter((b) => !b.archived)
-        .map((b) => ({
-          value: b.board_id,
-          label: (
-            <Space size={8}>
-              <BoardTile emoji={getBoardEmoji(b, branchById)} size={20} />
-              <span>{b.name}</span>
-            </Space>
-          ),
-        })),
-    [boardById, branchById]
-  );
-
-  const [createOpen, setCreateOpen] = useState(false);
-  const [selectedBoardId, setSelectedBoardId] = useState<string | undefined>();
-  const [createType, setCreateType] = useState<'teammate' | 'branch'>('teammate');
-
-  const handleNewSession = useCallback(
-    (defaultType: 'teammate' | 'branch' = 'teammate') => {
-      setCreateType(defaultType);
-      setSelectedBoardId(defaultBoardId);
-      setCreateOpen(true);
+  const openComment = useCallback(
+    ({ thread }: HomeCommentNeed) => {
+      if (thread.session_id) onSessionClick(thread.session_id);
+      else if (thread.branch_id) onBranchClick(thread.branch_id, thread.board_id);
+      else onBoardClick(thread.board_id);
     },
-    [defaultBoardId]
+    [onBoardClick, onBranchClick, onSessionClick]
+  );
+  // A group header stands for its earlier failures too, so opening it marks every one seen.
+  const openFailure = useCallback(
+    (need: HomeSessionNeed) => {
+      const now = Date.now();
+      const cutoff = now - OPENED_FAILURES_WINDOW_MS;
+      const { sessionById } = agorStore.getState();
+      const opened = [need.session, ...(need.earlier ?? [])].map(({ session_id }) => {
+        const session = sessionById.get(session_id);
+        // The run the person saw, on the server clock, so only a newer run brings the failure back.
+        return [session_id, { run: session ? lastRunStartedAt(session) : now, at: now }] as const;
+      });
+      setOpenedFailures((prev) => ({
+        ...Object.fromEntries(
+          Object.entries(asOpenedFailures(prev)).filter(([, entry]) => openedAt(entry) > cutoff)
+        ),
+        ...Object.fromEntries(opened),
+      }));
+      onSessionClick(need.session.session_id);
+    },
+    [onSessionClick, setOpenedFailures]
+  );
+  const markRead = useCallback(
+    (sessionId: string) => {
+      client
+        ?.service('sessions')
+        .patch(sessionId, { ready_for_prompt: false })
+        .catch(() => showError('Couldn’t mark as read'));
+    },
+    [client, showError]
+  );
+  const [markingAll, setMarkingAll] = useState(false);
+  const markAllRead = useCallback(async () => {
+    if (!client) return;
+    const ids = [...agorStore.getState().sessionById.values()]
+      .filter((s) => s.created_by === userId && !s.archived && isUnreadResult(s))
+      .map((s) => s.session_id);
+    setMarkingAll(true);
+    try {
+      const failed = await runWithLimit(ids, MARK_ALL_CONCURRENCY, (id) =>
+        client.service('sessions').patch(id, { ready_for_prompt: false })
+      );
+      if (failed.length === ids.length && failed.length) showError('Couldn’t mark as read');
+      else if (failed.length) showError(`Couldn’t mark ${failed.length} of ${ids.length} as read`);
+    } finally {
+      setMarkingAll(false);
+    }
+  }, [client, userId, showError]);
+  const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
+  const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
+  const showRunning = useCallback(() => {
+    setTab('running');
+    scrollToSection('mywork');
+  }, []);
+  const jumpToNeeds = useCallback(() => scrollToSection('needs'), []);
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const allBoards = useCallback(
+    () => (onAllBoards ?? (() => requestShellPicker(OPEN_BOARD_SWITCHER_EVENT)))(),
+    [onAllBoards]
+  );
+  const seeAllSessions = useCallback(
+    () => (onSeeAllSessions ?? (() => requestShellPicker(OPEN_GLOBAL_SEARCH_EVENT, 'session')))(),
+    [onSeeAllSessions]
   );
 
-  const handleConfirmCreate = useCallback(() => {
-    setCreateOpen(false);
-    props.onOpenCreateDialog(createType, selectedBoardId);
-  }, [props.onOpenCreateDialog, createType, selectedBoardId]);
+  const firstName = currentUser?.name?.trim().split(/\s+/)[0] || 'there';
+  // Waits for hydration so returning users never see it flash on a cold load.
+  const onboarding = hydrated && !onboardingHidden && onOpenSettings && !buckets.hasSessions && (
+    <HomeOnboarding
+      isAdmin={isAdmin}
+      canStartSessions={!!onCreateSession}
+      onOpenCreateDialog={onOpenCreateDialog}
+      onOpenSettings={onOpenSettings}
+      onDismiss={() => setOnboardingHidden(true)}
+    />
+  );
+  const textButton = { paddingInline: 0 };
 
   return (
-    <>
-      <div style={{ height: '100%', overflow: 'hidden', background: homeBackground }}>
-        <Layout hasSider style={{ height: '100%', background: 'transparent' }}>
-          <Content
-            style={{
-              overflowY: 'auto',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: 'clamp(16px, 3vw, 28px) clamp(16px, 3vw, 32px) 80px',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                height: '100%',
-                minHeight: 0,
-              }}
-            >
-              {/* Greeting */}
-              <header
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  justifyContent: 'space-between',
-                  gap: 16,
-                  marginBottom: 24,
-                }}
-              >
-                <div>
-                  <Title level={5} style={{ margin: 0, fontWeight: 700 }}>
-                    Hi, {username}! 👋
-                  </Title>
-                  <Text type="secondary" style={{ fontSize: 14 }}>
-                    Here's an overview of your workspace.
-                  </Text>
-                </div>
-                <Dropdown
-                  menu={{
-                    items: NEW_MENU_ITEMS,
-                    onClick: ({ key }) => {
-                      if (key === 'teammate' || key === 'branch') {
-                        handleNewSession(key);
-                      } else {
-                        props.onOpenCreateDialog(key as 'board');
-                      }
-                    },
-                  }}
-                  trigger={['click']}
-                >
-                  <Button type="primary" icon={<PlusOutlined />}>
-                    New
-                  </Button>
-                </Dropdown>
-              </header>
-
-              {/* Get started onboarding card — gate unmounted once dismissed */}
-              {!onboardingHidden && (
-                <HomeOnboarding
-                  currentUserId={props.currentUserId}
-                  onNewSession={handleNewSession}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                  onOpenSettings={props.onOpenSettings}
-                  onDismiss={() => {
-                    localStorage.setItem(ONBOARDING_HIDDEN_KEY, 'true');
-                    setOnboardingHidden(true);
-                  }}
-                />
-              )}
-
-              {/* Jump back in — awaiting sessions (renders nothing when none) */}
-              <JumpBackInSection
-                currentUserId={props.currentUserId}
-                onSessionClick={props.onSessionClick}
-              />
-
-              {/* Workspace stats */}
-              <HomeStatsBar currentUserId={props.currentUserId} />
-
-              {/* My Sessions — flex: 1 fills remaining viewport height */}
-              <HomeSessionsSection
-                currentUserId={props.currentUserId}
-                onSessionClick={props.onSessionClick}
-              />
-
-              {/* Boards grid */}
-              <div style={{ marginTop: 24 }}>
-                <HomeBoardsSection
-                  recentBoardIds={props.recentBoardIds}
-                  onBoardClick={props.onBoardClick}
-                  onOpenCreateDialog={props.onOpenCreateDialog}
-                />
-              </div>
-            </div>
-          </Content>
-
-          {/* Resizable right sidebar — hidden below 992px */}
-          {sidebarVisible && (
-            <aside
-              style={{
-                width: sidebarWidth,
-                flexShrink: 0,
-                position: 'relative',
-                borderLeft: `1px solid ${token.colorBorderSecondary}`,
-                ...glassCardStyle(token, 0.5),
-                overflow: 'hidden',
-                display: 'flex',
-                flexDirection: 'column',
-              }}
-            >
-              {/* Drag handle — biome-ignore lint/a11y/useSemanticElements: needs position:absolute full-height layout; <hr> can't serve as an interactive resize slider */}
-              {/* biome-ignore lint/a11y/useSemanticElements: interactive resize handle */}
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label="Resize sidebar"
-                aria-valuenow={Math.round(sidebarWidth)}
-                aria-valuemin={SIDEBAR_MIN}
-                aria-valuemax={Math.round(
-                  typeof window !== 'undefined'
-                    ? window.innerWidth * SIDEBAR_MAX_RATIO
-                    : SIDEBAR_DEFAULT
-                )}
-                tabIndex={0}
-                onMouseDown={handleDragStart}
-                onMouseEnter={() => setDragHandleHovered(true)}
-                onMouseLeave={() => setDragHandleHovered(false)}
-                onKeyDown={(e) => {
-                  const delta = e.key === 'ArrowLeft' ? 8 : e.key === 'ArrowRight' ? -8 : 0;
-                  if (delta) {
-                    e.preventDefault();
-                    setSidebarWidth((w) => {
-                      const maxW =
-                        typeof window !== 'undefined'
-                          ? window.innerWidth * SIDEBAR_MAX_RATIO
-                          : SIDEBAR_DEFAULT;
-                      const newW = Math.max(SIDEBAR_MIN, Math.min(maxW, w + delta));
-                      try {
-                        localStorage.setItem(SIDEBAR_STORAGE_KEY, String(Math.round(newW)));
-                      } catch {}
-                      return newW;
-                    });
-                  }
-                }}
-                title="Drag or use arrow keys to resize"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  width: 4,
-                  cursor: 'col-resize',
-                  zIndex: 10,
-                  background: dragHandleHovered ? token.colorPrimary : 'transparent',
-                  transition: 'background 0.15s',
-                }}
-              />
-              <div
-                style={{
-                  flex: 1,
-                  minHeight: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  overflow: 'hidden',
-                  padding: '16px 12px 16px 16px',
-                  gap: 32,
-                }}
-              >
-                <HomeActivitySection
-                  onBoardClick={props.onBoardClick}
-                  onBranchClick={props.onBranchClick}
-                  onSessionClick={props.onSessionClick}
-                />
-                <HomeKnowledgeSection client={props.client} connected={props.connected} />
-              </div>
-            </aside>
-          )}
-        </Layout>
-      </div>
-
-      <Modal
-        title={createType === 'branch' ? 'New branch' : 'New AI teammate'}
-        open={createOpen}
-        onCancel={() => setCreateOpen(false)}
-        width={420}
-        footer={
-          boardOptions.length === 0
-            ? [
-                <Button key="cancel" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </Button>,
-                <Button
-                  key="create"
-                  type="primary"
-                  onClick={() => {
-                    setCreateOpen(false);
-                    props.onOpenCreateDialog('board');
-                  }}
-                >
-                  Create a board first
-                </Button>,
-              ]
-            : [
-                <Button key="cancel" onClick={() => setCreateOpen(false)}>
-                  Cancel
-                </Button>,
-                <Button
-                  key="start"
-                  type="primary"
-                  disabled={!selectedBoardId}
-                  onClick={handleConfirmCreate}
-                >
-                  {createType === 'teammate' ? 'Start AI teammate' : 'Create branch'}
-                </Button>,
-              ]
-        }
-      >
-        {boardOptions.length === 0 ? (
-          <div style={{ padding: '8px 0 4px' }}>
-            <Typography.Text type="secondary" style={{ display: 'block', fontSize: 13 }}>
-              You don't have any boards yet. Create one first to organise your work.
-            </Typography.Text>
-          </div>
+    <HomeFrame>
+      {!isMobile && !connected && (
+        <Alert
+          type={connecting ? 'info' : 'warning'}
+          showIcon
+          title={
+            connecting
+              ? 'Reconnecting… showing what we had before the connection dropped.'
+              : 'You’re offline. Showing what we had before the connection dropped.'
+          }
+        />
+      )}
+      <div style={{ minWidth: 0 }}>
+        <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
+          Good {greeting()}, {firstName}
+        </Typography.Title>
+        {!hydrated ? (
+          <Skeleton.Input active size="small" style={{ width: 220 }} />
         ) : (
-          <div style={{ padding: '8px 0 4px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <Segmented
-              value={createType}
-              onChange={(v) => setCreateType(v as 'teammate' | 'branch')}
-              block
-              options={[
-                { value: 'teammate', label: 'AI teammate', icon: <RobotOutlined /> },
-                { value: 'branch', label: 'Branch / Worktree', icon: <BranchesOutlined /> },
-              ]}
-            />
-            <div>
-              <Typography.Text style={{ display: 'block', marginBottom: 8, fontSize: 13 }}>
-                Which board?
-              </Typography.Text>
-              <Select
-                value={selectedBoardId}
-                onChange={setSelectedBoardId}
-                options={boardOptions}
-                placeholder="Select a board"
-                style={{ width: '100%' }}
-              />
-            </div>
-          </div>
+          !newUser && (
+            <Flex align="center" gap={token.marginXS} wrap>
+              <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
+                {needsCount ? (
+                  <span>
+                    <Typography.Text strong>{needsCount}</Typography.Text> need you
+                  </span>
+                ) : (
+                  'All caught up'
+                )}
+              </Button>
+              {buckets.runningCount > 0 && (
+                <>
+                  <Typography.Text type="secondary" aria-hidden>
+                    ·
+                  </Typography.Text>
+                  <Button type="text" size="small" style={textButton} onClick={showRunning}>
+                    <span>
+                      <Typography.Text strong>{buckets.runningCount}</Typography.Text> running
+                    </span>
+                  </Button>
+                </>
+              )}
+            </Flex>
+          )
         )}
-      </Modal>
-    </>
+      </div>
+      <HomeRecentBoards
+        recentBoardIds={visitedBoardIds.length ? visitedBoardIds : buckets.boardIds}
+        onBoardClick={onBoardClick}
+        onAllBoards={allBoards}
+      />
+      {onCreateSession && (
+        <div id="ask">
+          <HomeAskBox
+            client={client}
+            currentUser={currentUser}
+            hasSessions={!hydrated || buckets.hasSessions}
+            disabled={mutationDisabled}
+            onCreateSession={onCreateSession}
+            onOpenSession={onSessionClick}
+          />
+        </div>
+      )}
+      <Flex gap={token.marginXL} wrap align="flex-start">
+        <Flex
+          vertical
+          gap={token.marginXL}
+          style={{ flex: `999 1 ${HOME_MAIN_COLUMN_BASIS}px`, minWidth: 0 }}
+        >
+          {!newUser && (
+            <HomeNeedsYou
+              client={client}
+              needs={needs}
+              needsCount={needsCount}
+              needsByReason={buckets.needsByReason}
+              commentCount={comments.length}
+              filter={needsFilter}
+              onFilterChange={setNeedsFilter}
+              expanded={needsExpanded}
+              onExpandedChange={setNeedsExpanded}
+              hydrated={hydrated}
+              onOpenSession={onSessionClick}
+              onOpenFailure={openFailure}
+              onOpenComment={openComment}
+              onMarkRead={markRead}
+              onMarkAllRead={client && buckets.unreadCount > 0 ? markAllRead : undefined}
+              markingAllRead={markingAll}
+              markAllReadDisabled={mutationDisabled}
+              onArchive={mutationDisabled ? undefined : archive}
+            />
+          )}
+          {onboarding}
+          <HomeMyWork
+            recent={buckets.recent}
+            recentCount={buckets.recentCount}
+            running={buckets.running}
+            runningCount={buckets.runningCount}
+            runningMatchCount={buckets.runningMatchCount}
+            hydrated={hydrated}
+            tab={tab}
+            onTabChange={setTab}
+            view={workView}
+            onViewChange={changeWorkView}
+            query={query}
+            onQueryChange={setQuery}
+            onlyStartedByMe={onlyStartedByMe}
+            onOnlyStartedByMeChange={setOnlyStartedByMe}
+            onOpenSession={onSessionClick}
+            onShowMore={showMoreWork}
+            onOpenBoard={onBoardClick}
+            onSeeAll={seeAllSessions}
+          />
+        </Flex>
+        {railReady && (
+          <Flex
+            vertical
+            gap={token.marginXL}
+            style={{ flex: `1 1 ${HOME_RAIL_BASIS}px`, minWidth: 0 }}
+          >
+            <HomeTeammatesSection
+              client={client}
+              currentUser={currentUser}
+              checkAccess={!!onCreateSession}
+              onOpenBoard={onBoardClick}
+              onSeeAll={onSeeAllTeammates}
+            />
+            <HomeKnowledgeSection client={client} connected={connected} />
+          </Flex>
+        )}
+      </Flex>
+    </HomeFrame>
   );
 });
 

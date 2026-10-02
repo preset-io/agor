@@ -43,6 +43,7 @@ export * from './mcp-oauth-pending-flows';
 export * from './mcp-servers';
 export * from './mcp-slack-connect-settings';
 export * from './messages';
+export * from './opencode-checkpoints';
 export * from './repos';
 export * from './schedules';
 export * from './session-env-selections';

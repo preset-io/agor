@@ -29,10 +29,20 @@ import {
   isAgenticToolName,
   mapToCodexPermissionConfig,
 } from '@agor-live/client';
-import { DownOutlined, KeyOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import {
+  DownOutlined,
+  KeyOutlined,
+  LoadingOutlined,
+  SettingOutlined,
+  ThunderboltOutlined,
+} from '@ant-design/icons';
 import type { CollapseProps } from 'antd';
-import { Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
+import { Alert, Button, Collapse, Divider, Form, Modal, Typography, theme } from 'antd';
 import React from 'react';
+import {
+  fullSessionDetailsErrorMessage,
+  useFullSessionDetails,
+} from '../../hooks/useFullSessionDetails';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -51,6 +61,7 @@ import { ErrorBoundary } from '../ErrorBoundary';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionIdsList } from '../SessionIds';
 import { SessionMetadataForm } from '../SessionMetadataForm';
+import { buildCustomContextPatch, jsonEqual } from './customContextPatch';
 
 export interface SessionSettingsModalProps {
   open: boolean;
@@ -131,11 +142,21 @@ function buildInitialValues(session: Session, sessionMcpServerIds: string[]): Fo
   };
 }
 
-function buildUpdates(
-  values: FormValues,
-  session: Session,
-  initialCustomContext: string
-): Partial<Session> {
+/** Model config as the form folds it, without the server-stamped `updated_at`. */
+function comparableModelConfig(values: Pick<FormValues, 'modelConfig' | 'effort'>) {
+  const modelConfig = buildModelConfigFromFormValues({
+    modelConfig: values.modelConfig ?? undefined,
+    effort: values.effort,
+  });
+  if (!modelConfig) return undefined;
+  const { updated_at: _updatedAt, ...rest } = modelConfig as typeof modelConfig & {
+    updated_at?: string;
+  };
+  return rest;
+}
+
+function buildUpdates(values: FormValues, session: Session, initial: FormValues): Partial<Session> {
+  const initialCustomContext = initial.custom_context;
   const updates: Partial<Session> = {};
 
   if (values.title !== session.title) {
@@ -148,7 +169,13 @@ function buildUpdates(
     updates.agentic_tool_preset_id = presetId as Session['agentic_tool_preset_id'];
   }
 
-  if (!presetId && values.modelConfig) {
+  // Only send model_config when the model or effort was changed from what the
+  // form was seeded with; the daemon keeps the stored value otherwise.
+  if (
+    !presetId &&
+    values.modelConfig &&
+    !jsonEqual(comparableModelConfig(values), comparableModelConfig(initial))
+  ) {
     const modelConfig = buildModelConfigFromFormValues({
       modelConfig: values.modelConfig,
       effort: values.effort,
@@ -185,13 +212,18 @@ function buildUpdates(
     };
   }
 
-  // Only send custom_context when the JSON was actually edited: echoing an
-  // unedited copy back would overwrite newer server-side values (arrays such
-  // as SDK-reported slash_commands replace rather than merge on patch).
+  // Only send custom_context when the JSON was actually edited, and then only
+  // the top-level keys that changed relative to the snapshot the editor was
+  // seeded with: echoing unchanged values would overwrite newer server-side
+  // ones (arrays such as SDK-reported slash_commands replace on patch).
   if (values.custom_context !== initialCustomContext) {
     if (values.custom_context) {
       try {
-        updates.custom_context = JSON.parse(values.custom_context);
+        const patch = buildCustomContextPatch(
+          initialCustomContext ? JSON.parse(initialCustomContext) : {},
+          JSON.parse(values.custom_context)
+        );
+        if (patch !== undefined) updates.custom_context = patch;
       } catch {
         // Don't update if JSON is invalid
       }
@@ -234,14 +266,23 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
 
-  const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
-    buildInitialValues(session, sessionMcpServerIds)
-  );
-  // The `session` prop comes from a lean session list that omits bulky
+  // The `session` prop may be a lean list row that withholds bulky
   // custom_context keys. Seed the editable JSON from the full record so the
-  // user edits what is actually stored; read-only only while it loads.
-  const [fullContextSessionId, setFullContextSessionId] = React.useState<string | null>(null);
-  const customContextReady = !client || fullContextSessionId === session.session_id;
+  // user edits what is actually stored; read-only until it has loaded, and a
+  // visible error + Retry (never the lean row) if it cannot.
+  const fullDetails = useFullSessionDetails(client, session, open);
+  const fullSession = fullDetails.status === 'ready' ? fullDetails.session : null;
+  const [initialValues, setInitialValues] = React.useState<FormValues>(() =>
+    buildInitialValues(fullSession ?? session, sessionMcpServerIds)
+  );
+  const initialValuesRef = React.useRef(initialValues);
+  initialValuesRef.current = initialValues;
+  // The full record whose context the field currently holds. The editor
+  // unlocks only once the field is seeded, never on the render the record
+  // arrives in (the seed effect runs after that commit).
+  const [seededFullSession, setSeededFullSession] = React.useState<Session | null>(null);
+  const seededFullSessionRef = React.useRef(seededFullSession);
+  const customContextReady = fullSession !== null && seededFullSession === fullSession;
   const [envSelections, setEnvSelections] = React.useState<string[]>([]);
   const [initialEnvSelections, setInitialEnvSelections] = React.useState<string[]>([]);
   const prevOpenRef = React.useRef(false);
@@ -265,35 +306,30 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
 
     if ((open && !wasOpen) || (open && sessionChanged)) {
       const values = buildInitialValues(session, sessionMcpServerIds);
+      if (fullSession?.session_id === session.session_id) {
+        values.custom_context = formatCustomContext(fullSession.custom_context);
+        seededFullSessionRef.current = fullSession;
+        setSeededFullSession(fullSession);
+      }
       setInitialValues(values);
       form.setFieldsValue(values);
     }
-  }, [open, session, sessionMcpServerIds, form]);
+  }, [open, session, sessionMcpServerIds, form, fullSession]);
 
-  // Load the full custom_context when the modal opens (or retargets).
+  // Seed custom_context once the full record arrives (on open, retarget,
+  // Retry, or a reconnect retry). The field is read-only until then; an
+  // unedited field is replaced, an edit in progress is kept.
   React.useEffect(() => {
-    if (!open || !client) return;
-    let cancelled = false;
-    setFullContextSessionId(null);
-    (async () => {
-      try {
-        const full = (await client.service('sessions').get(session.session_id)) as Session;
-        if (cancelled) return;
-        const text = formatCustomContext(full.custom_context);
-        setFullContextSessionId(session.session_id);
-        setInitialValues((previous) => ({ ...previous, custom_context: text }));
-        // The field is read-only until now, so there is no edit to preserve.
-        form.setFieldValue('custom_context', text);
-      } catch {
-        // Fall back to the row's (possibly lean) context. Patches deep-merge
-        // objects, so keys absent from an edit are kept server-side.
-        if (!cancelled) setFullContextSessionId(session.session_id);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, client, session.session_id, form]);
+    if (!open || !fullSession || fullSession.session_id !== session.session_id) return;
+    if (seededFullSessionRef.current === fullSession) return;
+    seededFullSessionRef.current = fullSession;
+    const text = formatCustomContext(fullSession.custom_context);
+    const unedited =
+      form.getFieldValue('custom_context') === initialValuesRef.current.custom_context;
+    setInitialValues((previous) => ({ ...previous, custom_context: text }));
+    if (unedited) form.setFieldValue('custom_context', text);
+    setSeededFullSession(fullSession);
+  }, [open, fullSession, session.session_id, form]);
 
   // Load current env selections when the modal opens.
   React.useEffect(() => {
@@ -332,7 +368,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
     form.validateFields().then(() => {
       // Use getFieldsValue(true) to include values from collapsed panels
       const values = form.getFieldsValue(true) as FormValues;
-      const updates = buildUpdates(values, session, initialValues.custom_context);
+      const updates = buildUpdates(values, session, initialValues);
 
       if (Object.keys(updates).length > 0 && onUpdate) {
         onUpdate(session.session_id, updates);
@@ -438,16 +474,55 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   secondaryItems.push({
     key: 'advanced',
     label: (
-      <Typography.Text strong>
-        <SettingOutlined style={{ marginRight: 8 }} />
-        Advanced
-      </Typography.Text>
+      <>
+        <Typography.Text strong>
+          <SettingOutlined style={{ marginRight: 8 }} />
+          Advanced
+        </Typography.Text>
+        {fullDetails.status === 'error' && (
+          <Typography.Text type="danger" style={{ marginLeft: token.marginXS }}>
+            (details unavailable)
+          </Typography.Text>
+        )}
+        {fullDetails.status === 'loading' && (
+          <Typography.Text type="secondary" style={{ marginLeft: token.marginXS }}>
+            <LoadingOutlined style={{ marginRight: token.marginXXS }} />
+            (loading…)
+          </Typography.Text>
+        )}
+      </>
     ),
     children: (
       <ErrorBoundary
         fallbackTitle="Failed to load Advanced settings."
         resetKey={session.session_id}
       >
+        {fullDetails.status === 'error' && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: token.marginSM }}
+            title={fullSessionDetailsErrorMessage(fullDetails.error)}
+            description="Custom context stays read-only: this view omits scheduled-run and SDK command/skill fields until the full record loads."
+            action={
+              <Button size="small" onClick={fullDetails.retry}>
+                Retry
+              </Button>
+            }
+          />
+        )}
+        {/* The read-only editor below still holds the lean row's context, which
+            looks complete; say plainly that it is not. */}
+        {fullDetails.status === 'loading' && (
+          <Alert
+            type="info"
+            showIcon
+            icon={<LoadingOutlined />}
+            style={{ marginBottom: token.marginSM }}
+            title="Loading full session context…"
+            description="Custom context is read-only until it loads. Scheduled-run and SDK command/skill fields are not shown yet."
+          />
+        )}
         <AdvancedSettingsForm showHelpText disabled={!customContextReady} />
       </ErrorBoundary>
     ),
