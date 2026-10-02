@@ -985,6 +985,19 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
     const [emptyActivityExpanded, setEmptyActivityExpanded] = useState(false);
     const firstAgentChainIndex = blocks.findIndex((block) => block.type === 'agent-chain');
+    // Without a chain, loaded detail renders inside a text-bearing message.
+    const inlineRevealId =
+      revealLoadedActivity && firstAgentChainIndex === -1
+        ? blocks
+            .flatMap((block) => (block.type === 'message' ? [block.message] : []))
+            .find(
+              (message) =>
+                Array.isArray(message.content) &&
+                message.content.some(
+                  (content) => content.type === 'thinking' || content.type === 'tool_use'
+                )
+            )?.message_id
+        : undefined;
     const loadActivity = async () => {
       pinLoad();
       setDetailsLoading(true);
@@ -1180,6 +1193,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 compact={compact}
                 defaultTextExpanded={defaultTextExpanded}
                 showAvatar={!groupedAvatarMessageIds.has(block.message.message_id)}
+                revealDetails={block.message.message_id === inlineRevealId}
               />
             );
             return (

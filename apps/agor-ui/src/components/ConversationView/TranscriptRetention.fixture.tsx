@@ -29,6 +29,8 @@ const editTurns = new Set<number>();
 const tableTurns = new Set<number>();
 /** Tool result sizes of turns that read a very large file. */
 const payloadBytes = new Map<number, number>();
+/** Turns whose only detail sits inside the answer, beside its text: no AgentChain. */
+const inlineTurns = new Map<number, 'reasoning' | 'read'>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -53,7 +55,7 @@ function messages(n: number): Message[] {
   };
   const prefix = `TRANSCRIPT_RETENTION_${n}_`;
   const thinking = `TRANSCRIPT_THINKING_${n}_`;
-  return [
+  const [tool, result, answer] = [
     {
       ...base,
       message_id: `${taskId(n)}-tool` as MessageID,
@@ -121,6 +123,15 @@ function messages(n: number): Message[] {
       ],
     },
   ] as Message[];
+  const inline = inlineTurns.get(n);
+  if (!inline) return [tool, result, answer];
+  type Blocks = Extract<Message['content'], unknown[]>;
+  const [reasoning, text] = answer.content as Blocks;
+  const detail =
+    inline === 'reasoning'
+      ? [reasoning]
+      : [...(tool.content as Blocks), ...(result.content as Blocks)];
+  return [{ ...answer, content: [...detail, text] }];
 }
 
 const project = (message: Message): Message => ({
@@ -214,8 +225,19 @@ export const fixture = {
     await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn({ edit = false, table = false, bytes = 0 } = {}) {
+  addTurn({
+    edit = false,
+    table = false,
+    bytes = 0,
+    inline,
+  }: {
+    edit?: boolean;
+    table?: boolean;
+    bytes?: number;
+    inline?: 'reasoning' | 'read';
+  } = {}) {
     const n = turns++;
+    if (inline) inlineTurns.set(n, inline);
     if (edit) editTurns.add(n);
     if (table) tableTurns.add(n);
     if (bytes) payloadBytes.set(n, bytes);

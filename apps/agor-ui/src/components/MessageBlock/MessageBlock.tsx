@@ -123,6 +123,11 @@ interface MessageBlockProps {
   showAvatar?: boolean;
   /** Stable presentation identity while a confirmed task gains its initial message. */
   textChoiceKey?: string;
+  /**
+   * A reader loaded this turn's detail and it renders inline here: open the
+   * reasoning, or else the first tool, as the reader's expansion (it pins).
+   */
+  revealDetails?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -407,6 +412,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   defaultTextExpanded = true,
   showAvatar = true,
   textChoiceKey,
+  revealDetails = false,
 }) => {
   const { token } = theme.useToken();
   const [timestampOpen, setTimestampOpen] = useState(false);
@@ -823,6 +829,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
           defaultExpanded={false}
+          revealRequested={revealDetails}
         />
       )}
 
@@ -967,6 +974,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   descriptionNode={bashNode}
                   status={status}
                   expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+                  revealRequested={revealDetails && !hasThinking && toolIndex === 0}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>

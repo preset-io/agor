@@ -539,3 +539,27 @@ it('pins a turn from a reader’s detail load until its expanded activity holds 
   // The opened activity's pin takes over; only the load pin is released.
   await waitFor(() => expect(events).toEqual(['retain 1', 'retain 2', 'release 1']));
 });
+
+it('does not pin inline detail that arrives without a reader asking for it', () => {
+  const retain = vi.fn(() => () => {});
+  const full = {
+    ...messages[1],
+    content: [
+      { type: 'thinking', text: 'INLINE_DETAIL' },
+      { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/a.txt' } },
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'TOOL_DETAIL' },
+      { type: 'text', text: 'Visible answer' },
+    ],
+  } as Message;
+  render(
+    view({
+      onRetainTaskDetails: retain,
+      taskMessages: [messages[0], full],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(screen.getByText('Visible answer')).toBeVisible();
+  expect(screen.queryByText('INLINE_DETAIL')).toBeNull();
+  expect(screen.queryByText('TOOL_DETAIL')).toBeNull();
+  expect(retain).not.toHaveBeenCalled();
+});
