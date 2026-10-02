@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { requireValue, uuid } from './api.mjs';
 
 export const MARKER = 'AGOR_PREVIEW_BINDING';
+// Non-secret deletion receipt survives removal of the service's binding marker.
+export const CLEANUP_MARKER = 'AGOR_PREVIEW_CLEANUP';
 export function configuration(env, input) {
   if (env.RAILWAY_AGOR_PROJECT_ID && !env.RAILWAY_PREVIEW_CONFIG) {
     requireValue(

@@ -119,6 +119,14 @@ Nuke accepts confirmed pending deletion, not merely a successful API response.
 Partial cleanup may require manual Railway recovery; no broad orphan deletion is done.
 Missing recorded volumes are never silently replaced with empty storage.
 
+Nuke records a non-secret `AGOR_PREVIEW_CLEANUP` receipt in the owned environment
+before deleting its service. It waits briefly for provider deletion visibility;
+if interrupted, repeat Nuke to resume using the exact recorded resource IDs.
+Already-requested deletions are only observed, never blindly repeated. Start
+refuses a preview with unfinished cleanup. Foreign, replaced or reattached
+resources still stop cleanup. Pre-receipt failures or manual service deletion
+can require manual Railway cleanup because the service's ownership marker is gone.
+
 Use **one lifecycle controller per project**, and serialize lifecycle actions.
 This lightweight implementation does **not** provide distributed locking,
 exactly-once creation or HA-safe concurrent starts. Ownership markers are not

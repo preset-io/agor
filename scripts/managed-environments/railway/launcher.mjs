@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { validateSource } from '../../../docker/runtime-checkout.mjs';
 import { PreviewError, RailwayAPI, requireValue } from './api.mjs';
+import { readCleanup, removePreview } from './cleanup.mjs';
 import { configuration } from './configuration.mjs';
 import { previewBase } from './image.mjs';
 import { Preview } from './preview.mjs';
@@ -36,6 +37,18 @@ export async function run(action, input, env = process.env, request = fetch) {
     config.workspaceId = project.workspaceId;
   }
   const preview = new Preview(api, config, input);
+  const cleanup = await readCleanup(preview);
+  if (cleanup) {
+    requireValue(
+      action === 'nuke',
+      'Preview cleanup is incomplete. Repeat Nuke to finish; Start cannot reuse a deleting preview.'
+    );
+    await removePreview(preview, null, cleanup);
+    return {
+      message:
+        'Owned preview removed. Volume deletion requested; Railway may retain data during its recovery window.',
+    };
+  }
   let owned = await preview.inspect();
   if (action === 'check')
     return {
@@ -73,8 +86,13 @@ export async function run(action, input, env = process.env, request = fetch) {
     owned = await preview.ensure(owned, password);
     return preview.start(owned, sha);
   }
-  if (!owned.service)
+  if (!owned.service) {
+    requireValue(
+      action !== 'nuke' || !owned.environment,
+      'The service is missing and no cleanup receipt remains. Inspect the leftover environment in Railway; Nuke cannot prove ownership of manually detached resources.'
+    );
     return { message: 'No owned service exists for this branch. Nothing was changed.' };
+  }
   if (action === 'logs') {
     const logs = await preview.logs(owned);
     let safe = logs;

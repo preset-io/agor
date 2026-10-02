@@ -1021,6 +1021,13 @@ if needed. Storage charges continue. **Nuke permanently removes the owned
 service, volume and environment**, never the project. Missing recorded volumes
 are not silently recreated. Partial cleanup can require manual Railway recovery.
 
+Nuke saves a non-secret cleanup receipt in the owned environment before removing
+the service and waits for Railway's asynchronous deletion to become visible.
+If it stops partway through, repeat Nuke to resume from that receipt; Start will
+not reuse a preview being deleted. Unknown deletion outcomes are observed rather
+than blindly retried. Older failures without a receipt, manually deleted services,
+or changed resource ownership still require manual inspection in Railway.
+
 **Serialize actions through one lifecycle controller per project.** This simple
 launcher does not promise HA-safe concurrent starts or exactly-once creation.
 No mutation is automatically retried within an invocation. Inspect ambiguous

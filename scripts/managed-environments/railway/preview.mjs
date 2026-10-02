@@ -1,5 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { nodes, requireValue, uuid } from './api.mjs';
+import { removePreview } from './cleanup.mjs';
 import { appVariables, identity, MARKER, resourceName } from './configuration.mjs';
 
 const inventoryQuery = `query PreviewInventory($id:String!){project(id:$id){id workspaceId
@@ -531,100 +532,7 @@ export class Preview {
     );
   }
   async remove(owned) {
-    requireValue(
-      owned.record.ready && owned.volume && owned.domain,
-      'Refusing destructive cleanup of an incomplete preview; inspect manually.'
-    );
-    requireValue(
-      (await this.active(owned)).length === 0,
-      'Compute must be stopped before removal.'
-    );
-    const service = await this.api.query(
-      'mutation PreviewDeleteService($id:String!){serviceDelete(id:$id)}',
-      { id: owned.service.id }
-    );
-    requireValue(
-      service.serviceDelete === true,
-      'Service deletion not confirmed; inspect before retrying cleanup.'
-    );
-    const after = await this.inventory();
-    requireValue(
-      !after.services.some((s) => s.id === owned.service.id),
-      'Service deletion is still pending; inspect before cleanup.'
-    );
-    const volume = after.volumes.find((v) => v.id === owned.volume.id);
-    if (volume) {
-      const attachments = nodes(volume.volumeInstances);
-      requireValue(
-        attachments.length === 0 ||
-          (attachments.length === 1 &&
-            attachments[0].serviceId === null &&
-            attachments[0].environmentId === owned.environment.id &&
-            attachments[0].mountPath === '/home/agor/.agor'),
-        'Deleted service volume was reattached; refusing deletion.'
-      );
-      const result = await this.api.query(
-        'mutation PreviewDeleteVolume($id:String!){volumeDelete(volumeId:$id)}',
-        { id: volume.id }
-      );
-      requireValue(
-        result.volumeDelete === true,
-        'Volume deletion not confirmed; inspect provider state.'
-      );
-    }
-    const last = await this.inventory();
-    // Railway soft-deletes volume instances for its recovery window. Accept only
-    // the exact previously owned, now-detached instance after confirmed deletion.
-    const retained = last.volumes.find((v) => v.id === owned.volume.id);
-    let pendingDeletion = false;
-    if (retained) {
-      const instances = nodes(retained.volumeInstances);
-      requireValue(
-        instances.length === 1 &&
-          instances[0].serviceId === null &&
-          instances[0].environmentId === owned.environment.id &&
-          instances[0].mountPath === '/home/agor/.agor',
-        'Volume changed during deletion; inspect provider state.'
-      );
-      const { volumeInstance } = await this.api.query(
-        'query PreviewDeletedVolume($id:String!){volumeInstance(id:$id){id volumeId serviceId environmentId isPendingDeletion deletedAt}}',
-        { id: instances[0].id }
-      );
-      pendingDeletion =
-        volumeInstance?.id === instances[0].id &&
-        volumeInstance.volumeId === owned.volume.id &&
-        volumeInstance.serviceId === null &&
-        volumeInstance.environmentId === owned.environment.id &&
-        volumeInstance.isPendingDeletion === true &&
-        typeof volumeInstance.deletedAt === 'string' &&
-        Number.isFinite(Date.parse(volumeInstance.deletedAt));
-      requireValue(pendingDeletion, 'Volume deletion is not yet visible; inspect before retrying.');
-    }
-    requireValue(
-      !last.volumes.some(
-        (v) =>
-          !(v.id === owned.volume.id && pendingDeletion) &&
-          (v.id === owned.volume.id ||
-            nodes(v.volumeInstances).some((i) => i.environmentId === owned.environment.id))
-      ) &&
-        !last.services.some((s) =>
-          nodes(s.serviceInstances).some((i) => i.environmentId === owned.environment.id)
-        ),
-      'Environment is no longer empty; refusing deletion.'
-    );
-    const result = await this.api.query(
-      'mutation PreviewDeleteEnvironment($id:String!){environmentDelete(id:$id)}',
-      { id: owned.environment.id }
-    );
-    requireValue(
-      result.environmentDelete === true,
-      'Environment deletion not confirmed; inspect provider state.'
-    );
-    const final = await this.inventory();
-    requireValue(
-      !final.environments.some((e) => e.id === owned.environment.id),
-      'Environment deletion is still pending; inspect Railway before retrying.'
-    );
+    return removePreview(this, owned);
   }
   async logs(owned) {
     const deployment = (await this.deployments(owned))[0];
