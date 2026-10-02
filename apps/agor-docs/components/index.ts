@@ -5,6 +5,5 @@ export { BlogIndex } from './BlogIndex';
 export { CloudInviteCTA } from './CloudInviteCTA';
 export { ContactLanding } from './ContactLanding';
 export { GifGallery } from './GifGallery';
-export { JoinBetaCTA } from './JoinBetaCTA';
 export { LandingPage } from './LandingPage';
 export { YouTubeEmbed } from './YouTubeEmbed';
