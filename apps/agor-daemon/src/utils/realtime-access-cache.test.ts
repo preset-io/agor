@@ -17,6 +17,10 @@ function cacheSizes(cache: RealtimeAccessCache): number[] {
   );
 }
 
+function cacheKeys(cache: RealtimeAccessCache, key: string): string[] {
+  return [...(Reflect.get(cache, key) as Map<string, unknown>).keys()];
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -314,6 +318,54 @@ describe('RealtimeAccessCache', () => {
     expect(cacheSizes(cache)).toEqual([32, 32, 32]);
   });
 
+  it('moves a concurrently overwritten key to the tail for expiry and eviction', async () => {
+    let now = 1_000;
+    const firstRead = deferred<BranchID | null>();
+    const secondRead = deferred<BranchID | null>();
+    const findBranchIdBySessionId = vi
+      .fn()
+      .mockImplementationOnce(() => firstRead.promise)
+      .mockImplementationOnce(() => secondRead.promise)
+      .mockResolvedValue('b1');
+    const cache = new RealtimeAccessCache({
+      branchRepository: {
+        findRealtimeVisibilityBranch: vi.fn(),
+        findRealtimeViewUserIds: vi.fn(),
+      },
+      sessionsRepository: { findBranchIdBySessionId, findCreatedByBySessionId: vi.fn() },
+      sessionBranchTtlMs: 100,
+      maxEntries: 3,
+      now: () => now,
+    });
+
+    // Two concurrent misses for `a`; another key lands between their fills.
+    const first = cache.getBranchIdForSession('a');
+    const second = cache.getBranchIdForSession('a');
+    firstRead.resolve('b1' as BranchID);
+    await first;
+    now = 1_010;
+    await cache.getBranchIdForSession('b');
+    now = 1_020;
+    secondRead.resolve('b1' as BranchID);
+    await second;
+    expect(cacheKeys(cache, 'sessionBranches')).toEqual(['b', 'a']);
+
+    // Capacity evicts `b`, the oldest fill, not the refreshed `a`.
+    now = 1_030;
+    await cache.getBranchIdForSession('c');
+    now = 1_040;
+    await cache.getBranchIdForSession('d');
+    expect(cacheKeys(cache, 'sessionBranches')).toEqual(['a', 'c', 'd']);
+    await cache.getBranchIdForSession('a');
+    expect(findBranchIdBySessionId).toHaveBeenCalledTimes(5);
+
+    // `a` now expires first (1_120), so the prefix sweep reclaims only it.
+    now = 1_121;
+    await cache.getBranchIdForSession('d');
+    expect(cacheKeys(cache, 'sessionBranches')).toEqual(['c', 'd']);
+    expect(findBranchIdBySessionId).toHaveBeenCalledTimes(5);
+  });
+
   it('applies default capacity bounds without configuration', async () => {
     const cache = new RealtimeAccessCache({
       branchRepository: {
@@ -389,13 +441,21 @@ describe('RealtimeAccessCache', () => {
     const pending = cache.getBranchVisibility('revoked' as BranchID);
     await vi.waitFor(() => expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalled());
     cache.invalidateBranch('revoked');
-    await cache.getBranchVisibility('other' as BranchID);
-    now += 11;
-    await cache.getBranchVisibility('third' as BranchID);
-    oldGrant.resolve(['old-authorized-user']);
 
+    // Capacity eviction while the old-generation read is still pending.
+    await cache.getBranchVisibility('other' as BranchID);
+    await cache.getBranchVisibility('third' as BranchID);
+    expect(cacheKeys(cache, 'branchVisibility')).toEqual(['third']);
+
+    // Then expiry, swept by a lookup on another map.
+    now += 11;
+    await cache.getSessionOwnerId('s1');
+    expect(cacheSizes(cache)[0]).toBe(0);
+
+    oldGrant.resolve(['old-authorized-user']);
     const revoked = { mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS, userIds: new Set() };
     await expect(pending).resolves.toEqual(revoked);
     await expect(cache.getBranchVisibility('revoked' as BranchID)).resolves.toEqual(revoked);
+    expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalledTimes(4);
   });
 });
