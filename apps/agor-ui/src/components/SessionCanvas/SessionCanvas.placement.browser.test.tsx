@@ -47,6 +47,10 @@ it('persists two real pointer drags when the first PATCH completes during the se
     branchById: new Map([[branch.branch_id, branch]]),
     repoById: new Map([[repo.repo_id, repo]]),
     boardObjectsByBoardId: new Map([[board.board_id, [initial]]]),
+    // Structural edits need the board's partition loaded.
+    boardPartitions: new Map([
+      [board.board_id, { status: 'loaded' as const, authorityScope: 'fixture', loadEpoch: 0 }],
+    ]),
   });
   let release!: () => void;
   const pending = new Promise<void>((resolve) => {
@@ -169,6 +173,10 @@ it('shows skipped-default warnings from an always_new drop response', async () =
     branchById: new Map([[branch.branch_id, branch]]),
     repoById: new Map([[repo.repo_id, repo]]),
     boardObjectsByBoardId: new Map([[board.board_id, [initial]]]),
+    // Structural edits need the board's partition loaded.
+    boardPartitions: new Map([
+      [board.board_id, { status: 'loaded' as const, authorityScope: 'fixture', loadEpoch: 0 }],
+    ]),
   });
   // This is a real-browser consumer regression, not daemon E2E: only the
   // transport response is stubbed. No prompt/provider is invoked.

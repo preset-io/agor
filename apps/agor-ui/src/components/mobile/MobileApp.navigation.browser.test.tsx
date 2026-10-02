@@ -53,6 +53,11 @@ const branches = new Map([
 function mount(path = '/m/board/alpha') {
   agorStore.setState({
     boardById: boards,
+    // Both boards' partitions are loaded (the page waits for them).
+    boardPartitions: new Map([
+      ['a', { status: 'loaded' as const, authorityScope: 'fixture', loadEpoch: 0 }],
+      ['b', { status: 'loaded' as const, authorityScope: 'fixture', loadEpoch: 0 }],
+    ]),
     branchById: branches,
     sessionById: new Map([
       ['parent', { session_id: 'parent', title: 'Parent', branch_id: 'assistant' } as Session],

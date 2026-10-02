@@ -12,8 +12,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useAgorStore } from '../../store/agorStore';
-import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
@@ -36,13 +36,16 @@ interface SessionPageProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onOpenBranch?: AppActionsContextValue['onOpenBranch'];
   onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
-
-const EMPTY_MCP_IDS: string[] = [];
 
 /**
  * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
@@ -79,10 +82,8 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   const branch = session?.branch_id ? (branchById.get(session.branch_id) ?? null) : null;
   const canonicalSessionId = session?.session_id;
 
-  const sessionMcpServerIds =
-    useAgorStore(
-      useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
-    ) ?? EMPTY_MCP_IDS;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: sessionMcpServerIds } = useSessionMcpServerIds(client, canonicalSessionId);
 
   const navigate = useNavigate();
   const loading = useAgorStore((state) => state.loading);

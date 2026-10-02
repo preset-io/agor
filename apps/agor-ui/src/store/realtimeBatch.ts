@@ -53,7 +53,7 @@
  * flush onto the scheduler that matches the new visibility state.
  */
 import type { Session } from '@agor-live/client';
-import { bumpRevision, getLastAppliedRevision, getRevision } from './agorHydration';
+import { bumpRevision, getLastAppliedRevision, getRevision, markTouched } from './agorHydration';
 import { applySessionPatchToMaps } from './agorMaps';
 import { agorStore } from './agorStore';
 
@@ -256,6 +256,9 @@ export function enqueueSessionPatch(authorityScope: string, session: Session): v
     authorityScope,
     revision: getRevision('sessions'),
   });
+  // Stamp at ENQUEUE, not flush: an in-flight board partition load must skip
+  // this id even though the queued patch has not reached the maps yet.
+  markTouched('sessions', session.session_id);
   scheduleFlush();
 }
 
@@ -392,11 +395,18 @@ export function untombstoneSession(authorityScope: string, sessionId: string): v
  * before its map reset and before the previous subscription's passive cleanup.
  */
 export function setRealtimeAuthorityScope(authorityScope: string | null): void {
+  // Before the early return: a store reset (remount) clears the mirror.
+  agorStore.getState().setDataAuthority(authorityScope);
   if (activeAuthorityScope === authorityScope) return;
   authorityCancellation.abort();
   authorityCancellation = new AbortController();
   activeAuthorityScope = authorityScope;
   discardRealtimeNow();
+}
+
+/** The authority scope realtime writes currently apply under (null = none). */
+export function getRealtimeAuthorityScope(): string | null {
+  return activeAuthorityScope;
 }
 
 /**

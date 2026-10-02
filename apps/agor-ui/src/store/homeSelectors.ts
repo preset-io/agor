@@ -6,6 +6,7 @@
  */
 import type { BoardComment, Branch, Session } from '@agor-live/client';
 import { getTeammateConfig, isGatewaySession, SessionStatus } from '@agor-live/client';
+import { boardIdForSession } from '../utils/boardIdForSession';
 import { commentMentionsUser } from '../utils/commentMentions';
 import { getTimeMs } from '../utils/entityTime';
 import { isSessionFailed } from '../utils/sessionStatus';
@@ -141,7 +142,7 @@ const sameItems = <T>(a: readonly T[], b: readonly T[]) =>
 
 function matchesQuery(session: Session, query: string, s: AgorState): boolean {
   const branch = s.branchById.get(session.branch_id);
-  const boardId = session.branch_board_id ?? branch?.board_id;
+  const boardId = boardIdForSession(session, s.branchById);
   return [
     session.title,
     session.description,
@@ -155,6 +156,9 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
  * The person started this session and every fork ancestor: no spawn, schedule,
  * gateway run or delegation in its lineage. An ancestor missing from the store counts as not.
  * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
+ * Limitation (design r3 decision Q4): the user scope loads only the caller's own sessions, not
+ * other users' fork ancestors, so a clean run forked from someone else's session doesn't
+ * supersede a failure once that ancestor isn't otherwise loaded.
  */
 function startedByUserLineage(
   session: Session,
@@ -299,7 +303,7 @@ export function makeHomeBucketsSelector(
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of ownSessions) {
       hasSessions = true;
-      const boardId = session.branch_board_id ?? s.branchById.get(session.branch_id)?.board_id;
+      const boardId = boardIdForSession(session, s.branchById);
       const board = boardsLimit && boardId ? s.boardById.get(boardId) : undefined;
       if (board && !board.archived && updatedAt(session) > (boardAt.get(board.board_id) ?? 0))
         boardAt.set(board.board_id, updatedAt(session));
@@ -421,13 +425,7 @@ export function makeCommentsForYouSelector({
   let byKey = new Map<string, HomeCommentNeed>();
   return (s) => {
     const isMine = (sessionId: string) => s.sessionById.get(sessionId)?.created_by === userId;
-    const inputs = [
-      s.commentById,
-      s.branchById,
-      s.boardById,
-      s.sessionsHydrated,
-      s.branchesHydrated,
-    ];
+    const inputs = [s.commentById, s.branchById, s.boardById, s.absentBranchIds];
     if (
       inputs.every((input, i) => input === source[i]) &&
       (s.sessionById === sessionSource || sessionDeps.every(([id, mine]) => isMine(id) === mine))
@@ -455,8 +453,10 @@ export function makeCommentsForYouSelector({
       const root = s.commentById.get(rootId);
       if (!root || root.resolved || s.boardById.get(root.board_id)?.archived) continue;
       const branch = root.branch_id ? s.branchById.get(root.branch_id) : undefined;
-      // Archived branches leave the store, so a missing branch after hydration is archived or gone.
-      if (root.branch_id && (branch ? branch.archived : s.branchesHydrated)) continue;
+      // The user scope resolves every candidate thread's branch: present, or
+      // recorded absent (archived, deleted or invisible) — then the thread leaves.
+      if (root.branch_id && (branch ? branch.archived : s.absentBranchIds.has(root.branch_id)))
+        continue;
       let last = root;
       let lastOther: BoardComment | undefined;
       let participated = false;

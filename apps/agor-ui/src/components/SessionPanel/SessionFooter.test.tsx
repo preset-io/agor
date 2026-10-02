@@ -23,6 +23,7 @@ import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
+import { agorStore } from '../../store/agorStore';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -98,6 +99,9 @@ const baseProps: SessionFooterProps = {
 describe('SessionFooter', () => {
   beforeEach(() => {
     localStorage.clear();
+    // The footer's MCP picker edits only a session whose links are loaded.
+    agorStore.getState().reset();
+    agorStore.getState().markSessionMcpLoaded('test-session-123');
   });
   afterEach(() => {
     localStorage.clear();

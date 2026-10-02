@@ -1010,6 +1010,16 @@ export const isPersistedAgent = isTeammate;
  * Supports canonical (`custom_context.teammate`) plus legacy
  * (`custom_context.assistant` / `custom_context.agent`) storage.
  */
+/**
+ * One row of `branch-counts.find()`: the number of active (non-archived)
+ * branches on a board, counting only branches the caller can view on boards
+ * the caller can view. Backs the board-switcher and mobile nav-tree badges.
+ */
+export interface BoardBranchCount {
+  board_id: BoardID;
+  branch_count: number;
+}
+
 export function getTeammateConfig(branch: {
   custom_context?: Record<string, unknown>;
 }): TeammateConfig | null {

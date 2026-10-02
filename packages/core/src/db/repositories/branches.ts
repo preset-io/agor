@@ -12,6 +12,7 @@ import { TaskRepository } from './tasks';
 
 import type {
   AgenticToolName,
+  BoardBranchCount,
   BoardID,
   Branch,
   BranchID,
@@ -24,7 +25,20 @@ import type {
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import {
@@ -74,6 +88,7 @@ import {
 import {
   minimumBranchAccessCondition,
   sessionBranchAccessCondition,
+  visibleBoardReferenceAccessExists,
   visibleBranchAccessCondition,
   visibleBranchReferenceAccessExists,
 } from './branch-access';
@@ -471,6 +486,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     zone_id?: string;
     archived?: boolean;
     branchIds?: BranchID[];
+    /** Restrict to branches created by this user (a filter, never an access grant). */
+    createdBy?: UUID;
     visibleToUserId?: UUID;
     limit?: number;
     offset?: number;
@@ -490,6 +507,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     }
     if (opts.archived !== undefined) conditions.push(eq(branches.archived, opts.archived));
     if (opts.branchIds) conditions.push(inArray(branches.branch_id, opts.branchIds));
+    if (opts.createdBy) conditions.push(eq(branches.created_by, opts.createdBy));
     if (opts.visibleToUserId) {
       conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
     }
@@ -532,6 +550,36 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
+   * Count active (non-archived) branches per board, for board badges.
+   *
+   * With `visibleToUserId`, only branches the user can view on boards the user
+   * can view are counted (the same predicates as `branches.find` and
+   * `boards.find`), so a count never reveals a private branch or board. Tenancy
+   * is enforced by the same row-level security as every branch read.
+   */
+  async countActiveByBoard(opts: { visibleToUserId?: UUID }): Promise<BoardBranchCount[]> {
+    const conditions: SQL[] = [eq(branches.archived, false), isNotNull(branches.board_id)];
+    if (opts.visibleToUserId) {
+      conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+      conditions.push(
+        visibleBoardReferenceAccessExists(this.db, opts.visibleToUserId, branches.board_id)
+      );
+    }
+    const rows = await select(this.db, {
+      board_id: branches.board_id,
+      branch_count: sql<number>`count(*)`,
+    })
+      .from(branches)
+      .where(and(...conditions))
+      .groupBy(branches.board_id)
+      .all();
+    return (rows as Array<{ board_id: string; branch_count: number | string }>).map((row) => ({
+      board_id: row.board_id as BoardID,
+      branch_count: Number(row.branch_count),
+    }));
+  }
+
+  /**
    * Return the complete branch inventory for one repository without transport
    * pagination. Repository deletion uses this after locking the parent row so
    * every database-cascaded removal has a corresponding tombstone.
@@ -569,21 +617,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
-   * Find active teammate branches without paginating the whole branch list first.
-   *
-   * A branch is discoverable as a teammate when it has the canonical teammate
-   * marker in custom_context (new or legacy key), or as a read-time backfill for
-   * older hand-bootstrapped teammates, when it has at least one enabled
-   * first-class schedule.
+   * Teammate marker predicate (plus repo/archived/visibility filters) shared by
+   * `findTeammateBranches` and `countTeammateBranches`.
    */
-  async findTeammateBranches(filter?: {
+  private teammateBranchConditions(filter?: {
     repo_id?: UUID;
     archived?: boolean;
     userId?: UUID;
     minimumPermission?: 'view' | 'session';
-    limit?: number;
-    offset?: number;
-  }): Promise<Branch[]> {
+  }): SQL[] {
     const teammateKindConditions = [
       eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.teammate.kind')}`, 'teammate'),
       eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'assistant'),
@@ -607,7 +649,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         .where(and(eq(schedules.branch_id, branches.branch_id), eq(schedules.enabled, true)))
     );
 
-    const conditions = [or(...teammateKindConditions, hasEnabledSchedule) ?? sql`false`];
+    const conditions: SQL[] = [or(...teammateKindConditions, hasEnabledSchedule) ?? sql`false`];
     if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
     if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
     if (filter?.userId) {
@@ -617,6 +659,43 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           : visibleBranchAccessCondition(this.db, filter.userId)
       );
     }
+    return conditions;
+  }
+
+  /**
+   * Number of teammate branches matching the same filter as
+   * `findTeammateBranches`, so a capped read can report its real total.
+   */
+  async countTeammateBranches(filter?: {
+    repo_id?: UUID;
+    archived?: boolean;
+    userId?: UUID;
+    minimumPermission?: 'view' | 'session';
+  }): Promise<number> {
+    const rows = await select(this.db, { count: sql<number>`count(*)` })
+      .from(branches)
+      .where(and(...this.teammateBranchConditions(filter)))
+      .all();
+    return Number((rows as Array<{ count: number | string }>)[0]?.count ?? 0);
+  }
+
+  /**
+   * Find active teammate branches without paginating the whole branch list first.
+   *
+   * A branch is discoverable as a teammate when it has the canonical teammate
+   * marker in custom_context (new or legacy key), or as a read-time backfill for
+   * older hand-bootstrapped teammates, when it has at least one enabled
+   * first-class schedule.
+   */
+  async findTeammateBranches(filter?: {
+    repo_id?: UUID;
+    archived?: boolean;
+    userId?: UUID;
+    minimumPermission?: 'view' | 'session';
+    limit?: number;
+    offset?: number;
+  }): Promise<Branch[]> {
+    const conditions = this.teammateBranchConditions(filter);
 
     const rows = await select(this.db)
       .from(branches)

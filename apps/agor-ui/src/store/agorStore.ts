@@ -39,11 +39,71 @@ enableMapSet();
 export type ItemCounts = Partial<Record<InitialLoadItemKey, number>>;
 
 /** Background-hydrated collections that gate UI reads on their first apply. */
-export type GatedHydrationFlag =
-  | 'sessionsHydrated'
-  | 'branchesHydrated'
-  | 'mcpServersHydrated'
-  | 'gatewayChannelsHydrated';
+export type GatedHydrationFlag = 'mcpServersHydrated' | 'gatewayChannelsHydrated';
+
+/**
+ * Loading state of one board partition: that board's branches, sessions,
+ * board objects, cards, comments and full board record. Presence of rows in a
+ * map never implies completeness; only `loaded` does (see `boardPartitions.ts`).
+ */
+export type BoardPartitionStatus = 'loading' | 'loaded' | 'error';
+export interface BoardPartitionState {
+  status: BoardPartitionStatus;
+  /** Authority scope the load ran under; a load never applies across scopes. */
+  authorityScope: string;
+  /** Hydration cancellation epoch of that load; another epoch counts as unloaded. */
+  loadEpoch: number;
+  /** The load that owns a `loading` entry; only its owner may settle or release it. */
+  loadId?: number;
+  /** The load that settled a `loaded` entry (absent when first paint or a resync did). */
+  loadedBy?: number;
+  error?: string;
+}
+
+/**
+ * Collections loaded globally in the background (Steps 1–2; removed in 3.3).
+ * Board objects, cards and full board records load per board only.
+ */
+export type GloballyHydratedCollection = 'sessions' | 'branches';
+export const GLOBALLY_HYDRATED_COLLECTIONS: readonly GloballyHydratedCollection[] = [
+  'sessions',
+  'branches',
+];
+
+/**
+ * Completeness flags of the caller's user scope (`userScope.ts`). Each says a
+ * user-scoped set is complete in the store; none says the workspace is loaded.
+ */
+export interface UserScopeMeta {
+  /** Every active session the caller created is in `sessionById`. */
+  mySessionsLoaded: boolean;
+  /** The all-my-sessions read hit its cap; counts are lower bounds ("N+"). */
+  mySessionsTruncated: boolean;
+  /** Every branch my sessions or candidate comment threads reference is present or absent. */
+  homeBranchesLoaded: boolean;
+  /** The teammate read finished; with `teammatesTruncated`, only up to its cap. */
+  teammatesLoaded: boolean;
+  /** More teammates are visible than the capped read returned: lists are partial. */
+  teammatesTruncated: boolean;
+  /** Referenced branch ids the server did not return (archived, deleted or invisible). */
+  absentBranchIds: Set<string>;
+  /**
+   * The daemon does not support the user-scope reads (an older daemon rejects
+   * or ignores their query keys). Terminal for the run; while global
+   * hydration exists (Steps 1–2) its snapshots complete the scope instead.
+   */
+  userScopeDegraded: boolean;
+}
+
+const INITIAL_USER_SCOPE: UserScopeMeta = {
+  mySessionsLoaded: false,
+  mySessionsTruncated: false,
+  homeBranchesLoaded: false,
+  teammatesLoaded: false,
+  teammatesTruncated: false,
+  absentBranchIds: new Set(),
+  userScopeDegraded: false,
+};
 
 /** Load/meta fields that ride alongside the data maps. */
 interface AgorMeta {
@@ -53,10 +113,6 @@ interface AgorMeta {
   loadingStage: InitialLoadingStage;
   error: string | null;
   itemCounts: ItemCounts;
-  /** Set once the full active-session set replaces the recent first-paint slice. */
-  sessionsHydrated: boolean;
-  /** Set once the full active-branch set lands (Home starts with none). */
-  branchesHydrated: boolean;
   /** Set once the background mcp-servers hydration first applies (empty result included). */
   mcpServersHydrated: boolean;
   /** Set once the background gateway-channels hydration first applies (empty result included). */
@@ -64,7 +120,33 @@ interface AgorMeta {
   agenticToolSettingsByName: Map<TenantAgenticToolName, TenantAgenticToolSettings>;
   /** Set once the background agentic-tool-settings hydration first applies (empty result included). */
   agenticToolSettingsHydrated: boolean;
+  /** Per-board partition loading state (see `boardPartitions.ts`). */
+  boardPartitions: Map<string, BoardPartitionState>;
+  /**
+   * Bumped (monotonically) by every reset of `boardPartitions`. A partition
+   * load in flight across a reset is orphaned: it can no longer settle its
+   * board, so loads dedupe per epoch and the board is requested again.
+   */
+  partitionEpoch: number;
+  /** Collections whose global snapshot has applied at least once. */
+  globallyHydrated: Set<GloballyHydratedCollection>;
+  /**
+   * Sessions whose MCP links are loaded (`sessionMcpLinks.ts`). For any other
+   * session `sessionMcpServerIds` may be partial: "not loaded" is not "none".
+   */
+  sessionMcpLoaded: Set<string>;
+  /** Bumped by every `resetSessionMcpLoaded`; a read from an older epoch applies nothing. */
+  sessionMcpEpoch: number;
+  /**
+   * The realtime authority scope (identity, role, auth generation) loads run
+   * under, or null while there is none (signed out, disconnected, reauth).
+   * Mirrored from `setRealtimeAuthorityScope` so on-demand loaders (board
+   * partitions, session MCP links) re-run when it becomes valid again.
+   */
+  dataAuthority: string | null;
 }
+
+type AgorMetaWithUserScope = AgorMeta & UserScopeMeta;
 
 /** Store actions: foundational primitives + named branch lifecycle cascades. */
 interface AgorActions {
@@ -116,13 +198,44 @@ interface AgorActions {
    * all-no-op reducer leaves the outer state object untouched.
    */
   applyMaps: (updater: (prev: DataMaps) => DataMaps) => void;
+  /** Set (or clear, with `null`) one board's partition state. */
+  setBoardPartition: (boardId: string, state: BoardPartitionState | null) => void;
+  /** Merge user-scope flags; a no-op when nothing changes. */
+  setUserScope: (partial: Partial<UserScopeMeta>) => void;
+  /**
+   * Forget every board partition (authority transitions orphan their loads)
+   * and bump `partitionEpoch`; `keepBoardId`'s entry survives when given (a
+   * reconnect resync keeps a board that loaded after it started).
+   */
+  resetBoardPartitions: (keepBoardId?: string) => void;
+  /** Record that a global snapshot of these collections has applied. */
+  markGloballyHydrated: (collections: readonly string[]) => void;
+  /** Record that one session's MCP links are loaded. */
+  markSessionMcpLoaded: (sessionId: string) => void;
+  /** Forget which sessions' MCP links are loaded and bump their epoch. */
+  resetSessionMcpLoaded: () => void;
+  /** Drop deleted sessions' MCP links and loaded marks. */
+  forgetSessionMcp: (sessionIds: readonly string[]) => void;
+  /** Mirror the realtime authority scope (see `dataAuthority`). */
+  setDataAuthority: (authority: string | null) => void;
   /** Mirror archive visibility while retaining the persisted board placement. */
   evictArchivedBranch: (branchId: string) => void;
   /** Atomically mirror every normalized FK cascade/SET NULL from a hard delete. */
   applyBranchHardDeleteCascade: (branchId: string) => void;
 }
 
-export type AgorState = DataMaps & AgorMeta & AgorActions;
+export type AgorState = DataMaps & AgorMetaWithUserScope & AgorActions;
+
+function shallowEqualPartition(a: BoardPartitionState, b: BoardPartitionState): boolean {
+  return (
+    a.status === b.status &&
+    a.authorityScope === b.authorityScope &&
+    a.loadEpoch === b.loadEpoch &&
+    a.loadId === b.loadId &&
+    a.loadedBy === b.loadedBy &&
+    a.error === b.error
+  );
+}
 
 function evictBranchAndSessions(draft: Draft<AgorState>, branchId: string): Set<string> {
   if (draft.branchById.has(branchId)) draft.branchById.delete(branchId);
@@ -162,18 +275,23 @@ function removeRelationshipsToDeletedSessions(
 }
 
 /** Initial meta values — identical to `useAgorData`'s `useState` defaults. */
-const INITIAL_META: AgorMeta = {
+const INITIAL_META: AgorMetaWithUserScope = {
+  ...INITIAL_USER_SCOPE,
   deletedMcpServerIds: new Set(),
   loading: true,
   loadingStage: 'idle',
   error: null,
   itemCounts: {},
-  sessionsHydrated: false,
-  branchesHydrated: false,
   mcpServersHydrated: false,
   gatewayChannelsHydrated: false,
   agenticToolSettingsByName: new Map(),
   agenticToolSettingsHydrated: false,
+  boardPartitions: new Map(),
+  partitionEpoch: 0,
+  globallyHydrated: new Set(),
+  sessionMcpLoaded: new Set(),
+  sessionMcpEpoch: 0,
+  dataAuthority: null,
 };
 
 export const agorStore = createStore<AgorState>()(
@@ -181,7 +299,16 @@ export const agorStore = createStore<AgorState>()(
     ...EMPTY_MAPS,
     ...INITIAL_META,
 
-    reset: () => set({ ...EMPTY_MAPS, ...INITIAL_META }),
+    reset: () =>
+      set({
+        ...EMPTY_MAPS,
+        ...INITIAL_META,
+        boardPartitions: new Map(),
+        partitionEpoch: get().partitionEpoch + 1,
+        globallyHydrated: new Set(),
+        absentBranchIds: new Set(),
+        sessionMcpLoaded: new Set(),
+      }),
 
     // Also clear the tenant-specific tool-settings map AND its hydration flag:
     // both are meta (not in EMPTY_MAPS), so without this they'd persist across a
@@ -191,10 +318,15 @@ export const agorStore = createStore<AgorState>()(
       set({
         ...EMPTY_MAPS,
         deletedMcpServerIds: new Set(),
-        sessionsHydrated: false,
-        branchesHydrated: false,
         agenticToolSettingsByName: new Map(),
         agenticToolSettingsHydrated: false,
+        // Readiness describes the maps being cleared, so it resets with them.
+        boardPartitions: new Map(),
+        partitionEpoch: get().partitionEpoch + 1,
+        globallyHydrated: new Set(),
+        sessionMcpLoaded: new Set(),
+        ...INITIAL_USER_SCOPE,
+        absentBranchIds: new Set(),
       }),
 
     // Meta setters mirror `useState`'s bail-out: a write equal to the current
@@ -231,6 +363,61 @@ export const agorStore = createStore<AgorState>()(
       // Intentionally leaves `agenticToolSettingsHydrated` untouched: a partial
       // update never establishes the complete set, so it can't flip the gate.
       set({ agenticToolSettingsByName: next });
+    },
+
+    setBoardPartition: (boardId, state) => {
+      const current = get().boardPartitions;
+      const existing = current.get(boardId);
+      if (state === null ? !existing : existing && shallowEqualPartition(existing, state)) return;
+      const next = new Map(current);
+      if (state === null) next.delete(boardId);
+      else next.set(boardId, state);
+      set({ boardPartitions: next });
+    },
+    setUserScope: (partial) => {
+      const state = get();
+      const changed = (Object.keys(partial) as (keyof UserScopeMeta)[]).some(
+        (key) => !Object.is(partial[key], state[key])
+      );
+      if (changed) set(partial as Partial<AgorState>);
+    },
+    resetBoardPartitions: (keepBoardId) => {
+      const kept = keepBoardId ? get().boardPartitions.get(keepBoardId) : undefined;
+      set({
+        boardPartitions: kept && keepBoardId ? new Map([[keepBoardId, kept]]) : new Map(),
+        partitionEpoch: get().partitionEpoch + 1,
+      });
+    },
+    markGloballyHydrated: (collections) => {
+      const current = get().globallyHydrated;
+      const additions = collections.filter(
+        (c): c is GloballyHydratedCollection =>
+          (GLOBALLY_HYDRATED_COLLECTIONS as readonly string[]).includes(c) &&
+          !current.has(c as GloballyHydratedCollection)
+      );
+      if (additions.length === 0) return;
+      set({ globallyHydrated: new Set([...current, ...additions]) });
+    },
+    markSessionMcpLoaded: (sessionId) => {
+      const current = get().sessionMcpLoaded;
+      if (current.has(sessionId)) return;
+      set({ sessionMcpLoaded: new Set(current).add(sessionId) });
+    },
+    resetSessionMcpLoaded: () =>
+      set({ sessionMcpLoaded: new Set(), sessionMcpEpoch: get().sessionMcpEpoch + 1 }),
+    forgetSessionMcp: (sessionIds) => {
+      const { sessionMcpLoaded, sessionMcpServerIds } = get();
+      const loaded = sessionIds.filter((id) => sessionMcpLoaded.has(id));
+      const linked = sessionIds.filter((id) => sessionMcpServerIds.has(id));
+      if (loaded.length === 0 && linked.length === 0) return;
+      const nextLoaded = new Set(sessionMcpLoaded);
+      for (const id of loaded) nextLoaded.delete(id);
+      const nextLinks = new Map(sessionMcpServerIds);
+      for (const id of linked) nextLinks.delete(id);
+      set({ sessionMcpLoaded: nextLoaded, sessionMcpServerIds: nextLinks });
+    },
+    setDataAuthority: (authority) => {
+      if (authority !== get().dataAuthority) set({ dataAuthority: authority });
     },
 
     setMap: (key, value) => {
@@ -295,11 +482,6 @@ export const agorStore = createStore<AgorState>()(
             removedObjectIds.add(objectId);
             draft.boardObjectById.delete(objectId);
           }
-        }
-        const indexedBoardObject = draft.boardObjectByBranchId.get(branchId);
-        if (indexedBoardObject) removedObjectIds.add(indexedBoardObject.object_id);
-        if (draft.boardObjectByBranchId.has(branchId)) {
-          draft.boardObjectByBranchId.delete(branchId);
         }
         for (const [boardId, boardObjects] of draft.boardObjectsByBoardId) {
           const remaining = boardObjects.filter(

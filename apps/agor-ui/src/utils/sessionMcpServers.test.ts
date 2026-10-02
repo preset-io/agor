@@ -6,7 +6,10 @@ import { sessionMcpCreated, sessionMcpPatched } from '../store/sessionMcpActions
 import { updateSessionMcpServers } from './sessionMcpServers';
 
 describe('updateSessionMcpServers', () => {
-  beforeEach(() => agorStore.getState().resetMaps());
+  beforeEach(() => {
+    agorStore.getState().resetMaps();
+    agorStore.getState().markSessionMcpLoaded('session-1');
+  });
 
   it('updates the relationship store from successful REST responses without waiting for websocket events', async () => {
     agorStore.getState().setMap('sessionMcpServerIds', new Map([['session-1', ['remove-me']]]));

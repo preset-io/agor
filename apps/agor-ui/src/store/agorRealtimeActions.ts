@@ -49,6 +49,7 @@ import {
   upsertBoardObjectInMaps,
 } from './agorMaps';
 import { type AgorState, agorStore } from './agorStore';
+import { pruneSessionMcpLinks } from './sessionMcpLinks';
 
 // Thin bindings to the store primitives. The vanilla store and its actions are
 // stable module singletons, so these resolve the live action each call. The
@@ -66,7 +67,7 @@ const applyBranchHardDeleteCascade: AgorState['applyBranchHardDeleteCascade'] = 
 export function sessionCreated(session: Session) {
   // Bump the sessions revision so an in-flight sessions hydration discards its
   // snapshot and refetches instead of clobbering this write.
-  bumpRevision('sessions');
+  bumpRevision('sessions', session.session_id);
   if (session.archived) return;
 
   // Update sessionById - only create new Map if session doesn't exist
@@ -95,12 +96,14 @@ export function sessionPatched(session: Session) {
   // resurrect an archive with a pre-archive snapshot. One `applyMaps` commits
   // both `sessionById` and `sessionsByBranch` in a single store notify; the
   // reducer returns `prev` untouched on a no-op patch so references stay stable.
-  bumpRevision('sessions');
+  bumpRevision('sessions', session.session_id);
   applyMaps((prev) => applySessionPatchToMaps(prev, session));
 }
 
 export function sessionRemoved(session: Session) {
-  bumpRevision('sessions');
+  bumpRevision('sessions', session.session_id);
+  bumpRevision('sessionMcp');
+  pruneSessionMcpLinks([session.session_id]);
   // Update sessionById — bail out when the id isn't tracked so the
   // wrapper short-circuit prevents the spurious `maps` update.
   setMap('sessionById', (prev) => {
@@ -135,7 +138,7 @@ export function sessionRemoved(session: Session) {
 // otherwise an in-flight boards hydration whose (full) snapshot predates a zone
 // create/move/delete could clobber the live change with the pre-edit board.
 export function boardCreated(board: Board) {
-  bumpRevision('boards');
+  bumpRevision('boards', board.board_id);
   setMap('boardById', (prev) => {
     if (prev.has(board.board_id)) return prev; // Already exists, shouldn't happen
     const next = new Map(prev);
@@ -144,11 +147,11 @@ export function boardCreated(board: Board) {
   });
 }
 export function boardPatched(board: Board) {
-  bumpRevision('boards');
+  bumpRevision('boards', board.board_id);
   setMap('boardById', (prev) => replaceIfChanged(prev, board.board_id, board));
 }
 export function boardRemoved(board: Board) {
-  bumpRevision('boards');
+  bumpRevision('boards', board.board_id);
   setMap('boardById', (prev) => {
     if (!prev.has(board.board_id)) return prev; // Doesn't exist, nothing to remove
     const next = new Map(prev);
@@ -159,15 +162,15 @@ export function boardRemoved(board: Board) {
 
 // ── Board objects ─────────────────────────────────────────────────────────--
 export function boardObjectCreated(boardObject: BoardEntityObject) {
-  bumpRevision('boardObjects');
+  bumpRevision('boardObjects', boardObject.object_id);
   applyMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'create'));
 }
 export function boardObjectPatched(boardObject: BoardEntityObject) {
-  bumpRevision('boardObjects');
+  bumpRevision('boardObjects', boardObject.object_id);
   applyMaps((prev) => upsertBoardObjectInMaps(prev, boardObject, 'patch'));
 }
 export function boardObjectRemoved(boardObject: BoardEntityObject) {
-  bumpRevision('boardObjects');
+  bumpRevision('boardObjects', boardObject.object_id);
   applyMaps((prev) => removeBoardObjectFromMaps(prev, boardObject));
 }
 
@@ -201,7 +204,7 @@ export function repoRemoved(repo: Repo) {
 export function branchCreated(branch: Branch) {
   // Bump the branches revision so an in-flight branches hydration can't clobber
   // this write (mirrors the session handlers).
-  bumpRevision('branches');
+  bumpRevision('branches', branch.branch_id);
   if (branch.archived) return;
 
   setMap('branchById', (prev) => {
@@ -212,7 +215,9 @@ export function branchCreated(branch: Branch) {
   });
 }
 export function branchPatched(branch: Branch) {
-  bumpRevision('branches');
+  // The branch id stamp also fences the eviction cascade below: a partition
+  // load skips every session/object/comment on a touched-and-absent branch.
+  bumpRevision('branches', branch.branch_id);
   if (branch.archived) {
     // Archive preserves the board-object placement for a future unarchive.
     bumpRevision('sessions');
@@ -223,17 +228,27 @@ export function branchPatched(branch: Branch) {
   setMap('branchById', (prev) => replaceIfChanged(prev, branch.branch_id, branch));
 }
 export function branchRemoved(branch: Branch) {
-  bumpRevision('branches');
+  // The branch id stamp fences the whole FK cascade below for partition loads.
+  bumpRevision('branches', branch.branch_id);
   // Mirror the archive path: a hard delete should also evict any sessions we
   // still track on that branch and its FK-cascaded board placement.
   bumpRevision('sessions');
   bumpRevision('boardObjects');
   bumpRevision('boards');
+  // The cascade clears these boards' teammate pointer; a partition's full
+  // board record fetched before the delete must not restore it.
+  for (const board of agorStore.getState().boardById.values()) {
+    if (board.primary_teammate_id === branch.branch_id) bumpRevision('boards', board.board_id);
+  }
   bumpRevision('comments');
   bumpRevision('sessionMcp');
   bumpRevision('gatewayChannels');
   bumpRevision('artifacts');
+  const removedSessionIds = [...agorStore.getState().sessionById.values()]
+    .filter((session) => session.branch_id === branch.branch_id)
+    .map((session) => session.session_id);
   applyBranchHardDeleteCascade(branch.branch_id);
+  pruneSessionMcpLinks(removedSessionIds);
   // Collapse exceptions survive archive/move but not a hard delete.
   removeCollapsedBranchNode(branch.branch_id);
 }
@@ -325,7 +340,7 @@ export function gatewayChannelRemoved(channel: GatewayChannel) {
 
 // ── Cards ─────────────────────────────────────────────────────────────────--
 export function cardCreated(card: CardWithType) {
-  bumpRevision('cards');
+  bumpRevision('cards', card.card_id);
   setMap('cardById', (prev) => {
     if (prev.has(card.card_id)) return prev; // Duplicate event — bail.
     const next = new Map(prev);
@@ -334,11 +349,11 @@ export function cardCreated(card: CardWithType) {
   });
 }
 export function cardPatched(card: CardWithType) {
-  bumpRevision('cards');
+  bumpRevision('cards', card.card_id);
   setMap('cardById', (prev) => replaceIfChanged(prev, card.card_id, card));
 }
 export function cardRemoved(card: CardWithType) {
-  bumpRevision('cards');
+  bumpRevision('cards', card.card_id);
   setMap('cardById', (prev) => {
     if (!prev.has(card.card_id)) return prev;
     const next = new Map(prev);
@@ -409,7 +424,7 @@ export { sessionMcpCreated, sessionMcpPatched, sessionMcpRemoved } from './sessi
 
 // ── Board comments ────────────────────────────────────────────────────────--
 export function commentCreated(comment: BoardComment) {
-  bumpRevision('comments');
+  bumpRevision('comments', comment.comment_id);
   setMap('commentById', (prev) => {
     if (prev.has(comment.comment_id)) return prev; // Already exists, shouldn't happen
     const next = new Map(prev);
@@ -418,11 +433,11 @@ export function commentCreated(comment: BoardComment) {
   });
 }
 export function commentPatched(comment: BoardComment) {
-  bumpRevision('comments');
+  bumpRevision('comments', comment.comment_id);
   setMap('commentById', (prev) => replaceIfChanged(prev, comment.comment_id, comment));
 }
 export function commentRemoved(comment: BoardComment) {
-  bumpRevision('comments');
+  bumpRevision('comments', comment.comment_id);
   setMap('commentById', (prev) => {
     if (!prev.has(comment.comment_id)) return prev; // Doesn't exist, nothing to remove
     const next = new Map(prev);

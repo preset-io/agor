@@ -1,4 +1,5 @@
-import { createContext, useContext } from 'react';
+import { createContext, type ReactNode, useContext, useLayoutEffect, useRef } from 'react';
+import { publishConnectionSnapshot, withdrawConnectionSnapshot } from '../store/connectionSnapshot';
 
 /**
  * ConnectionContext - Global connection state for disabling UI during disconnections
@@ -33,7 +34,24 @@ const DEFAULT_CONNECTION_CONTEXT: ConnectionContextValue = {
 
 const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
-export const ConnectionProvider = ConnectionContext.Provider;
+/**
+ * Provides the connection state and publishes it to `store/connectionSnapshot`
+ * on commit, so write guards read the current state at dispatch time.
+ */
+export function ConnectionProvider({
+  value,
+  children,
+}: {
+  value: ConnectionContextValue;
+  children?: ReactNode;
+}) {
+  const publisher = useRef({}).current;
+  useLayoutEffect(() => {
+    publishConnectionSnapshot(publisher, value);
+  }, [publisher, value]);
+  useLayoutEffect(() => () => withdrawConnectionSnapshot(publisher), [publisher]);
+  return <ConnectionContext.Provider value={value}>{children}</ConnectionContext.Provider>;
+}
 
 /**
  * Hook to check if UI should be disabled due to disconnection

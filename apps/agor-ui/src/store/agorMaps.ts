@@ -44,13 +44,6 @@ export type DataMaps = {
   boardById: Map<string, Board>;
   boardObjectById: Map<string, BoardEntityObject>;
   boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  // Global placement lookup. Branch placements are unique because a branch can
-  // only have one board-object row at a time.
-  boardObjectByBranchId: Map<string, BoardEntityObject>;
-  // Global placement lookup. Cards follow the same one-row-per-card service
-  // contract as branches; callers needing board-scoped iteration should use
-  // boardObjectsByBoardId instead.
-  boardObjectByCardId: Map<string, BoardEntityObject>;
   commentById: Map<string, BoardComment>;
   cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
@@ -70,8 +63,6 @@ export const EMPTY_MAPS: DataMaps = {
   boardById: new Map(),
   boardObjectById: new Map(),
   boardObjectsByBoardId: new Map(),
-  boardObjectByBranchId: new Map(),
-  boardObjectByCardId: new Map(),
   commentById: new Map(),
   cardById: new Map(),
   cardTypeById: new Map(),
@@ -163,49 +154,6 @@ export function buildById<T extends object>(
     map.set(item[key] as unknown as string, item);
   }
   return reconcileByIdMap(prev, map);
-}
-
-// Group session-MCP relationship rows by session_id.
-export function buildSessionMcpMap(
-  list: readonly { session_id: string; mcp_server_id: string }[]
-): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const relationship of list) {
-    const ids = map.get(relationship.session_id);
-    if (ids) ids.push(relationship.mcp_server_id);
-    else map.set(relationship.session_id, [relationship.mcp_server_id]);
-  }
-  return map;
-}
-
-// Derived board-object index set, built once from a fetched list. Shared by
-// the essential (board-scoped, first-paint) index build and the background
-// full-hydration pass — single source of truth so the two can't diverge.
-export function buildBoardObjectMaps(list: readonly BoardEntityObject[]): {
-  boardObjectById: Map<string, BoardEntityObject>;
-  boardObjectsByBoardId: Map<string, BoardEntityObject[]>;
-  boardObjectByBranchId: Map<string, BoardEntityObject>;
-  boardObjectByCardId: Map<string, BoardEntityObject>;
-} {
-  const boardObjectById = new Map<string, BoardEntityObject>();
-  const boardObjectsByBoardId = new Map<string, BoardEntityObject[]>();
-  const boardObjectByBranchId = new Map<string, BoardEntityObject>();
-  const boardObjectByCardId = new Map<string, BoardEntityObject>();
-  for (const boardObject of list) {
-    boardObjectById.set(boardObject.object_id, boardObject);
-
-    const bucket = boardObjectsByBoardId.get(boardObject.board_id);
-    if (bucket) bucket.push(boardObject);
-    else boardObjectsByBoardId.set(boardObject.board_id, [boardObject]);
-
-    if (boardObject.branch_id) {
-      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
-    }
-    if (boardObject.card_id) {
-      boardObjectByCardId.set(boardObject.card_id, boardObject);
-    }
-  }
-  return { boardObjectById, boardObjectsByBoardId, boardObjectByBranchId, boardObjectByCardId };
 }
 
 // Build the session lookups (`sessionById` + branch-bucketed `sessionsByBranch`)
@@ -521,45 +469,7 @@ export function upsertBoardObjectInMaps(
     boardObjectsByBoardId = nextBuckets;
   }
 
-  let boardObjectByBranchId = prev.boardObjectByBranchId;
-  if (existing?.branch_id && existing.branch_id !== boardObject.branch_id) {
-    boardObjectByBranchId = new Map(boardObjectByBranchId);
-    boardObjectByBranchId.delete(existing.branch_id);
-  }
-  if (boardObject.branch_id) {
-    const existingByBranch = boardObjectByBranchId.get(boardObject.branch_id);
-    if (!existingByBranch || !shallowEqualEntity(existingByBranch, boardObject)) {
-      boardObjectByBranchId =
-        boardObjectByBranchId === prev.boardObjectByBranchId
-          ? new Map(boardObjectByBranchId)
-          : boardObjectByBranchId;
-      boardObjectByBranchId.set(boardObject.branch_id, boardObject);
-    }
-  }
-
-  let boardObjectByCardId = prev.boardObjectByCardId;
-  if (existing?.card_id && existing.card_id !== boardObject.card_id) {
-    boardObjectByCardId = new Map(boardObjectByCardId);
-    boardObjectByCardId.delete(existing.card_id);
-  }
-  if (boardObject.card_id) {
-    const existingByCard = boardObjectByCardId.get(boardObject.card_id);
-    if (!existingByCard || !shallowEqualEntity(existingByCard, boardObject)) {
-      boardObjectByCardId =
-        boardObjectByCardId === prev.boardObjectByCardId
-          ? new Map(boardObjectByCardId)
-          : boardObjectByCardId;
-      boardObjectByCardId.set(boardObject.card_id, boardObject);
-    }
-  }
-
-  return {
-    ...prev,
-    boardObjectById,
-    boardObjectsByBoardId,
-    boardObjectByBranchId,
-    boardObjectByCardId,
-  };
+  return { ...prev, boardObjectById, boardObjectsByBoardId };
 }
 
 export function removeBoardObjectFromMaps(
@@ -572,30 +482,10 @@ export function removeBoardObjectFromMaps(
   const boardObjectById = new Map(prev.boardObjectById);
   boardObjectById.delete(existing.object_id);
 
-  let boardObjectByBranchId = prev.boardObjectByBranchId;
-  if (
-    existing.branch_id &&
-    boardObjectByBranchId.get(existing.branch_id)?.object_id === existing.object_id
-  ) {
-    boardObjectByBranchId = new Map(boardObjectByBranchId);
-    boardObjectByBranchId.delete(existing.branch_id);
-  }
-
-  let boardObjectByCardId = prev.boardObjectByCardId;
-  if (
-    existing.card_id &&
-    boardObjectByCardId.get(existing.card_id)?.object_id === existing.object_id
-  ) {
-    boardObjectByCardId = new Map(boardObjectByCardId);
-    boardObjectByCardId.delete(existing.card_id);
-  }
-
   return {
     ...prev,
     boardObjectById,
     boardObjectsByBoardId: removeBoardObjectFromBoardBucket(prev.boardObjectsByBoardId, existing),
-    boardObjectByBranchId,
-    boardObjectByCardId,
   };
 }
 
@@ -671,4 +561,107 @@ export function findSessionInBranchBuckets(
     if (session && !session.remote_surrogate) return session;
   }
   return undefined;
+}
+
+/** Collections the fill fence consults. */
+export type PartitionCollection = 'sessions' | 'branches' | 'boards' | 'boardObjects' | 'cards';
+
+/** Whether a live event wrote `id` in `collection` since the load started. */
+export type PartitionTouched = (collection: PartitionCollection, id: string) => boolean;
+
+/**
+ * Keep live writes over a wholesale replacement (the first-paint and silent
+ * resync apply in `useAgorData`): every id a live event touched since the load
+ * began keeps its current store row, or its absence (a live remove, archive or
+ * eviction), instead of the snapshot's row. Mutates and returns `snapshot`,
+ * which must be a map the caller owns.
+ */
+export function keepLiveWrites<T>(
+  snapshot: Map<string, T>,
+  live: ReadonlyMap<string, T>,
+  touchedIds: Iterable<string>
+): Map<string, T> {
+  for (const id of touchedIds) {
+    const row = live.get(id);
+    if (row) snapshot.set(id, row);
+    else snapshot.delete(id);
+  }
+  return snapshot;
+}
+
+/**
+ * Fill-only merge of branch and session rows (invariant I2: a load never
+ * overwrites a live row). The branch and session half of `fillScope`
+ * (`scopeMerge.ts`); the user-scope reads use it directly.
+ *
+ * - A row is inserted only when its id is ABSENT from the store and no live
+ *   event touched it since the load started. Present rows are kept current by
+ *   realtime events and are never overwritten. A touched absent row was
+ *   removed/archived/evicted, or its newer patch is queued and will flush.
+ * - A session whose branch was touched since the load started and is now
+ *   absent from `branchById` is skipped: that branch was archived or deleted
+ *   while the load was in flight.
+ *
+ * Returns `prev` unchanged when nothing was filled. Never bumps revisions, so a
+ * fill cannot make a concurrent global hydration discard its snapshot.
+ */
+export function applyEntityFill(
+  prev: DataMaps,
+  rows: { branches?: readonly Branch[]; sessions?: readonly Session[] },
+  touched: PartitionTouched
+): DataMaps {
+  let maps = prev;
+
+  let branchById = maps.branchById;
+  for (const branch of rows.branches ?? []) {
+    if (branch.archived || branchById.has(branch.branch_id)) continue;
+    if (touched('branches', branch.branch_id)) continue;
+    if (branchById === maps.branchById) branchById = new Map(branchById);
+    branchById.set(branch.branch_id, branch);
+  }
+  if (branchById !== maps.branchById) maps = { ...maps, branchById };
+
+  const inserts: Session[] = [];
+  for (const session of rows.sessions ?? []) {
+    if (session.archived || maps.sessionById.has(session.session_id)) continue;
+    if (
+      touched('sessions', session.session_id) ||
+      isOnRemovedBranch(maps, session.branch_id, touched)
+    )
+      continue;
+    inserts.push(session);
+  }
+  if (inserts.length === 0) return maps;
+  if (inserts.length > INCREMENTAL_SESSION_FILL_LIMIT) {
+    // One O(n) rebuild instead of a map copy per row (a user-scope read can
+    // insert thousands). Present rows are passed through unchanged;
+    // `buildSessionMaps` recomputes buckets and remote surrogates and reuses
+    // every unchanged reference.
+    const { sessionById, sessionsByBranch } = buildSessionMaps(
+      [...maps.sessionById.values(), ...inserts],
+      { sessionById: maps.sessionById, sessionsByBranch: maps.sessionsByBranch }
+    );
+    return { ...maps, sessionById, sessionsByBranch };
+  }
+  // Insert remote-create sources after their targets so the surrogate
+  // projection in `applySessionPatchToMaps` can find the target bucket.
+  inserts.sort(
+    (a, b) =>
+      Number(!!a.remote_relationships?.as_source?.length) -
+      Number(!!b.remote_relationships?.as_source?.length)
+  );
+  for (const session of inserts) maps = applySessionPatchToMaps(maps, session);
+  return maps;
+}
+
+/** Above this many new sessions, a fill rebuilds the session maps once. */
+const INCREMENTAL_SESSION_FILL_LIMIT = 64;
+
+/** Whether `branchId` was touched during the load and is now absent (archived or removed). */
+export function isOnRemovedBranch(
+  maps: DataMaps,
+  branchId: string | null | undefined,
+  touched: PartitionTouched
+): boolean {
+  return !!branchId && !maps.branchById.has(branchId) && touched('branches', branchId);
 }

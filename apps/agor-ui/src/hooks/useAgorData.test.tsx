@@ -17,13 +17,17 @@
  * `agorStore.getState().<map>` while load-state reads stay on `result.current`.
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { getRevision } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
+import { markBoardPartitionLoaded, registerDisplayedBoard } from '../store/boardPartitions';
+import { captureLoadLifetime } from '../store/loadLifetime';
 // Session `patched`/`updated` writes are coalesced to one flush per frame (see
 // realtimeBatch); flush synchronously in tests that assert the post-patch store.
 import { flushRealtimeNow } from '../store/realtimeBatch';
+import { loadSessionMcpServerIds } from '../store/sessionMcpLinks';
 import { useAgorData } from './useAgorData';
+import { useBoardPartition } from './useBoardPartition';
 
 // The opened-transcript prefetch retains a real reactive session; the mock
 // client doesn't model one. Default: ready at once (no deferral). Tests below
@@ -160,6 +164,19 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     fetchArguments: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchArguments.get(`${name}:${method}`) ?? [],
   };
+}
+
+/**
+ * Put the hook on board `board-1`'s route: board objects and cards load only
+ * with a board's partition (never on Home), here at first paint.
+ */
+function onBoardRoute(seed: Record<string, unknown[]>) {
+  const board = { board_id: 'board-1', slug: 'board-one', name: 'Board one' };
+  seed.boards ??= [board];
+  seed['boards:get'] ??= board as never;
+  window.history.pushState({}, '', '/b/board-one/');
+  onTestFinished(() => window.history.pushState({}, '', '/'));
+  return seed;
 }
 
 const makeBranch = (overrides: Record<string, unknown> = {}) => ({
@@ -309,11 +326,13 @@ describe('useAgorData — socket-event bailouts', () => {
     try {
       await waitForInitialLoad(result);
 
-      for (const service of ['branches', 'sessions', 'board-objects', 'board-comments', 'cards']) {
+      for (const service of ['branches', 'sessions', 'board-objects', 'cards']) {
         expect(fetchArguments(service, 'findAll')).toContainEqual({
           query: expect.objectContaining({ board_id: boardId }),
         });
       }
+      // Comments are global on every route (design r3 §2), never board-scoped.
+      expect(fetchArguments('board-comments', 'findAll')).toEqual([{ query: { $limit: 10000 } }]);
     } finally {
       window.history.pushState({}, '', '/');
     }
@@ -501,11 +520,13 @@ describe('useAgorData — socket-event bailouts', () => {
     const branch = makeBranch();
     const session = makeSession();
     const boardObject = makeBoardObject({ object_id: 'bo-1', branch_id: branch.branch_id });
-    const { client, emit } = makeMockClient({
-      branches: [branch],
-      sessions: [session],
-      'board-objects': [boardObject],
-    });
+    const { client, emit } = makeMockClient(
+      onBoardRoute({
+        branches: [branch],
+        sessions: [session],
+        'board-objects': [boardObject],
+      })
+    );
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
@@ -520,7 +541,6 @@ describe('useAgorData — socket-event bailouts', () => {
     // Archive preserves placement in the database for unarchive, so unlike a
     // hard delete it must stay in the client indexes too.
     expect(agorStore.getState().boardObjectById.get('bo-1')).toEqual(boardObject);
-    expect(agorStore.getState().boardObjectByBranchId.get('b-1')).toEqual(boardObject);
   });
 
   it('drops a duplicate `sessions.created` for an existing id', async () => {
@@ -597,11 +617,13 @@ describe('useAgorData — socket-event bailouts', () => {
       board_id: 'board-2',
       branch_id: 'b-1',
     });
-    const { client, emit } = makeMockClient({
-      sessions: [session],
-      branches: [branch],
-      'board-objects': [boardObject, duplicateBoardObject],
-    });
+    const { client, emit } = makeMockClient(
+      onBoardRoute({
+        sessions: [session],
+        branches: [branch],
+        'board-objects': [boardObject, duplicateBoardObject],
+      })
+    );
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
@@ -609,7 +631,6 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(true);
     expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(true);
-    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(true);
     expect(
       agorStore
         .getState()
@@ -632,7 +653,6 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().sessionsByBranch.has('b-1')).toBe(false);
     expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
     expect(agorStore.getState().boardObjectById.has('bo-duplicate')).toBe(false);
-    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
     expect(
       agorStore
         .getState()
@@ -685,10 +705,15 @@ describe('useAgorData — socket-event bailouts', () => {
   });
 
   it('keeps a missed hard delete removed after reconnect refetch', async () => {
+    // On the board, which the resync reconciles (other boards are unloaded).
+    window.history.pushState({}, '', '/b/displayed/');
+    const board = { board_id: 'board-1', slug: 'displayed', name: 'Displayed' };
     const session = makeSession({ session_id: 's-1', branch_id: 'b-1' });
     const branch = makeBranch({ branch_id: 'b-1' });
     const boardObject = makeBoardObject({ object_id: 'bo-1', branch_id: 'b-1' });
     const seed: Record<string, unknown[]> = {
+      boards: [board],
+      'boards:get': board as never,
       'sessions:find': [session],
       'sessions:findAll': [session],
       'branches:findAll': [branch],
@@ -696,6 +721,7 @@ describe('useAgorData — socket-event bailouts', () => {
     };
     const { client, emitIo } = makeMockClient(seed);
     const { result } = renderHook(() => useAgorData(client));
+    onTestFinished(() => window.history.pushState({}, '', '/'));
     await waitForInitialLoad(result);
 
     expect(agorStore.getState().branchById.has('b-1')).toBe(true);
@@ -711,7 +737,6 @@ describe('useAgorData — socket-event bailouts', () => {
       expect(agorStore.getState().branchById.has('b-1')).toBe(false);
       expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
       expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
-      expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
     });
   });
 
@@ -764,7 +789,7 @@ describe('useAgorData — socket-event bailouts', () => {
     expect(agorStore.getState().artifactById).toBe(before);
   });
 
-  it('builds derived board-object indexes during initial load', async () => {
+  it("buckets the displayed board's board objects at first paint", async () => {
     const branchObject = makeBoardObject({ object_id: 'bo-branch', branch_id: 'b-1' });
     const cardObject = makeBoardObject({
       object_id: 'bo-card',
@@ -777,9 +802,9 @@ describe('useAgorData — socket-event bailouts', () => {
       board_id: 'board-2',
       branch_id: 'b-2',
     });
-    const { client } = makeMockClient({
-      'board-objects': [branchObject, cardObject, otherBoardObject],
-    });
+    const { client } = makeMockClient(
+      onBoardRoute({ 'board-objects': [branchObject, cardObject, otherBoardObject] })
+    );
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
 
@@ -798,11 +823,9 @@ describe('useAgorData — socket-event bailouts', () => {
         .boardObjectsByBoardId.get('board-2')
         ?.map((bo) => bo.object_id)
     ).toEqual(['bo-other']);
-    expect(agorStore.getState().boardObjectByBranchId.get('b-1')?.object_id).toBe('bo-branch');
-    expect(agorStore.getState().boardObjectByCardId.get('c-1')?.object_id).toBe('bo-card');
   });
 
-  it('keeps board-object derived indexes in sync across patch and remove events', async () => {
+  it('keeps board-object buckets in sync across patch and remove events', async () => {
     const boardObject = makeBoardObject({
       object_id: 'bo-1',
       board_id: 'board-1',
@@ -829,14 +852,12 @@ describe('useAgorData — socket-event bailouts', () => {
         .boardObjectsByBoardId.get('board-2')
         ?.map((bo) => bo.object_id)
     ).toEqual(['bo-1']);
-    expect(agorStore.getState().boardObjectByBranchId.has('b-1')).toBe(false);
-    expect(agorStore.getState().boardObjectByBranchId.get('b-2')?.zone_id).toBe('zone-b');
+    expect(agorStore.getState().boardObjectById.get('bo-1')?.zone_id).toBe('zone-b');
 
     act(() => emit('board-objects', 'removed', { ...boardObject, board_id: 'board-2' }));
 
     expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
     expect(agorStore.getState().boardObjectsByBoardId.has('board-2')).toBe(false);
-    expect(agorStore.getState().boardObjectByBranchId.has('b-2')).toBe(false);
   });
 
   it('keeps unrelated board-object buckets reference-stable on other-board patches', async () => {
@@ -1260,34 +1281,20 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     }
   });
 
-  it('backfills every board objects via the boards background hydration', async () => {
+  it("never reads every board's full record: Home has only the lean list", async () => {
     const leanA = { board_id: 'board-A', slug: 'a', name: 'A' };
-    const leanB = { board_id: 'board-B', slug: 'b', name: 'B' };
-    const fullA = {
-      ...leanA,
-      objects: { 'z-a': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
-    };
-    const fullB = {
-      ...leanB,
-      objects: { 'z-b': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
-    };
-    const seed: Record<string, unknown[]> = {};
-    const { client, fetchCount, onFetch } = makeMockClient(seed);
-    // Home path (jsdom `/`): no board scope, no targeted get. The lean gated
-    // fetch (call 1) carries no objects; the hydration (call 2) carries them.
-    onFetch('boards', 'findAll', (call) => {
-      seed['boards:findAll'] = call === 1 ? [leanA, leanB] : [fullA, fullB];
-    });
+    const { client, fetchCount, fetchArguments } = makeMockClient({ boards: [leanA] });
     const { result } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
     await flush();
-    expect(agorStore.getState().boardById.get('board-A')?.objects).toBeDefined();
-    expect(agorStore.getState().boardById.get('board-B')?.objects).toBeDefined();
+    expect(fetchCount('boards', 'findAll')).toBe(1);
+    expect(fetchArguments('boards', 'findAll')[0]).toMatchObject({ query: { lean: true } });
     expect(fetchCount('boards', 'get')).toBe(0);
-    expect(fetchCount('branches', 'get')).toBe(0);
+    expect(fetchCount('board-objects', 'findAll')).toBe(0);
+    expect(fetchCount('cards', 'findAll')).toBe(0);
   });
 
-  it('does not repeat the displayed-board point read during reconnect resync', async () => {
+  it('reconnect resync reads the displayed board once and every board list lean', async () => {
     window.history.pushState({}, '', '/b/displayed/');
     const board = {
       board_id: 'board-D',
@@ -1299,7 +1306,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       boards: [board],
       'boards:get': board as never,
     };
-    const { client, emitIo, fetchCount } = makeMockClient(seed);
+    const { client, emitIo, fetchCount, fetchArguments } = makeMockClient(seed);
     const { result } = renderHook(() => useAgorData(client));
     try {
       await waitForInitialLoad(result);
@@ -1307,25 +1314,32 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       expect(fetchCount('boards', 'get')).toBe(1);
 
       act(() => emitIo('connect'));
-      await waitFor(() => expect(fetchCount('boards', 'findAll')).toBeGreaterThanOrEqual(3));
+      await waitFor(() => expect(fetchCount('boards', 'findAll')).toBe(2));
       await flush();
 
-      // Silent reconnect uses the full boards.findAll snapshot. It deliberately
-      // skips the cold-load targeted get, so resync and idle do not poll boards.
-      expect(fetchCount('boards', 'get')).toBe(1);
+      // The resync reads the lean list plus ONE point read of the displayed
+      // board (never every board's full record), so its zones never flash off.
+      // Other boards' records load with their partitions.
+      expect(fetchCount('boards', 'get')).toBe(2);
       expect(fetchCount('branches', 'get')).toBe(0);
+      for (const read of fetchArguments('boards', 'findAll') as Array<{ query?: unknown }>) {
+        expect(read.query).toMatchObject({ lean: true });
+      }
+      expect(agorStore.getState().boardById.get('board-D')?.objects).toBeDefined();
     } finally {
       window.history.pushState({}, '', '/');
     }
   });
 });
 
-describe('useAgorData — session and branch hydration flags', () => {
-  it('marks both flags again once the silent resync after an identity change lands', async () => {
+describe('useAgorData — user-scope flags', () => {
+  it('reset on an identity change and recover once the silent resync re-runs the scope', async () => {
+    // Rows honour each user's `created_by` filter (rows violating it would
+    // read as an older daemon that ignores the key).
     const seed: Record<string, unknown[]> = {
-      'sessions:find': [makeSession()],
-      'sessions:findAll': [makeSession()],
-      'branches:findAll': [makeBranch()],
+      'sessions:find': [makeSession({ created_by: 'user-a' })],
+      'sessions:findAll': [makeSession({ created_by: 'user-a' })],
+      'branches:findAll': [makeBranch({ created_by: 'user-a' })],
     };
     const gate = deferred();
     const { client, onFetch, fetchCount } = makeMockClient(seed);
@@ -1340,47 +1354,50 @@ describe('useAgorData — session and branch hydration flags', () => {
       { initialProps: { userId: 'user-a', generation: 1 } }
     );
     await waitForInitialLoad(result);
-    await flush();
-    expect(agorStore.getState().sessionsHydrated).toBe(true);
-    expect(agorStore.getState().branchesHydrated).toBe(true);
+    const scopeLoaded = () => {
+      const s = agorStore.getState();
+      return [s.mySessionsLoaded, s.homeBranchesLoaded, s.teammatesLoaded];
+    };
+    await waitFor(() => expect(scopeLoaded()).toEqual([true, true, true]));
 
     // Hold the resync's full session fetch so the reset flags can be observed first.
     const calls = fetchCount('sessions', 'findAll');
     onFetch('sessions', 'findAll', (call) => (call > calls ? gate.promise : undefined));
+    seed['sessions:find'] = [makeSession({ created_by: 'user-b' })];
+    seed['sessions:findAll'] = [makeSession({ created_by: 'user-b' })];
+    seed['branches:findAll'] = [makeBranch({ created_by: 'user-b' })];
     rerender({ userId: 'user-b', generation: 2 });
     await flush();
-    expect(agorStore.getState().sessionsHydrated).toBe(false);
-    expect(agorStore.getState().branchesHydrated).toBe(false);
+    expect(scopeLoaded()).toEqual([false, false, false]);
 
     await act(async () => {
       gate.resolve();
       await gate.promise;
     });
-    await flush();
+    await waitFor(() => expect(scopeLoaded()).toEqual([true, true, true]));
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
-    expect(agorStore.getState().sessionsHydrated).toBe(true);
-    expect(agorStore.getState().branchesHydrated).toBe(true);
   });
 });
 
-describe('session MCP initialization events', () => {
-  it('replaces attachments immediately, preserves unrelated sessions, and clears explicit empty selection', async () => {
-    const { client, emit, listeners } = makeMockClient({
-      'session-mcp-servers': [
-        { session_id: 's-1', mcp_server_id: 'old-server' },
-        { session_id: 's-2', mcp_server_id: 'other-server' },
-      ],
+describe('session MCP links', () => {
+  it('reads no session↔MCP links globally, and realtime events still apply to any session', async () => {
+    const { client, emit, listeners, fetchCount } = makeMockClient({
+      'session-mcp-servers': [{ session_id: 's-1', mcp_server_id: 'old-server' }],
     });
     const { result, unmount } = renderHook(() => useAgorData(client));
     await waitForInitialLoad(result);
-    await waitFor(() =>
-      expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['old-server'])
-    );
+    await flush();
+    expect(fetchCount('session-mcp-servers', 'findAll')).toBe(0);
+    expect(fetchCount('session-mcp-servers', 'find')).toBe(0);
+    expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
 
     const patch = { session_id: 's-1', mcp_server_ids: ['selected-server'] };
     act(() => emit('session-mcp-servers', 'patched', patch));
+    act(() => emit('session-mcp-servers', 'created', { session_id: 's-2', mcp_server_id: 'x' }));
     expect(agorStore.getState().sessionMcpServerIds.get('s-1')).toEqual(['selected-server']);
-    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
+    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['x']);
+    // Present through events only: not loaded, so not editable.
+    expect(agorStore.getState().sessionMcpLoaded.size).toBe(0);
 
     const before = agorStore.getState().sessionMcpServerIds;
     act(() => emit('session-mcp-servers', 'patched', patch));
@@ -1388,53 +1405,48 @@ describe('session MCP initialization events', () => {
 
     act(() => emit('session-mcp-servers', 'patched', { ...patch, mcp_server_ids: [] }));
     expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual([]);
-    expect(agorStore.getState().sessionMcpServerIds.get('s-2')).toEqual(['other-server']);
     unmount();
     expect(listeners('session-mcp-servers', 'patched')).toHaveLength(0);
   });
 
-  it.each([[['selected-server']], [[]]])(
-    'discards a stale snapshot racing replacement %j',
-    async (serverIds) => {
-      const seed = { 'session-mcp-servers': [{ session_id: 's-1', mcp_server_id: 'old-server' }] };
-      const { client, emit, onFetch, fetchCount } = makeMockClient(seed);
-      let release!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
-      const { result } = renderHook(() => useAgorData(client));
-      await waitForInitialLoad(result);
-      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(1));
+  it('a reconnect resync marks every session unloaded, and a read from before it never marks one loaded', async () => {
+    const seed = { 'session-mcp-servers': [{ session_id: 's-1', mcp_server_id: 'a' }] };
+    const { client, emitIo, onFetch, fetchCount } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
 
-      act(() =>
-        emit('session-mcp-servers', 'patched', { session_id: 's-1', mcp_server_ids: serverIds })
-      );
-      seed['session-mcp-servers'] = serverIds.map((mcp_server_id) => ({
-        session_id: 's-1',
-        mcp_server_id,
-      }));
-      await act(async () => {
-        release();
-        await pending;
-      });
-      await waitFor(() => expect(fetchCount('session-mcp-servers', 'findAll')).toBe(2));
-      expect(agorStore.getState().sessionMcpServerIds.get('s-1') ?? []).toEqual(serverIds);
-    }
-  );
+    await act(async () => {
+      await loadSessionMcpServerIds(client, 's-1');
+    });
+    expect(agorStore.getState().sessionMcpLoaded.has('s-1')).toBe(true);
+    expect(fetchCount('session-mcp-servers', 'find')).toBe(1);
+
+    // A read of s-2 is held across the reconnect.
+    const held = deferred();
+    onFetch('session-mcp-servers', 'find', (call) => (call === 2 ? held.promise : undefined));
+    let staleRead!: Promise<void>;
+    act(() => {
+      staleRead = loadSessionMcpServerIds(client, 's-2');
+    });
+    act(() => emitIo('connect'));
+    await flush();
+    expect(agorStore.getState().sessionMcpLoaded.size).toBe(0);
+    await act(async () => {
+      held.resolve();
+      await staleRead;
+    });
+    expect(agorStore.getState().sessionMcpLoaded.has('s-2')).toBe(false);
+  });
 
   it.each(['tenant-a-user', 'tenant-b-user'])(
-    'rejects previous-auth events and snapshots after reauthentication as %s',
+    'rejects previous-auth events and reads after reauthentication as %s',
     async (userId) => {
       const seed = {
         'session-mcp-servers': [{ session_id: 'session-a', mcp_server_id: 'server-a' }],
       };
       const { client, listeners, onFetch } = makeMockClient(seed);
-      let release!: () => void;
-      const pending = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      onFetch('session-mcp-servers', 'findAll', (call) => (call === 1 ? pending : undefined));
+      const held = deferred();
+      onFetch('session-mcp-servers', 'find', (call) => (call === 1 ? held.promise : undefined));
       const { result, rerender } = renderHook(
         ({ userId, generation, ready }) =>
           useAgorData(client, {
@@ -1446,18 +1458,22 @@ describe('session MCP initialization events', () => {
         { initialProps: { userId: 'tenant-a-user', generation: 1, ready: true } }
       );
       await waitForInitialLoad(result);
+      let oldRead!: Promise<void>;
+      act(() => {
+        oldRead = loadSessionMcpServerIds(client, 'session-a');
+      });
       const oldListeners = listeners('session-mcp-servers', 'patched');
       expect(oldListeners).toHaveLength(1);
-      seed['session-mcp-servers'] = [];
       rerender({ userId, generation: 2, ready: true });
       await act(async () => {
         for (const listener of oldListeners) {
           listener({ session_id: 'session-a', mcp_server_ids: ['server-a'] });
         }
-        release();
-        await pending;
+        held.resolve();
+        await oldRead;
       });
       expect(agorStore.getState().sessionMcpServerIds.size).toBe(0);
+      expect(agorStore.getState().sessionMcpLoaded.size).toBe(0);
     }
   );
 });
@@ -1478,7 +1494,11 @@ describe('useAgorData — opened session transcript priority', () => {
 
   it('holds the global hydration until the opened transcript is ready', async () => {
     const session = makeSession({ session_id: OPEN_ID });
-    const { client, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const other = makeSession({ session_id: 's-global-only' });
+    const { client, fetchCount } = makeMockClient({
+      'sessions:find': [session],
+      'sessions:findAll': [session, other],
+    });
     const prefetch = deferredPrefetch();
 
     const { result } = renderHook(() => useAgorData(client, { directSessionId: OPEN_SHORT }));
@@ -1488,17 +1508,13 @@ describe('useAgorData — opened session transcript priority', () => {
     expect(fetchCount('sessions', 'findAll')).toBe(0);
     expect(fetchCount('branches', 'findAll')).toBe(0);
     expect(fetchCount('boards', 'findAll')).toBe(1); // the gated lean list only
-    expect(agorStore.getState().sessionsHydrated).toBe(false);
-    expect(agorStore.getState().branchesHydrated).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-global-only')).toBe(false);
 
     await act(async () => prefetch.resolve());
     await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
     expect(fetchCount('branches', 'findAll')).toBe(1);
-    expect(fetchCount('boards', 'findAll')).toBe(2);
-    await waitFor(() => {
-      expect(agorStore.getState().sessionsHydrated).toBe(true);
-      expect(agorStore.getState().branchesHydrated).toBe(true);
-    });
+    expect(fetchCount('boards', 'findAll')).toBe(1); // full board records load per board only
+    await waitFor(() => expect(agorStore.getState().sessionById.has('s-global-only')).toBe(true));
   });
 
   it('skips the deferred hydration and releases the prefetch on unmount', async () => {
@@ -1544,7 +1560,9 @@ describe('useAgorData — opened session transcript priority', () => {
     const session = makeSession({ session_id: OPEN_ID });
     const { client, fetchCount, onFetch } = makeMockClient({ 'sessions:find': [session] });
     const heavy = deferred();
-    onFetch('cards', 'findAll', () => heavy.promise);
+    // Comments are gated on every route (Home defers cards to the background),
+    // so holding them holds the heavy batch.
+    onFetch('board-comments', 'findAll', () => heavy.promise);
     const release = vi.fn();
     // `ready` settles at once, so a resumed load would start the global sets.
     transcriptPrefetch.prefetchOpenedTranscript.mockReturnValueOnce({
@@ -1553,7 +1571,7 @@ describe('useAgorData — opened session transcript priority', () => {
     });
 
     const { unmount } = renderHook(() => useAgorData(client, { directSessionId: OPEN_ID }));
-    await waitFor(() => expect(fetchCount('cards', 'findAll')).toBe(1));
+    await waitFor(() => expect(fetchCount('board-comments', 'findAll')).toBe(1));
     expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenCalledTimes(1);
     unmount();
     expect(release).toHaveBeenCalled();
@@ -1581,4 +1599,754 @@ describe('useAgorData — opened session transcript priority', () => {
     expect(transcriptPrefetch.prefetchOpenedTranscript).not.toHaveBeenCalled();
     await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
   });
+
+  it('holds only the bulk U1 read behind the opened transcript', async () => {
+    // A full gated page (200 of mine), so the scope needs U1.
+    const page = Array.from({ length: 200 }, (_, i) =>
+      makeSession({
+        session_id: i === 0 ? OPEN_ID : `s-mine-${i}`,
+        created_by: 'user-me',
+      })
+    );
+    const { client, fetchArguments } = makeMockClient({ 'sessions:find': page });
+    const prefetch = deferredPrefetch();
+    const u1Sent = () =>
+      fetchArguments('sessions', 'find').some(
+        (args) => (args as { query: { $limit?: number } }).query.$limit === 10000
+      );
+
+    const { result } = renderHook(() =>
+      useAgorData(client, {
+        authenticatedUserId: 'user-me',
+        authenticatedUserRole: 'member',
+        authGeneration: 1,
+        connectionReady: true,
+        directSessionId: OPEN_SHORT,
+      })
+    );
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(agorStore.getState().teammatesLoaded).toBe(true));
+    expect(u1Sent()).toBe(false);
+
+    await act(async () => prefetch.resolve());
+    await waitFor(() => expect(u1Sent()).toBe(true));
+  });
+
+  it('starts the user scope without waiting for the opened transcript', async () => {
+    const session = makeSession({ session_id: OPEN_ID, created_by: 'user-me' });
+    const { client, fetchArguments, fetchCount } = makeMockClient({ 'sessions:find': [session] });
+    const prefetch = deferredPrefetch();
+
+    const { result } = renderHook(() =>
+      useAgorData(client, {
+        authenticatedUserId: 'user-me',
+        authenticatedUserRole: 'member',
+        authGeneration: 1,
+        connectionReady: true,
+        directSessionId: OPEN_SHORT,
+      })
+    );
+    await waitForInitialLoad(result);
+
+    // The global snapshots wait for the transcript; my teammates (U3) do not.
+    await waitFor(() =>
+      expect(fetchArguments('branches', 'find')).toContainEqual({
+        query: { teammate: true, archived: false, $limit: 1000 },
+      })
+    );
+    expect(fetchCount('sessions', 'findAll')).toBe(0);
+    await waitFor(() => expect(agorStore.getState().teammatesLoaded).toBe(true));
+
+    await act(async () => prefetch.resolve());
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+  });
+});
+
+describe('useAgorData — user-scoped first paint (design r3 §3.1)', () => {
+  const authority = {
+    authenticatedUserId: 'user-me',
+    authenticatedUserRole: 'member',
+    authGeneration: 1,
+    connectionReady: true,
+  };
+  const never = () => new Promise(() => {});
+
+  it('gates Home on my newest sessions and global comments, and reads no board objects or cards', async () => {
+    window.history.pushState({}, '', '/');
+    const mine = makeSession({ session_id: 's-mine', created_by: 'user-me' });
+    const { client, fetchArguments, onFetch } = makeMockClient({ 'sessions:find': [mine] });
+    // Annotations never resolve: Home must still open its gate.
+    onFetch('board-objects', 'findAll', never);
+    onFetch('cards', 'findAll', never);
+    // Hold the global sessions hydration so the first-paint state is observed.
+    onFetch('sessions', 'findAll', never);
+    const { result } = renderHook(() => useAgorData(client, authority));
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+      expect(result.current.initialLoadComplete).toBe(true);
+    });
+    // The gated page is MY sessions; it replaces the global recent slice.
+    expect(fetchArguments('sessions', 'find')[0]).toEqual({
+      query: {
+        created_by: 'user-me',
+        archived: false,
+        $sort: { updated_at: -1 },
+        $limit: 200,
+        $count: false,
+        lean: true,
+      },
+    });
+    expect(agorStore.getState().sessionById.has('s-mine')).toBe(true);
+    const gated = result.current.initialLoadItems.map((item) => item.key);
+    expect(gated).toContain('board-comments');
+    expect(gated).not.toContain('cards');
+    expect(gated).not.toContain('board-objects');
+    expect(fetchArguments('board-comments', 'findAll')).toEqual([{ query: { $limit: 10000 } }]);
+    // Home never reads board objects or cards; a board loads its own.
+    await flush();
+    expect(fetchArguments('board-objects', 'findAll')).toEqual([]);
+    expect(fetchArguments('cards', 'findAll')).toEqual([]);
+    // One gated row < 200: the gated page already holds all of my sessions.
+    await waitFor(() => expect(agorStore.getState().mySessionsLoaded).toBe(true));
+  });
+
+  it('degrades to the global recent slice when an older daemon rejects the my-sessions page', async () => {
+    window.history.pushState({}, '', '/');
+    const recent = makeSession({ session_id: 's-recent' });
+    const { client, fetchArguments, onFetch } = makeMockClient({ 'sessions:find': [recent] });
+    // Call 1 is the my-sessions page; call 2 the fallback recent slice.
+    onFetch('sessions', 'find', (call) =>
+      call === 1 ? Promise.reject(new Error('400 $count unsupported')) : undefined
+    );
+    onFetch('sessions', 'findAll', never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useAgorData(client, authority));
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+        expect(result.current.initialLoadComplete).toBe(true);
+      });
+      expect(result.current.error).toBeNull();
+      expect(fetchArguments('sessions', 'find')[1]).toEqual({
+        query: {
+          archived: false,
+          lean: true,
+          $limit: 50,
+          $count: false,
+          $sort: { updated_at: -1 },
+        },
+      });
+      expect(agorStore.getState().sessionById.has('s-recent')).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a session created during first paint and never skips U1 on that raced page', async () => {
+    window.history.pushState({}, '', '/');
+    const gated = makeSession({ session_id: 's-old', created_by: 'user-me' });
+    const { client, emit, onFetch, fetchArguments } = makeMockClient({
+      'sessions:find': [gated],
+    });
+    const comments = deferred();
+    onFetch('board-comments', 'findAll', (call) => (call === 1 ? comments.promise : undefined));
+    onFetch('sessions', 'findAll', never);
+    const { result } = renderHook(() => useAgorData(client, authority));
+    await waitFor(() => expect(fetchArguments('board-comments', 'findAll')).toHaveLength(1));
+
+    // My new session arrives live while the gated comments are still pending,
+    // and someone removes a session the gated page still holds.
+    const created = makeSession({ session_id: 's-new', created_by: 'user-me' });
+    act(() => emit('sessions', 'created', created));
+    await act(async () => {
+      comments.resolve();
+      await comments.promise;
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const state = agorStore.getState();
+    expect(state.sessionById.get('s-new')).toBe(created);
+    expect(
+      state.sessionsByBranch
+        .get('b-1')
+        ?.map((s) => s.session_id)
+        .sort()
+    ).toEqual(['s-new', 's-old']);
+    // One gated row < 200, but the page raced a create of mine: U1 still runs.
+    await waitFor(() =>
+      expect(
+        fetchArguments('sessions', 'find').some(
+          (args) => (args as { query: { $limit?: number } }).query.$limit === 10000
+        )
+      ).toBe(true)
+    );
+  });
+
+  it('keeps a live removal and a live comment over the first-paint snapshot', async () => {
+    window.history.pushState({}, '', '/');
+    const doomed = makeSession({ session_id: 's-doomed', created_by: 'user-me' });
+    const seed: Record<string, unknown[]> = { 'sessions:find': [doomed], 'board-comments': [] };
+    const { client, emit, onFetch } = makeMockClient(seed);
+    const comments = deferred();
+    onFetch('board-comments', 'findAll', (call) => (call === 1 ? comments.promise : undefined));
+    onFetch('sessions', 'findAll', never);
+    const { result } = renderHook(() => useAgorData(client, authority));
+    await waitFor(() => expect(result.current.initialLoadItems.length).toBeGreaterThan(0));
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    const comment = { comment_id: 'c-live', board_id: 'board-1', content: 'hi' };
+    // The server no longer has it either (the raced page makes U1 read again).
+    seed['sessions:find'] = [];
+    act(() => {
+      emit('sessions', 'removed', doomed);
+      emit('board-comments', 'created', comment);
+    });
+    await act(async () => {
+      comments.resolve();
+      await comments.promise;
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(agorStore.getState().sessionById.has('s-doomed')).toBe(false);
+    expect(agorStore.getState().commentById.has('c-live')).toBe(true);
+  });
+
+  it('sends the id reads for branches only U1 references before the global snapshots', async () => {
+    window.history.pushState({}, '', '/');
+    // A full gated page (200 of mine) on b-1, so the scope runs U1. U1 also
+    // returns an older session on b-old: no gated row, U2 or U3 knows it.
+    const page = Array.from({ length: 200 }, (_, i) =>
+      makeSession({ session_id: `s-${i}`, created_by: 'user-me', branch_id: 'b-1' })
+    );
+    const older = makeSession({ session_id: 's-older', created_by: 'user-me', branch_id: 'b-old' });
+    const seed: Record<string, unknown[]> = { 'sessions:find': page };
+    const mock = makeMockClient(seed);
+    // Call 2 of sessions.find is U1 (call 1 is the gated page).
+    mock.onFetch('sessions', 'find', (call) => {
+      if (call === 2) seed['sessions:find'] = [...page, older];
+      return undefined;
+    });
+    const order: string[] = [];
+    const service = mock.client.service;
+    (mock.client as { service: unknown }).service = (name: string) => {
+      const svc = service(name);
+      for (const method of ['find', 'findAll'] as const) {
+        const original = svc[method];
+        svc[method] = vi.fn((args?: { query?: Record<string, unknown> }) => {
+          const ids = (args?.query?.branch_id as { $in?: string[] } | undefined)?.$in;
+          order.push(ids ? `ids:${ids.join(',')}` : `${name}:${method}`);
+          return original(args);
+        });
+      }
+      return svc;
+    };
+    const { result } = renderHook(() => useAgorData(mock.client, authority));
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(order).toContain('sessions:findAll'));
+    const u1OnlyRead = order.findIndex(
+      (entry) => entry.startsWith('ids:') && entry.includes('b-old')
+    );
+    expect(u1OnlyRead).toBeGreaterThanOrEqual(0);
+    expect(u1OnlyRead).toBeLessThan(order.indexOf('sessions:findAll'));
+    expect(u1OnlyRead).toBeLessThan(order.lastIndexOf('branches:findAll'));
+    await waitFor(() => expect(agorStore.getState().homeBranchesLoaded).toBe(true));
+  });
+
+  it('sends the U1-only id reads before the global snapshots even when my branches fail', async () => {
+    window.history.pushState({}, '', '/');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const page = Array.from({ length: 200 }, (_, i) =>
+      makeSession({ session_id: `s-${i}`, created_by: 'user-me', branch_id: 'b-1' })
+    );
+    const older = makeSession({ session_id: 's-older', created_by: 'user-me', branch_id: 'b-old' });
+    // The global session snapshot holds every session too, as the daemon's would.
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': page,
+      'sessions:findAll': [...page, older],
+    };
+    const mock = makeMockClient(seed);
+    mock.onFetch('sessions', 'find', (call) => {
+      if (call === 2) seed['sessions:find'] = [...page, older];
+      return undefined;
+    });
+    // Hold the global branch snapshot so its compatibility pass can't settle
+    // b-old first; the order of the requests is what's under test.
+    let releaseGlobalBranches!: () => void;
+    const globalBranches = new Promise<void>((resolve) => {
+      releaseGlobalBranches = resolve;
+    });
+    mock.onFetch('branches', 'findAll', () => globalBranches);
+    const order: string[] = [];
+    const service = mock.client.service;
+    (mock.client as { service: unknown }).service = (name: string) => {
+      const svc = service(name);
+      for (const method of ['find', 'findAll'] as const) {
+        const original = svc[method];
+        svc[method] = vi.fn((args?: { query?: Record<string, unknown> }) => {
+          const ids = (args?.query?.branch_id as { $in?: string[] } | undefined)?.$in;
+          if (name === 'branches' && args?.query?.created_by) {
+            // U2 (my branches) fails transiently; U1 still succeeds.
+            order.push('u2');
+            return Promise.reject(new Error('socket timeout'));
+          }
+          order.push(ids ? `ids:${ids.join(',')}` : `${name}:${method}`);
+          return original(args);
+        });
+      }
+      return svc;
+    };
+    const { result } = renderHook(() => useAgorData(mock.client, authority));
+    await waitForInitialLoad(result);
+    const u1OnlyRead = () =>
+      order.findIndex((entry) => entry.startsWith('ids:') && entry.includes('b-old'));
+    await waitFor(() => {
+      expect(order).toContain('sessions:findAll');
+      expect(u1OnlyRead()).toBeGreaterThanOrEqual(0);
+    });
+    releaseGlobalBranches();
+    expect(order).toContain('u2');
+    expect(u1OnlyRead()).toBeLessThan(order.indexOf('sessions:findAll'));
+    expect(u1OnlyRead()).toBeLessThan(order.indexOf('branches:findAll'));
+  });
+
+  it("never applies a load that outlived its mount into the next user's store", async () => {
+    window.history.pushState({}, '', '/');
+    const seed: Record<string, unknown[]> = {
+      'sessions:find': [makeSession({ session_id: 's-alice', created_by: 'user-alice' })],
+    };
+    const { client, onFetch, fetchArguments } = makeMockClient(seed);
+    const aliceRead = deferred();
+    // Hold Alice's gated my-sessions page (call 1); Bob's (call 2) answers at once.
+    onFetch('sessions', 'find', (call) => (call === 1 ? aliceRead.promise : undefined));
+    onFetch('sessions', 'findAll', never);
+    const alice = renderHook(() =>
+      useAgorData(client, { ...authority, authenticatedUserId: 'user-alice' })
+    );
+    await waitFor(() => expect(fetchArguments('sessions', 'find')).toHaveLength(1));
+    alice.unmount();
+
+    // The response is captured at call time, so Bob's page differs from Alice's.
+    seed['sessions:find'] = [makeSession({ session_id: 's-bob', created_by: 'user-bob' })];
+    const bob = renderHook(() =>
+      useAgorData(client, { ...authority, authenticatedUserId: 'user-bob' })
+    );
+    try {
+      await waitForInitialLoad(bob.result);
+      await waitFor(() => expect(agorStore.getState().mySessionsLoaded).toBe(true));
+      const readsBefore = fetchArguments('branches', 'findAll').length;
+
+      await act(async () => {
+        aliceRead.resolve();
+        await aliceRead.promise;
+        // Long enough for an unfenced load to pass its indexing frame and apply.
+        await new Promise<void>((resolve) => setTimeout(resolve, 150));
+      });
+      const state = agorStore.getState();
+      expect(state.sessionById.has('s-alice')).toBe(false);
+      expect(state.sessionById.has('s-bob')).toBe(true);
+      // Alice's load neither started a user scope nor read anything after teardown.
+      expect(fetchArguments('branches', 'findAll')).toHaveLength(readsBefore);
+      expect(
+        fetchArguments('branches', 'findAll').some(
+          (args) => (args as { query?: { created_by?: string } }).query?.created_by === 'user-alice'
+        )
+      ).toBe(false);
+    } finally {
+      bob.unmount();
+    }
+  });
+
+  it('completes Home from the global snapshots against an older daemon that rejects every new key', async () => {
+    window.history.pushState({}, '', '/');
+    const mine = makeSession({ session_id: 's-mine', created_by: 'user-me', branch_id: 'b-1' });
+    const lost = makeSession({ session_id: 's-lost', created_by: 'user-me', branch_id: 'b-gone' });
+    const mock = makeMockClient({
+      'sessions:find': [mine],
+      'sessions:findAll': [mine, lost],
+      'branches:findAll': [makeBranch({ branch_id: 'b-1', created_by: 'user-me' })],
+    });
+    // The pre-PR validator: `created_by` with `$count: false`, `teammate`,
+    // branch `created_by` and id lists are all rejected with 400, every time.
+    const rejected: unknown[] = [];
+    const isNewKey = (name: string, query: Record<string, unknown> = {}) =>
+      (name === 'sessions' && query.created_by !== undefined) ||
+      (name === 'branches' &&
+        (query.created_by !== undefined ||
+          query.teammate !== undefined ||
+          typeof query.branch_id === 'object'));
+    const service = mock.client.service;
+    (mock.client as { service: unknown }).service = (name: string) => {
+      const svc = service(name);
+      for (const method of ['find', 'findAll'] as const) {
+        const original = svc[method];
+        svc[method] = vi.fn((args?: { query?: Record<string, unknown> }) => {
+          if (isNewKey(name, args?.query)) {
+            rejected.push(args?.query);
+            return Promise.reject(
+              Object.assign(new Error('Invalid query'), { name: 'BadRequest', code: 400 })
+            );
+          }
+          return original(args);
+        });
+      }
+      return svc;
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { result } = renderHook(() => useAgorData(mock.client, authority));
+      await waitForInitialLoad(result);
+      expect(result.current.error).toBeNull();
+      await waitFor(() => {
+        const state = agorStore.getState();
+        expect(state.userScopeDegraded).toBe(true);
+        expect(state.mySessionsLoaded).toBe(true);
+        expect(state.teammatesLoaded).toBe(true);
+        expect(state.homeBranchesLoaded).toBe(true);
+      });
+      expect(agorStore.getState().sessionById.has('s-lost')).toBe(true);
+      expect([...agorStore.getState().absentBranchIds]).toEqual(['b-gone']);
+      // Only the gated page probed the new keys; the scope sent none after it.
+      expect(rejected).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still gates a board route on its board objects and cards', async () => {
+    window.history.pushState({}, '', '/b/displayed/');
+    const gate = deferred();
+    const { client, onFetch } = makeMockClient({
+      boards: [{ board_id: 'board-D', slug: 'displayed', name: 'Displayed' }],
+    });
+    onFetch('cards', 'findAll', (call) => (call === 1 ? gate.promise : undefined));
+    try {
+      const { result } = renderHook(() => useAgorData(client, authority));
+      await waitFor(() =>
+        expect(result.current.initialLoadItems.find((i) => i.key === 'boards')?.done).toBe(true)
+      );
+      expect(result.current.initialLoadComplete).toBe(false);
+      expect(result.current.initialLoadItems.map((item) => item.key)).toContain('cards');
+      gate.resolve();
+      await waitFor(() => expect(result.current.initialLoadComplete).toBe(true));
+    } finally {
+      gate.resolve();
+      window.history.pushState({}, '', '/');
+    }
+  });
+});
+
+describe('useAgorData — reconnect reconciles the displayed partition', () => {
+  const boardA = { board_id: 'board-A', slug: 'displayed', name: 'Displayed' };
+  const fullA = { ...boardA, objects: { 'zone-1': { type: 'zone', x: 0, y: 0 } } };
+  const card = (id: string, title = id) => ({ card_id: id, board_id: 'board-A', title });
+
+  function boardRoute() {
+    window.history.pushState({}, '', '/b/displayed/');
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+  }
+
+  it('drops deletions, applies moves and archives missed while disconnected, and unloads other boards', async () => {
+    boardRoute();
+    const seed: Record<string, unknown[]> = {
+      boards: [boardA],
+      'boards:get': fullA as never,
+      'branches:findAll': [
+        makeBranch({ branch_id: 'b-1', board_id: 'board-A' }),
+        makeBranch({ branch_id: 'b-arch', board_id: 'board-A' }),
+      ],
+      'board-objects:findAll': [
+        makeBoardObject({ object_id: 'bo-1', board_id: 'board-A', branch_id: 'b-1' }),
+        makeBoardObject({ object_id: 'bo-arch', board_id: 'board-A', branch_id: 'b-arch' }),
+        makeBoardObject({ object_id: 'bo-card', board_id: 'board-A', branch_id: undefined }),
+        makeBoardObject({ object_id: 'bo-deleted', board_id: 'board-A', branch_id: undefined }),
+      ],
+      cards: [card('k-1'), card('k-deleted')],
+    };
+    const { client, emitIo, fetchArguments } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+    // Another board was loaded before the disconnect.
+    markBoardPartitionLoaded('board-B', captureLoadLifetime()!);
+    expect(agorStore.getState().cardById.has('k-deleted')).toBe(true);
+
+    // While disconnected: a card and a board object deleted, a placement
+    // moved, a card edited, a branch archived (its placement stays, as on the
+    // server).
+    seed['branches:findAll'] = [makeBranch({ branch_id: 'b-1', board_id: 'board-A' })];
+    seed['board-objects:findAll'] = [
+      makeBoardObject({ object_id: 'bo-1', board_id: 'board-A', branch_id: 'b-1' }),
+      makeBoardObject({ object_id: 'bo-arch', board_id: 'board-A', branch_id: 'b-arch' }),
+      makeBoardObject({
+        object_id: 'bo-card',
+        board_id: 'board-A',
+        branch_id: undefined,
+        position: { x: 300, y: 400 },
+      }),
+    ];
+    seed.cards = [card('k-1', 'edited')];
+    act(() => emitIo('connect'));
+
+    await waitFor(() => expect(agorStore.getState().cardById.has('k-deleted')).toBe(false));
+    const state = agorStore.getState();
+    expect([...state.cardById.keys()]).toEqual(['k-1']);
+    expect(state.cardById.get('k-1')?.title).toBe('edited');
+    expect([...state.boardObjectById.keys()].sort()).toEqual(['bo-1', 'bo-arch', 'bo-card']);
+    expect(state.boardObjectById.get('bo-card')?.position).toEqual({ x: 300, y: 400 });
+    expect(state.branchById.has('b-arch')).toBe(false);
+    expect(state.boardById.get('board-A')?.objects).toBeDefined();
+    // The displayed board is complete again; every other board is unloaded.
+    expect(state.boardPartitions.get('board-A')?.status).toBe('loaded');
+    expect(state.boardPartitions.has('board-B')).toBe(false);
+    expect([...state.globallyHydrated].sort()).toEqual(['branches', 'sessions']);
+    // Annotations were read for the displayed board only.
+    const resyncReads = [
+      fetchArguments('board-objects', 'findAll').at(-1),
+      fetchArguments('cards', 'findAll').at(-1),
+    ] as Array<{ query?: unknown }>;
+    for (const read of resyncReads) expect(read.query).toMatchObject({ board_id: 'board-A' });
+  });
+
+  it('keeps rows written live while the resync was in flight', async () => {
+    boardRoute();
+    const seed: Record<string, unknown[]> = {
+      boards: [boardA],
+      'boards:get': fullA as never,
+      cards: [card('k-1', 'server')],
+    };
+    const { client, emit, emitIo, onFetch } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+
+    let reconnecting = false;
+    onFetch('cards', 'findAll', () => {
+      if (!reconnecting) return undefined;
+      // Realtime during the resync's read: a card created and one patched.
+      emit('cards', 'created', card('k-live'));
+      emit('cards', 'patched', card('k-1', 'live'));
+      return undefined;
+    });
+    reconnecting = true;
+    act(() => emitIo('connect'));
+    await waitFor(() => expect(agorStore.getState().cardById.has('k-live')).toBe(true));
+    await flush();
+    expect(agorStore.getState().cardById.get('k-1')?.title).toBe('live');
+    expect(agorStore.getState().cardById.has('k-live')).toBe(true);
+  });
+
+  it('on Home reads no board objects or cards and unloads every board', async () => {
+    const { client, emitIo, fetchCount } = makeMockClient({});
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+    markBoardPartitionLoaded('board-B', captureLoadLifetime()!);
+    const before = {
+      objects: fetchCount('board-objects', 'findAll'),
+      cards: fetchCount('cards', 'findAll'),
+      sessions: fetchCount('sessions', 'findAll'),
+    };
+
+    act(() => emitIo('connect'));
+    await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBeGreaterThan(before.sessions));
+    await flush();
+    expect(fetchCount('board-objects', 'findAll')).toBe(before.objects);
+    expect(fetchCount('cards', 'findAll')).toBe(before.cards);
+    expect(agorStore.getState().boardPartitions.size).toBe(0);
+  });
+});
+
+describe('useAgorData — reconnect follows the board the UI displays', () => {
+  it('reconciles an artifact route board (resolved by the UI, not the URL)', async () => {
+    window.history.pushState({}, '', '/a/01a0fdaa/');
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+    const board = { board_id: 'board-art', slug: 'art', name: 'Artifact board' };
+    const seed: Record<string, unknown[]> = {
+      boards: [board],
+      'boards:get': { ...board, objects: { z: { type: 'zone' } } } as never,
+      cards: [{ card_id: 'k-1', board_id: 'board-art', title: 'one' }],
+    };
+    const { client, emitIo, fetchArguments } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+    // The UI resolved the artifact's board and shows it (useBoardPartition).
+    const unregister = registerDisplayedBoard('board-art');
+    onTestFinished(unregister);
+
+    act(() => emitIo('connect'));
+    await waitFor(() =>
+      expect(agorStore.getState().boardPartitions.get('board-art')?.status).toBe('loaded')
+    );
+    expect(fetchArguments('cards', 'findAll').at(-1)).toMatchObject({
+      query: { board_id: 'board-art' },
+    });
+    expect(agorStore.getState().boardById.get('board-art')?.objects).toBeDefined();
+  });
+});
+
+describe('useAgorData — reauthentication reads the displayed board once', () => {
+  it('the partition hook does not race the resync for the displayed board', async () => {
+    window.history.pushState({}, '', '/b/board-one/');
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+    const board = { board_id: 'board-1', slug: 'board-one', name: 'Board one' };
+    const { client, fetchArguments } = makeMockClient({
+      boards: [board],
+      'boards:get': board as never,
+    });
+    const options = (generation: number) => ({
+      authenticatedUserId: 'user-a',
+      authenticatedUserRole: 'member',
+      authGeneration: generation,
+      connectionReady: true,
+    });
+    const { result, rerender } = renderHook(
+      ({ generation }) => {
+        const data = useAgorData(client, options(generation));
+        useBoardPartition(client, 'board-1', { canUseMemberWorkspaceServices: true });
+        return data;
+      },
+      { initialProps: { generation: 1 } }
+    );
+    await waitForInitialLoad(result);
+    await flush();
+    const boardReads = () =>
+      (
+        fetchArguments('board-objects', 'findAll') as Array<{ query?: { board_id?: string } }>
+      ).filter((args) => args.query?.board_id === 'board-1').length;
+    const before = boardReads();
+
+    rerender({ generation: 2 }); // reauthenticated: partitions reset, silent resync
+    await waitFor(() =>
+      expect(agorStore.getState().boardPartitions.get('board-1')?.status).toBe('loaded')
+    );
+    await flush();
+    expect(boardReads() - before).toBe(1);
+  });
+});
+
+describe('useAgorData — navigating while a reconnect resync runs', () => {
+  it('the destination board still loads after the resync resets every partition', async () => {
+    window.history.pushState({}, '', '/b/board-a/');
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+    const boardA = { board_id: 'board-a', slug: 'board-a', name: 'A' };
+    const boardB = { board_id: 'board-b', slug: 'board-b', name: 'B' };
+    const { client, emitIo, onFetch, fetchArguments } = makeMockClient({
+      boards: [boardA, boardB],
+      'boards:get': boardA as never,
+    });
+    const { result, rerender } = renderHook(
+      ({ boardId }) => {
+        const data = useAgorData(client);
+        useBoardPartition(client, boardId, { canUseMemberWorkspaceServices: true });
+        return data;
+      },
+      { initialProps: { boardId: 'board-a' } }
+    );
+    await waitForInitialLoad(result);
+    await flush();
+
+    // Hold the resync in its board-scoped batch (A is already resolved).
+    const resync = deferred();
+    onFetch('board-comments', 'findAll', (call) => (call === 2 ? resync.promise : undefined));
+    // Hold B's first partition read.
+    const firstB = deferred();
+    let bReads = 0;
+    onFetch('cards', 'findAll', () => {
+      const args = fetchArguments('cards', 'findAll').at(-1) as { query?: { board_id?: string } };
+      if (args.query?.board_id !== 'board-b') return undefined;
+      bReads += 1;
+      return bReads === 1 ? firstB.promise : undefined;
+    });
+    act(() => emitIo('connect'));
+    await flush();
+
+    // Navigate to B: its partition read starts while the resync is held.
+    window.history.pushState({}, '', '/b/board-b/');
+    rerender({ boardId: 'board-b' });
+    await waitFor(() => expect(bReads).toBe(1));
+
+    // The resync finishes (resetting every entry), then B's first read lands.
+    await act(async () => {
+      resync.resolve();
+      await resync.promise;
+    });
+    await flush();
+    await act(async () => {
+      firstB.resolve();
+      await firstB.promise;
+    });
+    await waitFor(() =>
+      expect(agorStore.getState().boardPartitions.get('board-b')?.status).toBe('loaded')
+    );
+    expect(bReads).toBe(2);
+  });
+});
+
+describe('useAgorData — navigating during the resync light batch', () => {
+  it.each(['loaded', 'in flight'])(
+    'reuses the destination board partition load (%s) instead of reading the board again',
+    async (state) => {
+      window.history.pushState({}, '', '/b/board-a/');
+      onTestFinished(() => window.history.pushState({}, '', '/'));
+      const boardA = { board_id: 'board-a', slug: 'board-a', name: 'A' };
+      const boardB = { board_id: 'board-b', slug: 'board-b', name: 'B' };
+      const { client, emitIo, onFetch, fetchArguments } = makeMockClient({
+        boards: [boardA, boardB],
+        'boards:get': boardA as never,
+      });
+      const { result, rerender } = renderHook(
+        ({ boardId }) => {
+          const data = useAgorData(client);
+          useBoardPartition(client, boardId, { canUseMemberWorkspaceServices: true });
+          return data;
+        },
+        { initialProps: { boardId: 'board-a' } }
+      );
+      await waitForInitialLoad(result);
+      await flush();
+
+      // Hold the resync in its light batch, before it resolves a board.
+      const light = deferred();
+      onFetch('card-types', 'findAll', (call) => (call === 2 ? light.promise : undefined));
+      const boardReads = (service: 'cards' | 'board-objects') =>
+        fetchArguments(service, 'findAll').filter(
+          (args) => (args as { query?: { board_id?: string } }).query?.board_id === 'board-b'
+        ).length;
+      // 'in flight': B's partition read is still pending when the resync
+      // resolves its board.
+      const heldB = deferred();
+      onFetch('cards', 'findAll', () => {
+        const args = fetchArguments('cards', 'findAll').at(-1) as { query?: { board_id?: string } };
+        return state === 'in flight' && args.query?.board_id === 'board-b'
+          ? heldB.promise
+          : undefined;
+      });
+      act(() => emitIo('connect'));
+      await flush();
+
+      // Navigate to B: its partition read starts while the resync is held.
+      window.history.pushState({}, '', '/b/board-b/');
+      rerender({ boardId: 'board-b' });
+      await waitFor(() => expect(boardReads('cards')).toBe(1));
+
+      await act(async () => {
+        light.resolve();
+        await light.promise;
+      });
+      await flush();
+      await act(async () => {
+        heldB.resolve();
+        await heldB.promise;
+      });
+      await flush();
+      await waitFor(() =>
+        expect(agorStore.getState().boardPartitions.get('board-b')?.status).toBe('loaded')
+      );
+      await flush();
+      // One read of B's annotations: the resync reused B's in-flight load.
+      expect(boardReads('cards')).toBe(1);
+      expect(boardReads('board-objects')).toBe(1);
+      expect(agorStore.getState().boardPartitions.get('board-b')?.status).toBe('loaded');
+    }
+  );
 });

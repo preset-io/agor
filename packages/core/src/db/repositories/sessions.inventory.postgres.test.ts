@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { BranchID, UUID } from '../../types';
 import { createDatabase, type Database } from '../client';
-import { executeRaw, insert } from '../database-wrapper';
+import { executeRaw, insert, select } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import { branches, sessions } from '../schema';
 import * as schema from '../schema.postgres';
@@ -18,6 +18,7 @@ import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { exerciseSessionInventory } from './sessions.inventory-test-helpers';
+import { sessionVisibilityForm } from './sessions.visibility-parity-test-helpers';
 import { TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
@@ -64,6 +65,9 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           ).toEqual({ data: [] });
           expect(
             await repository.findPage({ visibleToUserId, boardId: foreign.boardId, limit: 0 })
+          ).toEqual({ total: 0, data: [] });
+          expect(
+            await repository.findPage({ visibleToUserId, createdBy: foreign.owner, limit: 100 })
           ).toEqual({ total: 0, data: [] });
           expect(await repository.findAll({ visibleToUserId, branchId: foreign.branchId })).toEqual(
             []
@@ -270,6 +274,132 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         });
         capture = false;
         expect(captured).toHaveLength(1);
+
+        // Creator and exact-id reads probe only their candidate Sessions; the
+        // branch-set form would evaluate policy for every configuration.
+        const branchIds: { id: BranchID }[] = await select(scoped, { id: branches.branch_id })
+          .from(branches)
+          .orderBy(branches.branch_unique_id)
+          .limit(3)
+          .all();
+        const viewerSessions = branchIds.map(({ id }) => ({
+          session_id: generateId(),
+          branch_id: id,
+          created_by: viewer.user_id,
+          created_at: new Date(1700000000000),
+          updated_at: new Date(1700000000000),
+          status: 'idle' as const,
+          agentic_tool: 'claude-code' as const,
+          archived: false,
+          data: { tasks: [], contextFiles: [], genealogy: { children: [] }, title: 'Mine' },
+        }));
+        await insert(scoped, sessions).values(viewerSessions).run();
+        const candidateIds = viewerSessions.map((row) => row.session_id);
+        for (const [name, read] of [
+          [
+            'findPageCreatedBy',
+            () =>
+              repository.findPage({
+                visibleToUserId: viewer.user_id as UUID,
+                createdBy: viewer.user_id,
+                archived: false,
+                sortUpdatedAt: -1,
+                limit: 200,
+                includeTotal: false,
+              }),
+          ],
+          [
+            'findPageSessionIds',
+            () =>
+              repository.findPage({
+                visibleToUserId: viewer.user_id as UUID,
+                sessionIds: [...candidateIds, generateId()],
+                limit: 200,
+                includeTotal: false,
+              }),
+          ],
+        ] as const) {
+          captured.length = 0;
+          capture = true;
+          const result = await read();
+          capture = false;
+          // Branch 1 of the first three is the only one Others may view.
+          expect(result.data.map((row) => row.session_id)).toEqual([candidateIds[1]]);
+          expect(captured).toHaveLength(1);
+          const plan = await executeRaw(
+            scoped,
+            sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${bindQuery(captured[0].query, captured[0].params)}`
+          );
+          process.stdout.write(
+            `INVENTORY_PLAN ${name} branches=${branchCount} sessions=${branchCount * sessionsPerBranch} ${JSON.stringify(plan)}\n`
+          );
+          const loops = policyLoops(plan);
+          expect(loops.length).toBeGreaterThan(0);
+          expect(Math.max(...loops)).toBeLessThanOrEqual(candidateIds.length);
+        }
+
+        // A busy creator: the own page walks the (tenant, archived, updated_at)
+        // index in order, so its probes stop after skip + limit rows; deep
+        // offsets and shapes no index orders keep the branch-set form.
+        const visibleBranchIds: { id: BranchID }[] = await select(scoped, {
+          id: branches.branch_id,
+        })
+          .from(branches)
+          .where(sql`${branches.branch_unique_id} % 2 = 1`)
+          .all();
+        const busy = Array.from({ length: 2000 }, (_, i) => ({
+          ...viewerSessions[0],
+          session_id: generateId(),
+          branch_id: visibleBranchIds[i % visibleBranchIds.length].id,
+          created_at: new Date(1800000000000 + i),
+          updated_at: new Date(1800000000000 + i),
+        }));
+        for (let i = 0; i < busy.length; i += 500) {
+          await insert(scoped, sessions)
+            .values(busy.slice(i, i + 500))
+            .run();
+        }
+        await executeRaw(scoped, sql`ANALYZE sessions`);
+        const usesIndex = (node: unknown, name: string): boolean =>
+          !!node &&
+          typeof node === 'object' &&
+          ((node as Record<string, unknown>)['Index Name'] === name ||
+            Object.values(node).some((child) => usesIndex(child, name)));
+        const ownPage = {
+          visibleToUserId: viewer.user_id as UUID,
+          createdBy: viewer.user_id,
+          archived: false,
+          sortUpdatedAt: -1 as const,
+          includeTotal: false as const,
+        };
+        for (const [name, opts, form] of [
+          ['ownPage', { ...ownPage, limit: 20 }, 'per-row'],
+          ['ownPageOffset', { ...ownPage, limit: 20, skip: 100 }, 'per-row'],
+          ['ownPageDeepOffset', { ...ownPage, limit: 200, skip: 1000 }, 'branch-set'],
+          ['ownPageArchivedUnset', { ...ownPage, archived: undefined, limit: 20 }, 'branch-set'],
+        ] as const) {
+          captured.length = 0;
+          capture = true;
+          const result = await repository.findPage(opts);
+          capture = false;
+          expect(result.data).toHaveLength(opts.limit);
+          expect(captured).toHaveLength(1);
+          expect(sessionVisibilityForm(captured[0].query), name).toBe(form);
+          if (form !== 'per-row') continue;
+          const plan = await executeRaw(
+            scoped,
+            sql`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${bindQuery(captured[0].query, captured[0].params)}`
+          );
+          process.stdout.write(`INVENTORY_PLAN ${name} ${JSON.stringify(plan)}\n`);
+          expect(usesIndex(plan, 'sessions_tenant_archived_updated_idx'), name).toBe(true);
+          const loops = policyLoops(plan);
+          expect(loops.length).toBeGreaterThan(0);
+          // The index orders by updated_at only; the incremental sort reads one
+          // row past the page to close its last (here distinct) timestamp.
+          expect(Math.max(...loops), name).toBeLessThanOrEqual(
+            ('skip' in opts ? opts.skip : 0) + opts.limit + 1
+          );
+        }
       });
     }, 120000);
   }

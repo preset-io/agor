@@ -270,9 +270,9 @@ function deferredList() {
 describe('workspace authority generation ordering', () => {
   it('discards delayed member responses after demotion', async () => {
     const seam = transitionClient();
-    const objects = deferredList();
-    seam.queueUsers(Promise.resolve([{ ...VIEWER, user_id: 'same-user', role: 'member' }]));
-    seam.queueBoardObjects(objects.promise);
+    // Users are member-only; their read is held across the demotion.
+    const users = deferredList();
+    seam.queueUsers(users.promise);
     const { result, rerender } = renderHook(
       ({ role, ready, generation }: { role: string; ready: boolean; generation: number }) =>
         useAgorData(seam.client, {
@@ -283,15 +283,15 @@ describe('workspace authority generation ordering', () => {
         }),
       { initialProps: { role: 'member', ready: true, generation: 1 } }
     );
-    await waitFor(() => expect(seam.boardObjectsFindAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(1));
 
     // The role can render before useAgorClient publishes its reauthenticated
     // generation. Even with a still-true connection bit, the old member fetch
     // is invalid and no viewer-era resync may start.
     rerender({ role: 'viewer', ready: true, generation: 1 });
     await act(async () => {
-      objects.resolve([{ object_id: 'old-object', board_id: 'board-1' }]);
-      await objects.promise;
+      users.resolve([{ ...VIEWER, user_id: 'same-user', role: 'member' }]);
+      await users.promise;
     });
     expect(agorStore.getState().userById.size).toBe(0);
     expect(agorStore.getState().boardObjectById.size).toBe(0);
@@ -332,7 +332,10 @@ describe('workspace authority generation ordering', () => {
     rerender({ role: 'member', ready: true, generation: 2 });
     await waitFor(() => expect(seam.usersFindAll).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(agorStore.getState().userById.get('same-user')).toBeDefined());
-    expect(agorStore.getState().boardObjectById.has('member-object')).toBe(true);
+    // On Home the resync reads no board objects: they load with a board's
+    // partition, which the promotion unloaded (and which may read them now).
+    expect(seam.boardObjectsFindAll).not.toHaveBeenCalled();
+    expect(agorStore.getState().boardPartitions.size).toBe(0);
     expect(result.current.error).toBeNull();
   });
 

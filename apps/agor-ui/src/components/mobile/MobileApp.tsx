@@ -16,6 +16,7 @@ import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
@@ -85,7 +86,12 @@ interface MobileAppProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -224,6 +230,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
   }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
+
+  // Load the effective board's partition when it is not complete yet.
+  const { boardReady } = useBoardPartition(client, effectiveBoardId, {
+    canUseMemberWorkspaceServices: hasMinimumRole(user?.role, ROLES.MEMBER),
+  });
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
@@ -532,6 +543,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 commentsBadge={boardCommentsBadge}
                 onOpenComments={openBoardComments}
                 userId={user?.user_id}
+                boardReady={boardReady}
               />
             }
           />

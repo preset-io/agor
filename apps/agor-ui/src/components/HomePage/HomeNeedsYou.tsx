@@ -4,6 +4,7 @@ import { memo } from 'react';
 import type { HomeCommentNeed, HomeNeed, HomeSessionNeed } from '../../store/selectors';
 import { HomeCommentRow, HomeList, HomeNeedRow } from './HomeRow';
 import { HomeCard, HomeLink, HomeSection, HomeShowMore, HomeSkeleton } from './HomeSection';
+import { formatCount } from './homeLayout';
 
 export const NEEDS_PREVIEW = 3;
 export const NEEDS_MAX = 50;
@@ -44,6 +45,8 @@ interface HomeNeedsYouProps {
   onExpandedChange: (expanded: boolean) => void;
   /** Counts and "all caught up" wait for the full session set; rows don't. */
   hydrated: boolean;
+  /** My sessions were read only up to the cap: counts are lower bounds, never "caught up". */
+  truncated?: boolean;
   onOpenSession: (sessionId: string) => void;
   /** Gets the whole need: a failure group's header stands for its earlier failures too. */
   onOpenFailure: (need: HomeSessionNeed) => void;
@@ -69,6 +72,7 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
   expanded,
   onExpandedChange,
   hydrated,
+  truncated = false,
   onOpenSession,
   onOpenFailure,
   onOpenComment,
@@ -115,7 +119,11 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
     >
       {needs.length === 0 ? (
         hydrated ? (
-          <Alert type="success" showIcon title="You’re all caught up." />
+          truncated ? (
+            <Alert type="info" showIcon title="Nothing needs you in your most recent sessions." />
+          ) : (
+            <Alert type="success" showIcon title="You’re all caught up." />
+          )
         ) : (
           <HomeSkeleton />
         )
@@ -142,7 +150,11 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
           {hydrated && hidden > 0 && (
             <HomeShowMore
               expanded={expanded}
-              label={expanded ? 'Show less' : `${hidden} more`}
+              label={
+                expanded
+                  ? 'Show less'
+                  : `${formatCount(hidden, truncated && filter !== 'comments')} more`
+              }
               detail={
                 expanded
                   ? undefined

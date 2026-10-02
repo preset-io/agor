@@ -34,12 +34,14 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
@@ -53,7 +55,6 @@ import {
   makeCommentMentionSelector,
   makeRepoSelector,
   makeSessionExistsSelector,
-  makeSessionMcpServerIdsSelector,
   makeSessionSelector,
   makeSessionsForBranchSelector,
   makeUnreadCommentCountSelector,
@@ -261,7 +262,12 @@ export interface AppProps {
   onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -283,10 +289,7 @@ export interface AppProps {
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
-// Stable empty-array sentinel: keeps prop refs equal across renders for the
-// common no-MCP case so that downstream React.memo bailouts are not defeated.
-// Frozen at runtime; the consuming components only read it.
-const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
+// Stable empty-array sentinel; frozen at runtime, consumers only read it.
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
@@ -1170,13 +1173,11 @@ export const App: React.FC<AppProps> = ({
     useAgorStore(
       useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
     ) ?? null;
-  const selectedSessionMcpServerIds =
-    useAgorStore(
-      useMemo(
-        () => makeSessionMcpServerIdsSelector(effectiveSelectedSessionId),
-        [effectiveSelectedSessionId]
-      )
-    ) ?? EMPTY_STRING_ARRAY;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: selectedSessionMcpServerIds } = useSessionMcpServerIds(
+    client,
+    effectiveSelectedSessionId
+  );
 
   // Narrow per-id subscription for the quick-start picker's branch — only
   // patches to that specific branch (or a socket-in-flight arrival) wake the
@@ -1220,7 +1221,14 @@ export const App: React.FC<AppProps> = ({
   const primaryTeammateRepo = useAgorStore(
     useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
   );
-  const primaryTeammateInaccessible = Boolean(primaryTeammateId && !primaryTeammateBranch);
+  // Load the displayed board's partition when it is not complete yet. Until it
+  // is, a missing teammate branch means "not loaded", not "no access" (I1).
+  const { boardReady } = useBoardPartition(client, isHomeSurface ? null : currentBoardId, {
+    canUseMemberWorkspaceServices: hasMinimumRole(user?.role, ROLES.MEMBER),
+  });
+  const primaryTeammateInaccessible = Boolean(
+    primaryTeammateId && !primaryTeammateBranch && boardReady
+  );
 
   // Preserve the historical board-switch behavior now that the panel itself
   // no longer pushes a default tab into controlled parent state on mount.
@@ -1519,6 +1527,7 @@ export const App: React.FC<AppProps> = ({
                   primaryTeammateBranch={primaryTeammateBranch}
                   primaryTeammateRepo={primaryTeammateRepo}
                   primaryTeammateInaccessible={primaryTeammateInaccessible}
+                  boardReady={boardReady}
                   currentUserId={user?.user_id}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}

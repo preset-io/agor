@@ -1,10 +1,5 @@
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  CardType,
-  CardWithType,
-} from '@agor-live/client';
+import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
+import { ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, PushpinFilled } from '@ant-design/icons';
 import {
   Button,
@@ -20,6 +15,7 @@ import {
   theme,
 } from 'antd';
 import { useMemo, useState } from 'react';
+import { usePermissions } from '@/hooks/usePermissions';
 import { useAgorStore } from '@/store/agorStore';
 import { selectBranchById } from '@/store/selectors';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -33,6 +29,7 @@ import { JSONEditor, validateJSON } from '../JSONEditor';
 import { MetaRow } from '../MetaRow';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { useSettingsCards } from './useSettingsCards';
 
 const { Sider, Content } = Layout;
 
@@ -40,22 +37,22 @@ import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 
 interface CardsTableProps {
   client: AgorClient | null;
-  cardById: Map<string, CardWithType>;
   cardTypeById: Map<string, CardType>;
   boardById: Map<string, Board>;
-  boardObjects?: BoardEntityObject[];
 }
 
-export const CardsTable: React.FC<CardsTableProps> = ({
-  client,
-  cardById,
-  cardTypeById,
-  boardById,
-  boardObjects,
-}) => {
+const NO_CARDS: CardWithType[] = [];
+
+export const CardsTable: React.FC<CardsTableProps> = ({ client, cardTypeById, boardById }) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const branchById = useAgorStore(selectBranchById);
+  const { hasRole } = usePermissions();
+  // The store holds only loaded boards' cards; this table reads every card.
+  const { data: cardsData, error: cardsError } = useSettingsCards(client, {
+    canReadPlacements: hasRole(ROLES.MEMBER),
+  });
+  const allCards = cardsData?.cards ?? NO_CARDS;
 
   // State
   const [selectedTypeId, setSelectedTypeId] = useState<string | null>(null);
@@ -85,13 +82,13 @@ export const CardsTable: React.FC<CardsTableProps> = ({
     [cardTypes, typeSearchTerm]
   );
 
-  // Build card_id → zone info lookup from board_objects
+  // Build card_id → zone info lookup from the card placements
   const cardZoneInfo = useMemo(() => {
     const map = new Map<string, { zoneName: string; zoneColor?: string }>();
-    if (!boardObjects) return map;
-    for (const bo of boardObjects) {
+    if (!cardsData) return map;
+    for (const bo of cardsData.placements) {
       if (!bo.card_id || !bo.zone_id) continue;
-      const board = boardById.get(bo.board_id);
+      const board = cardsData.zoneBoards.get(bo.board_id);
       const zoneObj = board?.objects?.[bo.zone_id];
       if (zoneObj && zoneObj.type === 'zone') {
         map.set(bo.card_id, {
@@ -101,13 +98,13 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       }
     }
     return map;
-  }, [boardObjects, boardById]);
+  }, [cardsData]);
 
   const selectedType = selectedTypeId ? (cardTypeById.get(selectedTypeId) ?? null) : null;
 
   const cardsForType = useMemo(() => {
     if (!selectedTypeId) return [];
-    const cards = mapToArray(cardById)
+    const cards = allCards
       .filter((c) => c.card_type_id === selectedTypeId && !c.archived)
       .sort((a, b) => a.title.localeCompare(b.title));
     return filterBySettingsSearch(cards, cardSearchTerm, [
@@ -122,7 +119,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       },
       (card) => JSON.stringify(card.data ?? {}),
     ]);
-  }, [cardById, selectedTypeId, cardSearchTerm, boardById, cardZoneInfo]);
+  }, [allCards, selectedTypeId, cardSearchTerm, boardById, cardZoneInfo]);
 
   // Card type CRUD handlers
   const handleCreateType = async () => {
@@ -466,8 +463,14 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                   style={{ width: 'min(100%, 300px)' }}
                 />
               </div>
+              {cardsError && (
+                <Typography.Text type="danger">
+                  Could not load cards. Close and reopen to retry.
+                </Typography.Text>
+              )}
               <ResponsiveTable
                 dataSource={cardsForType}
+                loading={!cardsData && !cardsError}
                 columns={cardColumns}
                 scroll={{ x: 720 }}
                 rowKey="card_id"

@@ -1,4 +1,5 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
+import { PAGINATION } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Col, Empty, Flex, Input, Row, Segmented, Skeleton, Typography, theme } from 'antd';
 import { memo, useEffect, useMemo, useState } from 'react';
@@ -37,7 +38,9 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
   // The status region mounts blank (keeping its line) and gains its text after, since readers may skip text a live region starts with.
   const [announce, setAnnounce] = useState(false);
   useEffect(() => setAnnounce(true), []);
-  const hydrated = useAgorStore((s) => s.branchesHydrated);
+  const hydrated = useAgorStore((s) => s.teammatesLoaded);
+  // More teammates are shared than one read returns: say the list is partial.
+  const truncated = useAgorStore((s) => s.teammatesTruncated);
   const {
     teammates,
     settled: sharingSettled,
@@ -182,6 +185,12 @@ export const TeammatesDirectory = memo(function TeammatesDirectory({
                 </Col>
               ))}
             </Row>
+          )}
+          {hydrated && truncated && (
+            <Typography.Text type="secondary" style={small}>
+              Showing the first {PAGINATION.MAX_TEAMMATE_BRANCHES.toLocaleString()} teammates shared
+              with you.
+            </Typography.Text>
           )}
           {failed > 0 && (
             <Flex align="center" gap={token.marginXXS} wrap>

@@ -11,6 +11,7 @@ import type {
   Session,
   SessionID,
   SessionUpdate,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
@@ -29,6 +30,7 @@ import {
   sql,
 } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
+import { PAGINATION } from '../../config/constants';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
 import { lockBranchForAdmission } from '../branch-admission';
@@ -62,7 +64,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { inVisibleBranchSet } from './branch-access';
+import { inVisibleBranchSet, visibleBranchReferenceAccessExists } from './branch-access';
 import { deepMerge } from './merge-utils';
 import {
   extractMessageText,
@@ -126,12 +128,48 @@ export interface SessionPageOptions {
   boardId?: string;
   branchId?: BranchID;
   branchIds?: BranchID[];
+  /** Restrict to these session ids (an empty set yields no rows). */
+  sessionIds?: SessionID[];
+  /** Restrict to sessions created by this user (a filter, never an access grant). */
+  createdBy?: UserID;
   archived?: boolean;
   sortUpdatedAt?: 1 | -1;
   sortCreatedAt?: 1 | -1;
   limit?: number;
   skip?: number;
   visibleToUserId?: UUID;
+}
+
+/**
+ * Whether `findPage` probes each candidate's branch instead of first building
+ * the caller's visible-branch set. The set has a fixed cost even for a few
+ * rows; a probe costs per candidate examined, so it is used only where that
+ * count is small:
+ * - an exact id list of at most `MAX_ID_LIST` (bounded by its length);
+ * - an uncounted, unscoped page of the caller's own sessions with `archived`
+ *   set and sorted by `updated_at`, so the `(archived, updated_at)` index
+ *   yields rows in order and the scan stops after about `skip + limit` own
+ *   rows. A heuristic, not a hard bound: own rows on branches the caller has
+ *   since lost still cost a probe each.
+ */
+function probesVisibilityPerRow(opts: SessionPageOptions): boolean {
+  if (opts.sessionIds !== undefined) return opts.sessionIds.length <= PAGINATION.MAX_ID_LIST;
+  // Checked here, not assumed from findPage's no-count guard: a missing,
+  // fractional or negative window must not pass as a small page.
+  const { limit, skip = 0 } = opts;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 0) return false;
+  if (!Number.isInteger(skip) || skip < 0) return false;
+  return (
+    opts.createdBy !== undefined &&
+    opts.createdBy === opts.visibleToUserId &&
+    opts.includeTotal === false &&
+    opts.archived !== undefined &&
+    opts.sortUpdatedAt !== undefined &&
+    opts.boardId === undefined &&
+    opts.branchId === undefined &&
+    opts.branchIds === undefined &&
+    limit + skip <= PAGINATION.MAX_ID_LIST
+  );
 }
 
 /**
@@ -601,7 +639,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         throw new Error('No-count session queries require a non-negative integer limit');
       }
       const tenantCondition = tenantInventoryCondition(this.db, sessions);
-      if (opts.branchIds?.length === 0)
+      if (opts.branchIds?.length === 0 || opts.sessionIds?.length === 0)
         return opts.includeTotal === false ? { data: [] } : { data: [], total: 0 };
       const baseUrl = await getBaseUrl(this.db);
 
@@ -612,10 +650,18 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
       if (opts.branchIds !== undefined)
         conditions.push(inArray(sessions.branch_id, opts.branchIds));
+      if (opts.sessionIds !== undefined)
+        conditions.push(inArray(sessions.session_id, opts.sessionIds));
+      if (opts.createdBy !== undefined) conditions.push(eq(sessions.created_by, opts.createdBy));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
+        // Same branch.view policy either way; only the evaluation shape differs.
+        // Outer board/branch filters already pin the branch, so the probe
+        // needs no scope. Parity: sessions.visibility-parity-test-helpers.ts.
         conditions.push(
-          inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id, opts)
+          probesVisibilityPerRow(opts)
+            ? visibleBranchReferenceAccessExists(this.db, opts.visibleToUserId, sessions.branch_id)
+            : inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id, opts)
         );
       }
       const whereClause = conditions.length > 0 ? and(...conditions) : undefined;

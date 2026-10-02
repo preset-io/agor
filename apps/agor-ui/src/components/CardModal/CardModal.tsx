@@ -23,9 +23,22 @@ import {
   PushpinFilled,
   SaveOutlined,
 } from '@ant-design/icons';
-import { Button, Collapse, Input, Modal, Space, Tag, Tooltip, Typography, theme } from 'antd';
-import React, { useCallback, useEffect, useState } from 'react';
+import {
+  Button,
+  Collapse,
+  Input,
+  Modal,
+  type ModalFuncProps,
+  Space,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useBoardMutationGuard } from '../../hooks/useBoardMutationGuard';
 import { useAgorStore } from '../../store/agorStore';
+import type { BoardWriteTicket } from '../../store/boardMutationGuard';
 import { selectBranchById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { isSafeExternalUrl } from '../../utils/safeExternalUrl';
@@ -46,6 +59,16 @@ interface CardModalProps {
   afterClose?: () => void;
   onCardUpdated?: (card: CardWithType) => void;
   onCardDeleted?: (cardId: string) => void;
+  /**
+   * Edits are blocked for this reason (e.g. the card's board is still
+   * loading, so the card shown may be stale).
+   */
+  readOnlyReason?: string;
+  /**
+   * The card shows its board's partition data (the canvas): edits need the
+   * partition loaded, and a reload while the modal is open makes it read-only.
+   */
+  requireLoadedBoard?: boolean;
 }
 
 const CardModalComponent = ({
@@ -59,6 +82,8 @@ const CardModalComponent = ({
   afterClose,
   onCardUpdated,
   onCardDeleted,
+  readOnlyReason,
+  requireLoadedBoard = false,
 }: CardModalProps) => {
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
@@ -108,15 +133,74 @@ const CardModalComponent = ({
     };
   }, [open, client, boardId]);
 
-  const canEdit = Boolean(boardAccess?.capabilities.includes('board.edit'));
+  // The board write guard (`useBoardMutationGuard`). The ticket is captured
+  // when the modal opens on a card; every write, including those confirmed in
+  // a dialog, checks it immediately before dispatching. A board reload or a
+  // lost connection while the modal is open ends it: reopen to edit.
+  const guard = useBoardMutationGuard(boardId, true, { requirePartition: requireLoadedBoard });
+  const [ticket, setTicket] = useState<BoardWriteTicket | null>(null);
+  // The ticket of the card open now. The guard outlives a close (the modal
+  // stays mounted), so closing, switching cards or unmounting ends the
+  // open-time ticket here, in the commit that does it.
+  const openTicketRef = useRef<BoardWriteTicket | null>(null);
+  // Confirmations are static dialogs outside this tree; they belong to this
+  // modal on this card, so closing it, switching cards or unmounting destroys
+  // every one still open.
+  const confirmsRef = useRef(new Set<{ destroy: () => void }>());
+  const cardId = card?.card_id;
+  // Captured after the commit, once the connection snapshot is published.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: captured on open, per card
+  useEffect(() => {
+    const captured = open && cardId ? guard.capture() : null;
+    openTicketRef.current = captured;
+    setTicket(captured);
+  }, [open, cardId]);
+  // Ended in the commit that closes the card, before anything can run.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: torn down per open card
+  useLayoutEffect(
+    () => () => {
+      openTicketRef.current = null;
+      for (const confirm of confirmsRef.current) confirm.destroy();
+      confirmsRef.current.clear();
+    },
+    [open, cardId]
+  );
+  const ticketCurrent = guard.isCurrent(ticket);
+  const isOpenTicketCurrent = useCallback(
+    (held: BoardWriteTicket | null) =>
+      held !== null && held === openTicketRef.current && guard.isCurrent(held),
+    [guard]
+  );
+
+  // One confirmation at a time: a second click (or the other action) while
+  // one is open opens nothing. The set is updated synchronously, so a double
+  // click can't slip a second dialog in before a render.
+  const openConfirm = useCallback((config: ModalFuncProps) => {
+    if (confirmsRef.current.size > 0) return;
+    const confirm = Modal.confirm({
+      ...config,
+      afterClose: () => {
+        confirmsRef.current.delete(confirm);
+      },
+    });
+    confirmsRef.current.add(confirm);
+  }, []);
+
+  const hasEditAccess = Boolean(boardAccess?.capabilities.includes('board.edit'));
+  const canEdit = !readOnlyReason && hasEditAccess && ticketCurrent;
   const editBlockedReason = canEdit
     ? undefined
-    : "You don't have Board Editor or Manager access to change this card.";
+    : (readOnlyReason ??
+      (!hasEditAccess
+        ? "You don't have Board Editor or Manager access to change this card."
+        : !guard.canMutate
+          ? 'This board is unavailable for edits right now.'
+          : 'This board reloaded while the card was open. Reopen it to edit.'));
 
   const hasChanges = noteValue !== (card?.note || '') || descValue !== (card?.description || '');
 
   const handleSave = useCallback(async () => {
-    if (!card || !client || !hasChanges || !canEdit) return;
+    if (!card || !client || !hasChanges || !canEdit || !isOpenTicketCurrent(ticket)) return;
     setSaving(true);
     try {
       const updated = await client.service('cards').patch(card.card_id, {
@@ -140,6 +224,8 @@ const CardModalComponent = ({
     descValue,
     hasChanges,
     canEdit,
+    isOpenTicketCurrent,
+    ticket,
     onCardUpdated,
     showSuccess,
     showError,
@@ -147,11 +233,19 @@ const CardModalComponent = ({
 
   const handleArchive = useCallback(async () => {
     if (!card || !client || !canEdit) return;
-    Modal.confirm({
+    openConfirm({
       title: 'Archive card?',
       content: `This will hide "${card.title}" from the board while preserving its data.`,
       okText: 'Archive',
       onOk: async () => {
+        // The board may have reloaded, or the connection dropped, while the
+        // confirmation was open.
+        if (!isOpenTicketCurrent(ticket)) {
+          guard.warnDropped(
+            'The card was not archived: the board reloaded or the connection dropped.'
+          );
+          return;
+        }
         try {
           const updated = await client.service('cards').patch(card.card_id, {
             archived: true,
@@ -166,16 +260,34 @@ const CardModalComponent = ({
         }
       },
     });
-  }, [card, client, canEdit, onCardUpdated, onClose, showSuccess, showError]);
+  }, [
+    card,
+    client,
+    canEdit,
+    guard,
+    ticket,
+    isOpenTicketCurrent,
+    openConfirm,
+    onCardUpdated,
+    onClose,
+    showSuccess,
+    showError,
+  ]);
 
   const handleDelete = useCallback(async () => {
     if (!card || !client || !canEdit) return;
-    Modal.confirm({
+    openConfirm({
       title: 'Delete card?',
       content: `This will permanently delete "${card.title}".`,
       okText: 'Delete',
       okType: 'danger',
       onOk: async () => {
+        if (!isOpenTicketCurrent(ticket)) {
+          guard.warnDropped(
+            'The card was not deleted: the board reloaded or the connection dropped.'
+          );
+          return;
+        }
         try {
           await client.service('cards').remove(card.card_id);
           onCardDeleted?.(card.card_id);
@@ -187,7 +299,19 @@ const CardModalComponent = ({
         }
       },
     });
-  }, [card, client, canEdit, onCardDeleted, onClose, showSuccess, showError]);
+  }, [
+    card,
+    client,
+    canEdit,
+    guard,
+    ticket,
+    isOpenTicketCurrent,
+    openConfirm,
+    onCardDeleted,
+    onClose,
+    showSuccess,
+    showError,
+  ]);
 
   if (!card) return null;
 

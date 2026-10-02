@@ -64,6 +64,11 @@ export interface AgenticConfigChipRowProps {
   branchId?: string;
   /** Display-only defaults. Undefined form value still means inherit on the server. */
   inheritedMcpServerIds?: string[];
+  /**
+   * The MCP selection is still loading (an existing session's links): the
+   * chip is read-only until the form holds the complete selection.
+   */
+  mcpLoading?: boolean;
   catalogEnabled?: boolean;
   /** Require integration-owned exact model selection on direct create/edit surfaces. */
   validateModelSelection?: boolean;
@@ -128,6 +133,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   currentUser,
   branchId,
   inheritedMcpServerIds,
+  mcpLoading = false,
   catalogEnabled = true,
   validateModelSelection = false,
   fieldName = 'agenticToolPresetId',
@@ -218,8 +224,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
     : shortModelName(tool, resolvedModel);
   const permissionLabel = getPermissionModeLabel(tool, resolvedPermission);
   const effortLabel = `Effort: ${resolvedEffort ? EFFORT_LABELS[resolvedEffort] : 'Inherited'}`;
-  const mcpLabel =
-    mcpCount > 0 ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}` : 'No MCP servers';
+  const mcpLabel = mcpLoading
+    ? 'Loading MCP servers…'
+    : mcpCount > 0
+      ? `${mcpCount} MCP server${mcpCount === 1 ? '' : 's'}`
+      : 'No MCP servers';
   const advisorLabel = advisorModel
     ? `Advisor: ${shortModelName(tool, advisorModel)}`
     : 'Advisor: Off';
@@ -407,7 +416,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         icon={<ApiOutlined />}
         label={mcpLabel}
         title="MCP servers"
-        editable
+        editable={!mcpLoading}
+        managedNote={
+          <Typography.Text type="secondary">Loading attached MCP servers…</Typography.Text>
+        }
         width={360}
         testid="mcp-chip"
         renderContent={() => (

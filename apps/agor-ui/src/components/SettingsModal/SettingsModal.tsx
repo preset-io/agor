@@ -31,7 +31,6 @@ import {
   selectBoardById,
   selectBoardObjectById,
   selectBranchById,
-  selectCardById,
   selectCardTypeById,
   selectGatewayChannelById,
   selectMcpServerById,
@@ -168,7 +167,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const cardById = useAgorStore(selectCardById);
   const cardTypeById = useAgorStore(selectCardTypeById);
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
@@ -268,7 +266,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           boards: boardById.size,
           repos: repoById.size,
           branches: branchById.size,
-          cards: cardById.size,
+          // No card count: the store holds only loaded boards' cards.
           artifacts: artifactById.size,
           mcp: mcpServerById.size,
           gateway: gatewayChannelById.size,
@@ -281,7 +279,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       boardById.size,
       repoById.size,
       branchById.size,
-      cardById.size,
       artifactById.size,
       mcpServerById.size,
       gatewayChannelById.size,
@@ -424,15 +421,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           />
         );
       case 'cards':
-        return (
-          <CardsTable
-            client={client}
-            cardById={cardById}
-            cardTypeById={cardTypeById}
-            boardById={boardById}
-            boardObjects={boardObjects}
-          />
-        );
+        return <CardsTable client={client} cardTypeById={cardTypeById} boardById={boardById} />;
       case 'artifacts':
         return (
           <ArtifactsTable

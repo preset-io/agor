@@ -101,8 +101,9 @@ export function seed({
     branchById: new Map(branches.map((b) => [b.branch_id, b])),
     boardById: new Map(boards.map((b) => [b.board_id, b])),
     userById: new Map([[ME, user]]),
-    sessionsHydrated: hydrated,
-    branchesHydrated: hydrated,
+    mySessionsLoaded: hydrated,
+    homeBranchesLoaded: hydrated,
+    teammatesLoaded: hydrated,
   } as never);
 }
 

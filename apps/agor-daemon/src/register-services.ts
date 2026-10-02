@@ -201,6 +201,7 @@ import { createBoardBranchMover } from './services/board-branch-move.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { createBranchCountsService } from './services/branch-counts.js';
 import { BranchDeletionStepsService } from './services/branch-deletion-steps.js';
 import { createBranchesService } from './services/branches.js';
 import { setupCapabilityPolicyServices } from './services/capability-policies.js';
@@ -364,6 +365,7 @@ import {
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { scopeFindToAccessibleBranchesSql } from './utils/branch-authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
@@ -594,6 +596,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
+  app.use('/branch-counts', createBranchCountsService(db), { methods: ['find'] });
+  // Per-board active branch counts: the same branch + board visibility as
+  // `branches.find`, pushed into SQL by the RBAC marker. Registered with the
+  // service (like `mcp-servers/oauth-status`) so `registerHooks` stays
+  // independent of it.
+  app.service('branch-counts').hooks({
+    before: {
+      all: [ctx.requireAuth],
+      find: [scopeFindToAccessibleBranchesSql({ allowSuperadmin })],
+    },
+  });
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
   const messagesService = createMessagesService(db, (tx, message) =>
     deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)

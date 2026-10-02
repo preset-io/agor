@@ -129,6 +129,19 @@ export function createQuerySchema<T extends TProperties>(
 }
 
 /**
+ * A uuid, or a bounded `{ $in: [...] }` id list (`PAGINATION.MAX_ID_LIST`).
+ * Larger sets are split by the caller rather than raising the cap.
+ */
+const uuidOrIdList = () =>
+  Type.Union([
+    CommonSchemas.uuid,
+    Type.Object(
+      { $in: Type.Array(CommonSchemas.uuid, { maxItems: PAGINATION.MAX_ID_LIST }) },
+      { additionalProperties: false }
+    ),
+  ]);
+
+/**
  * Session query schema
  */
 export const sessionQuerySchema = createQuerySchema(
@@ -139,7 +152,7 @@ export const sessionQuerySchema = createQuerySchema(
     // List-only projection: omit bulky single-session custom_context keys
     // (see LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS). Not a column filter.
     lean: Type.Optional(CommonSchemas.boolean),
-    session_id: Type.Optional(CommonSchemas.uuid),
+    session_id: Type.Optional(uuidOrIdList()),
     status: Type.Optional(CommonSchemas.sessionStatus),
     agentic_tool: Type.Optional(CommonSchemas.persistedAgenticTool),
     board_id: Type.Optional(CommonSchemas.uuid),
@@ -326,7 +339,10 @@ export const messageQuerySchema = Type.Object(
  */
 export const branchQuerySchema = createQuerySchema(
   Type.Object({
-    branch_id: Type.Optional(CommonSchemas.uuid),
+    branch_id: Type.Optional(uuidOrIdList()),
+    created_by: Type.Optional(CommonSchemas.uuid),
+    // Teammate marker filter (`BranchRepository.findTeammateBranches`).
+    teammate: Type.Optional(CommonSchemas.boolean),
     repo_id: Type.Optional(CommonSchemas.uuid),
     board_id: Type.Optional(CommonSchemas.uuid),
     zone_id: Type.Optional(Type.String({ maxLength: 255 })),

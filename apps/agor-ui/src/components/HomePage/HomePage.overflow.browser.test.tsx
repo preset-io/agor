@@ -102,8 +102,9 @@ function seed() {
       [ME, { user_id: ME, name: 'Ada Lovelace' } as User],
       ['u2', { user_id: 'u2', name: 'Grace Hopper' } as User],
     ]),
-    sessionsHydrated: true,
-    branchesHydrated: true,
+    mySessionsLoaded: true,
+    homeBranchesLoaded: true,
+    teammatesLoaded: true,
   } as never);
 }
 

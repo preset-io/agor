@@ -42,7 +42,12 @@ import { HomeNeedsYou, NEEDS_MAX, NEEDS_PREVIEW, type NeedsFilter } from './Home
 import { HomeRecentBoards } from './HomeRecentBoards';
 import { HomeFrame } from './HomeSection';
 import { HomeTeammatesSection } from './HomeTeammates';
-import { HOME_MAIN_COLUMN_BASIS, HOME_PAGE_TITLE_LEVEL, HOME_RAIL_BASIS } from './homeLayout';
+import {
+  formatCount,
+  HOME_MAIN_COLUMN_BASIS,
+  HOME_PAGE_TITLE_LEVEL,
+  HOME_RAIL_BASIS,
+} from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
 
 const RECENT_BOARDS = 5;
@@ -115,7 +120,11 @@ function greeting(date = new Date()) {
   return hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening';
 }
 
-const selectHydrated = (s: AgorState) => s.sessionsHydrated && s.branchesHydrated;
+// Counts wait for the user scope: all of my sessions and every branch they or
+// my comment threads reference (never for the whole workspace).
+const selectHydrated = (s: AgorState) => s.mySessionsLoaded && s.homeBranchesLoaded;
+// My sessions hit the single read's cap: session counts are lower bounds ("N+").
+const selectTruncated = (s: AgorState) => s.mySessionsTruncated;
 
 /** Onboarding steps the caller can perform, subscribed only while the card can still show. */
 const HomeOnboarding: React.FC<{
@@ -268,6 +277,7 @@ export const HomePage = memo(function HomePage({
   const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
 
   const hydrated = useAgorStore(selectHydrated);
+  const truncated = useAgorStore(selectTruncated);
   // Visit history that still names live boards; when none do, recent sessions stand in.
   const visitedBoardIds = useStoreWithEqualityFn(
     agorStore,
@@ -444,23 +454,32 @@ export const HomePage = memo(function HomePage({
         ) : (
           !newUser && (
             <Flex align="center" gap={token.marginXS} wrap>
-              <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
-                {needsCount ? (
-                  <span>
-                    <Typography.Text strong>{needsCount}</Typography.Text> need you
-                  </span>
-                ) : (
-                  'All caught up'
-                )}
-              </Button>
+              {/* Truncated with nothing found: not provably caught up, so no zero state. */}
+              {(needsCount > 0 || !truncated) && (
+                <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
+                  {needsCount ? (
+                    <span>
+                      <Typography.Text strong>{formatCount(needsCount, truncated)}</Typography.Text>{' '}
+                      need you
+                    </span>
+                  ) : (
+                    'All caught up'
+                  )}
+                </Button>
+              )}
               {buckets.runningCount > 0 && (
                 <>
-                  <Typography.Text type="secondary" aria-hidden>
-                    ·
-                  </Typography.Text>
+                  {(needsCount > 0 || !truncated) && (
+                    <Typography.Text type="secondary" aria-hidden>
+                      ·
+                    </Typography.Text>
+                  )}
                   <Button type="text" size="small" style={textButton} onClick={showRunning}>
                     <span>
-                      <Typography.Text strong>{buckets.runningCount}</Typography.Text> running
+                      <Typography.Text strong>
+                        {formatCount(buckets.runningCount, truncated)}
+                      </Typography.Text>{' '}
+                      running
                     </span>
                   </Button>
                 </>
@@ -471,6 +490,7 @@ export const HomePage = memo(function HomePage({
       </div>
       <HomeRecentBoards
         recentBoardIds={visitedBoardIds.length ? visitedBoardIds : buckets.boardIds}
+        userId={userId}
         onBoardClick={onBoardClick}
         onAllBoards={allBoards}
       />
@@ -504,6 +524,7 @@ export const HomePage = memo(function HomePage({
               expanded={needsExpanded}
               onExpandedChange={setNeedsExpanded}
               hydrated={hydrated}
+              truncated={truncated}
               onOpenSession={onSessionClick}
               onOpenFailure={openFailure}
               onOpenComment={openComment}
@@ -522,6 +543,7 @@ export const HomePage = memo(function HomePage({
             runningCount={buckets.runningCount}
             runningMatchCount={buckets.runningMatchCount}
             hydrated={hydrated}
+            truncated={truncated}
             tab={tab}
             onTabChange={setTab}
             view={workView}

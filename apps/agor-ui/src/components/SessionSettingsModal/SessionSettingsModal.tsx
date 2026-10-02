@@ -43,8 +43,9 @@ import {
   fullSessionDetailsErrorMessage,
   useFullSessionDetails,
 } from '../../hooks/useFullSessionDetails';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useAgorStore } from '../../store/agorStore';
-import { selectMcpServerById, selectSessionMcpServerIds } from '../../store/selectors';
+import { selectMcpServerById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { AdvancedSettingsForm } from '../AdvancedSettingsForm';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
@@ -68,7 +69,12 @@ export interface SessionSettingsModalProps {
   onClose: () => void;
   session: Session;
   onUpdate?: (sessionId: string, updates: Partial<Session>) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   /**
    * Called on save with the new list of env var names the session creator has
    * selected to export into the session's executor process. Only the session's
@@ -101,13 +107,12 @@ interface FormValues {
   };
 }
 
-// Stable empty array for sessions with no attached MCP servers — keeps the
-// derived per-session slice reference-stable so the form-reset effect (which
-// depends on it) doesn't re-fire on unrelated store patches.
-const EMPTY_MCP_SERVER_IDS: string[] = [];
-
 function formatCustomContext(customContext: Session['custom_context']): string {
   return customContext ? JSON.stringify(customContext, null, 2) : '';
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
 }
 
 function buildInitialValues(session: Session, sessionMcpServerIds: string[]): FormValues {
@@ -260,8 +265,13 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
   const { showError } = useThemedMessage();
   const { token } = theme.useToken();
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const sessionMcpServerIds =
-    useAgorStore(selectSessionMcpServerIds).get(session.session_id) ?? EMPTY_MCP_SERVER_IDS;
+  // Loaded on first need. Until then the ids may be partial, so the MCP chip
+  // is read-only and saving never sends an MCP diff (it would detach links
+  // the form never held).
+  const { ids: sessionMcpServerIds, loaded: sessionMcpLoaded } = useSessionMcpServerIds(
+    client,
+    session.session_id
+  );
   const [form] = Form.useForm();
   const watchedPresetId = Form.useWatch('agenticToolPresetId', form) as string | undefined;
   const isInlineConfig = watchedPresetId === INLINE_AGENTIC_CONFIGURATION;
@@ -315,6 +325,29 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
       form.setFieldsValue(values);
     }
   }, [open, session, sessionMcpServerIds, form, fullSession]);
+
+  // The MCP selection the user was shown, seeded from this session's loaded
+  // links. While the field still equals it, a reload (e.g. after a
+  // reconnect) reseeds both; an edit is kept, and so is the baseline it was
+  // made against. Save sends an MCP change only for an edit, diffed against
+  // this baseline, so links the user never saw are never detached.
+  const mcpBaselineRef = React.useRef<{ sessionId: string; ids: string[] } | null>(null);
+  React.useEffect(() => {
+    if (!open) {
+      mcpBaselineRef.current = null;
+      return;
+    }
+    if (!sessionMcpLoaded) return;
+    const baseline = mcpBaselineRef.current;
+    if (baseline?.sessionId === session.session_id) {
+      if (sameIds(baseline.ids, sessionMcpServerIds)) return;
+      const field = (form.getFieldValue('mcpServerIds') as string[] | undefined) ?? [];
+      if (!sameIds(field, baseline.ids)) return; // edited: keep the edit and its baseline
+    }
+    mcpBaselineRef.current = { sessionId: session.session_id, ids: sessionMcpServerIds };
+    setInitialValues((previous) => ({ ...previous, mcpServerIds: sessionMcpServerIds }));
+    form.setFieldValue('mcpServerIds', sessionMcpServerIds);
+  }, [open, sessionMcpLoaded, sessionMcpServerIds, session.session_id, form]);
 
   // Seed custom_context once the full record arrives (on open, retarget,
   // Retry, or a reconnect retry). The field is read-only until then; an
@@ -394,8 +427,14 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
         );
       }
 
-      if (onUpdateSessionMcpServers) {
-        onUpdateSessionMcpServers(session.session_id, values.mcpServerIds || []);
+      const mcpBaseline = mcpBaselineRef.current;
+      const nextMcpServerIds = values.mcpServerIds || [];
+      if (
+        onUpdateSessionMcpServers &&
+        mcpBaseline?.sessionId === session.session_id &&
+        !sameIds(nextMcpServerIds, mcpBaseline.ids)
+      ) {
+        onUpdateSessionMcpServers(session.session_id, nextMcpServerIds, mcpBaseline.ids);
       }
 
       if (canEditEnvSelections && onUpdateSessionEnvSelections) {
@@ -581,6 +620,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
           validateModelSelection
           enableSaveAsDefault
           showEffort
+          mcpLoading={!sessionMcpLoaded}
         />
 
         {/* SECONDARY ZONE — niche settings, collapsed by default */}

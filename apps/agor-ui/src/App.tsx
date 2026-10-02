@@ -1945,12 +1945,18 @@ function AppContent() {
   };
 
   // Handle update session-MCP server relationships
-  const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
+  const handleUpdateSessionMcpServers = async (
+    sessionId: string,
+    mcpServerIds: string[],
+    baselineIds?: string[]
+  ) => {
     if (!client) return;
 
     try {
-      // Get current session-MCP relationships for this session
-      const currentIds = agorStore.getState().sessionMcpServerIds.get(sessionId) || [];
+      // Diff against the links the user was shown (the settings form's
+      // baseline), never against links that loaded after they last looked.
+      const currentIds =
+        baselineIds ?? agorStore.getState().sessionMcpServerIds.get(sessionId) ?? [];
       await updateSessionMcpServers(client, sessionId, currentIds, mcpServerIds);
 
       // Note: Don't show success message here - it's part of the session settings save

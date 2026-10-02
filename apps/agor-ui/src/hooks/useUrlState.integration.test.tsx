@@ -27,6 +27,10 @@ import {
   type RecenterMapFn,
   useRegisterRecenter,
 } from '../contexts/CanvasNavigationContext';
+import { agorStore } from '../store/agorStore';
+import { markBoardPartitionLoaded } from '../store/boardPartitions';
+import { captureLoadLifetime } from '../store/loadLifetime';
+import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { type UseUrlStateOptions, useUrlState } from './useUrlState';
 
 const SESSION_ID = '019e9999-0000-7000-8000-000000000001';
@@ -323,6 +327,70 @@ describe('useUrlState — session selection recenters onto the session row', () 
       });
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+describe('useUrlState — /s/ links to a board whose branch is not loaded', () => {
+  const OTHER_BOARD_ID = '019e6666-0000-7000-8000-000000000001';
+
+  it('switches to the session row board and recenters again once that board is ready', () => {
+    vi.useFakeTimers();
+    agorStore.getState().reset();
+    setRealtimeAuthorityScope('user-a:member:1');
+    try {
+      const recenter = vi.fn<RecenterMapFn>(() => true);
+      const onBoardChange = vi.fn();
+      // The branch is NOT loaded (Home first paint / board not opened yet);
+      // the session row still knows its board.
+      const session = {
+        session_id: SESSION_ID,
+        branch_id: BRANCH_ID,
+        branch_board_id: BOARD_ID,
+      } as Session;
+      const optionsFor = (currentBoardId: string, currentSessionId: string | null) =>
+        baseOptions({
+          currentBoardId,
+          currentSessionId,
+          boardById: new Map([
+            [BOARD_ID, { board_id: BOARD_ID, slug: 'board' }],
+            [OTHER_BOARD_ID, { board_id: OTHER_BOARD_ID, slug: 'other' }],
+          ]),
+          sessionById: new Map([[session.session_id, session]]),
+          onBoardChange,
+        });
+      const { rerender } = renderAt(
+        `/s/${SESSION_SHORT}/`,
+        optionsFor(OTHER_BOARD_ID, null),
+        recenter
+      );
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(onBoardChange).toHaveBeenCalledWith(BOARD_ID);
+      // The app applies the board/session change.
+      rerender(optionsFor(BOARD_ID, SESSION_ID));
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(recenter).toHaveBeenCalledTimes(1);
+
+      // The partition lands: the card now exists, so the recenter re-runs.
+      act(() => {
+        markBoardPartitionLoaded(BOARD_ID, captureLoadLifetime()!);
+      });
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(recenter).toHaveBeenCalledTimes(2);
+      expect(recenter).toHaveBeenLastCalledWith(BRANCH_ID, {
+        sessionId: SESSION_ID,
+        ensureVisible: true,
+      });
+    } finally {
+      vi.useRealTimers();
+      setRealtimeAuthorityScope(null);
+      agorStore.getState().reset();
     }
   });
 });

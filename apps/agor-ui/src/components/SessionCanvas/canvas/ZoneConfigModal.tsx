@@ -23,6 +23,7 @@ import {
 import type { Color } from 'antd/es/color-picker';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
+import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 import { ExpandableAlert } from '../../ExpandableAlert';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
@@ -38,15 +39,24 @@ import {
   ZONE_FONT_SIZE_STEP,
 } from './zoneFontSize';
 
+type ZoneUpdate = (
+  objectId: string,
+  objectData: BoardObject
+) => BoardWriteResult | undefined | Promise<BoardWriteResult | undefined>;
+
 interface ZoneConfigModalProps {
   open: boolean;
   onCancel: () => void;
   zoneName: string;
   objectId: string;
-  onUpdate: (
-    objectId: string,
-    objectData: BoardObject
-  ) => boolean | undefined | Promise<boolean | undefined>;
+  /**
+   * Save under the ticket captured when the dialog opened. `false` keeps the
+   * draft for a retry; `'stale'` (the board reloaded) keeps it for an
+   * explicit re-apply.
+   */
+  onUpdate: ZoneUpdate;
+  /** Re-apply a refused draft under a ticket captured now (the user asked). */
+  onReapply?: ZoneUpdate;
   zoneData: BoardObject;
   canEdit?: boolean;
 }
@@ -62,6 +72,7 @@ export const ZoneConfigModal = ({
   zoneName,
   objectId,
   onUpdate,
+  onReapply,
   zoneData,
   canEdit = true,
 }: ZoneConfigModalProps) => {
@@ -75,6 +86,8 @@ export const ZoneConfigModal = ({
   const initialDraftRef = useRef<{ objectId: string; draft: ZoneConfigDraft } | null>(null);
   const savingRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
+  // The last save was refused because the board reloaded: the draft stays.
+  const [stale, setStale] = useState(false);
   const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
@@ -122,6 +135,7 @@ export const ZoneConfigModal = ({
       setFontSize(draft.fontSize);
       setClearLegacyColor(false);
       setTriggerAgent(draft.triggerAgent);
+      setStale(false);
     } else if (!open) {
       initialDraftRef.current = null;
     }
@@ -129,8 +143,26 @@ export const ZoneConfigModal = ({
 
   // Validation yields. Re-read props before constructing the replacement so a
   // received patch or permission change during validation is not lost.
-  const latestRef = useRef({ zone, objectId, open, canEdit, mutationGate, onUpdate, onCancel });
-  latestRef.current = { zone, objectId, open, canEdit, mutationGate, onUpdate, onCancel };
+  const latestRef = useRef({
+    zone,
+    objectId,
+    open,
+    canEdit,
+    mutationGate,
+    onUpdate,
+    onReapply,
+    onCancel,
+  });
+  latestRef.current = {
+    zone,
+    objectId,
+    open,
+    canEdit,
+    mutationGate,
+    onUpdate,
+    onReapply,
+    onCancel,
+  };
   useEffect(
     () => () => {
       initialDraftRef.current = null;
@@ -153,7 +185,11 @@ export const ZoneConfigModal = ({
   };
   const handleBackgroundColorChange = (color: Color) => setBackgroundColor(color.toHexString());
 
-  const handleSave = async () => {
+  /**
+   * Save the draft on top of the latest zone. `reapply` is the explicit user
+   * action after a reload refused the save: only it writes under a new ticket.
+   */
+  const handleSave = async (mode: 'save' | 'reapply' = 'save') => {
     if (
       savingRef.current ||
       !mutationGate.canMutate ||
@@ -191,9 +227,16 @@ export const ZoneConfigModal = ({
         clearLegacyColor,
       });
       if (nextZone) {
-        const saved = await latest.onUpdate(initial.objectId, nextZone);
+        const write = mode === 'reapply' ? latest.onReapply : latest.onUpdate;
+        if (!write) return;
+        const saved = await write(initial.objectId, nextZone);
         if (saved === false) return;
+        if (saved === 'stale') {
+          if (initialDraftRef.current === initial) setStale(true);
+          return;
+        }
       }
+      setStale(false);
       if (initialDraftRef.current === initial && latestRef.current.open) {
         latestRef.current.onCancel();
       }
@@ -460,7 +503,7 @@ export const ZoneConfigModal = ({
       closable={!isSaving}
       mask={{ closable: !isSaving }}
       keyboard={!isSaving}
-      onOk={handleSave}
+      onOk={() => handleSave()}
       okText="Save"
       okButtonProps={{
         disabled: isSaving || !mutationGate.canMutate || !canEdit || requiresSupportedToolSelection,
@@ -468,6 +511,29 @@ export const ZoneConfigModal = ({
       cancelText="Cancel"
       width={640}
     >
+      {stale && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Board reloaded — changes not saved."
+          description="This board reloaded while the dialog was open, so your changes were not saved over it. Re-apply them to the reloaded board, or cancel to discard them."
+          action={
+            onReapply && (
+              <Button
+                size="small"
+                type="primary"
+                disabled={
+                  isSaving || !mutationGate.canMutate || !canEdit || requiresSupportedToolSelection
+                }
+                onClick={() => handleSave('reapply')}
+              >
+                Re-apply to reloaded board
+              </Button>
+            )
+          }
+          style={{ marginBottom: token.margin }}
+        />
+      )}
       {/* Inert also covers custom agent cards that do not consume Form.disabled. */}
       <Form form={form} layout="vertical" disabled={isSaving} inert={isSaving}>
         <Tabs

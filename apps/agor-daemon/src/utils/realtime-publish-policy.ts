@@ -405,6 +405,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'agentic-tool-presets': { audience: 'none', why: 'Read-mostly presets; no socket subscriber.' },
   templates: { audience: 'none', why: 'Static template list.' },
   leaderboard: { audience: 'none', why: 'Analytics rollup, polled.' },
+  'branch-counts': {
+    audience: 'none',
+    why: 'Per-caller RBAC-scoped aggregate; refetched on branch events.',
+  },
   'thread-session-map': { audience: 'none', why: 'Gateway-internal thread bookkeeping.' },
   gateway: { audience: 'none', why: 'Inbound/outbound message routing; no socket subscriber.' },
   file: { audience: 'none', why: 'Reads a file out of a branch worktree for the caller.' },

@@ -64,7 +64,14 @@ beforeEach(() => {
   reactFlowProps = null;
   onNodesChangeInternalSpy.mockClear();
   setNodesUnsafeSpy.mockClear();
-  agorStore.setState({ userById: new Map(), commentById: new Map() });
+  agorStore.setState({
+    userById: new Map(),
+    commentById: new Map(),
+    // Structural edits need the board's partition loaded.
+    boardPartitions: new Map([
+      ['board-1', { status: 'loaded' as const, authorityScope: 'fixture', loadEpoch: 0 }],
+    ]),
+  });
 });
 
 describe('SessionCanvas zoom shortcuts', () => {

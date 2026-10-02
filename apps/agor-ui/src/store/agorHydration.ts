@@ -19,6 +19,8 @@
  * never collide with a fresh loop's generation.
  */
 
+import { agorStore } from './agorStore';
+
 // Skip-apply-on-race background hydration retry schedule. A hydration applies
 // its full-set snapshot ONLY if no live write to the target collection(s)
 // raced the fetch (proven via the per-collection `liveRevisions` counters);
@@ -125,15 +127,114 @@ const hydrationGeneration = makeZeroCounters();
 // apply. Reset to zero with `liveRevisions` on (re)mount.
 let lastAppliedRevision = makeZeroCounters();
 
+// ── Per-ID touched fence (board partition loads) ──────────────────────────
+// A board partition load never discards its snapshot (that is what lets
+// `runHydration` starve under churn). Instead it fills only rows that are
+// ABSENT from the store and that no live event has touched since the load
+// started. Each realtime write therefore stamps the entity id with the
+// collection revision it produced. Stamps are only retained while at least one
+// partition load is in flight: a load captures its start revisions first, so a
+// stamp recorded before any load started can never be newer than that load's
+// start revision and is irrelevant.
+let partitionLoadsInFlight = 0;
+let touchedIds = new Map<HydratedCollection, Map<string, number>>();
+
+// Wholesale (non-per-ID) replacement epoch. A reconnect resync or logout
+// replaces whole collections; a partition load that spans one cannot tell
+// which absent rows that replacement removed, so it restarts instead of
+// applying. Wholesale replacements are rare, so restarting cannot starve.
+let wholesaleEpoch = 0;
+
+const stampTouched = (collection: HydratedCollection, id: string): void => {
+  if (partitionLoadsInFlight === 0) return;
+  let ids = touchedIds.get(collection);
+  if (!ids) {
+    ids = new Map();
+    touchedIds.set(collection, ids);
+  }
+  ids.set(id, liveRevisions[collection]);
+};
+
 /**
  * Bump the live-write revision for a collection. Called by every realtime entity
  * action (and the hook's deep-link heal / OAuth handlers) that mutates one of the
  * hydrated collection Maps, so an in-flight hydration discards its snapshot
- * rather than clobbering the write.
+ * rather than clobbering the write. Pass the written entity's id so an in-flight
+ * board partition load skips that row (see `touchedSince`).
  */
-export const bumpRevision = (collection: HydratedCollection): void => {
+export const bumpRevision = (collection: HydratedCollection, id?: string): void => {
   liveRevisions[collection] += 1;
+  if (id) stampTouched(collection, id);
 };
+
+/**
+ * Stamp an id as touched at the CURRENT revision without bumping it. Used where
+ * the bump already happened synchronously (the frame-batched session queue
+ * stamps at enqueue time, right after the subscription's bump).
+ */
+export const markTouched = (collection: HydratedCollection, id: string): void => {
+  stampTouched(collection, id);
+};
+
+/** Whether a live event wrote `id` after the given start revision. */
+export const touchedSince = (
+  collection: HydratedCollection,
+  id: string,
+  startRevision: number
+): boolean => (touchedIds.get(collection)?.get(id) ?? Number.NEGATIVE_INFINITY) > startRevision;
+
+/** Every id a live event wrote in `collection` after the given start revision. */
+export const touchedIdsSince = (
+  collection: HydratedCollection,
+  startRevision: number
+): string[] => {
+  const ids: string[] = [];
+  for (const [id, revision] of touchedIds.get(collection) ?? []) {
+    if (revision > startRevision) ids.push(id);
+  }
+  return ids;
+};
+
+export interface PartitionLoadFence {
+  /** Per-collection revisions captured when the load started. */
+  startRevisions: Record<HydratedCollection, number>;
+  /** Wholesale epoch captured when the load started. */
+  epoch: number;
+}
+
+/**
+ * Start retaining touched stamps for a partition load and capture its fence.
+ * Every call MUST be paired with `endPartitionLoad()` (use try/finally).
+ */
+export const beginPartitionLoad = (): PartitionLoadFence => {
+  partitionLoadsInFlight += 1;
+  return { startRevisions: { ...liveRevisions }, epoch: wholesaleEpoch };
+};
+
+/** Release a partition load's hold on the touched stamps. */
+export const endPartitionLoad = (): void => {
+  partitionLoadsInFlight = Math.max(0, partitionLoadsInFlight - 1);
+  if (partitionLoadsInFlight === 0) touchedIds = new Map();
+};
+
+/** Whether a wholesale replacement happened since the fence was captured. */
+export const wholesaleReplacedSince = (fence: PartitionLoadFence): boolean =>
+  wholesaleEpoch !== fence.epoch;
+
+/** Restarts a fill-only load gets when wholesale replacements keep landing mid-read. */
+export const MAX_WHOLESALE_RESTARTS = 3;
+
+/**
+ * A fill-only load whose every attempt spanned a wholesale replacement. Its
+ * snapshot is never applied (it could resurrect rows the replacement removed);
+ * the caller surfaces a retryable failure instead.
+ */
+export class WholesaleReplacementError extends Error {
+  constructor() {
+    super('Data was replaced while loading; retry');
+    this.name = 'WholesaleReplacementError';
+  }
+}
 
 /**
  * Current live-write revision for a collection. The session-patch queue stamps
@@ -175,6 +276,7 @@ export const recordHydrationApply = (
  */
 export const bumpFirstPaintMergeRevisions = (): void => {
   for (const c of FIRST_PAINT_MERGE_COLLECTIONS) liveRevisions[c] += 1;
+  wholesaleEpoch += 1;
 };
 
 /**
@@ -185,6 +287,8 @@ export const bumpFirstPaintMergeRevisions = (): void => {
 export const resetHydrationRevisions = (): void => {
   liveRevisions = makeZeroCounters();
   lastAppliedRevision = makeZeroCounters();
+  touchedIds = new Map();
+  wholesaleEpoch += 1;
 };
 
 // Monotonic epoch for hydrations that are SCHEDULED but not yet started (the
@@ -222,6 +326,7 @@ export const cancelAndFailAllHydrations = (): void => {
     hydrationGeneration[c] += 1;
     liveRevisions[c] += 1;
   }
+  wholesaleEpoch += 1;
 };
 
 /**
@@ -289,6 +394,9 @@ export async function runHydration<T>(
       // has already subsumed, THEN apply.
       recordHydrationApply(collections, before);
       apply(result);
+      // A quiet global snapshot makes every board complete for these
+      // collections (the Steps 1–2 readiness shortcut in `boardPartitions`).
+      agorStore.getState().markGloballyHydrated(collections);
       return;
     }
     // A live write to one of these collections raced the fetch — discard this

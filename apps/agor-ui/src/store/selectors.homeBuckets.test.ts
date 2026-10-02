@@ -10,6 +10,7 @@ import {
   makeCommentsForYouSelector,
   makeHomeBucketsSelector,
   makeLatestOwnSessionSelector,
+  makeOwnBoardActivitySelector,
   makeTeammatesSelector,
 } from './selectors';
 
@@ -58,13 +59,13 @@ const state = ({
   comments = [],
   branches = [],
   boards = [],
-  branchesHydrated = false,
+  absentBranchIds = [],
 }: {
   sessions?: Session[];
   comments?: BoardComment[];
   branches?: Branch[];
   boards?: Board[];
-  branchesHydrated?: boolean;
+  absentBranchIds?: string[];
 }) =>
   ({
     ...EMPTY_MAPS,
@@ -72,8 +73,8 @@ const state = ({
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),
     boardById: new Map(boards.map((b) => [b.board_id, b])),
-    sessionsHydrated: true,
-    branchesHydrated,
+    mySessionsLoaded: true,
+    absentBranchIds: new Set(absentBranchIds),
   }) as unknown as AgorState;
 
 const select = (s: AgorState, options: Partial<HomeBucketsOptions> = {}) =>
@@ -755,15 +756,86 @@ describe('makeCommentsForYouSelector', () => {
       { branch_id: 'branch-live', archived: false } as Branch,
     ];
     const boards = [board('board-1'), board('board-arch', true)];
-    const keys = (branchesHydrated: boolean) =>
+    const keys = (absentBranchIds: string[]) =>
       makeCommentsForYouSelector({ userId: ME, userName: 'Kasia' })(
-        state({ comments, branches, boards, branchesHydrated })
+        state({ comments, branches, boards, absentBranchIds })
       )
         .map((n) => n.thread.comment_id)
         .sort();
-    // Until branches hydrate, a missing branch may just not be loaded yet.
-    expect(keys(false)).toEqual(['on-live-branch', 'on-missing-branch']);
-    expect(keys(true)).toEqual(['on-live-branch']);
+    // Until the user scope resolves it, a missing branch may just not be loaded yet.
+    expect(keys([])).toEqual(['on-live-branch', 'on-missing-branch']);
+    // Once the server says it isn't there (archived, deleted or invisible), the thread leaves.
+    expect(keys(['branch-gone'])).toEqual(['on-live-branch']);
+  });
+});
+
+describe('board lookups follow a live branch (boardIdForSession)', () => {
+  it('uses the loaded branch’s board after a move, the joined board before it loads', () => {
+    const moved = session('s-moved', {
+      branch_id: 'br-moved',
+      branch_board_id: 'board-old',
+      last_updated: new Date(NOW - 1000).toISOString(),
+    } as Partial<Session>);
+    const boards = [board('board-old'), board('board-new')];
+    const before = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 5,
+      recentLimit: 5,
+      boardsLimit: 5,
+    })(state({ sessions: [moved], boards }));
+    expect(before.boardIds).toEqual(['board-old']);
+    const after = makeHomeBucketsSelector({
+      userId: ME,
+      now: NOW,
+      needsLimit: 5,
+      recentLimit: 5,
+      boardsLimit: 5,
+    })(
+      state({
+        sessions: [moved],
+        boards,
+        branches: [{ branch_id: 'br-moved', board_id: 'board-new', archived: false } as Branch],
+      })
+    );
+    expect(after.boardIds).toEqual(['board-new']);
+  });
+});
+
+describe('makeOwnBoardActivitySelector', () => {
+  it('reports only the caller’s running and needs-you sessions, per board', () => {
+    const s = state({
+      sessions: [
+        session('mine-running', {
+          branch_id: 'br-a',
+          branch_board_id: 'board-a',
+          status: 'running',
+        } as Partial<Session>),
+        session('mine-permission', {
+          branch_id: 'br-b',
+          branch_board_id: 'board-b',
+          status: 'awaiting_permission',
+        } as Partial<Session>),
+        session('theirs-ready', {
+          branch_id: 'br-c',
+          branch_board_id: 'board-c',
+          created_by: 'someone',
+          ready_for_prompt: true,
+        } as Partial<Session>),
+      ],
+    });
+    expect(makeOwnBoardActivitySelector('board-a', ME)(s)).toEqual({
+      hasRunning: true,
+      hasReady: false,
+    });
+    expect(makeOwnBoardActivitySelector('board-b', ME)(s)).toEqual({
+      hasRunning: false,
+      hasReady: true,
+    });
+    expect(makeOwnBoardActivitySelector('board-c', ME)(s)).toEqual({
+      hasRunning: false,
+      hasReady: false,
+    });
   });
 });
 

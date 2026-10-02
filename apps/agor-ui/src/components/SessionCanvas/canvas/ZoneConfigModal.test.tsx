@@ -428,6 +428,50 @@ describe('ZoneConfigModal draft and save lifecycle', () => {
     }
   );
 
+  it('keeps a draft rejected by a board reload and re-applies it only when asked', async () => {
+    const onCancel = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue('stale');
+    const onReapply = vi.fn().mockResolvedValue(true);
+    const props = {
+      open: true,
+      objectId: 'zone-1',
+      zoneName: zone.label,
+      zoneData: zone,
+      onUpdate,
+      onReapply,
+      onCancel,
+    };
+    const view = render(
+      <AntdApp>
+        <ZoneConfigModal {...props} />
+      </AntdApp>
+    );
+    fireEvent.change(screen.getByLabelText('Prompt template'), {
+      target: { value: 'Kept draft' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Prompt template')).toHaveValue('Kept draft');
+    expect(await screen.findByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(onReapply).not.toHaveBeenCalled();
+
+    // The reloaded board renamed the zone; the draft applies on top of it.
+    const reloaded = { ...zone, label: 'Remote' };
+    view.rerender(
+      <AntdApp>
+        <ZoneConfigModal {...props} zoneName="Remote" zoneData={reloaded} />
+      </AntdApp>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Re-apply to reloaded board' }));
+    await waitFor(() => expect(onCancel).toHaveBeenCalledTimes(1));
+    expect(onReapply).toHaveBeenCalledExactlyOnceWith('zone-1', {
+      ...reloaded,
+      trigger: { ...zone.trigger, template: 'Kept draft' },
+    });
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+  });
+
   it('does not close a replacement zone when an old request completes', async () => {
     let resolve!: (value: boolean) => void;
     const v = mount(

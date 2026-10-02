@@ -384,6 +384,32 @@ export async function exerciseSessionInventory(db: Database) {
     sdk_home_scope: 'branch',
     custom_context: { inventory: true },
   });
+  // created_by narrows the visible set; it is a filter, never a grant.
+  const mine = await sessions.findPage({
+    visibleToUserId: viewer,
+    createdBy: owner,
+    archived: false,
+    sortUpdatedAt: -1,
+    limit: 100,
+    includeTotal: false,
+  });
+  expect(mine.total).toBeUndefined();
+  expect(new Set(mine.data.map((s) => s.session_id))).toEqual(
+    new Set(page.data.filter((s) => !s.archived).map((s) => s.session_id))
+  );
+  const updatedAt = mine.data.map((s) => Date.parse(s.last_updated));
+  expect(updatedAt).toEqual([...updatedAt].sort((a, b) => b - a));
+  expect(
+    await sessions.findPage({ visibleToUserId: viewer, createdBy: viewer, limit: 100 })
+  ).toEqual({ total: 0, data: [] });
+  expect(
+    await sessions.findPage({
+      visibleToUserId: viewer,
+      createdBy: owner,
+      branchId: hiddenBranch,
+      limit: 100,
+    })
+  ).toEqual({ total: 0, data: [] });
   // Revocation/fallback is read anew; no process-local allowed-branch cache.
   await groups.update(group.group_id, { archived: true });
   await verifyPrimitiveParity(viewer);

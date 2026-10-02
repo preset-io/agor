@@ -26,9 +26,12 @@
 
 import type { BoardID, SessionID } from '@agor-live/client';
 import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
+import { agorStore, useAgorStore } from '../store/agorStore';
+import { makeBoardReadySelector } from '../store/boardPartitions';
+import { boardIdForSession } from '../utils/boardIdForSession';
 import { isTeammatesRoute } from '../utils/uiRoutes';
 import {
   resolveArtifactFromShortIdPure,
@@ -56,7 +59,10 @@ export interface UseUrlStateOptions {
   boardById: Map<string, { board_id: string; slug?: string }>;
   /** Map of session ID to session object — used to resolve session
    *  share URLs and to chain through to the session's branch/board. */
-  sessionById: Map<string, { session_id: string; branch_id?: string }>;
+  sessionById: Map<
+    string,
+    { session_id: string; branch_id?: string; branch_board_id?: string | null }
+  >;
   /** Map of branch ID to branch — used to resolve branch share
    *  URLs (and to look up `branch.board_id` for session URLs). */
   branchById: Map<string, { branch_id: string; board_id?: string | null }>;
@@ -138,6 +144,11 @@ export function useUrlState(options: UseUrlStateOptions) {
   // one so rapid URL changes don't fire a stale recenter after a newer
   // navigation has already settled.
   const deferredRecenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingRecenter, setPendingRecenter] = useState<{
+    target: string;
+    boardId: string;
+    sessionId: string | undefined;
+  } | null>(null);
   // Last emitted active URL target, so we only fire the callback on
   // actual transitions and don't churn parent state on every effect run.
   const lastEmittedTargetRef = useRef<ActiveUrlTarget | null>(null);
@@ -275,6 +286,7 @@ export function useUrlState(options: UseUrlStateOptions) {
         clearTimeout(deferredRecenterTimerRef.current);
         deferredRecenterTimerRef.current = null;
       }
+      setPendingRecenter(null);
     }
 
     const fullyResolved =
@@ -353,12 +365,14 @@ export function useUrlState(options: UseUrlStateOptions) {
       resolvedSessionId = resolveSessionFromShortId(urlSessionShortId);
       if (resolvedSessionId) {
         urlParamsResolvedRef.current.session = true;
-        // Chain session → branch → board to drive board switch + recenter
+        // Chain session → board to drive board switch + recenter. The
+        // session row carries its board (`branch_board_id`), so this resolves
+        // before the branch is loaded; a loaded branch stays authoritative.
         const session = sessionById.get(resolvedSessionId);
-        const wt = session?.branch_id ? branchById.get(session.branch_id) : undefined;
-        if (wt?.board_id) {
-          resolvedBoardId = wt.board_id;
-          recenterTargetId = wt.branch_id;
+        const sessionBoardId = boardIdForSession(session, branchById);
+        if (session?.branch_id && sessionBoardId) {
+          resolvedBoardId = sessionBoardId;
+          recenterTargetId = session.branch_id;
           recenterSessionId = resolvedSessionId;
         }
       }
@@ -453,6 +467,13 @@ export function useUrlState(options: UseUrlStateOptions) {
         deferredRecenterTimerRef.current = null;
         recenterMap(target, { boardId, sessionId, ensureVisible: sessionId != null });
       }, 50);
+      // The target card may not exist until the board's partition loads;
+      // re-run the recenter once the board becomes ready.
+      setPendingRecenter(
+        makeBoardReadySelector(boardId)(agorStore.getState())
+          ? null
+          : { target, boardId, sessionId }
+      );
     }
   }, [
     urlBoardParam,
@@ -475,6 +496,20 @@ export function useUrlState(options: UseUrlStateOptions) {
     location.pathname,
     navigate,
   ]);
+
+  // Re-run a deep-link recenter that was scheduled before its board was ready.
+  const pendingRecenterBoardReady = useAgorStore(
+    useMemo(() => makeBoardReadySelector(pendingRecenter?.boardId), [pendingRecenter?.boardId])
+  );
+  useEffect(() => {
+    if (!pendingRecenter || !pendingRecenterBoardReady) return;
+    const { target, boardId, sessionId } = pendingRecenter;
+    const timer = setTimeout(() => {
+      setPendingRecenter(null);
+      recenterMap(target, { boardId, sessionId, ensureVisible: sessionId != null });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [pendingRecenter, pendingRecenterBoardReady, recenterMap]);
 
   // State → URL self-heal
   useEffect(() => {

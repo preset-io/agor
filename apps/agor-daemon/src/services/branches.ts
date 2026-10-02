@@ -154,6 +154,8 @@ export const BRANCH_MATERIALIZATION_INTENT = Symbol('branchMaterializationIntent
  */
 export type BranchParams = QueryParams<{
   branch_id?: BranchID | { $in?: BranchID[] };
+  created_by?: UUID;
+  teammate?: boolean;
   repo_id?: UUID;
   name?: string;
   ref?: string;
@@ -178,6 +180,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'board_id',
     'repo_id',
     'branch_id',
+    'created_by',
     'zone_id',
     '$limit',
     '$skip',
@@ -187,7 +190,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
   // An empty virtual filter historically goes through the generic adapter;
   // do not turn it into an unrestricted SQL page.
   if (query.zone_id === '') return false;
-  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id', 'created_by']) {
     if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
       return false;
     }
@@ -238,6 +241,28 @@ function parseStartWebhookResult(options: {
     throw new Error('environment start webhook returned invalid result JSON');
   }
   return validateEnvironmentLifecycleResult(decoded);
+}
+
+/**
+ * `branches.find({ teammate: true, archived?, $limit?, $skip? })`: the teammate
+ * branches the caller can view, through `BranchRepository.findTeammateBranches`,
+ * at most `PAGINATION.MAX_TEAMMATE_BRANCHES` per page. `total` is the real
+ * number of matching branches, so a caller can tell a capped page from a
+ * complete one. The marker set is a superset of the client's teammate check (it
+ * also matches branches with an enabled schedule), so clients keep their own
+ * filter.
+ */
+function isTeammateBranchQuery(query?: Record<string, unknown>): boolean {
+  if (!query || query.teammate === undefined) return false;
+  if (query.teammate !== true) {
+    throw new BadRequest('teammate only supports true');
+  }
+  const allowed = new Set(['teammate', 'archived', '$limit', '$skip']);
+  const extra = Object.keys(query).filter((key) => !allowed.has(key));
+  if (extra.length > 0) {
+    throw new BadRequest(`teammate cannot be combined with ${extra.join(', ')}`);
+  }
+  return true;
 }
 
 /**
@@ -1764,6 +1789,38 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const query = findParams?.query as Record<string, unknown> | undefined;
+    if (isTeammateBranchQuery(query)) {
+      const requested = typeof query?.$limit === 'number' ? query.$limit : undefined;
+      const limit = Math.min(
+        requested ?? PAGINATION.MAX_TEAMMATE_BRANCHES,
+        PAGINATION.MAX_TEAMMATE_BRANCHES
+      );
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const filter = {
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        userId: findParams?._agorSqlBranchAccessUserId,
+        minimumPermission: 'view' as const,
+      };
+      // One row past the page tells a complete read from a capped one; only a
+      // capped read pays for the count.
+      const probe = await this.branchRepo.findTeammateBranches({
+        ...filter,
+        limit: limit + 1,
+        offset: skip,
+      });
+      const hasMore = probe.length > limit;
+      const data = await this.branchRepo.enrichManyWithZoneInfo(
+        hasMore ? probe.slice(0, limit) : probe
+      );
+      // A capped page can't know the total, and neither can an empty page
+      // past the end (`skip + 0` would invent one): count those. Otherwise
+      // the page ended inside the set, so the total is `skip + rows`.
+      const total =
+        hasMore || (skip > 0 && data.length === 0)
+          ? await this.branchRepo.countTeammateBranches(filter)
+          : skip + data.length;
+      return { total, limit, skip, data };
+    }
     if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
       const branchIds =
@@ -1781,6 +1838,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         branchIds,
+        createdBy: typeof query?.created_by === 'string' ? (query.created_by as UUID) : undefined,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,
         limit,
         offset: skip,

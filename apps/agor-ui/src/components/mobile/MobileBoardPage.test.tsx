@@ -203,4 +203,72 @@ describe('MobileBoardPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Give Fable their first task/ }));
     expect(onGiveFirstTask).toHaveBeenCalled();
   });
+
+  it('never shows an empty-board CTA while the board partition is loading', () => {
+    const emptyBoard = { board_id: 'b2', name: 'Fresh board', objects: {} } as unknown as Board;
+    const props = {
+      boardById: new Map([['b2', emptyBoard]]),
+      branchById: new Map(),
+      repoById: new Map(),
+      sessionsByBranch: new Map(),
+      boardObjectsByBoardId: new Map(),
+      cardById: new Map(),
+      artifactById: new Map(),
+      onOpenBranch: vi.fn(),
+      onNewSession: vi.fn(),
+      onGiveFirstTask: vi.fn(),
+      firstTaskAssistantName: 'Fable',
+    };
+    const view = (boardReady: boolean) => (
+      <MemoryRouter initialEntries={['/m/board/b2']}>
+        <Routes>
+          <Route
+            path="/m/board/:boardId"
+            element={<MobileBoardPage {...props} boardReady={boardReady} />}
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+    const { rerender } = render(view(false));
+    // Absent rows prove nothing until the partition is loaded (I1).
+    expect(screen.queryByRole('button', { name: /first task/ })).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-skeleton')).not.toBeNull();
+
+    rerender(view(true));
+    expect(screen.getByRole('button', { name: /Give Fable their first task/ })).toBeVisible();
+    expect(document.querySelector('.ant-skeleton')).toBeNull();
+  });
+
+  it('renders no cached branches, cards or zones until the partition is loaded', () => {
+    const view = (boardReady: boolean) => (
+      <MemoryRouter initialEntries={['/m/board/board-1']}>
+        <Routes>
+          <Route
+            path="/m/board/:boardId"
+            element={
+              <MobileBoardPage
+                boardById={new Map([['board-1', board]])}
+                branchById={new Map([['branch-1', branch]])}
+                repoById={new Map()}
+                sessionsByBranch={new Map()}
+                boardObjectsByBoardId={new Map([['board-1', placements]])}
+                cardById={new Map()}
+                artifactById={new Map()}
+                onOpenBranch={vi.fn()}
+                onNewSession={vi.fn()}
+                onGiveFirstTask={vi.fn()}
+                boardReady={boardReady}
+              />
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    );
+    // Cached rows may be stale and the record lean: no zone groupings yet.
+    const { rerender } = render(view(false));
+    expect(screen.queryByText('feat/mobile')).not.toBeInTheDocument();
+    expect(screen.queryByText('Review')).not.toBeInTheDocument();
+    rerender(view(true));
+    expect(screen.getAllByText('feat/mobile').length).toBeGreaterThan(0);
+  });
 });

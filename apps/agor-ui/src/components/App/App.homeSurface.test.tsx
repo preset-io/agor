@@ -152,8 +152,9 @@ function seedStore() {
       [BRANCH_B, [session2]],
     ]),
     userById: new Map([[user.user_id, user]]),
-    sessionsHydrated: true,
-    branchesHydrated: true,
+    mySessionsLoaded: true,
+    homeBranchesLoaded: true,
+    teammatesLoaded: true,
   } as never);
 }
 

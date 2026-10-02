@@ -134,6 +134,15 @@ export const PAGINATION = {
    * Default limit for CLI list commands - reasonable for terminal display
    */
   CLI_DEFAULT_LIMIT: 50,
+
+  /**
+   * Maximum ids in one `{ $in: [...] }` id-list read (`session_id`,
+   * `branch_id`). Larger sets are split into chunks by the caller.
+   */
+  MAX_ID_LIST: 200,
+
+  /** Maximum rows returned by one `branches.find({ teammate: true })` read. */
+  MAX_TEAMMATE_BRANCHES: 1_000,
 } as const;
 
 /**
