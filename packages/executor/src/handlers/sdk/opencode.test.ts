@@ -338,10 +338,13 @@ describe('hosted OpenCode executor adapter', () => {
       checkpoint,
       finalMessage: { content: 'done', contentBlocks: [], toolUses: [], metadata: {} },
     });
-    const state = client({ sdk_session_id: 'stale-local-id' });
+    const state = client({ sdk_session_id: 'stale-local-id', sdk_home_scope: 'branch' });
 
     await executeManaged(state.value);
 
+    expect(mocks.prepareManaged).toHaveBeenCalledWith(
+      expect.objectContaining({ sdkHomeScope: 'branch' })
+    );
     const [input] = mocks.runTurn.mock.calls[0];
     expect(input).toMatchObject({
       existingOpenCodeSessionId: 'ses_accepted',

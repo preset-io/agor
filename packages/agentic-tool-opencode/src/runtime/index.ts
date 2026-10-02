@@ -24,6 +24,7 @@ export {
 export {
   assertOpenCodeCheckpointRuntime,
   discardOpenCodeScratch,
+  OPENCODE_CHECKPOINT_ROOT_ENV,
   OPENCODE_SCRATCH_ROOT_ENV,
   OpenCodeNativeStateError,
   type OpenCodeNativeStateLayout,

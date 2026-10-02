@@ -64,10 +64,7 @@ export function resolveNewSessionSdkHomeScope(input: {
   branchSdkHomeIntent: 'per_branch' | null;
   enabledForNewSessions: boolean;
   inheritedScope?: SessionSdkHomeScope;
-  /** The tool keeps no native state in any SDK home, so it never joins or adopts a branch. */
-  executionHomeOnly?: boolean;
 }): { scope: SessionSdkHomeScope; adoptBranch: boolean } {
-  if (input.executionHomeOnly) return { scope: 'execution_home', adoptBranch: false };
   if (input.inheritedScope) {
     return { scope: input.inheritedScope, adoptBranch: false };
   }
@@ -120,21 +117,23 @@ const ENV_VAR_SUBDIR: Readonly<Record<string, string>> = Object.freeze({
   COPILOT_CACHE_HOME: 'copilot-cache',
 });
 
-/** Hosted OpenCode restores per-Session checkpoints on Job scratch, so no SDK home is ever shared. */
-export function usesExecutionHomeOnly(
-  tool: AgenticToolName,
+/** Hosted OpenCode keeps credentials and live state on Job scratch; only sealed checkpoints use a branch home. */
+export function isHostedOpenCode(
   config: Parameters<typeof resolveOpenCodeCapabilities>[0]
 ): boolean {
-  return tool === 'opencode' && resolveOpenCodeCapabilities(config).mode === 'managed-projection';
+  return resolveOpenCodeCapabilities(config).mode === 'managed-projection';
 }
 
 /** Why a tool must be refused before a branch adopts shared SDK state. */
-export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | undefined {
+export function branchSdkHomeUnsupportedReason(
+  tool: AgenticToolName,
+  hostedOpenCode = false
+): string | undefined {
   const integration = getAgenticToolIntegration(tool);
   if (!integration.capabilities.supportsConfigHomeOverride) {
     return 'its SDK cannot relocate its config/state directory';
   }
-  if (tool === 'opencode') {
+  if (tool === 'opencode' && !hostedOpenCode) {
     return 'its current XDG data home combines native credentials with relocatable state';
   }
   return undefined;
@@ -172,6 +171,8 @@ export function branchSdkHomeAuthUnsupportedReason(input: {
 export async function resolveBranchSdkHomeCompatibility(input: {
   tool: AgenticToolName;
   delegated: boolean;
+  /** See {@link isHostedOpenCode}. */
+  hostedOpenCode: boolean;
   secureLocalCredentialOverlay: boolean;
   userId?: UserID;
   db: NonNullable<KeyResolutionContext['db']>;
@@ -180,7 +181,7 @@ export async function resolveBranchSdkHomeCompatibility(input: {
   /** Launch must project this caller's native Codex auth file by pinned fd. */
   requiresLocalCodexAuthOverlay: boolean;
 }> {
-  const toolReason = branchSdkHomeUnsupportedReason(input.tool);
+  const toolReason = branchSdkHomeUnsupportedReason(input.tool, input.hostedOpenCode);
   if (toolReason) return { unsupportedReason: toolReason, requiresLocalCodexAuthOverlay: false };
 
   const localCodexAuth =

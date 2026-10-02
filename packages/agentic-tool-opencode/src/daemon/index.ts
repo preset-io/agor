@@ -41,6 +41,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     config: Pick<AgorConfig, 'execution' | 'multi_tenancy' | 'agentic_tools'>;
     modelConfig?: Pick<NonNullable<Session['model_config']>, 'provider' | 'model'>;
     sessionOwnerId: string;
+    sessionSdkHomeScope: Session['sdk_home_scope'];
     prompterUserId: string | undefined;
   }) {
     assertOpenCodeExecutionAllowed(input);
@@ -58,7 +59,7 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     | { requiresLocalContainment: true; namespaceKey: string; executorPayload: object }
     | { requiresLocalContainment: false; executorPayload: object } {
     if (resolveOpenCodeCapabilities(input.config).mode === 'managed-projection') {
-      // Hosted: native state lives in the owner's executor home, so no daemon fence applies.
+      // Hosted: checkpoints live in the owner's or branch SDK home, so no daemon fence applies.
       return {
         requiresLocalContainment: false,
         executorPayload: {

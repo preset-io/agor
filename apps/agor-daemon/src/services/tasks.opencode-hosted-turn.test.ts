@@ -1,16 +1,23 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { sealOpenCodeCheckpoint } from '@agor/agentic-tool-opencode/runtime';
 import {
   BranchRepository,
+  type Database,
   RepoRepository,
   SessionRepository,
   TaskRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type SessionID, SessionStatus, type TaskID, TaskStatus } from '@agor/core/types';
+import {
+  type SessionID,
+  type SessionSdkHomeScope,
+  SessionStatus,
+  type TaskID,
+  TaskStatus,
+} from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
@@ -48,12 +55,10 @@ afterEach(async () => {
 const wire = <T>(value: T): T => (value === undefined ? value : JSON.parse(JSON.stringify(value)));
 
 describe('hosted OpenCode turn across executor and daemon', () => {
-  dbTest('admits, seals, accepts, and restores across two turns', async ({ db }) => {
-    const user = await new UsersRepository(db).create({
-      email: `${generateId()}@example.com`,
-      name: 'Hosted owner',
-    });
-    await new UsersRepository(db).setToolConfigField(user.user_id, 'opencode', 'zai', 'sk-zai');
+  async function hostedSession(db: Database, sdkHomeScope: SessionSdkHomeScope) {
+    const users = new UsersRepository(db);
+    const owner = await users.create({ email: `${generateId()}@example.com`, name: 'Owner' });
+    await users.setToolConfigField(owner.user_id, 'opencode', 'zai', 'sk-owner');
     const repo = await new RepoRepository(db).create({
       slug: `oc-${generateId()}`,
       name: 'repo',
@@ -70,14 +75,14 @@ describe('hosted OpenCode turn across executor and daemon', () => {
       path: `/tmp/${generateId()}`,
       base_ref: 'main',
       new_branch: false,
-      created_by: user.user_id,
+      created_by: owner.user_id,
     });
     const session = await new SessionRepository(db).create({
       branch_id: branch.branch_id,
-      created_by: user.user_id,
+      created_by: owner.user_id,
       agentic_tool: 'opencode',
       status: SessionStatus.IDLE,
-      sdk_home_scope: 'execution_home',
+      sdk_home_scope: sdkHomeScope,
       model_config: {
         mode: 'exact',
         provider: 'zai',
@@ -104,10 +109,10 @@ describe('hosted OpenCode turn across executor and daemon', () => {
     Reflect.set(service, 'trackTaskCompleted', () => undefined);
     Reflect.set(service, 'trackTaskStarted', () => undefined);
 
-    async function runTurn(prompt: string) {
+    async function runTurn(prompt: string, actorId = owner.user_id) {
       const task = await taskRepo.create({
         session_id: session.session_id,
-        created_by: user.user_id,
+        created_by: actorId,
         status: TaskStatus.DISPATCHING,
         full_prompt: prompt,
       });
@@ -122,7 +127,7 @@ describe('hosted OpenCode turn across executor and daemon', () => {
           payload: {
             type: 'executor-session',
             purpose: 'executor-task',
-            sub: user.user_id,
+            sub: actorId,
             tenant_id: 'tenant-a',
             session_id: session.session_id,
             task_id: task.task_id,
@@ -144,10 +149,10 @@ describe('hosted OpenCode turn across executor and daemon', () => {
         client,
         sessionId: session.session_id as SessionID,
         taskId: task.task_id as TaskID,
+        sdkHomeScope,
         provider: 'zai',
       });
       if (!turn) throw new Error('duplicate admission');
-      expect(JSON.parse(turn.authContent)).toEqual({ zai: { type: 'api', key: 'sk-zai' } });
 
       // Stand-in for the OpenCode server: append this turn to the live database on scratch.
       const live = new DatabaseSync(turn.layout.liveDbPath);
@@ -169,12 +174,19 @@ describe('hosted OpenCode turn across executor and daemon', () => {
         manifest
       );
       expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.COMPLETED);
-      return { turn, turns };
+      return { turn, turns, key: JSON.parse(turn.authContent).zai.key as string };
     }
+
+    return { owner, users, retired, runTurn };
+  }
+
+  dbTest('admits, seals, accepts, and restores across two turns', async ({ db }) => {
+    const { retired, runTurn } = await hostedSession(db, 'execution_home');
 
     const first = await runTurn('hi');
     expect(first.turn.input).toBeNull();
     expect(first.turns).toEqual(['hi']);
+    expect(first.key).toBe('sk-owner');
     // The completion retry re-patched the completed Task, so retirement ran again.
     expect(retired).toHaveLength(2);
     expect(new Set(retired).size).toBe(1);
@@ -182,5 +194,28 @@ describe('hosted OpenCode turn across executor and daemon', () => {
     const second = await runTurn('again');
     expect(second.turn.input?.openCodeSessionId).toBe('ses_hosted');
     expect(second.turns).toEqual(['hi', 'again']);
+  });
+
+  dbTest('continues a branch-home Session across prompters with each key', async ({ db }) => {
+    const branchHome = await mkdtemp(join(tmpdir(), 'agor-oc-branch-'));
+    vi.stubEnv('AGOR_OPENCODE_CHECKPOINT_ROOT', join(branchHome, 'opencode'));
+    try {
+      const { users, runTurn } = await hostedSession(db, 'branch');
+      const teammate = await users.create({ email: `${generateId()}@example.com`, name: 'Mate' });
+      await users.setToolConfigField(teammate.user_id, 'opencode', 'zai', 'sk-teammate');
+
+      const first = await runTurn('hi');
+      const second = await runTurn('again', teammate.user_id);
+      const third = await runTurn('back');
+
+      expect([first.key, second.key, third.key]).toEqual(['sk-owner', 'sk-teammate', 'sk-owner']);
+      expect(second.turns).toEqual(['hi', 'again']);
+      expect(third.turns).toEqual(['hi', 'again', 'back']);
+      // Checkpoints live only in the branch home, never in a prompter's home.
+      expect(second.turn.layout.sessionsDir).toBe(join(branchHome, 'opencode', 'sessions'));
+      expect(await readdir(home)).toEqual([]);
+    } finally {
+      await rm(branchHome, { recursive: true, force: true });
+    }
   });
 });

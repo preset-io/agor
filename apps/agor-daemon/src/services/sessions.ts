@@ -86,10 +86,10 @@ import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   branchSdkHomeUnsupportedReason,
   hasSecureLocalCredentialOverlay,
+  isHostedOpenCode,
   resolveBranchSdkHomeIncompatibility,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
-  usesExecutionHomeOnly,
 } from '../branch-sdk-home.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
@@ -459,7 +459,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // the mutation boundary rather than waiting for a confusing launch-time
     // refusal.
     if (existing.sdk_home_scope === 'branch') {
-      const unsupportedReason = branchSdkHomeUnsupportedReason(nextTool);
+      const config =
+        typeof (this.app as { get?: unknown }).get === 'function'
+          ? this.app.get('config')
+          : ({} as import('@agor/core/config').AgorConfig);
+      const unsupportedReason = branchSdkHomeUnsupportedReason(nextTool, isHostedOpenCode(config));
       if (unsupportedReason) {
         throw new BadRequest(
           `${nextTool} cannot use this session's branch SDK home because ${unsupportedReason}.`
@@ -609,7 +613,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         branchSdkHomeIntent: branch.sdk_home ?? null,
         enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
         inheritedScope: params?._sdkHomeScope,
-        executionHomeOnly: usesExecutionHomeOnly(agenticTool, config),
       });
       if (admission.scope === 'branch') {
         // Admission must reject credential/state combinations before it
@@ -622,6 +625,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         const unsupportedReason = await resolveBranchSdkHomeIncompatibility({
           tool: agenticTool,
           delegated,
+          hostedOpenCode: isHostedOpenCode(config),
           secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
           userId: createData.created_by as UserID | undefined,
           db: scoped,

@@ -5,12 +5,13 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchSdkHomeAuthUnsupportedReason,
+  branchSdkHomeUnsupportedReason,
+  isHostedOpenCode,
   resolveBranchSdkHomeLaunch,
   resolveExecutionSdkHomeEnv,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
   sessionUsesBranchSdkHome,
-  usesExecutionHomeOnly,
 } from './branch-sdk-home.js';
 
 // getBranchHomePath derives from AGOR_DATA_HOME → make the root deterministic.
@@ -43,7 +44,7 @@ describe('sessionUsesBranchSdkHome', () => {
   });
 });
 
-describe('usesExecutionHomeOnly', () => {
+describe('hosted OpenCode branch SDK homes', () => {
   const hosted = {
     multi_tenancy: { mode: 'required_from_auth' as const },
     execution: {
@@ -54,22 +55,16 @@ describe('usesExecutionHomeOnly', () => {
     },
   };
 
-  it('keeps hosted OpenCode out of branch SDK homes, even on an adopted branch', () => {
-    expect(usesExecutionHomeOnly('opencode', hosted)).toBe(true);
-    expect(
-      resolveNewSessionSdkHomeScope({
-        branchSdkHomeIntent: 'per_branch',
-        enabledForNewSessions: true,
-        inheritedScope: 'branch',
-        executionHomeOnly: true,
-      })
-    ).toEqual({ scope: 'execution_home', adoptBranch: false });
+  it('admits hosted OpenCode, whose credentials stay on Job scratch', () => {
+    expect(isHostedOpenCode(hosted)).toBe(true);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(hosted))).toBeUndefined();
   });
 
-  it('leaves other tools and local OpenCode to the branch SDK-home policy', () => {
-    expect(usesExecutionHomeOnly('claude-code', hosted)).toBe(false);
-    expect(usesExecutionHomeOnly('opencode', { execution: { unix_user_mode: 'sandbox' } })).toBe(
-      false
+  it('keeps refusing local OpenCode, whose data home holds native credentials', () => {
+    const local = { execution: { unix_user_mode: 'sandbox' as const } };
+    expect(isHostedOpenCode(local)).toBe(false);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(local))).toMatch(
+      /credentials/
     );
   });
 });

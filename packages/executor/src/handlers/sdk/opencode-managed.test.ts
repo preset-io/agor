@@ -33,6 +33,10 @@ function client(begin: unknown) {
   return { tasks, value: { service: () => tasks } as never };
 }
 
+function turnInput(state: ReturnType<typeof client>) {
+  return { client: state.value, sessionId, taskId, sdkHomeScope: 'execution_home' as const };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.remove.mockImplementation(async (_layout, objects) => objects);
@@ -42,12 +46,12 @@ describe('prepareManagedOpenCodeTurn', () => {
   it('returns null for a duplicate executor before reading any credential', async () => {
     const state = client({ outcome: 'duplicate' });
     await expect(
-      prepareManagedOpenCodeTurn({ client: state.value, sessionId, taskId, provider: 'openai' })
+      prepareManagedOpenCodeTurn({ ...turnInput(state), provider: 'openai' })
     ).resolves.toBeNull();
     expect(mocks.prepare).not.toHaveBeenCalled();
   });
 
-  it('writes the admitted owner key for the selected provider only', async () => {
+  it('writes the admitted prompter key for the selected provider only', async () => {
     const state = client({
       outcome: 'admitted',
       input: accepted,
@@ -55,9 +59,7 @@ describe('prepareManagedOpenCodeTurn', () => {
       providerKey: { providerId: 'openai', key: 'sk-owner' },
     });
     const turn = await prepareManagedOpenCodeTurn({
-      client: state.value,
-      sessionId,
-      taskId,
+      ...turnInput(state),
       provider: 'openai',
     });
 
@@ -65,6 +67,9 @@ describe('prepareManagedOpenCodeTurn', () => {
       openai: { type: 'api', key: 'sk-owner' },
     });
     expect(turn?.authSecrets).toContain('sk-owner');
+    expect(turn?.layout).toEqual({
+      layoutFor: { sessionId, taskId, sdkHomeScope: 'execution_home' },
+    });
     expect(mocks.restore).toHaveBeenCalledWith(expect.anything(), accepted);
     // The daemon accepts only UUIDv7 holder ids.
     expect(turn?.holderId).toMatch(
@@ -89,6 +94,7 @@ describe('prepareManagedOpenCodeTurn', () => {
         }).value,
         sessionId,
         taskId,
+        sdkHomeScope: 'execution_home',
         provider: 'openai',
       })
     ).rejects.toThrow(/failed verification/);
@@ -98,9 +104,7 @@ describe('prepareManagedOpenCodeTurn', () => {
   it('refuses a turn without a usable saved key before touching scratch', async () => {
     await expect(
       prepareManagedOpenCodeTurn({
-        client: client({ outcome: 'admitted', input: null, cleanup: [] }).value,
-        sessionId,
-        taskId,
+        ...turnInput(client({ outcome: 'admitted', input: null, cleanup: [] })),
         provider: 'anthropic',
       })
     ).rejects.toThrow(/No usable API key for anthropic/);
@@ -118,6 +122,7 @@ describe('prepareManagedOpenCodeTurn', () => {
         }).value,
         sessionId,
         taskId,
+        sdkHomeScope: 'execution_home',
         provider: 'anthropic',
       })
     ).rejects.toThrow(/No usable API key for anthropic/);

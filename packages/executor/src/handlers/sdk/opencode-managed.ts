@@ -15,6 +15,7 @@ import {
   type OpenCodeCheckpointAdmission,
   type OpenCodeCheckpointManifest,
   type SessionID,
+  type SessionSdkHomeScope,
   type Task,
   type TaskID,
   TaskStatus,
@@ -51,12 +52,17 @@ export async function prepareManagedOpenCodeTurn(input: {
   client: AgorClient;
   sessionId: SessionID;
   taskId: TaskID;
+  sdkHomeScope: SessionSdkHomeScope;
   provider: string;
 }): Promise<ManagedOpenCodeTurn | null> {
   const { client, taskId } = input;
   // Fail on an unusable image before admission or any credential read.
   await assertOpenCodeCheckpointRuntime();
-  const layout = resolveOpenCodeNativeStateLayout({ sessionId: input.sessionId, taskId });
+  const layout = resolveOpenCodeNativeStateLayout({
+    sessionId: input.sessionId,
+    taskId,
+    sdkHomeScope: input.sdkHomeScope,
+  });
   const holderId = generateId();
   // A retry after a lost response replays the same admission for this holder.
   const admission: OpenCodeCheckpointAdmission = await withRetries(() =>

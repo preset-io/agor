@@ -809,15 +809,19 @@ Hosted workspaces run OpenCode by default when they meet the prerequisites in
   by your first prompt. Providers that need OAuth sign-in, several credentials (Azure,
   Bedrock, Vertex), a custom endpoint, or a server on your own machine are not offered,
   and only models that support tool calls are listed.
-- **Owner only:** only the session creator can prompt an OpenCode session, and it
-  runs in the creator's own executor home.
+- **Sharing:** on branches with a per-branch SDK home, OpenCode sessions follow the
+  normal session sharing settings. With workspace and branch sharing on, teammates
+  can prompt them, and each turn uses the prompting teammate's own saved key for the
+  session's provider. Sessions kept in the owner's home stay owner-only.
 - **Conversation state:** each successful turn saves an immutable copy of
-  OpenCode's database in your home (`~/.agor/opencode/sessions/`), and the next
-  turn resumes from the last completed one. A failed or stopped turn keeps the
+  OpenCode's database, in the branch's shared SDK home for shared sessions or your
+  home (`~/.agor/opencode/sessions/`) otherwise, and the next turn resumes from the
+  last completed one. A failed or stopped turn keeps the
   previous state. If saved state is missing or damaged, the turn fails rather
   than silently starting an empty conversation; start a new session to recover.
-- **Cleanup:** superseded copies and copies from deleted sessions are removed
-  during your later OpenCode turns. Removal is best-effort, not an erasure
+- **Cleanup:** superseded copies are removed during later turns of the same shared
+  session, or during your later OpenCode turns. Copies from deleted shared sessions
+  are not removed automatically. Removal is best-effort, not an erasure
   guarantee.
 
 ---

@@ -39,7 +39,7 @@ export function resolveOpenCodeCapabilities(
     templated &&
     config.agentic_tools?.opencode_hosted_native_state !== 'disabled'
   ) {
-    // Checkpoints live in the owner's executor home, so that home must outlive the Job.
+    // Execution-home checkpoints live in the owner's executor home, so that home must outlive the Job.
     return config.execution?.executor_storage?.user_home === 'persistent-per-user'
       ? { mode: 'managed-projection' }
       : unsupported('persistent_user_home_required');

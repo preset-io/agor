@@ -21,7 +21,8 @@ let branchCounter = 1;
 async function createSession(
   db: Database,
   agenticTool: 'opencode' | 'codex' = 'opencode',
-  owner = OWNER
+  owner = OWNER,
+  sdkHomeScope: 'execution_home' | 'branch' = 'execution_home'
 ) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId(),
@@ -46,8 +47,17 @@ async function createSession(
     branch_id: branch.branch_id,
     agentic_tool: agenticTool,
     created_by: owner as UUID,
+    sdk_home_scope: sdkHomeScope,
   });
   return session.session_id;
+}
+
+async function createOther(db: Database) {
+  await new UsersRepository(db).create({
+    user_id: OTHER as UUID,
+    email: `other-${generateId()}@example.com`,
+    name: 'Other',
+  });
 }
 
 async function runningTask(db: Database, sessionId: string, owner = OWNER): Promise<Task> {
@@ -144,17 +154,17 @@ describe('OpenCodeCheckpointRepository', () => {
     const sessionId = await createSession(db);
     const task = await runningTask(db, sessionId);
     await expect(repo.begin(task.task_id, generateId(), 'someone-else')).rejects.toThrow(
-      /not active for its Session owner/
+      /not active for this prompter/
     );
 
     const codexTask = await runningTask(db, await createSession(db, 'codex'));
     await expect(repo.begin(codexTask.task_id, generateId(), OWNER)).rejects.toThrow(
-      /not active for its Session owner/
+      /not active for this prompter/
     );
 
     await new TaskRepository(db).updateFromExecutor(task.task_id, { status: TaskStatus.FAILED });
     await expect(repo.begin(task.task_id, generateId(), OWNER)).rejects.toThrow(
-      /not active for its Session owner/
+      /not active for this prompter/
     );
   });
 
@@ -259,11 +269,7 @@ describe('OpenCodeCheckpointRepository', () => {
   });
 
   dbTest('never lists or forgets another owner attempts', async ({ db }) => {
-    await new UsersRepository(db).create({
-      user_id: OTHER as UUID,
-      email: `other-${generateId()}@example.com`,
-      name: 'Other',
-    });
+    await createOther(db);
     const otherSession = await createSession(db, 'opencode', OTHER);
     const theirs = await turn(db, otherSession, 'ses_other', OTHER);
     await turn(db, otherSession, 'ses_other', OTHER);
@@ -278,5 +284,52 @@ describe('OpenCodeCheckpointRepository', () => {
       { sessionId: otherSession, taskId: theirs.task.task_id },
     ]);
     expect((await rows(db, otherSession)).map((row) => row.task_id)).toContain(theirs.task.task_id);
+  });
+  dbTest(
+    'continues a branch-home Session across prompters, never an execution-home one',
+    async ({ db }) => {
+      await createOther(db);
+      const shared = await createSession(db, 'opencode', OWNER, 'branch');
+      const first = await turn(db, shared);
+      const second = await turn(db, shared, 'ses_native', OTHER);
+      expect(second.admission).toMatchObject({ input: first.manifest });
+      const third = await turn(db, shared);
+      expect(third.admission).toMatchObject({ input: second.manifest });
+
+      const privateTask = await runningTask(db, await createSession(db), OTHER);
+      await expect(
+        new OpenCodeCheckpointRepository(db).begin(privateTask.task_id, generateId(), OTHER)
+      ).rejects.toThrow(/not active for this prompter/);
+    }
+  );
+
+  dbTest('cleans each checkpoint store only from a Job that mounts it', async ({ db }) => {
+    await createOther(db);
+    const repo = new OpenCodeCheckpointRepository(db);
+    const shared = await createSession(db, 'opencode', OWNER, 'branch');
+    const sharedFirst = await turn(db, shared);
+    await turn(db, shared, 'ses_native', OTHER);
+    const privateSession = await createSession(db);
+    const privateFirst = await turn(db, privateSession);
+    await turn(db, privateSession);
+
+    // A collaborator's branch-home turn cleans the Session's superseded attempt from any prompter.
+    const sharedTask = await runningTask(db, shared, OTHER);
+    const sharedAdmission = await repo.begin(sharedTask.task_id, generateId(), OTHER);
+    expect(sharedAdmission).toMatchObject({
+      cleanup: [{ sessionId: shared, taskId: sharedFirst.task.task_id }],
+    });
+
+    // The owner's execution-home turn never lists branch-home attempts it cannot reach.
+    const privateTask = await runningTask(db, privateSession);
+    const privateHolder = generateId();
+    const privateAdmission = await repo.begin(privateTask.task_id, privateHolder, OWNER);
+    expect(privateAdmission).toMatchObject({
+      cleanup: [{ sessionId: privateSession, taskId: privateFirst.task.task_id }],
+    });
+    await repo.acknowledgeCleanup(privateTask.task_id, privateHolder, [
+      { sessionId: shared, taskId: sharedFirst.task.task_id },
+    ]);
+    expect((await rows(db, shared)).map((row) => row.task_id)).toContain(sharedFirst.task.task_id);
   });
 });

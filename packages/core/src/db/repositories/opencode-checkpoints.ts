@@ -22,6 +22,12 @@ import { RepositoryError } from './base';
 export const MAX_OPENCODE_CLEANUP_OBJECTS = 20;
 const attempts = opencodeCheckpointAttempts;
 
+/** The admitted attempt whose Job performs cleanup. */
+type CleanupHolder = Pick<
+  typeof opencodeCheckpointAttempts.$inferSelect,
+  'session_id' | 'task_id' | 'owner_user_id'
+>;
+
 /** Hosted OpenCode checkpoint ledger; the invariants are in context/explorations/opencode-cloud.md. */
 export class OpenCodeCheckpointRepository {
   constructor(private readonly db: Database) {}
@@ -45,13 +51,14 @@ export class OpenCodeCheckpointRepository {
             !session ||
             session.agentic_tool !== 'opencode' ||
             task.created_by !== actorUserId ||
-            session.created_by !== actorUserId ||
+            // Only a branch-home Session's checkpoints are reachable from a collaborator's Job.
+            (session.sdk_home_scope !== 'branch' && session.created_by !== actorUserId) ||
             !task.executor_connected_at ||
             (task.status !== TaskStatus.RUNNING &&
               task.status !== TaskStatus.AWAITING_PERMISSION &&
               task.status !== TaskStatus.AWAITING_INPUT)
           ) {
-            throw new RepositoryError('Managed OpenCode Task is not active for its Session owner');
+            throw new RepositoryError('Managed OpenCode Task is not active for this prompter');
           }
 
           const existing = await select(tx)
@@ -69,7 +76,7 @@ export class OpenCodeCheckpointRepository {
                   .where(eq(attempts.task_id, existing.input_task_id))
                   .one()
               : undefined;
-            return this.admitted(tx, input?.manifest ?? null, existing.input_task_id, task);
+            return this.admitted(tx, input?.manifest ?? null, existing.input_task_id, existing);
           }
 
           const accepted = await select(tx)
@@ -77,21 +84,20 @@ export class OpenCodeCheckpointRepository {
             .where(and(eq(attempts.session_id, session.session_id), eq(attempts.state, 'accepted')))
             .one();
           const now = new Date();
-          await insert(tx, attempts)
-            .values({
-              attempt_id: generateId(),
-              session_id: session.session_id,
-              task_id: taskId,
-              owner_user_id: actorUserId,
-              holder_instance_id: holderId,
-              input_task_id: accepted?.task_id ?? null,
-              state: 'open',
-              manifest: null,
-              created_at: now,
-              updated_at: now,
-            })
-            .run();
-          return this.admitted(tx, accepted?.manifest ?? null, accepted?.task_id ?? null, task);
+          const attempt = {
+            attempt_id: generateId(),
+            session_id: session.session_id,
+            task_id: taskId,
+            owner_user_id: actorUserId,
+            holder_instance_id: holderId,
+            input_task_id: accepted?.task_id ?? null,
+            state: 'open' as const,
+            manifest: null,
+            created_at: now,
+            updated_at: now,
+          };
+          await insert(tx, attempts).values(attempt).run();
+          return this.admitted(tx, accepted?.manifest ?? null, accepted?.task_id ?? null, attempt);
         },
         { sqliteImmediate: true, sqliteBusyRetries: 9 }
       );
@@ -111,7 +117,7 @@ export class OpenCodeCheckpointRepository {
     tx: Database,
     input: OpenCodeCheckpointManifest | null,
     inputTaskId: string | null,
-    task: TaskRow
+    holder: CleanupHolder
   ): Promise<OpenCodeCheckpointAdmission> {
     if (inputTaskId && !isOpenCodeCheckpointManifest(input)) {
       // Never restart an existing conversation as empty when its record is unusable.
@@ -120,19 +126,31 @@ export class OpenCodeCheckpointRepository {
     return {
       outcome: 'admitted',
       input,
-      cleanup: (await this.cleanupCandidates(tx, task.created_by, task.task_id)).map(
-        ({ sessionId, taskId }) => ({ sessionId, taskId })
-      ),
+      cleanup: (await this.cleanupCandidates(tx, holder)).map(({ sessionId, taskId }) => ({
+        sessionId,
+        taskId,
+      })),
     };
   }
 
-  /** This owner's never-restorable attempts: superseded, unaccepted by a terminal Task, or of a deleted Session. */
+  /** Never-restorable attempts in the store the holder's Job mounts: its branch-home Session, or its own home. */
   private async cleanupCandidates(
     db: Database,
-    ownerUserId: string,
-    currentTaskId: string,
+    holder: CleanupHolder,
     only?: readonly string[]
   ): Promise<Array<OpenCodeCheckpointObject & { attemptId: string }>> {
+    const holderSession = await select(db, { scope: sessions.sdk_home_scope })
+      .from(sessions)
+      .where(eq(sessions.session_id, holder.session_id))
+      .one();
+    const store =
+      holderSession?.scope === 'branch'
+        ? eq(attempts.session_id, holder.session_id)
+        : and(
+            eq(attempts.owner_user_id, holder.owner_user_id),
+            // A deleted Session's scope is unknown; a branch-home file of one stays until its branch home is removed.
+            or(isNull(sessions.session_id), ne(sessions.sdk_home_scope, 'branch'))
+          );
     const rows = await select(db, {
       attemptId: attempts.attempt_id,
       sessionId: attempts.session_id,
@@ -143,8 +161,8 @@ export class OpenCodeCheckpointRepository {
       .leftJoin(tasks, eq(tasks.task_id, attempts.task_id))
       .where(
         and(
-          eq(attempts.owner_user_id, ownerUserId),
-          ne(attempts.task_id, currentTaskId),
+          store,
+          ne(attempts.task_id, holder.task_id),
           only ? inArray(attempts.task_id, [...only]) : undefined,
           or(
             isNull(sessions.session_id),
@@ -178,8 +196,7 @@ export class OpenCodeCheckpointRepository {
         }
         const eligible = await this.cleanupCandidates(
           tx,
-          holder.owner_user_id,
-          taskId,
+          holder,
           deleted.map((object) => object.taskId)
         );
         const confirmed = eligible.filter((row) =>

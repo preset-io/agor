@@ -28,6 +28,7 @@ function layoutFor(taskId: string): OpenCodeNativeStateLayout {
   return resolveOpenCodeNativeStateLayout({
     sessionId: SESSION,
     taskId,
+    sdkHomeScope: 'execution_home',
     env: { AGOR_OPENCODE_SCRATCH_ROOT: join(root, 'scratch') },
     homeDir: join(root, 'home'),
   });
@@ -45,15 +46,51 @@ async function writeLiveDatabase(layout: OpenCodeNativeStateLayout, sessionId: s
 describe('OpenCode native state', () => {
   it('requires a pinned absolute scratch root and canonical ids', () => {
     expect(() =>
-      resolveOpenCodeNativeStateLayout({ sessionId: SESSION, taskId: TASK_1, env: {} })
+      resolveOpenCodeNativeStateLayout({
+        sessionId: SESSION,
+        taskId: TASK_1,
+        sdkHomeScope: 'execution_home',
+        env: {},
+      })
     ).toThrow(/AGOR_OPENCODE_SCRATCH_ROOT/);
     expect(() =>
       resolveOpenCodeNativeStateLayout({
         sessionId: '../escape',
         taskId: TASK_1,
+        sdkHomeScope: 'execution_home',
         env: { AGOR_OPENCODE_SCRATCH_ROOT: '/scratch' },
       })
     ).toThrow(/canonical/);
+  });
+
+  it('keeps branch-home checkpoints in the pinned branch root, never the caller home', () => {
+    const branch = {
+      sessionId: SESSION,
+      taskId: TASK_1,
+      sdkHomeScope: 'branch' as const,
+      homeDir: '/home/caller',
+    };
+    expect(
+      resolveOpenCodeNativeStateLayout({
+        ...branch,
+        env: {
+          AGOR_OPENCODE_SCRATCH_ROOT: '/scratch',
+          AGOR_OPENCODE_CHECKPOINT_ROOT: '/branch-homes/b1/opencode',
+        },
+      }).sessionsDir
+    ).toBe('/branch-homes/b1/opencode/sessions');
+    expect(() =>
+      resolveOpenCodeNativeStateLayout({
+        ...branch,
+        env: { AGOR_OPENCODE_SCRATCH_ROOT: '/scratch' },
+      })
+    ).toThrow(/AGOR_OPENCODE_CHECKPOINT_ROOT/);
+    expect(() =>
+      resolveOpenCodeNativeStateLayout({
+        ...branch,
+        env: { AGOR_OPENCODE_SCRATCH_ROOT: '/scratch', AGOR_OPENCODE_CHECKPOINT_ROOT: 'relative' },
+      })
+    ).toThrow(/AGOR_OPENCODE_CHECKPOINT_ROOT/);
   });
 
   it('restores a checkpoint saved by an older OpenCode version', async () => {

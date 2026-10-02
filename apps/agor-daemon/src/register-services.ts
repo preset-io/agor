@@ -153,6 +153,7 @@ import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contribu
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import {
   hasSecureLocalCredentialOverlay,
+  isHostedOpenCode,
   resolveBranchSdkHomeCompatibility,
   resolveBranchSdkHomeLaunch,
   resolveExecutionSdkHomeEnv,
@@ -1381,6 +1382,7 @@ function createExecuteHandler(
         config,
         modelConfig: session.model_config ?? undefined,
         sessionOwnerId: session.created_by,
+        sessionSdkHomeScope: session.sdk_home_scope,
         prompterUserId: userId,
       });
     }
@@ -1500,14 +1502,14 @@ function createExecuteHandler(
         throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
       }
       const branchId = session.branch_id as string;
-      // A relocatable directory is necessary but not sufficient: OpenCode's
-      // current XDG data home also contains its native credential file. Until
-      // its actor credential namespace is split from branch-owned state, a
-      // branch home would either lose configured credentials or share them.
+      // A relocatable directory is necessary but not sufficient: local OpenCode's
+      // XDG data home also contains its native credential file, so only hosted
+      // OpenCode (credentials on Job scratch) may use a branch home.
       const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         resolveBranchSdkHomeCompatibility({
           tool: sdkHomeTool,
           delegated: isDelegatedExecution,
+          hostedOpenCode: isHostedOpenCode(config),
           secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
           userId,
           db: tenantDb,

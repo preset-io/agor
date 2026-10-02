@@ -59,9 +59,9 @@ root's `branch-homes/<branch-id>/` tree carries each branch's relocated SDK
 config/state. Each Session is immutably stamped to use either that tree or its
 historical execution home; every replica and delegated launcher must honor the
 Session stamp rather than inferring the choice from current deployment or
-branch configuration. OpenCode is refused for branch-scoped Sessions because
-its native credential file cannot currently be separated from its writable XDG
-state. Local Codex subscription auth is supported only with the per-user
+branch configuration. Local OpenCode is refused for branch-scoped Sessions
+because its native credential file cannot currently be separated from its
+writable XDG state; hosted OpenCode stores only sealed checkpoints there. Local Codex subscription auth is supported only with the per-user
 sandbox: each replica opens the exact caller's persistent `auth.json` and
 projects that pinned inode into the branch home for one executor without
 copying it. Credential replacement/logout records a durable termination request

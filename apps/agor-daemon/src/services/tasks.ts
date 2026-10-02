@@ -1844,7 +1844,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       userId
     );
     if (admission.outcome !== 'admitted') return admission;
-    // Only the selected provider's key is decrypted, and only for its owner's admitted executor.
+    // Only the selected provider's key is decrypted, and only for the prompter's admitted executor.
     const session = await new SessionRepository(this.db).findById(sessionId);
     const provider = session?.model_config?.provider?.trim();
     const key =

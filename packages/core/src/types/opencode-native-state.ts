@@ -10,7 +10,7 @@ export interface OpenCodeCheckpointManifest {
   openCodeVersion: string;
 }
 
-/** One attempt directory under the owner's home: `sessions/<sessionId>/attempts/<taskId>`. */
+/** One attempt directory under the checkpoint store: `sessions/<sessionId>/attempts/<taskId>`. */
 export interface OpenCodeCheckpointObject {
   sessionId: string;
   taskId: string;
@@ -26,9 +26,9 @@ export type OpenCodeCheckpointAdmission =
       outcome: 'admitted';
       /** The accepted checkpoint this turn must restore, or null for a new conversation. */
       input: OpenCodeCheckpointManifest | null;
-      /** Exact superseded or abandoned attempts of this owner whose files may be removed. */
+      /** Exact superseded or abandoned attempts in this Job's checkpoint store whose files may be removed. */
       cleanup: OpenCodeCheckpointObject[];
-      /** The owner's saved key for the Session's hosted provider, or null when none is usable. */
+      /** The prompter's saved key for the Session's hosted provider, or null when none is usable. */
       providerKey?: { providerId: string; key: string } | null;
     }
   /** Another executor already holds this Task; the caller must exit without side effects. */

@@ -77,7 +77,8 @@ Agor sets each supported tool's config-home environment variables and mounts
 the branch directory at its real path. Cursor is refused because its config
 home cannot currently be relocated reliably. Local OpenCode is also refused because
 its current XDG data home combines native credentials with relocatable state;
-hosted OpenCode keeps its Sessions in the owner's execution home instead.
+hosted OpenCode keeps live state and the prompter's key on Job-local scratch and
+stores only sealed conversation checkpoints in the branch home.
 Credentials remain caller-scoped rather than being copied into the shared
 branch home. Codex API keys are injected through the environment; Codex
 subscription auth uses a caller-specific file overlay in local sandbox mode.

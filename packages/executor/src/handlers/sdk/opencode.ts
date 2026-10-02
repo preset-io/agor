@@ -86,6 +86,7 @@ export async function executeOpenCodeTask(params: {
         client,
         sessionId,
         taskId,
+        sdkHomeScope: session.sdk_home_scope,
         provider: session.model_config.provider,
       });
       if (!managed) {

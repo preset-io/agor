@@ -93,7 +93,7 @@ describe('SessionsService SDK-home admission', () => {
   });
 
   dbTest(
-    'keeps hosted OpenCode in its execution home without adopting the branch',
+    'stamps hosted OpenCode branch-scoped so its checkpoints are shared on the branch',
     async ({ db }) => {
       const { user, branch } = await fixture(db);
       const config = {
@@ -124,9 +124,9 @@ describe('SessionsService SDK-home admission', () => {
         { _agenticConfigResolved: true } as never
       );
 
-      expect(session.sdk_home_scope).toBe('execution_home');
+      expect(session.sdk_home_scope).toBe('branch');
       await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
-        sdk_home: undefined,
+        sdk_home: 'per_branch',
       });
     }
   );
