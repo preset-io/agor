@@ -21,6 +21,7 @@ import {
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { onCloudCtaClick } from '../lib/cloudCtaAttribution';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL, PRESET_URL, presetUtm } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import styles from './AgorCloudLanding.module.css';
@@ -214,6 +215,7 @@ export function AgorCloudLanding() {
   const [formSource, setFormSource] = useState('cloud-page-hero');
 
   const openForm = (source: string) => {
+    onCloudCtaClick(source, 'hubspot_modal');
     setFormSource(source);
     setIsFormOpen(true);
   };

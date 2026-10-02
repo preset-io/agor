@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { onCloudCtaClick } from '../lib/cloudCtaAttribution';
 import styles from './CloudInviteCTA.module.css';
 import { HubSpotFormModal } from './HubSpotFormModal';
 
@@ -26,7 +27,10 @@ export function JoinBetaCTA({ label = 'Sign up for Agor Cloud', sourceCta }: Joi
         type="button"
         className={styles.primary}
         style={{ border: 0, cursor: 'pointer', font: 'inherit', fontWeight: 700 }}
-        onClick={() => setIsOpen(true)}
+        onClick={() => {
+          onCloudCtaClick(sourceCta, 'hubspot_modal');
+          setIsOpen(true);
+        }}
       >
         {label} →
       </button>

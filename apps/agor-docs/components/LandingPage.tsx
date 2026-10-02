@@ -30,6 +30,7 @@ import {
 import Link from 'next/link';
 import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { onCloudCtaClick } from '../lib/cloudCtaAttribution';
 import {
   AI_ENABLEMENT_POST_URL,
   DISCORD_INVITE_URL,
@@ -564,6 +565,7 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
   // into the form's hidden source_page field for attribution.
   const [betaCtaSource, setBetaCtaSource] = useState('landing-hero');
   const openBetaForm = (source: string) => {
+    onCloudCtaClick(source, 'hubspot_modal');
     setBetaCtaSource(source);
     setIsBetaFormOpen(true);
   };
