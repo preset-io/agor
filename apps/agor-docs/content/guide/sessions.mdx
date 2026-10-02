@@ -377,7 +377,9 @@ without creating a session, avoiding repeated retries while their configuration 
 ## Conversation history
 
 Conversations open with the latest ten turns, showing user and assistant messages.
-Scroll up or select **Load older history** to read earlier turns.
+Scroll up or select **Load older history** to read earlier turns. While you stay at the
+latest turn, the conversation keeps at most 30 turns loaded: older turns are unloaded
+and return through **Load older history**. Nothing is unloaded while you are scrolled up.
 
 Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
 collapsed by default; inside an open group, file edits show their diffs. Expand
@@ -389,8 +391,8 @@ and token usage. On touch screens, tap the prompt to toggle the metadata; press
 Escape to dismiss it. Stopped and failed turns show a notice below their content,
 with an error explanation when available.
 
-Search covers loaded history only. Load earlier turns to include them in search;
-tool details become searchable after expansion.
+Search covers loaded history only. Load earlier turns, including unloaded ones, to include
+them in search; tool details become searchable after expansion.
 
 ## Related
 

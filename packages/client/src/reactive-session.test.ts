@@ -5,7 +5,9 @@ import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
   LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT,
+  LEAN_TRANSCRIPT_TASK_WINDOW,
   ReactiveSessionHandle,
+  type ReactiveSessionOptions,
   releaseReactiveSession,
   retainReactiveSession,
   type TaskHydrationMode,
@@ -3019,6 +3021,310 @@ describe('lean transcript detail retention', () => {
     expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).size).toBeLessThanOrEqual(
       LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT
     );
+    f.handle.dispose();
+  });
+});
+
+describe('lean transcript window trimming', () => {
+  const id = (n: number) => `task-${String(n).padStart(3, '0')}`;
+  const ids = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => id(from + i));
+  const answer = (taskId: string) =>
+    ({
+      ...makeMessage(taskId, 1),
+      role: 'assistant',
+      content: [
+        { type: 'text', text: `Answer ${taskId}` },
+        { type: 'tool_use', id: `tool-${taskId}`, name: 'Read', input: {} },
+      ],
+    }) as unknown as Message;
+
+  /** 24 persisted turns; the reader opens on the latest ten. */
+  async function fixture(options: ReactiveSessionOptions = { taskHydration: 'lean' }) {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 24; n++) {
+      opts.tasks.push(makeTask(id(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[id(n)] = [makeMessage(id(n), 0), answer(id(n))];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, options);
+    await handle.ready();
+    let next = 24;
+    /** Live turns as the executor publishes them while the reader watches. */
+    const addTurns = (count: number, live = true) => {
+      for (let i = 0; i < count; i++) {
+        const taskId = id(next++);
+        opts.tasks.push(makeTask(taskId, TaskStatus.COMPLETED));
+        opts.messagesByTask[taskId] = [makeMessage(taskId, 0), answer(taskId)];
+        if (!live) continue;
+        mock.emitServiceEvent('tasks', 'created', makeTask(taskId, TaskStatus.RUNNING));
+        for (const message of opts.messagesByTask[taskId])
+          mock.emitServiceEvent('messages', 'created', message);
+        mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+      }
+    };
+    const reserve = () => id(next++);
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    /** Every per-task collection the handle exposes, keyed by Task ID. */
+    const heldIds = () =>
+      new Set([
+        ...handle.state.messagesByTask.keys(),
+        ...handle.state.toolsByTask.keys(),
+        ...handle.state.loadedTaskIds,
+        ...[...handle.state.streamingMessages.values()].map((stream) => stream.task_id),
+      ]);
+    return { ...mock, opts, handle, addTurns, reserve, taskIds, heldIds };
+  }
+
+  it('drops the oldest turns beyond the window and pages them back in order', async () => {
+    const f = await fixture();
+    expect(LEAN_TRANSCRIPT_TASK_WINDOW).toBe(30);
+    f.addTurns(30);
+    f.emitServiceEvent('tasks', 'tool:start', {
+      session_id: SESSION_ID,
+      task_id: id(14),
+      tool_use_id: 'old',
+      tool_name: 'Read',
+    });
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    for (const trimmed of ids(14, 23)) expect(f.heldIds().has(trimmed)).toBe(false);
+    expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).has(id(14))).toBe(false);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+
+    // The existing older-history path restores them, page by page, gap-free.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.getTaskMessages(id(14)).map((message) => message.index)).toEqual([0, 1]);
+    expect(JSON.stringify(f.handle.getTaskMessages(id(14)))).not.toContain('tool_use');
+    await f.handle.loadOlderTasks();
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(0, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+
+    // Back at the latest turns, the window applies again.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    f.handle.dispose();
+  });
+
+  it('keeps a contiguous window: stops at protected turns and the first visible turn', async () => {
+    const f = await fixture();
+    f.addTurns(36); // 46 loaded: task-014 … task-059
+    // The first turn the reader sees bounds the trim.
+    expect(f.handle.trimOlderTasks(id(17))).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(17));
+
+    // A pinned turn (expanded disclosure, focus, selection, overlay) holds itself and everything newer.
+    const release = f.handle.retainTaskDetails(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    release();
+    await Promise.resolve();
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(30, 59));
+
+    // Unsettled turns: executing (which covers streaming) or awaiting the reader.
+    const blockers: Array<[string, () => void, () => void]> = [
+      [
+        'running',
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.RUNNING)),
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.COMPLETED)),
+      ],
+      [
+        'pending permission',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'pending' },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'approved' },
+          }),
+      ],
+      [
+        'pending widget',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'pending' } },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'submitted' } },
+          }),
+      ],
+    ];
+    for (const [label, block, settle] of blockers) {
+      f.addTurns(1);
+      block();
+      expect(f.handle.trimOlderTasks(), label).toBe(false);
+      expect(f.taskIds()[0]).toBe(id(30));
+      settle();
+    }
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    f.handle.dispose();
+  });
+
+  it('only trims a lean conversation reader', async () => {
+    for (const options of [
+      { taskHydration: 'lean', cacheScope: 'preview' },
+      { taskHydration: 'lazy' },
+      { taskHydration: 'eager' },
+    ] as ReactiveSessionOptions[]) {
+      const f = await fixture(options);
+      f.addTurns(40);
+      const before = f.taskIds();
+      expect(f.handle.trimOlderTasks()).toBe(false);
+      expect(f.taskIds()).toEqual(before);
+      f.handle.dispose();
+    }
+  });
+
+  it('never lets resync or late traffic resurrect a trimmed turn or open a gap', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+
+    // Late traffic for trimmed turns: a Task patch, persisted messages, tools and streams.
+    const trimmed = id(20);
+    const event = { session_id: SESSION_ID, task_id: trimmed };
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', makeMessage(trimmed, 7));
+    f.emitServiceEvent('messages', 'patched', answer(trimmed));
+    f.emitServiceEvent('messages', 'removed', makeMessage(trimmed, 0));
+    f.emitServiceEvent('tasks', 'tool:start', { ...event, tool_use_id: 't', tool_name: 'Read' });
+    f.emitServiceEvent('messages', 'streaming:chunk', { ...event, message_id: 's', chunk: 'x' });
+    f.emitServiceEvent('messages', 'thinking:chunk', { ...event, message_id: 'h', chunk: 'x' });
+    f.emitServiceEvent('messages', 'streaming:error', { ...event, message_id: 's', error: 'x' });
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.heldIds().has(trimmed)).toBe(false);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+
+    // Reconnect refreshes reached history only: no trimmed reads, no trimmed rows.
+    const taskGet = vi.mocked(f.client.service('tasks').get);
+    taskGet.mockClear();
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(
+      taskGet.mock.calls.map(([taskId]) => taskId).filter((taskId) => taskId < id(24))
+    ).toEqual([]);
+
+    // A trim is refused while a history read is in flight; a patch journaled
+    // for a trimmed turn during that read does not resurrect it at commit.
+    f.addTurns(1);
+    f.opts.deferTaskMessageFetch = id(54);
+    f.messageFindAll.mockClear();
+    const resync = f.handle.resync();
+    expect(internals.taskFetches.size).toBe(1);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(54)));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await resync;
+    expect(f.taskIds()).toEqual(ids(24, 54));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(25, 54));
+
+    // More than a page of turns while offline: the window refills from the
+    // cursor without a gap, and stays above the trimmed history.
+    f.fireIo('disconnect');
+    f.addTurns(25, false);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(25, 79));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(50, 79));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(40, 79));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('discards an older page abandoned by a disconnect once the window moved', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    f.opts.deferTaskMessageFetch = id(13);
+    f.messageFindAll.mockClear();
+    const older = f.handle.loadOlderTasks();
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(13)));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Offline, the parked reader's view still trims.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await older;
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('settles terminal streams before trimming and attributes nothing to a trimmed turn', async () => {
+    const f = await fixture();
+    const failed = f.reserve();
+    const stream = (name: string, messageId: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: messageId,
+        task_id: failed,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    f.opts.tasks.push(makeTask(failed, TaskStatus.FAILED));
+    f.opts.messagesByTask[failed] = [makeMessage(failed, 0)];
+    f.emitServiceEvent('tasks', 'created', makeTask(failed, TaskStatus.RUNNING));
+    stream('thinking:start', 'thought');
+    stream('thinking:chunk', 'thought', { chunk: 'considering' });
+    stream('streaming:start', 'partial');
+    stream('streaming:chunk', 'partial', { chunk: 'unpersisted partial' });
+    stream('streaming:error', 'partial', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask(failed, TaskStatus.FAILED));
+    // #2930: terminal settlement keeps the errored partial and retires the thought.
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({ isStreaming: false });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    // Make the failed turn the oldest one loaded, then age it out.
+    f.addTurns(40);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).not.toContain(failed);
+    // Its settled partial has no reload path and goes with it, as on a page reload.
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect((Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>).size).toBe(0);
+    stream('streaming:error', 'thought', { error: 'late failure' });
+    stream('thinking:chunk', 'thought', { chunk: 'late' });
+    stream('streaming:chunk', 'partial', { chunk: 'late' });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    // Paging back restores the persisted turn only.
+    while (!f.taskIds().includes(failed)) await f.handle.loadOlderTasks();
+    expect(f.handle.getTask(failed)?.status).toBe(TaskStatus.FAILED);
+    expect(f.handle.getTaskMessages(failed).map((message) => message.message_id)).toEqual([
+      `${failed}-msg-0`,
+    ]);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
     f.handle.dispose();
   });
 });

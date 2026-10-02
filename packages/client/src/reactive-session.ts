@@ -1,10 +1,12 @@
 import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@agor/core/client';
 import {
+  InputRequestStatus,
   isTaskExecuting,
   isTerminalTaskStatus,
   leanMessage,
   MESSAGE_PAGINATION,
   PAGINATION,
+  PermissionStatus,
   TaskStatus,
 } from '@agor/core/client';
 
@@ -18,6 +20,13 @@ export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
  * count, not a byte bound: one turn may still be large.
  */
 export const LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT = 10;
+/**
+ * Lean conversation: the most turns trimOlderTasks() keeps loaded for a reader
+ * parked at the latest turns. Three pages: the detail-retained turns plus two
+ * pages of scrollback, so a reader who pages back once or twice and returns to
+ * the bottom keeps that history. A turn count, not a byte bound.
+ */
+export const LEAN_TRANSCRIPT_TASK_WINDOW = 3 * LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
 const isLeanActive = isTaskExecuting;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
 const MAX_RETIRED_STREAM_IDENTITIES = 256;
@@ -931,7 +940,7 @@ export class ReactiveSessionHandle {
     if (event.task_id && observedTaskId && event.task_id !== observedTaskId) return false;
     const taskId = event.task_id ?? observedTaskId;
     const index = this.indexStreamTasks(this.stateSnapshot.tasks);
-    if (taskId && index.terminalIds.has(taskId)) return false;
+    if (taskId && (index.terminalIds.has(taskId) || this.belowLeanWindow(taskId))) return false;
     // Old transports omitted task_id. Do not attribute their late chunks to a
     // completed turn; preserve pre-bootstrap and active mid-stream attachment.
     return !!taskId || this.stateSnapshot.loading || !!index.latestExecutingId;
@@ -1123,6 +1132,88 @@ export class ReactiveSessionHandle {
     return this.syncLeanHistory(true);
   }
 
+  /**
+   * Lean conversation: drop the oldest loaded turns beyond
+   * LEAN_TRANSCRIPT_TASK_WINDOW, for a reader parked at the latest turns. They
+   * become not-yet-loaded history again; loadOlderTasks() pages them back.
+   *
+   * Only an unbroken oldest run of settled turns goes, so loaded history stays
+   * one gap-free ID window from the cursor. The run stops at a turn that is
+   * not terminal (running or streaming), is pinned (retainTaskDetails), awaits a
+   * permission/input/widget answer, or is `keepFromTaskId` (the first turn the
+   * reader sees). Refused while a history read is in flight, so no page or
+   * resync snapshot commits across a trim. Returns whether anything was dropped.
+   */
+  trimOlderTasks(keepFromTaskId?: string): boolean {
+    const { tasks, messagesByTask, loading, terminal } = this.stateSnapshot;
+    if (
+      this.disposed ||
+      this.options.taskHydration !== 'lean' ||
+      this.options.cacheScope !== 'session' ||
+      this.leanSyncInflight ||
+      loading ||
+      terminal
+    )
+      return false;
+    const loaded = tasks
+      .filter((task) => task.status !== TaskStatus.QUEUED)
+      .sort((a, b) => (a.task_id < b.task_id ? -1 : 1));
+    const excess = loaded.length - LEAN_TRANSCRIPT_TASK_WINDOW;
+    if (excess <= 0) return false;
+    const trimmed = new Set<string>();
+    for (const { task_id: id, status } of loaded.slice(0, excess)) {
+      // Terminal settlement has already stopped every stream of a terminal turn.
+      if (
+        (keepFromTaskId !== undefined && id >= keepFromTaskId) ||
+        !isTerminalTaskStatus(status) ||
+        this.detailPins.has(id) ||
+        awaitsReader(messagesByTask.get(id))
+      )
+        break;
+      trimmed.add(id);
+    }
+    if (trimmed.size === 0) return false;
+    this.leanOldestTaskId = loaded[trimmed.size].task_id;
+    for (const id of trimmed) {
+      this.recentDetailTaskIds.delete(id);
+      this.detailTaskIds.delete(id);
+      this.leanLiveTaskIds.delete(id);
+      // Also fences a detail read still in flight for the turn.
+      this.messageCacheMutationsByTask.delete(id);
+    }
+    const kept = <V>(map: Map<string, V>) => new Map([...map].filter(([id]) => !trimmed.has(id)));
+    this.updateState((prev) => ({
+      ...prev,
+      tasks: prev.tasks.filter((task) => !trimmed.has(task.task_id)),
+      messagesByTask: kept(prev.messagesByTask),
+      toolsByTask: kept(prev.toolsByTask),
+      loadedTaskIds: new Set([...prev.loadedTaskIds].filter((id) => !trimmed.has(id))),
+      // A settled partial has no reload path; it goes with its turn, as on a reload.
+      streamingMessages: new Map(
+        [...prev.streamingMessages].filter(
+          ([, stream]) => !stream.task_id || !trimmed.has(stream.task_id)
+        )
+      ),
+      hasOlderTasks: true,
+    }));
+    return true;
+  }
+
+  /**
+   * Lean conversation history is one task-ID window from the older-history
+   * cursor to the latest turn. Traffic for a settled turn below it (never
+   * loaded, or trimmed) must not re-add it above an invisible gap; it returns
+   * through loadOlderTasks(). Pass the Task when known: executing or queued
+   * turns are always admitted.
+   */
+  private belowLeanWindow(taskId: string, task?: Task): boolean {
+    if (this.options.taskHydration !== 'lean' || this.options.cacheScope !== 'session')
+      return false;
+    if (this.leanOldestTaskId === undefined || taskId >= this.leanOldestTaskId) return false;
+    if (task && (task.status === TaskStatus.QUEUED || isTaskExecuting(task))) return false;
+    return !this.indexStreamTasks(this.stateSnapshot.tasks).byId.has(taskId);
+  }
+
   private syncLeanHistory(older = false): Promise<void> {
     if (this.disposed || this.stateSnapshot.terminal) return Promise.resolve();
     if (this.leanSyncInflight)
@@ -1263,8 +1354,11 @@ export class ReactiveSessionHandle {
       if (page.length && (older || !this.leanOldestTaskId))
         this.leanOldestTaskId = page.at(-1)!.task_id;
       this.updateState((prev) => {
+        // A journaled event can name a turn trimmed or never reached.
         const committedTasks = orderTasksBySession(
-          this.reconcileTaskFetch(taskToken, tasks),
+          this.reconcileTaskFetch(taskToken, tasks).filter(
+            (task) => !this.belowLeanWindow(task.task_id, task)
+          ),
           session.tasks
         );
         const ids = new Set<string>(committedTasks.map((task) => task.task_id));
@@ -1496,6 +1590,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
+      if (this.belowLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -1513,6 +1608,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
+      if (this.belowLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
@@ -1568,7 +1664,7 @@ export class ReactiveSessionHandle {
     );
 
     const onToolStart = (event: ToolStartEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || this.belowLeanWindow(event.task_id)) return;
       if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
@@ -1589,7 +1685,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
-      if (!this.matchesSession(event.session_id)) return;
+      if (!this.matchesSession(event.session_id) || this.belowLeanWindow(event.task_id)) return;
       if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
@@ -1631,7 +1727,7 @@ export class ReactiveSessionHandle {
         }
 
         const shouldTrackMessages =
-          this.options.taskHydration === 'lean' ||
+          (this.options.taskHydration === 'lean' && !this.belowLeanWindow(message.task_id)) ||
           this.options.taskHydration === 'eager' ||
           prev.loadedTaskIds.has(message.task_id);
 
@@ -1660,7 +1756,7 @@ export class ReactiveSessionHandle {
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const shouldTrackMessages =
-          this.options.taskHydration === 'lean' ||
+          (this.options.taskHydration === 'lean' && !this.belowLeanWindow(taskId)) ||
           this.options.taskHydration === 'eager' ||
           prev.loadedTaskIds.has(taskId);
         if (!shouldTrackMessages) return prev;
@@ -1680,7 +1776,7 @@ export class ReactiveSessionHandle {
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
-        if (!taskId) {
+        if (!taskId || this.belowLeanWindow(taskId)) {
           return {
             ...prev,
             streamingMessages: nextStreaming,
@@ -2556,6 +2652,19 @@ function restampStreamingTaskIds(
     }
   }
   return next;
+}
+
+/** A turn still waiting on the reader: an open permission, input or widget request. */
+function awaitsReader(messages: readonly Message[] | undefined): boolean {
+  return !!messages?.some(({ type, content, metadata }) => {
+    if (type === 'widget_request')
+      return metadata?.widget?.status === 'pending' || metadata?.widget?.status === 'resolving';
+    if (!content || typeof content !== 'object' || Array.isArray(content)) return false;
+    return (
+      (type === 'permission_request' && content.status === PermissionStatus.PENDING) ||
+      (type === 'input_request' && content.status === InputRequestStatus.PENDING)
+    );
+  });
 }
 
 function sortMessagesByIndex(messages: Message[]): Message[] {

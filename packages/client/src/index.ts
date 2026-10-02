@@ -29,6 +29,7 @@ import type {
 } from '@agor/core/types';
 import {
   attachReactiveSessionApi,
+  LEAN_TRANSCRIPT_TASK_WINDOW,
   type ReactiveAgorClient,
   type ReactiveLoadedTaskIds,
   type ReactiveMessagesByTask,
@@ -101,6 +102,7 @@ export {
   attachReactiveSessionApi,
   getApiKeyFromEnv,
   isDaemonRunning,
+  LEAN_TRANSCRIPT_TASK_WINDOW,
   releaseReactiveSession,
   retainReactiveSession,
 };
