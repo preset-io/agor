@@ -29,8 +29,13 @@ const editTurns = new Set<number>();
 const tableTurns = new Set<number>();
 /** Tool result sizes of turns that read a very large file. */
 const payloadBytes = new Map<number, number>();
-/** Turns whose only detail sits inside the answer, beside its text: no AgentChain. */
-const inlineTurns = new Map<number, 'reasoning' | 'read'>();
+/**
+ * Turns whose only detail sits inside the answer, beside its text: no
+ * AgentChain. `empty-reasoning-read` precedes the Read with SDK-normalized
+ * empty thinking, which renders nothing.
+ */
+type Inline = 'reasoning' | 'read' | 'empty-reasoning-read';
+const inlineTurns = new Map<number, Inline>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -127,10 +132,13 @@ function messages(n: number): Message[] {
   if (!inline) return [tool, result, answer];
   type Blocks = Extract<Message['content'], unknown[]>;
   const [reasoning, text] = answer.content as Blocks;
+  const read = [...(tool.content as Blocks), ...(result.content as Blocks)];
   const detail =
     inline === 'reasoning'
       ? [reasoning]
-      : [...(tool.content as Blocks), ...(result.content as Blocks)];
+      : inline === 'read'
+        ? read
+        : [{ type: 'thinking' as const, text: '' }, ...read];
   return [{ ...answer, content: [...detail, text] }];
 }
 
@@ -234,7 +242,7 @@ export const fixture = {
     edit?: boolean;
     table?: boolean;
     bytes?: number;
-    inline?: 'reasoning' | 'read';
+    inline?: Inline;
   } = {}) {
     const n = turns++;
     if (inline) inlineTurns.set(n, inline);

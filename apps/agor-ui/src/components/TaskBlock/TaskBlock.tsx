@@ -31,7 +31,7 @@ import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskD
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
-import { getMessageSpeaker, MessageBlock } from '../MessageBlock';
+import { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
@@ -990,13 +990,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       revealLoadedActivity && firstAgentChainIndex === -1
         ? blocks
             .flatMap((block) => (block.type === 'message' ? [block.message] : []))
-            .find(
-              (message) =>
-                Array.isArray(message.content) &&
-                message.content.some(
-                  (content) => content.type === 'thinking' || content.type === 'tool_use'
-                )
-            )?.message_id
+            .find(hasRevealableInlineDetail)?.message_id
         : undefined;
     const loadActivity = async () => {
       pinLoad();

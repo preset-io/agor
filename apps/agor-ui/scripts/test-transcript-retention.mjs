@@ -412,20 +412,24 @@ test('reloaded inline detail stays open and live while protected turns exceed th
   await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
     await page.waitForFunction(() => !!window.transcriptRetentionFixture);
     await page.evaluate(() => window.transcriptRetentionFixture.mount());
-    // Detail beside visible text, with no AgentChain: reasoning, then a Read.
+    // Detail beside visible text, with no AgentChain: reasoning, a Read, and a
+    // Read after SDK-normalized empty reasoning (which renders nothing).
     const reasoningId = await page.evaluate(() =>
       window.transcriptRetentionFixture.addTurn({ inline: 'reasoning' })
     );
     const readId = await page.evaluate(() =>
       window.transcriptRetentionFixture.addTurn({ inline: 'read' })
     );
+    const emptyId = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ inline: 'empty-reasoning-read' })
+    );
     // The latest turn alone holds more than the budget, so nothing else fits.
     await page.evaluate(
       (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
       36 * 1024 * 1024
     );
-    await page.getByText('Answer 2').waitFor();
-    assert.deepEqual(await liveTurns(page, cdp), both([2]));
+    await page.getByText('Answer 3').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([3]));
 
     // Reloading opens the detail the reader asked for, which then holds the turn.
     const reasoningTurn = page.locator(`[data-task-block="${reasoningId}"]`);
@@ -433,27 +437,32 @@ test('reloaded inline detail stays open and live while protected turns exceed th
     await reasoningShown(page, reasoningId, 0);
     const readTurn = page.locator(`[data-task-block="${readId}"]`);
     await readTurn.getByRole('button', { name: '1 tool call' }).click();
-    await page.waitForFunction(
-      (id) =>
-        !!document
-          .querySelector(`[data-task-block="${id}"]`)
-          ?.textContent?.includes('TRANSCRIPT_RETENTION_1_'),
-      readId
-    );
+    const readShown = (id, n) =>
+      page.waitForFunction(
+        ([turnId, marker]) =>
+          !!document.querySelector(`[data-task-block="${turnId}"]`)?.textContent?.includes(marker),
+        [id, `TRANSCRIPT_RETENTION_${n}_`]
+      );
+    await readShown(readId, 1);
+    const emptyTurn = page.locator(`[data-task-block="${emptyId}"]`);
+    await emptyTurn.getByRole('button', { name: '1 tool call' }).click();
+    await readShown(emptyId, 2);
     await disengage(page);
     assert.deepEqual(
       await liveTurns(page, cdp),
-      { tools: [1, 2], thinking: [0, 2] },
-      'both reloads stay while open'
+      { tools: [1, 2, 3], thinking: [0, 3] },
+      'every reload stays while open'
     );
 
     // Collapsing releases them to the budget, which has no room.
     await reasoningTurn.getByRole('button', { name: /Extended Thinking/ }).click();
     await readTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
+    await emptyTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
     await disengage(page);
-    assert.deepEqual(await liveTurns(page, cdp), both([2]), 'collapsed: released');
+    assert.deepEqual(await liveTurns(page, cdp), both([3]), 'collapsed: released');
     assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
     assert.equal(await page.getByText('Answer 1').count(), 1);
+    assert.equal(await page.getByText('Answer 2').count(), 1);
 
     await page.evaluate(() => window.transcriptRetentionFixture.unmount());
     assert.deepEqual(await liveTurns(page, cdp), both([]));

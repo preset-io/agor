@@ -45,9 +45,29 @@ it.each([
       { type: 'tool_result', tool_use_id: 'read-1', content: 'INLINE_DETAIL' },
     ],
   },
+  {
+    // SDK-normalized empty thinking renders nothing, so the Read is revealed.
+    shape: 'a Read result after empty reasoning, beside text',
+    recorded_tool_count: 1,
+    detail: [
+      { type: 'thinking', text: '' },
+      { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/a.txt' } },
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'INLINE_DETAIL' },
+    ],
+  },
+  {
+    // The turn's first answer has only empty reasoning: reveal the later Read.
+    shape: 'a Read result in a later answer than empty reasoning',
+    recorded_tool_count: 1,
+    earlier: [{ type: 'thinking', text: '' }],
+    detail: [
+      { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/a.txt' } },
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'INLINE_DETAIL' },
+    ],
+  },
 ])(
   'opens and pins loaded $shape before the load pin is released',
-  async ({ recorded_tool_count, detail }) => {
+  async ({ recorded_tool_count, detail, earlier }) => {
     const events: string[] = [];
     let pins = 0;
     const retain = vi.fn(() => {
@@ -57,23 +77,28 @@ it.each([
     });
     let finishLoad = () => {};
     const load = vi.fn(() => new Promise<void>((resolve) => (finishLoad = resolve)));
+    const first = (blocks: unknown[]) =>
+      message(1, MessageRole.ASSISTANT, [
+        ...blocks,
+        { type: 'text', text: 'Earlier answer' },
+      ] as Message['content']);
     const view = (answer: Message, loaded: boolean) => (
       <TaskBlock
         task={{ ...task, recorded_tool_count }}
-        taskMessages={[prompt, answer]}
+        taskMessages={earlier ? [prompt, first(loaded ? earlier : []), answer] : [prompt, answer]}
         taskMessagesLoaded={loaded}
         onLoadTaskMessages={load}
         onRetainTaskDetails={retain}
       />
     );
     const lean = {
-      ...message(1, MessageRole.ASSISTANT, [{ type: 'text', text: 'Visible answer' }]),
+      ...message(2, MessageRole.ASSISTANT, [{ type: 'text', text: 'Visible answer' }]),
       has_deferred_reasoning: recorded_tool_count === 0,
     };
     const { rerender } = render(view(lean, false));
     fireEvent.click(screen.getByRole('button', { name: /^(1 tool call|Reasoning)$/ }));
     expect(events).toEqual(['retain 1']);
-    const full = message(1, MessageRole.ASSISTANT, [
+    const full = message(2, MessageRole.ASSISTANT, [
       ...detail,
       { type: 'text', text: 'Visible answer' },
     ] as Message['content']);
