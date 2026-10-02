@@ -35,8 +35,12 @@ vi.mock('../ConnectionStatus', () => ({
 vi.mock('../GlobalSearch', () => ({
   GlobalSearch: () => <div data-testid="global-search" />,
 }));
+const globalUserMenuProps = vi.hoisted(() => [] as Array<{ externalAppLink?: string }>);
 vi.mock('../GlobalUserMenu', () => ({
-  GlobalUserMenu: () => <div data-testid="global-user-menu" />,
+  GlobalUserMenu: (props: { externalAppLink?: string }) => {
+    globalUserMenuProps.push(props);
+    return <div data-testid="global-user-menu" />;
+  },
 }));
 vi.mock('../MarkdownRenderer', () => ({
   MarkdownRenderer: () => <div data-testid="markdown-renderer" />,
@@ -232,31 +236,69 @@ describe('AppHeader settings dropdown', () => {
   });
 });
 
-describe('AppHeader navbar logo', () => {
-  it('goes Home by default', () => {
+describe('AppHeader instance label', () => {
+  it('bounds a long label with an ellipsis and keeps the full text in the title', () => {
+    const label = `Data team sandbox ${'x'.repeat(62)}`;
+    renderHeader({ instanceLabel: label });
+
+    const tag = screen.getByText(label);
+    expect(tag).toHaveAttribute('title', label);
+    // Inline style: jsdom cannot compute antd's CSS-variable border shorthands.
+    expect(tag.style).toMatchObject({
+      maxWidth: '200px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+    });
+  });
+
+  it('renders no badge without a label', () => {
+    renderHeader({ instanceLabel: undefined });
+    expect(document.querySelector('.ant-tag-cyan')).toBeNull();
+  });
+});
+
+describe('AppHeader external app link', () => {
+  function openSettingsMenu(props?: Partial<React.ComponentProps<typeof AppHeader>>) {
+    renderHeader(props);
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+  }
+
+  it('keeps the logo going Home when a link is configured', () => {
     const onHomeClick = vi.fn();
-    renderHeader({ onHomeClick });
+    renderHeader({ onHomeClick, externalAppLink: 'https://console.example.test' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Go to Home' }));
     expect(onHomeClick).toHaveBeenCalledOnce();
   });
 
-  it('links to the configured destination with its tooltip as the name', () => {
-    renderHeader({
-      navbarLogoLink: 'https://console.example.test',
-      navbarLogoTooltip: 'Back to Agor Cloud console',
+  it('adds the labeled link to the settings menu, opening in a new tab', async () => {
+    openSettingsMenu({
+      externalAppLink: 'https://console.example.test',
+      externalAppLabel: 'Open Agor Cloud',
     });
 
-    expect(screen.getByRole('link', { name: 'Back to Agor Cloud console' })).toHaveAttribute(
-      'href',
-      'https://console.example.test'
-    );
-    expect(screen.queryByRole('button', { name: 'Go to Home' })).not.toBeInTheDocument();
+    const link = await screen.findByRole('link', { name: 'Open Agor Cloud' });
+    expect(link).toHaveAttribute('href', 'https://console.example.test');
+    expect(link).toHaveAttribute('target', '_blank');
   });
 
-  it('ignores a non-http(s) destination', () => {
-    renderHeader({ navbarLogoLink: 'javascript:alert(1)' });
+  it('does not repeat the entry in the avatar menu', () => {
+    renderHeader({
+      externalAppLink: 'https://console.example.test',
+      externalAppLabel: 'Open Agor Cloud',
+    });
 
-    expect(screen.getByRole('button', { name: 'Go to Home' })).toBeInTheDocument();
+    expect(screen.getByTestId('global-user-menu')).toBeInTheDocument();
+    expect(globalUserMenuProps.at(-1)?.externalAppLink).toBeUndefined();
+  });
+
+  it('omits the entry for a non-http(s) link', async () => {
+    openSettingsMenu({
+      externalAppLink: 'javascript:alert(1)',
+      externalAppLabel: 'Open Agor Cloud',
+    });
+
+    expect(await screen.findByText('Settings')).toBeInTheDocument();
+    expect(screen.queryByText('Open Agor Cloud')).not.toBeInTheDocument();
   });
 });

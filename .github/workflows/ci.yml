@@ -65,6 +65,7 @@ jobs:
       # This fails if a workspace gains a test script without being assigned
       # to a matrix group below. It also records browser-only ownership.
       - run: node --test scripts/ci-test-matrix.test.mjs
+      - run: node --test scripts/railway-image-inputs.test.mjs
       - run: pnpm check:ci-test-coverage
 
       - run: pnpm check:agor-live-deps
@@ -225,6 +226,11 @@ jobs:
         run: |
           if [[ "${{ matrix.shard }}" == "1" ]]; then
             pnpm --filter agor-ui test:search-retention
+          fi
+      - name: Test production transcript retention
+        run: |
+          if [[ "${{ matrix.shard }}" == "2" ]]; then
+            pnpm --filter agor-ui test:transcript-retention
           fi
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
 

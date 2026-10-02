@@ -154,12 +154,16 @@ describe('resolveEffectiveConfig', () => {
       AGOR_RBAC_ENABLED: 'true',
       AGOR_UNIX_USER_MODE: 'delegated',
       INSTANCE_LABEL: 'replica-a',
+      EXTERNAL_APP_LINK: 'https://console.example.test/',
+      EXTERNAL_APP_LABEL: 'Open Agor Cloud',
     });
     expect(resolved.daemon).toMatchObject({
       host: 'env-host',
       port: 4321,
       mcpEnabled: true,
       instanceLabel: 'replica-a',
+      externalAppLink: 'https://console.example.test/',
+      externalAppLabel: 'Open Agor Cloud',
     });
     expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
     expect(resolved.multi_tenancy?.mode).toBe('static');
@@ -1072,6 +1076,39 @@ describe('loadConfig', () => {
       'utf-8'
     );
     await expect(loadConfig()).rejects.toThrow(/claude_subscription_oauth must be a boolean/);
+  });
+
+  it('accepts only checkpointed or disabled for hosted OpenCode', async () => {
+    const configPath = path.join(tempDir, '.agor', 'config.yaml');
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'checkpointed' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { opencode_hosted_native_state: 'checkpointed' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'disabled' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).resolves.toMatchObject({
+      agentic_tools: { opencode_hosted_native_state: 'disabled' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ agentic_tools: { opencode_hosted_native_state: 'live' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(
+      /opencode_hosted_native_state must be 'checkpointed' or 'disabled'/
+    );
   });
 
   it('rejects unsupported or duplicate configured agentic tools', async () => {

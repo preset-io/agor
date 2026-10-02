@@ -21,17 +21,21 @@ export const presetUtm = (content: string, hasQuery = false): string =>
 // Preset home — used by the footer credit (logo + text link).
 export const PRESET_URL = 'https://preset.io';
 
-// Agor Cloud waitlist: the console's request-invite page. Default primary
-// target for CloudInviteCTA.
-export const AGOR_CLOUD_INVITE_URL = 'https://console.agor.cloud/request-invite';
-// The console forwards `source` to HubSpot's hidden source_page field, so each
-// CTA stays attributable. Tags must be lowercase-hyphenated (the console drops
-// anything else).
-export const agorCloudInviteUrl = (source: string): string =>
-  `${AGOR_CLOUD_INVITE_URL}?source=${encodeURIComponent(source)}`;
+// Agor Cloud private beta interest form (Preset landing page, replaces
+// the legacy Google Forms link). Consumed by CloudInviteCTA in the
+// agor-cloud blog post. Note: agor-openclaw.mdx still has an inline
+// link to the legacy Google Forms URL and is not updated here.
+export const AGOR_CLOUD_INVITE_URL = `https://preset.io/contact-us-about-agor/${presetUtm('cloud-invite-cta')}`;
 
 // Agor Cloud demo / contact link (HubSpot meetings scheduler).
 export const AGOR_CLOUD_DEMO_URL = 'https://meetings-na2.hubspot.com/zane-aitken/agor-demo';
+
+// HubSpot contact form GUID (portal 246818610, region na2). Shared between
+// HubSpotForm (which renders it) and the GTM form-submission tracking script
+// in app/layout.tsx (which matches on it), so there's one source of truth
+// for the ID both sides need to agree on. Edit the form itself at
+// https://app-na2.hubspot.com/forms/246818610/editor/56f5b614-72f0-4412-9247-33b53715fda4/edit
+export const HUBSPOT_FORM_ID = '56f5b614-72f0-4412-9247-33b53715fda4';
 
 // Preset blog post defining the AI Enablement Engineer — Agor's target
 // persona. Linked from landing-page copy.

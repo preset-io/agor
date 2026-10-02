@@ -590,12 +590,24 @@ function validateConfig(config: AgorConfig): void {
     }
   };
   const legacyConfig = config as LegacyConfig;
-  only(config.agentic_tools, 'agentic_tools', ['installed', 'claude_subscription_oauth']);
+  only(config.agentic_tools, 'agentic_tools', [
+    'installed',
+    'claude_subscription_oauth',
+    'opencode_hosted_native_state',
+  ]);
   if (
     config.agentic_tools?.claude_subscription_oauth !== undefined &&
     typeof config.agentic_tools.claude_subscription_oauth !== 'boolean'
   ) {
     throw new Error('Config error: agentic_tools.claude_subscription_oauth must be a boolean');
+  }
+  if (
+    config.agentic_tools?.opencode_hosted_native_state !== undefined &&
+    !['checkpointed', 'disabled'].includes(config.agentic_tools.opencode_hosted_native_state)
+  ) {
+    throw new Error(
+      "Config error: agentic_tools.opencode_hosted_native_state must be 'checkpointed' or 'disabled'"
+    );
   }
   if (config.agentic_tools?.installed !== undefined) {
     if (!Array.isArray(config.agentic_tools.installed)) {
@@ -715,8 +727,8 @@ function validateConfig(config: AgorConfig): void {
     'mcpToolSearch',
     'instanceLabel',
     'instanceDescription',
-    'navbarLogoLink',
-    'navbarLogoTooltip',
+    'externalAppLink',
+    'externalAppLabel',
     'impersonation_token_expiry_ms',
     'cors_allow_sandpack',
     'cors_origins',
@@ -1610,8 +1622,8 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
       ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
-      ...(env.NAVBAR_LOGO_LINK ? { navbarLogoLink: env.NAVBAR_LOGO_LINK } : {}),
-      ...(env.NAVBAR_LOGO_TOOLTIP ? { navbarLogoTooltip: env.NAVBAR_LOGO_TOOLTIP } : {}),
+      ...(env.EXTERNAL_APP_LINK ? { externalAppLink: env.EXTERNAL_APP_LINK } : {}),
+      ...(env.EXTERNAL_APP_LABEL ? { externalAppLabel: env.EXTERNAL_APP_LABEL } : {}),
       ...(websocketCompression !== undefined
         ? { websocket_compression: websocketCompression }
         : {}),

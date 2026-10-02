@@ -19,6 +19,9 @@ export interface AgorAgenticToolsSettings {
    * Default: enabled; false is an explicit opt-out. Provider approval remains a release prerequisite.
    */
   claude_subscription_oauth?: boolean;
+
+  /** Hosted OpenCode with checkpointed native state. Default: enabled when every hosted prerequisite holds; 'disabled' opts out. */
+  opencode_hosted_native_state?: 'checkpointed' | 'disabled';
 }
 
 /**
@@ -109,11 +112,11 @@ export interface AgorDaemonSettings {
    * Displayed as a popover around the instance label Tag. */
   instanceDescription?: string;
 
-  /** Navbar logo destination (e.g. a hosting console); the logo goes Home when unset. */
-  navbarLogoLink?: string;
+  /** External app link (e.g. a hosting console) shown in the settings menu; opens in a new tab. */
+  externalAppLink?: string;
 
-  /** Tooltip shown on the navbar logo when `navbarLogoLink` is set. */
-  navbarLogoTooltip?: string;
+  /** Settings-menu label for `externalAppLink` (defaults to the link itself). */
+  externalAppLabel?: string;
 
   /** Maximum expiry for impersonation tokens in ms (default: 3600000 = 1 hour, capped at 1 hour) */
   impersonation_token_expiry_ms?: number;

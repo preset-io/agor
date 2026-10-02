@@ -5,9 +5,9 @@ description: 'Real-time collaboration on Agor boards: live cursors, facepile, sc
 
 # Multiplayer & Social
 
-**Agor is great solo. Multiplayer is what makes it Figma.**
+**Bring your team and agents together on one live board.**
 
-Just as Figma turned design from a solo activity into real-time collaboration, Agor brings multiplayer presence to AI coding. No more "share your screen" calls or wondering what your teammate's agent is doing.
+Agor is Multiplayer AI: people and agents working in the same space, where everyone can see what is happening and join in. You can start on your own, and the board becomes more useful as colleagues arrive. No more "share your screen" calls or wondering what your teammate's agent is doing.
 
 ---
 
@@ -34,7 +34,7 @@ the canvas after a short timeout.
 your workspace. When a person is focused on a board that you can also view,
 their tooltip names that board and you can click through to it. If they are on
 a private board you cannot view, the facepile may show only that they are
-online—it never reveals the board ID, name, or membership.
+online. It never reveals the board ID, name, or membership.
 
 Board association is deliberately lower-frequency than the live cursor stream.
 It is authorized by the daemon for both the publisher and every subscriber,
@@ -209,7 +209,7 @@ This is how a shared Linear or Slack MCP server can sit on the team's Agor insta
 | **Per-channel attachment** | Gateway channel config                          | Auto-attached for sessions that channel spawns  |
 | **User OAuth grants**      | User Settings → MCP authorizations (per server) | Bound automatically when that user is the actor |
 
-> **Pairing with the Message Gateway:** a Slack-routed session that runs as the matched Agor user, with that user's OAuth-authenticated Linear MCP server attached, can take Linear actions under the human's identity: no shared service account, full audit trail.
+> **Pairing with the Message Gateway:** a Slack-routed session that runs as the matched Agor user, with that user's OAuth-authenticated Linear MCP server attached, can take Linear actions under the human's identity: no shared service account, and the actions are recorded under that person's name.
 
 ---
 

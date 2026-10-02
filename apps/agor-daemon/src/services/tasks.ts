@@ -5,6 +5,10 @@
  * Uses DrizzleService adapter with TaskRepository.
  */
 
+import {
+  isHostedOpenCodeProvider,
+  resolveOpenCodeCapabilities,
+} from '@agor/agentic-tool-opencode/daemon';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type ChildCompletionContext,
@@ -24,12 +28,15 @@ import {
   getCurrentTenantId,
   getPostgresSqlState,
   isPostgresDatabaseHandle,
+  MAX_OPENCODE_CLEANUP_OBJECTS,
+  OpenCodeCheckpointRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
+  type TaskRuntimeAuthorityScope,
   type TaskTerminationCoordinationClaimInput,
   type TaskTerminationCoordinationClaimResult,
   type TenantScopeAwareDatabase,
@@ -37,6 +44,7 @@ import {
   type TerminationClaimResult,
   type TerminationSettlementInput,
   type TerminationSettlementResult,
+  UsersRepository,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
@@ -48,6 +56,10 @@ import type {
   ContentBlock,
   ExecutorTerminationCompleteInput,
   MessageID,
+  OpenCodeCheckpointAdmission,
+  OpenCodeCheckpointBeginInput,
+  OpenCodeCheckpointCleanupInput,
+  OpenCodeCheckpointCompletion,
   Paginated,
   QueryParams,
   ReorderQueuedTasksInput,
@@ -176,6 +188,8 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
+  'beginOpenCodeCheckpoint',
+  'acknowledgeOpenCodeCleanup',
 ] as const;
 
 export type TaskParams = QueryParams<{
@@ -946,7 +960,15 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
    *
    * NOTE: Tasks are only ever patched one at a time (never in bulk), so we don't need to loop.
    */
-  async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
+  async patch(
+    id: string,
+    patch: Partial<Task> & { opencode_checkpoint?: OpenCodeCheckpointCompletion },
+    params?: TaskParams
+  ): Promise<Task | Task[]> {
+    const { opencode_checkpoint: checkpoint, ...data } = patch;
+    if (checkpoint && !params?.provider) {
+      throw new BadRequest('opencode_checkpoint is accepted only from the task executor');
+    }
     const nextStatus = data.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
     if (
@@ -980,9 +1002,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const isRunningTransition =
       nextStatus === TaskStatus.RUNNING && currentTask?.status !== TaskStatus.RUNNING;
 
-    const result = params?.provider
-      ? await this.taskRepo.updateFromExecutor(id, data)
-      : await super.patch(id, data, params);
+    const result = checkpoint
+      ? await this.taskRepo.updateFromExecutor(id, data, {
+          holderId: checkpoint.holder_instance_id,
+          manifest: checkpoint.manifest,
+        })
+      : params?.provider
+        ? await this.taskRepo.updateFromExecutor(id, data)
+        : await super.patch(id, data, params);
 
     // Task terminality is the one lifecycle boundary shared by local and
     // off-host executors. Retire every bearer for this exact task before any
@@ -1680,39 +1707,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!authority || authority.taskId !== data.task_id) {
       throw new Forbidden('A token scoped to this executor task is required');
     }
-
-    // PostgreSQL validates the durable credential row in the same transaction
-    // as the Task heartbeat write. Standalone SQLite has no durable authority
-    // table, so its existing process-local fingerprint map supplies the exact
-    // O(1) decision. Store errors propagate and no heartbeat is refreshed.
-    let standaloneTokenCurrent: boolean | undefined;
-    if (!isPostgresDatabaseHandle(this.db)) {
-      const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
-      if (!check) throw new Error('Executor task token authority is unavailable');
-      standaloneTokenCurrent = await check.call(this.executorCredentialRevoker, {
-        tenantId: authority.tenantId,
-        tokenFingerprint: authority.tokenFingerprint,
-        sessionId: authority.sessionId,
-        taskId: authority.taskId,
-        branchId: authority.branchId,
-        userId: authority.userId,
-      });
-    }
+    const scope = await this.runtimeAuthorityScope(authority);
 
     const persistTelemetry = () =>
-      this.taskRepo.reportRuntimeTelemetry(
-        data.task_id,
-        {
-          token_fingerprint: authority.tokenFingerprint,
-          principal_user_id: authority.userId,
-          session_id: authority.sessionId,
-          branch_id: authority.branchId,
-          ...(standaloneTokenCurrent === undefined
-            ? {}
-            : { standalone_token_current: standaloneTokenCurrent }),
-        },
-        data.pulse
-      );
+      this.taskRepo.reportRuntimeTelemetry(data.task_id, scope, data.pulse);
 
     // PostgreSQL tenant-owned services run inside a request transaction. The
     // repository takes the Task row lock while deciding whether this heartbeat
@@ -1782,6 +1780,99 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       params,
     });
     return task;
+  }
+
+  /** PostgreSQL checks the durable token row in-transaction; SQLite uses the in-process map. */
+  private async runtimeAuthorityScope(
+    authority: NonNullable<ReturnType<typeof authenticatedTaskExecutorRuntimeAuthority>>
+  ): Promise<TaskRuntimeAuthorityScope> {
+    const scope: TaskRuntimeAuthorityScope = {
+      token_fingerprint: authority.tokenFingerprint,
+      principal_user_id: authority.userId,
+      session_id: authority.sessionId,
+      branch_id: authority.branchId,
+    };
+    if (isPostgresDatabaseHandle(this.db)) return scope;
+    const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
+    if (!check) throw new Error('Executor task token authority is unavailable');
+    scope.standalone_token_current = await check.call(this.executorCredentialRevoker, {
+      tenantId: authority.tenantId,
+      tokenFingerprint: authority.tokenFingerprint,
+      sessionId: authority.sessionId,
+      taskId: authority.taskId,
+      branchId: authority.branchId,
+      userId: authority.userId,
+    });
+    return scope;
+  }
+
+  /** Require the live executor of a hosted OpenCode Task and its checkpoint holder id. */
+  private async openCodeCheckpointAuthority(
+    taskId: string,
+    holderId: unknown,
+    params?: TaskParams
+  ): Promise<{ userId: string; sessionId: string }> {
+    if (typeof holderId !== 'string' || !isValidUUID(holderId)) {
+      throw new BadRequest('holder_instance_id must be a UUID');
+    }
+    const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+    if (!authority || authority.taskId !== taskId) {
+      throw new Forbidden('A token scoped to this executor task is required');
+    }
+    if (resolveOpenCodeCapabilities(this.app.get('config')).mode !== 'managed-projection') {
+      throw new BadRequest('Hosted OpenCode checkpoints are not enabled for this deployment');
+    }
+    await this.taskRepo.assertRuntimeCredentialAuthority(
+      taskId as TaskID,
+      await this.runtimeAuthorityScope(authority)
+    );
+    return { userId: authority.userId, sessionId: authority.sessionId };
+  }
+
+  async beginOpenCodeCheckpoint(
+    data: OpenCodeCheckpointBeginInput,
+    params?: TaskParams
+  ): Promise<OpenCodeCheckpointAdmission> {
+    const { userId, sessionId } = await this.openCodeCheckpointAuthority(
+      data.task_id,
+      data.holder_instance_id,
+      params
+    );
+    const admission = await new OpenCodeCheckpointRepository(this.db).begin(
+      data.task_id,
+      data.holder_instance_id,
+      userId
+    );
+    if (admission.outcome !== 'admitted') return admission;
+    // Only the selected provider's key is decrypted, and only for its owner's admitted executor.
+    const session = await new SessionRepository(this.db).findById(sessionId);
+    const provider = session?.model_config?.provider?.trim();
+    const key =
+      provider && isHostedOpenCodeProvider(provider)
+        ? (
+            await new UsersRepository(this.db).getToolConfigField(userId, 'opencode', provider)
+          )?.trim()
+        : undefined;
+    return { ...admission, providerKey: provider && key ? { providerId: provider, key } : null };
+  }
+
+  async acknowledgeOpenCodeCleanup(
+    data: OpenCodeCheckpointCleanupInput,
+    params?: TaskParams
+  ): Promise<void> {
+    await this.openCodeCheckpointAuthority(data.task_id, data.holder_instance_id, params);
+    if (
+      !Array.isArray(data.deleted) ||
+      data.deleted.length > MAX_OPENCODE_CLEANUP_OBJECTS ||
+      !data.deleted.every((object) => isValidUUID(object?.sessionId) && isValidUUID(object?.taskId))
+    ) {
+      throw new BadRequest('deleted must list canonical checkpoint objects within the limit');
+    }
+    await new OpenCodeCheckpointRepository(this.db).acknowledgeCleanup(
+      data.task_id,
+      data.holder_instance_id,
+      data.deleted
+    );
   }
 
   async reportSdkHealthFailure(data: SdkHealthFailureInput, params?: TaskParams): Promise<Task> {

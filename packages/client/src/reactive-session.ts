@@ -2,6 +2,7 @@ import type { AgorClient, Message, Session, SessionPromptOptions, Task } from '@
 import {
   isTaskExecuting,
   isTerminalTaskStatus,
+  leanMessage,
   MESSAGE_PAGINATION,
   PAGINATION,
   TaskStatus,
@@ -11,6 +12,12 @@ export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
+/**
+ * Lean mode keeps full detail (tool payloads, reasoning) for this many recently
+ * loaded or live turns, plus the latest, executing and pinned turns. A turn
+ * count, not a byte bound: one turn may still be large.
+ */
+export const LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT = 10;
 const isLeanActive = isTaskExecuting;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
 const MAX_RETIRED_STREAM_IDENTITIES = 256;
@@ -210,6 +217,11 @@ export class ReactiveSessionHandle {
   private leanSyncInflight: Promise<void> | null = null;
   private readonly detailInflight = new Map<string, Promise<Message[]>>();
   private readonly leanLiveTaskIds = new Set<string>();
+  // Lean detail retention: insertion-ordered recent turns, per-consumer pins,
+  // and the cached buckets that may still hold full (unprojected) messages.
+  private readonly recentDetailTaskIds = new Set<string>();
+  private readonly detailPins = new Map<string, number>();
+  private readonly detailTaskIds = new Set<string>();
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -229,7 +241,9 @@ export class ReactiveSessionHandle {
         tasks: Task[];
         byId: Map<string, Task>;
         terminalIds: Set<string>;
+        executingIds: Set<string>;
         latestExecutingId?: string;
+        latestHydratableId?: string;
       }
     | undefined;
 
@@ -237,13 +251,26 @@ export class ReactiveSessionHandle {
     if (this.streamTaskIndex?.tasks === tasks) return this.streamTaskIndex;
     const byId = new Map<string, Task>();
     const terminalIds = new Set<string>();
+    const executingIds = new Set<string>();
     let latestExecutingId: string | undefined;
+    let latestHydratableId: string | undefined;
     for (const task of tasks) {
       byId.set(task.task_id, task);
       if (isTerminalTaskStatus(task.status)) terminalIds.add(task.task_id);
-      if (isTaskExecuting(task)) latestExecutingId = task.task_id;
+      if (isTaskExecuting(task)) {
+        executingIds.add(task.task_id);
+        latestExecutingId = task.task_id;
+      }
+      if (task.status !== TaskStatus.QUEUED) latestHydratableId = task.task_id;
     }
-    this.streamTaskIndex = { tasks, byId, terminalIds, latestExecutingId };
+    this.streamTaskIndex = {
+      tasks,
+      byId,
+      terminalIds,
+      executingIds,
+      latestExecutingId,
+      latestHydratableId,
+    };
     return this.streamTaskIndex;
   }
 
@@ -407,6 +434,95 @@ export class ReactiveSessionHandle {
     return promise;
   }
 
+  /**
+   * Lean mode: keep a turn's full detail while a consumer shows it (an expanded
+   * tool or reasoning disclosure), beyond the recent-turn budget. Each call owns
+   * one pin; the returned release is idempotent.
+   */
+  retainTaskDetails(taskId: string): () => void {
+    if (this.disposed) return () => {};
+    this.detailPins.set(taskId, (this.detailPins.get(taskId) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released || this.disposed) return;
+      released = true;
+      const pins = (this.detailPins.get(taskId) ?? 1) - 1;
+      if (pins > 0) {
+        this.detailPins.set(taskId, pins);
+        return;
+      }
+      this.detailPins.delete(taskId);
+      // React replaces an effect by running its cleanup before the new setup in
+      // the same commit. Defer so a replacement pin lands before eviction.
+      queueMicrotask(() => {
+        if (!this.disposed && !this.detailPins.has(taskId)) this.updateState((state) => state);
+      });
+    };
+  }
+
+  private touchDetails(taskId: string): void {
+    this.recentDetailTaskIds.delete(taskId);
+    this.recentDetailTaskIds.add(taskId);
+    if (this.recentDetailTaskIds.size > LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT) {
+      const oldest = this.recentDetailTaskIds.values().next().value;
+      if (oldest !== undefined) this.recentDetailTaskIds.delete(oldest);
+    }
+  }
+
+  private markLeanLive(taskId: string): void {
+    if (!this.leanLiveTaskIds.has(taskId)) this.touchDetails(taskId);
+    this.leanLiveTaskIds.add(taskId);
+  }
+
+  /**
+   * Lean mode only. Project every cached bucket outside the retention set back
+   * to the lean transcript shape and forget that it was loaded, so the UI offers
+   * the persisted detail again on demand. Runs on every update, so late events
+   * and reconnect snapshots cannot regrow full detail for an old turn. Streams
+   * are left to terminal settlement: an unpersisted partial has no reload path.
+   */
+  private boundLeanDetails(
+    previous: ReactiveSessionState,
+    state: ReactiveSessionState
+  ): ReactiveSessionState {
+    // Memoized per Task-array generation: streaming chunks never rescan Tasks.
+    const index = this.indexStreamTasks(state.tasks);
+    if (state.messagesByTask !== previous.messagesByTask) {
+      for (const [taskId, messages] of state.messagesByTask) {
+        if (messages === previous.messagesByTask.get(taskId)) continue;
+        this.detailTaskIds.add(taskId);
+        // Payloads may arrive before their Task; charge them to the budget.
+        if (!index.byId.has(taskId)) this.touchDetails(taskId);
+      }
+    }
+    const keep = new Set([
+      ...this.recentDetailTaskIds,
+      ...this.detailPins.keys(),
+      ...index.executingIds,
+    ]);
+    if (index.latestHydratableId) keep.add(index.latestHydratableId);
+    // Reconnect hydrates live turns fully; an evicted turn rejoins the lean set.
+    for (const taskId of this.leanLiveTaskIds)
+      if (!keep.has(taskId)) this.leanLiveTaskIds.delete(taskId);
+    let { messagesByTask, loadedTaskIds } = state;
+    for (const taskId of this.detailTaskIds) {
+      if (keep.has(taskId)) continue;
+      this.detailTaskIds.delete(taskId);
+      const messages = messagesByTask.get(taskId);
+      if (messages?.length) {
+        if (messagesByTask === state.messagesByTask) messagesByTask = new Map(messagesByTask);
+        messagesByTask.set(taskId, messages.map(leanMessage));
+      }
+      if (loadedTaskIds.has(taskId)) {
+        if (loadedTaskIds === state.loadedTaskIds) loadedTaskIds = new Set(loadedTaskIds);
+        loadedTaskIds.delete(taskId);
+      }
+    }
+    return messagesByTask === state.messagesByTask && loadedTaskIds === state.loadedTaskIds
+      ? state
+      : { ...state, messagesByTask, loadedTaskIds };
+  }
+
   private async loadTaskMessagesOnce(taskId: string): Promise<Message[]> {
     this.assertNotDisposed();
     const generation = this.leanConnectionGeneration;
@@ -444,6 +560,10 @@ export class ReactiveSessionHandle {
         nextByTask.set(taskId, committed);
         const nextLoaded = new Set(prev.loadedTaskIds);
         nextLoaded.add(taskId);
+        // Recency starts at the commit, not the request: newer turns may have
+        // filled the budget while this read was pending, and the reader who
+        // asked must still receive the detail.
+        if (this.options.taskHydration === 'lean') this.touchDetails(taskId);
         return {
           ...prev,
           messagesByTask: nextByTask,
@@ -700,6 +820,9 @@ export class ReactiveSessionHandle {
     this.queueSnapshot = [];
     this.detailInflight.clear();
     this.leanLiveTaskIds.clear();
+    this.recentDetailTaskIds.clear();
+    this.detailPins.clear();
+    this.detailTaskIds.clear();
     this.messageFetches.clear();
     this.streamingAtMessageFetch.clear();
     this.messageMutations.length = 0;
@@ -891,6 +1014,8 @@ export class ReactiveSessionHandle {
       };
       for (const id of this.leanLiveTaskIds) if (!keep.has(id)) this.leanLiveTaskIds.delete(id);
     }
+    if (this.options.taskHydration === 'lean')
+      next = this.boundLeanDetails(this.stateSnapshot, next);
     if (next.terminal) {
       this.streamTaskIndex = undefined;
       this.retiredStreamTasks.clear();
@@ -1111,7 +1236,7 @@ export class ReactiveSessionHandle {
           (!older || page.some((item) => item.task_id === task.task_id))
       );
       for (const task of hydrateTasks) {
-        if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+        if (isLeanActive(task)) this.markLeanLive(task.task_id);
         if (this.leanLiveTaskIds.has(task.task_id)) fullIds.add(task.task_id);
         sequences.set(task.task_id, this.messageCacheMutationsByTask.get(task.task_id) ?? 0);
         snapshots.set(task.task_id, []);
@@ -1369,7 +1494,7 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(task.session_id)) return;
       this.invalidateQueue(task);
       if (task.status === TaskStatus.QUEUED) return;
-      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+      if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
@@ -1386,7 +1511,7 @@ export class ReactiveSessionHandle {
       if (!this.matchesSession(task.session_id)) return;
       this.invalidateQueue(task);
       if (task.status === TaskStatus.QUEUED) return;
-      if (isLeanActive(task)) this.leanLiveTaskIds.add(task.task_id);
+      if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
@@ -1444,7 +1569,7 @@ export class ReactiveSessionHandle {
 
     const onToolStart = (event: ToolStartEvent) => {
       if (!this.matchesSession(event.session_id)) return;
-      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
+      if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.some((t) => t.toolUseId === event.tool_use_id)) return prev;
@@ -1465,7 +1590,7 @@ export class ReactiveSessionHandle {
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
       if (!this.matchesSession(event.session_id)) return;
-      if (this.options.taskHydration === 'lean') this.leanLiveTaskIds.add(event.task_id);
+      if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
         if (existing.length === 0) return prev;

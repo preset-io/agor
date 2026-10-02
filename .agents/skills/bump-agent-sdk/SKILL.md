@@ -37,7 +37,14 @@ enforces `minimumReleaseAge`.
 
 Then run `pnpm install` and confirm the `pnpm-lock.yaml` diff touches only the bumped packages.
 
+For OpenCode, then run `pnpm --filter @agor-live/opencode generate:hosted-providers` to refresh the
+hosted provider snapshot (`packages/agentic-tool-opencode/src/daemon/hosted-providers.generated.ts`);
+its test fails until the snapshot matches `OPENCODE_VERSION`.
+
 ## 3. Prove the runtime does what the bump is for
+
+If adding a model, also follow the owner map and model checklist in
+[Publishing Agor](../../../PUBLISH.md#sdk-and-model-changes).
 
 Tests mock the SDK, so they cannot show that a new model or fix works. For a model bump:
 
@@ -63,19 +70,14 @@ Step 5 is what prevents that drift.
 
 ## 5. Ship it as a release
 
-Follow the release contract at the top of `.github/workflows/release-agor-live.yml`:
+Follow [Publishing Agor](../../../PUBLISH.md) for the aligned version bump and
+changelog, post-merge tag, protected `npm` environment approval, and registry
+verification before upgrading and running `agor install --sync`. Manual workflow
+dispatch is a non-publishing preflight. A build or publishing approval alone is not
+proof that the exact wrapper versions are available to installers.
 
-1. Bump every aligned package to the next version (15 files): `packages/agor-live`,
-   `packages/client`, `apps/agor-cli`, and each `packages/agor-<tool>/package.json` plus its
-   `AGOR_INTEGRATION_VERSION` in `packages/agor-<tool>/src/index.ts`. `check-agentic-tool-packages`
-   fails on any mismatch.
-2. Add a finalized `CHANGELOG.md` section covering merged changes since the previous tag. Name the
-   new SDK and runtime version, and tell operators to upgrade Agor and run `agor install --sync`
-   before restarting; updating a global CLI does not update Agor's runtime.
-3. After the PR merges, a maintainer pushes `v<version>` on that `main` commit.
-   `release-agor-live.yml` then builds once, runs the packaged-install matrix, and publishes
-   through npm trusted publishing. It refuses to republish an existing version with different
-   bytes.
+Agor Cloud rollout is separate; use the runbook in its private repository. Keep
+private cloud deployment details out of this skill and the public release guide.
 
 Precedents: [#2830](https://github.com/preset-io/agor/pull/2830) (Opus 5.5 runtime, 0.26.6) and
 [#2915](https://github.com/preset-io/agor/pull/2915) (Sonnet 5.5, 0.26.8).

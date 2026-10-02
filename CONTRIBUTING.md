@@ -4,6 +4,9 @@ Thank you for your interest in contributing to Agor! 🚀
 
 **📚 Complete contribution guide:** https://agor.live/guide/development
 
+**Maintainers:** see [Publishing Agor](PUBLISH.md) for SDK/model changes, release
+tags, publishing approval, npm verification, and installation order.
+
 The documentation covers everything you need:
 
 - Setup instructions (Docker or local pnpm)

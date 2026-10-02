@@ -27,6 +27,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { DrizzleService } from '../adapters/drizzle';
+import { requireAdminForEnvConfig } from '../utils/authorization.js';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { BRANCH_MATERIALIZATION_INTENT, BranchesService } from './branches';
@@ -1775,6 +1776,29 @@ describe('BranchesService.find SQL pushdown', () => {
       offset: 0,
       sort: undefined,
     });
+  });
+});
+
+describe('BranchesService.renderEnvironment through the registered service', () => {
+  it('lets a member who passed the control gate persist the rendered commands', async () => {
+    const { service, patchSpy } = createRenderEnvHarness({ current: null, status: 'stopped' });
+    const app = feathers() as Application;
+    app.use('branches', service);
+    const branches = app.service('branches') as unknown as BranchesService;
+    // The same admin-only guard the real branches patch chain runs.
+    branches.hooks({ before: { patch: [requireAdminForEnvConfig()] } });
+
+    await expect(
+      branches.renderEnvironment('wt-1' as BranchID, { variant: 'dev' }, {
+        provider: 'rest',
+        user: { user_id: 'user-member', role: 'member' },
+      } as never)
+    ).resolves.toBeDefined();
+    expect(patchSpy).toHaveBeenCalledWith(
+      'wt-1',
+      expect.objectContaining({ environment_variant: 'dev', start_command: 'echo dev' }),
+      expect.anything()
+    );
   });
 });
 

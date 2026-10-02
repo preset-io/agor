@@ -160,6 +160,49 @@ describe('managed agentic tool loading', () => {
     }
   );
 
+  it.skipIf(process.platform === 'win32')(
+    'finds a native package that an isolated (pnpm) install keeps beside its owning dependency',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-agentic-tools-'));
+      temporaryDirectories.push(root);
+      process.env.AGOR_AGENTIC_TOOLS_DIR = root;
+      process.env.AGOR_MANAGED_AGENTIC_TOOLS = '1';
+      process.env.AGOR_VERSION = '1.2.8';
+      const install = getAgenticToolInstallDir('opencode', '1.2.8');
+      const store = join(install, 'node_modules', '.pnpm');
+      const wrapper = join(store, 'wrapper', 'node_modules', '@agor-live', 'opencode');
+      const runtime = join(store, 'runtime', 'node_modules', 'opencode-ai');
+      const native = join(store, 'runtime', 'node_modules', 'opencode-linux-x64-baseline');
+      for (const directory of [wrapper, runtime, native])
+        await mkdir(directory, { recursive: true });
+      await writeFile(
+        join(wrapper, 'package.json'),
+        JSON.stringify({ name: '@agor-live/opencode', type: 'module', exports: './index.js' })
+      );
+      await writeFile(join(wrapper, 'index.js'), 'export {};');
+      await writeFile(join(runtime, 'package.json'), JSON.stringify({ name: 'opencode-ai' }));
+      await symlink(runtime, join(store, 'wrapper', 'node_modules', 'opencode-ai'), 'dir');
+      await mkdir(join(install, 'node_modules', '@agor-live'), { recursive: true });
+      await symlink(wrapper, join(install, 'node_modules', '@agor-live', 'opencode'), 'dir');
+
+      await expect(
+        resolveManagedAgenticToolPackageDirectory(
+          'opencode',
+          '1.2.8',
+          'opencode-linux-x64-baseline'
+        )
+      ).rejects.toThrow('missing from the managed integration tree');
+      await expect(
+        resolveManagedAgenticToolPackageDirectory(
+          'opencode',
+          '1.2.8',
+          'opencode-linux-x64-baseline',
+          'opencode-ai'
+        )
+      ).resolves.toMatch(/runtime\/node_modules\/opencode-linux-x64-baseline$/);
+    }
+  );
+
   it('returns an actionable error when support is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-agentic-tools-'));
     temporaryDirectories.push(root);

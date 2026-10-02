@@ -1,0 +1,72 @@
+/* Wrapper styling only. The form itself lives inside HubSpot's iframe
+ * and is themed via the `css` option passed to hbspt.forms.create — see
+ * HUBSPOT_FORM_CSS in HubSpotForm.tsx. */
+
+.wrapper {
+  margin: 2.5rem auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  /* Scroll target offset so anchored jumps don't tuck the form under the
+   * sticky Nextra navbar. */
+  scroll-margin-top: 6rem;
+}
+
+.form {
+  width: 100%;
+  max-width: 560px;
+}
+
+.demoLine {
+  margin: 1rem 0 0;
+  font-size: 0.95rem;
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* Styled as a link whether it's an <a> or a modal-view-swap <button>. */
+.demoLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: #7fe8df;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.demoLink:hover {
+  color: #a8f5ed;
+  text-decoration: underline;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 220px;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 3px solid rgba(52, 230, 196, 0.18);
+  border-top-color: #34e6c4;
+  animation: hsSpin 0.8s linear infinite;
+}
+
+@keyframes hsSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2s;
+  }
+}

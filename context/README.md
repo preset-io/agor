@@ -40,6 +40,8 @@ Tight, code-pointer-heavy notes on internals.
 
 Step-by-step implementation guides referenced from code.
 
+- [`Publishing Agor`](../PUBLISH.md) — SDK/model changes, aligned releases, tag and approval steps, npm verification, and upgrades.
+
 - [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
 - [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
 - [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC and simple/sandbox/delegated execution.
@@ -67,6 +69,7 @@ Designs that are referenced from code or in flight. Anything here is either stil
 - [`teammate-kb-namespace-memory-plan.md`](explorations/teammate-kb-namespace-memory-plan.md) — implementation plan for teammate primary KB namespaces, memory append tools, and branch-scoped namespace grants.
 - [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
 - [`session-sharing.md`](explorations/session-sharing.md) — tenant/branch gates, immutable Session compatibility, and caller identity for shared prompts.
+- [`opencode-cloud.md`](explorations/opencode-cloud.md) — hosted OpenCode: capability gate, single-key provider snapshot, and checkpointed native state (referenced from `packages/agentic-tool-opencode/`).
 - [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
 - [`task-runtime-architecture.md`](explorations/task-runtime-architecture.md) — discontinued runtime ownership exploration retained as a source for future targeted improvements.
 - [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.

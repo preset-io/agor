@@ -10,7 +10,7 @@ import type {
   User,
 } from '@agor-live/client';
 import { getDefaultModelForTool } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { buildSpawnPromptContext } from '../SessionPanel/spawn-prompt-context';
 import { ForkSpawnModal } from './ForkSpawnModal';
@@ -82,8 +82,15 @@ async function selectOption(combo: HTMLElement, label: string) {
 }
 async function changeMode(label: string) {
   fireEvent.click(screen.getByTestId('permission-chip'));
-  await waitFor(() => expect(screen.getAllByRole('combobox').length).toBeGreaterThan(3));
-  await selectOption(screen.getAllByRole('combobox').at(-1)!, label);
+  // Query the opened editor, not every Select in the modal and its portals.
+  // Whole-document role queries repeatedly compute JSDOM styles and made the
+  // multi-edit case exceed CI's timeout; the editor also avoids order/count assumptions.
+  const combo = await waitFor(() => {
+    const editor = screen.getByText('Permission mode').closest<HTMLElement>('.ant-popover');
+    expect(editor).not.toBeNull();
+    return within(editor!).getByRole('combobox');
+  });
+  await selectOption(combo, label);
 }
 async function expectAdvanced(sandbox: string, approval: string, network: boolean) {
   await waitFor(() => {
@@ -210,9 +217,7 @@ describe('spawn effective configuration through real AgenticConfigChipRow', () =
   it('detaches a sparse source by editing a chip and derives from the NEW mode', async () => {
     const { submit } = mount(networkParent, sparse);
     await selectOption(await screen.findByLabelText('Configuration'), 'My default');
-    fireEvent.click(screen.getByTestId('permission-chip'));
-    await waitFor(() => expect(screen.getAllByRole('combobox')).toHaveLength(2));
-    await selectOption(screen.getAllByRole('combobox').at(-1)!, 'Untrusted');
+    await changeMode('Untrusted');
     await screen.findByRole('switch');
     await expectAdvanced('read-only', 'untrusted', false);
     expect(await submitted(submit)).toMatchObject({

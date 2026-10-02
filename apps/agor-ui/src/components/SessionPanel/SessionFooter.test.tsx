@@ -8,6 +8,7 @@ import type {
   PermissionMode,
   Session,
 } from '@agor-live/client';
+import { SessionStatus } from '@agor-live/client';
 import {
   act,
   fireEvent,
@@ -22,7 +23,7 @@ import type React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { useFooterPreferences } from '../../hooks/useFooterPreferences';
-import { SessionFooter } from './SessionFooter';
+import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
 vi.mock('../../hooks/useAuth', () => ({
   useAuth: () => ({ user: { user_id: 'footer-user', role: 'member' } }),
@@ -50,14 +51,14 @@ const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   </ConfigProvider>
 );
 
-const baseSession: Session = {
+const baseSession: SessionFooterProps['session'] = {
   session_id: 'test-session-123',
   status: 'idle' as Session['status'],
   agentic_tool: 'claude-code',
   model_config: undefined,
-} as unknown as Session;
+} as unknown as SessionFooterProps['session'];
 
-const baseProps = {
+const baseProps: SessionFooterProps = {
   session: baseSession,
   footerTimerTask: null,
   latestContextWindow: null,
@@ -73,8 +74,8 @@ const baseProps = {
   connectionDisabled: false,
   effortLevel: 'high' as EffortLevel,
   permissionMode: 'default' as PermissionMode,
-  codexSandboxMode: 'on' as CodexSandboxMode,
-  codexApprovalPolicy: 'auto' as CodexApprovalPolicy,
+  codexSandboxMode: 'workspace-write' as CodexSandboxMode,
+  codexApprovalPolicy: 'on-request' as CodexApprovalPolicy,
   queuedTasks: [],
   client: null,
   modelLabel: undefined,
@@ -136,6 +137,41 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('shows named activity only while working and clears it on every non-running state', () => {
+    const session = { ...baseSession, status: SessionStatus.RUNNING };
+    const view = render(<SessionFooter {...baseProps} session={session} isRunning />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByRole('status', { name: 'Agent is working' })).toBeVisible();
+
+    for (const status of Object.values(SessionStatus).filter((s) => s !== SessionStatus.RUNNING)) {
+      view.rerender(<SessionFooter {...baseProps} session={{ ...session, status }} />);
+      expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+    }
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning />);
+    expect(screen.getByRole('status', { name: 'Agent is working' })).toBeVisible();
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning stopRequestInFlight />);
+    expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toHaveAttribute('aria-busy', 'true');
+    view.rerender(<SessionFooter {...baseProps} session={session} isRunning connectionDisabled />);
+    expect(screen.queryByRole('status', { name: 'Agent is working' })).not.toBeInTheDocument();
+  });
+
+  it('preserves the themed desktop bottom inset on the owning footer', () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280);
+    try {
+      render(
+        <ConfigProvider theme={{ token: { sizeUnit: 6 } }}>
+          <SessionFooter {...baseProps} />
+        </ConfigProvider>
+      );
+      const footer = screen.getByTestId('prompt-input').parentElement!.parentElement!;
+      expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('disables Stop while the daemon connection is unavailable', () => {
     const { container } = render(
       <SessionFooter {...baseProps} isRunning={true} connectionDisabled={true} />,
@@ -165,7 +201,7 @@ describe('SessionFooter', () => {
             ...baseSession,
             agentic_tool: 'opencode',
             model_config: undefined,
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -188,7 +224,7 @@ describe('SessionFooter', () => {
             ...baseSession,
             agentic_tool: 'claude-code',
             model_config: undefined,
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -212,7 +248,7 @@ describe('SessionFooter', () => {
     );
     const chip = screen.getByText('85%');
     expect(chip.querySelector('.anticon-percentage')).toBeNull();
-    expect(chip).toHaveTextContent(/^85%$/);
+    expect(chip.textContent).toMatch(/^85%$/);
     expect(chip).toBeInTheDocument();
     expect(chip.closest('.ant-tag')).toHaveClass('ant-tag-red');
   });
@@ -225,7 +261,7 @@ describe('SessionFooter', () => {
           {
             ...baseSession,
             model_config: { model: 'claude-sonnet-4-6', mode: 'alias' },
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -246,7 +282,7 @@ describe('SessionFooter', () => {
               provider: 'kimi-for-coding',
               mode: 'exact',
             },
-          } as unknown as Session
+          } as unknown as SessionFooterProps['session']
         }
       />,
       { wrapper: Wrapper }
@@ -450,8 +486,8 @@ describe('SessionFooter', () => {
     expect(notice).toHaveAttribute('role', 'status');
     expect(notice).toHaveAttribute('aria-live', 'polite');
     expect(notice).toHaveAttribute('aria-atomic', 'true');
-    expect(notice).toHaveTextContent(/2 MCP servers aren.t connected/);
-    expect(notice).toHaveTextContent(/Open the MCP badge/);
+    expect(notice.textContent).toMatch(/2 MCP servers aren.t connected/);
+    expect(notice.textContent).toMatch(/Open the MCP badge/);
     expect(
       screen.getByRole('button', { name: 'Dismiss MCP connection notice' })
     ).toBeInTheDocument();
@@ -477,7 +513,7 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
 
-    expect(screen.getByRole('status')).toHaveTextContent(/Open the MCP badge/);
+    expect(screen.getByRole('status').textContent).toMatch(/Open the MCP badge/);
     const disclosure = screen.getByRole('button', {
       name: 'MCP servers. Alpha isn’t connected. Open to connect.',
     });
@@ -521,7 +557,7 @@ describe('SessionFooter', () => {
     render(
       <SessionFooter
         {...baseProps}
-        session={{ ...baseSession, agentic_tool: 'codex' } as Session}
+        session={{ ...baseSession, agentic_tool: 'codex' } as SessionFooterProps['session']}
         toolCaps={AGENTIC_TOOL_CAPABILITIES.codex}
         effortLevel={undefined}
       />,

@@ -1,5 +1,5 @@
-import { stat } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { lstat } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type {
   BranchDeletionAction,
   BranchDeletionExecutionResult,
@@ -53,10 +53,14 @@ export async function verifyDelegatedDeletionStorageMounts(input: {
   tenantDataRoot: string;
   branchesRoot: string;
 }): Promise<void> {
-  const tenant = await stat(input.tenantDataRoot);
-  const worktrees = await stat(input.branchesRoot);
-  const repos = await stat(resolve(input.tenantDataRoot, 'repos'));
-  const homes = await stat(resolve(input.tenantDataRoot, 'branch-homes'));
+  if (input.branchesRoot !== resolve(input.tenantDataRoot, 'worktrees'))
+    throw new Error('Delegated deletion worktrees root does not match the tenant');
+  // These are mount points, not aliases. Following a symlink here can make a
+  // different tenant's volume satisfy the device check below.
+  const tenant = await lstat(input.tenantDataRoot);
+  const worktrees = await lstat(input.branchesRoot);
+  const repos = await lstat(resolve(input.tenantDataRoot, 'repos'));
+  const homes = await lstat(resolve(input.tenantDataRoot, 'branch-homes'));
   if (
     !tenant.isDirectory() ||
     !worktrees.isDirectory() ||
@@ -266,10 +270,7 @@ export async function handleBranchDelete(
         resolveManagedBranchDeletionPath(p.branchPath, p.branchesRoot)
       );
       await storageStep('validate_sdk_home', async () => {
-        if (
-          basename(p.branchHome) !== p.branchId ||
-          dirname(dirname(resolve(p.branchHome))) !== resolve(p.tenantDataRoot)
-        )
+        if (p.branchHome !== resolve(p.tenantDataRoot, 'branch-homes', p.branchId))
           throw new Error('Branch SDK home identity mismatch');
         // SDK homes are lazy children of the tenant data root, not independent
         // storage roots. Absence before the first SDK launch is normal. The

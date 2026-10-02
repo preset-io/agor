@@ -250,7 +250,8 @@ export interface AgenticToolsConfig {
   gemini?: GeminiConfig;
   copilot?: CopilotConfig;
   cursor?: CursorConfig;
-  opencode?: Record<string, never>;
+  /** Hosted OpenCode API keys by provider id; local mode keeps OpenCode's own store. */
+  opencode?: Record<string, string>;
 }
 
 /** Union of all valid env-var-named fields across all tool configs. */

@@ -196,6 +196,14 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
+  beginOpenCodeCheckpoint(
+    data: import('@agor/core/types').OpenCodeCheckpointBeginInput,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').OpenCodeCheckpointAdmission>;
+  acknowledgeOpenCodeCleanup(
+    data: import('@agor/core/types').OpenCodeCheckpointCleanupInput,
+    params?: FeathersParams
+  ): Promise<void>;
   cancelQueued(
     data: CancelQueuedTasksInput,
     params?: FeathersParams

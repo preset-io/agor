@@ -51,6 +51,9 @@ export class MigrationError extends Error {
   }
 }
 
+/** Stable diagnostic shared with PostgreSQL 0095; never exposes driver text. */
+export const OWNER_ATTRIBUTION_SQLSTATE = 'P0095';
+
 /** Maximum length of an automation-facing migration impact summary. */
 export const MIGRATION_IMPACT_SUMMARY_MAX_LENGTH = 200;
 
@@ -332,14 +335,15 @@ export function pendingOfflineCutoverMigrations(
 /**
  * SQLite cannot interpolate object ids into a trigger/constraint error. Run a
  * readable preflight before the transactional migration so operators know
- * exactly which protected resources need manual cleanup or attribution.
+ * exactly which protected resources need explicit same-tenant attribution.
  */
 export async function preflightSQLiteCapabilityPolicyOwners(db: Database): Promise<void> {
   if (!isSQLiteDatabase(db)) return;
   const result = await db.run(sql`
     SELECT 'board' AS kind, b.board_id AS id
     FROM boards b
-    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = b.created_by)
+    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.role IN ('admin','superadmin'))
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = b.created_by)
       AND NOT EXISTS (
         SELECT 1 FROM board_owners bo
         JOIN users u ON u.user_id = bo.user_id
@@ -348,7 +352,8 @@ export async function preflightSQLiteCapabilityPolicyOwners(db: Database): Promi
     UNION ALL
     SELECT 'branch' AS kind, br.branch_id AS id
     FROM branches br
-    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = br.created_by)
+    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.role IN ('admin','superadmin'))
+      AND NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = br.created_by)
       AND NOT EXISTS (
         SELECT 1 FROM branch_owners bo
         JOIN users u ON u.user_id = bo.user_id
@@ -360,7 +365,8 @@ export async function preflightSQLiteCapabilityPolicyOwners(db: Database): Promi
   if (result.rows.length === 0) return;
   const failures = result.rows.map((row) => `${String(row.kind)}:${String(row.id)}`).join(', ');
   throw new MigrationError(
-    `RBAC migration cannot attribute primary owners: ${failures}. Delete these resources or restore an existing creator/owner, then rerun the migration.`
+    `RBAC migration cannot attribute primary owners: ${failures}. No existing owner, creator, or admin/superadmin is available. Preserve the data: explicitly attribute each resource to a real user in this database using board_owners/branch_owners, then retry the offline migration. A zero-user database requires an operator identity/ownership decision; do not delete data to bypass this check.`,
+    { code: OWNER_ATTRIBUTION_SQLSTATE }
   );
 }
 

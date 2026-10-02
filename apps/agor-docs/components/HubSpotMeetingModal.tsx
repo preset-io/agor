@@ -29,7 +29,8 @@ declare global {
 export function MeetingEmbed() {
   const [frameReady, setFrameReady] = useState(false);
 
-  // "Opened" isn't something HubSpot's meeting embed reports back to us — the
+  // "Opened" isn't something HubSpot's meeting embed reports back to us —
+  // unlike the contact form's hsFormCallback postMessage contract, the
   // meetings scheduler bundle only ever posts a consent-readiness handshake,
   // an iframe-resize notice, and a final booking success/failure (confirmed
   // by reading its shipped JS — see app/layout.tsx's booking-tracking
@@ -67,7 +68,7 @@ export function HubSpotMeetingModal({
   onClose,
   title = 'Book a demo',
 }: HubSpotMeetingModalProps) {
-  // Esc-to-close + lock background scroll while open.
+  // Esc-to-close + lock background scroll while open (mirrors HubSpotFormModal).
   useEffect(() => {
     if (!isOpen) return;
     const onKey = (e: KeyboardEvent) => {

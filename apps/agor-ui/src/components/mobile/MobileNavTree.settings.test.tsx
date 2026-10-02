@@ -1,7 +1,7 @@
 import type { Board } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MobileNavTree } from './MobileNavTree';
 
 describe('MobileNavTree settings navigation', () => {
@@ -46,5 +46,51 @@ describe('MobileNavTree settings navigation', () => {
     fireEvent.click(screen.getByText('Workspace settings'));
     expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('boards');
     expect(onNavigate).toHaveBeenCalled();
+  });
+});
+
+describe('MobileNavTree external app link', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function renderNavTree(externalAppLink?: string) {
+    const onNavigate = vi.fn();
+    render(
+      <MemoryRouter>
+        <MobileNavTree
+          boardById={new Map()}
+          branchById={new Map()}
+          sessionsByBranch={new Map()}
+          commentById={new Map()}
+          onOpenWorkspaceSettings={vi.fn()}
+          onOpenUserSettings={vi.fn()}
+          onNavigate={onNavigate}
+          externalAppLink={externalAppLink}
+          externalAppLabel="Open Agor Cloud"
+        />
+      </MemoryRouter>
+    );
+    return onNavigate;
+  }
+
+  it('opens the configured link in a new tab', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const onNavigate = renderNavTree('https://console.example.test/');
+
+    fireEvent.click(screen.getByText('Open Agor Cloud'));
+
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://console.example.test/',
+      '_blank',
+      'noopener,noreferrer'
+    );
+    expect(onNavigate).toHaveBeenCalled();
+  });
+
+  it('omits the row for a non-http(s) link', () => {
+    renderNavTree('javascript:alert(1)');
+
+    expect(screen.queryByText('Open Agor Cloud')).not.toBeInTheDocument();
   });
 });

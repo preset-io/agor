@@ -25,8 +25,9 @@ import {
 import { FileTextOutlined, GithubOutlined, RobotOutlined } from '@ant-design/icons';
 import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
+import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskDetailRetention';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
@@ -105,6 +106,8 @@ interface TaskBlockProps {
   taskMessages: Message[];
   taskMessagesLoaded: boolean;
   onLoadTaskMessages: (taskId: string) => Promise<void> | void;
+  /** Pin this turn's full detail while a disclosure shows it; returns the release. */
+  onRetainTaskDetails?: (taskId: string) => (() => void) | undefined;
   teammateEmoji?: string;
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
   /** Authenticated Feathers client, forwarded to MessageBlock → WidgetBlock for inline submission. */
@@ -644,7 +647,7 @@ export function groupMessagesIntoBlocks(messages: Message[]): Block[] {
 
 /**
  * Identity key for reconciling a block across renders — mirrors the React
- * `key` each block type renders with.
+ * `key` each block type renders with (before any detail-eviction suffix).
  */
 function getBlockKey(block: Block): string {
   return block.type === 'message'
@@ -682,6 +685,39 @@ function blocksHaveSameComposition(a: Block, b: Block): boolean {
   return aMessages.every((msg, i) => msg === bMessages[i]);
 }
 
+/**
+ * Built outside TaskBlock's render scope on purpose: V8 shares one closure
+ * context per scope, so a stable callback created there would keep the first
+ * render's messages alive after the cache has released them.
+ */
+function useTaskDetailRetainer(
+  taskId: string,
+  retain: TaskBlockProps['onRetainTaskDetails']
+): () => (() => void) | undefined {
+  return useCallback(() => retain?.(taskId), [retain, taskId]);
+}
+
+/**
+ * Bumped once each time the cache releases this turn's detail. React keeps a
+ * fiber's previous props on its alternate, and descendants of a memoized child
+ * that bails out keep theirs indefinitely: a MessageBlock that still renders
+ * text after its reasoning is released held the full message through a
+ * render-scope closure (its timestamp tooltip). The extra commit refreshes
+ * TaskBlock's own alternate; keying blocks by the epoch remounts them, so the
+ * old fibers are discarded whole. Only an evicted turn is affected: it is not
+ * latest, running, streaming or expanded by a reader, and text choices live
+ * in the conversation, so nothing a reader set is lost.
+ */
+function useDetailEvictionEpoch(hasDetail: boolean): number {
+  const hadDetail = useRef(hasDetail);
+  const [epoch, setEpoch] = useState(0);
+  useEffect(() => {
+    if (hadDetail.current && !hasDetail) setEpoch((value) => value + 1);
+    hadDetail.current = hasDetail;
+  }, [hasDetail]);
+  return epoch;
+}
+
 export const TaskBlock = React.memo<TaskBlockProps>(
   ({
     task,
@@ -698,6 +734,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     taskMessages,
     taskMessagesLoaded,
     onLoadTaskMessages,
+    onRetainTaskDetails,
     teammateEmoji,
     onOpenAgenticToolSettings,
     isLatestTask = false,
@@ -984,6 +1021,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       (message) =>
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
+    const retainDetails = useTaskDetailRetainer(task.task_id, onRetainTaskDetails);
+    const overlays = useRetainTurnOverlays(retainDetails);
+    const evictionEpoch = useDetailEvictionEpoch(hasTools || hasReasoning);
+    const keySuffix = evictionEpoch ? `:evicted-${evictionEpoch}` : '';
     const toolDisclosure = (task.recorded_tool_count !== 0 ||
       hasDeferredReasoning ||
       hasReasoning ||
@@ -1082,7 +1123,10 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             // Render SDK status messages (rate limit, API wait, etc.) with dedicated component
             if (isSdkStatusMessage(block.message)) {
               return (
-                <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>
+                <div
+                  key={block.message.message_id + keySuffix}
+                  data-conversation-block={getBlockMarker(block)}
+                >
                   <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
                 </div>
               );
@@ -1096,7 +1140,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             const isPrompt = block.message.message_id === promptMessageId;
             const messageElement = (
               <MessageBlock
-                key={isPrompt ? promptKey : block.message.message_id}
+                key={isPrompt ? promptKey : block.message.message_id + keySuffix}
                 textChoiceKey={isPrompt ? promptKey : undefined}
                 message={block.message}
                 agentic_tool={agentic_tool}
@@ -1118,7 +1162,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             );
             return (
               <div
-                key={isPrompt ? promptKey : block.message.message_id}
+                key={isPrompt ? promptKey : block.message.message_id + keySuffix}
                 data-conversation-block={getBlockMarker(block)}
               >
                 {messageElement}
@@ -1129,7 +1173,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           if (block.type === 'agent-chain') {
             const sourceBlockIndex = blockIndex - (displayBlocks.length - blocks.length);
             // Use first message ID as key for agent chain
-            const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}`;
+            const blockKey = `agent-chain-${block.messages[0]?.message_id || 'unknown'}${keySuffix}`;
             return (
               <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                 <AgentChain
@@ -1172,7 +1216,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           }
           if (block.type === 'compaction') {
             // Render compaction block with aggregated messages
-            const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}`;
+            const blockKey = `compaction-${block.messages[0]?.message_id || 'unknown'}${keySuffix}`;
             return (
               <div key={blockKey} data-conversation-block={getBlockMarker(block)}>
                 <CompactionBlock messages={block.messages} agentic_tool={agentic_tool} />
@@ -1276,11 +1320,16 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         )}
       </div>
     );
-    return (
+    const turn = (
       // A turn boundary is the biggest break in the transcript, so it gets more
       // room than the gaps between blocks inside one. Collapses against the
       // neighbouring turn rather than summing with it.
-      <div data-task-block={task.task_id} style={{ marginBlockStart: token.margin }}>
+      <div
+        ref={overlays.ref}
+        {...overlays.handlers}
+        data-task-block={task.task_id}
+        style={{ marginBlockStart: token.margin }}
+      >
         {!promptMessageId && toolDisclosure}
         <ContextUsageRule
           // Keep the wrapper and metadata for every turn, but reserve the
@@ -1308,6 +1357,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           ) : null
         )}
       </div>
+    );
+    return (
+      <TaskDetailRetention.Provider value={retainDetails}>{turn}</TaskDetailRetention.Provider>
     );
   }
 );

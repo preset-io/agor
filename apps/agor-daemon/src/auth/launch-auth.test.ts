@@ -18,6 +18,7 @@ import {
   insert,
   runWithTenantDatabaseScope,
   select,
+  TenantDisplayRepository,
   TenantPublicRoutingRepository,
   update,
   userExternalIdentities,
@@ -27,6 +28,7 @@ import { NotAuthenticated } from '@agor/core/feathers';
 import type { InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { authenticatedHealthInstance } from '../health/instance.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
 
 const ASSERTION_SECRET = 'test-launch-assertion-secret';
@@ -273,6 +275,106 @@ execution:
       expect(new TenantPublicRoutingRepository(scoped).find()).resolves.toBeNull()
     );
   });
+
+  it('shows the signed tenant display label to authenticated health, else the config label', async () => {
+    const config: AgorConfig = { ...baseConfig(), daemon: { instanceLabel: 'config-label' } };
+    const healthLabel = async () =>
+      (
+        await authenticatedHealthInstance(config, () =>
+          runWithTenantDatabaseScope(db, 'default', (scoped) =>
+            new TenantDisplayRepository(scoped).find()
+          )
+        )
+      ).label;
+    mockExchange(signClaims());
+    await service(config).create({ launchCode: 'without-claim' });
+    await expect(healthLabel()).resolves.toBe('config-label');
+
+    mockExchange(signClaims({ workspace_display_name: '  Data team sandbox  ' }));
+    await service(config).create({ launchCode: 'with-claim' });
+    await expect(healthLabel()).resolves.toBe('Data team sandbox');
+
+    // A later launch without the claim keeps the last observed label.
+    mockExchange(signClaims({ sub: 'another-user', email: 'another@example.test' }));
+    await service(config).create({ launchCode: 'legacy' });
+    await expect(healthLabel()).resolves.toBe('Data team sandbox');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['too long', `Label-${'x'.repeat(80)}`],
+    ['control character', 'Private\nLabel'],
+    ['non-string', 4242],
+  ])(
+    'ignores an invalid display label claim (%s) without failing or logging it',
+    async (_case, value) => {
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {})
+      );
+      try {
+        mockExchange(signClaims({ workspace_display_name: value }));
+        const result = await service().create({ launchCode: 'invalid-label' });
+        expect(result.accessToken).toBeTruthy();
+        await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          expect(new TenantDisplayRepository(scoped).find()).resolves.toBeNull()
+        );
+        const warn = spies[2];
+        expect(warn.mock.calls).toEqual([['[auth/launch] launch_workspace_display_name_invalid']]);
+        const logged = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
+        if (typeof value === 'string' && value) expect(logged).not.toContain(value.trim());
+        expect(logged).not.toContain('4242');
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
+
+  it.each([
+    ['missing', undefined],
+    ['negative', -1],
+    ['non-integer', Math.floor(Date.now() / 1000) + 0.5],
+  ])(
+    'ignores a valid display label whose iat is %s, without public_base_url',
+    async (_case, iat) => {
+      const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((method) =>
+        vi.spyOn(console, method).mockImplementation(() => {})
+      );
+      try {
+        // An explicit exp keeps jsonwebtoken from deriving it from the bad iat.
+        mockExchange(
+          jwt.sign(
+            {
+              sub: 'external-user-1',
+              email: 'person@example.test',
+              instance_id: 'instance-1',
+              workspace_display_name: 'Iat Dependent Label',
+              exp: Math.floor(Date.now() / 1000) + 300,
+              ...(iat === undefined ? {} : { iat }),
+            },
+            ASSERTION_SECRET,
+            {
+              algorithm: 'HS256',
+              noTimestamp: iat === undefined,
+              issuer: 'https://issuer.example.test',
+              audience: 'runtime:test',
+            }
+          )
+        );
+        const result = await service().create({ launchCode: 'label-iat' });
+        expect(result.accessToken).toBeTruthy();
+        await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          expect(new TenantDisplayRepository(scoped).find()).resolves.toBeNull()
+        );
+        expect(spies[2].mock.calls).toEqual([
+          ['[auth/launch] launch_workspace_display_name_invalid'],
+        ]);
+        const logged = spies.flatMap((spy) => spy.mock.calls.flat().map(String)).join('\n');
+        expect(logged).not.toContain('Iat Dependent Label');
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
 
   it('rejects when disabled', async () => {
     await expect(

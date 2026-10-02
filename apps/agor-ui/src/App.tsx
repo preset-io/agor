@@ -75,6 +75,7 @@ import {
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { useAuthenticatedInstanceConfig } from './hooks/useAuthenticatedInstanceConfig';
 import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { useEnvironmentStart } from './hooks/useEnvironmentStart';
@@ -347,6 +348,17 @@ function AppContent() {
   });
   const startEnvironmentWithConfirmation = useEnvironmentStart(client);
   const handleUnarchiveBranch = useUnarchiveBranch(client);
+  // Authenticated callers see their tenant's label; pre-login config is the fallback.
+  const authenticatedInstanceConfig = useAuthenticatedInstanceConfig({
+    client,
+    user,
+    connected,
+    connecting,
+    authGeneration,
+    authenticationGeneration,
+    isAuthenticationGenerationCurrent,
+  });
+  const headerInstanceConfig = authenticatedInstanceConfig ?? instanceConfig;
   const appAuthorityGuard = useAuthorityOperationGuard(
     user?.user_id && user.role && client && connected && !connecting
       ? [user.user_id, user.role, client, authGeneration]
@@ -2039,6 +2051,8 @@ function AppContent() {
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
+      externalAppLink={headerInstanceConfig?.externalAppLink}
+      externalAppLabel={headerInstanceConfig?.externalAppLabel}
     />
   );
 
@@ -2048,6 +2062,8 @@ function AppContent() {
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
+      externalAppLink={headerInstanceConfig?.externalAppLink}
+      externalAppLabel={headerInstanceConfig?.externalAppLabel}
     />
   );
 
@@ -2154,10 +2170,10 @@ function AppContent() {
       onDeleteComment={handleDeleteComment}
       onLogout={logout}
       onRetryConnection={retryConnection}
-      instanceLabel={instanceConfig?.label}
-      instanceDescription={instanceConfig?.description}
-      navbarLogoLink={instanceConfig?.navbarLogoLink}
-      navbarLogoTooltip={instanceConfig?.navbarLogoTooltip}
+      instanceLabel={headerInstanceConfig?.label}
+      instanceDescription={headerInstanceConfig?.description}
+      externalAppLink={headerInstanceConfig?.externalAppLink}
+      externalAppLabel={headerInstanceConfig?.externalAppLabel}
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}
@@ -2364,6 +2380,8 @@ function AppContent() {
                   onToggleReaction={handleToggleReaction}
                   onDeleteComment={handleDeleteComment}
                   onLogout={logout}
+                  externalAppLink={headerInstanceConfig?.externalAppLink}
+                  externalAppLabel={headerInstanceConfig?.externalAppLabel}
                   onOpenWorkspaceSettings={setSettingsTabToOpen}
                   onOpenUserSettings={() => setOpenUserSettings(true)}
                   onOpenAgenticToolSettings={(tool) => {

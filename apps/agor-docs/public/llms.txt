@@ -69,6 +69,7 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 
 ## Optional
 
+- [Agor Cloud Open Beta](https://agor.live/blog/agor-cloud-open-beta): Multiplayer AI on live spatial boards, shared workflows, and hosted open beta
 - [Introducing Agor Teammates](https://agor.live/blog/agor-assistants): Persistent AI companions with memory, skills, and team-wide reach through Slack
 - [Agent Modeling 101](https://agor.live/blog/agent-modeling-101): Designing long-lived agents for teams — scoping, operating, governing, and building trust
 - [Raise a Team Helper Agent in an Afternoon](https://agor.live/blog/raise-team-helper-agent): A practical recipe for a PM-style teammate that remembers context and keeps a team aligned

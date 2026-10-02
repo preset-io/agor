@@ -469,3 +469,41 @@ it('retains prompt disclosure and surrounding message order when history supplie
     .join('|');
   expect(text).toMatch(/Earlier event[\s\S]*Long prompt text[\s\S]*Later user message/);
 });
+
+it('remounts message blocks once when cached detail is evicted, not on live updates or reload', async () => {
+  const reasoningTask = { ...task, recorded_tool_count: 0 };
+  const full = message(1, MessageRole.ASSISTANT, [
+    { type: 'thinking', text: 'Saved reasoning' },
+    { type: 'text', text: 'Visible answer' },
+  ]);
+  // What the session cache leaves after evicting this turn's detail.
+  const evicted: Message = {
+    ...full,
+    content: [{ type: 'text', text: 'Visible answer' }],
+    has_deferred_reasoning: true,
+  };
+  const render_ = (taskMessages: Message[], taskMessagesLoaded: boolean) =>
+    view({ task: reasoningTask, taskMessages, taskMessagesLoaded });
+  const { rerender } = render(render_([messages[0], full], true));
+  const block = (text: string) => screen.getByText(text).closest('[data-conversation-block]');
+  const prompt = block('Retained prompt');
+  const answer = block('Visible answer');
+  expect(screen.getByText('Extended Thinking')).toBeVisible();
+
+  // A live update that still carries detail keeps the mounted block.
+  rerender(render_([messages[0], { ...full }], true));
+  expect(block('Visible answer')).toBe(answer);
+
+  // Eviction discards the old fibers whole; the prompt (and its disclosure) stays.
+  rerender(render_([messages[0], evicted], false));
+  await waitFor(() => expect(block('Visible answer')).not.toBe(answer));
+  expect(block('Retained prompt')).toBe(prompt);
+  expect(screen.queryByText('Extended Thinking')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Reasoning' })).toBeVisible();
+  const remounted = block('Visible answer');
+
+  // Reloading persisted detail restores reasoning without another remount.
+  rerender(render_([messages[0], full], true));
+  expect(screen.getByText('Extended Thinking')).toBeVisible();
+  expect(block('Visible answer')).toBe(remounted);
+});

@@ -74,6 +74,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   Branch,
   MCPServerID,
   PersistedScheduleAgenticToolConfig,
@@ -291,6 +292,8 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
+  /** Same capability gate as interactive session creation, before admitting a row. */
+  deploymentToolUnsupported?: (tool: AgenticToolName) => BadRequest | undefined;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
@@ -301,6 +304,8 @@ export interface SchedulerConfig {
   sdkHomeMode?: SdkHomeMode;
   /** Local executor can project caller auth with a pinned sandbox file bind. */
   secureLocalCredentialOverlay?: boolean;
+  /** Tools whose Sessions never use a branch SDK home in this deployment. */
+  executionHomeOnly?: (tool: AgenticToolName) => boolean;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
@@ -327,11 +332,13 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
+  deploymentToolUnsupported: (tool: AgenticToolName) => BadRequest | undefined;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
   sdkHomeMode: SdkHomeMode;
   secureLocalCredentialOverlay: boolean;
+  executionHomeOnly: (tool: AgenticToolName) => boolean;
   tenantId?: TenantID | string;
   scanBatchSize: number;
   maxIdleInterval: number;
@@ -375,11 +382,13 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
+      deploymentToolUnsupported: config.deploymentToolUnsupported ?? (() => undefined),
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
       sdkHomeMode: config.sdkHomeMode ?? 'inherit',
       secureLocalCredentialOverlay: config.secureLocalCredentialOverlay ?? false,
+      executionHomeOnly: config.executionHomeOnly ?? (() => false),
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
           ? config.tenantId.trim()
@@ -895,6 +904,8 @@ export class SchedulerService {
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is not installed for this deployment`);
     }
+    const unsupported = this.config.deploymentToolUnsupported(resolvedConfig.activeTool);
+    if (unsupported) throw unsupported;
     if (
       !(await this.withTenantDatabase(() =>
         isTenantAgenticToolEnabled(resolvedConfig.activeTool, this.db)
@@ -960,6 +971,7 @@ export class SchedulerService {
         const sdkHomeAdmission = resolveNewSessionSdkHomeScope({
           branchSdkHomeIntent: currentBranch.sdk_home ?? null,
           enabledForNewSessions: this.config.sdkHomeMode === 'per_branch',
+          executionHomeOnly: this.config.executionHomeOnly(resolvedConfig.activeTool),
         });
         if (sdkHomeAdmission.scope === 'branch') {
           const unsupportedReason = branchSdkHomeIncompatibility;

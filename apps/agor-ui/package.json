@@ -15,7 +15,8 @@
     "test:ui": "vitest --ui",
     "gen:streamdown-css": "node scripts/gen-streamdown-css.mjs",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:search-retention": "node --test scripts/test-global-search-retention.mjs"
+    "test:search-retention": "node --test scripts/test-global-search-retention.mjs",
+    "test:transcript-retention": "node --test scripts/test-transcript-retention.mjs"
   },
   "dependencies": {
     "@agor-live/client": "workspace:*",

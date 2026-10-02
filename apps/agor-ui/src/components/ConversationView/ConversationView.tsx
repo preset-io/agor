@@ -26,6 +26,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { useRetainEngagedTurns } from '../../hooks/useTaskDetailRetention';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
@@ -262,7 +263,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         reactiveOptions: { taskHydration: 'lean' },
       }
     );
+    // Never capture the reactive state in a closure here. V8 keeps one context
+    // per render for all its closures, so the stable callbacks below would pin
+    // that snapshot, including turn detail the session handle has released.
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
+    const reactiveTasks = currentReactiveState?.tasks;
+    const hasOlderTasks = !!currentReactiveState?.hasOlderTasks;
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
@@ -274,8 +280,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // every streaming chunk produced a fresh array → every downstream useMemo
     // depending on `tasks` would invalidate and rebuild.
     const tasks = useMemo(
-      () => (currentReactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
-      [currentReactiveState?.tasks]
+      () => (reactiveTasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
+      [reactiveTasks]
     );
 
     const allStreamingMessages =
@@ -332,6 +338,20 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       },
       [reactiveSession]
     );
+    const handleRetainTaskDetails = useCallback(
+      (taskId: string) => reactiveSession?.retainTaskDetails(taskId),
+      [reactiveSession]
+    );
+    // Focus or a selection inside a turn keeps it from being evicted.
+    const turnsRoot = useRef<HTMLDivElement | null>(null);
+    useRetainEngagedTurns(turnsRoot, handleRetainTaskDetails);
+    const setTurnsViewport = useCallback(
+      (element: HTMLDivElement | null) => {
+        turnsRoot.current = element;
+        setScrollViewport(element);
+      },
+      [setScrollViewport]
+    );
 
     const [loadingOlder, setLoadingOlder] = useState(false);
     const olderInflight = useRef<object | null>(null);
@@ -353,7 +373,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       };
     }, [reactiveSession]);
     const loadOlder = useCallback(async () => {
-      if (!reactiveSession || olderInflight.current || !currentReactiveState?.hasOlderTasks) return;
+      if (!reactiveSession || olderInflight.current || !hasOlderTasks) return;
       const viewport = scrollRef.current;
       if (!viewport) return;
       stopScroll();
@@ -379,7 +399,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           setLoadingOlder(false);
         }
       }
-    }, [reactiveSession, currentReactiveState?.hasOlderTasks, scrollRef, stopScroll, sessionId]);
+    }, [reactiveSession, hasOlderTasks, scrollRef, stopScroll, sessionId]);
     useLayoutEffect(() => {
       const anchor = olderAnchor.current;
       if (!anchor || loadingOlder || !scrollRef.current) return;
@@ -522,9 +542,41 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       );
     };
 
+    // A loop rather than a render-scoped .map() callback, for the reason above.
+    const taskBlocks: React.ReactNode[] = [];
+    for (const [taskIndex, task] of tasks.entries()) {
+      taskBlocks.push(
+        <TaskBlock
+          key={task.task_id}
+          task={task}
+          latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
+          agentic_tool={agentic_tool}
+          sessionModel={sessionModel}
+          userById={userById}
+          currentUserId={currentUserId}
+          sessionId={sessionId}
+          onPermissionDecision={onPermissionDecision}
+          branchName={branchName}
+          scheduledFromBranch={scheduledFromBranch}
+          scheduledRunAt={scheduledRunAt}
+          streamingMessages={streamingMessagesByTask.get(task.task_id)}
+          taskMessages={currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES}
+          taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+          onLoadTaskMessages={handleLoadTaskMessages}
+          onRetainTaskDetails={handleRetainTaskDetails}
+          teammateEmoji={teammateEmoji}
+          isLatestTask={taskIndex === tasks.length - 1}
+          client={client}
+          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+          compact={compact}
+          defaultTextExpanded={protectedTurns.has(task.task_id)}
+        />
+      );
+    }
+
     return (
       <div
-        ref={setScrollViewport}
+        ref={setTurnsViewport}
         data-testid="conversation-scroll-container"
         onWheel={(event) => {
           // At the top (including an underfilled page), upward intent cannot
@@ -555,34 +607,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               </Button>
             )}
             {/* Task-organized conversation */}
-            {tasks.map((task, taskIndex) => (
-              <TaskBlock
-                key={task.task_id}
-                task={task}
-                latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
-                agentic_tool={agentic_tool}
-                sessionModel={sessionModel}
-                userById={userById}
-                currentUserId={currentUserId}
-                sessionId={sessionId}
-                onPermissionDecision={onPermissionDecision}
-                branchName={branchName}
-                scheduledFromBranch={scheduledFromBranch}
-                scheduledRunAt={scheduledRunAt}
-                streamingMessages={streamingMessagesByTask.get(task.task_id)}
-                taskMessages={
-                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-                }
-                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-                onLoadTaskMessages={handleLoadTaskMessages}
-                teammateEmoji={teammateEmoji}
-                isLatestTask={taskIndex === tasks.length - 1}
-                client={client}
-                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                compact={compact}
-                defaultTextExpanded={protectedTurns.has(task.task_id)}
-              />
-            ))}
+            {taskBlocks}
           </div>
         </HistoryTextChoices.Provider>
       </div>

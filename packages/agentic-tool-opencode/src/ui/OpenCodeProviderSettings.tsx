@@ -378,13 +378,27 @@ export function OpenCodeProviderSettings({
     );
   };
 
+  if (settings?.runtime === 'unsupported') {
+    // A permanent deployment limitation: no Retry and no provider form.
+    return (
+      <Alert
+        type="info"
+        showIcon
+        title="OpenCode is not available in this workspace"
+        description={settings.unsupported.message}
+        data-testid="opencode-unsupported"
+      />
+    );
+  }
+
   return (
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-        Connect providers through native API-key or subscription authorization in the managed
-        OpenCode runtime.
+        {settings?.isolation.mode === 'managed-projection'
+          ? 'Save an API key for a supported provider. Keys are stored encrypted for your account, delivered only to your own executor runs, and verified by your first prompt.'
+          : 'Connect providers through native API-key or subscription authorization in the managed OpenCode runtime.'}
       </Typography.Paragraph>
-      {settings && (
+      {settings && settings.isolation.mode !== 'managed-projection' && (
         <Alert
           type="warning"
           showIcon

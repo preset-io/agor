@@ -1,3 +1,4 @@
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import { generateId, shortId } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
@@ -293,9 +294,16 @@ async function runContainment(
     return { status: 'terminal', task: current };
   }
   if (!coordinationToken) return { status: 'condition_changed', task: current };
-  const descriptorUnverifiedReason = isAgenticToolName(tool)
-    ? getAgenticToolIntegration(tool).unverifiedTerminationReason
-    : undefined;
+  // Hosted OpenCode runs inside the executor's own Job, so its acknowledged quiescence covers the server.
+  const hostedOpenCodeQuiesced =
+    remoteMode &&
+    executorQuiesced &&
+    tool === 'opencode' &&
+    resolveOpenCodeCapabilities(input.app.get('config') ?? {}).mode === 'managed-projection';
+  const descriptorUnverifiedReason =
+    isAgenticToolName(tool) && !hostedOpenCodeQuiesced
+      ? getAgenticToolIntegration(tool).unverifiedTerminationReason
+      : undefined;
   const unverifiedReason =
     containment.status === 'unverified' ? containment.reason : descriptorUnverifiedReason;
   if (unverifiedReason !== undefined) {

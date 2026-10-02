@@ -107,19 +107,22 @@ describe('categories', () => {
 });
 
 describe('galleryCardsForFilter', () => {
-  it('All view sorts recommended cards to the front (in rec order), blank last', () => {
+  it('All view leads with blank, then recommended cards (in rec order)', () => {
     const ids = galleryCardsForFilter(['dig-into-anything'], 'all').map((t) => t.id);
-    // dig-into-anything → competitive-analyst, financial-analyst first, blank last.
-    expect(ids.slice(0, 2)).toEqual(['competitive-analyst', 'financial-analyst']);
-    expect(ids.at(-1)).toBe(BLANK_TEMPLATE_ID);
+    // dig-into-anything → blank, then competitive-analyst, financial-analyst.
+    expect(ids.slice(0, 3)).toEqual([
+      BLANK_TEMPLATE_ID,
+      'competitive-analyst',
+      'financial-analyst',
+    ]);
     // All nine cards present, no dupes.
     expect(ids).toHaveLength(9);
     expect(new Set(ids).size).toBe(9);
   });
 
-  it('All view keeps default order (blank last) when there are no recommendations', () => {
+  it('All view keeps default order (blank first) when there are no recommendations', () => {
     const ids = galleryCardsForFilter([], 'all').map((t) => t.id);
-    expect(ids).toEqual([...TEAMMATE_TEMPLATES.map((t) => t.id), BLANK_TEMPLATE_ID]);
+    expect(ids).toEqual([BLANK_TEMPLATE_ID, ...TEAMMATE_TEMPLATES.map((t) => t.id)]);
   });
 
   it('a category filter returns only that category in default order, no blank', () => {

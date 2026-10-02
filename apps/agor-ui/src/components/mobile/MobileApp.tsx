@@ -93,6 +93,9 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
+  /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
+  externalAppLink?: string;
+  externalAppLabel?: string;
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
@@ -126,6 +129,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onOpenAgenticToolSettings,
@@ -653,6 +658,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onOpenUserSettings={onOpenUserSettings}
         onLogout={onLogout}
+        externalAppLink={externalAppLink}
+        externalAppLabel={externalAppLabel}
       />
 
       <BranchModal
