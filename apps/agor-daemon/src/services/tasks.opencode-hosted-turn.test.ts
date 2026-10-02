@@ -95,7 +95,12 @@ describe('hosted OpenCode turn across executor and daemon', () => {
     Reflect.set(service, 'get', async (id: string) => taskRepo.findById(id));
     Reflect.set(service, 'runtimeAuthorityScope', async () => ({}));
     Reflect.set(service, 'processCompletionSideEffects', async () => undefined);
-    Reflect.set(service, 'retireTaskExecutorCredentials', async () => undefined);
+    // The first retirement fails after completion commits, as a transient revocation error would.
+    const retired: string[] = [];
+    Reflect.set(service, 'retireTaskExecutorCredentials', async (task: { task_id: string }) => {
+      retired.push(task.task_id);
+      if (retired.length === 1) throw new Error('revocation store unavailable');
+    });
     Reflect.set(service, 'trackTaskCompleted', () => undefined);
     Reflect.set(service, 'trackTaskStarted', () => undefined);
 
@@ -170,6 +175,9 @@ describe('hosted OpenCode turn across executor and daemon', () => {
     const first = await runTurn('hi');
     expect(first.turn.input).toBeNull();
     expect(first.turns).toEqual(['hi']);
+    // The completion retry re-patched the completed Task, so retirement ran again.
+    expect(retired).toHaveLength(2);
+    expect(new Set(retired).size).toBe(1);
 
     const second = await runTurn('again');
     expect(second.turn.input?.openCodeSessionId).toBe('ses_hosted');

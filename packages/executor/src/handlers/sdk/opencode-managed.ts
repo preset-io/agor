@@ -106,7 +106,11 @@ export async function completeManagedOpenCodeTurn(
 ): Promise<void> {
   await withRetries(async () => {
     const current = (await client.service('tasks').get(taskId)) as Task;
-    if (current.status === TaskStatus.COMPLETED) return;
+    if (current.status === TaskStatus.COMPLETED) {
+      // A terminal re-patch lets the service retry credential retirement if the first one failed.
+      await client.service('tasks').patch(taskId, { status: TaskStatus.COMPLETED });
+      return;
+    }
     if (isTerminalTaskStatus(current.status) || current.status === TaskStatus.STOPPING) {
       throw new FinalError(`OpenCode completion was not accepted (task is ${current.status})`);
     }

@@ -129,7 +129,7 @@ describe('completeManagedOpenCodeTurn', () => {
   const turn = { holderId: 'holder' } as never;
   const manifest = { version: 1 } as never;
 
-  it('treats a Task already read back as completed as accepted after a lost response', async () => {
+  it('treats a Task read back as completed as accepted and re-patches it to repair credential retirement', async () => {
     vi.useFakeTimers();
     try {
       const state = client(undefined);
@@ -146,11 +146,13 @@ describe('completeManagedOpenCodeTurn', () => {
       );
       await vi.runAllTimersAsync();
       await expect(done).resolves.toBeUndefined();
-      expect(state.tasks.patch).toHaveBeenCalledOnce();
-      expect(state.tasks.patch).toHaveBeenCalledWith(taskId, {
+      expect(state.tasks.patch).toHaveBeenCalledTimes(2);
+      expect(state.tasks.patch).toHaveBeenNthCalledWith(1, taskId, {
         status: 'completed',
         opencode_checkpoint: { holder_instance_id: 'holder', manifest },
       });
+      // Re-patching without the checkpoint lets the service repair credential retirement.
+      expect(state.tasks.patch).toHaveBeenNthCalledWith(2, taskId, { status: 'completed' });
     } finally {
       vi.useRealTimers();
     }
