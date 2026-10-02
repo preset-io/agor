@@ -2594,7 +2594,11 @@ export async function cleanBranch(branchPath: string): Promise<{ filesRemoved: n
 }
 
 /** Ignored-only cleanup. No preview, file list, output parser, or warning-as-success. */
-export async function cleanIgnoredWorkspace(branchPath: string, timeoutMs: number): Promise<void> {
+export async function cleanIgnoredWorkspace(
+  branchPath: string,
+  timeoutMs: number,
+  options: { selfContainedClone?: boolean } = {}
+): Promise<void> {
   const { git } = createGit(branchPath, timeoutMs);
   git.outputHandler((_command, stdout, stderr) => {
     // simple-git normally buffers every chunk before invoking its parser. This
@@ -2605,7 +2609,16 @@ export async function cleanIgnoredWorkspace(branchPath: string, timeoutMs: numbe
       stream.resume();
     }
   });
-  await git.raw(['clean', '-fdX']);
+  // External cleanup runs outside the branch-shell sandbox. Pin the worktree
+  // explicitly so mutable core.worktree configuration cannot redirect deletion.
+  // The caller verifies that .git is a real in-branch directory before entry.
+  await git.raw([
+    ...(options.selfContainedClone
+      ? [`--git-dir=${join(branchPath, '.git')}`, `--work-tree=${branchPath}`]
+      : []),
+    'clean',
+    '-fdX',
+  ]);
 }
 
 /**

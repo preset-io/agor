@@ -79,6 +79,7 @@ export class BranchWorkspaceOperationRepository {
       !repo ||
       row.repo_id !== snapshot.repo_id ||
       row.data.path !== snapshot.path ||
+      (snapshot.storage_mode !== undefined && row.storage_mode !== snapshot.storage_mode) ||
       repo.local_path !== snapshot.repo_path
     )
       throw new RepositoryError('Workspace location changed before execution');
@@ -176,7 +177,7 @@ export class BranchWorkspaceOperationRepository {
             ? undefined
             : outcome === 'unknown'
               ? 'Workspace command outcome is unknown. The branch remains fenced pending reconciliation.'
-              : 'Workspace command failed. Files may already have changed; there is no undo.';
+              : 'Workspace command failed. Check executor storage mounts, checkout type and cleanup policy before retrying. Files may already have changed; there is no undo.';
         const cleanup = operation.filesystem_action === 'cleaned';
         await update(tx, branches)
           .set({

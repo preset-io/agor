@@ -1,5 +1,5 @@
 import { lstat } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import {
   BRANCH_CLEANUP_COMMAND,
   BRANCH_CLEANUP_REPORT_SERVICE,
@@ -7,8 +7,13 @@ import {
   type BranchWorkspaceReportAction,
   DEFAULT_BRANCH_CLEANUP_COMMAND,
 } from '@agor/core/types';
-import { cleanIgnoredWorkspace, removeBranchWorkspace } from '@agor/git';
+import {
+  cleanIgnoredWorkspace,
+  removeBranchWorkspace,
+  resolveManagedBranchDeletionPath,
+} from '@agor/git';
 import type { BranchArchivePayload, BranchCleanPayload, ExecutorResult } from '../payload-types.js';
+import { verifyDelegatedWorkspaceStorage } from './branch-workspace-storage.js';
 import type { CommandOptions } from './index.js';
 
 type Outcome = 'succeeded' | 'failed' | 'unknown';
@@ -18,6 +23,32 @@ export async function runBranchWorkspaceFiles(
   payload: BranchCleanPayload | BranchArchivePayload
 ): Promise<Outcome> {
   const p = payload.params;
+  if (Date.now() >= p.deadlineAt) return 'failed';
+  if (p.delegatedStorage) {
+    const storage = p.delegatedStorage;
+    // All targets come from the same admitted tenant/branch snapshot. Reject a
+    // mismatched duplicate before any Git command or recursive removal starts.
+    if (
+      p.filesystemAction === 'deleted'
+        ? Object.entries(p.removal).some(
+            ([key, value]) => storage[key as keyof typeof storage] !== value
+          )
+        : storage.branchPath !== p.cwd
+    )
+      return 'failed';
+    try {
+      await verifyDelegatedWorkspaceStorage(storage);
+      if (p.filesystemAction === 'cleaned') {
+        const gitDir = join(p.cwd, '.git');
+        await resolveManagedBranchDeletionPath(gitDir, p.cwd);
+        if (!(await lstat(gitDir)).isDirectory()) return 'failed';
+      }
+    } catch {
+      // No destructive work has started; a failed mount check is settled, not
+      // an unknown recursive-removal outcome. A corrected request may retry.
+      return 'failed';
+    }
+  }
   if (Date.now() >= p.deadlineAt) return 'failed';
   if (p.filesystemAction === 'deleted') {
     // The fixed storage owner runs outside the victim's branch-shell mount,
@@ -40,7 +71,8 @@ export async function runBranchWorkspaceFiles(
     try {
       await cleanIgnoredWorkspace(
         p.cwd,
-        Math.min(BRANCH_CLEANUP_TIMEOUT_MS, p.deadlineAt - Date.now())
+        Math.min(BRANCH_CLEANUP_TIMEOUT_MS, p.deadlineAt - Date.now()),
+        { selfContainedClone: !!p.delegatedStorage }
       );
     } catch {
       // A timed-out Git invocation is not certified stopped by an exception.
@@ -124,7 +156,7 @@ async function run(
           code: outcome === 'failed' ? 'CLEANUP_COMMAND_FAILED' : 'CLEANUP_OUTCOME_UNKNOWN',
           message:
             outcome === 'failed'
-              ? 'Workspace command failed; files may already have changed'
+              ? 'Workspace validation failed before file changes. Check storage mounts, checkout type, cleanup policy and operation deadline before retrying.'
               : 'Workspace command outcome is unknown; the branch remains fenced',
         },
       };

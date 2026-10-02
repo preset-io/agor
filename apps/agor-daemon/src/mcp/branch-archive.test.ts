@@ -55,7 +55,10 @@ for (const facade of [false, true]) {
         });
         const fixture = await archiveMcpFixture(db);
         try {
-          vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { exists: true } });
+          vi.mocked(requestExecutor).mockResolvedValue({
+            success: true,
+            data: { branchId: branch.branch_id, exists: true, kind: 'directory' },
+          });
           // No command token is used against a daemon: both executor boundaries are stubbed.
           Object.assign(fixture.app, {
             sessionTokenService: {
@@ -103,6 +106,7 @@ for (const facade of [false, true]) {
             workspace_operation: { status: files ? 'accepted' : 'succeeded' },
           });
           expect(spawnExecutor).toHaveBeenCalledTimes(files ? 1 : 0);
+          expect(requestExecutor).toHaveBeenCalledTimes(effectiveAction === 'cleaned' ? 1 : 0);
           if (files)
             expect(spawnExecutor).toHaveBeenCalledWith(
               expect.objectContaining({

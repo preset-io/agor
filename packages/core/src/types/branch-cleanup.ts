@@ -90,7 +90,20 @@ export interface BranchWorkspaceSnapshot {
   repo_id: import('./id').UUID;
   path: string;
   repo_path: string;
+  storage_mode?: import('./branch').Branch['storage_mode'];
   policy?: RepoCleanupPolicy;
+}
+
+/** Daemon-selected clone storage for fixed operations on an external executor.
+ * Not public input or authority: the invocation claim and tenant-scoped records
+ * authorize the operation; the executor verifies these mounts before mutation.
+ */
+export interface DelegatedBranchWorkspaceStorage {
+  tenantDataRoot: string;
+  branchesRoot: string;
+  branchPath: string;
+  repoPath: string;
+  storageMode: 'clone';
 }
 /** Standalone cleanup has exactly one filesystem action; archive chooses explicitly. */
 export type BranchWorkspaceRequest =

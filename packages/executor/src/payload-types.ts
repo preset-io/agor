@@ -415,6 +415,16 @@ const BranchMaintenanceParamsSchema = z.object({
   generation: z.number().int().positive(),
   executionId: z.string().uuid(),
   deadlineAt: z.number().positive(),
+  delegatedStorage: z
+    .object({
+      tenantDataRoot: z.string().min(1),
+      branchesRoot: z.string().min(1),
+      branchPath: z.string().min(1),
+      repoPath: z.string().min(1),
+      storageMode: z.literal('clone'),
+    })
+    .strict()
+    .optional(),
 });
 const BranchCleanupParamsSchema = BranchMaintenanceParamsSchema.extend({
   filesystemAction: z.literal('cleaned'),

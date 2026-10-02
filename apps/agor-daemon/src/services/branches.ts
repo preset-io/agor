@@ -130,6 +130,7 @@ import {
   withoutPrefetchedRecord,
 } from '../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
+import { verifyBranchWorkspacePreflight } from '../utils/branch-workspace-preflight.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
@@ -1867,16 +1868,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     const config = this.app.get('config');
     const needsFiles = filesystemAction !== 'preserved';
-    if (
-      needsFiles &&
-      (config.execution?.unix_user_mode === 'delegated' ||
-        config.execution?.executor_command_template ||
-        (config.deployment?.mode === 'ha' &&
-          config.deployment.ha?.execution_topology === 'external'))
-    )
-      throw new Conflict(
-        'Workspace maintenance requires supported local executor containment; delegated execution is not supported'
-      );
+    const externalExecutor =
+      config.execution?.unix_user_mode === 'delegated' ||
+      Boolean(config.execution?.executor_command_template) ||
+      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const authorize = async (repository: BranchRepository, current: Branch) => {
       if (needsFiles)
@@ -1905,6 +1900,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
     id = branch.branch_id;
     await this.withTenantDatabase(params, () => authorize(this.branchRepo, branch));
+    if (needsFiles && externalExecutor && branch.storage_mode !== 'clone')
+      throw new Conflict(
+        'External workspace cleanup/removal requires a self-contained clone. Use Leave untouched for a legacy linked worktree.'
+      );
     const repo = await this.withTenantDatabase(params, () =>
       new RepoRepository(this.db).findById(branch.repo_id)
     );
@@ -1915,7 +1914,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const validate = async (tx: import('@agor/core/db').Database) => {
       const repository = new BranchRepository(tx);
       const current = await repository.findById(id);
-      if (!current || current.path !== branch.path || current.repo_id !== branch.repo_id)
+      if (
+        !current ||
+        current.path !== branch.path ||
+        current.repo_id !== branch.repo_id ||
+        current.storage_mode !== branch.storage_mode
+      )
         throw new Conflict('Branch location changed; refresh before maintenance');
       await authorize(repository, current);
       if (policy) {
@@ -1974,36 +1978,44 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               now.getTime() + BRANCH_WORKSPACE_OPERATION_BUDGET_MS
             ).toISOString(),
           },
-          { repo_id: branch.repo_id, path: branch.path, repo_path: repo.local_path ?? '', policy }
+          {
+            repo_id: branch.repo_id,
+            path: branch.path,
+            repo_path: repo.local_path ?? '',
+            storage_mode: branch.storage_mode,
+            policy,
+          }
         )
       );
       const context = needsFiles
         ? await this.resolveEnvironmentExecutorContext(branch, params)
         : undefined;
-      if (needsFiles) {
+      if (filesystemAction === 'cleaned') {
         // Read-only executor preflight. No daemon filesystem access or fallback mkdir.
+        // Removal deliberately skips this probe: its storage owner verifies the
+        // managed root and absence, including an already-absent checkout on retry.
         const statusToken = await this.withTenantDatabase(params, () =>
           issueExecutorCommandToken(this.app, 'branch-filesystem-status', user.user_id, id)
         );
-        const status = await requestExecutor(
-          {
-            command: 'branch.filesystem.status',
-            sessionToken: statusToken,
-            daemonUrl: getDaemonUrl(),
-            params: { branchId: id },
-          },
-          {
-            preparedEnv: context!.env,
-            templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
-          }
+        await verifyBranchWorkspacePreflight(id, () =>
+          requestExecutor(
+            {
+              command: 'branch.filesystem.status',
+              sessionToken: statusToken,
+              daemonUrl: getDaemonUrl(),
+              params: { branchId: id },
+            },
+            {
+              preparedEnv: context!.env,
+              delegatedHomeKey: context!.delegatedHomeKey,
+              templateVariables: {
+                branch_id: id,
+                user_id: user.user_id,
+                branch_fs_access: 'write',
+              },
+            }
+          )
         );
-        if (
-          !status.success ||
-          !status.data ||
-          typeof status.data !== 'object' ||
-          (status.data as { exists?: boolean }).exists !== true
-        )
-          throw new Conflict('Branch workspace is unavailable; nothing was cleaned');
       }
       if (action === 'archive') {
         await this.withTenantDatabase(params, () =>
@@ -2048,6 +2060,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               operationId: admission.claim.operation_id,
               generation: admission.claim.generation,
               executionId,
+              ...(externalExecutor
+                ? {
+                    delegatedStorage: {
+                      tenantDataRoot: getTenantDataRoot(tenantId),
+                      branchesRoot: getBranchesDir(tenantId),
+                      branchPath: branch.path,
+                      repoPath: repo.local_path!,
+                      storageMode: 'clone' as const,
+                    },
+                  }
+                : {}),
               ...(filesystemAction === 'deleted'
                 ? {
                     filesystemAction: 'deleted' as const,
@@ -2070,6 +2093,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           },
           {
             preparedEnv: context!.env,
+            delegatedHomeKey: context!.delegatedHomeKey,
             logPrefix: '[Branch workspace maintenance]',
             templateVariables: { branch_id: id, user_id: user.user_id, branch_fs_access: 'write' },
           }

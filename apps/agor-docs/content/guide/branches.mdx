@@ -291,6 +291,8 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
   style={{ maxWidth: '400px' }}
 />
 
+**Workspace** here means the branch’s on-disk Git checkout, not your Cloud tenant.
+
 **Filesystem options:**
 
 - **Leave untouched**: Metadata-only archival. Files stay on disk.
@@ -358,8 +360,20 @@ and SDK homes. Workspace removal retains Git refs; it is not branch-history dele
 Permanent deletion remains the separate full-resource workflow.
 
 Agor checks known task, upload and environment activity. Terminal closure is best-effort;
-detached/unmanaged processes are **not proven stopped**. Archive Clean and explicit
-workspace removal reject delegated/external executors when they would change files.
+detached/unmanaged processes are **not proven stopped**. Delegated/external executors
+support the fixed cleanup command and explicit checkout removal for self-contained
+clones, with verified tenant worktrees/repositories mounts. Missing or inconsistent
+mounts fail closed; an empty executor image directory is not proof of deletion.
+Legacy linked worktrees remain unsupported on external executors. This requires
+matching daemon/executor support; the separate delegated permanent-deletion flag
+does not enable or disable archive cleanup.
+
+Cleanup checks that the checkout is visible before archiving. Executor connectivity,
+unsupported responses, and inaccessible storage are errors, not proof that files
+are absent. Explicit checkout removal instead verifies its managed storage root
+and the checkout's final absence in the removal worker, so an already-absent checkout
+can complete successfully. Leave untouched needs no filesystem executor and never
+claims to free disk space.
 Branch `updated_at` is metadata activity, not evidence of filesystem inactivity.
 There is no scheduler or age cutoff.
 
