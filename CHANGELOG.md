@@ -33,6 +33,34 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.9 (2026-10-02)
+
+Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d7a676f8`: [compare changes](https://github.com/preset-io/agor/compare/v0.26.8...d7a676f8cee62cd4418a561de71965723f9b19fd). This entry does not imply publication or deployment.
+
+### Features
+
+- **Home and teammate directory** — Home brings together Needs you, My work, recent boards, and an ask box; a shared teammate directory adds caller-scoped navigation. The creation gallery now leads with Start blank. ([#2901](https://github.com/preset-io/agor/pull/2901), [#2907](https://github.com/preset-io/agor/pull/2907), [#2959](https://github.com/preset-io/agor/pull/2959))
+- **OpenCode in hosted workspaces** — eligible deployments can run owner-only OpenCode sessions with per-user provider keys and checkpointed conversation state. Provider failures surface bounded, sanitized errors instead of leaving turns retrying indefinitely; unsupported deployments report the missing prerequisites. ([#2935](https://github.com/preset-io/agor/pull/2935))
+- **Branch-local Railway previews** — an opt-in launcher provisions previews from pushed public source, reuses branch-owned resources, retains data on Stop, and removes it on Nuke. ([#2927](https://github.com/preset-io/agor/pull/2927))
+- **Workspace identity in the header** — verified launches can supply a tenant-specific display label; a configurable external app link lives in the settings menu while the logo returns Home. ([#2945](https://github.com/preset-io/agor/pull/2945), [#2951](https://github.com/preset-io/agor/pull/2951), [#2961](https://github.com/preset-io/agor/pull/2961))
+
+### Fixes
+
+- **Faster session loading** — prioritizes the opened conversation, defers global hydration, and reduces session-list payloads. WebSocket compression supports Firefox and has an operator-controlled off switch; session settings and zone triggers show Retry rather than using incomplete context when full details cannot load. ([#2887](https://github.com/preset-io/agor/pull/2887), [#2947](https://github.com/preset-io/agor/pull/2947), [#2948](https://github.com/preset-io/agor/pull/2948))
+- **Bounded memory during long sessions** — limits retained transcript detail and realtime access-cache entries, releases completed thinking payloads and obsolete search callbacks, and settles pending socket requests on disconnect. Home selectors and shared branch-card styles also reduce repeated work. ([#2950](https://github.com/preset-io/agor/pull/2950), [#2949](https://github.com/preset-io/agor/pull/2949), [#2930](https://github.com/preset-io/agor/pull/2930), [#2908](https://github.com/preset-io/agor/pull/2908), [#2932](https://github.com/preset-io/agor/pull/2932), [#2905](https://github.com/preset-io/agor/pull/2905), [#2953](https://github.com/preset-io/agor/pull/2953))
+- **Teammate setup recovers from missed clone events** — rechecks repository readiness, provides teammate creation from an empty board tab, and resolves implicit template defaults from the registered remote. ([#2942](https://github.com/preset-io/agor/pull/2942), [#2924](https://github.com/preset-io/agor/pull/2924))
+- **Database upgrades preserve ownership boundaries** — repairs upgrade guards and same-tenant owner recovery. If ownership still cannot be attributed, migration stops with guidance to preserve the data and assign a real owner in the same tenant before retrying. ([#2955](https://github.com/preset-io/agor/pull/2955))
+- **Conversation layout and activity cues** — adds footer spacing and a persistent activity spinner, and finishes the compact header sizing in session drawers and board panels. ([#2944](https://github.com/preset-io/agor/pull/2944), [#2929](https://github.com/preset-io/agor/pull/2929))
+
+### Security
+
+- **Tenant-confined repository operations** — hosted repositories accept network Git remotes only, keep local paths server-owned, and reject origin realignment outside the caller's tenant repository root. ([#2934](https://github.com/preset-io/agor/pull/2934))
+- **Contained delegated branch deletion** — validates mounted storage roots and the exact branch SDK-home target, runs as the requesting Manager, and refuses unsupported executor setups before deletion begins. Shared execution homes remain outside the deletion targets. ([#2943](https://github.com/preset-io/agor/pull/2943))
+
+### Chores
+
+- **Release and deployment diagnostics** — adds the canonical `PUBLISH.md` preparation, approval, recovery, and upgrade runbook, plus trusted deployment provenance for analytics. ([#2925](https://github.com/preset-io/agor/pull/2925), [#2923](https://github.com/preset-io/agor/pull/2923))
+
 ## 0.26.8 (2026-09-29)
 
 Release preparation includes merged changes from `v0.26.7` (`fb272b8d`) through `504c7ec7`, plus the Claude and Codex model and runtime updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.7...504c7ec7608d45bbc069791196e620db9d606d38). This entry does not imply publication or deployment.
