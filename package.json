@@ -65,7 +65,7 @@
     "prettier": "^3.9.9",
     "rollup": "4.63.4",
     "rollup-plugin-dts": "^6.5.1",
-    "socket.io-client": "^4.8.3",
+    "socket.io-client": "^4.8.4",
     "tsx": "4.23.15",
     "turbo": "^2.11.3",
     "typescript": "^6.0.3",
