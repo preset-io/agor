@@ -131,13 +131,25 @@ export function useRetainEngagedTurns(
   });
 }
 
-/** Open overlays a turn can own: modal viewers (portaled or not) and link confirmation. */
-const OVERLAY = '[aria-modal="true"], [data-streamdown="link-safety-modal"]';
+/**
+ * Overlays a turn's own markdown renders and that close when its message
+ * remounts: Streamdown's fullscreen viewers (portaled to `document.body`) and
+ * its link confirmation. Streamdown mounts each only while open, so leaving
+ * the document is exactly closing. Other modals are deliberately excluded:
+ * app-level dialogs (e.g. User Settings opened from a recovery panel) live
+ * outside the turn's tree, so eviction cannot close them, and some stay
+ * mounted but hidden after closing, which would pin the turn indefinitely.
+ */
+const OVERLAY = [
+  '[data-streamdown="mermaid-fullscreen"]',
+  '[data-streamdown="table-fullscreen"]',
+  '[data-streamdown="link-safety-modal"]',
+].join(', ');
 
 /**
- * Keep a turn cached while an overlay it opened stays open, e.g. Streamdown's
- * fullscreen table/Mermaid viewers, which portal to `document.body` outside
- * the turn's DOM. Evicting the turn would remount its message and close the
+ * Keep a turn cached while a viewer overlay it opened stays open (see
+ * `OVERLAY`); the fullscreen viewers portal to `document.body` outside the
+ * turn's DOM. Evicting the turn would remount its message and close the
  * viewer mid-use. Ownership follows React's tree: a click inside the turn that
  * opens an overlay, or a focus/pointer event bubbling out of a portaled one,
  * attributes it to this turn. The pin is released when the overlay leaves the
