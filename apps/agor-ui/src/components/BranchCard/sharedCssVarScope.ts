@@ -19,7 +19,14 @@ import type { ThemeConfig } from 'antd';
 // biome-ignore lint/complexity/noBannedTypes: algorithms are identified by reference only.
 const functionIds = new WeakMap<Function, number>();
 let nextFunctionId = 0;
+/**
+ * Recipe text -> id, capped so fresh algorithm identities can't grow it forever. Ids come
+ * from a monotonic counter and are never reused: evicting a recipe only means a later
+ * identical recipe gets a new id (a separate scope), never another recipe's scope.
+ */
+export const RECIPE_ID_CACHE_LIMIT = 64;
 const recipeIds = new Map<string, number>();
+let nextRecipeId = 0;
 /** Theme configs from ConfigContext are memoized per provider, so cache by identity. */
 const configRecipeIds = new WeakMap<object, number | null>();
 
@@ -65,19 +72,27 @@ function serializeRecipe(value: unknown, depth: number): string | undefined {
 }
 
 /** Interned id for a parent theme recipe, or null when the recipe can't be identified. */
-function themeRecipeId(config: ThemeConfig | undefined): number | null {
+export function themeRecipeId(config: ThemeConfig | undefined): number | null {
   if (config === undefined) return 0;
   const cached = configRecipeIds.get(config);
   if (cached !== undefined) return cached;
   const recipe = serializeRecipe(config, 0);
   let id: number | null = null;
   if (recipe !== undefined) {
-    id = recipeIds.get(recipe) ?? recipeIds.size + 1;
+    id = recipeIds.get(recipe) ?? ++nextRecipeId;
+    // Re-insert so the map's insertion order is least-recently-used first.
+    recipeIds.delete(recipe);
     recipeIds.set(recipe, id);
+    if (recipeIds.size > RECIPE_ID_CACHE_LIMIT) {
+      recipeIds.delete(recipeIds.keys().next().value as string);
+    }
   }
   configRecipeIds.set(config, id);
   return id;
 }
+
+/** Number of interned recipe strings (for tests). */
+export const recipeIdCacheSize = () => recipeIds.size;
 
 /**
  * Scope identity for nested themes under one parent: its computed-token hash plus its

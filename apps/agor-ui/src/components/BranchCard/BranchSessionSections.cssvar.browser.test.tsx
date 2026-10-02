@@ -181,13 +181,20 @@ it('gives parents with equal tokens but different algorithms separate scopes', (
   expect(screen.getByTestId('hover-token-key').textContent).toBe(plainTokenKey);
 
   // Each tree resolves its own parent's no-motion Tree tokens, not whichever wrote last.
-  for (const value of treeHoverBgs('dark')) {
+  const plainHoverBgs = treeHoverBgs('dark');
+  const hoverHoverBgs = treeHoverBgs('light');
+  expect(plainHoverBgs).toHaveLength(2);
+  expect(hoverHoverBgs).toHaveLength(2);
+  for (const value of plainHoverBgs) {
     expect(value).toBeTruthy();
     expect(value).not.toBe(HOVER_ON_NO_MOTION);
   }
-  for (const value of treeHoverBgs('light')) expect(value).toBe(HOVER_ON_NO_MOTION);
+  for (const value of hoverHoverBgs) expect(value).toBe(HOVER_ON_NO_MOTION);
+  // One card scope and one tree scope per parent, and none shared.
   const plain = cardScopes('dark');
   const hover = cardScopes('light');
+  expect(plain.size).toBe(2);
+  expect(hover.size).toBe(2);
   expect([...plain].some((cls) => hover.has(cls))).toBe(false);
 });
 
