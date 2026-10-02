@@ -17,8 +17,10 @@ import { ConversationView } from './ConversationView';
 // turn numbers and mints fresh payloads per read, so it never retains one.
 const SESSION_ID = '0199a000-0000-7000-8000-000000000000' as SessionID;
 const PAYLOAD_BYTES = 256 * 1024;
+const THINKING_BYTES = 64 * 1024;
 const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
 let turns = 0;
+let detailReadDelay = 0;
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -42,6 +44,7 @@ function messages(n: number): Message[] {
     timestamp: task(n, TaskStatus.COMPLETED).created_at,
   };
   const prefix = `TRANSCRIPT_RETENTION_${n}_`;
+  const thinking = `TRANSCRIPT_THINKING_${n}_`;
   return [
     {
       ...base,
@@ -77,7 +80,14 @@ function messages(n: number): Message[] {
       role: MessageRole.ASSISTANT,
       type: 'assistant',
       content_preview: '',
-      content: [{ type: 'text', text: `Answer ${n}` }],
+      // Reasoning beside visible text: the message stays mounted after eviction.
+      content: [
+        {
+          type: 'thinking',
+          text: JSON.parse(JSON.stringify(thinking + 'y'.repeat(THINKING_BYTES - thinking.length))),
+        },
+        { type: 'text', text: `Answer ${n}` },
+      ],
     },
   ] as Message[];
 }
@@ -128,6 +138,9 @@ const messageService = Object.assign(events(), {
     query: { task_id: string | { $in: string[] }; transcript?: string };
   }) => {
     const ids = typeof query.task_id === 'string' ? [query.task_id] : query.task_id.$in;
+    if (query.transcript !== 'lean' && detailReadDelay) {
+      await new Promise((resolve) => setTimeout(resolve, detailReadDelay));
+    }
     const rows = ids.flatMap((id) => messages(Number(id.slice(-12))));
     return query.transcript === 'lean' ? rows.map(project) : rows;
   },
@@ -170,6 +183,10 @@ export const fixture = {
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));
     return taskId(n);
+  },
+  /** Hold full-detail reads open so the loading state can be observed. */
+  delayDetailReads(ms: number) {
+    detailReadDelay = ms;
   },
   unmount() {
     root.unmount();

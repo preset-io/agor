@@ -2778,11 +2778,12 @@ describe('lean transcript detail retention', () => {
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
     await handle.ready();
     /** One live turn as the executor delivers it: running → payload → completed. */
-    const runTurn = (n: number) => {
+    const runTurn = (n: number, whileRunning?: (taskId: string) => void) => {
       const taskId = turnId(n);
       const running = makeTask(taskId, TaskStatus.RUNNING);
       opts.tasks = [...opts.tasks.filter((task) => task.task_id !== taskId), running];
       mock.emitServiceEvent('tasks', 'created', running);
+      whileRunning?.(taskId);
       opts.messagesByTask[taskId] = [fullMessage(taskId, n)];
       mock.emitServiceEvent('messages', 'created', fullMessage(taskId, n));
       const completed = makeTask(taskId, TaskStatus.COMPLETED);
@@ -2864,6 +2865,39 @@ describe('lean transcript detail retention', () => {
     // Late React cleanups/effects after disposal are harmless no-ops.
     f.handle.retainTaskDetails(turnId(0))();
     releaseB();
+  });
+
+  it('keeps no evicted turn reasoning in cached messages or settled thinking streams', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 15; n++) {
+      // Live reasoning arrives on a temporary stream ID, then persists.
+      f.runTurn(n, (taskId) => {
+        const event = { session_id: SESSION_ID, message_id: `thought-${n}`, task_id: taskId };
+        f.emitServiceEvent('messages', 'thinking:start', event);
+        f.emitServiceEvent('messages', 'thinking:chunk', { ...event, chunk: `Streamed ${n}` });
+        f.emitServiceEvent('messages', 'thinking:end', event);
+        expect(f.handle.getStreamingMessage(`thought-${n}`)?.thinkingContent).toBe(`Streamed ${n}`);
+      });
+    }
+    const state = JSON.stringify({
+      messages: [...f.handle.state.messagesByTask],
+      streams: [...f.handle.state.streamingMessages],
+    });
+    const turnsWith = (label: string) =>
+      Array.from({ length: 15 }, (_, n) => n).filter((n) => state.includes(`${label} ${n}"`));
+    expect(turnsWith('Reasoning')).toEqual(Array.from({ length: 10 }, (_, i) => i + 5));
+    expect(turnsWith('Streamed')).toEqual([]);
+    // The evicted turn still advertises its reasoning, and a reload restores it.
+    expect(f.handle.getTaskMessages(turnId(0))[0]).toMatchObject({
+      content: [{ type: 'text', text: 'Answer 0' }],
+      has_deferred_reasoning: true,
+    });
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toContainEqual({
+      type: 'thinking',
+      text: 'Reasoning 0',
+    });
+    f.handle.dispose();
   });
 
   it('keeps executing, latest and early-payload turns full regardless of age', async () => {
