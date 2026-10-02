@@ -104,12 +104,31 @@ them into absolute `og:image` and `twitter:image` URLs using `NEXT_PUBLIC_SITE_U
 `/screenshots/board-hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
 dimensions.
 
+## Blog listing dates
+
+Keep each post's `date: YYYY-MM-DD` frontmatter in sync with `lib/blogPosts.ts`.
+The `/blog` listing reveals a post at **06:00 PST (fixed UTC−08:00 / 14:00 UTC)**
+on that date, including during daylight-saving time. `/blog?all` shows every
+post; presence of the `all` parameter is sufficient, regardless of its value.
+The browser checks the time on load, at the next publication boundary, and when
+a tab regains focus. This works without rebuilding the static site, but relies
+on JavaScript and the visitor's clock. Without JavaScript, the listing reflects
+the build time until the next deployment.
+
+This is **listing visibility, not an embargo or access control**. Article slugs
+are always exported and accessible. Sitemap, Pagefind, LLM indexes, other links
+and crawler indexing are unchanged and can expose future posts. For a real
+embargo, do not deploy the content. Existing `noindex: true` frontmatter can
+discourage search indexing, but removing it requires a rebuild/deployment; the
+listing timer does not change static article metadata.
+
 ## Validate and build
 
 From the repository root:
 
 ```bash
 pnpm --filter @agor/docs typecheck
+pnpm --filter @agor/docs test:blog
 pnpm --filter @agor/docs validate:brand-assets
 pnpm --filter @agor/docs validate:social-metadata
 pnpm docs:build

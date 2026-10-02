@@ -15,7 +15,7 @@ export const blogPosts: BlogPost[] = [
     description:
       'Bring your team and agents together on live spatial boards. Agor Cloud Open Beta gives you shared AI workflows without running the infrastructure yourself.',
     author: 'Agor team',
-    date: '2026-10-06',
+    date: '2026-10-13',
     image: '/images/blog/agor-cloud-open-beta.webp',
   },
   {
