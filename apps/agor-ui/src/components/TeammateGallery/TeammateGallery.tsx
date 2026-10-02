@@ -143,8 +143,9 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
 };
 
 /**
- * The blank starter, rendered as a full-width footer card spanning both grid
- * columns (so the eight templates stay a clean 4×2 grid with no orphan). It's a
+ * The blank starter, rendered as a full-width header card spanning every grid
+ * column (so the eight templates stay a clean grid with no orphan). It leads
+ * the All view so picking a template never reads as required. It's a
  * deliberately understated "build your own" affordance — dashed neutral border,
  * no category color/pill, no Recommended badge — laid out horizontally (icon +
  * copy) since it's wide. Still single-selectable with the same softened,
@@ -174,7 +175,7 @@ const BlankCard: React.FC<{
       tabIndex={0}
       {...toggleHandlers}
       style={{
-        // Span every column of the auto-fit grid → full-width footer card.
+        // Span every column of the auto-fit grid → full-width header card.
         gridColumn: '1 / -1',
         // Constant 1px dashed border in both states — only the color changes on
         // select, so no layout shift. Dashed + neutral reads as "build your own".

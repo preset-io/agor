@@ -341,7 +341,6 @@ const ONB_ANIM_CSS = `
   }
 
   @media (max-height: 600px) {
-    .onb-workspace-intro-copy,
     .onb-workspace-helper { display: none !important; }
   }
 
@@ -2314,7 +2313,7 @@ export function OnboardingWizard({
               // high enough that the fixed height is honored on typical laptop
               // viewports so the goals grid + footer are never clipped.
               boxSizing: 'border-box',
-              height: 'min(460px, calc(100dvh - 192px))',
+              height: 'min(620px, calc(100dvh - 192px))',
               position: 'relative',
               zIndex: 1,
               // Step 2 owns its scrolling via an inner two-region layout (fixed

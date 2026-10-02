@@ -236,7 +236,10 @@ describe('OnboardingWizard layout (real browser)', () => {
     // Chromium can preserve `repeat(auto-fit, minmax(...))` in computed style
     // at narrow viewports. Count the cards sharing the first rendered row
     // instead; this observes the layout result rather than its CSS spelling.
-    const cardRects = Array.from(grid.children, (card) => card.getBoundingClientRect());
+    // Skip the full-width Start blank header row so the first template row is measured.
+    const cardRects = Array.from(grid.children)
+      .filter((card) => card.getAttribute('aria-label') !== 'Start blank')
+      .map((card) => card.getBoundingClientRect());
     const firstTop = cardRects[0]?.top;
     const renderedColumns = cardRects.filter((rect) => Math.abs(rect.top - firstTop) < 1).length;
     const expectedColumns = window.innerWidth <= 480 ? 1 : 3;

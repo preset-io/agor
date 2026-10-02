@@ -177,7 +177,7 @@ export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
  * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
- * render "Start blank" last and never accidentally recommend it. Its
+ * render "Start blank" first and never accidentally recommend it. Its
  * `sourceBranch` is the framework repo default; the wiring resolves it to the
  * repo's own default branch rather than forcing a literal.
  */
@@ -331,11 +331,11 @@ export function galleryCardsForFilter(
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
 
-  // All: recommended first, then the remaining templates in default order, then blank.
+  // All: blank first (so templates never read as required), then recommended, then the rest.
   const recommendedCards = recommendedTemplateIds(goals)
     .map((id) => getTeammateTemplate(id))
     .filter((template): template is TeammateGalleryCard => Boolean(template));
   const recommendedIds = new Set(recommendedCards.map((template) => template.id));
   const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
-  return [...recommendedCards, ...rest, BLANK_TEMPLATE];
+  return [BLANK_TEMPLATE, ...recommendedCards, ...rest];
 }
