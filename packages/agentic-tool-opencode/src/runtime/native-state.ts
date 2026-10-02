@@ -18,7 +18,7 @@ export const OPENCODE_SCRATCH_ROOT_ENV = 'AGOR_OPENCODE_SCRATCH_ROOT';
 export const OPENCODE_CHECKPOINT_ROOT_ENV = 'AGOR_OPENCODE_CHECKPOINT_ROOT';
 const DB_FILE = 'opencode.db';
 /** OpenCode tables that hold tokens; a checkpoint may reach collaborators, so they must stay empty. */
-const CREDENTIAL_TABLES = ['account', 'control_account', 'credential'];
+const CREDENTIAL_TABLES = ['account', 'control_account', 'credential', 'session_share'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class OpenCodeNativeStateError extends Error {

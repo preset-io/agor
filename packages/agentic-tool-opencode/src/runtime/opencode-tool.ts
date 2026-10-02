@@ -38,7 +38,7 @@ import {
   type OpenCodeEventEffect,
   reconcileOpenCodeMessages,
 } from './event-translator.js';
-import { assertHostedOpenCodeInvocationConfig, writeHostedOpenCodeAuth } from './hosted-config.js';
+import { hostedOpenCodeInvocationConfig, writeHostedOpenCodeAuth } from './hosted-config.js';
 import {
   createOpenCodeSanitizer,
   type ManagedChild,
@@ -763,12 +763,14 @@ export class OpenCodeTool {
     // OPENCODE_CONFIG_CONTENT is the highest-precedence, invocation-scoped
     // configuration. Force every interceptable permission through Agor even if
     // the repository's opencode.json contains permissive rules.
-    const invocationConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
+    const protectedConfig = this.protectedInvocationConfig(resolvedInvocationConfig);
+    const invocationConfig = input.managed
+      ? hostedOpenCodeInvocationConfig(protectedConfig)
+      : protectedConfig;
     const configContent = JSON.stringify(invocationConfig);
     let managedServer: ManagedOpenCodeServer;
     try {
       if (input.managed) {
-        assertHostedOpenCodeInvocationConfig(resolvedInvocationConfig);
         await writeHostedOpenCodeAuth(input.managed.layout, input.managed.authContent);
       }
       managedServer = await startManagedOpenCodeServer(

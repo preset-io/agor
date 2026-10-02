@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertHostedOpenCodeInvocationConfig,
   hostedOpenCodeEnvironment,
+  hostedOpenCodeInvocationConfig,
 } from './hosted-config.js';
 import { resolveOpenCodeNativeStateLayout } from './native-state.js';
 
@@ -43,5 +44,14 @@ describe('hosted OpenCode configuration', () => {
     expect(() =>
       assertHostedOpenCodeInvocationConfig({ mcp: { agor: { type: 'remote', url: 'https://x' } } })
     ).not.toThrow();
+  });
+
+  it('disables native sharing in the serialised config, whatever the resolved config asked for', () => {
+    const config = hostedOpenCodeInvocationConfig({
+      mcp: { agor: { type: 'remote', url: 'https://x' } },
+      share: 'auto',
+    });
+    expect(JSON.parse(JSON.stringify(config))).toMatchObject({ share: 'disabled' });
+    expect(() => hostedOpenCodeInvocationConfig({ mcp: {}, plugin: ['x'] })).toThrow();
   });
 });

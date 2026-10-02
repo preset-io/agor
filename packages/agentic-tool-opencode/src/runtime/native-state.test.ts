@@ -156,6 +156,18 @@ describe('OpenCode native state', () => {
     await expect(sealOpenCodeCheckpoint(layout, 'ses_1')).rejects.toThrow(/stored credentials/);
   });
 
+  it('refuses to seal a checkpoint that holds an OpenCode share secret', async () => {
+    const layout = layoutFor(TASK_1);
+    await prepareOpenCodeScratch(layout);
+    await writeLiveDatabase(layout, 'ses_1');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(layout.liveDbPath);
+    db.exec('CREATE TABLE session_share (session_id TEXT PRIMARY KEY, secret TEXT, url TEXT)');
+    db.exec("INSERT INTO session_share VALUES ('ses_1', 'share-secret', 'https://x')");
+    db.close();
+    await expect(sealOpenCodeCheckpoint(layout, 'ses_1')).rejects.toThrow(/stored credentials/);
+  });
+
   it('fails closed when the saved conversation is missing, altered, or from another version', async () => {
     const first = layoutFor(TASK_1);
     await prepareOpenCodeScratch(first);

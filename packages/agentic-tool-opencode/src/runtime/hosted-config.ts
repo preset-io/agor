@@ -15,6 +15,14 @@ export function assertHostedOpenCodeInvocationConfig(config: OpenCodeInvocationC
   }
 }
 
+/** The config a hosted turn serialises: native sharing off, so no share secret enters a checkpoint. */
+export function hostedOpenCodeInvocationConfig(
+  config: OpenCodeInvocationConfig
+): OpenCodeInvocationConfig {
+  assertHostedOpenCodeInvocationConfig(config);
+  return { ...config, share: 'disabled' };
+}
+
 /** All OpenCode roots on scratch; no project/home/system config or inherited OPENCODE_* selectors. */
 export function hostedOpenCodeEnvironment(
   layout: OpenCodeNativeStateLayout,
