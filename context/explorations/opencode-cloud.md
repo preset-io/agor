@@ -59,7 +59,8 @@ removes only attempts the ledger says can never be restored (superseded, never
 accepted by a now-terminal Task, or belonging to a deleted Session), by exact
 path, by a later turn whose Job mounts that store: any prompter's turn of the same
 branch-scoped Session, or the owner's later execution-home turns. A deleted
-branch-scoped Session's files stay until its branch home is removed, and a stale
+branch-scoped Session's files stay until its branch home is removed (with the
+branch, or with the workspace where branch deletion keeps branch homes), and a stale
 executor can at worst leave an orphaned file behind; those leaks are accepted and
 there is no erasure guarantee.
 

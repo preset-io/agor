@@ -17,6 +17,8 @@ export const OPENCODE_SCRATCH_ROOT_ENV = 'AGOR_OPENCODE_SCRATCH_ROOT';
 /** The launcher pins this to the branch SDK home's OpenCode directory for shared Sessions. */
 export const OPENCODE_CHECKPOINT_ROOT_ENV = 'AGOR_OPENCODE_CHECKPOINT_ROOT';
 const DB_FILE = 'opencode.db';
+/** OpenCode tables that hold tokens; a checkpoint may reach collaborators, so they must stay empty. */
+const CREDENTIAL_TABLES = ['account', 'control_account', 'credential'];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class OpenCodeNativeStateError extends Error {
@@ -64,7 +66,7 @@ export function resolveOpenCodeNativeStateLayout(input: {
       );
     }
     sessionsDir = join(root, 'sessions');
-  } else {
+  } else if (input.sdkHomeScope === 'execution_home') {
     const home = input.homeDir ?? homedir();
     if (!home || !isAbsolute(home)) {
       throw new OpenCodeNativeStateError(
@@ -72,6 +74,8 @@ export function resolveOpenCodeNativeStateLayout(input: {
       );
     }
     sessionsDir = join(home, '.agor', 'opencode', 'sessions');
+  } else {
+    throw new OpenCodeNativeStateError('OpenCode native state requires a known SDK-home scope');
   }
   const scratchRoot = join(scratch, input.taskId);
   return {
@@ -152,7 +156,7 @@ export async function restoreOpenCodeCheckpoint(
     await copyFile(source, layout.liveDbPath);
   } catch (error) {
     throw new OpenCodeNativeStateError(
-      'OpenCode native state unavailable: the saved conversation is missing from your home',
+      'OpenCode native state unavailable: the saved conversation is missing from its checkpoint store',
       { cause: error }
     );
   }
@@ -188,6 +192,14 @@ async function checkpointLiveDatabase(dbPath: string, openCodeSessionId: string)
       throw new OpenCodeNativeStateError(
         'OpenCode checkpoint does not contain the completed session'
       );
+    }
+    for (const table of CREDENTIAL_TABLES) {
+      const exists = db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .get(table);
+      if (exists && db.prepare(`SELECT 1 FROM "${table}" LIMIT 1`).get()) {
+        throw new OpenCodeNativeStateError('OpenCode checkpoint contains stored credentials');
+      }
     }
     const checkpoint = db.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get() as { busy?: number };
     if (checkpoint?.busy) {

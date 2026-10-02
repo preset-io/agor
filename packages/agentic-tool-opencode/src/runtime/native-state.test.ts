@@ -91,6 +91,13 @@ describe('OpenCode native state', () => {
         env: { AGOR_OPENCODE_SCRATCH_ROOT: '/scratch', AGOR_OPENCODE_CHECKPOINT_ROOT: 'relative' },
       })
     ).toThrow(/AGOR_OPENCODE_CHECKPOINT_ROOT/);
+    expect(() =>
+      resolveOpenCodeNativeStateLayout({
+        ...branch,
+        sdkHomeScope: undefined as never,
+        env: { AGOR_OPENCODE_SCRATCH_ROOT: '/scratch' },
+      })
+    ).toThrow(/known SDK-home scope/);
   });
 
   it('restores a checkpoint saved by an older OpenCode version', async () => {
@@ -137,6 +144,18 @@ describe('OpenCode native state', () => {
     await expect(sealOpenCodeCheckpoint(layout, 'ses_1')).rejects.toThrow(/not durable/);
   });
 
+  it('refuses to seal a checkpoint that holds OpenCode-stored credentials', async () => {
+    const layout = layoutFor(TASK_1);
+    await prepareOpenCodeScratch(layout);
+    await writeLiveDatabase(layout, 'ses_1');
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(layout.liveDbPath);
+    db.exec('CREATE TABLE credential (id TEXT PRIMARY KEY, value TEXT)');
+    db.exec("INSERT INTO credential VALUES ('c1', 'sk-secret')");
+    db.close();
+    await expect(sealOpenCodeCheckpoint(layout, 'ses_1')).rejects.toThrow(/stored credentials/);
+  });
+
   it('fails closed when the saved conversation is missing, altered, or from another version', async () => {
     const first = layoutFor(TASK_1);
     await prepareOpenCodeScratch(first);
@@ -150,7 +169,7 @@ describe('OpenCode native state', () => {
     ).rejects.toThrow(/saved by newer OpenCode 999.0.0/);
     await expect(
       restoreOpenCodeCheckpoint(second, { ...manifest, taskId: TASK_2 })
-    ).rejects.toThrow(/missing from your home/);
+    ).rejects.toThrow(/missing from its checkpoint store/);
     await writeFile(
       join(first.sessionsDir, SESSION, 'attempts', TASK_1, 'opencode.db'),
       'tampered'

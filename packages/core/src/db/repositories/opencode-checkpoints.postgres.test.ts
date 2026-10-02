@@ -28,7 +28,10 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       await (db as Database & { $client: { end(): Promise<void> } }).$client.end();
     });
 
-    async function seedSession(scoped: Database) {
+    async function seedSession(
+      scoped: Database,
+      sdkHomeScope: 'execution_home' | 'branch' = 'execution_home'
+    ) {
       const owner = await new UsersRepository(scoped).create({
         email: `${crypto.randomUUID()}@example.test`,
         role: 'member',
@@ -56,16 +59,17 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         branch_id: branch.branch_id,
         agentic_tool: 'opencode',
         created_by: owner.user_id,
+        sdk_home_scope: sdkHomeScope,
       });
       return { ownerId: owner.user_id as string, sessionId: session.session_id as string };
     }
 
-    async function turn(scoped: Database, ownerId: string, sessionId: string) {
+    async function turn(scoped: Database, actorId: string, sessionId: string) {
       const tasks = new TaskRepository(scoped);
       const created = await tasks.create({
         task_id: generateId(),
         session_id: sessionId as UUID,
-        created_by: ownerId,
+        created_by: actorId,
         full_prompt: 'Continue',
         status: TaskStatus.DISPATCHING,
         message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
@@ -76,7 +80,7 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
       const admission = await new OpenCodeCheckpointRepository(scoped).begin(
         created.task_id,
         holder,
-        ownerId
+        actorId
       );
       const manifest = {
         version: 1 as const,
@@ -107,6 +111,32 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           state: string;
         }>;
         expect(states.map((row) => row.state).sort()).toEqual(['accepted', 'superseded']);
+      });
+      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        expect(await select(scoped).from(opencodeCheckpointAttempts).all()).toEqual([]);
+      });
+    });
+    it('continues a branch-home Session across prompters and cleans it within its tenant', async () => {
+      const tenantA = `checkpoints-${crypto.randomUUID()}`;
+      const tenantB = `checkpoints-${crypto.randomUUID()}`;
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const { ownerId, sessionId } = await seedSession(scoped, 'branch');
+        const mate = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          role: 'member',
+        });
+        const first = await turn(scoped, ownerId, sessionId);
+        const second = await turn(scoped, mate.user_id, sessionId);
+        const third = await turn(scoped, ownerId, sessionId);
+        expect(second.admission).toMatchObject({ input: first.manifest });
+        expect(third.admission).toMatchObject({
+          input: second.manifest,
+          cleanup: [{ sessionId, taskId: first.manifest.taskId }],
+        });
+        // The owner's private-home turn never lists the branch Session's attempts.
+        const own = await seedSession(scoped);
+        const privateTurn = await turn(scoped, own.ownerId, own.sessionId);
+        expect(privateTurn.admission).toMatchObject({ cleanup: [] });
       });
       await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
         expect(await select(scoped).from(opencodeCheckpointAttempts).all()).toEqual([]);

@@ -99,7 +99,7 @@ export type RunOpenCodeTurnInput = {
   mcpToken?: string;
   permissionMode?: PermissionMode;
   dataHome?: string;
-  /** Hosted turn: Job-local layout plus the owner's selected provider auth entry. */
+  /** Hosted turn: Job-local layout plus the prompter's selected provider auth entry. */
   managed?: {
     layout: OpenCodeNativeStateLayout;
     authContent: string;
@@ -1006,12 +1006,12 @@ export class OpenCodeTool {
     }
     if (!modelAvailable) {
       throw new Error(
-        'The selected OpenCode provider/model is not available for this session owner and branch configuration; retry discovery or enter an available exact pair'
+        'The selected OpenCode provider/model is not available for this prompter and branch configuration; retry discovery or enter an available exact pair'
       );
     }
     if (!effortAvailable) {
       throw new Error(
-        "The selected OpenCode reasoning effort is not available for this session owner's provider/model and branch configuration; choose a supported effort or leave it unset"
+        "The selected OpenCode reasoning effort is not available for this prompter's provider/model and branch configuration; choose a supported effort or leave it unset"
       );
     }
   }
