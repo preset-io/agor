@@ -23,7 +23,7 @@
     "generate:hosted-providers": "node scripts/generate-hosted-providers.mjs"
   },
   "dependencies": {
-    "@opencode-ai/sdk": "1.18.31",
+    "@opencode-ai/sdk": "1.18.33",
     "opencode-ai": "1.18.31"
   },
   "devDependencies": {
