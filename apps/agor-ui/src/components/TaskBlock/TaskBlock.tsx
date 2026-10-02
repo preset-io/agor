@@ -704,16 +704,21 @@ function useTaskDetailRetainer(
  * outside TaskBlock's render scope for the same reason as the retainer.
  */
 function useLoadPin(loading: boolean, retain: () => (() => void) | undefined): () => void {
-  const release = useRef<(() => void) | undefined>(undefined);
+  const pin = useRef<{ request: number; release?: () => void }>({ request: 0 });
+  // A click can land between a commit and its passive effect. Fence by the
+  // request this render saw, so that older effect never releases a newer pin.
+  const seen = pin.current.request;
   // Every commit, so a batched loading true → false cannot strand the pin.
   useEffect(() => {
-    if (loading) return;
-    release.current?.();
-    release.current = undefined;
+    const held = pin.current;
+    if (loading || held.request > seen) return;
+    held.release?.();
+    held.release = undefined;
   });
-  useEffect(() => () => release.current?.(), []);
+  useEffect(() => () => pin.current.release?.(), []);
   return useCallback(() => {
-    release.current ??= retain();
+    pin.current.request += 1;
+    pin.current.release ??= retain();
   }, [retain]);
 }
 

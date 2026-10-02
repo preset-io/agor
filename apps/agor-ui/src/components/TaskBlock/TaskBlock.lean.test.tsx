@@ -7,7 +7,7 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from './TaskBlock';
@@ -562,4 +562,45 @@ it('does not pin inline detail that arrives without a reader asking for it', () 
   expect(screen.queryByText('INLINE_DETAIL')).toBeNull();
   expect(screen.queryByText('TOOL_DETAIL')).toBeNull();
   expect(retain).not.toHaveBeenCalled();
+});
+
+it('keeps a load pin taken before the previous commit’s passive effect runs', async () => {
+  const events: string[] = [];
+  let pins = 0;
+  const retain = vi.fn(() => {
+    const pin = ++pins;
+    events.push(`retain ${pin}`);
+    return () => events.push(`release ${pin}`);
+  });
+  const load = vi.fn(() => new Promise<void>(() => {})); // the read stays pending
+  let rerenderOutsideAct = () => {};
+  /**
+   * Re-renders TaskBlock (loading=false) in a non-act, default-priority commit,
+   * whose passive effects run later. Its layout effect clicks the disclosure
+   * header first, as a non-focusing early click would.
+   */
+  function Harness() {
+    const [tick, setTick] = useState(0);
+    rerenderOutsideAct = () => setTimeout(() => setTick(1));
+    useLayoutEffect(() => {
+      if (!tick) return;
+      events.push('click');
+      screen.getByRole('button', { name: '1 tool call' }).click();
+    }, [tick]);
+    return (
+      <TaskBlock
+        task={{ ...task, recorded_tool_count: 1 }}
+        taskMessages={messages}
+        taskMessagesLoaded={false}
+        onLoadTaskMessages={load}
+        onRetainTaskDetails={retain}
+      />
+    );
+  }
+  render(<Harness />);
+  rerenderOutsideAct();
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The stale effect (from the render before the click) must not release it.
+  expect(events).toEqual(['click', 'retain 1']);
 });
