@@ -22,36 +22,6 @@ For agent selection, start with [Choosing an Agent](#choosing-an-agent). The
 reference below also covers integration behavior and SDK-specific limitations.
 Connection setup is covered separately in [MCP Catalog & Connections](/guide/mcp-servers).
 
-## Codex native plugins
-
-**Include native Codex plugins** is a Codex agent-configuration option, **off by
-default**. Set it in your per-tool defaults, a Codex preset, or a session's
-custom configuration. It follows the existing configuration selection rules:
-preset-backed sessions use the live preset; to override just one session,
-switch it to custom configuration when workspace policy permits. User defaults
-seed new sessions; editing a default does not rewrite existing custom sessions.
-Forks and spawns follow the normal same-tool configuration inheritance.
-
-Off (including a missing value in older sessions) applies `features.plugins=false`
-to SDK start/resume and the native fork sidecar. On removes Agor's veto and
-respects native Codex settings; it does not force every plugin on. Changes take
-effect on the next task launch, not during a running task. No daemon restart is
-needed. The configuration field is `codexIncludePlugins`; the materialized
-session value is `permission_config.codex.includePlugins`.
-
-This disables native plugin skills, MCP servers, hooks, and marketplace hydration,
-not standalone/repository skills or Agor's directly configured MCP connections.
-Codex Apps are a separate setting. The switch does not install plugins, connect
-accounts, grant credentials, or share another user's connections.
-
-Existing caches, native config, credentials, and conversation history are left
-untouched. SDK homes are branch-shared: one opted-in session may populate caches
-that another session leaves unused. Turning the option off is not cache cleanup.
-
-To restore native plugin behavior after upgrading, enable this option in the
-applicable preset or session configuration. There is no deployment-level
-`agentic_tools.codex_plugins` setting.
-
 ## Gemini Beta
 
 Gemini is **Beta** and supports **AI Studio API keys only**. Add a key in
