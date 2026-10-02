@@ -493,6 +493,14 @@ The reason members **cannot** hand-edit rendered commands: admins curate the set
 
 Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permission or admin access. Health/status reads can remain available to users who can view the branch because they do not run the configured shell/log commands.
 
+### Environment logs
+
+**View Logs** separates **Commands** (Start/Stop/Nuke output and recent attempts)
+from **Runtime** (output of the configured `logs` command). Failed or in-flight
+commands open the Commands tab first. Their output remains available even when
+no runtime service exists or runtime logs are unavailable. Older attempts are
+collapsed; general remote-environment guidance is under **About remote environments**.
+
 ### Health-check lifecycle
 
 Automatic health monitoring is active only while a non-archived environment is
