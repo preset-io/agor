@@ -392,6 +392,14 @@ async function applyPermissionEffect(input: {
 /** How long a turn waits out provider retries before failing with the provider's reason. */
 export type OpenCodeRetryBudget = { maxRetries: number; maxWaitMs: number };
 const DEFAULT_RETRY_BUDGET: OpenCodeRetryBudget = { maxRetries: 2, maxWaitMs: 30_000 };
+const RETRY_WINDOW_ENDERS = new Set<OpenCodeEventEffect['type']>([
+  'text-delta',
+  'reasoning-delta',
+  'tool-activity',
+  'permission',
+  'idle',
+  'error',
+]);
 
 function openCodeErrorMessage(error: unknown): string | undefined {
   const value = error as { data?: { message?: unknown }; message?: unknown } | undefined;
@@ -411,10 +419,23 @@ function createOpenCodeEffectConsumer(input: {
 }) {
   let textStarted = false;
   let firstRetryAt: number | undefined;
+  let lastRetryMessage = '';
+  let retryDeadline: ReturnType<typeof setTimeout> | undefined;
   let thinkingStarted = false;
   let sequence = 0;
+  // Model output ends a retry window; OpenCode reports `busy` before each retry, so that does not.
+  const endRetryWindow = () => {
+    clearTimeout(retryDeadline);
+    retryDeadline = undefined;
+    firstRetryAt = undefined;
+  };
+  const giveUp = (attempts: string) =>
+    input.settle(
+      input.promptFailure(`gave up after ${attempts}: ${lastRetryMessage || 'no reason given'}`)
+    );
 
   return {
+    dispose: endRetryWindow,
     get textStarted() {
       return textStarted;
     },
@@ -423,6 +444,7 @@ function createOpenCodeEffectConsumer(input: {
     },
     async apply(effects: OpenCodeEventEffect[]): Promise<void> {
       for (const effect of effects) {
+        if (RETRY_WINDOW_ENDERS.has(effect.type)) endRetryWindow();
         switch (effect.type) {
           case 'text-delta':
             input.streamingCallbacks?.onPulse?.('progress', 'message.text_delta');
@@ -490,18 +512,25 @@ function createOpenCodeEffectConsumer(input: {
             input.streamingCallbacks?.onPulse?.('progress', 'session.status.retry');
             const now = Date.now();
             firstRetryAt ??= now;
+            lastRetryMessage = effect.message;
             const nextAt = effect.next > now ? effect.next : now;
             // Provider-agnostic: a turn waits out at most a few retries, then fails with the provider's reason.
             if (
               effect.attempt > input.retryBudget.maxRetries ||
               nextAt - firstRetryAt > input.retryBudget.maxWaitMs
             ) {
-              input.settle(
-                input.promptFailure(
-                  `gave up after ${effect.attempt} provider retries: ${effect.message || 'no reason given'}`
-                )
-              );
+              endRetryWindow();
+              giveUp(`${effect.attempt} provider retries`);
+              break;
             }
+            // Enforce the wait budget even if no further event arrives.
+            retryDeadline ??= setTimeout(
+              () => {
+                retryDeadline = undefined;
+                giveUp(`${input.retryBudget.maxWaitMs / 1000}s of provider retries`);
+              },
+              firstRetryAt + input.retryBudget.maxWaitMs - now
+            );
             break;
           }
           case 'error':
@@ -1209,6 +1238,7 @@ export class OpenCodeTool {
       }
       throw failure;
     } finally {
+      effects.dispose();
       input.signal.removeEventListener('abort', settleAbort);
       // The runTurn cleanup route owns collector, permission, session, and child shutdown.
     }

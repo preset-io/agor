@@ -6,7 +6,7 @@ import type { EffortLevel, SessionID } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 import { OpenCodeCleanupUnverifiedError } from './managed-server.js';
-import { OpenCodeTool } from './opencode-tool.js';
+import { type OpenCodeRetryBudget, OpenCodeTool } from './opencode-tool.js';
 
 type AbortResponse = { data: boolean; error: undefined } | { data: undefined; error: unknown };
 
@@ -286,7 +286,7 @@ describe('OpenCodeTool prompt variants', () => {
 });
 
 describe('OpenCodeTool provider failures', () => {
-  async function failedTurn(events: unknown[]) {
+  async function failedTurn(events: unknown[], retryBudget?: OpenCodeRetryBudget) {
     const stream = (async function* () {
       for (const event of events) yield event;
       await new Promise(() => undefined);
@@ -299,7 +299,7 @@ describe('OpenCodeTool provider failures', () => {
         prompt: vi.fn(() => new Promise(() => undefined)),
       },
     };
-    const runtime = new OpenCodeTool({}) as unknown as {
+    const runtime = new OpenCodeTool({ retryBudget }) as unknown as {
       executeTask(...args: unknown[]): Promise<unknown>;
     };
     const started = Date.now();
@@ -328,11 +328,11 @@ describe('OpenCodeTool provider failures', () => {
     return { result, started };
   }
 
-  const retry = (attempt: number, message: string) => ({
+  const retry = (attempt: number, message: string, nextInMs = 1_000) => ({
     type: 'session.status',
     properties: {
       sessionID: 'opencode-session-1',
-      status: { type: 'retry', attempt, message, next: Date.now() + 1_000 },
+      status: { type: 'retry', attempt, message, next: Date.now() + nextInMs },
     },
   });
 
@@ -346,6 +346,60 @@ describe('OpenCodeTool provider failures', () => {
       'OpenCode prompt failed for any-provider/any-model: gave up after 3 provider retries: Insufficient balance'
     );
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('fails after the wait budget when no further retry event arrives', async () => {
+    const { result, started } = await failedTurn([retry(1, 'Insufficient balance', 10)], {
+      maxRetries: 2,
+      maxWaitMs: 100,
+    });
+    await expect(result).rejects.toThrow(
+      'OpenCode prompt failed for any-provider/any-model: gave up after 0.1s of provider retries: Insufficient balance'
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it('stops the wait budget once the model produces output after a retry', async () => {
+    const { result } = await failedTurn(
+      [
+        retry(1, 'overloaded', 10),
+        {
+          type: 'message.updated',
+          properties: { info: { id: 'a-1', sessionID: 'opencode-session-1', role: 'assistant' } },
+        },
+        {
+          type: 'message.part.updated',
+          properties: {
+            part: {
+              id: 'p-1',
+              sessionID: 'opencode-session-1',
+              messageID: 'a-1',
+              type: 'text',
+              text: '',
+            },
+          },
+        },
+        {
+          type: 'message.part.delta',
+          properties: {
+            sessionID: 'opencode-session-1',
+            messageID: 'a-1',
+            partID: 'p-1',
+            field: 'text',
+            delta: 'Hi',
+          },
+        },
+      ],
+      { maxRetries: 2, maxWaitMs: 100 }
+    );
+    const outcome = await Promise.race([
+      result.then(
+        () => 'resolved',
+        (error: Error) => error.message
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('still running'), 400)),
+    ]);
+    expect(outcome).toBe('still running');
   });
 
   it('surfaces the provider error message instead of a generic reconnect hint', async () => {
