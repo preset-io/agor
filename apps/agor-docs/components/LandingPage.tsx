@@ -32,6 +32,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import {
   AI_ENABLEMENT_POST_URL,
+  agorCloudInviteUrl,
   DISCORD_INVITE_URL,
   GITHUB_REPO_URL,
   PRESET_URL,
@@ -39,7 +40,6 @@ import {
 } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import Aurora from './Aurora/Aurora';
-import { HubSpotFormModal } from './HubSpotFormModal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import { HERO_VARIANTS, type HeroVariantKey, HighlightedText } from './heroVariants';
 import styles from './LandingPage.module.css';
@@ -559,14 +559,6 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
   const heroH1Ref = useFitText<HTMLHeadingElement>([variant?.headline]);
   const heroH2Ref = useFitText<HTMLHeadingElement>([variant?.subheadline]);
   const landingRef = useRef<HTMLElement>(null);
-  const [isBetaFormOpen, setIsBetaFormOpen] = useState(false);
-  // Which on-page CTA opened the (single, shared) beta form modal — stamped
-  // into the form's hidden source_page field for attribution.
-  const [betaCtaSource, setBetaCtaSource] = useState('landing-hero');
-  const openBetaForm = (source: string) => {
-    setBetaCtaSource(source);
-    setIsBetaFormOpen(true);
-  };
   const [isDemoFormOpen, setIsDemoFormOpen] = useState(false);
   const [activeShot, setActiveShot] = useState(0);
   const [activeSurface, setActiveSurface] = useState(0);
@@ -790,15 +782,12 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
               </h2>
             )}
             <div className={styles.heroActions}>
-              <button
-                type="button"
+              <a
                 className={styles.primaryButton}
-                onClick={() =>
-                  openBetaForm(variant ? `landing-hero-${heroVariant}` : 'landing-hero')
-                }
+                href={agorCloudInviteUrl(variant ? `landing-hero-${heroVariant}` : 'landing-hero')}
               >
                 {variant ? variant.ctaLabel : 'Sign up for Agor Cloud'}
-              </button>
+              </a>
               <button
                 type="button"
                 className={styles.secondaryButton}
@@ -1305,13 +1294,9 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
                 {item.desc}
                 {item.beta && (
                   <>
-                    <button
-                      type="button"
-                      className={styles.busBetaLink}
-                      onClick={() => openBetaForm('landing-bus-item')}
-                    >
+                    <a className={styles.busBetaLink} href={agorCloudInviteUrl('landing-bus-item')}>
                       Register for the Agor Cloud beta
-                    </button>
+                    </a>
                     .
                   </>
                 )}
@@ -1504,13 +1489,9 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
             enterprise-ready scale. Agor Cloud is opening to teams now.
           </p>
           <div className={styles.heroActions}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              onClick={() => openBetaForm('landing-final-cta')}
-            >
+            <a className={styles.primaryButton} href={agorCloudInviteUrl('landing-final-cta')}>
               Sign up for Agor Cloud
-            </button>
+            </a>
             <button
               type="button"
               className={styles.secondaryButton}
@@ -1560,13 +1541,7 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
             <Link href={DISCORD_INVITE_URL} target="_blank" rel="noopener noreferrer">
               Discord
             </Link>
-            <button
-              type="button"
-              className={styles.footerLinkButton}
-              onClick={() => openBetaForm('landing-footer')}
-            >
-              Sign up for Agor Cloud
-            </button>
+            <a href={agorCloudInviteUrl('landing-footer')}>Sign up for Agor Cloud</a>
           </div>
         </div>
         <p className={styles.footerCredit}>
@@ -1591,12 +1566,6 @@ export function LandingPage({ heroVariant }: LandingPageProps = {}) {
         </p>
       </footer>
 
-      <HubSpotFormModal
-        isOpen={isBetaFormOpen}
-        onClose={() => setIsBetaFormOpen(false)}
-        title="Join the Agor Cloud private beta"
-        sourceCta={betaCtaSource}
-      />
       <HubSpotMeetingModal isOpen={isDemoFormOpen} onClose={() => setIsDemoFormOpen(false)} />
     </main>
   );
