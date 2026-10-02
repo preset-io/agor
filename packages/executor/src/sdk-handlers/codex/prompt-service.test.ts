@@ -48,7 +48,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 import { CodexTool } from './codex-tool.js';
-import { CodexPromptService } from './prompt-service.js';
+import { CodexPromptService, type CodexStreamEvent } from './prompt-service.js';
 
 // Track how many Codex instances were created (module-level state)
 let mockInstanceCount = 0;
@@ -2009,6 +2009,205 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     expect(last?.rawContextUsage).toMatchObject({
       totalTokens: 30_000,
       maxTokens: 272_000,
+    });
+  });
+
+  describe('completed tool payload retention', () => {
+    const TOOL_COUNT = 20;
+    const payload = (label: string) => `PAYLOAD-${label}:${'tool output line\n'.repeat(10_000)}`;
+
+    function toolHeavyTurn(): Array<Record<string, unknown>> {
+      const events: Array<Record<string, unknown>> = [{ type: 'turn.started' }];
+      for (let i = 0; i < TOOL_COUNT; i++) {
+        const item = {
+          id: `cmd-${i}`,
+          type: 'command_execution',
+          command: `cat INPUT-${i}.log`,
+          aggregated_output: payload(`cmd-${i}`),
+          exit_code: 0,
+          status: 'completed',
+        };
+        events.push({
+          type: 'item.started',
+          item: { ...item, aggregated_output: '', status: 'in_progress' },
+        });
+        events.push({ type: 'item.completed', item });
+        if (i === TOOL_COUNT / 2) {
+          events.push({
+            type: 'event_msg',
+            payload: { type: 'agent_message', message: 'Halfway through the logs.' },
+          });
+        }
+      }
+      const todo = {
+        id: 'todo-1',
+        type: 'todo_list',
+        items: [{ text: 'Summarize logs', completed: true }],
+      };
+      events.push(
+        {
+          type: 'item.completed',
+          item: {
+            id: 'mcp-1',
+            type: 'mcp_tool_call',
+            server: 'agor',
+            tool: 'agor_execute_tool',
+            arguments: { tool_name: 'INPUT-mcp' },
+            result: { content: [{ type: 'text', text: payload('mcp') }] },
+            status: 'completed',
+          },
+        },
+        { type: 'item.updated', item: todo },
+        { type: 'item.completed', item: todo },
+        {
+          type: 'item.completed',
+          item: { id: 'reasoning-1', type: 'reasoning', text: 'Thinking' },
+        },
+        { type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: 'Done.' } },
+        {
+          type: 'turn.completed',
+          usage: { input_tokens: 10, output_tokens: 5, cached_input_tokens: 0 },
+        }
+      );
+      return events;
+    }
+
+    const isToolBlock = (block: { type: string }) =>
+      block.type === 'tool_use' || block.type === 'tool_result';
+
+    async function collect(retainCompletedTools?: boolean) {
+      const { service } = await makeInitializedStreamingService(null);
+      mockStreamEvents = toolHeavyTurn();
+      const events: CodexStreamEvent[] = [];
+      for await (const event of service.promptSessionStreaming(
+        testSessionId,
+        'go',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        retainCompletedTools === undefined ? undefined : { retainCompletedTools }
+      )) {
+        events.push(event);
+      }
+      return events;
+    }
+
+    it('drops turn-end tool copies when asked, emitting identical tool events', async () => {
+      const retained = await collect();
+      const dropped = await collect(false);
+      expect(await collect(true)).toEqual(retained);
+
+      // Every streamed event other than the final complete is unchanged.
+      expect(dropped.slice(0, -1)).toEqual(retained.slice(0, -1));
+      const toolCompletes = dropped.filter((event) => event.type === 'tool_complete');
+      expect(toolCompletes).toHaveLength(TOOL_COUNT + 2); // + MCP + one TodoWrite
+      expect(toolCompletes[0]).toMatchObject({ toolUse: { output: payload('cmd-0') } });
+
+      const retainedFinal = retained.at(-1);
+      const droppedFinal = dropped.at(-1);
+      if (retainedFinal?.type !== 'complete' || droppedFinal?.type !== 'complete') {
+        throw new Error('expected a final complete event');
+      }
+
+      // Legacy/default mode keeps the full copies for the final message.
+      expect(retainedFinal.toolUses).toHaveLength(TOOL_COUNT + 2);
+      const retainedBlocks = retainedFinal.content.filter(isToolBlock);
+      // The todo list has no output/status, so it has no tool_result block.
+      expect(retainedBlocks.filter((block) => block.type === 'tool_use')).toHaveLength(
+        TOOL_COUNT + 2
+      );
+      expect(retainedBlocks.filter((block) => block.type === 'tool_result')).toHaveLength(
+        TOOL_COUNT + 1
+      );
+      for (let i = 0; i < TOOL_COUNT; i++) {
+        expect(JSON.stringify(retainedFinal)).toContain(`PAYLOAD-cmd-${i}:`);
+      }
+
+      // Without retention the final event carries only the non-tool blocks, in order,
+      // and nothing held until turn end references a tool payload or input.
+      expect(droppedFinal).toEqual({
+        ...retainedFinal,
+        content: retainedFinal.content.filter((block) => !isToolBlock(block)),
+        toolUses: undefined,
+      });
+      expect(droppedFinal.content).toEqual([{ type: 'text', text: 'Halfway through the logs.' }]);
+      const finalJson = JSON.stringify(droppedFinal);
+      expect(finalJson).not.toContain('PAYLOAD-');
+      expect(finalJson).not.toContain('INPUT-');
+    });
+
+    it('streaming execution persists the same messages without the turn-end copies', async () => {
+      async function persistTurn(forceRetain: boolean) {
+        const { service } = await makeInitializedStreamingService(null);
+        const original = service.promptSessionStreaming.bind(service);
+        const spy = vi
+          .spyOn(service, 'promptSessionStreaming')
+          .mockImplementation(
+            (...args: Parameters<CodexPromptService['promptSessionStreaming']>) =>
+              forceRetain
+                ? original(args[0], args[1], args[2], args[3], args[4], args[5], {
+                    ...args[6],
+                    retainCompletedTools: true,
+                  })
+                : original(...args)
+          );
+        const messagesRepo = {
+          findInitialUserMessagesByTaskId: vi.fn(async () => []),
+          getNextIndexBySessionId: vi.fn(async () => 0),
+        };
+        const messagesService = {
+          create: vi.fn(async (message: Partial<Message>) => message as Message),
+          patch: vi.fn(async (_id: string, message: Partial<Message>) => message as Message),
+        } satisfies MessagesService;
+        const tool = new CodexTool(
+          messagesRepo as unknown as MessagesRepository,
+          mockSessionsRepo,
+          mockSessionMCPServerRepo,
+          mockBranchesRepo,
+          undefined,
+          'test-api-key',
+          messagesService
+        );
+        Reflect.set(tool, 'promptService', service);
+        // No branch path: keeps edit-baseline snapshots off this repository.
+        mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1' });
+        mockStreamEvents = toolHeavyTurn();
+        await tool.executePromptWithStreaming(testSessionId, 'go');
+
+        // Message ids and timestamps are generated per run; identify rows by index.
+        const indexById = new Map<string, number>();
+        const writes = [
+          ...messagesService.create.mock.calls.map(([message]) => {
+            indexById.set(String(message.message_id), Number(message.index));
+            const { message_id: _id, timestamp: _timestamp, ...rest } = message;
+            return { op: 'create', ...rest };
+          }),
+          ...messagesService.patch.mock.calls.map(([id, patch]) => ({
+            op: 'patch',
+            index: indexById.get(id),
+            ...patch,
+          })),
+        ];
+        return { writes, options: spy.mock.calls[0]?.[6] };
+      }
+
+      const legacy = await persistTurn(true);
+      const current = await persistTurn(false);
+      expect(current.options).toEqual({ retainCompletedTools: false });
+      expect(current.writes).toEqual(legacy.writes);
+
+      // Each tool result is persisted exactly once, on its own tool row.
+      const results = current.writes
+        .flatMap((write) => (Array.isArray(write.content) ? write.content : []))
+        .filter((block) => block.type === 'tool_result');
+      expect(results.map((block) => block.tool_use_id).sort()).toEqual(
+        [...Array.from({ length: TOOL_COUNT }, (_, i) => `cmd-${i}`), 'mcp-1'].sort()
+      );
+      expect(results.find((block) => block.tool_use_id === 'cmd-0')).toMatchObject({
+        content: payload('cmd-0'),
+        is_error: false,
+      });
     });
   });
 
