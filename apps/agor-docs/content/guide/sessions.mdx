@@ -378,8 +378,10 @@ without creating a session, avoiding repeated retries while their configuration 
 
 Conversations open with the latest ten turns, showing user and assistant messages.
 Scroll up or select **Load older history** to read earlier turns. While you stay at the
-latest turn, the conversation keeps at most 30 turns loaded: older turns are unloaded
-and return through **Load older history**. Nothing is unloaded while you are scrolled up.
+latest turn, the conversation normally keeps the latest 30 turns loaded: older turns are
+unloaded and return through **Load older history**. Turns still running, awaiting an
+approval or answer, or open in an expanded section stay loaded, along with everything
+after them. Nothing is unloaded while you are scrolled up.
 
 Expand **Tool calls** to load a turn's recorded tool activity. Tool groups are
 collapsed by default; inside an open group, file edits show their diffs. Expand

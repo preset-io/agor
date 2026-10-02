@@ -31,6 +31,7 @@ import {
   attachReactiveSessionApi,
   LEAN_TRANSCRIPT_TASK_WINDOW,
   type ReactiveAgorClient,
+  type ReactiveContextWindow,
   type ReactiveLoadedTaskIds,
   type ReactiveMessagesByTask,
   type ReactiveSessionHandle,
@@ -75,6 +76,7 @@ export { getGatewayCredentialPresentation } from '@agor/core/types';
 export * from './models';
 export type {
   ReactiveAgorClient,
+  ReactiveContextWindow,
   ReactiveLoadedTaskIds,
   ReactiveMessagesByTask,
   ReactiveSessionHandle,

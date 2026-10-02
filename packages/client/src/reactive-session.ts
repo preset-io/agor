@@ -66,6 +66,19 @@ export interface ToolExecutionState {
 }
 
 /**
+ * The Session's latest context-window snapshot: a few fields of the newest
+ * turn that reported one, kept even after that turn leaves the lean
+ * transcript. Never the Task or its raw SDK response.
+ */
+export interface ReactiveContextWindow {
+  task_id: string;
+  computed_context_window: number;
+  model?: string;
+  duration_ms?: number;
+  normalized_sdk_response: NonNullable<Task['normalized_sdk_response']>;
+}
+
+/**
  * Named collection aliases improve IntelliSense discoverability for nested session state.
  */
 export type ReactiveMessagesByTask = Map<string, Message[]>;
@@ -90,6 +103,8 @@ export interface ReactiveSessionState {
   loadedTaskIds: ReactiveLoadedTaskIds;
   /** POC-only older-history cursor state. */
   hasOlderTasks?: boolean;
+  /** Independent of which turns are loaded; see ReactiveContextWindow. */
+  latestContextWindow?: ReactiveContextWindow;
   connected: boolean;
   loading: boolean;
   error: string | null;
@@ -231,6 +246,8 @@ export class ReactiveSessionHandle {
   private readonly recentDetailTaskIds = new Set<string>();
   private readonly detailPins = new Map<string, number>();
   private readonly detailTaskIds = new Set<string>();
+  // Memoized per Session.tasks array: display rank by Task ID.
+  private displayRanks: { order: readonly string[]; ranks: Map<string, number> } | undefined;
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -823,8 +840,10 @@ export class ReactiveSessionHandle {
       loading: false,
       connected: false,
       hasOlderTasks: false,
+      latestContextWindow: undefined,
     };
     this.streamTaskIndex = undefined;
+    this.displayRanks = undefined;
     this.retiredStreamTasks.clear();
     this.queueSnapshot = [];
     this.detailInflight.clear();
@@ -940,7 +959,7 @@ export class ReactiveSessionHandle {
     if (event.task_id && observedTaskId && event.task_id !== observedTaskId) return false;
     const taskId = event.task_id ?? observedTaskId;
     const index = this.indexStreamTasks(this.stateSnapshot.tasks);
-    if (taskId && (index.terminalIds.has(taskId) || this.belowLeanWindow(taskId))) return false;
+    if (taskId && (index.terminalIds.has(taskId) || this.outsideLeanWindow(taskId))) return false;
     // Old transports omitted task_id. Do not attribute their late chunks to a
     // completed turn; preserve pre-bootstrap and active mid-stream attachment.
     return !!taskId || this.stateSnapshot.loading || !!index.latestExecutingId;
@@ -1004,6 +1023,8 @@ export class ReactiveSessionHandle {
       };
     }
     next = this.settleTerminalStreams(next);
+    if (next.tasks !== this.stateSnapshot.tasks || next.terminal !== this.stateSnapshot.terminal)
+      next = this.projectContextWindow(next);
     if (this.options.cacheScope === 'preview') {
       const latest = next.tasks.filter((task) => task.status !== TaskStatus.QUEUED).at(-1);
       const keep = new Set<string>(next.tasks.filter(isTaskExecuting).map((task) => task.task_id));
@@ -1041,6 +1062,50 @@ export class ReactiveSessionHandle {
     this.stateSnapshot = next;
     this.notify();
     return next;
+  }
+
+  /**
+   * Follow the newest turn that reported a context-window snapshot. A loaded
+   * turn replaces the projection unless the projected turn has left the
+   * transcript and is displayed after it (an older page loading back).
+   */
+  private projectContextWindow(state: ReactiveSessionState): ReactiveSessionState {
+    if (state.terminal)
+      return state.latestContextWindow ? { ...state, latestContextWindow: undefined } : state;
+    const current = state.latestContextWindow;
+    for (let i = state.tasks.length - 1; i >= 0; i--) {
+      const task = state.tasks[i];
+      const used = task.computed_context_window;
+      const normalized = task.normalized_sdk_response;
+      if (used === undefined || used <= 0 || !normalized) continue;
+      if (
+        current &&
+        current.task_id !== task.task_id &&
+        !state.tasks.some((loaded) => loaded.task_id === current.task_id) &&
+        (this.displayRank(task.task_id, state.session) ?? Number.POSITIVE_INFINITY) <
+          (this.displayRank(current.task_id, state.session) ?? Number.POSITIVE_INFINITY)
+      )
+        return state;
+      if (
+        current?.task_id === task.task_id &&
+        current.computed_context_window === used &&
+        current.normalized_sdk_response === normalized &&
+        current.model === task.model &&
+        current.duration_ms === task.duration_ms
+      )
+        return state;
+      return {
+        ...state,
+        latestContextWindow: {
+          task_id: task.task_id,
+          computed_context_window: used,
+          model: task.model,
+          duration_ms: task.duration_ms,
+          normalized_sdk_response: normalized,
+        },
+      };
+    }
+    return state;
   }
 
   private commitBootstrapState(args: {
@@ -1133,16 +1198,19 @@ export class ReactiveSessionHandle {
   }
 
   /**
-   * Lean conversation: drop the oldest loaded turns beyond
+   * Lean conversation: drop the oldest displayed turns beyond
    * LEAN_TRANSCRIPT_TASK_WINDOW, for a reader parked at the latest turns. They
    * become not-yet-loaded history again; loadOlderTasks() pages them back.
    *
-   * Only an unbroken oldest run of settled turns goes, so loaded history stays
-   * one gap-free ID window from the cursor. The run stops at a turn that is
-   * not terminal (running or streaming), is pinned (retainTaskDetails), awaits a
-   * permission/input/widget answer, or is `keepFromTaskId` (the first turn the
-   * reader sees). Refused while a history read is in flight, so no page or
-   * resync snapshot commits across a trim. Returns whether anything was dropped.
+   * "Oldest" is display order (Session.tasks, appended at dispatch), never
+   * task-ID order: a callback or auto-resume Task keeps its source's UUIDv7
+   * timestamp, and a queued prompt promoted after newer ones runs last with
+   * an older ID. Only an unbroken run from the top of the transcript goes,
+   * never the latest window. It stops at a turn that is not terminal (running
+   * or streaming), is pinned (retainTaskDetails), awaits a permission/input/
+   * widget answer, or is `keepFromTaskId` (the first turn the reader sees).
+   * Refused while a history read is in flight, so no page or resync snapshot
+   * commits across a trim. Returns whether anything was dropped.
    */
   trimOlderTasks(keepFromTaskId?: string): boolean {
     const { tasks, messagesByTask, loading, terminal } = this.stateSnapshot;
@@ -1155,43 +1223,57 @@ export class ReactiveSessionHandle {
       terminal
     )
       return false;
-    const loaded = tasks
-      .filter((task) => task.status !== TaskStatus.QUEUED)
-      .sort((a, b) => (a.task_id < b.task_id ? -1 : 1));
+    const loaded = tasks.filter((task) => task.status !== TaskStatus.QUEUED);
     const excess = loaded.length - LEAN_TRANSCRIPT_TASK_WINDOW;
     if (excess <= 0) return false;
-    const trimmed = new Set<string>();
-    for (const { task_id: id, status } of loaded.slice(0, excess)) {
+    const visible =
+      keepFromTaskId === undefined
+        ? loaded.length
+        : loaded.findIndex((task) => task.task_id === keepFromTaskId);
+    if (visible === -1) return false;
+    const trimmed: string[] = [];
+    for (const { task_id: id, status } of loaded.slice(0, Math.min(excess, visible))) {
       // Terminal settlement has already stopped every stream of a terminal turn.
       if (
-        (keepFromTaskId !== undefined && id >= keepFromTaskId) ||
         !isTerminalTaskStatus(status) ||
         this.detailPins.has(id) ||
         awaitsReader(messagesByTask.get(id))
       )
         break;
-      trimmed.add(id);
+      trimmed.push(id);
     }
-    if (trimmed.size === 0) return false;
-    this.leanOldestTaskId = loaded[trimmed.size].task_id;
-    for (const id of trimmed) {
+    // Older pages are still read by task ID (`$lte cursor`), so the cursor must
+    // keep its meaning: every Task at or above it stays loaded. It therefore
+    // moves to the lowest kept ID above every trimmed one. Kept turns below it
+    // (callbacks, late promotions) are extras the page dedupes.
+    const highest = trimmed.reduce((max, id) => (id > max ? id : max), '');
+    const cursor = this.leanOldestTaskId ?? '';
+    let next: string | undefined;
+    for (const { task_id: id } of loaded.slice(trimmed.length)) {
+      if (id > highest && id >= cursor && (next === undefined || id < next)) next = id;
+    }
+    // Every kept turn sorts below a trimmed one: ID paging could not restore them.
+    if (trimmed.length === 0 || next === undefined) return false;
+    this.leanOldestTaskId = next;
+    const dropped = new Set(trimmed);
+    for (const id of dropped) {
       this.recentDetailTaskIds.delete(id);
       this.detailTaskIds.delete(id);
       this.leanLiveTaskIds.delete(id);
       // Also fences a detail read still in flight for the turn.
       this.messageCacheMutationsByTask.delete(id);
     }
-    const kept = <V>(map: Map<string, V>) => new Map([...map].filter(([id]) => !trimmed.has(id)));
+    const kept = <V>(map: Map<string, V>) => new Map([...map].filter(([id]) => !dropped.has(id)));
     this.updateState((prev) => ({
       ...prev,
-      tasks: prev.tasks.filter((task) => !trimmed.has(task.task_id)),
+      tasks: prev.tasks.filter((task) => !dropped.has(task.task_id)),
       messagesByTask: kept(prev.messagesByTask),
       toolsByTask: kept(prev.toolsByTask),
-      loadedTaskIds: new Set([...prev.loadedTaskIds].filter((id) => !trimmed.has(id))),
+      loadedTaskIds: new Set([...prev.loadedTaskIds].filter((id) => !dropped.has(id))),
       // A settled partial has no reload path; it goes with its turn, as on a reload.
       streamingMessages: new Map(
         [...prev.streamingMessages].filter(
-          ([, stream]) => !stream.task_id || !trimmed.has(stream.task_id)
+          ([, stream]) => !stream.task_id || !dropped.has(stream.task_id)
         )
       ),
       hasOlderTasks: true,
@@ -1199,19 +1281,42 @@ export class ReactiveSessionHandle {
     return true;
   }
 
+  /** A Task's position in Session.tasks (dispatch order); undefined before dispatch. */
+  private displayRank(taskId: string, session = this.stateSnapshot.session): number | undefined {
+    const order = session?.tasks;
+    if (!order?.length) return undefined;
+    if (this.displayRanks?.order !== order)
+      this.displayRanks = { order, ranks: new Map(order.map((id, rank) => [id, rank])) };
+    return this.displayRanks.ranks.get(taskId);
+  }
+
+  /** Display rank of the first loaded turn, the top of the lean transcript. */
+  private leanDisplayFloor(): number | undefined {
+    for (const task of this.stateSnapshot.tasks) {
+      const rank = this.displayRank(task.task_id);
+      if (rank !== undefined) return rank;
+    }
+    return undefined;
+  }
+
   /**
-   * Lean conversation history is one task-ID window from the older-history
-   * cursor to the latest turn. Traffic for a settled turn below it (never
-   * loaded, or trimmed) must not re-add it above an invisible gap; it returns
-   * through loadOlderTasks(). Pass the Task when known: executing or queued
-   * turns are always admitted.
+   * Lean conversation: true for traffic about a settled turn displayed above
+   * the loaded transcript (never loaded, or trimmed). Applying it would re-add
+   * that turn above an invisible gap; it returns through loadOlderTasks().
+   * Unsettled Tasks, Tasks not yet in Session.tasks, and turns displayed at or
+   * below the top of the transcript are new, so callbacks and promoted queued
+   * prompts are always admitted. Before the first page commits, a settled
+   * Task cannot be placed at all; the page snapshot carries what it needs.
    */
-  private belowLeanWindow(taskId: string, task?: Task): boolean {
+  private outsideLeanWindow(taskId: string, task?: Task): boolean {
     if (this.options.taskHydration !== 'lean' || this.options.cacheScope !== 'session')
       return false;
-    if (this.leanOldestTaskId === undefined || taskId >= this.leanOldestTaskId) return false;
-    if (task && (task.status === TaskStatus.QUEUED || isTaskExecuting(task))) return false;
-    return !this.indexStreamTasks(this.stateSnapshot.tasks).byId.has(taskId);
+    if (this.indexStreamTasks(this.stateSnapshot.tasks).byId.has(taskId)) return false;
+    if (task && !isTerminalTaskStatus(task.status)) return false;
+    if (task && this.stateSnapshot.loading) return true;
+    const rank = this.displayRank(taskId);
+    const floor = this.leanDisplayFloor();
+    return rank !== undefined && floor !== undefined && rank < floor;
   }
 
   private syncLeanHistory(older = false): Promise<void> {
@@ -1315,6 +1420,24 @@ export class ReactiveSessionHandle {
         }
       }
       for (const task of page) byId.set(task.task_id, task);
+      if (!older && this.options.cacheScope !== 'preview') {
+        // Pages are read in task-ID order, but the newest displayed turn can
+        // carry an older ID (a callback keeps its source's timestamp; a queued
+        // prompt promoted after newer ones runs last). Always load the newest
+        // displayed turns, wherever their IDs sort; below the cursor they are
+        // extras an older page dedupes.
+        for (const taskId of (session.tasks ?? []).slice(-pageSize)) {
+          if (stale()) return;
+          if (byId.has(taskId)) continue;
+          try {
+            const task = await this.client.service('tasks').get(taskId);
+            if (task.status !== TaskStatus.QUEUED) byId.set(taskId, task);
+          } catch (error) {
+            if (errorStatusCode(error) !== 404) throw error;
+          }
+        }
+      }
+      const fetchedIds = new Set(byId.keys());
       const tasks = this.reconcileTaskFetch(taskToken, [...byId.values()]);
       const fullIds = new Set(this.stateSnapshot.loadedTaskIds);
       const snapshots = new Map<string, Message[]>();
@@ -1354,10 +1477,23 @@ export class ReactiveSessionHandle {
       if (page.length && (older || !this.leanOldestTaskId))
         this.leanOldestTaskId = page.at(-1)!.task_id;
       this.updateState((prev) => {
-        // A journaled event can name a turn trimmed or never reached.
+        // Commit the snapshot's rows and turns already shown. A journaled event
+        // alone names a turn its live handler refused (trimmed, or above the
+        // transcript). A reconnect page adds no settled turn displayed above the
+        // transcript's top; only an older page widens it.
+        const shown = new Set(prev.tasks.map((task) => task.task_id));
+        const floor =
+          older || prev.loading || this.options.cacheScope === 'preview'
+            ? undefined
+            : this.leanDisplayFloor();
         const committedTasks = orderTasksBySession(
           this.reconcileTaskFetch(taskToken, tasks).filter(
-            (task) => !this.belowLeanWindow(task.task_id, task)
+            ({ task_id: id, status }) =>
+              shown.has(id) ||
+              (fetchedIds.has(id) &&
+                (floor === undefined ||
+                  !isTerminalTaskStatus(status) ||
+                  (this.displayRank(id, session) ?? Number.POSITIVE_INFINITY) >= floor))
           ),
           session.tasks
         );
@@ -1590,7 +1726,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.belowLeanWindow(task.task_id, task)) return;
+      if (this.outsideLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -1608,7 +1744,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.belowLeanWindow(task.task_id, task)) return;
+      if (this.outsideLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
@@ -1664,7 +1800,7 @@ export class ReactiveSessionHandle {
     );
 
     const onToolStart = (event: ToolStartEvent) => {
-      if (!this.matchesSession(event.session_id) || this.belowLeanWindow(event.task_id)) return;
+      if (!this.matchesSession(event.session_id) || this.outsideLeanWindow(event.task_id)) return;
       if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
@@ -1685,7 +1821,7 @@ export class ReactiveSessionHandle {
       });
     };
     const onToolComplete = (event: ToolCompleteEvent) => {
-      if (!this.matchesSession(event.session_id) || this.belowLeanWindow(event.task_id)) return;
+      if (!this.matchesSession(event.session_id) || this.outsideLeanWindow(event.task_id)) return;
       if (this.options.taskHydration === 'lean') this.markLeanLive(event.task_id);
       this.updateState((prev) => {
         const existing = prev.toolsByTask.get(event.task_id) || [];
@@ -1727,7 +1863,7 @@ export class ReactiveSessionHandle {
         }
 
         const shouldTrackMessages =
-          (this.options.taskHydration === 'lean' && !this.belowLeanWindow(message.task_id)) ||
+          (this.options.taskHydration === 'lean' && !this.outsideLeanWindow(message.task_id)) ||
           this.options.taskHydration === 'eager' ||
           prev.loadedTaskIds.has(message.task_id);
 
@@ -1756,7 +1892,7 @@ export class ReactiveSessionHandle {
       this.recordMessageMutation('upsert', message);
       this.updateState((prev) => {
         const shouldTrackMessages =
-          (this.options.taskHydration === 'lean' && !this.belowLeanWindow(taskId)) ||
+          (this.options.taskHydration === 'lean' && !this.outsideLeanWindow(taskId)) ||
           this.options.taskHydration === 'eager' ||
           prev.loadedTaskIds.has(taskId);
         if (!shouldTrackMessages) return prev;
@@ -1776,7 +1912,7 @@ export class ReactiveSessionHandle {
       this.updateState((prev) => {
         const nextStreaming = new Map(prev.streamingMessages);
         nextStreaming.delete(message.message_id);
-        if (!taskId || this.belowLeanWindow(taskId)) {
+        if (!taskId || this.outsideLeanWindow(taskId)) {
           return {
             ...prev,
             streamingMessages: nextStreaming,
