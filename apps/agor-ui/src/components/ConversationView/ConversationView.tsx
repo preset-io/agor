@@ -26,6 +26,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSta
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { useRetainEngagedTurns } from '../../hooks/useTaskDetailRetention';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
@@ -341,6 +342,16 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       (taskId: string) => reactiveSession?.retainTaskDetails(taskId),
       [reactiveSession]
     );
+    // Focus or a selection inside a turn keeps it from being evicted.
+    const turnsRoot = useRef<HTMLDivElement | null>(null);
+    useRetainEngagedTurns(turnsRoot, handleRetainTaskDetails);
+    const setTurnsViewport = useCallback(
+      (element: HTMLDivElement | null) => {
+        turnsRoot.current = element;
+        setScrollViewport(element);
+      },
+      [setScrollViewport]
+    );
 
     const [loadingOlder, setLoadingOlder] = useState(false);
     const olderInflight = useRef<object | null>(null);
@@ -565,7 +576,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
 
     return (
       <div
-        ref={setScrollViewport}
+        ref={setTurnsViewport}
         data-testid="conversation-scroll-container"
         onWheel={(event) => {
           // At the top (including an underfilled page), upward intent cannot

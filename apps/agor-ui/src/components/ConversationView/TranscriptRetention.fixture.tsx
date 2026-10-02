@@ -21,6 +21,8 @@ const THINKING_BYTES = 64 * 1024;
 const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
 let turns = 0;
 let detailReadDelay = 0;
+/** Turns whose answer also edits a file: a default-open body beside the text. */
+const editTurns = new Set<number>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -87,6 +89,20 @@ function messages(n: number): Message[] {
           text: JSON.parse(JSON.stringify(thinking + 'y'.repeat(THINKING_BYTES - thinking.length))),
         },
         { type: 'text', text: `Answer ${n}` },
+        ...(editTurns.has(n)
+          ? [
+              {
+                type: 'tool_use',
+                id: `edit-${n}`,
+                name: 'Edit',
+                input: {
+                  file_path: `/edit-${n}.txt`,
+                  old_string: 'before',
+                  new_string: `TRANSCRIPT_EDIT_${n}`,
+                },
+              },
+            ]
+          : []),
       ],
     },
   ] as Message[];
@@ -177,13 +193,15 @@ export const fixture = {
     );
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn() {
+  addTurn({ edit = false } = {}) {
     const n = turns++;
+    if (edit) editTurns.add(n);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));
     return taskId(n);
   },
+  taskId,
   /** Hold full-detail reads open so the loading state can be observed. */
   delayDetailReads(ms: number) {
     detailReadDelay = ms;

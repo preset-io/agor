@@ -33,6 +33,13 @@ const reasoningShown = (page, taskId, n) =>
     [taskId, `TRANSCRIPT_THINKING_${n}_`]
   );
 
+/** A reader moving on: focus and selection leave the transcript. */
+const disengage = (page) =>
+  page.evaluate(() => {
+    document.activeElement?.blur();
+    document.getSelection()?.removeAllRanges();
+  });
+
 const range = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
 const both = (turns) => ({ tools: turns, thinking: turns });
 
@@ -66,6 +73,7 @@ test('lean transcript releases old turn payloads beyond the recent-turn budget',
     await chain.click(); // collapse tools: the reasoning pin still holds the turn
     assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(20, 29)]));
     await reasoning.click(); // collapse reasoning: the last pin is released
+    await disengage(page); // the collapsed trigger keeps its turn while focused
     assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)), 'collapsed turn is released');
     assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
 
@@ -104,5 +112,101 @@ test('lean transcript releases turns that were already full when the reader open
     }
     await page.getByText('Answer 29').waitFor();
     assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)));
+  });
+});
+
+test('a reopened file edit, keyboard focus or a selection keeps its turn while engaged', {
+  timeout: 120_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    const first = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ edit: true })
+    );
+    const turn = page.locator(`[data-task-block="${first}"]`);
+    const editShown = () =>
+      page.evaluate(
+        (id) =>
+          !!document
+            .querySelector(`[data-task-block="${id}"]`)
+            ?.textContent?.includes('TRANSCRIPT_EDIT_0'),
+        first
+      );
+    // Show the turn's activity, then close the tool calls again: the edit, open
+    // by default inside the answer, stays visible with no tool-chain pin.
+    const chainZero = turn.getByRole('button', { name: '1 tool call' });
+    await chainZero.click();
+    await chainZero.click();
+    // The reader collapses and reopens the default-open edit.
+    const edit = turn.locator('button[aria-expanded]').filter({ hasText: 'Edit/edit-0.txt' });
+    assert.equal(await edit.getAttribute('aria-expanded'), 'true');
+    await edit.click();
+    await edit.click();
+    assert.equal(await edit.getAttribute('aria-expanded'), 'true');
+    await disengage(page); // isolate the reader's pin from focus protection
+    for (let n = 1; n < 30; n++) {
+      await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 29').waitFor();
+    assert.equal(await editShown(), true, 'the reopened diff stays beyond the budget');
+    assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(20, 29)]));
+    await edit.click(); // collapse the reopened edit: its pin is released
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)));
+
+    // Keyboard: expand and collapse turn 20's tool calls, keeping focus there.
+    const twenty = await page.evaluate(() => window.transcriptRetentionFixture.taskId(20));
+    const chain = page
+      .locator(`[data-task-block="${twenty}"]`)
+      .getByRole('button', { name: '1 tool call' });
+    await chain.focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter');
+    assert.equal(await chain.getAttribute('aria-expanded'), 'false');
+    await page.evaluate(() => {
+      window.__focused = document.activeElement;
+    });
+    // A reader selects text in turn 21.
+    const selected = await page.evaluate(
+      (id) => {
+        const root = document.querySelector(`[data-task-block="${id}"]`);
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        let node = walker.nextNode();
+        while (node && !node.data.includes('Answer 21')) node = walker.nextNode();
+        const range = document.createRange();
+        range.selectNodeContents(node);
+        document.getSelection().removeAllRanges();
+        document.getSelection().addRange(range);
+        return document.getSelection().toString();
+      },
+      await page.evaluate(() => window.transcriptRetentionFixture.taskId(21))
+    );
+    assert.equal(selected, 'Answer 21');
+    for (let n = 30; n < 40; n++) {
+      await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 39').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([20, 21, ...range(30, 39)]));
+    assert.equal(
+      await page.evaluate(
+        () => document.activeElement === window.__focused && window.__focused.isConnected
+      ),
+      true,
+      'the focused trigger survives aging out'
+    );
+    assert.equal(await page.evaluate(() => document.getSelection().toString()), 'Answer 21');
+
+    await page.evaluate(() => {
+      window.__focused = undefined;
+      document.activeElement?.blur();
+    });
+    assert.deepEqual(await liveTurns(page, cdp), both([21, ...range(30, 39)]), 'focus left');
+    await page.evaluate(() => document.getSelection()?.removeAllRanges());
+    assert.deepEqual(await liveTurns(page, cdp), both(range(30, 39)), 'selection cleared');
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
   });
 });

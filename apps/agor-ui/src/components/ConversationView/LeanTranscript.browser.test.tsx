@@ -124,6 +124,7 @@ const handle = {
   loadOlderTasks,
   loadTaskMessages,
   unloadTaskMessages: () => {},
+  retainTaskDetails: () => () => {},
   resync: async () => {},
 } as unknown as ReactiveSessionHandle;
 let currentHandle = handle;
@@ -1026,8 +1027,19 @@ it('pins turn detail only while a reader expands it and releases on collapse and
   await waitFor(() => expect(retain).toHaveBeenCalledTimes(2));
   await userEvent.click(screen.getByText('Extended Thinking'));
   await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
-  await userEvent.click(chain);
+  // The default-open edit stays beside the answer with the chain collapsed.
+  // Collapsing it pins nothing; a reader's reopening does.
+  const edit = screen.getByRole('button', { name: /Edit.*\/a\.ts/, expanded: true });
+  await userEvent.click(edit);
+  expect(edit).toHaveAttribute('aria-expanded', 'false');
+  await userEvent.click(edit);
+  expect(edit).toHaveAttribute('aria-expanded', 'true');
   await waitFor(() => expect(retain).toHaveBeenCalledTimes(3));
+  await userEvent.click(edit);
+  await waitFor(() => expect(release).toHaveBeenCalledTimes(3));
+  await userEvent.click(edit);
+  await userEvent.click(chain);
+  await waitFor(() => expect(retain).toHaveBeenCalledTimes(5));
   view.unmount();
-  expect(release).toHaveBeenCalledTimes(3);
+  expect(release).toHaveBeenCalledTimes(5);
 });

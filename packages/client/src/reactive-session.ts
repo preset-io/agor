@@ -425,7 +425,6 @@ export class ReactiveSessionHandle {
 
   loadTaskMessages(taskId: string): Promise<Message[]> {
     if (this.options.taskHydration !== 'lean') return this.loadTaskMessagesOnce(taskId);
-    this.touchDetails(taskId);
     const existing = this.detailInflight.get(taskId);
     if (existing) return existing;
     const promise = this.loadTaskMessagesOnce(taskId).finally(() => {
@@ -561,6 +560,10 @@ export class ReactiveSessionHandle {
         nextByTask.set(taskId, committed);
         const nextLoaded = new Set(prev.loadedTaskIds);
         nextLoaded.add(taskId);
+        // Recency starts at the commit, not the request: newer turns may have
+        // filled the budget while this read was pending, and the reader who
+        // asked must still receive the detail.
+        if (this.options.taskHydration === 'lean') this.touchDetails(taskId);
         return {
           ...prev,
           messagesByTask: nextByTask,

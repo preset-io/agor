@@ -2867,6 +2867,27 @@ describe('lean transcript detail retention', () => {
     releaseB();
   });
 
+  it('keeps a delayed reload that newer turns overtake until its reader can see it', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const reload = f.handle.loadTaskMessages(turnId(0));
+    // A full recent-turn budget of newer turns arrives while the read is pending.
+    for (let n = 12; n < 12 + LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT; n++) f.runTurn(n);
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    expect(await reload).toEqual([fullMessage(turnId(0), 0)]);
+    // The commit, not the request, makes it the newest recent turn.
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.handle.getTaskMessages(turnId(0))).toEqual([fullMessage(turnId(0), 0)]);
+    for (let n = 22; n < 22 + LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT - 1; n++) f.runTurn(n);
+    expect(f.fullIds()).toContain(turnId(0));
+    f.runTurn(31);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    f.handle.dispose();
+  });
+
   it('keeps no evicted turn reasoning in cached messages or settled thinking streams', async () => {
     const f = await fixture();
     for (let n = 0; n < 15; n++) {

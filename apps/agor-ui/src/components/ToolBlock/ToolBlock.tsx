@@ -134,12 +134,17 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({
   expandedByDefault = false,
   children,
 }) => {
-  const [expanded, setExpanded] = useState(expandedByDefault);
+  // Who opened the body: a default-open body (file edits) is not a reader's
+  // request to keep the turn, or every such turn's detail would stay for as
+  // long as it is mounted. Once the reader toggles it, the reader owns it.
+  const [openedBy, setOpenedBy] = useState<'default' | 'reader' | null>(
+    expandedByDefault ? 'default' : null
+  );
+  const expanded = openedBy !== null;
+  const setExpanded = (next: boolean) => setOpenedBy(next ? 'reader' : null);
   const { token } = theme.useToken();
   const hasBody = !!children;
-  // Only a reader's expansion pins the turn. Default-open bodies (file edits)
-  // would otherwise keep every such turn's detail for as long as it is mounted.
-  useRetainTaskDetailsWhile(expanded && hasBody && !expandedByDefault);
+  useRetainTaskDetailsWhile(openedBy === 'reader' && hasBody);
 
   const statusColor =
     status === 'error'
