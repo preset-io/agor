@@ -236,8 +236,8 @@ export interface MCPCatalogEntryCredentials {
  *
  * - **No client secret.** `curated.yaml` is checked into a public repository
  *   and is byte-identical for every tenant, so a secret in it is a published
- *   secret shared by everyone. A server that cannot work without a confidential
- *   client cannot be a catalog entry.
+ *   secret shared by everyone. A confidential app needs a reviewed
+ *   `configured_client` recipe; its owner supplies credentials through secure UI.
  * - **No `authorization_url` / `token_url`.** These are where an authorization
  *   code and a client credential are sent, so a stale one does not fail closed
  *   — it delivers a live grant to whatever now answers at that hostname. They
@@ -247,10 +247,12 @@ export interface MCPCatalogEntryCredentials {
  *   is responsible for keeping current.
  *
  * None of this is user-specific: an entry is the same for every installer, and
- * the credential each installer obtains is per-user and lives outside the
- * server row entirely.
+ * the grant each installer obtains is per-user and lives outside the server
+ * row. Customer-owned app credentials are encrypted on the owner's server row.
  */
 export interface MCPCatalogEntryOAuth {
+  /** Reviewed customer-owned app setup; contains no credentials or endpoint overrides. */
+  configured_client?: { setup_url: string; issuer: string; secret_required: boolean };
   /** Space-separated OAuth scopes to request. */
   scope?: string;
   /** A pre-registered *public* client id. Never a confidential one. */
@@ -404,6 +406,8 @@ export interface MCPCatalogConnectData {
    * to a row with no reason to carry it.
    */
   bearer_token?: string;
+  /** Browser-only configured app material. Never submit through model-visible tools. */
+  oauth_client?: { client_id: string; client_secret?: string };
   /**
    * The `permission_disclosure` the user was shown and accepted.
    *
@@ -480,6 +484,8 @@ export interface MCPCatalogReadiness {
   reusable_configuration?: boolean;
   /** Eligible canonical shared configuration exists, independent of selected ownership/grant. Advisory only. */
   shared_configuration_available?: boolean;
+  /** Exact operator-selected callback to register in the customer's app. */
+  redirect_uri?: string;
 }
 
 /**

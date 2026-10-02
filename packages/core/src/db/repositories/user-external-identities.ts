@@ -1,5 +1,5 @@
 import type { UserExternalIdentity, UserID } from '@agor/core/types';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import { executeRaw, insert, isPostgresDatabase, select, update } from '../database-wrapper';
 import { userExternalIdentities } from '../schema';
@@ -20,6 +20,19 @@ export class UserExternalIdentityBindingConflictError extends RepositoryError {
  */
 export class UserExternalIdentitiesRepository {
   constructor(private readonly db: Database) {}
+
+  async findForUser(userId: UserID, provider: string, issuer: string) {
+    return select(this.db)
+      .from(userExternalIdentities)
+      .where(
+        and(
+          eq(userExternalIdentities.user_id, userId),
+          eq(userExternalIdentities.provider, provider),
+          eq(userExternalIdentities.issuer, issuer)
+        )
+      )
+      .all();
+  }
 
   /** Serialize JIT projection for one subject on PostgreSQL; SQLite uses IMMEDIATE transactions. */
   async lockProvisioningKey(key: string): Promise<void> {

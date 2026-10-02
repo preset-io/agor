@@ -1,5 +1,5 @@
 /** Two-service PostgreSQL proof for the public MCP OAuth start/callback wiring. */
-
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import {
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -15,14 +15,17 @@ import {
   runWithTenantDatabaseTransaction,
   sql,
   type TenantScopeAwareDatabase,
+  UserExternalIdentitiesRepository,
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, MCPServerID, User, UserID } from '@agor/core/types';
+import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { lockMCPOAuthGrantConfiguration } from './services/mcp-oauth-grant-binding.js';
+import { MCPOAuthRelay, relayBodyHash } from './services/mcp-oauth-relay.js';
 
 const oauthFixture = vi.hoisted(() => ({
   starts: 0,
@@ -68,6 +71,8 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         clientId: string | undefined,
         redirectUri: string,
         options?: {
+          clientSecret?: string;
+          resolveRedirectUri?: (issuer: string) => string;
           resolveDynamicClientRegistration?: (
             request: {
               registrationEndpoint: string;
@@ -86,6 +91,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           ) => Promise<{ registration: { client_id: string }; registrationId?: string }>;
         }
       ) => {
+        redirectUri = options?.resolveRedirectUri?.('https://provider.example.test') ?? redirectUri;
         const ordinal = ++oauthFixture.starts;
         let resolvedClientId = clientId;
         let clientRegistrationId: string | undefined;
@@ -114,7 +120,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           }
         }
         if (!resolvedClientId) throw new Error('Fixture OAuth client was not resolved');
-        const state = `fixture-state-${ordinal}`;
+        const state = randomBytes(32).toString('base64url');
         const authorizationUrl = new URL('https://provider.example.test/authorize');
         authorizationUrl.searchParams.set('state', state);
         authorizationUrl.searchParams.set('redirect_uri', redirectUri);
@@ -127,6 +133,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           redirectUri,
           pkceVerifier: `fixture-verifier-${ordinal}`,
           clientId: resolvedClientId,
+          clientSecret: options?.clientSecret,
           ...(clientRegistrationId ? { clientRegistrationId } : {}),
           state,
           authorizationUrl: authorizationUrl.toString(),
@@ -192,7 +199,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     let originalBaseUrl: string | undefined;
     let originalMasterSecret: string | undefined;
 
-    async function createReplica(label: string): Promise<Replica> {
+    async function createReplica(
+      label: string,
+      config: RegisterServicesContext['config'] = {}
+    ): Promise<Replica> {
       const raw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
       if (!isPostgresDatabase(raw)) throw new Error('PostgreSQL test requires PostgreSQL');
       const db = createTenantScopedDatabaseProxy(raw, {
@@ -212,7 +222,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const { oauthCallbackHandler } = await registerMCPServices({
         db,
         app,
-        config: {} as RegisterServicesContext['config'],
+        config,
         jwtSecret: 'test-jwt',
         daemonUrl: 'https://agor.example.test',
         bundledUiAvailable: false,
@@ -1127,6 +1137,198 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         oauthFixture.afterDcrResolved = undefined;
         releaseStart.resolve();
         await start.catch(() => undefined);
+      }
+    });
+    it('binds signed relay delivery to tenant/user/server and one durable callback winner across replicas', async () => {
+      const cloud = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const cell = generateKeyPairSync('rsa', { modulusLength: 2048 });
+      const keyEnv = 'AGOR_TEST_RELAY_CELL_KEY';
+      process.env[keyEnv] = cell.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      const relayConfig: RegisterServicesContext['config'] = {
+        external_launch: {
+          enabled: true,
+          issuer: 'https://cloud.test',
+          audience: 'launch-audience',
+          exchange_url: 'https://cloud.test/launch',
+          public_key: cloud.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        },
+        mcp_oauth_relay: {
+          callback_origin: 'https://cloud.test',
+          cell_id: 'cell-a',
+          credential_id: 'credential-a',
+          private_key_env: keyEnv,
+        },
+      };
+      const preparations: import('@agor/core/types').MCPOAuthRelayPrepare[] = [];
+      const prepare = vi
+        .spyOn(MCPOAuthRelay.prototype, 'prepare')
+        .mockImplementation(async (input) => {
+          preparations.push(input);
+          return 'https://cloud.test/start/opaque';
+        });
+      const a = await createReplica('relay-A', relayConfig);
+      const b = await createReplica('relay-B', relayConfig);
+      const tenant = `relay-${crypto.randomUUID()}`;
+      try {
+        const { owner, server } = await runWithTenantDatabaseScope(a.db, tenant, async (scoped) => {
+          const owner = await new UsersRepository(scoped).create({
+            email: `${crypto.randomUUID()}@test.example`,
+            name: 'Relay user',
+            role: 'admin',
+          });
+          await new UserExternalIdentitiesRepository(scoped).bind(owner.user_id, {
+            key: createHash('sha256')
+              .update(`https://cloud.test\0https://cloud.test\0user:cloud-alice`)
+              .digest('hex'),
+            provider: 'https://cloud.test',
+            issuer: 'https://cloud.test',
+            subject: 'user:cloud-alice',
+            last_login_at: new Date().toISOString(),
+          });
+          const server = await new MCPServerRepository(scoped).create({
+            name: `relay-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: owner.user_id,
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'per_user',
+              oauth_client_id: 'customer-app',
+              oauth_client_secret: 'customer-app-secret',
+              oauth_dcr_mode: 'disabled',
+              oauth_compatibility_mode: 'strict',
+            },
+          });
+          const raw = await executeRaw(
+            scoped,
+            sql`SELECT data FROM mcp_servers WHERE mcp_server_id = ${server.mcp_server_id}`
+          );
+          expect(JSON.stringify(raw)).not.toContain('customer-app-secret');
+          return { owner, server };
+        });
+        await expect(
+          runWithTenantDatabaseScope(b.db, `${tenant}-other`, (scoped) =>
+            new MCPServerRepository(scoped).findById(server.mcp_server_id)
+          )
+        ).resolves.toBeNull();
+        const start = () =>
+          a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant));
+        const beforeShared = {
+          starts: oauthFixture.starts,
+          registrations: oauthFixture.registrations,
+          exchanges: oauthFixture.exchanges,
+        };
+        await a.app
+          .service('mcp-servers')
+          .patch(server.mcp_server_id, { auth: { oauth_mode: 'shared' } }, params(owner, tenant));
+        await expect(start()).resolves.toMatchObject({ success: false });
+        expect({
+          starts: oauthFixture.starts,
+          registrations: oauthFixture.registrations,
+          exchanges: oauthFixture.exchanges,
+        }).toEqual(beforeShared);
+        expect(preparations).toHaveLength(0);
+        await a.app
+          .service('mcp-servers')
+          .patch(server.mcp_server_id, { auth: { oauth_mode: 'per_user' } }, params(owner, tenant));
+        expect(await start()).toMatchObject({
+          success: true,
+          authorizationUrl: 'https://cloud.test/start/opaque',
+        });
+        const deliver = async (replica: Replica, overrides: Record<string, unknown> = {}) => {
+          const { authorization_url: _authorization, ...binding } = preparations.at(-1)!;
+          const input = { ...binding, code: 'fake-code', iss: binding.issuer, ...overrides };
+          const body = Buffer.from(JSON.stringify(input));
+          const token = jwt.sign(
+            {
+              purpose: 'mcp_oauth_callback',
+              cell_id: 'cell-a',
+              workspace_id: input.workspace_id,
+              tenant_id: input.workspace_id,
+              sub: `user:${input.cloud_user_id}`,
+              body_sha256: relayBodyHash(body),
+            },
+            cloud.privateKey,
+            {
+              algorithm: 'RS256',
+              issuer: 'https://cloud.test',
+              audience: 'agor-cell:cell-a:mcp-oauth-relay',
+              expiresIn: 30,
+              jwtid: crypto.randomUUID(),
+            }
+          );
+          let status = 200;
+          let result: unknown;
+          const response = {
+            setHeader() {},
+            status(value: number) {
+              status = value;
+              return this;
+            },
+            json(value: unknown) {
+              result = value;
+              return this;
+            },
+          };
+          const handler = (
+            replica.app as unknown as {
+              mcpOAuthRelayCallbackHandler(request: unknown, response: unknown): Promise<void>;
+            }
+          ).mcpOAuthRelayCallbackHandler;
+          await handler({ body, headers: { authorization: `Bearer ${token}` } }, response);
+          return { status, result };
+        };
+        const count = oauthFixture.exchanges;
+        for (const overrides of [
+          { workspace_id: `${tenant}-other` },
+          { runtime_user_id: generateId() },
+          { server_id: generateId() },
+          { iss: 'https://wrong-provider.test' },
+        ]) {
+          expect((await deliver(b, overrides)).status).toBe(401);
+        }
+        expect(oauthFixture.exchanges).toBe(count);
+        const results = await Promise.all([deliver(a), deliver(b)]);
+        expect(
+          results.filter(
+            (value) =>
+              value.status === 200 && (value.result as { outcome: string }).outcome === 'connected'
+          )
+        ).toHaveLength(1);
+        expect(oauthFixture.exchanges).toBe(count + 1);
+        expect((await deliver(b)).status).toBe(409);
+        await start();
+        await a.app
+          .service('mcp-servers')
+          .patch(
+            server.mcp_server_id,
+            { auth: { oauth_client_secret: 'rotated-customer-secret' } },
+            params(owner, tenant)
+          );
+        expect((await deliver(b)).result).toEqual({ outcome: 'failed' });
+        expect(oauthFixture.exchanges).toBe(count + 1);
+        await start();
+        const pending = preparations.at(-1)!;
+        const direct = await b.callback({
+          code: 'fake-code',
+          state: pending.state,
+          iss: pending.issuer,
+        });
+        expect(direct.status).not.toBe(200);
+        expect(oauthFixture.exchanges).toBe(count + 1);
+      } finally {
+        prepare.mockRestore();
+        delete process.env[keyEnv];
+        await Promise.all(
+          [a, b].map((replica) =>
+            (replica.raw as RawDatabase & { $client: { end(): Promise<void> } }).$client.end()
+          )
+        );
       }
     });
   }
