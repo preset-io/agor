@@ -248,6 +248,10 @@ export class ReactiveSessionHandle {
   private readonly detailTaskIds = new Set<string>();
   // Memoized per Session.tasks array: display rank by Task ID.
   private displayRanks: { order: readonly string[]; ranks: Map<string, number> } | undefined;
+  // Lean history not loaded and not reachable through the task-ID cursor:
+  // Session.tasks ranks [from, top of the transcript). Older pages drain it
+  // first, in display order, then resume ID paging (`idHasOlder`).
+  private leanBacklog: { from: number; idHasOlder: boolean } | undefined;
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -844,6 +848,7 @@ export class ReactiveSessionHandle {
     };
     this.streamTaskIndex = undefined;
     this.displayRanks = undefined;
+    this.leanBacklog = undefined;
     this.retiredStreamTasks.clear();
     this.queueSnapshot = [];
     this.detailInflight.clear();
@@ -1242,20 +1247,34 @@ export class ReactiveSessionHandle {
         break;
       trimmed.push(id);
     }
-    // Older pages are still read by task ID (`$lte cursor`), so the cursor must
-    // keep its meaning: every Task at or above it stays loaded. It therefore
-    // moves to the lowest kept ID above every trimmed one. Kept turns below it
-    // (callbacks, late promotions) are extras the page dedupes.
-    const highest = trimmed.reduce((max, id) => (id > max ? id : max), '');
-    const cursor = this.leanOldestTaskId ?? '';
-    let next: string | undefined;
-    for (const { task_id: id } of loaded.slice(trimmed.length)) {
-      if (id > highest && id >= cursor && (next === undefined || id < next)) next = id;
+    if (trimmed.length === 0) return false;
+    if (!this.leanBacklog) {
+      // Older pages are read by task ID (`$lte cursor`), so the cursor keeps its
+      // meaning: every Task at or above it stays loaded. It moves to the lowest
+      // kept ID above every trimmed one; kept turns below it (callbacks, late
+      // promotions) are extras the page dedupes. If no kept ID is above them,
+      // the trimmed turns start a display-order backlog instead.
+      const highest = trimmed.reduce((max, id) => (id > max ? id : max), '');
+      const cursor = this.leanOldestTaskId ?? '';
+      let next: string | undefined;
+      for (const { task_id: id } of loaded.slice(trimmed.length)) {
+        if (id > highest && id >= cursor && (next === undefined || id < next)) next = id;
+      }
+      const top = this.displayRank(trimmed[0]);
+      if (next !== undefined) this.leanOldestTaskId = next;
+      else if (top !== undefined)
+        this.leanBacklog = { from: top, idHasOlder: !!this.stateSnapshot.hasOlderTasks };
+      else return false;
     }
-    // Every kept turn sorts below a trimmed one: ID paging could not restore them.
-    if (trimmed.length === 0 || next === undefined) return false;
-    this.leanOldestTaskId = next;
+    // With a backlog, the trimmed run joins it: it ends at the transcript's top.
     const dropped = new Set(trimmed);
+    this.updateState((prev) => ({ ...this.forgetLeanTurns(prev, dropped), hasOlderTasks: true }));
+    return true;
+  }
+
+  /** Remove turns from the lean transcript and every per-turn record of them. */
+  private forgetLeanTurns(state: ReactiveSessionState, dropped: ReadonlySet<string>) {
+    if (dropped.size === 0) return state;
     for (const id of dropped) {
       this.recentDetailTaskIds.delete(id);
       this.detailTaskIds.delete(id);
@@ -1264,21 +1283,19 @@ export class ReactiveSessionHandle {
       this.messageCacheMutationsByTask.delete(id);
     }
     const kept = <V>(map: Map<string, V>) => new Map([...map].filter(([id]) => !dropped.has(id)));
-    this.updateState((prev) => ({
-      ...prev,
-      tasks: prev.tasks.filter((task) => !dropped.has(task.task_id)),
-      messagesByTask: kept(prev.messagesByTask),
-      toolsByTask: kept(prev.toolsByTask),
-      loadedTaskIds: new Set([...prev.loadedTaskIds].filter((id) => !dropped.has(id))),
+    return {
+      ...state,
+      tasks: state.tasks.filter((task) => !dropped.has(task.task_id)),
+      messagesByTask: kept(state.messagesByTask),
+      toolsByTask: kept(state.toolsByTask),
+      loadedTaskIds: new Set([...state.loadedTaskIds].filter((id) => !dropped.has(id))),
       // A settled partial has no reload path; it goes with its turn, as on a reload.
       streamingMessages: new Map(
-        [...prev.streamingMessages].filter(
+        [...state.streamingMessages].filter(
           ([, stream]) => !stream.task_id || !dropped.has(stream.task_id)
         )
       ),
-      hasOlderTasks: true,
-    }));
-    return true;
+    };
   }
 
   /** A Task's position in Session.tasks (dispatch order); undefined before dispatch. */
@@ -1358,28 +1375,59 @@ export class ReactiveSessionHandle {
     const sessionSequence = this.sessionMutationSequence;
     try {
       const pageSize = this.options.cacheScope === 'preview' ? 1 : LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
+      const leanSession = this.options.cacheScope === 'session';
       const cursor = older ? this.leanOldestTaskId : undefined;
+      // An older page drains the display-order backlog before ID paging.
+      const backlog = older ? this.leanBacklog : undefined;
+      const top = backlog ? this.leanDisplayFloor() : undefined;
+      const backlogFrom =
+        backlog && top !== undefined ? Math.max(backlog.from, top - pageSize) : undefined;
+      // The Session row this transcript last knew: reconnect compares against it.
+      const known =
+        !older && leanSession && !this.stateSnapshot.loading
+          ? new Set(this.stateSnapshot.session?.tasks ?? [])
+          : undefined;
       const [session, result] = await Promise.all([
         older && this.stateSnapshot.session
           ? Promise.resolve(this.stateSnapshot.session)
           : this.client.service('sessions').get(this.sessionId),
-        this.client.service('tasks').find({
-          query: {
-            session_id: this.sessionId,
-            $sort: { task_id: -1 },
-            $limit: pageSize + 1,
-            status: { $ne: TaskStatus.QUEUED },
-            ...(cursor ? { task_id: { $lte: cursor } } : {}),
-          },
-        }),
+        backlogFrom !== undefined
+          ? Promise.resolve([] as Task[])
+          : this.client.service('tasks').find({
+              query: {
+                session_id: this.sessionId,
+                $sort: { task_id: -1 },
+                $limit: pageSize + 1,
+                status: { $ne: TaskStatus.QUEUED },
+                ...(cursor ? { task_id: { $lte: cursor } } : {}),
+              },
+            }),
         older ? Promise.resolve() : this.refreshQueue(),
       ]);
       if (stale()) return;
       this.canonicalSessionId = session.session_id;
+      const getTask = async (taskId: string): Promise<Task | undefined> => {
+        try {
+          const task = await this.client.service('tasks').get(taskId);
+          return task.status === TaskStatus.QUEUED ? undefined : task;
+        } catch (error) {
+          if (errorStatusCode(error) === 404) return undefined;
+          throw error;
+        }
+      };
       const rows = Array.isArray(result) ? result : result.data;
       const candidates = rows.filter((task) => task.task_id !== cursor);
-      const page = candidates.slice(0, pageSize);
-      const hasOlder = cursor ? candidates.length >= pageSize : candidates.length > pageSize;
+      let page = candidates.slice(0, pageSize);
+      let hasOlder = cursor ? candidates.length >= pageSize : candidates.length > pageSize;
+      if (backlog && backlogFrom !== undefined && top !== undefined) {
+        page = [];
+        for (const taskId of (session.tasks ?? []).slice(backlogFrom, top).reverse()) {
+          if (stale()) return;
+          const task = await getTask(taskId);
+          if (task) page.push(task);
+        }
+        hasOlder = backlogFrom > backlog.from || backlog.idHasOlder;
+      }
       const byId = new Map(this.stateSnapshot.tasks.map((task) => [task.task_id, task]));
       for (const task of this.queueSnapshot) byId.set(task.task_id, task);
       if (!older) {
@@ -1420,20 +1468,33 @@ export class ReactiveSessionHandle {
         }
       }
       for (const task of page) byId.set(task.task_id, task);
-      if (!older && this.options.cacheScope !== 'preview') {
-        // Pages are read in task-ID order, but the newest displayed turn can
-        // carry an older ID (a callback keeps its source's timestamp; a queued
-        // prompt promoted after newer ones runs last). Always load the newest
-        // displayed turns, wherever their IDs sort; below the cursor they are
-        // extras an older page dedupes.
-        for (const taskId of (session.tasks ?? []).slice(-pageSize)) {
+      let rebaseTop: number | undefined;
+      if (!older && leanSession) {
+        // Pages are read in task-ID order, but a displayed turn can carry an
+        // older ID (a callback keeps its source's timestamp; a queued prompt
+        // promoted after newer ones runs last), even below an exhausted cursor.
+        // Load the newest displayed turns and every turn dispatched since the
+        // Session row this transcript last knew. Past a window of those, rebase
+        // onto the newest window: the rest becomes display-order backlog, so no
+        // gap opens above it.
+        const order = session.tasks ?? [];
+        const added = known ? order.filter((id) => !known.has(id)) : [];
+        const recent = added.slice(-LEAN_TRANSCRIPT_TASK_WINDOW);
+        if (added.length > recent.length) rebaseTop = this.displayRank(recent[0], session);
+        for (const taskId of new Set([...recent, ...order.slice(-pageSize)])) {
           if (stale()) return;
           if (byId.has(taskId)) continue;
-          try {
-            const task = await this.client.service('tasks').get(taskId);
-            if (task.status !== TaskStatus.QUEUED) byId.set(taskId, task);
-          } catch (error) {
-            if (errorStatusCode(error) !== 404) throw error;
+          const task = await getTask(taskId);
+          if (task) byId.set(taskId, task);
+        }
+        // Settled rows above the transcript (an ID page or window reaching into
+        // backlog) are neither hydrated nor committed.
+        const above = rebaseTop ?? (this.leanBacklog ? this.leanDisplayFloor() : undefined);
+        if (above !== undefined) {
+          for (const [taskId, task] of byId) {
+            const rank = this.displayRank(taskId, session);
+            if (isTerminalTaskStatus(task.status) && rank !== undefined && rank < above)
+              byId.delete(taskId);
           }
         }
       }
@@ -1474,29 +1535,45 @@ export class ReactiveSessionHandle {
         generation !== this.leanConnectionGeneration
       )
         return;
-      if (page.length && (older || !this.leanOldestTaskId))
+      if (page.length && !backlog && (older || !this.leanOldestTaskId))
         this.leanOldestTaskId = page.at(-1)!.task_id;
+      if (backlog && backlogFrom === backlog.from) this.leanBacklog = undefined;
+      if (rebaseTop !== undefined) {
+        this.leanBacklog = {
+          from: Math.min(
+            this.leanBacklog?.from ?? Number.POSITIVE_INFINITY,
+            this.leanDisplayFloor() ?? 0
+          ),
+          idHasOlder: this.leanBacklog?.idHasOlder ?? !!this.stateSnapshot.hasOlderTasks,
+        };
+      }
       this.updateState((prev) => {
         // Commit the snapshot's rows and turns already shown. A journaled event
         // alone names a turn its live handler refused (trimmed, or above the
         // transcript). A reconnect page adds no settled turn displayed above the
         // transcript's top; only an older page widens it.
+        // A rebase also drops settled turns already shown above the new top.
         const shown = new Set(prev.tasks.map((task) => task.task_id));
         const floor =
-          older || prev.loading || this.options.cacheScope === 'preview'
-            ? undefined
-            : this.leanDisplayFloor();
-        const committedTasks = orderTasksBySession(
-          this.reconcileTaskFetch(taskToken, tasks).filter(
-            ({ task_id: id, status }) =>
-              shown.has(id) ||
-              (fetchedIds.has(id) &&
-                (floor === undefined ||
-                  !isTerminalTaskStatus(status) ||
-                  (this.displayRank(id, session) ?? Number.POSITIVE_INFINITY) >= floor))
-          ),
-          session.tasks
+          rebaseTop ??
+          (older || prev.loading || !leanSession ? undefined : this.leanDisplayFloor());
+        const reconciled = this.reconcileTaskFetch(taskToken, tasks).filter(
+          ({ task_id: id, status }) => {
+            if (!shown.has(id) && !fetchedIds.has(id)) return false;
+            if (shown.has(id) && rebaseTop === undefined) return true;
+            return (
+              floor === undefined ||
+              !isTerminalTaskStatus(status) ||
+              (this.displayRank(id, session) ?? Number.POSITIVE_INFINITY) >= floor
+            );
+          }
         );
+        const kept = new Set(reconciled.map((task) => task.task_id));
+        prev = this.forgetLeanTurns(
+          prev,
+          new Set([...shown].filter((id) => rebaseTop !== undefined && !kept.has(id)))
+        );
+        const committedTasks = orderTasksBySession(reconciled, session.tasks);
         const ids = new Set<string>(committedTasks.map((task) => task.task_id));
         const messagesByTask = new Map([...prev.messagesByTask].filter(([id]) => ids.has(id)));
         const loadedTaskIds = new Set([...prev.loadedTaskIds].filter((id) => ids.has(id)));
@@ -1526,7 +1603,12 @@ export class ReactiveSessionHandle {
             this.reconcilePersistedStreams(prev.streamingMessages, fetched, messageToken),
             committedTasks
           ),
-          hasOlderTasks: older || prev.hasOlderTasks === undefined ? hasOlder : prev.hasOlderTasks,
+          hasOlderTasks:
+            rebaseTop !== undefined
+              ? true
+              : older || prev.hasOlderTasks === undefined
+                ? hasOlder
+                : prev.hasOlderTasks,
           loading: false,
           error: null,
           lastSyncedAt: new Date().toISOString(),

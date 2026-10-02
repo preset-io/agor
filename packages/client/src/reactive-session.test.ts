@@ -3439,6 +3439,77 @@ describe('lean transcript window follows displayed turn order', () => {
     f.handle.dispose();
   });
 
+  /** A 4-turn Session whose whole history is loaded: the ID cursor is exhausted. */
+  async function shortSession() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 4; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.hasOlderTasks).toBe(false);
+    /** Callback turns completing while the reader is offline; IDs sort below every turn. */
+    const offlineCallbacks = (count: number) => {
+      const ids = Array.from({ length: count }, (_, k) =>
+        completionCallbackTaskId(
+          `0199a000-0000-7000-8000-${String(k).padStart(12, '0')}` as TaskID,
+          SESSION_ID as SessionID
+        )
+      );
+      for (const id of ids) {
+        expect(id < turn(0)).toBe(true);
+        opts.tasks.push(makeTask(id, TaskStatus.COMPLETED));
+        opts.messagesByTask[id] = [answer(id) as Message];
+      }
+      return ids;
+    };
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    return { ...mock, opts, handle, offlineCallbacks, taskIds };
+  }
+
+  it('reconciles every turn dispatched while offline, even below an exhausted cursor', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(15);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    for (const id of callbacks) expect(f.handle.getTaskMessages(id)).toHaveLength(1);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('loads the newest window after more offline turns than it holds, the rest via older history', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(LEAN_TRANSCRIPT_TASK_WINDOW + 7);
+    f.fireIo('connect');
+    await f.handle.ready();
+    // Never a gap above the newest window: earlier turns become older history.
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Older history pages back in display order, then reports it is exhausted.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([turn(1), turn(2), turn(3), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Late traffic for still-unloaded history is not placed above the transcript.
+    f.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    expect(f.taskIds()).not.toContain(turn(0));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    // A later trim still follows display order.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    f.handle.dispose();
+  });
+
   it('loads a newest callback on open even when it is not among the highest task IDs', async () => {
     const f = await fixture();
     const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
