@@ -351,3 +351,57 @@ test('a portaled fullscreen viewer keeps its turn open and focused until closed'
     assert.deepEqual(await liveTurns(page, cdp), both([]));
   });
 });
+
+test('a byte budget releases very large turns before the turn count would', {
+  timeout: 180_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    const MiB = 1024 * 1024;
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    // Eight 6 MiB reads: within the ten-turn count, but only five fit 32 MiB.
+    const ids = [];
+    for (let n = 0; n < 8; n++) {
+      ids.push(
+        await page.evaluate(
+          (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
+          6 * MiB
+        )
+      );
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 7').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both(range(3, 7)), 'oldest large turns released');
+
+    // A reader re-expands an evicted large turn: its pin holds it within budget.
+    const zero = page.locator(`[data-task-block="${ids[0]}"]`);
+    const chain = zero.getByRole('button', { name: '1 tool call' });
+    await chain.click();
+    await zero.getByText('Read').first().waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(4, 7)]));
+
+    // One read larger than the whole budget is kept only while protected.
+    await chain.click();
+    await disengage(page);
+    const huge = await page.evaluate(
+      (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
+      36 * MiB
+    );
+    await page.getByText('Answer 8').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([8]), 'the latest turn is protected');
+    await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+    await page.getByText('Answer 9').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([9]), 'no longer latest: released');
+    const hugeTurn = page.locator(`[data-task-block="${huge}"]`);
+    const hugeChain = hugeTurn.getByRole('button', { name: '1 tool call' });
+    await hugeChain.click();
+    await hugeTurn.getByText('Read').first().waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([8, 9]), 'reloaded and kept while expanded');
+    await hugeChain.click();
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both([9]), 'collapsed: released again');
+
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
+  });
+});

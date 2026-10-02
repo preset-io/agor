@@ -698,6 +698,26 @@ function useTaskDetailRetainer(
 }
 
 /**
+ * Pins the turn from a reader's detail load until the commit after it settles,
+ * when the disclosures it opened hold their own pins. Otherwise a turn over the
+ * cache's byte budget would be evicted by the very commit that loads it. Built
+ * outside TaskBlock's render scope for the same reason as the retainer.
+ */
+function useLoadPin(loading: boolean, retain: () => (() => void) | undefined): () => void {
+  const release = useRef<(() => void) | undefined>(undefined);
+  // Every commit, so a batched loading true → false cannot strand the pin.
+  useEffect(() => {
+    if (loading) return;
+    release.current?.();
+    release.current = undefined;
+  });
+  useEffect(() => () => release.current?.(), []);
+  return useCallback(() => {
+    release.current ??= retain();
+  }, [retain]);
+}
+
+/**
  * Bumped once each time the cache releases this turn's detail. React keeps a
  * fiber's previous props on its alternate, and descendants of a memoized child
  * that bails out keep theirs indefinitely: a MessageBlock that still renders
@@ -966,6 +986,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const [emptyActivityExpanded, setEmptyActivityExpanded] = useState(false);
     const firstAgentChainIndex = blocks.findIndex((block) => block.type === 'agent-chain');
     const loadActivity = async () => {
+      pinLoad();
       setDetailsLoading(true);
       setDetailsError(null);
       setRevealLoadedActivity(true);
@@ -1022,6 +1043,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
     const retainDetails = useTaskDetailRetainer(task.task_id, onRetainTaskDetails);
+    const pinLoad = useLoadPin(detailsLoading, retainDetails);
     const overlays = useRetainTurnOverlays(retainDetails);
     const evictionEpoch = useDetailEvictionEpoch(hasTools || hasReasoning);
     const keySuffix = evictionEpoch ? `:evicted-${evictionEpoch}` : '';

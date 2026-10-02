@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
+  LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET,
   LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT,
   ReactiveSessionHandle,
   releaseReactiveSession,
@@ -2758,7 +2759,8 @@ describe('disconnect cleanup alongside terminal stream settlement', () => {
 
 describe('lean transcript detail retention', () => {
   const turnId = (n: number) => `turn-${String(n).padStart(3, '0')}`;
-  const fullMessage = (taskId: string, n: number) =>
+  /** `outputBytes` pads the tool result: a turn that read a large file. */
+  const fullMessage = (taskId: string, n: number, outputBytes = 0) =>
     ({
       ...makeMessage(taskId, n),
       role: 'assistant',
@@ -2766,7 +2768,11 @@ describe('lean transcript detail retention', () => {
         { type: 'text', text: `Answer ${n}` },
         { type: 'thinking', text: `Reasoning ${n}` },
         { type: 'tool_use', id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } },
-        { type: 'tool_result', tool_use_id: `tool-${n}`, content: `TOOL_OUTPUT_${n}` },
+        {
+          type: 'tool_result',
+          tool_use_id: `tool-${n}`,
+          content: `TOOL_OUTPUT_${n}${'x'.repeat(outputBytes)}`,
+        },
       ],
       tool_uses: [{ id: `tool-${n}`, name: 'Read', input: { path: '/fixture' } }],
       metadata: { model: 'synthetic', raw_sdk_message: `RAW_${n}` },
@@ -2778,21 +2784,27 @@ describe('lean transcript detail retention', () => {
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
     await handle.ready();
     /** One live turn as the executor delivers it: running → payload → completed. */
-    const runTurn = (n: number, whileRunning?: (taskId: string) => void) => {
+    const runTurn = (n: number, whileRunning?: (taskId: string) => void, outputBytes = 0) => {
       const taskId = turnId(n);
       const running = makeTask(taskId, TaskStatus.RUNNING);
       opts.tasks = [...opts.tasks.filter((task) => task.task_id !== taskId), running];
       mock.emitServiceEvent('tasks', 'created', running);
       whileRunning?.(taskId);
-      opts.messagesByTask[taskId] = [fullMessage(taskId, n)];
-      mock.emitServiceEvent('messages', 'created', fullMessage(taskId, n));
+      opts.messagesByTask[taskId] = [fullMessage(taskId, n, outputBytes)];
+      mock.emitServiceEvent('messages', 'created', fullMessage(taskId, n, outputBytes));
       const completed = makeTask(taskId, TaskStatus.COMPLETED);
       opts.tasks = opts.tasks.map((task) => (task.task_id === taskId ? completed : task));
       mock.emitServiceEvent('tasks', 'patched', completed);
     };
     const fullIds = () =>
       [...handle.state.messagesByTask]
-        .filter(([, messages]) => JSON.stringify(messages).includes('TOOL_OUTPUT_'))
+        .filter(([, messages]) =>
+          messages.some(
+            (message) =>
+              Array.isArray(message.content) &&
+              message.content.some((block) => block.type === 'tool_result')
+          )
+        )
         .map(([taskId]) => taskId)
         .sort();
     return { ...mock, opts, handle, runTurn, fullIds };
@@ -3019,6 +3031,170 @@ describe('lean transcript detail retention', () => {
     expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).size).toBeLessThanOrEqual(
       LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT
     );
+    f.handle.dispose();
+  });
+
+  const BUDGET = LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET;
+  /** Four of these fit the byte budget with their small text; a fifth does not. */
+  const QUARTER = BUDGET / 4 - 4096;
+
+  it('accounts retained detail bytes on commit, live and late messages', async () => {
+    const f = await fixture();
+    const bytes = () => f.handle.getRetainedDetailBytes();
+    expect(bytes()).toBe(0);
+    f.runTurn(0, undefined, 100_000);
+    const one = bytes();
+    expect(one).toBeGreaterThan(100_000);
+    expect(one).toBeLessThan(101_000);
+    // A live message adds its size; a patch replaces it rather than adding.
+    f.emitServiceEvent('messages', 'created', { ...fullMessage(turnId(0), 1, 5000) });
+    expect(bytes()).toBeGreaterThan(one + 5000);
+    f.emitServiceEvent('messages', 'patched', { ...fullMessage(turnId(0), 1, 100) });
+    expect(bytes()).toBeGreaterThan(one + 100);
+    expect(bytes()).toBeLessThan(one + 1000);
+    // Streaming chunks touch no message bucket and charge nothing.
+    const settled = bytes();
+    const stream = { session_id: SESSION_ID, message_id: 'stream-0', task_id: turnId(0) };
+    f.emitServiceEvent('messages', 'streaming:start', { ...stream, role: 'assistant' });
+    f.emitServiceEvent('messages', 'streaming:chunk', { ...stream, chunk: 'z'.repeat(9000) });
+    expect(bytes()).toBe(settled);
+    // Evicted turns stop counting; their late messages land projected and free.
+    for (let n = 1; n <= LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT; n++) f.runTurn(n);
+    expect(f.fullIds()).not.toContain(turnId(0));
+    const recent = bytes();
+    expect(recent).toBeLessThan(5000);
+    f.emitServiceEvent('messages', 'patched', fullMessage(turnId(0), 0, 50_000));
+    expect(bytes()).toBe(recent);
+    // A committed reload is charged again.
+    f.opts.messagesByTask[turnId(0)] = [fullMessage(turnId(0), 0, 20_000)];
+    await f.handle.loadTaskMessages(turnId(0));
+    expect(bytes()).toBeGreaterThan(20_000);
+    f.handle.dispose();
+    expect(bytes()).toBe(0);
+  });
+
+  it('evicts recent turns oldest first over the byte budget; the count bound still applies', async () => {
+    const f = await fixture();
+    for (let n = 0; n < 6; n++) f.runTurn(n, undefined, QUARTER);
+    expect(f.fullIds()).toEqual(range(2, 5));
+    expect(f.handle.getRetainedDetailBytes()).toBeLessThanOrEqual(BUDGET);
+    expect(f.handle.isTaskLoaded(turnId(1))).toBe(false);
+    expect(f.handle.getTaskMessages(turnId(1))[0]).toMatchObject({
+      content: [{ type: 'text', text: 'Answer 1' }],
+      has_deferred_reasoning: true,
+    });
+    // Small turns fill the count bound, which evicts on its own.
+    for (let n = 6; n < 12; n++) f.runTurn(n);
+    expect(f.fullIds()).toEqual(range(2, 11));
+    f.runTurn(12);
+    expect(f.fullIds()).toEqual(range(3, 12));
+    f.handle.dispose();
+  });
+
+  it('never evicts protected turns for the budget, and evicts every other turn', async () => {
+    const f = await fixture();
+    const release = f.handle.retainTaskDetails(turnId(0));
+    f.runTurn(0, undefined, BUDGET * 0.6);
+    const active = makeTask('active', TaskStatus.RUNNING);
+    f.opts.tasks.push(active);
+    f.emitServiceEvent('tasks', 'created', active);
+    f.emitServiceEvent('messages', 'created', fullMessage('active', 99, BUDGET * 0.6));
+    f.runTurn(1);
+    f.runTurn(2);
+    // Pinned + executing alone exceed the budget: both stay, with the latest.
+    expect(f.fullIds()).toEqual(['active', turnId(0), turnId(2)]);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual(['active', turnId(2)]);
+    f.handle.dispose();
+  });
+
+  it('evicts a single over-budget turn to lean; it reloads, and stays while pinned', async () => {
+    const f = await fixture();
+    f.runTurn(0, undefined, BUDGET * 1.5);
+    // Latest: protected.
+    expect(f.fullIds()).toEqual([turnId(0)]);
+    f.runTurn(1);
+    expect(f.fullIds()).toEqual([turnId(1)]);
+    expect(f.handle.getTaskMessages(turnId(0))[0].content).toEqual([
+      { type: 'text', text: 'Answer 0' },
+    ]);
+    // A reader expanding it pins it first; the reload is kept until released.
+    const release = f.handle.retainTaskDetails(turnId(0));
+    const loaded = await f.handle.loadTaskMessages(turnId(0));
+    expect(loaded).toEqual([fullMessage(turnId(0), 0, BUDGET * 1.5)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(0), turnId(1)]);
+    release();
+    await Promise.resolve();
+    expect(f.fullIds()).toEqual([turnId(1)]);
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps budget evictions out of the journal and the reconnect refetch', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.runTurn(0, undefined, QUARTER);
+    f.opts.deferTaskMessageFetch = turnId(0);
+    const abandoned = f.handle.loadTaskMessages(turnId(0));
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    for (let n = 1; n < 6; n++) f.runTurn(n, undefined, QUARTER);
+    expect(internals.messageMutations).toHaveLength(0);
+    expect(f.fullIds()).toEqual(range(2, 5));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.messageFindAll.mockClear();
+    f.fireIo('connect');
+    await f.handle.ready();
+    f.releaseMessageFetch();
+    expect(await abandoned).toEqual([]);
+    expectNoStrandedFetches(internals);
+    const fullFetches = f.messageFindAll.mock.calls
+      .filter(([params]) => params.query.transcript !== 'lean')
+      .map(([params]) => params.query.task_id as string)
+      .sort();
+    expect(fullFetches).toEqual(range(2, 5));
+    expect(f.fullIds()).toEqual(range(2, 5));
+    expect(f.handle.isTaskLoaded(turnId(0))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps an evicted turn unpersisted partial stream when the budget evicts it', async () => {
+    const f = await fixture();
+    const failed = makeTask('failed', TaskStatus.RUNNING);
+    f.opts.tasks.push(failed);
+    f.emitServiceEvent('tasks', 'created', failed);
+    f.emitServiceEvent('messages', 'created', fullMessage('failed', 40, BUDGET * 0.6));
+    const event = (name: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: 'partial',
+        task_id: 'failed',
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    event('streaming:start');
+    event('streaming:chunk', { chunk: 'unpersisted partial' });
+    event('streaming:error', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask('failed', TaskStatus.FAILED));
+    // One newer large turn pushes the failed turn over the budget, not the count.
+    f.runTurn(0, undefined, BUDGET * 0.6);
+    expect(f.fullIds()).toEqual([turnId(0)]);
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({
+      content: 'unpersisted partial',
+      error: 'synthetic failure',
+      isStreaming: false,
+    });
+    // Persistence replaces the partial and lands projected.
+    f.emitServiceEvent('messages', 'created', {
+      ...fullMessage('failed', 50, BUDGET * 0.6),
+      message_id: 'partial',
+    });
+    expect(f.handle.getStreamingMessage('partial')).toBeUndefined();
+    expect(f.fullIds()).toEqual([turnId(0)]);
     f.handle.dispose();
   });
 });

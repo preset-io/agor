@@ -507,3 +507,35 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   expect(screen.getByText('Extended Thinking')).toBeVisible();
   expect(block('Visible answer')).toBe(remounted);
 });
+
+it('pins a turn from a reader’s detail load until its expanded activity holds its own pin', async () => {
+  const events: string[] = [];
+  let pins = 0;
+  const retain = vi.fn(() => {
+    const pin = ++pins;
+    events.push(`retain ${pin}`);
+    return () => events.push(`release ${pin}`);
+  });
+  let finishLoad = () => {};
+  const load = vi.fn(() => new Promise<void>((resolve) => (finishLoad = resolve)));
+  const props = { onLoadTaskMessages: load, onRetainTaskDetails: retain };
+  const { rerender } = render(view(props));
+  fireEvent.click(screen.getByRole('button', { name: 'Tool calls', expanded: false }));
+  // Pinned before the read starts, so its commit cannot be evicted for size.
+  expect(events).toEqual(['retain 1']);
+  expect(load).toHaveBeenCalledTimes(1);
+  const full = [
+    messages[0],
+    message(1, MessageRole.ASSISTANT, [
+      { type: 'tool_use', id: 'call-1', name: 'Read', input: {} },
+      { type: 'tool_result', tool_use_id: 'call-1', content: 'Result' },
+    ]),
+  ];
+  // The cache commits the detail before the read settles.
+  rerender(view({ ...props, taskMessages: full, taskMessagesLoaded: true }));
+  expect(screen.getByRole('button', { name: '1 tool call', expanded: true })).toBeVisible();
+  expect(events).toEqual(['retain 1', 'retain 2']);
+  finishLoad();
+  // The opened activity's pin takes over; only the load pin is released.
+  await waitFor(() => expect(events).toEqual(['retain 1', 'retain 2', 'release 1']));
+});

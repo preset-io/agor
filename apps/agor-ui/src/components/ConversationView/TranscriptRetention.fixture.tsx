@@ -27,6 +27,8 @@ let mountedHandle = false;
 const editTurns = new Set<number>();
 /** Turns whose answer has a table: Streamdown offers a portaled fullscreen viewer. */
 const tableTurns = new Set<number>();
+/** Tool result sizes of turns that read a very large file. */
+const payloadBytes = new Map<number, number>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -75,7 +77,11 @@ function messages(n: number): Message[] {
         {
           type: 'tool_result',
           tool_use_id: `read-${n}`,
-          content: JSON.parse(JSON.stringify(prefix + 'x'.repeat(PAYLOAD_BYTES - prefix.length))),
+          content: JSON.parse(
+            JSON.stringify(
+              prefix + 'x'.repeat((payloadBytes.get(n) ?? PAYLOAD_BYTES) - prefix.length)
+            )
+          ),
         },
       ],
     },
@@ -208,10 +214,11 @@ export const fixture = {
     await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn({ edit = false, table = false } = {}) {
+  addTurn({ edit = false, table = false, bytes = 0 } = {}) {
     const n = turns++;
     if (edit) editTurns.add(n);
     if (table) tableTurns.add(n);
+    if (bytes) payloadBytes.set(n, bytes);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));

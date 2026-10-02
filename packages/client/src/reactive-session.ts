@@ -14,13 +14,51 @@ export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
 /**
  * Lean mode keeps full detail (tool payloads, reasoning) for this many recently
- * loaded or live turns, plus the latest, executing and pinned turns. A turn
- * count, not a byte bound: one turn may still be large.
+ * loaded or live turns, plus the latest, executing and pinned turns.
  */
 export const LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT = 10;
+/**
+ * Lean mode also evicts recent turns, oldest first, while the full detail it
+ * retains exceeds this many bytes (estimated as string code units: one byte
+ * each for the Latin-1 strings that dominate tool output). Ten ordinary turns
+ * stay far below it, so the count bound normally decides; this catches huge
+ * tool results. Latest, executing and pinned turns count toward it but are
+ * never evicted by it.
+ */
+export const LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET = 32 * 1024 * 1024;
 const isLeanActive = isTaskExecuting;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
 const MAX_RETIRED_STREAM_IDENTITIES = 256;
+
+// Byte estimates, memoized per immutable message and per bucket array: a new
+// message is walked once, and a changed bucket only re-sums cached messages.
+const detailBytesOf = new WeakMap<object, number>();
+
+function stringBytes(value: unknown, depth = 0): number {
+  if (typeof value === 'string') return value.length;
+  if (!value || typeof value !== 'object' || depth > 32) return 0;
+  let bytes = 0;
+  for (const item of Array.isArray(value) ? value : Object.values(value))
+    bytes += stringBytes(item, depth + 1);
+  return bytes;
+}
+
+function bucketDetailBytes(messages: Message[] | undefined): number {
+  if (!messages) return 0;
+  let bytes = detailBytesOf.get(messages);
+  if (bytes !== undefined) return bytes;
+  bytes = 0;
+  for (const message of messages) {
+    let size = detailBytesOf.get(message);
+    if (size === undefined) {
+      size = stringBytes(message);
+      detailBytesOf.set(message, size);
+    }
+    bytes += size;
+  }
+  detailBytesOf.set(messages, bytes);
+  return bytes;
+}
 
 export interface ReactiveSessionOptions {
   /**
@@ -222,6 +260,7 @@ export class ReactiveSessionHandle {
   private readonly recentDetailTaskIds = new Set<string>();
   private readonly detailPins = new Map<string, number>();
   private readonly detailTaskIds = new Set<string>();
+  private retainedDetailBytes = 0;
 
   /**
    * The canonical (full-UUID) session id. When this handle was constructed with
@@ -387,6 +426,15 @@ export class ReactiveSessionHandle {
   }
 
   /**
+   * Lean mode diagnostics: approximate bytes of cached messages in the turns
+   * that may hold full detail, as charged against
+   * {@link LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET}.
+   */
+  getRetainedDetailBytes(): number {
+    return this.retainedDetailBytes;
+  }
+
+  /**
    * Returns tool executions currently tracked for a task.
    */
   getTaskTools(taskId: string): readonly ToolExecutionState[] {
@@ -501,6 +549,25 @@ export class ReactiveSessionHandle {
       ...index.executingIds,
     ]);
     if (index.latestHydratableId) keep.add(index.latestHydratableId);
+    // Byte budget: every kept bucket counts; only unprotected recent turns are
+    // evicted for it, oldest first, even one that alone exceeds the budget.
+    let bytes = 0;
+    for (const taskId of this.detailTaskIds)
+      if (keep.has(taskId)) bytes += bucketDetailBytes(state.messagesByTask.get(taskId));
+    for (const taskId of this.recentDetailTaskIds) {
+      if (bytes <= LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET) break;
+      if (
+        !this.detailTaskIds.has(taskId) ||
+        this.detailPins.has(taskId) ||
+        index.executingIds.has(taskId) ||
+        taskId === index.latestHydratableId
+      )
+        continue;
+      this.recentDetailTaskIds.delete(taskId);
+      keep.delete(taskId);
+      bytes -= bucketDetailBytes(state.messagesByTask.get(taskId));
+    }
+    this.retainedDetailBytes = bytes;
     // Reconnect hydrates live turns fully; an evicted turn rejoins the lean set.
     for (const taskId of this.leanLiveTaskIds)
       if (!keep.has(taskId)) this.leanLiveTaskIds.delete(taskId);
@@ -823,6 +890,7 @@ export class ReactiveSessionHandle {
     this.recentDetailTaskIds.clear();
     this.detailPins.clear();
     this.detailTaskIds.clear();
+    this.retainedDetailBytes = 0;
     this.messageFetches.clear();
     this.streamingAtMessageFetch.clear();
     this.messageMutations.length = 0;
