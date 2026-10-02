@@ -727,8 +727,8 @@ function validateConfig(config: AgorConfig): void {
     'mcpToolSearch',
     'instanceLabel',
     'instanceDescription',
-    'navbarLogoLink',
-    'navbarLogoTooltip',
+    'externalAppLink',
+    'externalAppLabel',
     'impersonation_token_expiry_ms',
     'cors_allow_sandpack',
     'cors_origins',
@@ -1622,8 +1622,8 @@ export function resolveEffectiveConfig(
       ...(env.AGOR_JWT_SECRET ? { jwtSecret: env.AGOR_JWT_SECRET } : {}),
       ...(env.AGOR_MASTER_SECRET ? { masterSecret: env.AGOR_MASTER_SECRET } : {}),
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
-      ...(env.NAVBAR_LOGO_LINK ? { navbarLogoLink: env.NAVBAR_LOGO_LINK } : {}),
-      ...(env.NAVBAR_LOGO_TOOLTIP ? { navbarLogoTooltip: env.NAVBAR_LOGO_TOOLTIP } : {}),
+      ...(env.EXTERNAL_APP_LINK ? { externalAppLink: env.EXTERNAL_APP_LINK } : {}),
+      ...(env.EXTERNAL_APP_LABEL ? { externalAppLabel: env.EXTERNAL_APP_LABEL } : {}),
       ...(websocketCompression !== undefined
         ? { websocket_compression: websocketCompression }
         : {}),

@@ -209,6 +209,8 @@ interface KnowledgePageProps {
   currentUser?: User | null;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 const DEFAULT_MARKDOWN = `# New Knowledge Page\n\nWrite markdown here.\n`;
@@ -710,6 +712,8 @@ export function KnowledgePage({
   currentUser = null,
   onUserSettingsClick,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }: KnowledgePageProps) {
   // Self-subscribe to the user map (powers `@` user mentions). The subscription
   // used to live in the outer App shell; relocating it here keeps the shell from
@@ -3085,6 +3089,8 @@ export function KnowledgePage({
             user={currentUser}
             onUserSettingsClick={onUserSettingsClick}
             onLogout={onLogout}
+            externalAppLink={externalAppLink}
+            externalAppLabel={externalAppLabel}
           />
         </Space>
       </Header>

@@ -4,6 +4,7 @@ import {
   BulbOutlined,
   CommentOutlined,
   DownOutlined,
+  ExportOutlined,
   InfoCircleOutlined,
   LogoutOutlined,
   SearchOutlined,
@@ -14,6 +15,7 @@ import type { MenuProps } from 'antd';
 import { Badge, Button, Collapse, Divider, Menu, Space, Typography, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { resolveExternalAppLink } from '@/utils/externalAppLink';
 import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { BoardCollapse } from '../BoardCollapse';
@@ -30,6 +32,9 @@ interface MobileNavTreeProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onLogout?: () => void;
+  /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -41,6 +46,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -123,12 +130,16 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   };
   // Retired the 12-item settings accordion: a single entry opens the shared
   // SettingsModal, which renders full-screen on mobile with its own section list.
+  const externalApp = resolveExternalAppLink(externalAppLink, externalAppLabel);
   const utilityItems: MenuProps['items'] = [
     { key: 'search', label: 'Search', icon: <SearchOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
     { key: 'workspace-settings', label: 'Workspace settings', icon: <SettingOutlined /> },
     { key: 'user-settings', label: 'User settings', icon: <UserOutlined /> },
     { key: 'documentation', label: 'Documentation', icon: <InfoCircleOutlined /> },
+    ...(externalApp
+      ? [{ key: 'external-app', label: externalApp.label, icon: <ExportOutlined /> }]
+      : []),
     { type: 'divider' },
     { key: 'logout', label: 'Logout', icon: <LogoutOutlined />, danger: true },
   ];
@@ -291,6 +302,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
           else if (key === 'user-settings') onOpenUserSettings();
           else if (key === 'documentation')
             window.open('https://agor.live/guide/getting-started', '_blank', 'noopener,noreferrer');
+          else if (key === 'external-app' && externalApp)
+            window.open(externalApp.href, '_blank', 'noopener,noreferrer');
           else if (key === 'logout') onLogout?.();
           // Close the navigation drawer for every destination. Workspace settings
           // render in their own bottom sheet; leaving this drawer open keeps its

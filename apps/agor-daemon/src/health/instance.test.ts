@@ -17,7 +17,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { authenticatedHealthInstance, publicHealthInstance } from './instance';
 
 const config: AgorConfig = {
-  daemon: { instanceLabel: 'config-label', instanceDescription: 'Shared **description**' },
+  daemon: {
+    instanceLabel: 'config-label',
+    instanceDescription: 'Shared **description**',
+    externalAppLink: 'https://console.example.test/',
+    externalAppLabel: 'Open Agor Cloud',
+  },
 };
 
 describe('/health instance', () => {
@@ -46,11 +51,15 @@ describe('/health instance', () => {
     await expect(authenticatedHealthInstance(config, readTenant)).resolves.toEqual({
       label: 'Tenant label',
       description: 'Shared **description**',
+      externalAppLink: 'https://console.example.test/',
+      externalAppLabel: 'Open Agor Cloud',
     });
     expect(JSON.stringify(publicHealthInstance(config))).not.toContain('Tenant label');
     expect(publicHealthInstance(config)).toEqual({
       label: 'config-label',
       description: 'Shared **description**',
+      externalAppLink: 'https://console.example.test/',
+      externalAppLabel: 'Open Agor Cloud',
     });
   });
 

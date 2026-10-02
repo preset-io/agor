@@ -154,12 +154,16 @@ describe('resolveEffectiveConfig', () => {
       AGOR_RBAC_ENABLED: 'true',
       AGOR_UNIX_USER_MODE: 'delegated',
       INSTANCE_LABEL: 'replica-a',
+      EXTERNAL_APP_LINK: 'https://console.example.test/',
+      EXTERNAL_APP_LABEL: 'Open Agor Cloud',
     });
     expect(resolved.daemon).toMatchObject({
       host: 'env-host',
       port: 4321,
       mcpEnabled: true,
       instanceLabel: 'replica-a',
+      externalAppLink: 'https://console.example.test/',
+      externalAppLabel: 'Open Agor Cloud',
     });
     expect(resolved.execution).toMatchObject({ branch_rbac: true, unix_user_mode: 'delegated' });
     expect(resolved.multi_tenancy?.mode).toBe('static');

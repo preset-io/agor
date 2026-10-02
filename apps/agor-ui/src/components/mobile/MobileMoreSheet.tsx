@@ -16,6 +16,8 @@ interface MobileMoreSheetProps {
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenUserSettings: () => void;
   onLogout?: () => void;
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 /**
@@ -33,6 +35,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onOpenWorkspaceSettings,
   onOpenUserSettings,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -82,6 +86,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
           onOpenUserSettings();
         }}
         onLogout={onLogout}
+        externalAppLink={externalAppLink}
+        externalAppLabel={externalAppLabel}
       />
     </Drawer>
   );
