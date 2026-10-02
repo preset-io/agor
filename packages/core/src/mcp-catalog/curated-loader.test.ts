@@ -8,6 +8,7 @@ import {
   loadCuratedCatalog,
   parseCuratedCatalog,
 } from './curated-loader';
+import { isCatalogEntryVisible } from './query';
 
 // Names an endpoint because the loader now refuses an entry that does not:
 // see `parseCuratedCatalog — entries nothing could install`.
@@ -612,7 +613,9 @@ describe('the shipped catalog', () => {
   });
 
   it('offers Asana V2 only with the documented customer app setup, never a shared credential', async () => {
-    const entry = (await loadCuratedCatalog()).find((entry) => entry.name === 'com.asana/mcp');
+    const entry = (await loadCuratedCatalog())
+      .filter(isCatalogEntryVisible)
+      .find((entry) => entry.name === 'com.asana/mcp');
     expect(entry).toMatchObject({
       remote_url: 'https://mcp.asana.com/v2/mcp',
       transport: 'streamable-http',

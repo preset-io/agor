@@ -396,11 +396,21 @@ projection from the `AGOR_CLOUD_*` environment into this config block.
 
 For the Cloud runtime Helm chart, `daemon.config.mcp_oauth_relay` renders this
 block into `/home/agor/.agor/config.yaml`; `runtimeServiceCredential.existingSecret`
-can supply the existing cell's `AGOR_CLOUD_RUNTIME_SIGNING_KEY`. Normal managed
-cell specs do not automatically set the relay block. An image bump alone does
-not enable it. Use the Cloud operator's supported configuration route, preserving
-all existing values; a one-off pod/ConfigMap edit is not durable across cell
-reapply. Never put a PEM or provider secret into Helm values or commands.
+supplies the existing cell's `AGOR_CLOUD_RUNTIME_SIGNING_KEY`. With a compatible
+Cloud control plane and Data Plane Agent, managed Cells receive this configuration
+through normal **Create Cell** or **Prepare → Apply Release**. Register the tested
+daemon artifact in Releases with **Daemon supports stable MCP OAuth callback
+relay v1** (`metadata.mcpOauthRelayConfigVersion: 1`). Eligible launch-enabled
+Cells then default on: Cloud derives the trusted console origin, and the agent
+renders the current realized credential IDs and Secret reference together.
+Unknown/older releases receive no unsupported relay configuration. Upgrade Data
+Plane Agents first; do not mark an incompatible daemon as supporting relay.
+
+No per-cell YAML edits or copied IDs are needed for that managed route. Normal
+reapply and credential rotation preserve the desired intent; a raw image bump or
+one-off pod/ConfigMap edit is not a substitute for Release Apply. Standalone
+operator-managed installs can use the explicit block above and remain direct by
+default. Never put a PEM or provider secret into Helm values or commands.
 
 Upgrade all callback-serving replicas before enabling relay. New attempts use
 sealed-envelope v4; older replicas reject them instead of silently dropping
@@ -422,12 +432,16 @@ After both halves and their configuration are deployed by the operator:
    query strings, request bodies or Authorization headers. Reconnect after expired,
    ambiguous or interrupted attempts; do not replay a callback.
 
-To turn off the feature, stop new connections, disable the runtime relay block and
-Cloud relay setting together through their managed configuration routes, then
-restart the affected services. Existing grants are not revoked by this switch;
-disconnect/revoke them explicitly if that is intended. Allow pending attempts to
-expire and reconnect using the chosen callback registration. Do not downgrade a
-shared database schema or remove the deployment master secret as a rollback step.
+To turn off managed relay, stop new connections and set
+`MCP_OAUTH_RELAY_ENABLED=false` on all Cloud manager replicas. Let admitted
+callbacks finish or expire (ten minutes), then use normal **Prepare → Apply**
+with the compatible control plane/agent to remove runtime relay configuration.
+Do this before downgrading the control plane or agent; older versions may reject
+new spec fields. For standalone operator-managed installs, remove the explicit
+runtime block after draining. Existing grants are not revoked by this switch;
+disconnect/revoke them explicitly if intended, and reconnect using the chosen
+callback registration. Do not downgrade a shared database schema or remove the
+deployment master secret as a rollback step.
 Fake-provider tests cover exchange and refresh; they are not evidence of live
 Asana consent or of a sandbox deployment having been performed.
 
