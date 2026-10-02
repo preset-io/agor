@@ -48,6 +48,9 @@ const checks = [
       // channel proves executor control events are registered by Feathers and
       // cross Socket.IO rather than only exercising the publisher directly.
       'apps/agor-daemon/src/register-services.tasks-events.test.ts': 4,
+      // MCP creation regression: two in-memory Feathers daemons with explicit
+      // tenant memberships prove post-commit relay and cross-tenant exclusion.
+      'apps/agor-daemon/src/mcp/tools/branches.realtime.test.ts': 3,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,

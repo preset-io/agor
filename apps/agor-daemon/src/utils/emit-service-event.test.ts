@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { runWithTenantDatabaseScope } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, feathers } from '@agor/core/feathers';
+import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { emitServiceEvent } from './emit-service-event';
+import { emitServiceEvent, publishCommittedServiceEvent } from './emit-service-event';
 
 function makeApp(emit: (name: string, data: unknown, hook: unknown) => void) {
   const service = { emit };
@@ -93,6 +94,71 @@ describe('emitServiceEvent', () => {
         })
       ).toThrow('explicit tenant does not match ambient tenant scope');
     });
+  });
+});
+
+describe('publishCommittedServiceEvent', () => {
+  it('keeps bulk dispatch redaction, one event per row, and the original CRUD response', async () => {
+    const app = feathers();
+    const rows = [
+      { branch_id: 'a', private: true },
+      { branch_id: 'b', private: true },
+    ];
+    app.use('branches', {
+      async create() {
+        return rows;
+      },
+    });
+    app.service('branches').hooks({
+      after: {
+        create: [
+          (context: HookContext) => {
+            context.dispatch = rows.map(({ branch_id }) => ({ branch_id }));
+            return context;
+          },
+          publishCommittedServiceEvent,
+        ],
+      },
+    });
+    const received = vi.fn();
+    app.service('branches').on('created', received);
+    await runWithTenantDatabaseScope({ run() {} } as never, 'tenant-a', async () => {
+      expect(await app.service('branches').create({})).toBe(rows);
+      expect(received).not.toHaveBeenCalled();
+    });
+    expect(received).toHaveBeenCalledTimes(2);
+    expect(received.mock.calls.map(([row]) => row)).toEqual([
+      { branch_id: 'a' },
+      { branch_id: 'b' },
+    ]);
+    for (const [, hook] of received.mock.calls) {
+      expect(hook).toMatchObject({
+        path: 'branches',
+        event: 'created',
+        method: 'create',
+        params: { tenant: { tenant_id: 'tenant-a' } },
+      });
+    }
+  });
+
+  it('does not re-enable a suppressed event', () => {
+    const context = { event: null, result: { branch_id: 'a' } } as HookContext;
+    expect(publishCommittedServiceEvent(context)).toBe(context);
+    expect(context.event).toBeNull();
+  });
+
+  it('emits once without an outer tenant transaction too', async () => {
+    const app = feathers();
+    app.use('board-objects', {
+      async create() {
+        return { object_id: 'placement' };
+      },
+    });
+    app.service('board-objects').hooks({ after: { create: [publishCommittedServiceEvent] } });
+    const received = vi.fn();
+    app.service('board-objects').on('created', received);
+    await app.service('board-objects').create({});
+    expect(received).toHaveBeenCalledOnce();
   });
 });
 

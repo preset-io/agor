@@ -183,7 +183,7 @@ import {
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
-import { emitServiceEvent } from './utils/emit-service-event.js';
+import { emitServiceEvent, publishCommittedServiceEvent } from './utils/emit-service-event.js';
 import { bindPrimaryOwnerToCreatedBy, injectCreatedBy } from './utils/inject-created-by.js';
 import {
   captureMarketplaceInvalidationTargets as captureMarketplaceTargets,
@@ -2003,6 +2003,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         boardObjectAccess('delete board objects'),
       ],
     },
+    after: {
+      // Repos/MCP creation inserts placement in the same outer transaction as
+      // the branch. Remote publishers must not authorize it before commit.
+      create: [publishCommittedServiceEvent],
+    },
   });
 
   // ============================================================================
@@ -2410,17 +2415,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     // Feathers' automatic event fires when this nested method returns, not when
     // that transaction commits. Replace only this event with the existing queue;
     // rollback drops it, and successful commit emits it exactly once.
-    const event = context.event;
-    context.event = null;
-    emitServiceEvent(app, {
-      path: 'branches',
-      event,
-      method: context.method,
-      id: context.id,
-      data: context.dispatch ?? context.result,
-      params: context.params,
-    });
-    return context;
+    return publishCommittedServiceEvent(context);
   };
 
   app.service('branches').hooks({
@@ -2450,7 +2445,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      create: [invalidateRealtimeBranchFromResult],
+      create: [invalidateRealtimeBranchFromResult, publishCommittedServiceEvent],
       update: [
         invalidateRealtimeBranchFromResult,
         publishMarketplaceInvalidation,

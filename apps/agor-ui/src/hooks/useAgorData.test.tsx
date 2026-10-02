@@ -23,6 +23,7 @@ import { agorStore } from '../store/agorStore';
 // Session `patched`/`updated` writes are coalesced to one flush per frame (see
 // realtimeBatch); flush synchronously in tests that assert the post-patch store.
 import { flushRealtimeNow } from '../store/realtimeBatch';
+import { makeBranchesForBoardSelector } from '../store/selectors';
 import { useAgorData } from './useAgorData';
 
 // The opened-transcript prefetch retains a real reactive session; the mock
@@ -1580,5 +1581,53 @@ describe('useAgorData — opened session transcript priority', () => {
 
     expect(transcriptPrefetch.prefetchOpenedTranscript).not.toHaveBeenCalled();
     await waitFor(() => expect(fetchCount('sessions', 'findAll')).toBe(1));
+  });
+});
+
+describe('branch creation on an already-open board', () => {
+  // The services are independently authorized/published, so readiness and
+  // placement may overtake the branch create. No order needs a refresh.
+  it.each([
+    ['branch', 'placement', 'ready'],
+    ['branch', 'ready', 'placement'],
+    ['placement', 'branch', 'ready'],
+    ['placement', 'ready', 'branch'],
+    ['ready', 'branch', 'placement'],
+    ['ready', 'placement', 'branch'],
+  ])('keeps one placed, ready card for %s -> %s -> %s', async (...order) => {
+    const { client, emit, fetchCount } = makeMockClient();
+    const { result, unmount } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      const select = makeBranchesForBoardSelector('board-1');
+      expect(select(agorStore.getState())).toEqual([]);
+      const beforeBranches = fetchCount('branches', 'findAll');
+      const beforePlacements = fetchCount('board-objects', 'findAll');
+      const branch = makeBranch({ board_id: 'board-1', filesystem_status: 'creating' });
+      const ready = { ...branch, filesystem_status: 'ready' };
+      const placement = makeBoardObject({ zone_id: 'zone-tasks' });
+      const events: Record<string, () => void> = {
+        branch: () => emit('branches', 'created', branch),
+        placement: () => emit('board-objects', 'created', placement),
+        ready: () => emit('branches', 'patched', ready),
+      };
+      for (const event of order) act(events[event]);
+      // Delayed/replayed creates must not roll back ready state or duplicate
+      // a placement. Branch updates do not carry the board-object record.
+      act(events.branch);
+      act(events.placement);
+      expect(select(agorStore.getState())).toEqual([ready]);
+      expect(agorStore.getState().boardObjectsByBoardId.get('board-1')).toEqual([placement]);
+      const moved = { ...placement, position: { x: 80, y: 120 }, zone_id: 'zone-review' };
+      act(() => emit('board-objects', 'patched', moved));
+      act(events.placement); // old create cannot undo newer placement
+      act(events.ready); // readiness never replaces placement
+      expect(agorStore.getState().boardObjectByBranchId.get(branch.branch_id)).toEqual(moved);
+      expect(select(agorStore.getState())).toHaveLength(1);
+      expect(fetchCount('branches', 'findAll')).toBe(beforeBranches);
+      expect(fetchCount('board-objects', 'findAll')).toBe(beforePlacements);
+    } finally {
+      unmount();
+    }
   });
 });
