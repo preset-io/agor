@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import type * as SDK from '@google/gemini-cli-core';
+import { EXECUTOR_SCRATCH_ROOT_ENV } from '../../prompt-payload-env.js';
 
 export const GEMINI_KEY_MESSAGE =
   'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).';
@@ -143,7 +144,15 @@ export async function enterGeminiRuntime() {
   for (const key of [...Object.values(PROVIDER_CREDENTIAL_FIELDS).flat(), 'GOOGLE_API_KEY']) {
     if (key) delete process.env[key];
   }
-  const root = path.join(home, '.gemini', 'agor-task-tmp');
+  // Prefer launcher-provided Job-local scratch so task temp never lands on a shared network home.
+  const scratch = process.env[EXECUTOR_SCRATCH_ROOT_ENV]?.trim();
+  if (scratch !== undefined && !path.isAbsolute(scratch))
+    throw new GeminiIntegrationError(
+      'Executor scratch directory is not an absolute path; the task was not started.'
+    );
+  const root = scratch
+    ? path.join(scratch, 'gemini-task-tmp')
+    : path.join(home, '.gemini', 'agor-task-tmp');
   await fs.mkdir(root, { recursive: true, mode: 0o700 });
   const namespace = await processNamespace();
   for (const entry of await fs.readdir(root, { withFileTypes: true })) {

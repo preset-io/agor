@@ -1,5 +1,8 @@
 import { filterEnv } from '@agor/core/config';
 
+/** Job-local scratch directory a delegated launcher may provide for per-task temporary files. */
+export const EXECUTOR_SCRATCH_ROOT_ENV = 'AGOR_EXECUTOR_SCRATCH_ROOT';
+
 const PAYLOAD_IDENTITY_DENY = new Set([
   'HOME',
   'PATH',
@@ -12,6 +15,7 @@ const PAYLOAD_IDENTITY_DENY = new Set([
   'AGOR_MASTER_SECRET',
   // Pinned by the execution pod to Job-local scratch; must not move live OpenCode state.
   'AGOR_OPENCODE_SCRATCH_ROOT',
+  EXECUTOR_SCRATCH_ROOT_ENV,
 ]);
 
 function isDeniedPayloadEnvironmentName(key: string): boolean {
