@@ -35,7 +35,7 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## 0.26.9 (2026-10-02)
 
-Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d7a676f8`: [compare changes](https://github.com/preset-io/agor/compare/v0.26.8...d7a676f8cee62cd4418a561de71965723f9b19fd). This entry does not imply publication or deployment.
+Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d7a676f8`, plus the SDK updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.8...d7a676f8cee62cd4418a561de71965723f9b19fd). This entry does not imply publication or deployment.
 
 ### Features
 
@@ -46,6 +46,7 @@ Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d
 
 ### Fixes
 
+- **Claude and Codex runtime reliability** — updates Claude Agent SDK from 0.3.284 to 0.3.288 (Claude Code 2.1.288), including upstream fixes for streaming timeouts, resume/compaction, headless termination, and duplicate MCP calls; updates Codex SDK and CLI from 0.159.0 to 0.160.0 for startup and provider-catalog fixes. Model lists and defaults stay unchanged, including Claude Sonnet 5.5 and GPT-6 Astra; after publication and npm verification, packaged installations must drain active tasks, upgrade Agor, run `agor install --sync` and `agor doctor`, then restart. ([#2967](https://github.com/preset-io/agor/pull/2967))
 - **Faster session loading** — prioritizes the opened conversation, defers global hydration, and reduces session-list payloads. WebSocket compression supports Firefox and has an operator-controlled off switch; session settings and zone triggers show Retry rather than using incomplete context when full details cannot load. ([#2887](https://github.com/preset-io/agor/pull/2887), [#2947](https://github.com/preset-io/agor/pull/2947), [#2948](https://github.com/preset-io/agor/pull/2948))
 - **Bounded memory during long sessions** — limits retained transcript detail and realtime access-cache entries, releases completed thinking payloads and obsolete search callbacks, and settles pending socket requests on disconnect. Home selectors and shared branch-card styles also reduce repeated work. ([#2950](https://github.com/preset-io/agor/pull/2950), [#2949](https://github.com/preset-io/agor/pull/2949), [#2930](https://github.com/preset-io/agor/pull/2930), [#2908](https://github.com/preset-io/agor/pull/2908), [#2932](https://github.com/preset-io/agor/pull/2932), [#2905](https://github.com/preset-io/agor/pull/2905), [#2953](https://github.com/preset-io/agor/pull/2953))
 - **Teammate setup recovers from missed clone events** — rechecks repository readiness, provides teammate creation from an empty board tab, and resolves implicit template defaults from the registered remote. ([#2942](https://github.com/preset-io/agor/pull/2942), [#2924](https://github.com/preset-io/agor/pull/2924))
