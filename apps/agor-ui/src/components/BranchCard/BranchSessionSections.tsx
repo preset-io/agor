@@ -26,7 +26,7 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIdleReady } from '../../hooks/useIdleReady';
@@ -82,10 +82,7 @@ import {
   type SessionTreeNode,
 } from './buildSessionTree';
 import { PagedSessions } from './PagedSessions';
-
-/** A cssVar scope shared by every nested theme `name` under the same parent tokens. */
-const sharedCssVarScope = (name: string, parentTokenKey: string | undefined) =>
-  parentTokenKey ? { cssVar: { key: `agor-${name}-${parentTokenKey}` } } : undefined;
+import { parentCssVarScopeId, sharedCssVarScope } from './sharedCssVarScope';
 
 const SECTION_KEYS: BranchSectionKey[] = ['sessions', 'scheduled-runs', 'gateway-sessions'];
 /** Revealed rows animate in with a short stagger; later rows share the last delay. */
@@ -400,18 +397,22 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const isPanel = mode === 'panel';
   // A nested theme otherwise gets its own useId cssVar scope, so every card on a board
   // re-injects the full token and component style set. Keying by the parent's token
-  // hash (stamped by antd's cssinjs) makes cards with identical tokens share one scope,
-  // while any token difference (light/dark, a custom theme) gets its own. Without the
-  // hash, antd falls back to a per-instance scope.
-  const parentTokenKey = (token as { _tokenKey?: string })._tokenKey;
+  // hash plus its theme recipe (see sharedCssVarScope) makes cards under the same parent
+  // theme share one scope, while light/dark, custom themes, or different algorithms get
+  // their own. If either is unknown, antd falls back to a per-instance scope.
+  const parentThemeConfig = useContext(ConfigProvider.ConfigContext).theme;
+  const parentScopeId = parentCssVarScopeId(
+    (token as { _tokenKey?: string })._tokenKey,
+    parentThemeConfig
+  );
   // Card mode disables antd motion: 30 cards animating their collapse/tree
   // mounts multiplies board-mount commits (#1768). Panel mode keeps motion.
   const noMotionTheme = useMemo(
     () =>
       isPanel
         ? undefined
-        : { token: { motion: false }, ...sharedCssVarScope('card', parentTokenKey) },
-    [isPanel, parentTokenKey]
+        : { token: { motion: false }, ...sharedCssVarScope('card', parentScopeId) },
+    [isPanel, parentScopeId]
   );
   // Compact chevron column and nesting step for Tree (its defaults are controlHeightSM).
   const compactTreeTheme = useMemo(
@@ -419,9 +420,9 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
       components: {
         Tree: { switcherSize: token.controlHeightXS, indentSize: token.controlHeightXS },
       },
-      ...sharedCssVarScope(isPanel ? 'session-tree' : 'card-session-tree', parentTokenKey),
+      ...sharedCssVarScope(isPanel ? 'session-tree' : 'card-session-tree', parentScopeId),
     }),
-    [token.controlHeightXS, isPanel, parentTokenKey]
+    [token.controlHeightXS, isPanel, parentScopeId]
   );
   const prefersReducedMotion = usePrefersReducedMotion();
   const [enteringRows, setEnteringRows] = useState(EMPTY_ENTERING_ROWS);
