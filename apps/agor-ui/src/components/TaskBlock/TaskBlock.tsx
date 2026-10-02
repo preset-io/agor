@@ -27,7 +27,7 @@ import { Bubble } from '@ant-design/x';
 import { Alert, Button, Flex, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IDENTITY_AVATAR_SIZE } from '../../constants/ui';
-import { TaskDetailRetention } from '../../hooks/useTaskDetailRetention';
+import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskDetailRetention';
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
@@ -1022,6 +1022,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
     const retainDetails = useTaskDetailRetainer(task.task_id, onRetainTaskDetails);
+    const overlays = useRetainTurnOverlays(retainDetails);
     const evictionEpoch = useDetailEvictionEpoch(hasTools || hasReasoning);
     const keySuffix = evictionEpoch ? `:evicted-${evictionEpoch}` : '';
     const toolDisclosure = (task.recorded_tool_count !== 0 ||
@@ -1323,7 +1324,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       // A turn boundary is the biggest break in the transcript, so it gets more
       // room than the gaps between blocks inside one. Collapses against the
       // neighbouring turn rather than summing with it.
-      <div data-task-block={task.task_id} style={{ marginBlockStart: token.margin }}>
+      <div
+        ref={overlays.ref}
+        {...overlays.handlers}
+        data-task-block={task.task_id}
+        style={{ marginBlockStart: token.margin }}
+      >
         {!promptMessageId && toolDisclosure}
         <ContextUsageRule
           // Keep the wrapper and metadata for every turn, but reserve the

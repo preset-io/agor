@@ -210,3 +210,144 @@ test('a reopened file edit, keyboard focus or a selection keeps its turn while e
     assert.deepEqual(await liveTurns(page, cdp), both([]));
   });
 });
+
+test('a selection keeps every turn it spans, including a container-wide range', {
+  timeout: 120_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    const ids = [];
+    for (let n = 0; n < 10; n++) {
+      ids.push(
+        await page.evaluate((edit) => window.transcriptRetentionFixture.addTurn({ edit }), n === 1)
+      );
+    }
+    await page.getByText('Answer 9').waitFor();
+    // Show turn 1's default-open edit beside its answer, then close its tool calls.
+    const chain = page.locator(`[data-task-block="${ids[1]}"]`).getByRole('button', {
+      name: '1 tool call',
+    });
+    await chain.click();
+    await chain.click();
+    await disengage(page);
+    // Select from turn 0's answer through turn 2's: turn 1 is wholly inside.
+    const selection = await page.evaluate(
+      ([from, to]) => {
+        const textOf = (id, text) => {
+          const walker = document.createTreeWalker(
+            document.querySelector(`[data-task-block="${id}"]`),
+            NodeFilter.SHOW_TEXT
+          );
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (node.data.includes(text)) return node;
+          }
+        };
+        const range = document.createRange();
+        range.setStart(textOf(from, 'Answer 0'), 0);
+        range.setEnd(textOf(to, 'Answer 2'), 'Answer 2'.length);
+        // selectionchange is dispatched asynchronously; let the transcript see it.
+        const seen = new Promise((resolve) =>
+          document.addEventListener('selectionchange', resolve, { once: true })
+        );
+        document.getSelection().removeAllRanges();
+        document.getSelection().addRange(range);
+        return seen.then(() => document.getSelection().toString());
+      },
+      [ids[0], ids[2]]
+    );
+    assert.match(selection, /TRANSCRIPT_EDIT_1/);
+    for (let n = 10; n < 20; n++) {
+      await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 19').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([0, 1, 2, ...range(10, 19)]));
+    assert.match(
+      await page.evaluate(() => document.getSelection().toString()),
+      /TRANSCRIPT_EDIT_1/,
+      'the middle turn keeps its diff inside the selection'
+    );
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both(range(10, 19)));
+
+    // A range whose boundaries are the conversation container itself.
+    await page.evaluate(() => {
+      const range = document.createRange();
+      range.selectNodeContents(
+        document.querySelector('[data-testid="conversation-scroll-container"]')
+      );
+      const seen = new Promise((resolve) =>
+        document.addEventListener('selectionchange', resolve, { once: true })
+      );
+      document.getSelection().addRange(range);
+      return seen;
+    });
+    for (let n = 20; n < 30; n++) {
+      await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 29').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both(range(10, 29)));
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)), 'selection cleared');
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
+  });
+});
+
+test('a portaled fullscreen viewer keeps its turn open and focused until closed', {
+  timeout: 120_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    const first = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ table: true })
+    );
+    const turn = page.locator(`[data-task-block="${first}"]`);
+    await turn.getByText('TABLE_0').waitFor();
+    await turn.locator('[data-streamdown="table-wrapper"]').hover();
+    await turn.getByTitle(/fullscreen/i).click();
+    const viewer = page.locator('[data-streamdown="table-fullscreen"]');
+    await viewer.waitFor();
+    // The viewer is portaled outside the transcript; a control in it takes focus.
+    const outside = await page.evaluate(() => {
+      const overlay = document.querySelector('[data-streamdown="table-fullscreen"]');
+      overlay.querySelector('button').focus();
+      window.__viewer = overlay;
+      window.__focused = document.activeElement;
+      return (
+        overlay.contains(document.activeElement) &&
+        !document.querySelector('[data-testid="conversation-scroll-container"]').contains(overlay)
+      );
+    });
+    assert.equal(outside, true);
+    for (let n = 1; n < 30; n++) {
+      await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 29').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(20, 29)]));
+    assert.equal(
+      await page.evaluate(
+        () =>
+          window.__viewer.isConnected &&
+          document.activeElement === window.__focused &&
+          window.__focused.isConnected
+      ),
+      true,
+      'the viewer stays open with its focused control'
+    );
+    await page.getByTitle('Exit fullscreen').click();
+    await viewer.waitFor({ state: 'detached' });
+    await page.evaluate(() => {
+      window.__viewer = undefined;
+      window.__focused = undefined;
+    });
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both(range(20, 29)), 'closing releases it');
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
+  });
+});

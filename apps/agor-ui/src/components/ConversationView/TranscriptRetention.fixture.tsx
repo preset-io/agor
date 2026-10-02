@@ -3,6 +3,7 @@ import {
   type Message,
   type MessageID,
   MessageRole,
+  releaseReactiveSession,
   retainReactiveSession,
   type SessionID,
   type Task,
@@ -21,8 +22,11 @@ const THINKING_BYTES = 64 * 1024;
 const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
 let turns = 0;
 let detailReadDelay = 0;
+let mountedHandle = false;
 /** Turns whose answer also edits a file: a default-open body beside the text. */
 const editTurns = new Set<number>();
+/** Turns whose answer has a table: Streamdown offers a portaled fullscreen viewer. */
+const tableTurns = new Set<number>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -88,7 +92,12 @@ function messages(n: number): Message[] {
           type: 'thinking',
           text: JSON.parse(JSON.stringify(thinking + 'y'.repeat(THINKING_BYTES - thinking.length))),
         },
-        { type: 'text', text: `Answer ${n}` },
+        {
+          type: 'text',
+          text: tableTurns.has(n)
+            ? `Answer ${n}\n\n| Column | Value |\n| --- | --- |\n| row | TABLE_${n} |`
+            : `Answer ${n}`,
+        },
         ...(editTurns.has(n)
           ? [
               {
@@ -185,17 +194,24 @@ export const fixture = {
   async prehydrate() {
     await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
-  mount() {
+  /** Resolves once the view's handle has loaded, so live turns follow its snapshot. */
+  async mount() {
     root.render(
       <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
         <ConversationView client={client} sessionId={SESSION_ID} />
       </div>
     );
+    // The view retains its shared handle in an effect that may not have run
+    // yet. Share it now and hold the reference until unmount, so the handle
+    // that loaded is the one receiving live turns.
+    mountedHandle = true;
+    await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn({ edit = false } = {}) {
+  addTurn({ edit = false, table = false } = {}) {
     const n = turns++;
     if (edit) editTurns.add(n);
+    if (table) tableTurns.add(n);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));
@@ -208,6 +224,8 @@ export const fixture = {
   },
   unmount() {
     root.unmount();
+    if (mountedHandle) releaseReactiveSession(client, SESSION_ID, { taskHydration: 'lean' });
+    mountedHandle = false;
   },
 };
 
