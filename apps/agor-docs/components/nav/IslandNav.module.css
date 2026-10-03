@@ -1,0 +1,715 @@
+/* Floating island global nav (design handoff option 1b). Values follow the
+ * handoff; type uses the site's own stacks instead of Geist. */
+
+.spacer {
+  height: var(--nextra-navbar-height, 64px);
+}
+
+.island {
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --display: var(--font-display), "Space Grotesk", system-ui, sans-serif;
+  --body: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
+  --mono: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
+  --open-w: calc(100vw - 48px);
+
+  position: fixed;
+  z-index: 40;
+  top: 8px;
+  left: 50%;
+  width: calc(100vw - 48px);
+  height: 58px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  background: rgba(14, 18, 20, 0.8);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  color: #c9d2d3;
+  font-family: var(--body);
+  transform: translateX(-50%);
+  transition:
+    width 0.38s var(--ease),
+    height 0.32s var(--ease),
+    top 0.38s var(--ease),
+    border-radius 0.38s,
+    background 0.3s,
+    border-color 0.3s,
+    box-shadow 0.3s;
+}
+
+/* Full-bleed marketing pages: a flat header at the top of the page. The
+ * handoff has it fully transparent; ours keeps a light blurred tint because
+ * the home hero video shows the Agor app's own header right behind it. */
+.island[data-marketing="true"][data-scrolled="false"][data-open="false"] {
+  border-color: rgba(255, 255, 255, 0);
+  background: rgba(14, 18, 20, 0.35);
+  box-shadow: 0 0 0 rgba(0, 0, 0, 0);
+}
+
+.island[data-scrolled="true"] {
+  --open-w: 780px;
+  top: 14px;
+  width: 660px;
+  border-radius: 30px;
+}
+
+.island[data-open="true"] {
+  width: var(--open-w);
+  height: calc(58px + var(--panel-h));
+}
+
+.island[data-scrolled="true"][data-open="true"] {
+  border-radius: 22px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 56px;
+  padding: 0 9px 0 14px;
+}
+
+.barLeft,
+.barRight,
+.triggers {
+  display: flex;
+  align-items: center;
+  /* Breathing room, so an open trigger and a hovered one don't touch. */
+  gap: 3px;
+}
+
+.barLeft {
+  gap: 14px;
+  min-width: 0;
+}
+
+.barRight {
+  gap: 6px;
+  flex: none;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  text-decoration: none;
+}
+
+.logo img {
+  display: block;
+  width: 30px;
+  height: 30px;
+}
+
+.logo :global(.agor-docs-wordmark) {
+  /* The island is dark in both docs themes, so pin the light-on-dark ramp. */
+  background-image: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
+  font-family: var(--display);
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #c9d2d3;
+  font: 500 14px var(--body);
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.trigger:hover,
+.triggerOpen {
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.caret {
+  opacity: 0.7;
+  transition: transform 0.2s;
+}
+
+.triggerOpen .caret,
+.caretOpen {
+  transform: rotate(180deg);
+}
+
+.iconButton {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #dfe6e6;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.iconButton:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.menuButton {
+  display: none;
+}
+
+.ctaSlot {
+  display: flex;
+}
+
+.cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: #45c4bb;
+  color: #062321;
+  font: 600 14px var(--body);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.cta:hover {
+  background: #6fd8cf;
+  color: #062321;
+}
+
+.trigger:focus-visible,
+.iconButton:focus-visible,
+.cta:focus-visible,
+.logo:focus-visible,
+.navItem:focus-visible,
+.feature:focus-visible,
+.sheetRow:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 2px;
+}
+
+/* --- Menu panels: stacked; only the active one is visible, others slide
+ * 28px toward their side so content travels in the direction you move. */
+.menuRegion {
+  position: relative;
+}
+
+.panel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: var(--open-w);
+  padding: 4px 12px 12px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(var(--panel-x, 0));
+  transition:
+    opacity 0.2s ease,
+    transform 0.28s var(--ease);
+}
+
+.panelOn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.panelGrid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.panelGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.navGroupLabel {
+  padding: 4px 10px 6px;
+  color: #6f7b7e;
+  font: 500 11px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.navItem {
+  display: flex;
+  gap: 11px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.navItem:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.navItemIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  background: rgba(69, 196, 187, 0.1);
+  color: #58cfc5;
+}
+
+.navItemText {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.navItemLabel {
+  color: #e9efef;
+  font: 500 13.5px var(--body);
+}
+
+.navItemDesc {
+  color: #8b979a;
+  font: 400 12.5px / 1.4 var(--body);
+  text-wrap: pretty;
+}
+
+.feature {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(69, 196, 187, 0.08);
+  text-decoration: none;
+  transition: background 0.15s;
+}
+
+.feature:hover {
+  background: rgba(69, 196, 187, 0.14);
+}
+
+.featureKicker {
+  color: #58cfc5;
+  font: 500 11px var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.featureTitle {
+  color: #cfd8d9;
+  font: 400 13.5px var(--body);
+}
+
+.featureCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  color: #58cfc5;
+  font: 500 13.5px var(--body);
+}
+
+/* --- Mobile sheet (below ~900px) ------------------------------------------ */
+.sheet {
+  --body: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
+  --mono: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
+  position: fixed;
+  z-index: 39;
+  inset: 72px 0 0;
+  display: none;
+  flex-direction: column;
+  background: #0a0d0e;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-12px);
+  transition:
+    opacity 0.2s ease,
+    transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.sheetOpen {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.sheetScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 12px 12px;
+}
+
+.sheetSection {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sheetRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 56px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: #f2f6f6;
+  font: 500 18px var(--body);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sheetRowLead {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sheetGroups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 0 16px;
+}
+
+.sheetGroups .navItem {
+  align-items: center;
+  min-height: 48px;
+  padding: 6px 8px;
+}
+
+.sheetGroups .navItemLabel {
+  font-size: 15px;
+}
+
+.sheetGroups .navItemDesc {
+  font-size: 13px;
+}
+
+.sheetFooter {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 30px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  background: #0a0d0e;
+}
+
+.sheetFooterPair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.sheetFooterPair a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  color: #dfe6e6;
+  font: 500 15px var(--body);
+  text-decoration: none;
+}
+
+.sheetCta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 50px;
+  border-radius: 12px;
+  background: #45c4bb;
+  color: #062321;
+  font: 600 16px var(--body);
+  text-decoration: none;
+}
+
+@media (max-width: 899px) {
+  .island,
+  .island[data-scrolled="true"],
+  .island[data-open="true"] {
+    top: 8px;
+    width: calc(100vw - 16px);
+    height: 58px;
+    border-radius: 16px;
+  }
+
+  .triggers,
+  .ctaSlot,
+  .menuRegion {
+    display: none;
+  }
+
+  .iconButton {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    background: transparent;
+  }
+
+  .menuButton {
+    display: grid;
+  }
+
+  .sheet {
+    display: flex;
+  }
+}
+
+/* --- Command palette ------------------------------------------------------ */
+.paletteBackdrop {
+  --body: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
+  --mono: var(--font-mono-label), "JetBrains Mono", ui-monospace, monospace;
+  position: fixed;
+  z-index: 60;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 96px 16px 16px;
+  background: rgba(3, 5, 6, 0.55);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  font-family: var(--body);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.16s ease;
+}
+
+.paletteOpen {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.palette {
+  width: 100%;
+  max-width: 640px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 16px;
+  background: rgba(15, 19, 21, 0.96);
+  box-shadow:
+    0 30px 80px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(69, 196, 187, 0.06);
+  transform: scale(0.97);
+  transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.paletteOpen .palette {
+  transform: scale(1);
+}
+
+.paletteInputRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.paletteSearchIcon {
+  flex: none;
+  color: #45c4bb;
+}
+
+.paletteInputRow input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #eef3f3;
+  font: 400 16px var(--body);
+}
+
+.paletteKey {
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  color: #8b979a;
+  font: 500 11px var(--mono);
+}
+
+.paletteResults {
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.paletteGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-bottom: 6px;
+}
+
+.paletteGroup .navGroupLabel {
+  padding: 10px 10px 6px;
+}
+
+.paletteRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.paletteRowActive {
+  background: rgba(69, 196, 187, 0.11);
+}
+
+.paletteIcon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: rgba(69, 196, 187, 0.1);
+  color: #58cfc5;
+}
+
+.paletteText {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.paletteLabel {
+  color: #dfe6e6;
+  font: 500 14px var(--body);
+  white-space: nowrap;
+}
+
+.paletteRowActive .paletteLabel {
+  color: #fff;
+}
+
+.paletteDesc {
+  overflow: hidden;
+  color: #7d898c;
+  font: 400 13px var(--body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.paletteReturn {
+  flex: none;
+  color: #8b979a;
+  opacity: 0;
+}
+
+.paletteRowActive .paletteReturn {
+  opacity: 1;
+}
+
+.paletteEmpty {
+  padding: 28px 12px;
+  color: #8b979a;
+  font-size: 14px;
+  text-align: center;
+}
+
+.paletteFooter {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 10px 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  color: #7d898c;
+  font: 400 12px var(--body);
+}
+
+.paletteFooter > span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.paletteFooterEnd {
+  margin-left: auto;
+}
+
+@media (max-width: 899px) {
+  .paletteBackdrop {
+    padding: 12px;
+  }
+
+  .paletteResults {
+    max-height: 520px;
+  }
+}
+
+/* Reduced motion: fade only, no size tweening or slide offsets. */
+@media (prefers-reduced-motion: reduce) {
+  .island,
+  .panel,
+  .sheet,
+  .palette {
+    transition-property: opacity, background, border-color, box-shadow;
+  }
+
+  .panel,
+  .sheet,
+  .palette {
+    transform: none;
+  }
+
+  .paletteOpen .palette {
+    transform: none;
+  }
+}
+
+/* The docs theme colors every link teal (`.dark a`), which outranks a single
+ * class; restate the nav's own link colors at higher specificity. */
+.island a.trigger,
+.sheet a.sheetRow {
+  color: #c9d2d3;
+}
+
+.island a.trigger:hover,
+.sheet a.sheetRow:hover {
+  color: #fff;
+}
+
+.island a.cta,
+.island a.cta:hover,
+.sheet a.sheetCta {
+  color: #062321;
+}
+
+.sheet .sheetFooterPair a {
+  color: #dfe6e6;
+}

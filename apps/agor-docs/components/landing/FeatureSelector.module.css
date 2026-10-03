@@ -1,0 +1,308 @@
+/* Feature selector: accordion rows + media panel (design handoff "feature
+ * demo selector"). See FeatureSelector.tsx; also the board section header. */
+
+.section,
+.body {
+  --bs-line: rgba(143, 169, 166, 0.16);
+  --bs-teal: #3fd9c4;
+  --bs-cyan: #6fdcf0;
+  --bs-panel: #0a1717;
+  --bs-muted: #8fa9a6;
+  --bs-off: #4f6b68;
+}
+
+div.head {
+  position: relative;
+  z-index: 1;
+  /* The shared .sectionHeader caps at 920px, which wraps this heading. */
+  max-width: none;
+}
+
+.head h1,
+.head h2 {
+  text-wrap: balance;
+}
+
+.sub {
+  max-width: 72ch;
+  text-wrap: pretty;
+  margin: 20px 0 0;
+  color: var(--bs-muted);
+  font-size: clamp(1.05rem, 1.5vw, 1.3rem);
+  line-height: 1.5;
+}
+
+.subLead {
+  color: #fff;
+}
+
+.body {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  /* The captures are full-app recordings: give them most of the column. */
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  align-items: center;
+  gap: clamp(32px, 4vw, 56px);
+  margin-top: 56px;
+}
+
+/* Accordion rows: hairlines between, a chevron and title each; only the open
+ * row shows its sentence and progress bar. */
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-bottom: 1px solid var(--bs-line);
+}
+
+.row {
+  position: relative;
+  border-top: 1px solid var(--bs-line);
+}
+
+.rowButton {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: 100%;
+  padding: 20px 4px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--bs-off);
+  transition:
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.3s;
+}
+
+.rowTitle {
+  color: var(--bs-off);
+  font: 600 clamp(1.15rem, 1.6vw, 1.45rem) / 1.2 var(--font-body-stack);
+  letter-spacing: -0.01em;
+  transition: color 0.3s;
+}
+
+.rowButton:hover .rowTitle,
+.rowButton:hover .chevron {
+  color: #a9c4bf;
+}
+
+.rowActive .chevron,
+.rowActive .rowButton:hover .chevron {
+  color: var(--bs-teal);
+  transform: rotate(90deg);
+}
+
+.rowActive .rowTitle,
+.rowActive .rowButton:hover .rowTitle {
+  color: #fff;
+}
+
+.rowButton:focus-visible {
+  outline: 2px solid var(--bs-teal);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* Opens by animating the grid row from 0fr to 1fr (no height measuring). */
+.reveal {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.rowActive .reveal {
+  grid-template-rows: 1fr;
+}
+
+.revealInner {
+  min-height: 0;
+  overflow: hidden;
+  /* Under the title, past the chevron. */
+  padding-left: 42px;
+}
+
+.rowBody {
+  max-width: 460px;
+  margin: 0;
+  padding-bottom: 20px;
+  color: var(--bs-muted);
+  font-size: 1rem;
+  line-height: 1.6;
+  text-wrap: pretty;
+  opacity: 0;
+  transition: opacity 0.25s;
+}
+
+.rowActive .rowBody {
+  opacity: 1;
+  transition-delay: 0.12s;
+}
+
+.rowBody a.learnMore {
+  color: var(--bs-teal);
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.rowBody a.learnMore:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* The open row's progress bar sits on its bottom hairline, under the copy. */
+.track {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 42px;
+  height: 2px;
+  border-radius: 2px;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--bs-teal), var(--bs-cyan));
+  transform-origin: left;
+}
+
+/* --- Media panel: the same captures as /board's detail blocks --- */
+.panel {
+  position: relative;
+  align-self: center;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid rgba(63, 217, 196, 0.2);
+  border-radius: 16px;
+  background: var(--bs-panel);
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.5);
+}
+
+.media,
+.mediaStill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  animation: mediaIn 0.25s ease both;
+}
+
+.media {
+  object-fit: cover;
+}
+
+/* Stills aren't 16:9; show all of it on the panel background. */
+.mediaStill {
+  object-fit: contain;
+}
+
+@keyframes mediaIn {
+  from {
+    opacity: 0;
+  }
+}
+
+.counter {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 3;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: rgba(5, 7, 7, 0.7);
+  color: #c9d2d3;
+  font:
+    500 0.75rem / 1.4 var(--font-mono-label),
+    ui-monospace,
+    monospace;
+  letter-spacing: 0.04em;
+}
+
+.pauseToggle {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(5, 7, 7, 0.6);
+  color: #c9d2d3;
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.panel:hover .pauseToggle,
+.pauseToggle:focus-visible {
+  opacity: 1;
+}
+
+.pauseToggle:focus-visible {
+  outline: 2px solid var(--bs-teal);
+  outline-offset: 2px;
+}
+
+/* /board hero still (BoardSection hero mode). */
+.heroShot {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 48px;
+  border: 1px solid rgba(63, 217, 196, 0.2);
+  border-radius: 16px;
+  box-shadow: 0 40px 100px rgba(0, 0, 0, 0.5);
+}
+
+/* Stacked: the panel opens beneath the active tab (accordion), so the media
+ * stays next to the words it illustrates. BoardSelector.tsx decides where the
+ * one panel renders. */
+@media (max-width: 1100px) {
+  .body {
+    grid-template-columns: 1fr;
+    margin-top: 40px;
+  }
+
+  /* Full width: back out of the copy's indent under the chevron. */
+  .panelInline {
+    margin: 0 0 22px -42px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .chevron,
+  .rowBody {
+    transition: none;
+  }
+
+  .media,
+  .mediaStill {
+    animation: none;
+  }
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

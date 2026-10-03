@@ -1,47 +1,54 @@
 'use client';
 
 import { useState } from 'react';
-import { AGOR_CLOUD_INVITE_URL } from '../lib/links';
+import { CloudCtaLink } from './CloudCtaLink';
 import styles from './CloudInviteCTA.module.css';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 
 interface CloudInviteCTAProps {
-  primaryLabel?: string;
+  /** Attribution slug for this spot (utm_content on the console link). */
+  placement?: string;
   demoLabel?: string;
+  /**
+   * A fixed primary link instead of the status-driven Cloud CTA (e.g. the
+   * open beta post linking straight to the console). Both must be set.
+   */
+  primaryLabel?: string;
   primaryHref?: string;
   /** Render the primary pill. Set false for a demo-only secondary CTA. */
   showPrimary?: boolean;
   /** Render the "Book a Demo" button. Set false for a primary-only CTA. */
   showDemo?: boolean;
-  /** Append a trailing arrow to button labels. */
+  /** Ignored: buttons never carry arrows on this site. Kept for existing posts. */
   arrow?: boolean;
 }
 
 export function CloudInviteCTA({
-  primaryLabel = 'Join the Private Beta',
+  placement = 'cloud-invite',
   demoLabel = 'Book a Demo',
-  primaryHref = AGOR_CLOUD_INVITE_URL,
+  primaryLabel,
+  primaryHref,
   showPrimary = true,
   showDemo = true,
-  arrow = true,
 }: CloudInviteCTAProps) {
-  const suffix = arrow ? ' →' : '';
-  const isInPageAnchor = primaryHref.startsWith('#') || primaryHref.startsWith('/');
   // The scheduler opens in an on-site modal instead of linking out to the
   // (Preset-branded) meetings.hubspot.com page.
   const [isDemoOpen, setIsDemoOpen] = useState(false);
+  const isInPageAnchor = primaryHref?.startsWith('#') || primaryHref?.startsWith('/');
   return (
     <div className={styles.wrapper}>
-      {showPrimary && (
-        <a
-          href={primaryHref}
-          {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-          className={styles.primary}
-        >
-          {primaryLabel}
-          {suffix}
-        </a>
-      )}
+      {showPrimary &&
+        (primaryHref && primaryLabel ? (
+          <a
+            href={primaryHref}
+            {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+            className={styles.primary}
+          >
+            {primaryLabel}
+          </a>
+        ) : (
+          <CloudCtaLink placement={placement} className={styles.primary} />
+        ))}
       {showDemo && (
         <>
           <button
@@ -51,7 +58,6 @@ export function CloudInviteCTA({
             onClick={() => setIsDemoOpen(true)}
           >
             {demoLabel}
-            {suffix}
           </button>
           <HubSpotMeetingModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
         </>

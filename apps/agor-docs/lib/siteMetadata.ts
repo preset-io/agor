@@ -15,10 +15,10 @@ export const LOGO_PATH = '/logo.svg';
 /** Transparent Agor mark for normal docs and in-product rendering. */
 export const LOGO_MARK_PATH = '/logo-mark.svg';
 
-export const DEFAULT_TITLE = 'agor – The command center for AI enablement';
+export const DEFAULT_TITLE = 'agor – Multiplayer AI';
 
 export const DEFAULT_DESCRIPTION =
-  'The command center for AI enablement. Empower your team with AI teammates — Claude Code, Codex, Gemini — on a shared canvas anchored on git branches, with real-time multiplayer and an MCP surface agents drive themselves.';
+  'Agor is Multiplayer AI. Bring your team and agents (Claude Code, Codex, Gemini, and more) together on a live spatial board, and raise AI teammates with memory, skills, and your tools.';
 
 export const DEFAULT_SOCIAL_IMAGE = '/screenshots/board-hero.png';
 

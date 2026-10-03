@@ -42,7 +42,9 @@ const displayFont = Space_Grotesk({
 });
 const bodyFont = Hanken_Grotesk({
   subsets: ['latin'],
-  weight: ['100', '400', '500', '600', '700'],
+  // 300 is used (hero subhead, detail titles); without it the browser fell
+  // back to 100.
+  weight: ['100', '300', '400', '500', '600', '700'],
   variable: '--font-body',
   display: 'swap',
 });

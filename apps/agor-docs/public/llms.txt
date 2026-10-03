@@ -1,8 +1,8 @@
 # Agor
 
-> Agor is the command center for AI enablement — a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
+> Agor is Multiplayer AI: a live spatial board where teams work together with AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration.
 
-Agor is source-available software licensed under BSL 1.1. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
+Agor is source-available software licensed under BSL 1.1 (never describe it as open source). The npm-installed, self-hosted version is **Agor Community Edition**; **Agor Cloud** is the managed service. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
 
 - Website: https://agor.live
 - GitHub: https://github.com/preset-io/agor
@@ -26,6 +26,7 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 - [Features Overview](https://agor.live/guide/features-overview): Map of all major features
 - [Teammates](https://agor.live/guide/teammates): Persistent AI teammates with memory, skills, orchestration, and scheduled heartbeats
 - [Knowledge](https://agor.live/guide/knowledge): Built-in knowledge base for shared context, searchable memory, and a doc graph humans and agents use together
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server: agents drive Agor through the same API as the UI
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Per-prompt token/$ accounting, context viz, tool blocks, queueing, autocomplete, Streamdown
 - [In-Conversation Widgets](https://agor.live/guide/in-conversation-widgets): Inline interactive UI in the transcript that captures user input without it entering the LLM's context
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Live cursors, facepile, spatial comments, attention pulse, shared terminals
@@ -60,7 +61,6 @@ Agor is source-available software licensed under BSL 1.1. Production use is perm
 - [Development Guide](https://agor.live/guide/development): Contributing to Agor — development environment setup and codebase structure
 - [Architecture](https://agor.live/guide/architecture): System architecture, daemon-based design, typed TypeScript client, data flow
 - [SDK Comparison](https://agor.live/guide/sdk-comparison): Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations
-- [Agor MCP Server](https://agor.live/guide/internal-mcp): Built-in MCP server — anything a user can do, an agent can do too
 
 ## Other
 

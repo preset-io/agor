@@ -61,7 +61,8 @@ export const demoBoard: Board = {
   created_by: demoUsers[0].user_id,
   archived: false,
   url: '/demo/marketing-screenshots',
-  background_color: 'linear-gradient(135deg, #f5af19 0%, #f12711 30%, #f5af19 60%, #f12711 100%)',
+  // Aqua is Agor's solution color on the marketing site (amber marks problems).
+  background_color: 'linear-gradient(135deg, #066d85 0%, #0a6f66 30%, #066d85 60%, #0b5953 100%)',
   objects: {
     'zone-ship': {
       type: 'zone',
@@ -70,7 +71,7 @@ export const demoBoard: Board = {
       width: 680,
       height: 1080,
       label: '🚢 Ship this week',
-      borderColor: '#fde047',
+      borderColor: '#99f6e4',
       backgroundColor: 'rgba(120,53,15,0.24)',
       locked: true,
       trigger: {
@@ -86,7 +87,7 @@ export const demoBoard: Board = {
       width: 680,
       height: 1080,
       label: '🔎 Review lane',
-      borderColor: '#fed7aa',
+      borderColor: '#bae6fd',
       backgroundColor: 'rgba(127,29,29,0.26)',
       locked: true,
       trigger: {
@@ -102,7 +103,7 @@ export const demoBoard: Board = {
       width: 1400,
       height: 1080,
       label: '🤖 Teammates + artifacts',
-      borderColor: '#f472b6',
+      borderColor: '#c4b5fd',
       backgroundColor: 'rgba(88,28,135,0.16)',
       locked: true,
       trigger: {

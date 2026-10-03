@@ -1,0 +1,48 @@
+/* Social icon row (footer). */
+.socials {
+  display: flex;
+  gap: 10px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.socials a {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(52, 230, 196, 0.18);
+  border-radius: 10px;
+  background: rgba(52, 230, 196, 0.05);
+  color: #9fc4bd;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.socials a:hover {
+  border-color: rgba(52, 230, 196, 0.5);
+  background: rgba(52, 230, 196, 0.12);
+  color: #eafff9;
+}
+
+.socials a:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 2px;
+}
+
+.socials svg {
+  width: 17px;
+  height: 17px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}

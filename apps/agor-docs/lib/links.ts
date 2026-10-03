@@ -8,6 +8,8 @@
 
 export const DISCORD_INVITE_URL = 'https://discord.gg/Qh4TrFQZpd';
 export const GITHUB_REPO_URL = 'https://github.com/preset-io/agor';
+export const X_URL = 'https://x.com/agorcloud';
+export const LINKEDIN_URL = 'https://www.linkedin.com/company/agorcloud/';
 
 // UTM suffix for links into preset.io, so Preset's Google Analytics can
 // attribute traffic coming from Agor surfaces. Append per placement via

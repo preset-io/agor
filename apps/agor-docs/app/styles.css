@@ -201,20 +201,6 @@ body:has([class*="landingShell"]) .agor-docs-wordmark {
   background-image: linear-gradient(90deg, #2e9a92 0%, #7fe8df 50%, #a8f5ed 100%);
 }
 
-.dark .nextra-navbar-blur,
-body:has([class*="landingShell"]) .nextra-navbar-blur {
-  background: rgba(7, 16, 15, 0.72);
-  border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-  backdrop-filter: blur(14px) saturate(1.4);
-  -webkit-backdrop-filter: blur(14px) saturate(1.4);
-  /* Keep the glass layer promoted while video/WebGL content repaints below
-   * it. Without a stable compositor layer Chromium can briefly present the
-   * navbar before its backdrop-filter pass, which looks like a blur flicker. */
-  backface-visibility: hidden;
-  transform: translateZ(0);
-  will-change: backdrop-filter;
-}
-
 /* Search field: pill shape + mint focus, matching the landing button system */
 .nextra-search input {
   border-radius: 999px;
@@ -231,68 +217,6 @@ body:has([class*="landingShell"]) .nextra-navbar-blur {
   border-radius: 999px;
 }
 
-/* Nav links: mint accent on hover instead of stock opacity-only fade */
-.nextra-navbar nav a {
-  transition:
-    color 0.2s ease,
-    opacity 0.2s ease;
-}
-
-.nextra-navbar nav a:hover {
-  color: var(--agor-teal-light, #7fe8df);
-}
-
-/* GitHub / Discord icons: dimmed grayscale at rest, full color on hover */
-.nextra-navbar nav a[href^="https://github.com"],
-.nextra-navbar nav a[href^="https://discord.gg"] {
-  filter: grayscale(1);
-  opacity: 0.55;
-  transition:
-    filter 0.25s ease,
-    opacity 0.25s ease,
-    color 0.2s ease;
-}
-
-.nextra-navbar nav a[href^="https://github.com"]:hover,
-.nextra-navbar nav a[href^="https://discord.gg"]:hover {
-  filter: grayscale(0);
-  opacity: 1;
-}
-
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search input {
-  background: rgba(255, 255, 255, 0.1);
-  color: #e5e7eb;
-}
-
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search input::placeholder {
-  color: #9ca3af;
-}
-
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar .nextra-search kbd {
-  background: rgba(17, 17, 17, 0.9);
-  border-color: rgba(255, 255, 255, 0.18);
-  color: #cbd5e1;
-}
-
-/* ---------------------------------------------------------------------------
- * Light-theme landing overrides — kept LAST so specificity ascends file-wide
- * (biome noDescendingSpecificity). The landing page keeps Agor's dark hero
- * treatment even when a reader has selected the light docs theme.
- */
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar {
-  color: #f8fafc;
-}
-
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar-blur {
-  background: rgba(17, 17, 17, 0.72);
-  border-color: rgba(255, 255, 255, 0.12);
-}
-
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://github.com"],
-html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https://discord.gg"] {
-  color: var(--agor-teal-light);
-}
-
 /* ---------------------------------------------------------------------------
  * WCAG AA fix: the shiki github-dark comment token (#6A737D) only reaches
  * 4.03:1 on the dark code-block background (#050f0f); AA needs 4.5:1. The
@@ -303,122 +227,6 @@ html:not(.dark) body:has([class*="landingShell"]) .nextra-navbar a[href^="https:
 code span[style*="--shiki-dark:#6A737D"] {
   /* biome-ignore lint/complexity/noImportantStyles: must beat the inline style attribute that carries the token color. */
   --shiki-dark: #8b949e !important;
-}
-
-/* Navbar "Agor Cloud" CTA — rendered as Navbar children (after search in the
- * DOM); flex order slots it visually before the Docs/Blog items and search.
- * Hidden on phones, where the mobile menu + in-page CTAs carry the flow. */
-/* Dressed as a plain nav item (matches the Docs/Blog links beside it) even
- * though it's a button that pops the beta modal. */
-.navbar-cloud-cta {
-  order: 1;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: rgb(61, 180, 170);
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.navbar-cloud-cta:hover {
-  color: var(--agor-teal-light, #7fe8df);
-}
-
-@media (max-width: 767px) {
-  .navbar-cloud-cta {
-    display: none;
-  }
-}
-
-/* Navbar "Talk to Us" CTA — a button that pops the HubSpot meeting scheduler
- * modal (the same one as the landing page's "Book a demo"). Dressed as a plain
- * nav item to match the Agor Cloud CTA beside it, and slotted into the same
- * flex order (1) so the two CTAs sit together, before search. Hidden on phones. */
-.navbar-talk-to-us {
-  order: 1;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: rgb(61, 180, 170);
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 400;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.navbar-talk-to-us:hover {
-  color: var(--agor-teal-light, #7fe8df);
-}
-
-@media (max-width: 767px) {
-  .navbar-talk-to-us {
-    display: none;
-  }
-}
-
-/* Slot the CTA between the nav items and search: nav flex order is
- * [logo(auto) items(0) CTA(1) search(2) github/discord(3) menu(4)].
- * The CTA renders last in the DOM (Navbar children), so everything that
- * should follow it visually gets bumped. */
-.nextra-navbar nav > div:has(input) {
-  order: 2;
-}
-
-.nextra-navbar nav > a:not(:first-child) {
-  order: 3;
-}
-
-/* github/discord/menu buttons trail everything. Exclude the two CTA buttons
- * (Agor Cloud renders as an <a>, but Talk to Us is a real <button>) so this
- * doesn't shove Talk to Us to the far right after search. */
-.nextra-navbar nav > button:not(.navbar-cloud-cta):not(.navbar-talk-to-us) {
-  order: 4;
-}
-
-/* The CTA is an <a> (links to /cloud), so it also matches
- * `nav > a:not(:first-child)` above (order: 3). Re-assert order: 1 and its
- * link color at higher specificity so it keeps its slot before search. */
-.nextra-navbar nav a.navbar-cloud-cta {
-  order: 1;
-  color: rgb(61, 180, 170);
-}
-
-.nextra-navbar nav a.navbar-cloud-cta:hover {
-  color: var(--agor-teal-light, #7fe8df);
-}
-
-/* EXPERIMENTAL: horizontally center the search box in the navbar so the logo
- * stays pinned far left and the links/CTAs group pins right, giving
- * [logo] ......... [search] ......... [Docs][Blog][Agor Cloud][Talk to Us][GitHub][Discord][menu].
- *
- * Technique: take the search container out of flex flow and absolutely center
- * it in the (now relatively positioned) nav. The logo already carries
- * margin-inline-end:auto, so with search removed from flow that auto margin
- * pushes every remaining item to the right edge. The existing `order` values
- * (Docs/Blog wrapper 0, CTAs 1, github/discord 3, menu 4) already lay the right
- * group out in the intended sequence, so nothing else needs to move.
- *
- * Gated to >= 960px: below that the centered box would collide with the right
- * group on narrower desktops, so search keeps its current in-flow slot there.
- * The whole block is easy to revert if the experiment isn't kept. */
-@media (min-width: 960px) {
-  .nextra-navbar nav {
-    position: relative;
-  }
-
-  .nextra-navbar nav > div:has(input) {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    margin: 0;
-  }
 }
 
 /* Docs content headings — adopt the marketing display font (Space Grotesk)
@@ -436,4 +244,11 @@ body:not(:has([class*="landingShell"])) main :is(h1, h2, h3) {
 
 html:not(.dark) body:not(:has([class*="landingShell"])) main :is(h1, h2, h3) {
   color: #0d6f5f;
+}
+
+/* Site rule: no diagonal arrows. Nextra's link component appends a ↗ icon
+ * to every external link (post text, TOC feedback/edit links, sidebar);
+ * hide it. Matched by Nextra's own classes, so our icons are untouched. */
+a[target="_blank"] > svg.x\:align-baseline.x\:shrink-0:last-child {
+  display: none;
 }

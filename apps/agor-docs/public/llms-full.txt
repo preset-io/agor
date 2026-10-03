@@ -1,8 +1,8 @@
 # Agor
 
-> Agor is the command center for AI enablement — a multiplayer canvas for orchestrating AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
+> Agor is Multiplayer AI: a live spatial board where teams work together with AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
 
-Agor is source-available software licensed under BSL 1.1. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
+Agor is source-available software licensed under BSL 1.1 (never describe it as open source). The npm-installed, self-hosted version is **Agor Community Edition**; **Agor Cloud** is the managed service. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
 
 - Website: https://agor.live
 - GitHub: https://github.com/preset-io/agor
@@ -103,7 +103,7 @@ Start with [Using Agor](https://agor.live/guide/features-overview),
 - [Features Overview](https://agor.live/guide/features-overview): Map of all features
 - [Teammates](https://agor.live/guide/teammates): Persistent AI companions with memory and orchestration
 - [Knowledge](https://agor.live/guide/knowledge): Built-in knowledge base — shared context, searchable memory, doc graph
-- [Agor MCP Server](https://agor.live/guide/internal-mcp): Anything a user can do, an agent can do too
+- [Agor MCP Server](https://agor.live/guide/internal-mcp): Agents drive Agor through the same API as the UI
 - [Rich Chat UX](https://agor.live/guide/rich-chat-ux): Token/$ accounting, context viz, tool blocks, queueing, Streamdown
 - [In-Conversation Widgets](https://agor.live/guide/in-conversation-widgets): Inline interactive UI that captures input outside the LLM's context
 - [Multiplayer & Social](https://agor.live/guide/multiplayer-social): Cursors, facepile, comments, attention pulse, shared terminals

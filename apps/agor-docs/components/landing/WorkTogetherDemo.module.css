@@ -1,0 +1,505 @@
+/* Home "Work together again" self-demo. Static styling only; everything that
+ * moves is an inline style derived from scene(t) in WorkTogetherDemo.tsx. */
+
+.demo {
+  position: relative;
+}
+
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 48px;
+}
+
+.livePill {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border: 1px solid rgba(63, 217, 196, 0.25);
+  border-radius: 999px;
+  background: rgba(63, 217, 196, 0.08);
+  color: #cfe9e5;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.liveDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3fd9c4;
+  box-shadow: 0 0 12px #3fd9c4;
+}
+
+/* Scaled design-space board (1200 × 700, settling to 1200 × 440). Height is
+ * set inline from the measured scale; the transition is the settle. */
+.board {
+  position: relative;
+  margin-top: 40px;
+  transition: height 0.9s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.stage {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  font-family: var(--font-body-stack);
+}
+
+.card {
+  position: absolute;
+  top: 30px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  padding: 22px;
+  overflow: hidden;
+  border: 1px solid rgba(63, 217, 196, 0.2);
+  border-radius: 16px;
+  background: #0f1f1f;
+}
+
+.cardTop {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cardBottom {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+}
+
+.sessionHead {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  color: #5f7d7a;
+  font-family: var(--font-mono-stack);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ownerDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.collapsible {
+  flex: none;
+  overflow: hidden;
+}
+
+.bubbleRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.bubble {
+  max-width: 250px;
+  padding: 8px 13px;
+  border-radius: 14px;
+  background: #1c3d38;
+  color: #e8f2f1;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.avatar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #061010;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.thinking {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.thinking span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3fd9c4;
+}
+
+.title {
+  flex: none;
+  min-height: 1.2em;
+  margin: 0 0 8px;
+  color: #3fd9c4;
+  font-family: var(--font-body-stack);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+.body {
+  flex: none;
+  margin: 0;
+  color: #a9c0bd;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: #6f7f7d;
+  font-family: var(--font-mono-stack);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.dirty {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e0a21b;
+}
+
+.btnRow {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  transform-origin: left center;
+}
+
+.card a.cardBtn,
+.stack a.cardBtn {
+  display: flex;
+  align-items: center;
+  padding: 9px 18px;
+  border-radius: 999px;
+  background: #3fd9c4;
+  color: #061010;
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.15s;
+}
+
+.card a.cardBtn:hover,
+.stack a.cardBtn:hover {
+  background: #6fdcf0;
+}
+
+.composerWrap {
+  overflow: hidden;
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 104px;
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  overflow: hidden;
+  color: #b9c7c5;
+  font-size: 11px;
+}
+
+.chip {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  box-sizing: border-box;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid #2a3534;
+  border-radius: 5px;
+  background: #131918;
+  white-space: nowrap;
+}
+
+.chipTimer {
+  border-color: rgba(63, 217, 196, 0.35);
+  background: rgba(63, 217, 196, 0.1);
+  color: #3fd9c4;
+  font-family: var(--font-mono-stack);
+}
+
+.chipCtx {
+  border-color: rgba(110, 200, 90, 0.35);
+  background: rgba(90, 170, 70, 0.12);
+  color: #7fd36a;
+  font-family: var(--font-mono-stack);
+}
+
+.input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 0 12px;
+  border: 1.5px solid #1d3a37;
+  border-radius: 8px;
+  background: #121616;
+  font-size: 14px;
+}
+
+.inputTyping {
+  border-color: #2f8f84;
+  box-shadow: 0 0 0 3px rgba(63, 217, 196, 0.12);
+}
+
+.typistDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.placeholder {
+  overflow: hidden;
+  color: #4f6b68;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inputText {
+  overflow: hidden;
+  color: #e8f2f1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caret {
+  flex: none;
+  width: 1.5px;
+  height: 17px;
+  margin-left: -7px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 32px;
+}
+
+.icons {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-left: 4px;
+  color: #8a9795;
+}
+
+.actionBtns {
+  display: flex;
+  gap: 6px;
+}
+
+.stop,
+.send {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.stop {
+  border: 1.5px solid #e0454f;
+  color: #f06a72;
+}
+
+.send {
+  border: 1.5px solid #2a3534;
+  color: #5f6b6a;
+  font-weight: 500;
+}
+
+.sendActive {
+  border-color: #2a9d8f;
+  background: #2a9d8f;
+  color: #fff;
+}
+
+.pulse {
+  position: absolute;
+  z-index: 6;
+  width: 60px;
+  height: 60px;
+  box-sizing: border-box;
+  border: 2px solid;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 7;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.cursorName {
+  margin-left: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  color: #061010;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Final CTA: glassy pill, centered between the settled cards and the board's
+ * bottom edge. A button, so no arrow (site rule). */
+.stage a.cta {
+  position: absolute;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  padding: 18px 32px;
+  border: 1px solid rgba(63, 217, 196, 0.35);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03));
+  backdrop-filter: blur(16px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 20px 60px rgba(0, 0, 0, 0.45),
+    0 0 40px rgba(63, 217, 196, 0.12);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.stage a.cta:hover {
+  border-color: rgba(63, 217, 196, 0.6);
+  background: linear-gradient(180deg, rgba(63, 217, 196, 0.2), rgba(63, 217, 196, 0.06));
+  color: #fff;
+}
+
+.replay {
+  position: absolute;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: #5f7d7a;
+  font: inherit;
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+
+.replay:hover {
+  color: #3fd9c4;
+}
+
+.replay:focus-visible,
+.card a.cardBtn:focus-visible,
+.stack a.cardBtn:focus-visible,
+.stage a.cta:focus-visible {
+  outline: 2px solid #3fd9c4;
+  outline-offset: 3px;
+}
+
+.stack {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .board,
+  .livePill,
+  .replay {
+    display: none;
+  }
+
+  .stack {
+    display: grid;
+    gap: 16px;
+    margin-top: 32px;
+  }
+
+  .stackCard {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 22px;
+    border: 1px solid rgba(63, 217, 196, 0.2);
+    border-radius: 16px;
+    background: #0f1f1f;
+  }
+
+  .stackCard .title {
+    margin: 0;
+    font-size: 22px;
+  }
+
+  .stackCard .cardBtn {
+    margin-top: 8px;
+  }
+
+  .stack a.stackCta {
+    justify-self: center;
+    margin-top: 12px;
+    color: #3fd9c4;
+    font-weight: 600;
+    text-decoration: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board {
+    transition: none;
+  }
+}
+
+/* The home page's cursor troupe plays these three, so theirs never show. */
+:global(html[data-troupe-on]) .cursor {
+  visibility: hidden;
+}
