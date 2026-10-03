@@ -19,6 +19,7 @@ import { ConversationView } from './ConversationView';
 const SESSION_ID = '0199a000-0000-7000-8000-000000000000' as SessionID;
 const PAYLOAD_BYTES = 256 * 1024;
 const THINKING_BYTES = 64 * 1024;
+const LEAN_TEXT_BYTES = 4 * 1024;
 const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
 let turns = 0;
 let detailReadDelay = 0;
@@ -27,6 +28,8 @@ let mountedHandle = false;
 const editTurns = new Set<number>();
 /** Turns whose answer has a table: Streamdown offers a portaled fullscreen viewer. */
 const tableTurns = new Set<number>();
+/** Turns whose answer carries a marked text payload: what lean history itself keeps. */
+const leanTextTurns = new Set<number>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -51,6 +54,7 @@ function messages(n: number): Message[] {
   };
   const prefix = `TRANSCRIPT_RETENTION_${n}_`;
   const thinking = `TRANSCRIPT_THINKING_${n}_`;
+  const lean = `TRANSCRIPT_LEAN_${n}_`;
   return [
     {
       ...base,
@@ -98,6 +102,16 @@ function messages(n: number): Message[] {
             ? `Answer ${n}\n\n| Column | Value |\n| --- | --- |\n| row | TABLE_${n} |`
             : `Answer ${n}`,
         },
+        ...(leanTextTurns.has(n)
+          ? [
+              {
+                type: 'text',
+                text: JSON.parse(
+                  JSON.stringify(lean + 'z'.repeat(LEAN_TEXT_BYTES - lean.length))
+                ) as string,
+              },
+            ]
+          : []),
         ...(editTurns.has(n)
           ? [
               {
@@ -208,10 +222,11 @@ export const fixture = {
     await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn({ edit = false, table = false } = {}) {
+  addTurn({ edit = false, table = false, leanText = false } = {}) {
     const n = turns++;
     if (edit) editTurns.add(n);
     if (table) tableTurns.add(n);
+    if (leanText) leanTextTurns.add(n);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));

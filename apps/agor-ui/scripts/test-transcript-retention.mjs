@@ -351,3 +351,67 @@ test('a portaled fullscreen viewer keeps its turn open and focused until closed'
     assert.deepEqual(await liveTurns(page, cdp), both([]));
   });
 });
+
+test('a reader parked at the latest turns keeps a bounded lean transcript and DOM', {
+  timeout: 180_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    // Cheap mid-run probe: a heap snapshot stalls the page long enough to
+    // reorder the bottom lock's scroll/resize timers, which a reader never does.
+    const dom = () =>
+      page.evaluate(() => {
+        const viewport = document.querySelector('[data-testid="conversation-scroll-container"]');
+        return {
+          turns: document.querySelectorAll('[data-task-block]').length,
+          elements: document.getElementsByTagName('*').length,
+          belowViewport:
+            viewport && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+        };
+      });
+    /** Turns whose lean text payload is live after a full collection. */
+    const liveLean = async () => {
+      await page.waitForTimeout(300);
+      await cdp.send('HeapProfiler.collectGarbage');
+      return [...new Set(await livePayloads(cdp, /^TRANSCRIPT_LEAN_(\d+)_z{512}/, 0))]
+        .map(Number)
+        .sort((a, b) => a - b);
+    };
+    // Paced like (fast) live turns. Bursts every 20 ms can release the bottom
+    // lock on main too, when an evicted turn shrinks above the viewport.
+    const addTurns = async (count) => {
+      for (let i = 0; i < count; i++) {
+        await page.evaluate(() => window.transcriptRetentionFixture.addTurn({ leanText: true }));
+        await page.waitForTimeout(100);
+      }
+    };
+    await addTurns(60);
+    await page.getByText('Answer 59').waitFor();
+    const at60 = await dom();
+    await addTurns(60);
+    await page.getByText('Answer 119').waitFor();
+    const at120 = await dom();
+    const lean = await liveLean();
+    const { usedSize } = await cdp.send('Runtime.getHeapUsage');
+    // Synthetic, informational: not a production memory measurement.
+    console.log(
+      `parked reader: ${at60.turns}/${at120.turns} turns, ${at60.elements}/${at120.elements} ` +
+        `elements at 60/120 turns; ${(usedSize / 2 ** 20).toFixed(1)} MiB JS heap at 120`
+    );
+    assert.ok(at120.belowViewport < 2, 'the reader is still parked at the latest turn');
+    assert.deepEqual(lean, range(90, 119), 'only the latest window keeps lean history');
+    assert.equal(at120.turns, 30, 'only the latest window stays mounted');
+    assert.ok(
+      at120.elements <= at60.elements + 50,
+      `DOM stays bounded: ${at60.elements} elements at 60 turns, ${at120.elements} at 120`
+    );
+
+    // Trimmed history comes back through Load older history.
+    await page.getByRole('button', { name: 'Load older history' }).click();
+    await page.getByText('Answer 80', { exact: true }).waitFor();
+    assert.deepEqual(await liveLean(), range(80, 119));
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveLean(), [], 'closing the reader releases everything');
+  });
+});

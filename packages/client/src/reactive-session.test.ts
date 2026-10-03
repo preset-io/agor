@@ -1,11 +1,14 @@
-import type { AgorClient, Message, Session, Task } from '@agor/core/client';
+import type { AgorClient, Message, Session, SessionID, Task, TaskID } from '@agor/core/client';
 import { TaskStatus } from '@agor/core/client';
+import { completionCallbackTaskId } from '@agor/core/ids';
 import { describe, expect, it, vi } from 'vitest';
 import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
   LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT,
+  LEAN_TRANSCRIPT_TASK_WINDOW,
   ReactiveSessionHandle,
+  type ReactiveSessionOptions,
   releaseReactiveSession,
   retainReactiveSession,
   type TaskHydrationMode,
@@ -3020,5 +3023,614 @@ describe('lean transcript detail retention', () => {
       LEAN_TRANSCRIPT_DETAIL_RETENTION_COUNT
     );
     f.handle.dispose();
+  });
+});
+
+describe('lean transcript window trimming', () => {
+  const id = (n: number) => `task-${String(n).padStart(3, '0')}`;
+  const ids = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => id(from + i));
+  const answer = (taskId: string) =>
+    ({
+      ...makeMessage(taskId, 1),
+      role: 'assistant',
+      content: [
+        { type: 'text', text: `Answer ${taskId}` },
+        { type: 'tool_use', id: `tool-${taskId}`, name: 'Read', input: {} },
+      ],
+    }) as unknown as Message;
+
+  /** 24 persisted turns; the reader opens on the latest ten. */
+  async function fixture(options: ReactiveSessionOptions = { taskHydration: 'lean' }) {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 24; n++) {
+      opts.tasks.push(makeTask(id(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[id(n)] = [makeMessage(id(n), 0), answer(id(n))];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, options);
+    await handle.ready();
+    let next = 24;
+    /** The daemon appends Session.tasks when a turn dispatches. */
+    const publishSession = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    /** Live turns as the executor publishes them while the reader watches. */
+    const addTurns = (count: number, live = true) => {
+      for (let i = 0; i < count; i++) {
+        const taskId = id(next++);
+        opts.tasks.push(makeTask(taskId, TaskStatus.COMPLETED));
+        opts.messagesByTask[taskId] = [makeMessage(taskId, 0), answer(taskId)];
+        if (!live) continue;
+        mock.emitServiceEvent('tasks', 'created', makeTask(taskId, TaskStatus.RUNNING));
+        publishSession();
+        for (const message of opts.messagesByTask[taskId])
+          mock.emitServiceEvent('messages', 'created', message);
+        mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+      }
+    };
+    const reserve = () => id(next++);
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    /** Every per-task collection the handle exposes, keyed by Task ID. */
+    const heldIds = () =>
+      new Set([
+        ...handle.state.messagesByTask.keys(),
+        ...handle.state.toolsByTask.keys(),
+        ...handle.state.loadedTaskIds,
+        ...[...handle.state.streamingMessages.values()].map((stream) => stream.task_id),
+      ]);
+    return { ...mock, opts, handle, addTurns, reserve, publishSession, taskIds, heldIds };
+  }
+
+  it('drops the oldest turns beyond the window and pages them back in order', async () => {
+    const f = await fixture();
+    expect(LEAN_TRANSCRIPT_TASK_WINDOW).toBe(30);
+    f.addTurns(30);
+    f.emitServiceEvent('tasks', 'tool:start', {
+      session_id: SESSION_ID,
+      task_id: id(14),
+      tool_use_id: 'old',
+      tool_name: 'Read',
+    });
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    for (const trimmed of ids(14, 23)) expect(f.heldIds().has(trimmed)).toBe(false);
+    expect((Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>).has(id(14))).toBe(false);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+
+    // The existing older-history path restores them, page by page, gap-free.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expect(f.handle.getTaskMessages(id(14)).map((message) => message.index)).toEqual([0, 1]);
+    expect(JSON.stringify(f.handle.getTaskMessages(id(14)))).not.toContain('tool_use');
+    await f.handle.loadOlderTasks();
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(0, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+
+    // Back at the latest turns, the window applies again.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    f.handle.dispose();
+  });
+
+  it('keeps a contiguous window: stops at protected turns and the first visible turn', async () => {
+    const f = await fixture();
+    f.addTurns(36); // 46 loaded: task-014 … task-059
+    // The first turn the reader sees bounds the trim.
+    expect(f.handle.trimOlderTasks(id(17))).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(17));
+
+    // A pinned turn (expanded disclosure, focus, selection, overlay) holds itself and everything newer.
+    const release = f.handle.retainTaskDetails(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()[0]).toBe(id(20));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    release();
+    await Promise.resolve();
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(30, 59));
+
+    // Unsettled turns: executing (which covers streaming) or awaiting the reader.
+    const blockers: Array<[string, () => void, () => void]> = [
+      [
+        'running',
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.RUNNING)),
+        () => f.emitServiceEvent('tasks', 'patched', makeTask(id(30), TaskStatus.COMPLETED)),
+      ],
+      [
+        'pending permission',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'pending' },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 5),
+            type: 'permission_request',
+            content: { request_id: 'r', tool_name: 'Bash', tool_input: {}, status: 'approved' },
+          }),
+      ],
+      [
+        'pending widget',
+        () =>
+          f.emitServiceEvent('messages', 'created', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'pending' } },
+          }),
+        () =>
+          f.emitServiceEvent('messages', 'patched', {
+            ...makeMessage(id(30), 6),
+            type: 'widget_request',
+            metadata: { widget: { widget_type: 'env_vars', status: 'submitted' } },
+          }),
+      ],
+    ];
+    for (const [label, block, settle] of blockers) {
+      f.addTurns(1);
+      block();
+      expect(f.handle.trimOlderTasks(), label).toBe(false);
+      expect(f.taskIds()[0]).toBe(id(30));
+      settle();
+    }
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    f.handle.dispose();
+  });
+
+  it('only trims a lean conversation reader', async () => {
+    for (const options of [
+      { taskHydration: 'lean', cacheScope: 'preview' },
+      { taskHydration: 'lazy' },
+      { taskHydration: 'eager' },
+    ] as ReactiveSessionOptions[]) {
+      const f = await fixture(options);
+      f.addTurns(40);
+      const before = f.taskIds();
+      expect(f.handle.trimOlderTasks()).toBe(false);
+      expect(f.taskIds()).toEqual(before);
+      f.handle.dispose();
+    }
+  });
+
+  it('never lets resync or late traffic resurrect a trimmed turn or open a gap', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+
+    // Late traffic for trimmed turns: a Task patch, persisted messages, tools and streams.
+    const trimmed = id(20);
+    const event = { session_id: SESSION_ID, task_id: trimmed };
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', makeMessage(trimmed, 7));
+    f.emitServiceEvent('messages', 'patched', answer(trimmed));
+    f.emitServiceEvent('messages', 'removed', makeMessage(trimmed, 0));
+    f.emitServiceEvent('tasks', 'tool:start', { ...event, tool_use_id: 't', tool_name: 'Read' });
+    f.emitServiceEvent('messages', 'streaming:chunk', { ...event, message_id: 's', chunk: 'x' });
+    f.emitServiceEvent('messages', 'thinking:chunk', { ...event, message_id: 'h', chunk: 'x' });
+    f.emitServiceEvent('messages', 'streaming:error', { ...event, message_id: 's', error: 'x' });
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(f.heldIds().has(trimmed)).toBe(false);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+
+    // Reconnect refreshes reached history only: no trimmed reads, no trimmed rows.
+    const taskGet = vi.mocked(f.client.service('tasks').get);
+    taskGet.mockClear();
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    expect(
+      taskGet.mock.calls.map(([taskId]) => taskId).filter((taskId) => taskId < id(24))
+    ).toEqual([]);
+
+    // A trim is refused while a history read is in flight; a patch journaled
+    // for a trimmed turn during that read does not resurrect it at commit.
+    f.addTurns(1);
+    f.opts.deferTaskMessageFetch = id(54);
+    f.messageFindAll.mockClear();
+    const resync = f.handle.resync();
+    expect(internals.taskFetches.size).toBe(1);
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.emitServiceEvent('tasks', 'patched', makeTask(trimmed, TaskStatus.COMPLETED));
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(54)));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await resync;
+    expect(f.taskIds()).toEqual(ids(24, 54));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(25, 54));
+
+    // More than a page of turns while offline: the window refills from the
+    // cursor without a gap, and stays above the trimmed history.
+    f.fireIo('disconnect');
+    f.addTurns(25, false);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(25, 79));
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(50, 79));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(40, 79));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('discards an older page abandoned by a disconnect once the window moved', async () => {
+    const f = await fixture();
+    const internals = f.handle as unknown as FetchInternals;
+    f.addTurns(30);
+    f.opts.deferTaskMessageFetch = id(13);
+    f.messageFindAll.mockClear();
+    const older = f.handle.loadOlderTasks();
+    await vi.waitFor(() => expect(JSON.stringify(f.messageFindAll.mock.calls)).toContain(id(13)));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    f.fireIo('disconnect');
+    expectNoStrandedFetches(internals);
+    // Offline, the parked reader's view still trims.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.opts.deferTaskMessageFetch = undefined;
+    f.releaseMessageFetch();
+    await older;
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual(ids(24, 53));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual(ids(14, 53));
+    expectNoStrandedFetches(internals);
+    f.handle.dispose();
+  });
+
+  it('settles terminal streams before trimming and attributes nothing to a trimmed turn', async () => {
+    const f = await fixture();
+    const failed = f.reserve();
+    const stream = (name: string, messageId: string, extra = {}) =>
+      f.emitServiceEvent('messages', name, {
+        session_id: SESSION_ID,
+        message_id: messageId,
+        task_id: failed,
+        timestamp: '2026-01-01T00:00:00.000Z',
+        role: 'assistant',
+        ...extra,
+      });
+    f.opts.tasks.push(makeTask(failed, TaskStatus.FAILED));
+    f.opts.messagesByTask[failed] = [makeMessage(failed, 0)];
+    f.emitServiceEvent('tasks', 'created', makeTask(failed, TaskStatus.RUNNING));
+    f.publishSession();
+    stream('thinking:start', 'thought');
+    stream('thinking:chunk', 'thought', { chunk: 'considering' });
+    stream('streaming:start', 'partial');
+    stream('streaming:chunk', 'partial', { chunk: 'unpersisted partial' });
+    stream('streaming:error', 'partial', { error: 'synthetic failure' });
+    f.emitServiceEvent('tasks', 'patched', makeTask(failed, TaskStatus.FAILED));
+    // #2930: terminal settlement keeps the errored partial and retires the thought.
+    expect(f.handle.getStreamingMessage('partial')).toMatchObject({ isStreaming: false });
+    expect(f.handle.getStreamingMessage('thought')).toBeUndefined();
+    // Make the failed turn the oldest one loaded, then age it out.
+    f.addTurns(40);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).not.toContain(failed);
+    // Its settled partial has no reload path and goes with it, as on a page reload.
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    expect((Reflect.get(f.handle, 'retiredStreamTasks') as Map<string, string>).size).toBe(0);
+    stream('streaming:error', 'thought', { error: 'late failure' });
+    stream('thinking:chunk', 'thought', { chunk: 'late' });
+    stream('streaming:chunk', 'partial', { chunk: 'late' });
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    // Paging back restores the persisted turn only.
+    while (!f.taskIds().includes(failed)) await f.handle.loadOlderTasks();
+    expect(f.handle.getTask(failed)?.status).toBe(TaskStatus.FAILED);
+    expect(f.handle.getTaskMessages(failed).map((message) => message.message_id)).toEqual([
+      `${failed}-msg-0`,
+    ]);
+    expect(f.handle.state.streamingMessages.size).toBe(0);
+    f.handle.dispose();
+  });
+});
+
+describe('lean transcript window follows displayed turn order', () => {
+  // UUIDv7-shaped IDs in creation order, as the daemon mints ordinary turns.
+  const turn = (n: number) => `0199c000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
+  /** A Task from another Session that finished long before this one began. */
+  const earlierSource = '0199a000-0000-7000-8000-000000000001' as TaskID;
+  const answer = (taskId: string) => ({ ...makeMessage(taskId, 1), content: `Answer ${taskId}` });
+
+  async function fixture() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 24; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    let next = 24;
+    /** The daemon appends Session.tasks at dispatch, in run order. */
+    const publishSession = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.filter((task) => task.status !== TaskStatus.QUEUED).map((t) => t.task_id),
+      });
+    /** One turn runs to completion; it may be a known (e.g. callback or queued) Task. */
+    const run = (taskId: string, { created = true } = {}) => {
+      const known = opts.tasks.find((task) => task.task_id === taskId);
+      if (known) opts.tasks.splice(opts.tasks.indexOf(known), 1);
+      opts.tasks.push(makeTask(taskId, TaskStatus.RUNNING));
+      opts.messagesByTask[taskId] = [answer(taskId) as Message];
+      if (created) mock.emitServiceEvent('tasks', 'created', makeTask(taskId, TaskStatus.RUNNING));
+      publishSession();
+      if (created) mock.emitServiceEvent('messages', 'created', answer(taskId));
+      opts.tasks[opts.tasks.length - 1] = makeTask(taskId, TaskStatus.COMPLETED);
+      mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+    };
+    const runTurns = (count: number) => {
+      for (let i = 0; i < count; i++) run(turn(next++));
+    };
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    return { ...mock, opts, handle, run, runTurns, taskIds, turn: (n: number) => turn(n) };
+  }
+
+  it('keeps a newest callback whose durable ID sorts before every loaded turn', async () => {
+    const f = await fixture();
+    f.runTurns(36); // 46 loaded: turns 14 … 59
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    expect(callback < f.turn(0)).toBe(true);
+    f.run(callback);
+    expect(f.taskIds().at(-1)).toBe(callback);
+    // The reader sees turns 20 … 59 and the callback answer at the bottom.
+    expect(f.handle.trimOlderTasks(f.turn(20))).toBe(true);
+    expect(f.taskIds().at(-1)).toBe(callback);
+    expect(f.taskIds()[0]).toBe(f.turn(20));
+    expect(f.handle.getTaskMessages(callback)).toHaveLength(1);
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(callback);
+
+    // Reconnect and paging back keep it once, at its displayed position.
+    await f.handle.resync();
+    expect(f.taskIds().at(-1)).toBe(callback);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 60 }, (_, n) => f.turn(n)), callback]);
+
+    // A second callback that is first seen settled is a new turn, not late history.
+    f.handle.trimOlderTasks();
+    const second = completionCallbackTaskId(
+      earlierSource,
+      '0199a000-0000-7000-8000-00000000abcd' as SessionID
+    );
+    f.run(second, { created: false });
+    expect(f.taskIds().at(-1)).toBe(second);
+    // Late traffic for a trimmed turn is still not re-added above a gap.
+    f.emitServiceEvent('tasks', 'patched', makeTask(f.turn(3), TaskStatus.COMPLETED));
+    f.emitServiceEvent('messages', 'created', answer(f.turn(3)));
+    expect(f.taskIds()).not.toContain(f.turn(3));
+    expect(f.handle.state.messagesByTask.has(f.turn(3))).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('keeps trimmed turns out when a reconnect page reaches below the cursor', async () => {
+    const f = await fixture();
+    // Mostly callbacks: few kept turns have IDs at or above the history cursor.
+    const callbacks = Array.from({ length: 25 }, (_, k) =>
+      completionCallbackTaskId(
+        `0199a000-0000-7000-8000-${String(k).padStart(12, '0')}` as TaskID,
+        SESSION_ID as SessionID
+      )
+    );
+    for (const callback of callbacks) f.run(callback);
+    f.runTurns(6); // turns 24 … 29
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    const trimmed = [...Array.from({ length: 10 }, (_, n) => f.turn(14 + n)), callbacks[0]];
+    for (const id of trimmed) expect(f.taskIds()).not.toContain(id);
+    await f.handle.resync();
+    for (const id of trimmed) expect(f.taskIds()).not.toContain(id);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(f.turn(29));
+    f.handle.dispose();
+  });
+
+  /** A 4-turn Session whose whole history is loaded: the ID cursor is exhausted. */
+  async function shortSession() {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 4; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.hasOlderTasks).toBe(false);
+    /** Callback turns completing while the reader is offline; IDs sort below every turn. */
+    const offlineCallbacks = (count: number) => {
+      const ids = Array.from({ length: count }, (_, k) =>
+        completionCallbackTaskId(
+          `0199a000-0000-7000-8000-${String(k).padStart(12, '0')}` as TaskID,
+          SESSION_ID as SessionID
+        )
+      );
+      for (const id of ids) {
+        expect(id < turn(0)).toBe(true);
+        opts.tasks.push(makeTask(id, TaskStatus.COMPLETED));
+        opts.messagesByTask[id] = [answer(id) as Message];
+      }
+      return ids;
+    };
+    const taskIds = () => handle.state.tasks.map((task): string => task.task_id);
+    return { ...mock, opts, handle, offlineCallbacks, taskIds };
+  }
+
+  it('reconciles every turn dispatched while offline, even below an exhausted cursor', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(15);
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    for (const id of callbacks) expect(f.handle.getTaskMessages(id)).toHaveLength(1);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    f.handle.dispose();
+  });
+
+  it('loads the newest window after more offline turns than it holds, the rest via older history', async () => {
+    const f = await shortSession();
+    f.fireIo('disconnect');
+    const callbacks = f.offlineCallbacks(LEAN_TRANSCRIPT_TASK_WINDOW + 7);
+    f.fireIo('connect');
+    await f.handle.ready();
+    // Never a gap above the newest window: earlier turns become older history.
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Older history pages back in display order, then reports it is exhausted.
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([turn(1), turn(2), turn(3), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(true);
+    // Late traffic for still-unloaded history is not placed above the transcript.
+    f.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    expect(f.taskIds()).not.toContain(turn(0));
+    await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    expect(f.handle.state.hasOlderTasks).toBe(false);
+    // A later trim still follows display order.
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    await f.handle.resync();
+    expect(f.taskIds()).toEqual(callbacks.slice(-LEAN_TRANSCRIPT_TASK_WINDOW));
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([...Array.from({ length: 4 }, (_, n) => turn(n)), ...callbacks]);
+    f.handle.dispose();
+  });
+
+  it('loads a newest callback on open even when it is not among the highest task IDs', async () => {
+    const f = await fixture();
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    f.opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    f.opts.messagesByTask[callback] = [answer(callback) as Message];
+    const reopened = new ReactiveSessionHandle(f.client, SESSION_ID, { taskHydration: 'lean' });
+    await reopened.ready();
+    expect(reopened.state.tasks.at(-1)?.task_id).toBe(callback);
+    expect(reopened.getTaskMessages(callback)).toHaveLength(1);
+    reopened.dispose();
+    f.handle.dispose();
+  });
+
+  it('keeps a queued prompt that runs last after newer prompts were promoted ahead of it', async () => {
+    const f = await fixture();
+    const waiting = f.turn(24);
+    const queued = { ...makeTask(waiting, TaskStatus.QUEUED), queue_position: 1 } as Task;
+    f.opts.tasks.push(queued);
+    f.emitServiceEvent('tasks', 'queued', queued);
+    // Newer prompts are reordered ahead of it and run first.
+    for (let n = 25; n < 61; n++) f.run(f.turn(n));
+    f.run(waiting);
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    expect(f.handle.trimOlderTasks(f.turn(40))).toBe(true);
+    expect(f.taskIds()).toHaveLength(LEAN_TRANSCRIPT_TASK_WINDOW);
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    await f.handle.resync();
+    expect(f.taskIds().at(-1)).toBe(waiting);
+    while (f.handle.state.hasOlderTasks) await f.handle.loadOlderTasks();
+    expect(f.taskIds()).toEqual([
+      ...Array.from({ length: 24 }, (_, n) => f.turn(n)),
+      ...Array.from({ length: 36 }, (_, n) => f.turn(25 + n)),
+      waiting,
+    ]);
+    f.handle.dispose();
+  });
+
+  it('does not place a settled event that arrives before the first page', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {}, deferSessionGet: true };
+    for (let n = 0; n < 100; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() => expect(mock.client.service('sessions').get).toHaveBeenCalled());
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    mock.releaseSessionGet();
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, i) => turn(90 + i))
+    );
+    handle.dispose();
+  });
+});
+
+describe('lean session context-window projection', () => {
+  const turn = (n: number) => `0199d000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
+  const withSnapshot = (task: Task, used: number) =>
+    ({
+      ...task,
+      model: 'synthetic-model',
+      duration_ms: 1200,
+      computed_context_window: used,
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: used, outputTokens: 1, totalTokens: used + 1 },
+        contextWindowLimit: 200_000,
+      },
+      raw_sdk_response: { canary: 'RAW_SDK_CANARY' },
+    }) as Task;
+
+  it('keeps the latest snapshot after its turn is trimmed, and never regresses to an older one', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 10; n++)
+      opts.tasks.push(withSnapshot(makeTask(turn(n), TaskStatus.COMPLETED), 1000 + n));
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await handle.ready();
+    expect(handle.state.latestContextWindow).toMatchObject({
+      task_id: turn(9),
+      computed_context_window: 1009,
+      model: 'synthetic-model',
+      duration_ms: 1200,
+    });
+    expect(JSON.stringify(handle.state.latestContextWindow)).not.toContain('RAW_SDK_CANARY');
+    // Forty turns that report no snapshot push turn 9 out of the transcript.
+    for (let n = 10; n < 50; n++) {
+      const task = makeTask(turn(n), TaskStatus.COMPLETED);
+      opts.tasks.push(task);
+      mock.emitServiceEvent('tasks', 'created', makeTask(turn(n), TaskStatus.RUNNING));
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((row) => row.task_id),
+      });
+      mock.emitServiceEvent('tasks', 'patched', task);
+    }
+    expect(handle.trimOlderTasks()).toBe(true);
+    expect(handle.getTask(turn(9))).toBeUndefined();
+    expect(handle.state.latestContextWindow?.task_id).toBe(turn(9));
+    // Paging back an older snapshot does not replace the newer one.
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.latestContextWindow?.task_id).toBe(turn(9));
+    // A newer reported snapshot replaces it.
+    const latest = withSnapshot(makeTask(turn(49), TaskStatus.COMPLETED), 4242);
+    mock.emitServiceEvent('tasks', 'patched', latest);
+    expect(handle.state.latestContextWindow).toMatchObject({
+      task_id: turn(49),
+      computed_context_window: 4242,
+    });
+    // Another Session's handle starts without it; removal and disposal clear it.
+    const other = new ReactiveSessionHandle(
+      createMockClient({ tasks: [], messagesByTask: {} }).client,
+      SESSION_ID,
+      { taskHydration: 'lean' }
+    );
+    await other.ready();
+    expect(other.state.latestContextWindow).toBeUndefined();
+    other.dispose();
+    mock.emitServiceEvent('sessions', 'removed', { session_id: SESSION_ID });
+    expect(handle.state.latestContextWindow).toBeUndefined();
+    handle.dispose();
+    expect(handle.state.latestContextWindow).toBeUndefined();
   });
 });
