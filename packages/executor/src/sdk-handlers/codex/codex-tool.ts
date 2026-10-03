@@ -247,7 +247,10 @@ export class CodexTool implements ITool {
         taskId,
         permissionMode,
         abortController,
-        streamingCallbacks?.onPulse
+        streamingCallbacks?.onPulse,
+        // Tool rows are persisted from tool_complete below and tool blocks are
+        // filtered out of the final complete event, so skip the turn-end copies.
+        { retainCompletedTools: false }
       )) {
         // Detect if execution was stopped early
         if (event.type === 'stopped') {
