@@ -62,6 +62,10 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
         !branch.environment_instance.command_attempt.finished_at));
   const [selectedTab, setSelectedTab] = useState<string>();
   const activeTab = selectedTab ?? (preferCommands ? 'commands' : 'runtime');
+  // Choose a default once per opening, not whenever a command finishes.
+  useEffect(() => {
+    if (open) setSelectedTab((selected) => selected ?? activeTab);
+  }, [open, activeTab]);
   const showRuntime = activeTab === 'runtime';
   const [logs, setLogs] = useState<LogsResponse | null>(null);
   const [loading, setLoading] = useState(false);

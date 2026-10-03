@@ -313,6 +313,39 @@ describe('EnvironmentLogsModal', () => {
     await waitFor(() => expect(screen.getByText('Build admitted')).toBeVisible());
   });
 
+  it('keeps Commands selected after completion and chooses a fresh default on reopening', async () => {
+    const active: Branch = {
+      ...mockBranch,
+      environment_instance: {
+        status: 'starting',
+        command_attempt: { ...failed.command_attempt!, finished_at: undefined },
+      },
+    } as Branch;
+    const completed: Branch = {
+      ...active,
+      environment_instance: {
+        status: 'running',
+        command_attempt: { ...failed.command_attempt!, output: 'Preview ready' },
+        last_command: { ...failed.last_command!, status: 'succeeded' },
+      },
+    };
+    const find = vi.fn().mockResolvedValue({ logs: 'Runtime ready', timestamp: 'now' });
+    const props = {
+      onClose: () => {},
+      client: { service: () => ({ find }) } as unknown as AgorClient,
+    };
+    const { rerender } = render(<EnvironmentLogsModal {...props} open branch={active} />);
+    expect(screen.getByRole('tab', { name: 'Commands' })).toHaveAttribute('aria-selected', 'true');
+    rerender(<EnvironmentLogsModal {...props} open branch={completed} />);
+    expect(screen.getByRole('tab', { name: 'Commands' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByText('Preview ready')).toBeVisible());
+    expect(find).not.toHaveBeenCalled();
+    rerender(<EnvironmentLogsModal {...props} open={false} branch={completed} />);
+    rerender(<EnvironmentLogsModal {...props} open branch={completed} />);
+    expect(screen.getByRole('tab', { name: 'Runtime' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(screen.getByText('Runtime ready')).toBeVisible());
+  });
+
   it('renders legacy output and unknown outcomes without treating them as app health', async () => {
     const legacy: BranchEnvironmentInstance = {
       status: 'error',

@@ -63,10 +63,7 @@ import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../../hooks/useConfirmNukeEnvironment';
 import { useEnvironmentStart } from '../../../hooks/useEnvironmentStart';
 import { usePermissions } from '../../../hooks/usePermissions';
-import {
-  getEnvironmentCommandStatus,
-  hasEnvironmentCommandLogs,
-} from '../../../utils/environmentCommand';
+import { getEnvironmentCommandStatus, hasEnvironmentLogs } from '../../../utils/environmentCommand';
 import {
   getEnvironmentState,
   getEnvironmentStateDescription,
@@ -559,8 +556,11 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // ----- Derived UI state -----
   const inferredState = getEnvironmentState(environment);
   const commandStatus = getEnvironmentCommandStatus(environment);
-  const hasCommandLogs = hasEnvironmentCommandLogs(environment);
-  const canViewLogs = hasCommandLogs || (!!branch.logs_command && !shellLogsUnavailable);
+  const canViewLogs = hasEnvironmentLogs(
+    environment,
+    branch.logs_command,
+    featuresConfig?.environmentCommands?.shellLogs
+  );
   const hasEnvironmentConfig = !!repo.environment;
   const noVariantsConfigured = !hasEnvironmentConfig;
 

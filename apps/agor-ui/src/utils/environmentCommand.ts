@@ -38,3 +38,15 @@ export function hasEnvironmentCommandLogs(environment?: BranchEnvironmentInstanc
     environment?.command_history?.length
   );
 }
+
+/** Log availability only; callers must still enforce branch permissions. */
+export function hasEnvironmentLogs(
+  environment: BranchEnvironmentInstance | undefined,
+  logsCommand: string | null | undefined,
+  shellLogs = true
+): boolean {
+  return (
+    hasEnvironmentCommandLogs(environment) ||
+    (!!logsCommand && (shellLogs || /^https?:\/\//i.test(logsCommand.trim())))
+  );
+}
