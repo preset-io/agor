@@ -9,7 +9,7 @@ import {
   StopOutlined,
 } from '@ant-design/icons';
 import { Button, Space, Tooltip, theme } from 'antd';
-import { useAuthConfig } from '../../hooks/useAuthConfig';
+import { useAuthConfigSnapshot } from '../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEnvironmentAccessUrls } from '../../utils/environmentAccessUrls';
 import { hasEnvironmentLogs } from '../../utils/environmentCommand';
@@ -49,7 +49,7 @@ export function EnvironmentPill({
   const effectiveEnv = getEffectiveEnv(repo);
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
-  const { featuresConfig } = useAuthConfig();
+  const { featuresConfig } = useAuthConfigSnapshot();
   const canViewLogs = hasEnvironmentLogs(
     env,
     branch.logs_command,
