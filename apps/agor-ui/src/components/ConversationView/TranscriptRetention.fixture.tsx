@@ -27,6 +27,15 @@ let mountedHandle = false;
 const editTurns = new Set<number>();
 /** Turns whose answer has a table: Streamdown offers a portaled fullscreen viewer. */
 const tableTurns = new Set<number>();
+/** Tool result sizes of turns that read a very large file. */
+const payloadBytes = new Map<number, number>();
+/**
+ * Turns whose only detail sits inside the answer, beside its text: no
+ * AgentChain. `empty-reasoning-read` precedes the Read with SDK-normalized
+ * empty thinking, which renders nothing.
+ */
+type Inline = 'reasoning' | 'read' | 'empty-reasoning-read';
+const inlineTurns = new Map<number, Inline>();
 
 function task(n: number, status: Task['status']): Task {
   const createdAt = new Date(Date.UTC(2026, 9, 1, 0, n)).toISOString();
@@ -51,7 +60,7 @@ function messages(n: number): Message[] {
   };
   const prefix = `TRANSCRIPT_RETENTION_${n}_`;
   const thinking = `TRANSCRIPT_THINKING_${n}_`;
-  return [
+  const [tool, result, answer] = [
     {
       ...base,
       message_id: `${taskId(n)}-tool` as MessageID,
@@ -75,7 +84,11 @@ function messages(n: number): Message[] {
         {
           type: 'tool_result',
           tool_use_id: `read-${n}`,
-          content: JSON.parse(JSON.stringify(prefix + 'x'.repeat(PAYLOAD_BYTES - prefix.length))),
+          content: JSON.parse(
+            JSON.stringify(
+              prefix + 'x'.repeat((payloadBytes.get(n) ?? PAYLOAD_BYTES) - prefix.length)
+            )
+          ),
         },
       ],
     },
@@ -115,6 +128,18 @@ function messages(n: number): Message[] {
       ],
     },
   ] as Message[];
+  const inline = inlineTurns.get(n);
+  if (!inline) return [tool, result, answer];
+  type Blocks = Extract<Message['content'], unknown[]>;
+  const [reasoning, text] = answer.content as Blocks;
+  const read = [...(tool.content as Blocks), ...(result.content as Blocks)];
+  const detail =
+    inline === 'reasoning'
+      ? [reasoning]
+      : inline === 'read'
+        ? read
+        : [{ type: 'thinking' as const, text: '' }, ...read];
+  return [{ ...answer, content: [...detail, text] }];
 }
 
 const project = (message: Message): Message => ({
@@ -208,10 +233,22 @@ export const fixture = {
     await retainReactiveSession(client, SESSION_ID, { taskHydration: 'lean' }).ready();
   },
   /** One live turn as the daemon publishes it: created, payloads, completed. */
-  addTurn({ edit = false, table = false } = {}) {
+  addTurn({
+    edit = false,
+    table = false,
+    bytes = 0,
+    inline,
+  }: {
+    edit?: boolean;
+    table?: boolean;
+    bytes?: number;
+    inline?: Inline;
+  } = {}) {
     const n = turns++;
+    if (inline) inlineTurns.set(n, inline);
     if (edit) editTurns.add(n);
     if (table) tableTurns.add(n);
+    if (bytes) payloadBytes.set(n, bytes);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));
