@@ -329,7 +329,11 @@ admission/UI projection:
   session back to its appropriate resting state in the same transaction;
   queue processing and other side effects run after commit;
 - reconciliation repairs a failed/not-ready session when no non-queued task
-  still owns that busy state.
+  still owns that busy state;
+- the browser confirms executing-to-resting Session events with caller-scoped
+  reads, generation fencing, and bounded backoff. After exhaustion a new
+  terminal event earns one read at the final backoff delay (duplicates coalesce,
+  without resetting the retry budget); window focus can start a fresh cycle.
 
 `queued` Tasks are not startup orphans and are never wiped during daemon
 startup. The all-daemon queue worker rediscovers them. Fleet-safe ownership and
