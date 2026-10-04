@@ -32,7 +32,7 @@ import {
   ROLES,
   sessionPath,
 } from '@agor-live/client';
-import { Alert, ConfigProvider, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Space, theme } from 'antd';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AVAILABLE_AGENTS } from './components/AgentSelectionGrid';
@@ -444,6 +444,9 @@ function AppContent() {
     loadingStage,
     loading,
     error: dataError,
+    refetch: retryData,
+    placementRecoveryFailed,
+    retryPlacements,
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
@@ -452,6 +455,21 @@ function AppContent() {
     authGeneration,
     connectionReady: connected && !connecting,
   });
+
+  useEffect(() => {
+    if (!placementRecoveryFailed) return;
+    const key = 'placement-recovery';
+    showWarning(
+      <Space>
+        Saved branch positions could not be loaded.
+        <Button size="small" onClick={retryPlacements}>
+          Retry positions
+        </Button>
+      </Space>,
+      { key, duration: 0 }
+    );
+    return () => destroy(key);
+  }, [placementRecoveryFailed, retryPlacements, showWarning, destroy]);
 
   // Entity maps are NOT subscribed here. Each surface that needs a whole map
   // (MobileApp, OnboardingWizard, KnowledgePage) self-subscribes via
@@ -1163,7 +1181,7 @@ function AppContent() {
   }
 
   // Show connection error
-  if (connectionError) {
+  if (connectionError && !hasLoadedOnce) {
     return (
       <div
         style={{
@@ -1197,7 +1215,13 @@ function AppContent() {
           padding: '2rem',
         }}
       >
-        <Alert type="error" title="Failed to load data" description={dataError} showIcon />
+        <Alert
+          type="error"
+          title="Failed to load data"
+          description={dataError}
+          showIcon
+          action={<Button onClick={() => void retryData()}>Retry</Button>}
+        />
       </div>
     );
   }

@@ -193,7 +193,10 @@ export function useAuth(): UseAuthReturn {
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
     localLoginAttemptRef.current = null;
-    setState((prev) => ({ ...prev, loading: true, error: null }));
+    // Revalidation is not a new login. Keep the authenticated surface mounted
+    // while checking the same credentials; login/authority replacement still
+    // uses its own blocking lifecycle below.
+    setState((prev) => ({ ...prev, loading: !prev.authenticated, error: null }));
 
     const storedAccessToken = getStoredAccessToken();
     const storedRefreshToken = getStoredRefreshToken();
@@ -366,6 +369,17 @@ export function useAuth(): UseAuthReturn {
             fallbackError
           );
         }
+      }
+
+      // A failed network probe is not proof that the current identity expired.
+      // Preserve usable state; a definitive credential rejection still clears it.
+      if (isConnectionError && authStateRef.current.authenticated && !attemptedLaunch) {
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: 'Connection lost - waiting for daemon...',
+        }));
+        return;
       }
 
       noteUnauthenticated();

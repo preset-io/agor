@@ -1,3 +1,4 @@
+import type { UserID } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { consumePromptDraftSeed, stagePromptDraftSeed } from '../utils/promptDrafts';
@@ -258,8 +259,12 @@ describe('useAuth launch-code fallback', () => {
     const loggedInGeneration = result.current.authenticationGeneration;
     expect(loggedInGeneration).toBeGreaterThan(initialGeneration);
     expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(true);
-    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(true);
-    expect(result.current.isAuthenticationOwnerCurrent('u2', loggedInGeneration)).toBe(false);
+    expect(result.current.isAuthenticationOwnerCurrent('u1' as UserID, loggedInGeneration)).toBe(
+      true
+    );
+    expect(result.current.isAuthenticationOwnerCurrent('u2' as UserID, loggedInGeneration)).toBe(
+      false
+    );
 
     act(() => {
       window.dispatchEvent(
@@ -283,15 +288,21 @@ describe('useAuth launch-code fallback', () => {
     });
     const replacedGeneration = result.current.authenticationGeneration;
     expect(replacedGeneration).toBeGreaterThan(loggedInGeneration);
-    expect(result.current.isAuthenticationOwnerCurrent('u1', replacedGeneration)).toBe(false);
-    expect(result.current.isAuthenticationOwnerCurrent('u2', replacedGeneration)).toBe(true);
+    expect(result.current.isAuthenticationOwnerCurrent('u1' as UserID, replacedGeneration)).toBe(
+      false
+    );
+    expect(result.current.isAuthenticationOwnerCurrent('u2' as UserID, replacedGeneration)).toBe(
+      true
+    );
 
     await act(async () => {
       await result.current.logout();
     });
     expect(result.current.authenticationGeneration).toBeGreaterThan(replacedGeneration);
     expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(false);
-    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(false);
+    expect(result.current.isAuthenticationOwnerCurrent('u1' as UserID, loggedInGeneration)).toBe(
+      false
+    );
   });
 
   it('advances generation when the final login authority is committed', async () => {
@@ -332,7 +343,7 @@ describe('useAuth launch-code fallback', () => {
       const pendingAuth = deferred<{
         accessToken: string;
         refreshToken: string;
-        user: { user_id: string; email: string };
+        user: { user_id: string; email: string; role?: string };
       }>();
       const refreshed = vi.fn();
       window.addEventListener(TOKENS_REFRESHED_EVENT, refreshed);
@@ -489,7 +500,7 @@ describe('useAuth launch-code fallback', () => {
 
     const pendingRefresh = deferred<{
       accessToken: string;
-      user: { user_id: string; email: string };
+      user: { user_id: string; email: string; role?: string };
     }>();
     authenticate.mockImplementationOnce(() => pendingRefresh.promise);
     let authorityA = true;
@@ -598,5 +609,44 @@ describe('useAuth launch-code fallback', () => {
     expect(result.current.error).toContain('Launch sign-in failed');
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('stored-access');
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('stored-refresh');
+  });
+});
+
+describe('same-authority network revalidation', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    localStorage.clear();
+  });
+
+  it('keeps loaded auth state while revalidating and after transient retries are exhausted', async () => {
+    window.history.replaceState({}, '', '/');
+    authenticate.mockReset();
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'token');
+    const user = { user_id: 'user-a', role: 'member', email: 'a@example.test' };
+    authenticate.mockResolvedValueOnce({ accessToken: 'token', user });
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.authenticated).toBe(true));
+    const generation = result.current.authenticationGeneration;
+    const probe = deferred<never>();
+    authenticate.mockReturnValueOnce(probe.promise);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    let pending!: Promise<void>;
+    vi.useFakeTimers();
+    act(() => {
+      pending = result.current.reAuthenticate();
+    });
+    expect(result.current.loading).toBe(false);
+    expect(result.current.user).toEqual(user);
+    await act(async () => {
+      authenticate.mockRejectedValue(new Error('network error'));
+      probe.reject(new Error('network error'));
+      await vi.advanceTimersByTimeAsync(40_000);
+      await pending;
+    });
+    expect(result.current.authenticated).toBe(true);
+    expect(result.current.user).toEqual(user);
+    expect(result.current.authenticationGeneration).toBe(generation);
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('token');
   });
 });

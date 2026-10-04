@@ -16,6 +16,7 @@
  * `../store/agorHydration`.
  */
 
+import type { BoardEntityObject } from '@agor/core/types';
 import type {
   AgorClient,
   Board,
@@ -66,6 +67,7 @@ import {
   tombstoneSession,
   untombstoneSession,
 } from '../store/realtimeBatch';
+import { isTransientConnectionError } from '../utils/authErrors';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { runLatestMCPOAuthStatusRequest } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
@@ -87,6 +89,32 @@ import {
 // (see `fetchData`) and intentionally absent here so the gate never waits on
 // them. Their realtime subscriptions are still attached immediately in the
 // subscribe effect, so live updates land even before their fetch resolves.
+// Canvas placements can outnumber active branches by orders of magnitude.
+// Keep each transport response bounded even when hydrating the global index.
+const BOARD_OBJECT_PAGE_LIMIT = 100;
+
+// Restart only this collection, from page one, when offset pagination observes
+// membership churn. Never retry authorization/transport failures here.
+async function readPlacements(
+  client: AgorClient,
+  query: Record<string, unknown>,
+  isCurrent: () => boolean
+): Promise<BoardEntityObject[]> {
+  for (let attempt = 0; ; attempt++) {
+    if (!isCurrent()) return [];
+    try {
+      return await client.service('board-objects').findAll({ query });
+    } catch (error) {
+      if (
+        attempt === 2 ||
+        !(error instanceof Error) ||
+        error.message !== 'Paginated findAll() changed while pages were being read'
+      )
+        throw error;
+    }
+  }
+}
+
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
@@ -136,6 +164,8 @@ interface UseAgorDataResult {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  placementRecoveryFailed: boolean;
+  retryPlacements: () => void;
 }
 
 // Parse the leading entity segment out of the current pathname, e.g.
@@ -337,6 +367,33 @@ export function useAgorData(
   const authorityScopeKeyRef = useRef(authorityScopeKey);
   authorityScopeKeyRef.current = authorityScopeKey;
 
+  const [placementFailureScope, setPlacementFailureScope] = useState<string | null>(null);
+  const retryPlacementsRef = useRef<() => void>(() => {});
+  const retryPlacements = useCallback(() => retryPlacementsRef.current(), []);
+
+  const placementRecoveryRef = useRef<{
+    reads: Map<string, { timer?: ReturnType<typeof setTimeout>; failed: boolean; attempt: number }>;
+  } | null>(null);
+
+  // Recovery belongs to the authenticated client, not a listener registration.
+  // Navigation resubscribes listeners but must retain timers, in-flight reads,
+  // exhausted entries and Retry. Layout teardown fences true authority changes
+  // and unmount before any old passive listeners or responses can apply.
+  useLayoutEffect(() => {
+    setPlacementFailureScope(null);
+    if (!authorityScopeKey || !client) return;
+    const recovery: NonNullable<typeof placementRecoveryRef.current> = { reads: new Map() };
+    placementRecoveryRef.current = recovery;
+    return () => {
+      placementRecoveryRef.current = null;
+      retryPlacementsRef.current = () => {};
+      for (const pending of recovery.reads.values()) {
+        if (pending.timer) clearTimeout(pending.timer);
+      }
+      recovery.reads.clear();
+    };
+  }, [authorityScopeKey, client]);
+
   // Advance the singleton realtime queue in the layout phase. React runs this
   // before the authority-transition map reset below and before the previous
   // subscription's passive cleanup, so that cleanup cannot flush a queued row
@@ -531,102 +588,23 @@ export function useAgorData(
           agorStore.getState().setItemCounts({});
         }
 
-        // Marks a tracked item complete (and captures its count from the
-        // resolved list length) when its promise resolves. No-ops on
-        // silent (reconnect) refetches so initial-load progress isn't mutated.
+        // A reconnect can be the first successful bootstrap after an error.
+        // Finish its checklist too, otherwise App's first-load gate stays closed.
+        const updateInitialProgress =
+          !silent ||
+          INITIAL_LOAD_ITEMS.some(({ key }) => agorStore.getState().itemCounts[key] === undefined);
+        // Routine reconnects leave the completed checklist alone.
         const track = <T extends ReadonlyArray<unknown>>(
           key: InitialLoadItemKey,
           p: Promise<T>
         ): Promise<T> => {
           const timedPromise = debugTimer?.track(key, p) ?? p;
           return timedPromise.then((r) => {
-            if (!silent && authorityIsCurrent())
+            if (updateInitialProgress && authorityIsCurrent())
               agorStore.getState().setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
         };
-
-        // ── Background (non-gated) fetches ──────────────────────────────
-        // These collections are NOT needed to paint the canvas, so they must
-        // never block the first-paint gate. Fire-and-forget: each populates its
-        // own map slice on resolve. Their realtime subscriptions are attached in
-        // the subscribe effect BEFORE this fetch runs, so live events land even
-        // while these fetches are in flight — and `runHydration` only applies a
-        // snapshot when no live write to that collection raced (else it refetches
-        // a fresh one). We deliberately do NOT `track()` them — they're absent
-        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
-        // gate ignores them. We apply through the store's `applyMaps` (not the
-        // per-entity setters), keeping fetchData's deps stable so the subscribe
-        // effect doesn't re-fire.
-        // Route the full snapshot through the shared skip-apply-on-race / generation
-        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
-        // clobber a newer realtime upsert, and a fetch resolving after logout is
-        // dropped instead of repopulating the previous tenant. The apply sets the
-        // hydration gate, so it only flips once a quiet, current snapshot lands.
-        void runAuthorityHydration(
-          'agentic-tool-settings',
-          ['agenticToolSettings'],
-          () => client.service('agentic-tool-settings').findAll(),
-          (settings) => agorStore.getState().setAgenticToolSettings(settings)
-        );
-
-        void runAuthorityHydration(
-          'mcp-servers',
-          ['mcpServers'],
-          () =>
-            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
-            }));
-            agorStore.getState().markHydrated('mcpServersHydrated');
-          }
-        );
-        void runAuthorityHydration(
-          'session-mcp-servers',
-          ['sessionMcp'],
-          () =>
-            client
-              .service('session-mcp-servers')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
-        );
-        void runAuthorityHydration(
-          'gateway-channels',
-          ['gatewayChannels'],
-          () =>
-            client
-              .service('gateway-channels')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
-            }));
-            agorStore.getState().markHydrated('gatewayChannelsHydrated');
-          }
-        );
-        void runAuthorityHydration(
-          'artifacts',
-          ['artifacts'],
-          () =>
-            client.service('artifacts').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
-              },
-            }),
-          (list) =>
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              artifactById: buildById(list, 'artifact_id', prev.artifactById),
-            }))
-        );
-        void refetchOAuthDurableState(fetchAuthorityScope);
 
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
@@ -863,12 +841,15 @@ export function useAgorData(
             // expected authorization failure here is not an essential bootstrap
             // failure. Keep the collection empty and don't subscribe below.
             canUseMemberWorkspaceServices
-              ? client.service('board-objects').findAll({
-                  query: {
-                    $limit: PAGINATION.DEFAULT_LIMIT,
+              ? readPlacements(
+                  client,
+                  {
+                    exclude_archived_branches: true,
+                    $limit: BOARD_OBJECT_PAGE_LIMIT,
                     ...(boardScope ? { board_id: boardScope } : {}),
                   },
-                })
+                  authorityIsCurrent
+                )
               : Promise.resolve([])
           ),
           track(
@@ -1017,6 +998,88 @@ export function useAgorData(
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
 
+        // ── Secondary fetches — after the canvas snapshot lands ────────
+        // These collections are NOT needed to paint the canvas, so they must
+        // never compete with essential reads over a slow connection. Each populates its
+        // own map slice on resolve. Their realtime subscriptions are attached in
+        // the subscribe effect BEFORE this fetch runs, so live events land even
+        // while these fetches are in flight — and `runHydration` only applies a
+        // snapshot when no live write to that collection raced (else it refetches
+        // a fresh one). We deliberately do NOT `track()` them — they're absent
+        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
+        // gate ignores them. We apply through the store's `applyMaps` (not the
+        // per-entity setters), keeping fetchData's deps stable so the subscribe
+        // effect doesn't re-fire.
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        void runAuthorityHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
+
+        void runAuthorityHydration(
+          'mcp-servers',
+          ['mcpServers'],
+          () =>
+            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
+            }));
+            agorStore.getState().markHydrated('mcpServersHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'session-mcp-servers',
+          ['sessionMcp'],
+          () =>
+            client
+              .service('session-mcp-servers')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) =>
+            agorStore
+              .getState()
+              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
+        );
+        void runAuthorityHydration(
+          'gateway-channels',
+          ['gatewayChannels'],
+          () =>
+            client
+              .service('gateway-channels')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
+            }));
+            agorStore.getState().markHydrated('gatewayChannelsHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'artifacts',
+          ['artifacts'],
+          () =>
+            client.service('artifacts').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
+              },
+            }),
+          (list) =>
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              artifactById: buildById(list, 'artifact_id', prev.artifactById),
+            }))
+        );
+        void refetchOAuthDurableState(fetchAuthorityScope);
+
         // ── Background full hydration (skip-apply-on-race) ──────────────
         // First paint is now open with ONLY the recent sessions + the displayed
         // board's branches/sessions/objects/cards/comments. Pull the FULL sets so
@@ -1125,9 +1188,11 @@ export function useAgorData(
                 'board-objects',
                 ['boardObjects'],
                 () =>
-                  client
-                    .service('board-objects')
-                    .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+                  readPlacements(
+                    client,
+                    { exclude_archived_branches: true, $limit: BOARD_OBJECT_PAGE_LIMIT },
+                    authorityIsCurrent
+                  ),
                 (allBoardObjects) =>
                   agorStore.getState().applyMaps((prev) => {
                     const base = buildBoardObjectMaps(allBoardObjects);
@@ -1199,6 +1264,8 @@ export function useAgorData(
         } else {
           hydrateGlobalSets();
         }
+
+        agorStore.getState().setError(null);
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
@@ -1438,7 +1505,13 @@ export function useAgorData(
     }
 
     const subscriptionAuthorityScope = authorityScopeKey;
-    const subscriptionIsCurrent = () => authorityScopeKeyRef.current === subscriptionAuthorityScope;
+    let disposed = false;
+    const subscriptionIsCurrent = () =>
+      !disposed && authorityScopeKeyRef.current === subscriptionAuthorityScope;
+    const recovery = placementRecoveryRef.current!;
+    const recoveryIsCurrent = () =>
+      placementRecoveryRef.current === recovery &&
+      authorityScopeKeyRef.current === subscriptionAuthorityScope;
     // All direct store handlers are authority-scoped too. Although only
     // sessions are frame-batched, an old Feathers listener remains live until
     // passive cleanup and must not write during the layout→cleanup overlap.
@@ -1492,14 +1565,47 @@ export function useAgorData(
     boardsService.on('updated', scopedRealtime.boardPatched);
     boardsService.on('removed', scopedRealtime.boardRemoved);
 
+    // A removed/moved placement that races a targeted unarchive read must win.
+    const placementReads = recovery.reads;
+    const publishPlacementFailures = () => {
+      if (recoveryIsCurrent())
+        setPlacementFailureScope(
+          [...placementReads.values()].some((pending) => pending.failed)
+            ? subscriptionAuthorityScope
+            : null
+        );
+    };
+    const cancelPlacementRead = (branchId: string) => {
+      const pending = placementReads.get(branchId);
+      if (pending?.timer) clearTimeout(pending.timer);
+      placementReads.delete(branchId);
+      publishPlacementFailures();
+    };
+    const boardObjectRemoved = (object) => {
+      if (!subscriptionIsCurrent()) return;
+      cancelPlacementRead(object.branch_id);
+      scopedRealtime.boardObjectRemoved(object);
+    };
+
+    const boardObjectCreated = (object) => {
+      if (!subscriptionIsCurrent()) return;
+      cancelPlacementRead(object.branch_id);
+      scopedRealtime.boardObjectCreated(object);
+    };
+    const boardObjectPatched = (object) => {
+      if (!subscriptionIsCurrent()) return;
+      cancelPlacementRead(object.branch_id);
+      scopedRealtime.boardObjectPatched(object);
+    };
+
     // Subscribe to board object events
     const boardObjectsService = canUseMemberWorkspaceServices
       ? client.service('board-objects')
       : null;
-    boardObjectsService?.on('created', scopedRealtime.boardObjectCreated);
-    boardObjectsService?.on('patched', scopedRealtime.boardObjectPatched);
-    boardObjectsService?.on('updated', scopedRealtime.boardObjectPatched);
-    boardObjectsService?.on('removed', scopedRealtime.boardObjectRemoved);
+    boardObjectsService?.on('created', boardObjectCreated);
+    boardObjectsService?.on('patched', boardObjectPatched);
+    boardObjectsService?.on('updated', boardObjectPatched);
+    boardObjectsService?.on('removed', boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
@@ -1512,6 +1618,7 @@ export function useAgorData(
     const branchesService = client.service('branches');
     const branchRemovedSync = (branch: Branch) => {
       if (!subscriptionIsCurrent()) return;
+      cancelPlacementRead(branch.branch_id);
       scopedRealtime.branchRemoved(branch);
       // Branch deletion cascades tasks/messages without child Feathers events.
       // Comments survive those cascades with task_id/message_id SET NULL, but
@@ -1530,9 +1637,86 @@ export function useAgorData(
           }))
       );
     };
+    // Archived placements are intentionally absent from initial reads. Unarchive
+    // preserves its stored position without emitting a board-object event, so
+    // recover only that branch's placement. Deduplicate paired patched/updated
+    // events; never overwrite a newer live placement or cross an auth boundary.
+    const recoverPlacement = (branchId: string) => {
+      if (!recoveryIsCurrent() || !boardObjectsService || placementReads.has(branchId)) return;
+      const pending = {
+        failed: false,
+        attempt: 0,
+        timer: undefined as ReturnType<typeof setTimeout> | undefined,
+      };
+      const stillNeeded = () => {
+        const state = agorStore.getState();
+        const branch = state.branchById.get(branchId);
+        return (
+          recoveryIsCurrent() &&
+          placementReads.get(branchId) === pending &&
+          branch &&
+          !branch.archived &&
+          !state.boardObjectByBranchId.has(branchId)
+        );
+      };
+      placementReads.set(branchId, pending);
+      const attempt = async () => {
+        if (!stillNeeded()) {
+          if (placementReads.get(branchId) === pending) cancelPlacementRead(branchId);
+          return;
+        }
+        try {
+          const objects = await boardObjectsService.findAll({
+            query: {
+              branch_id: branchId,
+              exclude_archived_branches: true,
+              $limit: BOARD_OBJECT_PAGE_LIMIT,
+            },
+          });
+          if (!stillNeeded()) return;
+          const branch = agorStore.getState().branchById.get(branchId);
+          for (const object of objects) {
+            if (object.branch_id === branchId && object.board_id === branch.board_id)
+              realtime.boardObjectCreated(object);
+          }
+        } catch (error) {
+          if (!stillNeeded()) return;
+          if (isTransientConnectionError(error) && pending.attempt < 2) {
+            pending.timer = setTimeout(
+              () => {
+                pending.timer = undefined;
+                void attempt();
+              },
+              250 * 2 ** pending.attempt++
+            );
+            return;
+          }
+          pending.failed = true;
+          publishPlacementFailures();
+        } finally {
+          if (!pending.timer && !pending.failed && placementReads.get(branchId) === pending)
+            cancelPlacementRead(branchId);
+        }
+      };
+      void attempt();
+    };
+    retryPlacementsRef.current = () => {
+      if (!recoveryIsCurrent()) return;
+      for (const [branchId, pending] of placementReads) {
+        if (!pending.failed) continue;
+        cancelPlacementRead(branchId);
+        recoverPlacement(branchId);
+      }
+    };
+    const branchPatched = (branch: Branch) => {
+      if (!subscriptionIsCurrent()) return;
+      scopedRealtime.branchPatched(branch);
+      if (branch.archived) cancelPlacementRead(branch.branch_id);
+      else recoverPlacement(branch.branch_id);
+    };
     branchesService.on('created', scopedRealtime.branchCreated);
-    branchesService.on('patched', scopedRealtime.branchPatched);
-    branchesService.on('updated', scopedRealtime.branchPatched);
+    branchesService.on('patched', branchPatched);
+    branchesService.on('updated', branchPatched);
     branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
@@ -1713,6 +1897,7 @@ export function useAgorData(
 
     // Cleanup listeners on unmount
     return () => {
+      disposed = true;
       // APPLY only when this is a same-authority resubscribe. The layout-phase
       // scope transition has already discarded an identity/role/auth/connection
       // queue, and makes this old passive cleanup a no-op. This preserves live
@@ -1732,10 +1917,10 @@ export function useAgorData(
       boardsService.removeListener('updated', scopedRealtime.boardPatched);
       boardsService.removeListener('removed', scopedRealtime.boardRemoved);
 
-      boardObjectsService?.removeListener('created', scopedRealtime.boardObjectCreated);
-      boardObjectsService?.removeListener('patched', scopedRealtime.boardObjectPatched);
-      boardObjectsService?.removeListener('updated', scopedRealtime.boardObjectPatched);
-      boardObjectsService?.removeListener('removed', scopedRealtime.boardObjectRemoved);
+      boardObjectsService?.removeListener('created', boardObjectCreated);
+      boardObjectsService?.removeListener('patched', boardObjectPatched);
+      boardObjectsService?.removeListener('updated', boardObjectPatched);
+      boardObjectsService?.removeListener('removed', boardObjectRemoved);
 
       reposService.removeListener('created', scopedRealtime.repoCreated);
       reposService.removeListener('patched', scopedRealtime.repoPatched);
@@ -1743,8 +1928,8 @@ export function useAgorData(
       reposService.removeListener('removed', scopedRealtime.repoRemoved);
 
       branchesService.removeListener('created', scopedRealtime.branchCreated);
-      branchesService.removeListener('patched', scopedRealtime.branchPatched);
-      branchesService.removeListener('updated', scopedRealtime.branchPatched);
+      branchesService.removeListener('patched', branchPatched);
+      branchesService.removeListener('updated', branchPatched);
       branchesService.removeListener('removed', branchRemovedSync);
 
       usersService?.removeListener('created', scopedRealtime.userCreated);
@@ -1823,5 +2008,7 @@ export function useAgorData(
     loading: storeState.loading,
     error: storeState.error,
     refetch: fetchData,
+    placementRecoveryFailed: !!authorityScopeKey && placementFailureScope === authorityScopeKey,
+    retryPlacements,
   };
 }
