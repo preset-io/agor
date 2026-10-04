@@ -44,7 +44,7 @@ describePostgres('ThreadSessionMapRepository.claimMetadataFlag (PostgreSQL)', ()
     await initializeDatabase(db);
   });
 
-  async function seedMapping(): Promise<ThreadSessionMapID> {
+  async function seedMapping() {
     return runWithTenantDatabaseScope(db, 'default', async (scoped) => {
       // PostgreSQL enforces that a branch's primary owner is a real user in
       // this tenant, so the fixture cannot invent one.
@@ -97,7 +97,7 @@ describePostgres('ThreadSessionMapRepository.claimMetadataFlag (PostgreSQL)', ()
         session_id: session.session_id,
         branch_id: branch.branch_id,
       });
-      return mapping.id;
+      return { mapping, session, channel, branch };
     });
   }
 
@@ -115,7 +115,8 @@ describePostgres('ThreadSessionMapRepository.claimMetadataFlag (PostgreSQL)', ()
   }
 
   it('waits for a competing writer and then refuses the claim it already made', async () => {
-    const mappingId = await seedMapping();
+    const { mapping } = await seedMapping();
+    const mappingId = mapping.id;
 
     // A peer that is mid-claim, held open deliberately. This is the window a
     // plain read-then-write has no answer for: its SELECT would run against a
@@ -161,9 +162,51 @@ describePostgres('ThreadSessionMapRepository.claimMetadataFlag (PostgreSQL)', ()
   });
 
   it('grants the claim once when nothing else holds the row', async () => {
-    const mappingId = await seedMapping();
+    const { mapping } = await seedMapping();
+    const mappingId = mapping.id;
     await expect(claim(mappingId, 'first')).resolves.toBe(true);
     await expect(claim(mappingId, 'second')).resolves.toBe(false);
     expect(await readFlag(mappingId)).toBe('first');
+  });
+
+  describe('findBySessionAmbiguityAware', () => {
+    // PostgreSQL is the half of this read that was an unordered `LIMIT 1`
+    // rather than SQLite's `.get()`, and a planner is free to change its mind
+    // about which row that is. The SQLite lane asserts the same contract in
+    // `thread-session-map.test.ts`.
+    it('answers the same row every time, and says when it was a guess', async () => {
+      const { mapping, session, channel, branch } = await seedMapping();
+      await runWithTenantDatabaseScope(db, 'default', (scoped) =>
+        new ThreadSessionMapRepository(scoped).create({
+          channel_id: channel.id,
+          thread_id: 'C123-1700000000.000002',
+          session_id: session.session_id,
+          branch_id: branch.branch_id,
+        })
+      );
+
+      const read = () =>
+        runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          new ThreadSessionMapRepository(scoped).findBySessionAmbiguityAware(session.session_id)
+        );
+      const first = await read();
+
+      expect(first.ambiguous).toBe(true);
+      expect(first.mapping?.id).toBe(mapping.id);
+      expect((await read()).mapping?.id).toBe(mapping.id);
+    });
+
+    it('reports a single mapping as unambiguous', async () => {
+      const { mapping, session } = await seedMapping();
+
+      await expect(
+        runWithTenantDatabaseScope(db, 'default', (scoped) =>
+          new ThreadSessionMapRepository(scoped).findBySessionAmbiguityAware(session.session_id)
+        )
+      ).resolves.toEqual({
+        mapping: expect.objectContaining({ id: mapping.id }),
+        ambiguous: false,
+      });
+    });
   });
 });

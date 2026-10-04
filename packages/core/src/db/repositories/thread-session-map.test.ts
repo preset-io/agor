@@ -72,7 +72,7 @@ async function seedMapping(db: Database, metadata: Record<string, unknown> = {})
     branch_id: branch.branch_id,
     metadata,
   });
-  return { mappings, mapping, session };
+  return { mappings, mapping, session, channel, branch };
 }
 
 describe('ThreadSessionMapRepository.claimMetadataFlag', () => {
@@ -145,5 +145,43 @@ describe('ThreadSessionMapRepository.claimMetadataFlag', () => {
     await expect(
       mappings.claimMetadataFlag(generateId() as never, WARNED_KEY, 'now')
     ).rejects.toThrow(/ThreadSessionMap/);
+  });
+});
+
+describe('ThreadSessionMapRepository.findBySessionAmbiguityAware', () => {
+  dbTest('answers the same row every time, and says when it was a guess', async ({ db }) => {
+    // `(channel_id, thread_id)` is unique; `session_id` is only indexed. This
+    // read used to be a bare `.one()` with no ORDER BY, so a session serving
+    // two threads got an arbitrary one of them and no indication that a choice
+    // had been made — which is how a gateway reply could be delivered into a
+    // thread nobody asked for.
+    const { mappings, mapping, session, channel, branch } = await seedMapping(db);
+    const second = await mappings.create({
+      channel_id: channel.id,
+      thread_id: 'C123-1700000000.000002',
+      session_id: session.session_id,
+      branch_id: branch.branch_id,
+    });
+
+    const first = await mappings.findBySessionAmbiguityAware(session.session_id);
+    const again = await mappings.findBySessionAmbiguityAware(session.session_id);
+
+    expect(first.ambiguous).toBe(true);
+    expect(first.mapping?.id).toBe(mapping.id);
+    expect(again.mapping?.id).toBe(first.mapping?.id);
+    expect(second.id).not.toBe(mapping.id);
+  });
+
+  dbTest('reports a single mapping as unambiguous, and none as neither', async ({ db }) => {
+    const { mappings, mapping, session } = await seedMapping(db);
+
+    await expect(mappings.findBySessionAmbiguityAware(session.session_id)).resolves.toEqual({
+      mapping: expect.objectContaining({ id: mapping.id }),
+      ambiguous: false,
+    });
+    await expect(mappings.findBySessionAmbiguityAware(generateId())).resolves.toEqual({
+      mapping: null,
+      ambiguous: false,
+    });
   });
 });

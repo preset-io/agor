@@ -270,7 +270,12 @@ function connectLane(options: LaneOptions): LaneHarness {
         }) as MCPServer,
     },
     threadMapRepo: {
-      findBySession: async () => ({ id: 'map-1', channel_id: 'gateway-1', thread_id: THREAD }),
+      findByChannelAndThread: async () => ({
+        id: 'map-1',
+        session_id: 'session-1',
+        channel_id: 'gateway-1',
+        thread_id: THREAD,
+      }),
       claimMetadataFlag: async () => false,
     },
     activeListeners: new Map([

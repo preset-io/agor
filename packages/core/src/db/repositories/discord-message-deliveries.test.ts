@@ -1,5 +1,5 @@
-import type { BranchID, Message, MessageID, SessionID, UUID } from '@agor/core/types';
-import { MessageRole, SessionStatus } from '@agor/core/types';
+import type { BranchID, Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -13,6 +13,7 @@ import { GatewayChannelRepository } from './gateway-channels';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { TaskRepository } from './tasks';
 import { ThreadSessionMapRepository } from './thread-session-map';
 
 const discordConfig = {
@@ -138,6 +139,112 @@ describe('DiscordMessageDeliveryRepository', () => {
       });
     }
   );
+
+  dbTest('addresses stamped and pre-stamp Tasks, not the first session mapping', async ({ db }) => {
+    const { mapping, session, channel } = await seedMappedDiscord(db);
+    const mappings = new ThreadSessionMapRepository(db);
+    const second = await mappings.create({
+      channel_id: channel.id,
+      session_id: session.session_id,
+      branch_id: mapping.branch_id,
+      thread_id: 'discord:message:333333333333333333:999999999999999999',
+    });
+    const tasks = new TaskRepository(db);
+    const deliveries = new DiscordMessageDeliveryRepository(db);
+    const messages = new MessagesRepository(db, (tx, message) =>
+      deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+    );
+    for (const stamped of [true, false]) {
+      const task = await tasks.create({
+        task_id: generateId() as TaskID,
+        session_id: session.session_id,
+        created_by: session.created_by,
+        full_prompt: 'second thread',
+        status: TaskStatus.COMPLETED,
+        metadata: {
+          gateway_task_source: {
+            gateway_channel_id: channel.id,
+            channel_type: 'discord',
+            thread_id: second.thread_id,
+            provider_user_id: '444444444444444444',
+            ...(stamped ? { thread_session_map_id: second.id } : {}),
+          },
+        },
+      });
+      const message = await messages.create(
+        assistantMessage(session.session_id, { task_id: task.task_id })
+      );
+      expect(await deliveries.findByMessageId(message.message_id)).toMatchObject({
+        thread_session_map_id: second.id,
+      });
+    }
+    await mappings.delete(second.id);
+    const task = await tasks.create({
+      task_id: generateId() as TaskID,
+      session_id: session.session_id,
+      created_by: session.created_by,
+      full_prompt: 'deleted thread',
+      status: TaskStatus.COMPLETED,
+      metadata: {
+        gateway_task_source: {
+          gateway_channel_id: channel.id,
+          channel_type: 'discord',
+          thread_id: second.thread_id,
+          provider_user_id: '444444444444444444',
+          thread_session_map_id: second.id,
+        },
+      },
+    });
+    const message = await messages.create(
+      assistantMessage(session.session_id, { task_id: task.task_id })
+    );
+    expect(await deliveries.findByMessageId(message.message_id)).toBeNull();
+  });
+
+  dbTest('does not adopt another session’s Task or stamped mapping', async ({ db }) => {
+    const own = await seedMappedDiscord(db);
+    const otherSession = await new SessionRepository(db).create({
+      ...own.session,
+      session_id: generateId() as SessionID,
+    });
+    const otherMapping = await new ThreadSessionMapRepository(db).create({
+      channel_id: own.channel.id,
+      session_id: otherSession.session_id,
+      branch_id: own.mapping.branch_id,
+      thread_id: 'discord:message:333333333333333333:999999999999999999',
+    });
+    const deliveries = new DiscordMessageDeliveryRepository(db);
+    const messages = new MessagesRepository(db, (tx, message) =>
+      deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+    );
+    const task = await new TaskRepository(db).create({
+      task_id: generateId() as TaskID,
+      session_id: own.session.session_id,
+      created_by: own.session.created_by,
+      full_prompt: 'mismatched stamp',
+      status: TaskStatus.COMPLETED,
+      metadata: {
+        gateway_task_source: {
+          gateway_channel_id: own.channel.id,
+          channel_type: 'discord',
+          thread_id: otherMapping.thread_id,
+          provider_user_id: '444444444444444444',
+          thread_session_map_id: otherMapping.id,
+        },
+      },
+    });
+    const message = await messages.create(
+      assistantMessage(own.session.session_id, { task_id: task.task_id })
+    );
+    expect(await deliveries.findByMessageId(message.message_id)).toBeNull();
+    // The repository must also reject mismatched Task ownership on direct calls.
+    await expect(
+      deliveries.enqueueForMessageInTransaction(
+        db,
+        assistantMessage(otherSession.session_id, { task_id: task.task_id })
+      )
+    ).resolves.toBeNull();
+  });
 
   dbTest(
     'delivers all assistant replies in a DM session regardless of prompt origin',

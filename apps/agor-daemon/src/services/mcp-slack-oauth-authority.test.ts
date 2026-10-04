@@ -79,13 +79,13 @@ function repositories(fixtures: Fixtures = {}): SlackMCPOAuthAuthorityRepositori
   const mapping =
     fixtures.mapping === null
       ? null
-      : { channel_id: 'gateway-1', thread_id: THREAD, ...fixtures.mapping };
+      : { session_id: SESSION_ID, channel_id: 'gateway-1', thread_id: THREAD, ...fixtures.mapping };
   return {
     sessions: { findById: async () => session },
     users: { findById: async () => user },
     channels: { findById: async () => channel },
     servers: { findById: async () => server },
-    threadMap: { findBySession: async () => mapping },
+    threadMap: { findByChannelAndThread: async () => mapping },
   } as unknown as SlackMCPOAuthAuthorityRepositories;
 }
 

@@ -582,7 +582,12 @@ function deliveryHarness(options: HarnessOptions = {}) {
         }) as MCPServer,
     },
     threadMapRepo: {
-      findBySession: async () => ({ id: 'map-1', channel_id: 'gateway-1', thread_id: THREAD }),
+      findByChannelAndThread: async () => ({
+        id: 'map-1',
+        session_id: SESSION_ID,
+        channel_id: 'gateway-1',
+        thread_id: THREAD,
+      }),
       claimMetadataFlag,
     },
     activeListeners: new Map([['tenant-a\0gateway-1', connector]]),
