@@ -49,6 +49,7 @@ import {
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
+import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
   AuthenticatedParams,
   BranchID,
@@ -1483,7 +1484,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
       // Render callback message using template
       const customTemplate = targetSession.callback_config?.template;
-      const callbackMessage = renderChildCompletionCallback(context, customTemplate);
+      // The callback quotes child-controlled text (its last assistant message,
+      // and optionally its own stamped prompt). The default template's
+      // Handlebars escaping already defuses the reserved provenance tag, but a
+      // custom template can emit raw text through `{{{...}}}`, so neutralize
+      // it here regardless of template.
+      const callbackMessage = escapePromptProvenanceSentinels(
+        renderChildCompletionCallback(context, customTemplate)
+      ).text;
 
       // Validate target session has a creator for authentication
       if (!targetSession.created_by) {

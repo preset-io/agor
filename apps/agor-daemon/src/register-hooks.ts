@@ -80,6 +80,7 @@ import {
   isMCPServerUsableBy,
   isMCPServerUsableInSession,
 } from '@agor/core/mcp';
+import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
 import type {
   AuthenticatedParams,
   Board,
@@ -741,6 +742,10 @@ export function protectExternalTaskCreate(context: HookContext): HookContext {
 
   data.status = TaskStatus.CREATED;
   data.metadata = { source: 'agor' };
+  // The `<agor_prompt_provenance>` tag is reserved on every admitted prompt.
+  // This dormant create/run path writes `full_prompt` without passing the
+  // prompt route, so it applies the same neutralization here.
+  data.full_prompt = escapePromptProvenanceSentinels(data.full_prompt).text;
   return context;
 }
 

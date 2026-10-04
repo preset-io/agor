@@ -8,12 +8,17 @@
  * the prompt text already stored on the task — see `Task.full_prompt`).
  */
 
+import { stripPromptProvenanceBlock } from '../templates/prompt-provenance';
+
 const MAX_TITLE_LENGTH = 60;
 
 export function deriveTitleFromPrompt(prompt: string): string {
   // The canonical attachment block leads ordinary prompts and follows slash
   // commands; title only the user's text, or skip attachment-only prompts.
-  const promptText = prompt.replace(
+  // The server-stamped provenance block sits in the same position for the same
+  // reason, and titling a session after Agor's own attestation would tell a
+  // reader nothing about the work.
+  const promptText = stripPromptProvenanceBlock(prompt).replace(
     /(?:^|\r?\n\r?\n)Attached files:\r?\n(?:- [^\r\n]*(?:\r?\n|$))+/,
     ''
   );
