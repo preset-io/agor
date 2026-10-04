@@ -849,6 +849,42 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(queryButton(/Copy manifest/)).toBeDefined();
   });
 
+  it('warns that delivering reactions adds reactions:read and subscribes to reaction events', async () => {
+    const { client } = makeClient(undefined, { appId: 'A0123ABC', teamId: 'T1' });
+    renderEditTable(client, makeSlackChannel());
+    expandPanel('Message Sources');
+
+    expect(screen.queryAllByText('reaction_added')).toHaveLength(0);
+    fireEvent.click(document.querySelector('#inbound_reactions') as HTMLElement);
+
+    expect(await screen.findByText(/This change adds the/)).toBeInTheDocument();
+    expect(screen.queryAllByText('reactions:read').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('reaction_added').length).toBeGreaterThan(0);
+    expect(screen.queryAllByText('reaction_removed').length).toBeGreaterThan(0);
+  });
+
+  it('persists inbound_reactions on save and rehydrates it on edit', async () => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      {
+        ...makeSlackChannel(),
+        agentic_config: { agent: 'claude-code' },
+        config: { ...makeSlackChannel().config, inbound_reactions: true },
+      },
+      { onUpdate }
+    );
+    expandPanel('Message Sources');
+    expect(document.querySelector('#inbound_reactions')).toHaveAttribute('aria-checked', 'true');
+
+    clickButton(/^Save$/);
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      config: expect.objectContaining({ inbound_reactions: true }),
+    });
+  });
+
   it('does not warn on unrelated edits or on toggles that only remove scopes', async () => {
     renderEditTable(null, makeSlackChannel());
     expandPanel('Message Sources');

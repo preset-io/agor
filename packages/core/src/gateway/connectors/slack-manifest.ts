@@ -13,7 +13,8 @@
  * {@link ./slack.ts}. DMs are always handled, so there is no DM toggle, and
  * channel-like surfaces trigger exclusively on `app_mention` (verified in the
  * connector's inbound filter), so no `message.channels`/`groups`/`mpim` events
- * are requested.
+ * are requested. Inbound emoji reactions are the one non-message trigger: they
+ * subscribe to `reaction_added`/`reaction_removed` only when opted in.
  */
 
 import {
@@ -37,6 +38,12 @@ export interface SlackWizardOptions {
   outbound: boolean;
   /** Ingest files attached to inbound messages (screenshots/images). */
   ingestFiles: boolean;
+  /**
+   * Deliver human emoji reactions on messages in mapped threads to the
+   * session (maps to `config.inbound_reactions`). Optional so callers that
+   * predate the capability keep their manifest unchanged.
+   */
+  inboundReactions?: boolean;
   /** Agent-callable MCP tool toggles (maps to `config.agent_tools`). */
   agentTools: SlackAgentToolsConfig;
 }
@@ -156,6 +163,9 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
   if (opts.ingestFiles) {
     scopes.push('files:read');
   }
+  if (opts.inboundReactions) {
+    scopes.push('reactions:read');
+  }
   if (opts.outbound) {
     // Outbound name resolution lists public+private channels and opens DMs by
     // email, independent of inbound listening.
@@ -181,13 +191,17 @@ export function requiredBotScopes(opts: SlackWizardOptions): string[] {
 /**
  * Bot event subscriptions required for the selected capabilities,
  * de-duplicated and stable-sorted. Channel-like surfaces trigger only on
- * `app_mention`; DMs trigger on `message.im`.
+ * `app_mention`; DMs trigger on `message.im`; inbound reactions add
+ * `reaction_added`/`reaction_removed`.
  */
 export function requiredBotEvents(opts: SlackWizardOptions): string[] {
   const events = ['message.im'];
 
   if (hasChannelLikeSurface(opts)) {
     events.push('app_mention');
+  }
+  if (opts.inboundReactions) {
+    events.push('reaction_added', 'reaction_removed');
   }
 
   return sortedUnique(events);

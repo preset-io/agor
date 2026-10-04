@@ -73,9 +73,11 @@ import {
   gatewayListenerFailure,
   getConnector,
   hasConnector,
+  isSlackInboundReactionEventType,
   isSlackWriteTargetAllowed,
   normalizeOutbound,
   normalizeSendReceipt,
+  normalizeSlackReactionName,
   parseDiscordAuthorityMetadata,
   parseDiscordThreadKey,
   parseGitHubThreadId,
@@ -788,6 +790,61 @@ function formatSlackCatchUpPrompt(args: {
   }
 
   lines.push(args.currentText);
+  return lines.join('\n');
+}
+
+/**
+ * Prompt for one Slack emoji reaction admitted into a mapped thread
+ * (`config.inbound_reactions`). The emoji name is shape-checked; the reactor's
+ * display name and the reacted message text are untrusted Slack content.
+ * Returns null when the metadata does not describe a well-formed reaction.
+ */
+function formatSlackReactionPrompt(metadata?: Record<string, unknown>): string | null {
+  if (!isSlackInboundReactionEventType(metadata?.slack_event_type)) return null;
+  const reaction = normalizeSlackReactionName(metadata.slack_reaction);
+  if (!reaction) return null;
+  const removed = metadata.slack_event_type === 'reaction_removed';
+  const senderName =
+    typeof metadata.slack_user_name === 'string'
+      ? oneLineForPrompt(metadata.slack_user_name, 80)
+      : null;
+  const senderEmail =
+    typeof metadata.slack_user_email === 'string'
+      ? oneLineForPrompt(metadata.slack_user_email, 120)
+      : null;
+  const who = senderName
+    ? `${senderName}${senderEmail && senderEmail !== senderName ? ` (${senderEmail})` : ''}`
+    : (senderEmail ?? 'A Slack user');
+  const itemTs =
+    typeof metadata.slack_reaction_item_ts === 'string' &&
+    /^\d+\.\d+$/.test(metadata.slack_reaction_item_ts)
+      ? metadata.slack_reaction_item_ts
+      : undefined;
+  const itemTime = formatUtcLabel(itemTs);
+  const botUserId =
+    typeof metadata.slack_bot_user_id === 'string' ? metadata.slack_bot_user_id : undefined;
+  const target =
+    botUserId && metadata.slack_reaction_item_user_id === botUserId ? 'your message' : 'a message';
+  const where = itemTs ? ` (ts ${itemTs}${itemTime ? `, ${itemTime}` : ''})` : '';
+  const lines = [
+    removed
+      ? `[Slack reaction] ${who} removed their :${reaction}: reaction from ${target} in this thread${where}.`
+      : `[Slack reaction] ${who} reacted :${reaction}: to ${target} in this thread${where}.`,
+  ];
+  if (
+    typeof metadata.slack_reaction_item_text === 'string' &&
+    metadata.slack_reaction_item_text.trim()
+  ) {
+    lines.push(
+      '',
+      'Reacted message (untrusted Slack content):',
+      quoteForPrompt(oneLineForPrompt(metadata.slack_reaction_item_text, 300))
+    );
+  }
+  lines.push(
+    '',
+    'This is a lightweight signal, not a new request. Act on it only if it clearly answers something you asked (for example, approval to proceed); otherwise acknowledge it in at most one short line.'
+  );
   return lines.join('\n');
 }
 
@@ -4561,6 +4618,26 @@ export class GatewayService {
       channel.channel_type === 'discord' ? parseDiscordAuthorityMetadata(data.metadata) : null;
     const discordDm = discordMetadata?.[DISCORD_METADATA_KEY.directMessage] === true;
 
+    // Slack emoji reactions are a mapped-thread-only signal gated by the
+    // channel's inbound_reactions flag. The connector filters them already;
+    // re-check against the freshly loaded config because connector metadata
+    // is untrusted here. A reaction never creates a session, consumes an
+    // outbound seed, or posts a rejection notice (that would spam threads).
+    const isSlackReaction =
+      channel.channel_type === 'slack' &&
+      isSlackInboundReactionEventType(data.metadata?.slack_event_type);
+    const slackReactionPrompt = isSlackReaction ? formatSlackReactionPrompt(data.metadata) : null;
+    if (
+      isSlackReaction &&
+      ((channel.config as Record<string, unknown> | null)?.inbound_reactions !== true ||
+        !slackReactionPrompt)
+    ) {
+      console.debug(
+        `[gateway] IGNORED: Slack reaction not admitted (inbound_reactions off or malformed): channel=${shortId(channel.id)}`
+      );
+      return { success: false, sessionId: '', created: false };
+    }
+
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
     // adopt mappings written before DG-02.
@@ -4596,6 +4673,12 @@ export class GatewayService {
       console.log(
         `[gateway] Slack inbound thread ${data.thread_id} → session ${shortId(existingMapping.session_id)} (root ${existingMapping.thread_id})`
       );
+    }
+    if (isSlackReaction && !existingMapping) {
+      console.debug(
+        `[gateway] IGNORED: Slack reaction in unmapped thread: channel=${shortId(channel.id)}, thread=${data.thread_id}`
+      );
+      return { success: false, sessionId: '', created: false };
     }
     let recoveringInitialDelivery = false;
     let outboundSeed: GatewayOutboundMessage | null = null;
@@ -4692,7 +4775,7 @@ export class GatewayService {
         typeof data.metadata?.channel_type === 'string' ? data.metadata.channel_type : undefined;
       const isSlackDm = slackConversationType === 'im';
       const hasExplicitMention = data.metadata?.slack_has_mention === true;
-      if (!isSlackDm && !hasExplicitMention) {
+      if (!isSlackDm && !hasExplicitMention && !isSlackReaction) {
         console.debug(
           `[gateway] IGNORED: Slack channel-like message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -4830,11 +4913,13 @@ export class GatewayService {
           user = await usersService.get(matchedUser.user_id);
         } else {
           console.log('[gateway] Slack user alignment failed: result=agor_user_not_found');
-          this.sendSystemMessage(
-            channel,
-            data.thread_id,
-            `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
-          );
+          if (!isSlackReaction) {
+            this.sendSystemMessage(
+              channel,
+              data.thread_id,
+              `User ${email} doesn't have an Agor account. Ask an admin to create an account with this email, or disable user alignment.`
+            );
+          }
           return {
             success: false,
             sessionId: '',
@@ -4846,11 +4931,13 @@ export class GatewayService {
         // users:read.email scope, Slack API error, or no email on profile).
         // Reject instead of silently falling back to channel owner.
         console.log('[gateway] Slack user alignment failed: result=identity_email_unavailable');
-        this.sendSystemMessage(
-          channel,
-          data.thread_id,
-          "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
-        );
+        if (!isSlackReaction) {
+          this.sendSystemMessage(
+            channel,
+            data.thread_id,
+            "Couldn't resolve your Slack identity. The bot may be missing the `users:read.email` scope, or your Slack profile has no email. Ask an admin to check the bot's scopes."
+          );
+        }
         return {
           success: false,
           sessionId: '',
@@ -4951,7 +5038,9 @@ export class GatewayService {
         await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
       } catch (error) {
         if (!(error instanceof GatewayPromptAuthorizationError)) throw error;
-        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        if (!isSlackReaction) {
+          await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        }
         return { success: false, sessionId: '', created: false };
       }
     } else {
@@ -5016,6 +5105,7 @@ export class GatewayService {
     if (
       (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
       !threadOwnedByUnseededMapping &&
+      !isSlackReaction &&
       !discordDm
     ) {
       outboundAdmission = await this.outboundRepo.admitReplySession(channel.id, data.thread_id);
@@ -5565,7 +5655,7 @@ export class GatewayService {
       // requires explicit mentions for channel-like Slack conversations, so each
       // delivered prompt advances the last-delivered cursor. Non-mention replies
       // are picked up here the next time the bot is summoned.
-      let promptText = data.text;
+      let promptText = slackReactionPrompt ?? data.text;
       let slackCursorTsToWrite: string | undefined;
       let discordCursorToWrite: string | undefined;
       if (channel.channel_type === 'discord' && !outboundSeed) {
@@ -5649,7 +5739,9 @@ export class GatewayService {
           throw new GatewayCatchUpError('unsupported', 'Discord history is unavailable');
         }
       }
-      if (channel.channel_type === 'slack' && !outboundSeed) {
+      // A reaction carries no message of its own, so it neither reads nor
+      // advances the catch-up cursor; the next mention still sees everything.
+      if (channel.channel_type === 'slack' && !outboundSeed && !isSlackReaction) {
         const currentTs = getSlackMessageTs(data.metadata);
         const mappingMetadata = ((mappingForCursor?.metadata as Record<string, unknown>) ?? {}) as
           | Record<string, unknown>
@@ -5954,7 +6046,9 @@ export class GatewayService {
       }
     } catch (error) {
       if (error instanceof GatewayPromptAuthorizationError) {
-        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        if (!isSlackReaction) {
+          await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        }
         this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'failed',
