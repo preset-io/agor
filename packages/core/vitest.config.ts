@@ -11,6 +11,7 @@ const gitSrcDir = fileURLToPath(new URL('../git/src', import.meta.url));
 // exports map. This plugin intercepts them and maps to src/ directly.
 const selfImportResolver = {
   name: 'core-self-import-resolver',
+  enforce: 'pre' as const,
   resolveId(id: string) {
     const m = id.match(/^@agor\/core(?:\/(.+))?$/);
     if (!m) return null;

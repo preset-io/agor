@@ -1,3 +1,4 @@
+import { OpenCodeTool } from '@agor/agentic-tool-opencode/runtime';
 import type { AgorConfig } from '@agor/core/config';
 import {
   BranchRepository,
@@ -13,6 +14,8 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { getMcpServersForSession, resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
+import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type { CreateSessionInput } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
@@ -46,6 +49,8 @@ function createService(db: Database, events: EmittedEvent[] = []) {
   return {
     create: (input: CreateSessionInput, params?: SessionParams) =>
       runWithTenantDatabaseScope(scopedDb, 'static', () => service.create(input, params)),
+    patch: (...args: Parameters<SessionsService['patch']>) =>
+      runWithTenantDatabaseScope(scopedDb, 'static', () => service.patch(...args)),
   };
 }
 
@@ -88,6 +93,95 @@ async function fixture(db: Database) {
 afterEach(() => vi.restoreAllMocks());
 
 describe('SessionsService create-time MCP attachment', () => {
+  dbTest(
+    'explicit [] survives persistence and the production runtime set without global/user/branch fallback',
+    async ({ db }) => {
+      const { user, branch, servers, sharedServer } = await fixture(db);
+      const gmail = await servers.create({
+        name: 'fictional-gmail',
+        scope: 'global',
+        source: 'user',
+        transport: 'http',
+        url: 'https://gmail.example.test/mcp',
+        enabled: true,
+        owner_user_id: user.user_id,
+        auth: { type: 'oauth', oauth_mode: 'per_user' },
+      });
+      const service = createService(db);
+      const base = {
+        branch_id: branch.branch_id,
+        created_by: user.user_id,
+        agentic_tool: 'claude-code' as const,
+        status: SessionStatus.IDLE,
+      };
+      const explicit = resolveSessionMcpServerIds({
+        explicit: [],
+        branch: { mcp_server_ids: [gmail.mcp_server_id] },
+        user: { default_mcp_server_ids: [gmail.mcp_server_id] },
+      });
+      const created = await service.create({ ...base, mcpServerIds: explicit }, {
+        _agenticConfigResolved: true,
+      } as never);
+      const stored = await new SessionRepository(db).findById(created.session_id);
+      expect(stored?.mcp_selection_explicit).toBe(true);
+      const links = new SessionMCPServerRepository(db);
+      const global = vi.fn(async () => [gmail, sharedServer]);
+      const auth = vi.fn();
+      const resolved = await getMcpServersForSession(
+        created.session_id,
+        {
+          sessionMCPRepo: {
+            listServers: (id, enabled) => links.listServers(id, enabled),
+            listEffectiveServers: async (id, enabled, caller) =>
+              resolveEffectiveSessionMcpServers(
+                (await new SessionRepository(db).findById(id))!,
+                await links.listServers(id, enabled),
+                global,
+                caller
+              ),
+          },
+          mcpServerRepo: servers,
+          mcpOAuthAuthHeadersRepo: { getAuthHeaders: auth },
+          forUserId: user.user_id,
+        },
+        { toolFiltering: 'intercept' }
+      );
+      expect(resolved).toEqual([]);
+      const tool = new OpenCodeTool({
+        resolveMcpServers: async () => resolved,
+        getDaemonUrl: async () => 'https://daemon.example.test',
+      });
+      const config = await (
+        tool as unknown as {
+          buildInvocationConfig(
+            id: string,
+            token: string
+          ): Promise<{ mcp: Record<string, unknown> }>;
+        }
+      ).buildInvocationConfig(created.session_id, 'fictional-agor-token');
+      expect(Object.keys(config.mcp)).toHaveLength(1);
+      expect(Object.keys(config.mcp)[0]).toMatch(/^agor_/);
+      expect(global).not.toHaveBeenCalled();
+      expect(auth).not.toHaveBeenCalled();
+      expect(
+        await resolveEffectiveSessionMcpServers(stored!, [gmail], global, user.user_id)
+      ).toEqual([gmail]);
+      expect(global).not.toHaveBeenCalled();
+      await expect(
+        service.patch(created.session_id, { mcp_selection_explicit: false })
+      ).rejects.toThrow('mcp_selection_explicit is server-managed');
+      const omitted = await service.create(base, { _agenticConfigResolved: true } as never);
+      expect(omitted.mcp_selection_explicit).toBeUndefined();
+      expect(await resolveEffectiveSessionMcpServers(omitted, [], global, user.user_id)).toEqual([
+        gmail,
+        sharedServer,
+      ]);
+      expect(
+        await resolveEffectiveSessionMcpServers(omitted, [], global, 'different-caller')
+      ).toEqual([sharedServer]);
+    }
+  );
+
   dbTest(
     'default → delete → create keeps valid defaults and warns without rolling back',
     async ({ db }) => {
@@ -221,7 +315,7 @@ describe('SessionsService create-time MCP attachment', () => {
         mcpServerIds: [
           sharedServer.mcp_server_id,
           sharedServer.mcp_server_id,
-          sharedServer.mcp_server_id.replaceAll('-', '').slice(0, 31),
+          String(sharedServer.mcp_server_id).replaceAll('-', '').slice(0, 31),
         ],
       },
       { _agenticConfigResolved: true } as never
@@ -290,7 +384,7 @@ describe('SessionsService create-time MCP attachment', () => {
     });
     for (const mcpServerIds of [
       [privateServer.mcp_server_id],
-      [privateServer.mcp_server_id.replaceAll('-', '').slice(0, 31)],
+      [String(privateServer.mcp_server_id).replaceAll('-', '').slice(0, 31)],
       undefined,
     ]) {
       await expect(

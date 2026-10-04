@@ -3,6 +3,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { createZoneTriggerSession } from './zoneTriggerSessionCreation';
 
 describe('createZoneTriggerSession', () => {
+  it.each([[], undefined])('preserves empty versus omitted selection: %j', async (mcpServerIds) => {
+    const create = vi.fn(async () => ({ session_id: 'session-1' }) as Session);
+    const client = { service: () => ({ create }) } as unknown as AgorClient;
+    await createZoneTriggerSession(client, {
+      branchId: 'branch-1',
+      zoneName: 'Review',
+      mcpServerIds,
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ mcpServerIds }));
+  });
   it('hands the selected MCP servers to the single session create request', async () => {
     const session = { session_id: 'session-1' } as Session;
     const create = vi.fn(async () => session);
