@@ -1954,7 +1954,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       : await this.withTenantDatabase(params, () =>
           new BranchMaintenanceRepository(this.db).claim(
             id,
-            'cleanup',
+            needsFiles ? 'cleanup' : 'metadata_archive',
             user.user_id as UserID,
             validate
           )
@@ -2027,10 +2027,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       }
       if (!needsFiles) {
+        // Branch-scoped attachment closure touches no disk and cannot close a
+        // shared-path sibling's terminals, including on the overlap escape.
+        this.closeBranchTerminals(id, String(tenantId));
         await this.withTenantDatabase(params, () =>
           new BranchWorkspaceOperationRepository(this.db).finishPreserve(admission.claim)
         );
-        this.closeBranchTerminals(id, String(tenantId));
         const current = await this.withTenantDatabase(params, () => this.get(id, params));
         emitServiceEvent(this.app, {
           path: 'branches',

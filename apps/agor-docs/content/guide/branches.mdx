@@ -313,6 +313,17 @@ automatically. A repository administrator can open **Repository settings** above
 the archive dialog; saving refreshes the command without submitting archive or
 overriding an explicit Preserve/Delete choice.
 
+If two branch records share or overlap a workspace path, choose **Archive → Leave
+untouched** to hide the broken record without touching files. Cleanup, workspace
+removal, and permanent deletion remain blocked while the paths overlap,
+even if the other record is archived, failed, cleaned, or marked deleted. These
+states do not prove that files are absent or that provisioning cannot retry.
+
+Agor has no ownership-reconciliation UI or API. After file-preserving archival,
+ask your installation operator (or hosted support) to investigate the conflicting
+workspace-path records before retrying filesystem maintenance. Do not delete files
+or change a recorded path merely to bypass the overlap guard.
+
 ### Branch cleanup settings
 
 In **Settings → Repositories → Edit**, configure **Branch cleanup**. Cleanup is

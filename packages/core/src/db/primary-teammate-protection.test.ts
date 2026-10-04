@@ -23,7 +23,7 @@ dbTest(
       if (designation === 'user')
         await users.setPrimaryTeammate(user.user_id, branch.branch_id, { source: 'explicit' });
       else await boards.setPrimaryTeammate(board.board_id, branch.branch_id);
-      for (const kind of ['cleanup', 'delete'] as const) {
+      for (const kind of ['cleanup', 'delete', 'metadata_archive'] as const) {
         await expect(maintenance.claim(branch.branch_id, kind, user.user_id)).rejects.toThrow(
           'Primary teammate is protected'
         );

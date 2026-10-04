@@ -23,6 +23,11 @@ export class BranchWorkspaceOperationRepository {
     snapshot: BranchWorkspaceSnapshot
   ) {
     await new BranchMaintenanceRepository(this.db).withClaim(claim, async (tx, row) => {
+      if (
+        claim.kind === 'metadata_archive' &&
+        (operation.action !== 'archive' || operation.filesystem_action !== 'preserved')
+      )
+        throw new RepositoryError('Metadata-only archival must preserve workspace files');
       await update(tx, branches)
         .set({
           data: { ...row.data, workspace_operation: operation, workspace_snapshot: snapshot },

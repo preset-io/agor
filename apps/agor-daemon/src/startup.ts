@@ -19,6 +19,7 @@ import {
 } from '@agor/core/config';
 import type { DistributedWorkIdentity } from '@agor/core/coordination';
 import {
+  BranchMaintenanceRepository,
   MessagesRepository,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -244,6 +245,16 @@ async function runStartupTenantDatabaseScope<T>(
   // historical bootstrap/static tenant behavior explicit at the DB boundary so
   // guarded required_from_auth databases fail closed everywhere else.
   return runWithTenantDatabaseScope(ctx.db, startupTenantParams(ctx.config).tenant.tenant_id, work);
+}
+
+/** Replica startup cannot prove another daemon's metadata operation stopped. */
+export async function reconcileInterruptedBranchMetadataArchives(
+  ctx: StartupContext
+): Promise<void> {
+  if (ctx.taskRuntimePolicy !== 'standalone') return;
+  await runStartupTenantDatabaseScope(ctx, () =>
+    new BranchMaintenanceRepository(ctx.db).reconcileInterruptedMetadataArchives()
+  );
 }
 
 interface OrphanCleanupResult {
@@ -681,6 +692,11 @@ export async function startup(ctx: StartupContext): Promise<void> {
     throw new Error('Environment health monitor policy does not match the Task runtime policy');
   }
   app.set('environmentHealthMonitor', healthMonitor);
+
+  // Recover only execution-less metadata archives before new requests can
+  // claim maintenance. Bootstrap-tenant scope and standalone policy match the
+  // provisioning safety net; replica startup is not evidence of owner death.
+  await reconcileInterruptedBranchMetadataArchives(ctx);
 
   // 3. Start server. Deployment secrets were resolved before service
   // registration in startDaemon(); consumers may already have captured them.
