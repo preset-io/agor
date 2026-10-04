@@ -10,8 +10,7 @@
  * Proved by holding the row from a second connection rather than by racing two
  * calls, because a race that happens to serialize proves nothing — verified by
  * removing `lockRowForUpdate` from the repository, which makes the first test
- * below fail and leaves the second green. See
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ * below fail and leaves the second green.
  */
 
 import type { BranchID, SessionID, ThreadSessionMapID, UUID } from '@agor/core/types';

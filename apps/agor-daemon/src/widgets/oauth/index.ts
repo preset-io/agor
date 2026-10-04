@@ -32,8 +32,6 @@
  * (#2585 / #2182). Attaching at resolution also means the agent's next turn is
  * the first turn where the server both exists and is authorized, which avoids
  * needing the runtime to hot-reload transports mid-turn.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  */
 
 import type { TenantScopeAwareDatabase } from '@agor/core/db';

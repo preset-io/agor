@@ -5,9 +5,7 @@
  * conversation) rather than once per event, and the only caller today is the
  * MCP connect lane's shared-thread warning. Every test above it mocks the
  * method away, which pins that the gateway calls it and says nothing about
- * whether it actually compares and sets. That is the failure shape
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §8 describes, so this
- * suite drives the real method over real rows.
+ * whether it actually compares and sets, so this suite drives the real method over real rows.
  */
 
 import type { BranchID, SessionID, UUID } from '@agor/core/types';

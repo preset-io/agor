@@ -1,9 +1,14 @@
 import { BoardRepository, BranchRepository } from '@agor/core/db';
-import type { Application, Branch, Repo } from '@agor/core/types';
+import type { Application } from '@agor/core/feathers';
+import type { BoardID, Branch, Repo, TenantID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DrizzleService } from '../adapters/drizzle';
+import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
+  EXECUTOR_SESSION_TOKEN_TYPE,
+} from '../auth/executor-session-token';
 import { BranchesService } from './branches';
-import { ReposService } from './repos';
+import { type RepoParams, ReposService } from './repos';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
@@ -26,7 +31,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
 
     await expect(
       service.create({
-        board_id: '550e8400-e29b-41d4-a716-446655440000',
+        board_id: '550e8400-e29b-41d4-a716-446655440000' as BoardID,
         storage_mode: 'worktree',
       } as Partial<Branch>)
     ).rejects.toThrow(/worktree.*unavailable in hosted multi-tenant mode/);
@@ -62,7 +67,7 @@ describe('hosted repository storage policy canonical boundaries', () => {
 
     await expect(
       service.create({
-        board_id: '550e8400-e29b-41d4-a716-446655440000',
+        board_id: '550e8400-e29b-41d4-a716-446655440000' as BoardID,
         name: 'onboarding-teammate',
       })
     ).resolves.toMatchObject({ storage_mode: 'clone' });
@@ -130,11 +135,15 @@ describe('hosted repository storage policy canonical boundaries', () => {
   });
 
   describe('tenant filesystem confinement', () => {
-    const attackerParams = {
+    const attackerParams: RepoParams = {
       provider: 'rest',
-      user: { user_id: '550e8400-e29b-41d4-a716-446655440004', role: 'member' },
-      tenant: { tenant_id: 'attacker' },
-    } as never;
+      user: {
+        user_id: '550e8400-e29b-41d4-a716-446655440004' as UserID,
+        role: 'member',
+        email: 'synthetic@example.invalid',
+      },
+      tenant: { tenant_id: 'attacker' as TenantID, source: 'auth_claim' },
+    };
     const victimRepo = '/home/agor/.agor/tenants/victim/repos/acme/private-source';
     const victimCheckout = '/home/agor/.agor/tenants/victim/worktrees/acme/private-source/main';
 
@@ -239,6 +248,23 @@ describe('hosted repository storage policy canonical boundaries', () => {
 
       await expect(
         service.patch('repo-1', { local_path: localPath, clone_status: 'cloning' }, attackerParams)
+      ).rejects.toThrow(/setup status is managed by the Git executor/);
+      await expect(
+        service.patch(
+          'repo-1',
+          { local_path: localPath, clone_status: 'cloning' },
+          {
+            ...attackerParams,
+            authentication: {
+              strategy: 'jwt',
+              payload: {
+                type: EXECUTOR_SESSION_TOKEN_TYPE,
+                purpose: EXECUTOR_COMMAND_TOKEN_PURPOSE,
+                session_id: 'git.clone',
+              },
+            },
+          }
+        )
       ).resolves.toBe(patched);
     });
   });

@@ -31,7 +31,7 @@ import { TaskDetailRetention, useRetainTurnOverlays } from '../../hooks/useTaskD
 import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
-import { getMessageSpeaker, MessageBlock } from '../MessageBlock';
+import { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from '../MessageBlock';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
@@ -698,6 +698,31 @@ function useTaskDetailRetainer(
 }
 
 /**
+ * Pins the turn from a reader's detail load until the commit after it settles,
+ * when the disclosures it opened hold their own pins. Otherwise a turn over the
+ * cache's byte budget would be evicted by the very commit that loads it. Built
+ * outside TaskBlock's render scope for the same reason as the retainer.
+ */
+function useLoadPin(loading: boolean, retain: () => (() => void) | undefined): () => void {
+  const pin = useRef<{ request: number; release?: () => void }>({ request: 0 });
+  // A click can land between a commit and its passive effect. Fence by the
+  // request this render saw, so that older effect never releases a newer pin.
+  const seen = pin.current.request;
+  // Every commit, so a batched loading true → false cannot strand the pin.
+  useEffect(() => {
+    const held = pin.current;
+    if (loading || held.request > seen) return;
+    held.release?.();
+    held.release = undefined;
+  });
+  useEffect(() => () => pin.current.release?.(), []);
+  return useCallback(() => {
+    pin.current.request += 1;
+    pin.current.release ??= retain();
+  }, [retain]);
+}
+
+/**
  * Bumped once each time the cache releases this turn's detail. React keeps a
  * fiber's previous props on its alternate, and descendants of a memoized child
  * that bails out keep theirs indefinitely: a MessageBlock that still renders
@@ -965,7 +990,15 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const [revealLoadedActivity, setRevealLoadedActivity] = useState(false);
     const [emptyActivityExpanded, setEmptyActivityExpanded] = useState(false);
     const firstAgentChainIndex = blocks.findIndex((block) => block.type === 'agent-chain');
+    // Without a chain, loaded detail renders inside a text-bearing message.
+    const inlineRevealId =
+      revealLoadedActivity && firstAgentChainIndex === -1
+        ? blocks
+            .flatMap((block) => (block.type === 'message' ? [block.message] : []))
+            .find(hasRevealableInlineDetail)?.message_id
+        : undefined;
     const loadActivity = async () => {
+      pinLoad();
       setDetailsLoading(true);
       setDetailsError(null);
       setRevealLoadedActivity(true);
@@ -1022,6 +1055,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         Array.isArray(message.content) && message.content.some((block) => block.type === 'thinking')
     );
     const retainDetails = useTaskDetailRetainer(task.task_id, onRetainTaskDetails);
+    const pinLoad = useLoadPin(detailsLoading, retainDetails);
     const overlays = useRetainTurnOverlays(retainDetails);
     const evictionEpoch = useDetailEvictionEpoch(hasTools || hasReasoning);
     const keySuffix = evictionEpoch ? `:evicted-${evictionEpoch}` : '';
@@ -1158,6 +1192,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 compact={compact}
                 defaultTextExpanded={defaultTextExpanded}
                 showAvatar={!groupedAvatarMessageIds.has(block.message.message_id)}
+                revealDetails={block.message.message_id === inlineRevealId}
               />
             );
             return (

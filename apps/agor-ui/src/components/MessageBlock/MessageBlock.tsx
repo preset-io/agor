@@ -123,6 +123,11 @@ interface MessageBlockProps {
   showAvatar?: boolean;
   /** Stable presentation identity while a confirmed task gains its initial message. */
   textChoiceKey?: string;
+  /**
+   * A reader loaded this turn's detail and it renders inline here: open the
+   * reasoning, or else the first tool, as the reader's expansion (it pins).
+   */
+  revealDetails?: boolean;
 }
 
 /** Get short description for a tool call (file path, pattern, command, etc.) */
@@ -377,6 +382,22 @@ function DaemonRestartNotice({
   );
 }
 
+/**
+ * Whether a reader's reveal can open something here: non-empty reasoning
+ * (empty thinking renders nothing), or a tool rendered as a ToolBlock (Task
+ * calls render as text). Matches what `revealDetails` opens.
+ */
+export function hasRevealableInlineDetail(message: Message): boolean {
+  return (
+    Array.isArray(message.content) &&
+    message.content.some((block) =>
+      block.type === 'thinking'
+        ? !!(block as unknown as ThinkingContentBlock).text?.trim()
+        : block.type === 'tool_use' && (block as unknown as ToolUseBlock).name !== 'Task'
+    )
+  );
+}
+
 // Memoized: every text block / tool block of every message in the conversation
 // re-rendered on every streaming chunk because TaskBlock's `messages` array
 // gets a fresh reference each tick. Default shallow compare is sufficient
@@ -407,6 +428,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   defaultTextExpanded = true,
   showAvatar = true,
   textChoiceKey,
+  revealDetails = false,
 }) => {
   const { token } = theme.useToken();
   const [timestampOpen, setTimestampOpen] = useState(false);
@@ -467,7 +489,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // In-conversation interactive widgets. WidgetBlock looks up the registered
   // component by `metadata.widget.widget_type` and falls back to an
   // "Unknown widget type" placeholder for forward-compat with newer
-  // daemons. See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
+  // daemons.
   if (message.type === 'widget_request') {
     return (
       <div style={{ margin: blockMargin }}>
@@ -749,6 +771,8 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   const hasTextBefore = textBeforeTools.some((text) => text.trim().length > 0);
   const hasTextAfter = textAfterTools.some((text) => text.trim().length > 0);
   const hasTools = toolBlocks.length > 0;
+  // A reveal opens reasoning only when it renders; otherwise the first tool.
+  const revealReasoning = revealDetails && !!(streamingThinking || thinkingBlocks.join('')).trim();
 
   const hasTaskTruncation = taskTruncations.some((value) => Object.keys(value ?? {}).length > 0);
   if (!hasThinking && !hasTextBefore && !hasTextAfter && !hasTools && !hasTaskTruncation) {
@@ -823,6 +847,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
           content={streamingThinking || thinkingBlocks.join('\n\n')}
           isStreaming={isThinking}
           defaultExpanded={false}
+          revealRequested={revealReasoning}
         />
       )}
 
@@ -967,6 +992,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                   descriptionNode={bashNode}
                   status={status}
                   expandedByDefault={shouldExpandToolByDefault(toolUse.name)}
+                  revealRequested={revealDetails && !revealReasoning && toolIndex === 0}
                 >
                   <ToolUseRenderer toolUse={toolUse} toolResult={toolResult} />
                 </ToolBlock>

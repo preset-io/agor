@@ -3,7 +3,9 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
+import { encryptApiKey, eq, UsersRepository, update, users } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 
 const {
   buildSandboxWrapMock,
@@ -700,6 +702,56 @@ describe('configured executor spawning', () => {
     expect(vi.mocked(console.log).mock.calls.flat().join(' ')).not.toContain(secret);
     expect(vi.mocked(console.error).mock.calls.flat().join(' ')).not.toContain(secret);
   });
+
+  for (const { option, scratch } of [
+    { option: 'preparedEnv', scratch: '/synthetic/user/scratch' },
+    { option: 'env', scratch: 'relative/scratch' },
+  ] as const) {
+    dbTest(
+      `excludes stored user scratch from the local ${option} while preserving other settings`,
+      async ({ db }) => {
+        const user = await new UsersRepository(db).create({
+          email: 'scratch-regression@example.com',
+          name: 'Scratch regression',
+        });
+        await update(db, users)
+          .set({
+            data: {
+              env_vars: {
+                AGOR_EXECUTOR_SCRATCH_ROOT: {
+                  value_encrypted: encryptApiKey(scratch),
+                  scope: 'global',
+                },
+                SYNTHETIC_SESSION_SETTING: {
+                  value_encrypted: encryptApiKey('ordinary-session-value'),
+                  scope: 'global',
+                },
+              },
+            },
+          })
+          .where(eq(users.user_id, user.user_id))
+          .run();
+        const { createUserProcessEnvironment } = await import('@agor/core/config');
+        const sessionEnv = await createUserProcessEnvironment(user.user_id, db);
+        expect(sessionEnv.AGOR_EXECUTOR_SCRATCH_ROOT).toBe(scratch);
+        const installed = installMockExecutor('agor-executor-user-scratch-');
+        try {
+          const { spawnExecutor } = await import('./spawn-executor');
+          spawnExecutor({ command: 'prompt', env: sessionEnv }, { [option]: sessionEnv });
+
+          expect(spawnMock).toHaveBeenCalledOnce();
+          const spawnOptions = spawnMock.mock.calls[0][2] as {
+            env: Record<string, string>;
+          };
+          expect(spawnOptions.env.AGOR_EXECUTOR_SCRATCH_ROOT).toBeUndefined();
+          expect(spawnOptions.env.SYNTHETIC_SESSION_SETTING).toBe('ordinary-session-value');
+          expect(sessionEnv.AGOR_EXECUTOR_SCRATCH_ROOT).toBe(scratch);
+        } finally {
+          installed.restore();
+        }
+      }
+    );
+  }
 
   it('launches a local executor from its operator-owned package directory, not payload cwd', async () => {
     const proc = createMockProcess();

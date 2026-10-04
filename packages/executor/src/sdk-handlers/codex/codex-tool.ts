@@ -198,8 +198,7 @@ export class CodexTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md).
+    // Create user message (or reuse the daemon's pre-write).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,
@@ -247,7 +246,10 @@ export class CodexTool implements ITool {
         taskId,
         permissionMode,
         abortController,
-        streamingCallbacks?.onPulse
+        streamingCallbacks?.onPulse,
+        // Tool rows are persisted from tool_complete below and tool blocks are
+        // filtered out of the final complete event, so skip the turn-end copies.
+        { retainCompletedTools: false }
       )) {
         // Detect if execution was stopped early
         if (event.type === 'stopped') {
@@ -702,8 +704,7 @@ export class CodexTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md).
+    // Create user message (or reuse the daemon's pre-write).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,

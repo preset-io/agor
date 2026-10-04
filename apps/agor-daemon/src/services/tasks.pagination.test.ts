@@ -1,4 +1,4 @@
-import { PAGINATION } from '@agor/core/config';
+import { PAGINATION, TASK_PAGINATION } from '@agor/core/config';
 import { feathers } from '@agor/core/feathers';
 import type { Paginated, SessionID, Task, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
@@ -43,6 +43,55 @@ async function createTestSession(db: Parameters<typeof dbTest>[0]['db']): Promis
 }
 
 describe('TasksService.find pagination', () => {
+  dbTest('loads a page of one Session by task_id $in, never another Session', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const otherSessionId = await createTestSession(db);
+    const repository = new TaskRepository(db);
+    const create = (session_id: SessionID) =>
+      repository.create({
+        session_id,
+        status: TaskStatus.COMPLETED,
+        created_by: generateId() as UUID,
+      });
+    const [first, , third] = [
+      await create(sessionId),
+      await create(sessionId),
+      await create(sessionId),
+    ];
+    const foreign = await create(otherSessionId);
+    const service = createTasksService(db, feathers());
+    const result = (await service.find({
+      query: {
+        session_id: sessionId,
+        task_id: { $in: [third.task_id, first.task_id, foreign.task_id] },
+        $limit: TASK_PAGINATION.MAX_TASK_IDS,
+      },
+    })) as Paginated<Task>;
+    expect(result.data.map((task) => task.task_id).sort()).toEqual(
+      [first.task_id, third.task_id].sort()
+    );
+    await expect(service.find({ query: { task_id: { $in: [first.task_id] } } })).rejects.toThrow(
+      /exact session_id/
+    );
+    await expect(
+      service.find({
+        query: {
+          session_id: sessionId,
+          task_id: {
+            $in: Array.from({ length: TASK_PAGINATION.MAX_TASK_IDS + 1 }, () => generateId()),
+          },
+        },
+      })
+    ).rejects.toThrow(/bounded/);
+    expect(
+      (
+        (await service.find({
+          query: { session_id: sessionId, task_id: { $in: [] } },
+        })) as Paginated<Task>
+      ).data
+    ).toEqual([]);
+  });
+
   dbTest('excludes queued tasks in SQL before the transcript page limit', async ({ db }) => {
     const sessionId = await createTestSession(db);
     const repository = new TaskRepository(db);

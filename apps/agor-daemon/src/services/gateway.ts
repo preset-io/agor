@@ -2495,7 +2495,6 @@ export class GatewayService {
   // would be a second thing to keep in step. The card's presentation lives in
   // `services/mcp-slack-connect-card.ts`.
   //
-  // See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
   // ==========================================================================
 
   /**
@@ -5293,7 +5292,6 @@ export class GatewayService {
         agentic_tool_preset_id: resolvedPresetId,
         permission_config: gatewayPermissionConfig,
         model_config: gatewayModelConfig,
-        tasks: [],
         // Denormalized gateway metadata (immutable snapshot at creation time)
         // Avoids N+1 lookups when rendering board cards
         custom_context: {

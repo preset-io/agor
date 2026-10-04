@@ -268,7 +268,7 @@ someone closes it after the run goes green.
 - **[Discord](https://discord.gg/Qh4TrFQZpd)** - Join our Discord community for support and discussion
 - **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** - Ask questions, share ideas, get help
 - **[GitHub Issues](https://github.com/preset-io/agor/issues)** - Report bugs, request features
-- **Read the docs** - [CLAUDE.md](CLAUDE.md) and [context/](context/) have extensive documentation
+- **Read the docs** - [AGENTS.md](AGENTS.md) and [context/](context/)
 
 **Response time:**
 

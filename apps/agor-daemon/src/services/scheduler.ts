@@ -2,8 +2,7 @@
  * Scheduler Service
  *
  * Manages cron-based scheduling. Reads from the first-class `schedules`
- * table (see docs/internal/schedules-first-class-design-2026-05-24.md);
- * spawns sessions, and enforces retention.
+ * table, spawns sessions, and enforces retention.
  *
  * **Architecture:**
  * - Runs on a configurable tick interval (default 30s)

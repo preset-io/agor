@@ -27,6 +27,13 @@ export function createProxy(origin, { healthRequest = fetch } = {}) {
       res.end();
       return;
     }
+    // Vite's /ui/ base rejects the slashless path produced by client navigation.
+    // Preserve query parameters without accepting a caller-controlled redirect host.
+    if (req.url === '/ui' || req.url.startsWith('/ui?')) {
+      res.writeHead(302, { Location: `/ui/${req.url.slice('/ui'.length)}` });
+      res.end();
+      return;
+    }
     if (req.url === '/health') {
       try {
         const checks = await Promise.all(
@@ -127,7 +134,12 @@ export async function syncIfChanged({ prepare, appliedSha, changedPaths, sync })
 
 export function runtimeGit(simpleGit, safeEnv) {
   return (baseDir) =>
-    simpleGit({ ...(baseDir ? { baseDir } : {}), timeout: { block: 30_000 } }).env(safeEnv);
+    simpleGit({
+      ...(baseDir ? { baseDir } : {}),
+      // simple-git 4 rejects explicit GIT_* keys (e.g. GIT_TERMINAL_PROMPT) unless named.
+      allowEnvironment: Object.keys(safeEnv),
+      timeout: { block: 30_000 },
+    }).env(safeEnv);
 }
 
 async function main() {

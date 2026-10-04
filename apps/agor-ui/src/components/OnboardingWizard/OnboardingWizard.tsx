@@ -412,6 +412,8 @@ export interface OnboardingCompletionAttempt {
 
 export interface OnboardingWizardProps {
   open: boolean;
+  /** Optional prefetch status, shown contextually at the required workspace step. */
+  repositorySetupNotice?: string;
   /** Synchronous owner fence for every async continuation in this wizard instance. */
   isCurrent?: () => boolean;
   onComplete: (
@@ -482,6 +484,7 @@ const WIZARD_SELECTED_SHADOW =
 
 export function OnboardingWizard({
   open,
+  repositorySetupNotice,
   isCurrent = ALWAYS_CURRENT,
   onComplete,
   onDismiss,
@@ -658,20 +661,19 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
+    // Dismissal saves selections even before the final step allocates a board.
+    setSelectedGoals(savedOnboarding?.goals ?? []);
+    setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
+    setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
+    const savedTemplateId = savedOnboarding?.teammateTemplateId;
+    const savedTemplate = getTeammateTemplate(savedTemplateId);
+    setSelectedTemplateId(savedTemplate?.id ?? null);
+    setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
     if (savedBoardId) {
-      setSelectedGoals(savedOnboarding?.goals ?? []);
-      setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
-      setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
-      const savedTemplateId = savedOnboarding?.teammateTemplateId;
-      const savedTemplate = getTeammateTemplate(savedTemplateId);
-      setSelectedTemplateId(savedTemplate?.id ?? null);
-      setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
       setCreatedBoardId(savedBoardId);
       createdBoardIdRef.current = savedBoardId;
       boardCreationConfirmedRef.current = !!savedBoard;
       if (!initialStep) setCurrentStep('done');
-    } else {
-      setTeammateName('');
     }
   }, [
     open,
@@ -1073,6 +1075,7 @@ export function OnboardingWizard({
       setTeammateName('');
       setTeammateEmoji('🤖');
       setSelectedTemplateId(null);
+      setInvalidSavedTemplateId(null);
     }
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
@@ -2011,6 +2014,9 @@ export function OnboardingWizard({
     if (completionError) {
       headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
       subline = 'Nothing was lost. Review the error below, then try again.';
+    } else if (name && repositorySetupNotice) {
+      headline = `${name} needs workspace setup.`;
+      subline = 'Continue to retry setup, or close this wizard and finish later.';
     } else if (!name) {
       headline = completing ? 'Almost ready…' : "You're ready to build.";
       subline = "Your board is ready. Open it and start whenever you're ready.";
@@ -2137,6 +2143,15 @@ export function OnboardingWizard({
           />
         )}
 
+        {repositorySetupNotice && !completionError && !completing && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Your teammate workspace needs setup"
+            description={repositorySetupNotice}
+            style={{ marginTop: 18, textAlign: 'left' }}
+          />
+        )}
         {completionError && !completionSlow && (
           <Alert
             type="error"

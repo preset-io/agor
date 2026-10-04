@@ -7,7 +7,7 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from './TaskBlock';
@@ -506,4 +506,101 @@ it('remounts message blocks once when cached detail is evicted, not on live upda
   rerender(render_([messages[0], full], true));
   expect(screen.getByText('Extended Thinking')).toBeVisible();
   expect(block('Visible answer')).toBe(remounted);
+});
+
+it('pins a turn from a reader’s detail load until its expanded activity holds its own pin', async () => {
+  const events: string[] = [];
+  let pins = 0;
+  const retain = vi.fn(() => {
+    const pin = ++pins;
+    events.push(`retain ${pin}`);
+    return () => events.push(`release ${pin}`);
+  });
+  let finishLoad = () => {};
+  const load = vi.fn(() => new Promise<void>((resolve) => (finishLoad = resolve)));
+  const props = { onLoadTaskMessages: load, onRetainTaskDetails: retain };
+  const { rerender } = render(view(props));
+  fireEvent.click(screen.getByRole('button', { name: 'Tool calls', expanded: false }));
+  // Pinned before the read starts, so its commit cannot be evicted for size.
+  expect(events).toEqual(['retain 1']);
+  expect(load).toHaveBeenCalledTimes(1);
+  const full = [
+    messages[0],
+    message(1, MessageRole.ASSISTANT, [
+      { type: 'tool_use', id: 'call-1', name: 'Read', input: {} },
+      { type: 'tool_result', tool_use_id: 'call-1', content: 'Result' },
+    ]),
+  ];
+  // The cache commits the detail before the read settles.
+  rerender(view({ ...props, taskMessages: full, taskMessagesLoaded: true }));
+  expect(screen.getByRole('button', { name: '1 tool call', expanded: true })).toBeVisible();
+  expect(events).toEqual(['retain 1', 'retain 2']);
+  finishLoad();
+  // The opened activity's pin takes over; only the load pin is released.
+  await waitFor(() => expect(events).toEqual(['retain 1', 'retain 2', 'release 1']));
+});
+
+it('does not pin inline detail that arrives without a reader asking for it', () => {
+  const retain = vi.fn(() => () => {});
+  const full = {
+    ...messages[1],
+    content: [
+      { type: 'thinking', text: 'INLINE_DETAIL' },
+      { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/a.txt' } },
+      { type: 'tool_result', tool_use_id: 'read-1', content: 'TOOL_DETAIL' },
+      { type: 'text', text: 'Visible answer' },
+    ],
+  } as Message;
+  render(
+    view({
+      onRetainTaskDetails: retain,
+      taskMessages: [messages[0], full],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(screen.getByText('Visible answer')).toBeVisible();
+  expect(screen.queryByText('INLINE_DETAIL')).toBeNull();
+  expect(screen.queryByText('TOOL_DETAIL')).toBeNull();
+  expect(retain).not.toHaveBeenCalled();
+});
+
+it('keeps a load pin taken before the previous commit’s passive effect runs', async () => {
+  const events: string[] = [];
+  let pins = 0;
+  const retain = vi.fn(() => {
+    const pin = ++pins;
+    events.push(`retain ${pin}`);
+    return () => events.push(`release ${pin}`);
+  });
+  const load = vi.fn(() => new Promise<void>(() => {})); // the read stays pending
+  let rerenderOutsideAct = () => {};
+  /**
+   * Re-renders TaskBlock (loading=false) in a non-act, default-priority commit,
+   * whose passive effects run later. Its layout effect clicks the disclosure
+   * header first, as a non-focusing early click would.
+   */
+  function Harness() {
+    const [tick, setTick] = useState(0);
+    rerenderOutsideAct = () => setTimeout(() => setTick(1));
+    useLayoutEffect(() => {
+      if (!tick) return;
+      events.push('click');
+      screen.getByRole('button', { name: '1 tool call' }).click();
+    }, [tick]);
+    return (
+      <TaskBlock
+        task={{ ...task, recorded_tool_count: 1 }}
+        taskMessages={messages}
+        taskMessagesLoaded={false}
+        onLoadTaskMessages={load}
+        onRetainTaskDetails={retain}
+      />
+    );
+  }
+  render(<Harness />);
+  rerenderOutsideAct();
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The stale effect (from the render before the click) must not release it.
+  expect(events).toEqual(['click', 'retain 1']);
 });

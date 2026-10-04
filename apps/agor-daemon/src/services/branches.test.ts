@@ -16,6 +16,8 @@ import { feathers } from '@agor/core/feathers';
 import {
   type Application,
   type BoardID,
+  BRANCH_WORKSPACE_SERVER_FIELDS,
+  type Branch,
   type BranchID,
   type CapabilityPolicyFsAccess,
   type CapabilityPolicyPresetId,
@@ -1029,6 +1031,28 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchedEnvironment).toHaveProperty('last_error', undefined);
     expect(patchedEnvironment).toHaveProperty('last_command', undefined);
   });
+});
+
+describe('BranchesService server-managed workspace fields', () => {
+  it.each(BRANCH_WORKSPACE_SERVER_FIELDS)(
+    'rejects %s at the patch/update API boundary',
+    async (field) => {
+      const branchId = 'workspace-managed' as BranchID;
+      const { service, repository } = createPatchHarness({
+        current: { branch_id: branchId },
+        updated: { branch_id: branchId },
+      });
+      const data = { [field]: null } as Partial<Branch>;
+      for (const method of ['patch', 'update'] as const) {
+        await expect(service[method](branchId, data, { provider: 'rest' })).rejects.toMatchObject({
+          code: 400,
+          message: 'Workspace operation state is server-managed',
+        });
+      }
+      expect(repository.findById).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {

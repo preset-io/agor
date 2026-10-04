@@ -707,8 +707,7 @@ export function __seedDynamicClientCacheForTests(
  *
  * A per-deployment name was tried once, for a Datadog `Mismatching redirect
  * URI`, and reverted: the failure reproduced under both names while the same
- * integration kept working on deployments that sent this one. See §7.1.16 of
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ * integration kept working on deployments that sent this one.
  */
 export const MCP_OAUTH_DCR_CLIENT_NAME = 'Agor MCP Client';
 

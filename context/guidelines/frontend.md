@@ -103,6 +103,10 @@ Agor has one set of feature components. Make them responsive; do not fork them.
 
 ## Modal lifecycle
 
+For imperative dialogs use `useThemedModal()` (`apps/agor-ui/src/utils/modal.tsx`), never static
+`Modal.confirm()`/`Modal.info()`: static APIs mount outside `ConfigProvider` and ignore the theme.
+Toasts follow the same rule via `useThemedMessage()`; see [`toasts.md`](toasts.md).
+
 Mount rare/heavy dialogs in lists or canvas nodes on demand. Keep the mounted entity separate
 from the controlled `open` state: close with `open=false`, then unmount in `afterClose` so AntD's
 exit motion and cleanup still run. Preserve intentionally retained drafts and singleton modal
@@ -133,10 +137,3 @@ state; use `destroyOnHidden` when the wrapper must stay mounted but its contents
 - [ ] Keyboard, focus, names, contrast, loading, disabled, and error states were considered.
 - [ ] Any deviation/exact color has a narrow documented reason and works across supported themes.
 - [ ] Focused tests, formatting/lint, and typecheck were run as applicable.
-
-## Prioritized follow-ups
-
-Do these incrementally when the relevant surface is next changed: extract shared action/pin rows
-from `SessionFooter`; converge repeated pill treatments; standardize settings-table actions; and
-reduce bespoke Knowledge/canvas surface chrome. Preserve real canvas/data-visualization palettes
-and avoid a mechanical literal rewrite.

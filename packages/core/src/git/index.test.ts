@@ -1414,6 +1414,46 @@ describe('cloneRepo', () => {
     expect(markerExists).toBe(true);
   });
 
+  it('keeps an interrupted no-checkout clone intact instead of declaring it ready', async () => {
+    await createBareRepo(remoteDir);
+    const source = path.join(tempDir, 'source');
+    await createTestRepo(source);
+    await simpleGit(source).addRemote('origin', remoteDir);
+    await simpleGit(source).push('origin', 'main');
+    const targetDir = path.join(tempDir, 'incomplete');
+    await simpleGit().clone(remoteDir, targetDir, ['--no-checkout']);
+    await expect(cloneRepo({ url: remoteDir, targetDir, branch: 'main' })).rejects.toThrow(
+      'incomplete or has staged changes'
+    );
+    expect(await isGitRepo(targetDir)).toBe(true);
+    expect((await simpleGit(targetDir).status()).staged.length).toBeGreaterThan(0);
+  });
+
+  it('does not reuse a cached clone for a different remote or inaccessible source', async () => {
+    await createBareRepo(remoteDir);
+    const source = path.join(tempDir, 'source');
+    await createTestRepo(source);
+    const git = simpleGit(source);
+    await git.addRemote('origin', remoteDir);
+    await git.push('origin', 'main');
+    const targetDir = path.join(tempDir, 'cached');
+    await cloneRepo({ url: remoteDir, targetDir, branch: 'main' });
+    await fs.writeFile(path.join(targetDir, 'keep-local-work'), 'keep me');
+    await expect(
+      cloneRepo({ url: `${remoteDir}-other`, targetDir, branch: 'main' })
+    ).rejects.toThrow('different remote');
+    // Registration metadata / an existing checkout is not proof of remote access.
+    const unavailable = `${remoteDir}-offline`;
+    await fs.rename(remoteDir, unavailable);
+    try {
+      await expect(cloneRepo({ url: remoteDir, targetDir, branch: 'main' })).rejects.toThrow();
+      expect(await fs.readFile(path.join(targetDir, 'keep-local-work'), 'utf8')).toBe('keep me');
+      expect((await simpleGit(targetDir).branch()).current).toBe('main');
+    } finally {
+      await fs.rename(unavailable, remoteDir);
+    }
+  });
+
   it('should reject reuse when the pinned branch cannot be checked out', async () => {
     // Existing clone, pin a branch that doesn't exist on the remote — must
     // fail rather than silently returning the wrong defaultBranch.

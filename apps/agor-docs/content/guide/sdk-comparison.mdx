@@ -51,6 +51,14 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
   To preserve both and start fresh, set `AGOR_GEMINI_RESET_HISTORY_FOR` to the Agor
   session ID in your environment variables and retry once. The matching recordings
   move into a quarantine folder in the SDK home; remove the variable afterward.
+- The executor's per-task temporary directory (`TMPDIR`) lives in the SDK home
+  unless a delegated launcher sets `AGOR_EXECUTOR_SCRATCH_ROOT` to an absolute local
+  scratch directory, keeping it off a shared network home. Shell commands inherit
+  it, so builds then share that scratch's size limit. Conversation recordings
+  always stay in the SDK home.
+- MCP servers use the SDK's 10-minute request timeout separately for each
+  connection attempt, tool listing and tool call, so a server that accepts a
+  connection and then stalls can hold up a turn for 10 minutes or more.
 - The default model is `gemini-3.8-flash`. The picker also offers `gemini-3.7-flash`,
   `gemini-3.5-flash-lite` and the paid preview `gemini-3.1-pro-preview`. Stored 2.5
   selections remain usable when the API key has access. Retired Flash selections

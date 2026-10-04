@@ -332,6 +332,7 @@ export interface TaskRuntimeDiscoveryOptions {
 export interface TaskFindPageOptions {
   excludeQueued?: boolean;
   taskId?: TaskID;
+  taskIds?: TaskID[];
   afterTaskId?: TaskID;
   throughTaskId?: TaskID;
   sessionId?: SessionID;
@@ -703,10 +704,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async findPage(
     opts: TaskFindPageOptions = {}
   ): Promise<{ data: Partial<Task>[]; total: number }> {
-    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+    if (opts.sessionIds?.length === 0 || opts.taskIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
     if (opts.taskId) conditions.push(eq(tasks.task_id, opts.taskId));
+    if (opts.taskIds) conditions.push(inArray(tasks.task_id, opts.taskIds));
     if (opts.afterTaskId) conditions.push(gt(tasks.task_id, opts.afterTaskId));
     if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));

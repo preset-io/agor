@@ -2,7 +2,6 @@
  * Schedule Repository
  *
  * Type-safe CRUD operations for the first-class `schedules` table.
- * See docs/internal/schedules-first-class-design-2026-05-24.md.
  */
 
 import type {

@@ -23,11 +23,9 @@ export const presetUtm = (content: string, hasQuery = false): string =>
 // Preset home — used by the footer credit (logo + text link).
 export const PRESET_URL = 'https://preset.io';
 
-// Agor Cloud private beta interest form (Preset landing page, replaces
-// the legacy Google Forms link). Consumed by CloudInviteCTA in the
-// agor-cloud blog post. Note: agor-openclaw.mdx still has an inline
-// link to the legacy Google Forms URL and is not updated here.
-export const AGOR_CLOUD_INVITE_URL = `https://preset.io/contact-us-about-agor/${presetUtm('cloud-invite-cta')}`;
+// Agor Cloud waitlist: the console's request-invite page. Default primary
+// target for CloudInviteCTA; pass `placement` to tag it for attribution.
+export const AGOR_CLOUD_INVITE_URL = 'https://console.agor.cloud/request-invite';
 
 // Agor Cloud demo / contact link (HubSpot meetings scheduler).
 export const AGOR_CLOUD_DEMO_URL = 'https://meetings-na2.hubspot.com/zane-aitken/agor-demo';

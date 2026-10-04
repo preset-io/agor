@@ -1243,7 +1243,6 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
           children: [],
         },
-        tasks: [],
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);

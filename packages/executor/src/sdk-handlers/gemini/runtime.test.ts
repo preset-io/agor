@@ -54,10 +54,15 @@ describe('fixed Gemini errors', () => {
 
 it('uses the delegated executor HOME when no Gemini home override is projected', async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-delegated-home-'));
-  const previous = { HOME: process.env.HOME, GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME };
+  const previous = {
+    HOME: process.env.HOME,
+    GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
+    AGOR_EXECUTOR_SCRATCH_ROOT: process.env.AGOR_EXECUTOR_SCRATCH_ROOT,
+  };
   try {
     process.env.HOME = home;
     delete process.env.GEMINI_CLI_HOME;
+    delete process.env.AGOR_EXECUTOR_SCRATCH_ROOT;
     const cleanup = await enterGeminiRuntime();
     try {
       expect(process.env.TMPDIR).toContain(path.join(home, '.gemini', 'agor-task-tmp'));
@@ -71,6 +76,61 @@ it('uses the delegated executor HOME when no Gemini home override is projected',
     }
     await fs.rm(home, { recursive: true, force: true });
   }
+});
+
+describe('executor scratch for task temp', () => {
+  const keys = ['HOME', 'GEMINI_CLI_HOME', 'AGOR_EXECUTOR_SCRATCH_ROOT', 'TMPDIR'] as const;
+  const restore = (previous: Record<string, string | undefined>) => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+
+  it('keeps task temp on launcher scratch instead of the SDK home', async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-scratch-home-'));
+    const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-scratch-root-'));
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+    try {
+      process.env.HOME = home;
+      delete process.env.GEMINI_CLI_HOME;
+      process.env.AGOR_EXECUTOR_SCRATCH_ROOT = scratch;
+      const cleanup = await enterGeminiRuntime();
+      let temp: string | undefined;
+      try {
+        temp = process.env.TMPDIR;
+        expect(temp?.startsWith(path.join(scratch, 'gemini-task-tmp') + path.sep)).toBe(true);
+        await expect(fs.stat(path.join(home, '.gemini', 'agor-task-tmp'))).rejects.toThrow();
+      } finally {
+        await cleanup();
+      }
+      await expect(fs.stat(temp!)).rejects.toThrow();
+      expect(process.env.TMPDIR).toBe(previous.TMPDIR);
+    } finally {
+      restore(previous);
+      await fs.rm(home, { recursive: true, force: true });
+      await fs.rm(scratch, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['relative/scratch', '   '])(
+    'refuses a non-absolute scratch path %j instead of falling back',
+    async (value) => {
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), 'gemini-scratch-home-'));
+      const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+      try {
+        process.env.HOME = home;
+        delete process.env.GEMINI_CLI_HOME;
+        process.env.AGOR_EXECUTOR_SCRATCH_ROOT = value;
+        await expect(enterGeminiRuntime()).rejects.toBeInstanceOf(GeminiIntegrationError);
+        expect(process.env.TMPDIR).toBe(previous.TMPDIR);
+        await expect(fs.stat(path.join(home, '.gemini', 'agor-task-tmp'))).rejects.toThrow();
+      } finally {
+        restore(previous);
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    }
+  );
 });
 
 it('quarantines ambiguous recordings only for an explicit matching session reset', async () => {

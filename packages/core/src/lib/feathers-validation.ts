@@ -8,7 +8,7 @@
 import { Ajv } from '@feathersjs/schema';
 import type { TObject, TProperties } from '@feathersjs/typebox';
 import { getValidator, Type } from '@feathersjs/typebox';
-import { MESSAGE_PAGINATION, PAGINATION } from '../config/constants';
+import { MESSAGE_PAGINATION, PAGINATION, TASK_PAGINATION } from '../config/constants';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 import {
   KNOWLEDGE_DOCUMENT_KINDS,
@@ -173,6 +173,12 @@ export const taskQuerySchema = Type.Intersect(
             {
               $gt: Type.Optional(CommonSchemas.uuid),
               $lte: CommonSchemas.uuid,
+            },
+            { additionalProperties: false }
+          ),
+          Type.Object(
+            {
+              $in: Type.Array(CommonSchemas.uuid, { maxItems: TASK_PAGINATION.MAX_TASK_IDS }),
             },
             { additionalProperties: false }
           ),

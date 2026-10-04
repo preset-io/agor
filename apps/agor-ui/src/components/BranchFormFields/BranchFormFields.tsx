@@ -246,8 +246,7 @@ export const BranchFormFields: React.FC<BranchFormFieldsProps> = ({
           'How the branch is materialised on disk. ' +
           '"Worktree" uses git\'s native shared-base model (legacy default). ' +
           '"Clone" gives this branch its own .git/ directory via a real ' +
-          'git clone — credentials and config are isolated from sibling branches. ' +
-          'See context/explorations/clone-redesign.md.'
+          'git clone — credentials and config are isolated from sibling branches.'
         }
         extra={
           allowedStorageModes.length === 1

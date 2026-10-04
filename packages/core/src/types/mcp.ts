@@ -1073,7 +1073,6 @@ export interface MCPSlackOAuthRecoveryContext {
 // machine — which is why this is a separate token type, audience, and durable
 // record rather than a reuse of the recovery one.
 //
-// See docs/internal/slack-mcp-oauth-connect-2026-09-16.md §7.
 // ---------------------------------------------------------------------------
 
 /**

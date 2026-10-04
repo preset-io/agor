@@ -1,12 +1,17 @@
 'use client';
 
 import { useState } from 'react';
+import { onCloudCtaClick, withCtaAttribution } from '../lib/cloudCtaAttribution';
 import { CloudCtaLink } from './CloudCtaLink';
 import styles from './CloudInviteCTA.module.css';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 
 interface CloudInviteCTAProps {
-  /** Attribution slug for this spot (utm_content on the console link). */
+  /**
+   * Attribution slug for this spot: utm_content on the console link, and the
+   * reported click. The status-driven CTA falls back to `cloud-invite`; a
+   * fixed link is only tagged when this is set.
+   */
   placement?: string;
   demoLabel?: string;
   /**
@@ -24,7 +29,7 @@ interface CloudInviteCTAProps {
 }
 
 export function CloudInviteCTA({
-  placement = 'cloud-invite',
+  placement,
   demoLabel = 'Book a Demo',
   primaryLabel,
   primaryHref,
@@ -34,20 +39,26 @@ export function CloudInviteCTA({
   // The scheduler opens in an on-site modal instead of linking out to the
   // (Preset-branded) meetings.hubspot.com page.
   const [isDemoOpen, setIsDemoOpen] = useState(false);
-  const isInPageAnchor = primaryHref?.startsWith('#') || primaryHref?.startsWith('/');
+  const href = primaryHref && placement ? withCtaAttribution(primaryHref, placement) : primaryHref;
+  const isInPageAnchor = href?.startsWith('#') || href?.startsWith('/');
   return (
     <div className={styles.wrapper}>
       {showPrimary &&
-        (primaryHref && primaryLabel ? (
+        (href && primaryLabel ? (
           <a
-            href={primaryHref}
+            href={href}
+            onClick={
+              placement
+                ? (event) => onCloudCtaClick(placement, 'console', event.currentTarget)
+                : undefined
+            }
             {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
             className={styles.primary}
           >
             {primaryLabel}
           </a>
         ) : (
-          <CloudCtaLink placement={placement} className={styles.primary} />
+          <CloudCtaLink placement={placement ?? 'cloud-invite'} className={styles.primary} />
         ))}
       {showDemo && (
         <>

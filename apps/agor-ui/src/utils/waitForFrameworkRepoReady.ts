@@ -12,6 +12,8 @@ export interface WaitForFrameworkRepoReadyOptions {
   deadlineMs: number;
   /** Cap on the server read made at the deadline. */
   finalReadMs?: number;
+  /** Fence asynchronous reads when the authenticated owner changes. */
+  isCurrent?: () => boolean;
 }
 
 const readyIn = (repoById: Map<string, Repo>) =>
@@ -32,7 +34,10 @@ export function waitForFrameworkRepoReady({
   applyRepo,
   deadlineMs,
   finalReadMs = 2_000,
+  isCurrent = () => true,
 }: WaitForFrameworkRepoReadyOptions): Promise<Repo | undefined> {
+  if (!isCurrent()) return Promise.resolve(undefined);
+  const initialIds = new Set(getRepoById().keys());
   const readyNow = readyIn(getRepoById());
   if (readyNow) return Promise.resolve(readyNow);
 
@@ -41,18 +46,28 @@ export function waitForFrameworkRepoReady({
     let finalTimer: ReturnType<typeof setTimeout> | undefined;
 
     const check = () => {
+      if (!isCurrent()) {
+        finish(undefined);
+        return;
+      }
       const ready = readyIn(getRepoById());
       if (ready) finish(ready);
     };
-    // A server read only updates framework rows the store still holds; it never adds or restores rows.
+    // Recover missed created events, but never restore a row removed during this wait.
     const read = () =>
       Promise.resolve()
         .then(fetchRepos)
         .then((repos) => {
           if (settled) return;
+          if (!isCurrent()) {
+            finish(undefined);
+            return;
+          }
           const store = getRepoById();
           const server = new Map(
-            repos.filter((repo) => store.has(repo.repo_id)).map((repo) => [repo.repo_id, repo])
+            repos
+              .filter((repo) => store.has(repo.repo_id) || !initialIds.has(repo.repo_id))
+              .map((repo) => [repo.repo_id, repo])
           );
           const ready = readyIn(server);
           const best = findFrameworkRepo(server)?.[1];
@@ -79,7 +94,7 @@ export function waitForFrameworkRepoReady({
       unsubscribe();
       clearTimeout(deadline);
       clearTimeout(finalTimer);
-      resolve(repo);
+      resolve(isCurrent() ? repo : undefined);
     }
     // Re-check in case readiness landed between the check above and subscribing.
     check();

@@ -25,6 +25,8 @@ interface ThinkingBlockProps {
   isStreaming?: boolean;
   /** Whether to default to expanded state */
   defaultExpanded?: boolean;
+  /** A reader asked for this turn's detail: open on mount (and keep the turn). */
+  revealRequested?: boolean;
 }
 
 /**
@@ -38,9 +40,10 @@ export const ThinkingBlock: React.FC<ThinkingBlockProps> = ({
   content,
   isStreaming = false,
   defaultExpanded = false,
+  revealRequested = false,
 }) => {
   const { token } = theme.useToken();
-  const [expanded, setExpanded] = useState(defaultExpanded);
+  const [expanded, setExpanded] = useState(defaultExpanded || revealRequested);
   useRetainTaskDetailsWhile(expanded && (!!content || isStreaming));
 
   // Don't render if no content

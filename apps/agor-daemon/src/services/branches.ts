@@ -11,6 +11,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   assertAsyncEnvironmentCommandConfig,
+  branchMaintenanceCapabilities,
   createUserProcessEnvironment,
   ENVIRONMENT,
   ensureBranchCloneDepthAllowed,
@@ -20,9 +21,11 @@ import {
   getBranchHomePath,
   getTenantDataRoot,
   PAGINATION,
+  permanentBranchDeletionCapability,
   resolveBranchStorageConfig,
   resolveMultiTenancyConfig,
   usesAsyncEnvironmentCommands,
+  usesExternalBranchExecutor,
 } from '@agor/core/config';
 import {
   BoardObjectRepository,
@@ -94,6 +97,7 @@ import {
   BRANCH_DELETION_COMMAND,
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+  BRANCH_WORKSPACE_SERVER_FIELDS,
   type BranchCleanAccepted,
   type BranchWorkspaceRequest,
   branchCleanupCommandId,
@@ -1349,8 +1353,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Override patch to handle board_objects when board_id changes.
    *
-   * Schedule config lives on the `schedules` table now (see
-   * docs/internal/schedules-first-class-design-2026-05-24.md); patches
+   * Schedule config lives on the `schedules` table now; patches
    * to schedule fields go through the `schedules` service, not here.
    */
   async patch(
@@ -1448,15 +1451,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('filesystem_status is managed by branch materialization.');
       }
     }
-    if (
-      [
-        'workspace_snapshot',
-        'workspace_operation',
-        'cleanup_last_error',
-        'last_cleanup_succeeded_at',
-        'last_cleanup_operation_id',
-      ].some((key) => Object.hasOwn(data, key))
-    )
+    if (BRANCH_WORKSPACE_SERVER_FIELDS.some((key) => Object.hasOwn(data, key)))
       throw new BadRequest('Workspace operation state is server-managed');
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(
@@ -1645,6 +1640,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     const branch = await super.get(id, params);
     const withZone = await this.branchRepo.enrichWithZoneInfo(branch as Branch);
+
+    // A missing runtime config is unknown, never an implicit local capability.
+    const config = this.app.get('config');
+    withZone.maintenance_capabilities = config
+      ? branchMaintenanceCapabilities(config, withZone.storage_mode)
+      : undefined;
 
     // Only enrich with session activity if explicitly requested
     if (includeSessions === true || includeSessions === 'true') {
@@ -1868,10 +1869,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
     const config = this.app.get('config');
     const needsFiles = filesystemAction !== 'preserved';
-    const externalExecutor =
-      config.execution?.unix_user_mode === 'delegated' ||
-      Boolean(config.execution?.executor_command_template) ||
-      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
+    const externalExecutor = usesExternalBranchExecutor(config);
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const authorize = async (repository: BranchRepository, current: Branch) => {
       if (needsFiles)
@@ -1900,10 +1898,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
     id = branch.branch_id;
     await this.withTenantDatabase(params, () => authorize(this.branchRepo, branch));
-    if (needsFiles && externalExecutor && branch.storage_mode !== 'clone')
-      throw new Conflict(
-        'External workspace cleanup/removal requires a self-contained clone. Use Leave untouched for a legacy linked worktree.'
-      );
+    const support = branchMaintenanceCapabilities(config, branch.storage_mode);
+    const capability = support[filesystemAction === 'cleaned' ? 'archive_clean' : 'archive_remove'];
+    if (needsFiles && !capability.supported) throw new Conflict(capability.reason);
     const repo = await this.withTenantDatabase(params, () =>
       new RepoRepository(this.db).findById(branch.repo_id)
     );
@@ -2124,17 +2121,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const user = (params as AuthenticatedParams | undefined)?.user;
     if (!user) throw new NotAuthenticated('Authenticated branch management authority is required');
     const config = this.app.get('config');
-    const externalExecutor =
-      config.execution?.unix_user_mode === 'delegated' ||
-      Boolean(config.execution?.executor_command_template) ||
-      (config.deployment?.mode === 'ha' && config.deployment.ha?.execution_topology === 'external');
-    if (externalExecutor && config.execution?.delegated_branch_deletion !== true) {
-      throw new Conflict(
-        'Permanent deletion is not enabled for this delegated/external executor. ' +
-          'An operator must verify the deletion storage mount contract before enabling ' +
-          'execution.delegated_branch_deletion. No deletion was started.'
-      );
-    }
+    const externalExecutor = usesExternalBranchExecutor(config);
+    const capability = permanentBranchDeletionCapability(config);
+    if (!capability.supported) throw new Conflict(capability.reason);
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!tenantId) throw new Forbidden('Deletion tenant context is required');

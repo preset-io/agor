@@ -75,8 +75,8 @@ import {
   validateRepoCleanupPolicy,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { authenticatedExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import type { BranchesServiceImpl } from '../declarations.js';
-import { emitHaNativeSocketEvent, tenantChannelName } from '../realtime/routing.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
 import { resolveBranchExecutorSandboxMounts } from '../utils/branch-executor-sandbox.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
@@ -112,9 +112,9 @@ export type RepoParams = QueryParams<{
 function sanitizeProvisioningError(error: unknown): string {
   const raw = error instanceof Error ? error.message : String(error);
   try {
-    return redactGitUrlCredentials(raw);
+    return redactGitUrlCredentials(raw).slice(0, 2000);
   } catch {
-    return raw;
+    return 'Provisioning failed; inspect executor logs.';
   }
 }
 
@@ -203,7 +203,10 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
     const rows = Array.isArray(data) ? data : [data];
-    for (const row of rows) this.validateCleanupPolicyWrite(row, params);
+    for (const row of rows) {
+      this.validateCleanupPolicyWrite(row, params);
+      this.validateCloneLifecycleWrite(row, params);
+    }
     if (this.isHostedMultiTenancy()) {
       if (rows.some((row) => row.repo_type === 'local')) {
         throw new BadRequest(
@@ -228,12 +231,14 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     params?: RepoParams
   ): Promise<Repo | Repo[]> {
     this.validateCleanupPolicyWrite(data, params);
+    this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
     return super.patch(id, data, params);
   }
 
   override async update(id: string, data: Partial<Repo>, params?: RepoParams): Promise<Repo> {
     this.validateCleanupPolicyWrite(data, params);
+    this.validateCloneLifecycleWrite(data, params);
     await this.validateRepoLocationWrite(id, data, params);
     return super.update(id, data, params);
   }
@@ -268,6 +273,19 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     if (becomesLocal && current.repo_type !== 'local') {
       throw new BadRequest(
         'Local repository registration is unavailable in hosted multi-tenant mode.'
+      );
+    }
+  }
+
+  private validateCloneLifecycleWrite(data: Partial<Repo>, params?: RepoParams): void {
+    if (!params?.provider) return; // Trusted claim / exit reconciliation is internal.
+    if (
+      !['clone_status', 'clone_generation', 'clone_error'].some((key) => Object.hasOwn(data, key))
+    )
+      return;
+    if (authenticatedExecutorCommandRuntimeScope(params)?.commandId !== 'git.clone') {
+      throw new Forbidden(
+        'Repository setup status is managed by the Git executor. Use repository setup to retry.'
       );
     }
   }
@@ -323,247 +341,144 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
   }
 
   /**
-   * Custom method: Clone repository (fire-and-forget)
-   *
-   * The DB row is created EARLY (here) with `clone_status: 'cloning'` so
-   * MCP / UI callers can discover the outcome via `agor_repos_get(repoId)`
-   * even when the clone fails — fixes #1126's "silent pending forever"
-   * symptom. The executor then handles:
-   * - Git clone
-   * - Parse .agor.yml
-   * - Patch the existing row to `'ready'` (with parsed env, default branch)
-   *   or `'failed'` (with categorized clone_error)
-   *
-   * Returns immediately with `{ status: 'pending', slug, repo_id }`.
-   * Clients see a `repos.created` event for the placeholder row, then a
-   * `repos.patched` event when the clone finishes.
-   *
-   * Slug-collision policy: a previous `clone_status: 'failed'` row is
-   * deleted to allow seamless retry; any other state surfaces `'exists'`.
+   * Register / retry a managed clone. A retry retains the repo and all branches.
+   * Claims are atomic across daemon replicas; executors start only after commit.
+   * `exists` is registration, not proof of caller remote access or filesystem readiness.
    */
   async cloneRepository(
     data: { url: string; slug?: string; name?: string; default_branch?: string },
     params?: RepoParams
   ): Promise<CloneRepositoryResult> {
+    const user = params?.user;
+    if (!user?.user_id) throw new NotAuthenticated('Authentication required');
+    if (!hasMinimumRole(user.role, ROLES.MEMBER)) {
+      throw new Forbidden('Member access is required to set up repositories.');
+    }
+    const userId = user.user_id as UserID;
     const remoteUrl = stripGitUrlCredentials(data.url);
-    if (remoteUrl !== data.url) {
-      console.warn(
-        `[repos.clone] Stripped credentials from submitted remote URL: ${redactGitUrlCredentials(data.url)}`
-      );
-    }
-
-    // Note: `||` (not `??`) is intentional — we want an empty `data.slug`
-    // to fall through to derivation rather than be treated as "explicit".
-    let slug = data.slug || data.name;
-    if (!slug) {
-      // Normalize URL (strip trailing slashes and `.git`) using the shared
-      // canonical form, so UI and daemon cannot drift.
-      slug = extractSlugFromUrl(normalizeRepoUrl(remoteUrl));
-    }
+    const slug = data.slug || data.name || extractSlugFromUrl(normalizeRepoUrl(remoteUrl));
     if (!slug || !isValidSlug(slug)) {
-      throw new Error('Could not derive a valid slug from URL. Please provide a slug.');
+      throw new BadRequest('Provide a valid repository URL and name.');
     }
-    // Reject local transports before touching any row: a hosted clone runs as
-    // the daemon and could otherwise copy another tenant's repository.
     if (this.isHostedMultiTenancy()) this.validateHostedRemoteUrlWrite({ remote_url: remoteUrl });
 
-    // Slug-collision policy:
-    // - `clone_status: 'failed'` → previous attempt left a tombstone row;
-    //   delete it so the user can retry without manually cleaning up.
-    //   Cascades to any half-initialized branch rows (FK onDelete: cascade).
-    // - any other state (ready / cloning / undefined-legacy) → surface
-    //   `'exists'` so callers don't unintentionally clobber a working repo
-    //   or interrupt an in-flight clone.
-    //
-    // Go through `this.remove` (the Feathers service) — NOT `repoRepo.delete`
-    // directly — so the standard `repos.removed` WebSocket event fires and
-    // connected UIs drop the failed row from their state before we create
-    // the replacement placeholder.
-    //
-    // CRITICAL: do NOT forward the caller's `params.query` into the retry
-    // remove. A REST caller hitting `/repos/clone?cleanup=true` would
-    // otherwise trip the filesystem-cleanup branch on the placeholder
-    // (which doesn't exist on disk anyway, but the side-effects matter for
-    // branches that may have been pre-created). Pass an explicitly empty
-    // query so retry is always a DB-only tombstone removal.
-    const existing = await this.repoRepo.findBySlug(slug);
-    if (existing) {
-      if (existing.clone_status === 'failed') {
-        console.log(
-          `[clone ${slug}] Found previous failed clone (${shortId(existing.repo_id)}); deleting to retry`
-        );
-        await this.remove(existing.repo_id, { ...params, query: {} });
-      } else {
-        return { status: 'exists', slug, repo_id: existing.repo_id };
+    return this.withTenantDatabase(params, async () => {
+      // Metadata is shared within this tenant, credentials are not. Joining an
+      // existing registration needs no new executor or credential token. This
+      // fast path is only an optimization; claimClone still arbitrates races.
+      const existing = await this.repoRepo.findBySlug(slug);
+      if (existing) {
+        if (
+          existing.repo_type !== 'remote' ||
+          normalizeRepoUrl(existing.remote_url ?? '') !== normalizeRepoUrl(remoteUrl)
+        ) {
+          throw new Conflict(
+            'This repository name is already registered with a different source. Choose another name or ask an administrator to check repository settings.'
+          );
+        }
+        if (existing.clone_status !== 'failed')
+          return { status: 'exists', slug, repo_id: existing.repo_id };
       }
-    }
-
-    const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    if (!userId) throw new NotAuthenticated('Authentication required');
-    const mayImportEnvironment = hasMinimumRole(
-      (params as AuthenticatedParams | undefined)?.user?.role,
-      ROLES.ADMIN
-    );
-
-    // The clone worker is the initiating user over ordinary Feathers
-    // authorization. Admin-derived `.agor.yml` import below therefore passes
-    // the same environment hook as an interactive repo patch; members cannot
-    // smuggle executable config through clone finalization.
-    // A managed clone is lifecycle storage beneath the configured repo root,
-    // not a read/probe in the requesting user's home. Delegated substrates
-    // receive the caller's stable execution-home key for routing.
-    const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
-      this.db,
-      userId,
-      this.app.get('config')
-    );
-
-    // Pre-create the repo row with `clone_status: 'cloning'` so failures stay
-    // queryable via `agor_repos_get(repoId)`. Pre-#1126 the row was only
-    // created on success by the executor — a failed clone left zero state and
-    // MCP callers had no way to discover the outcome (issue #1126 bug B).
-    //
-    // Use the Feathers service `create` (not `repoRepo.create`) so the
-    // standard `repos.created` WebSocket event fires and the UI can render
-    // a "cloning" card immediately, then transition to ready/failed when the
-    // executor patches the row.
-    //
-    // local_path is computed best-effort (mirrors what the executor will use).
-    // Use the slug, not the URL basename, so two remotes with the same repo
-    // name but distinct Agor slugs do not collide on disk.
-    const tenantId = (params as AuthenticatedParams | undefined)?.tenant?.tenant_id;
-    const expectedLocalPath = this.managedRepoPath(slug, params);
-    const placeholder = (await this.create(
-      {
+      // Validate routing and credentials before claiming, so these failures cannot
+      // leave a placeholder stuck in cloning with no worker to finish it.
+      const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
+        this.db,
+        userId,
+        this.app.get('config')
+      );
+      const sessionToken = await issueExecutorCommandToken(this.app, 'git.clone', userId);
+      const claim = await this.repoRepo.claimClone({
         slug: slug as RepoSlug,
         name: data.name || slug,
         repo_type: 'remote',
         remote_url: remoteUrl,
-        local_path: expectedLocalPath,
+        local_path: this.managedRepoPath(slug, params),
         ...(data.default_branch ? { default_branch: data.default_branch } : {}),
-        clone_status: 'cloning',
-      },
-      params
-    )) as Repo;
-    const repoId = placeholder.repo_id;
-    const sessionToken = await issueExecutorCommandToken(this.app, 'git.clone', userId);
+      });
+      const repo = claim.repo;
+      const repoId = repo.repo_id;
+      if (!claim.acquired) return { status: 'exists', slug, repo_id: repoId };
+      const generation = repo.clone_generation;
+      const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+      emitServiceEvent(this.app, {
+        path: 'repos',
+        event: claim.created ? 'created' : 'patched',
+        data: repo,
+        params,
+        id: repoId,
+      });
 
-    // Fire and forget - spawn executor and return immediately.
-    // Executor handles: git clone, .agor.yml parsing, repo row patching.
-    // Executor resolves the token principal's bounded Git capability through
-    // the executor-only credential service.
-    // Unix permissions are applied synchronously inside that lifecycle executor.
-    const app = this.app;
-    // Capture the Feathers service so the `onExit` safety net (below) writes
-    // through the same service layer the executor uses — that way clients
-    // receive `repos.patched` regardless of which path declares failure.
-    const reposService = this.app.service('repos');
-    spawnExecutorFireAndForget(
-      {
-        command: 'git.clone',
-        sessionToken,
-        daemonUrl: getDaemonUrl(),
-        params: {
-          url: remoteUrl,
-          slug,
-          repoId,
-          outputPath: expectedLocalPath,
-          // Forward the user-supplied default_branch so the executor
-          // persists what the operator typed in "Add Repository" instead
-          // of silently overwriting it with origin/HEAD.
-          ...(data.default_branch ? { default_branch: data.default_branch } : {}),
-          createDbRecord: true,
-          // `.agor.yml` can define executable environment commands. Preserve
-          // the same admin boundary as direct repo create/patch even though
-          // clone finalization currently authenticates as a daemon worker.
-          importEnvironmentConfig: mayImportEnvironment,
-          userId: userId as string | undefined,
-        },
-      },
-      {
-        logPrefix: `[clone ${slug}]`,
-        delegatedHomeKey: delegatedHomeKey,
-        templateVariables: {
-          user_id: userId,
-        },
-        onExit: async (code) => {
-          if (code !== 0 && code !== null) {
-            console.error(
-              `[clone ${slug}] Clone failed with exit code ${code}; resolving durable error`
-            );
-            const io = (
-              app as unknown as {
-                io?: {
-                  to: (room: string) => { emit: (event: string, data: unknown) => void };
-                };
-              }
-            ).io;
-            // Resolve the durable row before emitting the fallback event. If
-            // the executor already persisted a categorized error, include the
-            // same structured payload so the fallback toast cannot lose the
-            // auth/CA/Git remediation hints. If the executor crashed before
-            // patching, preserve the safety-net failure row and emit that one.
-            const resolveDurableFailure = async () => {
-              let current: Repo | undefined;
-              try {
-                current = (await reposService.get(repoId)) as Repo;
-                if (current.clone_status === 'cloning') {
-                  current = (await reposService.patch(repoId, {
-                    clone_status: 'failed',
-                    clone_error: {
-                      exit_code: code,
-                      category: 'unknown',
-                      message: `Clone exited with code ${code} before reporting an error.`,
-                    },
-                  })) as Repo;
-                }
-              } catch (err) {
-                console.error(
-                  `[clone ${slug}] Failed to mark repo as failed in onExit safety net:`,
-                  err instanceof Error ? err.message : String(err)
-                );
-              }
-
-              if (io && tenantId) {
-                // Include the pinned branch in the message so an operator who
-                // typo'd the Default Branch can self-diagnose.
-                const branchHint = data.default_branch
-                  ? ` Default Branch was set to '${data.default_branch}' — verify it exists on the remote.`
-                  : '';
-                emitHaNativeSocketEvent(io.to(tenantChannelName(tenantId)), 'repo:cloneError', {
-                  slug,
-                  url: remoteUrl,
-                  error:
-                    current?.clone_error?.message ??
-                    `Clone failed (exit code ${code}). Check that the repository URL is correct and accessible.${branchHint}`,
-                  repo_id: repoId,
-                  ...(current?.clone_error ? { clone_error: current.clone_error } : {}),
-                });
-              } else if (io) {
-                // Never fall back to a global raw Socket.IO broadcast. The
-                // durable repos.patched event remains the source of truth.
-                console.warn(`[clone ${slug}] Missing tenant scope; skipping clone-error toast`);
-              }
-            };
-
-            // Executor callbacks outlive the request transaction that spawned
-            // them. In tenant-aware modes, explicitly leave any inherited ALS
-            // transaction and persist the safety-net result in one fresh,
-            // write-gated tenant unit. Standalone SQLite retains its historical
-            // unscoped internal-service behavior.
-            if (tenantId) {
-              await withFreshTenantWrite(this.db, tenantId, resolveDurableFailure);
-            } else {
-              await resolveDurableFailure();
+      // The old worker may exit after a retry has already claimed the same row.
+      // Both the read and the atomic repository update fence on attempt identity.
+      const reportFailure = async (code: number | null, dispatchError?: unknown) => {
+        const work = async () => {
+          const reposService = this.app.service('repos');
+          const current = (await reposService.get(repoId)) as Repo;
+          if (current.clone_generation !== generation || current.clone_status !== 'cloning') return;
+          const diagnostic = dispatchError
+            ? sanitizeProvisioningError(dispatchError)
+            : `Repository setup worker exited (${code ?? 'signal'}) before reporting an outcome.`;
+          console.error(`[clone ${slug}] attempt ${generation}: ${diagnostic}`);
+          await reposService.patch(repoId, {
+            clone_status: 'failed',
+            clone_generation: generation,
+            clone_error: { exit_code: code || 1, category: 'unknown', message: diagnostic },
+          });
+          // Durable repos.patched is the source of truth. Do not broadcast raw
+          // errors to the whole tenant or mark a newer successful attempt failed.
+        };
+        try {
+          if (tenantId) await withFreshTenantWrite(this.db, tenantId, work);
+          else await work();
+        } catch (error) {
+          console.error(
+            `[clone ${slug}] Could not persist setup outcome: ${sanitizeProvisioningError(error)}`
+          );
+        }
+      };
+      const launch = async () => {
+        try {
+          spawnExecutorFireAndForget(
+            {
+              command: 'git.clone',
+              sessionToken,
+              daemonUrl: getDaemonUrl(),
+              params: {
+                url: remoteUrl,
+                slug,
+                repoId,
+                cloneGeneration: generation,
+                outputPath: repo.local_path,
+                ...(repo.default_branch ? { default_branch: repo.default_branch } : {}),
+                createDbRecord: true,
+                // Recovery must not replace saved variants/template overrides.
+                // Existing repos can import YAML through the explicit admin action.
+                importEnvironmentConfig: claim.created && hasMinimumRole(user.role, ROLES.ADMIN),
+                userId,
+              },
+            },
+            {
+              logPrefix: `[clone ${slug}]`,
+              delegatedHomeKey,
+              templateVariables: { user_id: userId },
+              onExit: (code) => reportFailure(code),
             }
-          }
-        },
-      }
-    );
-
-    // Return immediately - callers can poll `agor_repos_get(repoId)` for
-    // `clone_status: 'ready' | 'failed'` to discover the final outcome.
-    return { status: 'pending', slug, repo_id: repoId };
+          );
+        } catch (error) {
+          await reportFailure(1, error);
+        }
+      };
+      // Includes the command token as well as the row. In PostgreSQL, launching
+      // inside the request transaction races the worker's first authenticated read.
+      if (
+        !enqueueAfterTenantDatabaseCommit(async () => {
+          if (tenantId) await runWithTenantContext(tenantId, launch);
+          else await launch();
+        })
+      )
+        await launch();
+      return { status: 'pending', slug, repo_id: repoId };
+    });
   }
 
   /**
@@ -781,8 +696,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       zoneId?: string;
       environment_variant?: string;
       /**
-       * Branch storage model — see context/explorations/clone-redesign.md.
-       * The deployment configuration selects the default. 'worktree' uses
+       * Branch storage model. The deployment configuration selects the default. 'worktree' uses
        * native `git worktree add`; 'clone' uses a self-standing `git clone`.
        */
       storage_mode?: 'worktree' | 'clone';

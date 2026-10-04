@@ -5,6 +5,7 @@
  * Use this module in browser environments instead of '@agor/core/config'.
  */
 
+export * from './branch-maintenance';
 export * from './constants';
 export * from './environment-commands';
 export * from './password-policy-contract';

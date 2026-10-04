@@ -351,3 +351,184 @@ test('a portaled fullscreen viewer keeps its turn open and focused until closed'
     assert.deepEqual(await liveTurns(page, cdp), both([]));
   });
 });
+
+test('a byte budget releases very large turns before the turn count would', {
+  timeout: 180_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    const MiB = 1024 * 1024;
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    // Eight 6 MiB reads: within the ten-turn count, but only five fit 32 MiB.
+    const ids = [];
+    for (let n = 0; n < 8; n++) {
+      ids.push(
+        await page.evaluate(
+          (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
+          6 * MiB
+        )
+      );
+      await page.waitForTimeout(20);
+    }
+    await page.getByText('Answer 7').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both(range(3, 7)), 'oldest large turns released');
+
+    // A reader re-expands an evicted large turn: its pin holds it within budget.
+    const zero = page.locator(`[data-task-block="${ids[0]}"]`);
+    const chain = zero.getByRole('button', { name: '1 tool call' });
+    await chain.click();
+    await zero.getByText('Read').first().waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([0, ...range(4, 7)]));
+
+    // One read larger than the whole budget is kept only while protected.
+    await chain.click();
+    await disengage(page);
+    const huge = await page.evaluate(
+      (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
+      36 * MiB
+    );
+    await page.getByText('Answer 8').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([8]), 'the latest turn is protected');
+    await page.evaluate(() => window.transcriptRetentionFixture.addTurn());
+    await page.getByText('Answer 9').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([9]), 'no longer latest: released');
+    const hugeTurn = page.locator(`[data-task-block="${huge}"]`);
+    const hugeChain = hugeTurn.getByRole('button', { name: '1 tool call' });
+    await hugeChain.click();
+    await hugeTurn.getByText('Read').first().waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([8, 9]), 'reloaded and kept while expanded');
+    await hugeChain.click();
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both([9]), 'collapsed: released again');
+
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
+  });
+});
+
+test('reloaded inline detail stays open and live while protected turns exceed the budget', {
+  timeout: 180_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    // Detail beside visible text, with no AgentChain: reasoning, a Read, and a
+    // Read after SDK-normalized empty reasoning (which renders nothing).
+    const reasoningId = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ inline: 'reasoning' })
+    );
+    const readId = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ inline: 'read' })
+    );
+    const emptyId = await page.evaluate(() =>
+      window.transcriptRetentionFixture.addTurn({ inline: 'empty-reasoning-read' })
+    );
+    // The latest turn alone holds more than the budget, so nothing else fits.
+    await page.evaluate(
+      (bytes) => window.transcriptRetentionFixture.addTurn({ bytes }),
+      36 * 1024 * 1024
+    );
+    await page.getByText('Answer 3').waitFor();
+    assert.deepEqual(await liveTurns(page, cdp), both([3]));
+
+    // Reloading opens the detail the reader asked for, which then holds the turn.
+    const reasoningTurn = page.locator(`[data-task-block="${reasoningId}"]`);
+    await reasoningTurn.getByRole('button', { name: '1 tool call' }).click();
+    await reasoningShown(page, reasoningId, 0);
+    const readTurn = page.locator(`[data-task-block="${readId}"]`);
+    await readTurn.getByRole('button', { name: '1 tool call' }).click();
+    const readShown = (id, n) =>
+      page.waitForFunction(
+        ([turnId, marker]) =>
+          !!document.querySelector(`[data-task-block="${turnId}"]`)?.textContent?.includes(marker),
+        [id, `TRANSCRIPT_RETENTION_${n}_`]
+      );
+    await readShown(readId, 1);
+    const emptyTurn = page.locator(`[data-task-block="${emptyId}"]`);
+    await emptyTurn.getByRole('button', { name: '1 tool call' }).click();
+    await readShown(emptyId, 2);
+    await disengage(page);
+    assert.deepEqual(
+      await liveTurns(page, cdp),
+      { tools: [1, 2, 3], thinking: [0, 3] },
+      'every reload stays while open'
+    );
+
+    // Collapsing releases them to the budget, which has no room.
+    await reasoningTurn.getByRole('button', { name: /Extended Thinking/ }).click();
+    await readTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
+    await emptyTurn.locator('button[aria-expanded]').filter({ hasText: 'Read' }).click();
+    await disengage(page);
+    assert.deepEqual(await liveTurns(page, cdp), both([3]), 'collapsed: released');
+    assert.equal(await page.getByText('Answer 0').count(), 1, 'lean history stays visible');
+    assert.equal(await page.getByText('Answer 1').count(), 1);
+    assert.equal(await page.getByText('Answer 2').count(), 1);
+
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveTurns(page, cdp), both([]));
+  });
+});
+
+test('a reader parked at the latest turns keeps a bounded lean transcript and DOM', {
+  timeout: 180_000,
+}, async () => {
+  await withProductionFixture('ConversationView/TranscriptRetention', async (page, cdp) => {
+    await page.waitForFunction(() => !!window.transcriptRetentionFixture);
+    await page.evaluate(() => window.transcriptRetentionFixture.mount());
+    // Cheap mid-run probe: a heap snapshot stalls the page long enough to
+    // reorder the bottom lock's scroll/resize timers, which a reader never does.
+    const dom = () =>
+      page.evaluate(() => {
+        const viewport = document.querySelector('[data-testid="conversation-scroll-container"]');
+        return {
+          turns: document.querySelectorAll('[data-task-block]').length,
+          elements: document.getElementsByTagName('*').length,
+          belowViewport:
+            viewport && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop,
+        };
+      });
+    /** Turns whose lean text payload is live after a full collection. */
+    const liveLean = async () => {
+      await page.waitForTimeout(300);
+      await cdp.send('HeapProfiler.collectGarbage');
+      return [...new Set(await livePayloads(cdp, /^TRANSCRIPT_LEAN_(\d+)_z{512}/, 0))]
+        .map(Number)
+        .sort((a, b) => a - b);
+    };
+    // Paced like (fast) live turns. Bursts every 20 ms can release the bottom
+    // lock on main too, when an evicted turn shrinks above the viewport.
+    const addTurns = async (count) => {
+      for (let i = 0; i < count; i++) {
+        await page.evaluate(() => window.transcriptRetentionFixture.addTurn({ leanText: true }));
+        await page.waitForTimeout(100);
+      }
+    };
+    await addTurns(60);
+    await page.getByText('Answer 59').waitFor();
+    const at60 = await dom();
+    await addTurns(60);
+    await page.getByText('Answer 119').waitFor();
+    const at120 = await dom();
+    const lean = await liveLean();
+    const { usedSize } = await cdp.send('Runtime.getHeapUsage');
+    // Synthetic, informational: not a production memory measurement.
+    console.log(
+      `parked reader: ${at60.turns}/${at120.turns} turns, ${at60.elements}/${at120.elements} ` +
+        `elements at 60/120 turns; ${(usedSize / 2 ** 20).toFixed(1)} MiB JS heap at 120`
+    );
+    assert.ok(at120.belowViewport < 2, 'the reader is still parked at the latest turn');
+    assert.deepEqual(lean, range(90, 119), 'only the latest window keeps lean history');
+    assert.equal(at120.turns, 30, 'only the latest window stays mounted');
+    assert.ok(
+      at120.elements <= at60.elements + 50,
+      `DOM stays bounded: ${at60.elements} elements at 60 turns, ${at120.elements} at 120`
+    );
+
+    // Trimmed history comes back through Load older history.
+    await page.getByRole('button', { name: 'Load older history' }).click();
+    await page.getByText('Answer 80', { exact: true }).waitFor();
+    assert.deepEqual(await liveLean(), range(80, 119));
+    await page.evaluate(() => window.transcriptRetentionFixture.unmount());
+    assert.deepEqual(await liveLean(), [], 'closing the reader releases everything');
+  });
+});

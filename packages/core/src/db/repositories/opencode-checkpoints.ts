@@ -28,7 +28,7 @@ type CleanupHolder = Pick<
   'session_id' | 'task_id' | 'owner_user_id'
 >;
 
-/** Hosted OpenCode checkpoint ledger; the invariants are in context/explorations/opencode-cloud.md. */
+/** Hosted OpenCode checkpoint ledger; the invariants are in context/concepts/opencode-hosted.md. */
 export class OpenCodeCheckpointRepository {
   constructor(private readonly db: Database) {}
 

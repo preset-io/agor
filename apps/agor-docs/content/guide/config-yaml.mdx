@@ -71,8 +71,13 @@ everywhere. To turn hosted OpenCode off:
 ```yaml
 agentic_tools:
   opencode_hosted_native_state: disabled
-``` See
-[OpenCode in hosted workspaces](/guide/sdk-comparison#hosted-workspaces).
+```
+
+See [OpenCode in hosted workspaces](/guide/sdk-comparison#hosted-workspaces).
+
+With `persistent-per-user` homes, the launcher should also set
+`AGOR_EXECUTOR_SCRATCH_ROOT` to Job-local storage so Gemini's per-task temporary
+directory stays off the shared home; see [Gemini Beta](/guide/sdk-comparison#gemini-beta).
 
 For Claude subscription sign-in, two storage modes are supported:
 

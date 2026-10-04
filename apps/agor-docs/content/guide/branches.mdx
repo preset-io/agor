@@ -307,6 +307,12 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
 - **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
 
+The dialog checks runtime support separately from branch permissions. Unsupported
+permanent deletion and external linked-worktree cleanup/removal are disabled with
+an explanation before confirmation. Permanent deletion is never changed to archive.
+On an older daemon without capability diagnostics, filesystem-changing choices
+stay disabled; metadata-only **Leave untouched** remains available with authority.
+
 When cleanup is unavailable, the archive dialog defaults to **Leave untouched**
 and warns that workspace files will remain on disk. It never selects full deletion
 automatically. A repository administrator can open **Repository settings** above
@@ -542,7 +548,17 @@ workspace's `.git` file. Workspace removal alone does not erase SDK homes or his
 Selecting metadata deletion always requires complete owned-storage removal; preserve
 and clean are archive-only choices.
 
-The CLI `agor branch rm <id>` asks for confirmation; `--force` explicitly confirms
+`branches.get` (also `agor_branches_get`) returns read-only
+`maintenance_capabilities` for `archive_preserve`, `archive_clean`, `archive_remove`,
+and `permanent_delete`, each with `supported` and an explanation when unsupported.
+These are runtime support hints, **not** permission grants or proof of mounted
+storage, idle work, SDK-home ownership, or a settled prior invocation. Request
+admission rechecks all requirements. API/MCP clients should read these before
+offering an operation. The public `/health` response exposes the non-secret
+`features.permanentBranchDeletion` gate for operator diagnostics; a missing field
+on an older daemon means unknown, not enabled. Neither diagnostic enables deletion.
+
+The CLI `agor branch rm <id>` checks runtime support before asking for confirmation; `--force` explicitly confirms
 non-interactive deletion. The former `--from-filesystem` flag is now redundant.
 
 Deletion is asynchronous. Acceptance is **not completion**: the branch stays visible
