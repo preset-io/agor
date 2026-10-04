@@ -182,6 +182,8 @@ async function captureAppendHandler(options: {
   documents: { getDocument: unknown; putDocument: unknown };
   defaultVisibility?: string;
   namespaceVisibilityDefault?: string;
+  memoryVisibility?: string;
+  memoryEditPolicy?: string;
 }) {
   const { registerKnowledgeTools } = await import('./knowledge.js');
 
@@ -195,6 +197,8 @@ async function captureAppendHandler(options: {
           primary_namespace_id: 'namespace-fixture',
           primary_namespace_slug: 'fixture-space',
           ...(options.defaultVisibility ? { default_visibility: options.defaultVisibility } : {}),
+          ...(options.memoryVisibility ? { memory_visibility: options.memoryVisibility } : {}),
+          ...(options.memoryEditPolicy ? { memory_edit_policy: options.memoryEditPolicy } : {}),
         },
       },
     },
@@ -241,6 +245,105 @@ async function captureAppendHandler(options: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+});
+
+describe('agor_teammate_memory_append creation defaults', () => {
+  /**
+   * Daily teammate memory is personal operational context, so a freshly
+   * created memory document must be private and owner-edited.
+   *
+   * The two halves are asserted separately because they were two distinct
+   * defects: `edit_policy` was hardcoded `'public'`, and `visibility` fell back
+   * to `namespace.visibility_default`. Teammate namespaces are created with
+   * `visibility_default: 'public'` (ensureTeammateKnowledgeNamespace), and
+   * `kb.default_visibility` is only a machine-maintained mirror of that field
+   * (teammateKbPatch) — so neither is an owner opt-in to publish, and a public
+   * namespace must still yield a private document.
+   */
+  it('creates a memory document private even when the namespace default is public', async () => {
+    const documents = createFakeDocumentsService();
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      namespaceVisibilityDefault: 'public',
+    });
+
+    await append({ bullets: 'Private by default', date: MEMORY_DATE });
+
+    expect(documents.read()?.visibility).toBe('private');
+    const payload = documents.putDocument.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.visibility).toBe('private');
+  });
+
+  it('creates a memory document private even when kb.default_visibility mirrors a public namespace', async () => {
+    const documents = createFakeDocumentsService();
+    // Reproduces the real shape: the mirror and the namespace agree on public.
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      defaultVisibility: 'public',
+      namespaceVisibilityDefault: 'public',
+    });
+
+    await append({ bullets: 'Mirrored public must not leak', date: MEMORY_DATE });
+
+    expect(documents.read()?.visibility).toBe('private');
+  });
+
+  it('creates a memory document owner-edited regardless of namespace and mirror defaults', async () => {
+    const documents = createFakeDocumentsService();
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      defaultVisibility: 'public',
+      namespaceVisibilityDefault: 'public',
+    });
+
+    await append({ bullets: 'Owner-edited by default', date: MEMORY_DATE });
+
+    expect(documents.read()?.edit_policy).toBe('owner');
+    const payload = documents.putDocument.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.edit_policy).toBe('owner');
+  });
+
+  it("ignores a private namespace default too — memory governance is not the namespace's", async () => {
+    const documents = createFakeDocumentsService();
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      namespaceVisibilityDefault: 'private',
+    });
+
+    await append({ bullets: 'Still private', date: MEMORY_DATE });
+
+    expect(documents.read()?.visibility).toBe('private');
+    expect(documents.read()?.edit_policy).toBe('owner');
+  });
+
+  it('honours an explicit memory_visibility opt-in', async () => {
+    const documents = createFakeDocumentsService();
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      namespaceVisibilityDefault: 'private',
+      memoryVisibility: 'public',
+    });
+
+    await append({ bullets: 'Deliberately shared', date: MEMORY_DATE });
+
+    expect(documents.read()?.visibility).toBe('public');
+    // Opting into a wider visibility must not also widen who can edit.
+    expect(documents.read()?.edit_policy).toBe('owner');
+  });
+
+  it('honours an explicit memory_edit_policy opt-in without widening visibility', async () => {
+    const documents = createFakeDocumentsService();
+    const append = await captureAppendHandler({
+      documents: documents.service,
+      namespaceVisibilityDefault: 'public',
+      memoryEditPolicy: 'public',
+    });
+
+    await append({ bullets: 'Deliberately co-edited', date: MEMORY_DATE });
+
+    expect(documents.read()?.edit_policy).toBe('public');
+    expect(documents.read()?.visibility).toBe('private');
+  });
 });
 
 describe('agor_teammate_memory_append governance preservation', () => {
@@ -304,29 +407,15 @@ describe('agor_teammate_memory_append governance preservation', () => {
     await append({ bullets: 'First bullet of a brand new day', date: MEMORY_DATE });
 
     const stored = documents.read();
-    // Teammate default wins over the namespace default on first write.
     expect(stored?.visibility).toBe('private');
     expect(stored?.kind).toBe('memory');
     expect(stored?.status).toBe('published');
-    expect(stored?.edit_policy).toBe('public');
+    expect(stored?.edit_policy).toBe('owner');
     expect(stored?.title).toBe(MEMORY_DATE);
-    // Guards against the fields being dropped and silently falling back to the
-    // repository column defaults rather than the memory-document defaults.
+    // Guards against `kind` being dropped and silently falling back to the
+    // repository column default rather than the memory-document default.
     expect(stored?.kind).not.toBe(CREATE_DEFAULTS.kind);
-    expect(stored?.edit_policy).not.toBe(CREATE_DEFAULTS.edit_policy);
     expect(stored?.content).toContain('First bullet of a brand new day');
-  });
-
-  it('falls back to the namespace default visibility when the teammate sets none', async () => {
-    const documents = createFakeDocumentsService();
-    const append = await captureAppendHandler({
-      documents: documents.service,
-      namespaceVisibilityDefault: 'private',
-    });
-
-    await append({ bullets: 'Namespace-defaulted bullet', date: MEMORY_DATE });
-
-    expect(documents.read()?.visibility).toBe('private');
   });
 
   it('does not drift over repeated appends to a private document', async () => {

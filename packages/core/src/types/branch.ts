@@ -1,7 +1,7 @@
 // src/types/branch.ts
 import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
-import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
+import type { KnowledgeEditPolicy, KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName, Repo } from './repo';
 
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
@@ -948,7 +948,24 @@ export interface TeammateKnowledgeConfig {
   primary_namespace_id: KnowledgeNamespaceID;
   primary_namespace_slug: string;
   memory_path_template: 'memory/{{YYYY-MM-DD}}.md';
+  /**
+   * Governance default for ordinary teammate documents.
+   *
+   * This is a machine-maintained mirror of the home namespace's
+   * `visibility_default` (see `teammateKbPatch`), not a statement of intent —
+   * so it must not be read as an opt-in to publish anything.
+   */
   default_visibility: KnowledgeVisibility;
+  /**
+   * Explicit opt-in overrides for daily memory documents only.
+   *
+   * Daily memory is personal operational context, so it is created
+   * private/owner. Nothing auto-populates these two fields, which is what
+   * makes a value here an actual owner decision rather than an inherited
+   * namespace default.
+   */
+  memory_visibility?: KnowledgeVisibility;
+  memory_edit_policy?: KnowledgeEditPolicy;
   /**
    * Teammate-tool policy for namespaces not listed in `grants`.
    *
