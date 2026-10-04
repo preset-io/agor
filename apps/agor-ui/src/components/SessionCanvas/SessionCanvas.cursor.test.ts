@@ -35,3 +35,14 @@ describe('React Flow no-drag cursor boundary', () => {
     region.remove();
   });
 });
+
+describe('arrange motion CSS', () => {
+  it('settles monotonically and never eases a node being dragged', () => {
+    expect(canvasCss).toMatch(
+      /\.react-flow\.agor-dealing \.react-flow__node \{[\s\S]*?transform[^;]*cubic-bezier\(0\.22, 1, 0\.36, 1\)/
+    );
+    expect(canvasCss).toMatch(
+      /\.react-flow\.agor-dealing \.react-flow__node\.dragging \{\s*transition: none;/
+    );
+  });
+});

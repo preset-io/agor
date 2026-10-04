@@ -31,6 +31,7 @@ import type {
   Board,
   BoardComment,
   BoardEntityObject,
+  BoardLayoutAppliedEvent,
   Branch,
   CardType,
   CardWithType,
@@ -146,6 +147,20 @@ export function boardCreated(board: Board) {
 export function boardPatched(board: Board) {
   bumpRevision('boards');
   setMap('boardById', (prev) => replaceIfChanged(prev, board.board_id, board));
+}
+export function boardLayoutApplied(event: BoardLayoutAppliedEvent) {
+  bumpRevision('boards');
+  bumpRevision('boardObjects');
+  applyMaps((previous) => {
+    let next = {
+      ...previous,
+      boardById: replaceIfChanged(previous.boardById, event.board.board_id, event.board),
+    };
+    for (const placement of event.placements) {
+      next = upsertBoardObjectInMaps(next, placement, 'patch');
+    }
+    return next;
+  });
 }
 export function boardRemoved(board: Board) {
   bumpRevision('boards');

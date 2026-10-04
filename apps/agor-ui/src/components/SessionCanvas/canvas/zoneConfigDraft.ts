@@ -1,8 +1,21 @@
-import type { AgenticToolName, ZoneBoardObject, ZoneTriggerBehavior } from '@agor-live/client';
+import {
+  normalizeZoneLayoutPolicy,
+  resolveZoneLayoutPolicy,
+  zoneLayoutBinding,
+} from '@agor/core/layout/zone-layout';
+import type {
+  AgenticToolName,
+  ZoneBoardObject,
+  ZoneLayoutBinding,
+  ZoneLayoutPolicy,
+  ZoneTriggerBehavior,
+} from '@agor-live/client';
 import { isAgenticToolName } from '@agor-live/client';
 import { sanitizeZoneFontSize } from './zoneFontSize';
 
 export interface ZoneConfigDraft {
+  layout: ZoneLayoutPolicy;
+  layoutBinding: ZoneLayoutBinding;
   name: string;
   locked: boolean;
   triggerBehavior: ZoneTriggerBehavior;
@@ -14,9 +27,15 @@ export interface ZoneConfigDraft {
   clearLegacyColor: boolean;
 }
 
-export function createZoneConfigDraft(zone: ZoneBoardObject, name: string): ZoneConfigDraft {
+export function createZoneConfigDraft(
+  zone: ZoneBoardObject,
+  name: string,
+  boardZoneLayoutDefaults?: ZoneLayoutPolicy
+): ZoneConfigDraft {
   const agent = zone.trigger?.agent;
   return {
+    layout: resolveZoneLayoutPolicy(zone, boardZoneLayoutDefaults),
+    layoutBinding: zoneLayoutBinding(zone),
     name,
     locked: Boolean(zone.locked),
     triggerBehavior: zone.trigger?.behavior ?? 'show_picker',
@@ -41,6 +60,15 @@ export function applyZoneConfigDraft(
   draft: ZoneConfigDraft
 ): ZoneBoardObject | undefined {
   const changes: Partial<ZoneBoardObject> = {};
+  // Layout and its inheritance binding are one policy edit. Untouched layout
+  // must preserve received updates just like appearance and automation fields.
+  if (
+    draft.layoutBinding !== initial.layoutBinding ||
+    JSON.stringify(draft.layout) !== JSON.stringify(initial.layout)
+  ) {
+    changes.layout = normalizeZoneLayoutPolicy(draft.layout);
+    changes.layout_binding = draft.layoutBinding;
+  }
   if (draft.name !== initial.name) changes.label = draft.name;
   if (draft.locked !== initial.locked) changes.locked = draft.locked;
   if (draft.borderColor !== initial.borderColor) changes.borderColor = draft.borderColor;

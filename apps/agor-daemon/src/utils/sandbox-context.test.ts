@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -149,7 +149,7 @@ describe('resolveOwnerHomeStore', () => {
           tenantId: 'tenant-a',
           ownerUserId: 'user-a',
         })
-      ).toBe(join(canonicalData, 'tenants', 'tenant-a', 'homes', 'user-a'));
+      ).toBe(join(realpathSync(canonicalData), 'tenants', 'tenant-a', 'homes', 'user-a'));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -170,7 +170,7 @@ describe('resolveOwnerHomeStore', () => {
           tenantId: 'tenant-a',
           ownerUserId: 'user-a',
         })
-      ).toBe(join(homes, 'user-a'));
+      ).toBe(join(realpathSync(homes), 'user-a'));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

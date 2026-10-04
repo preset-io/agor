@@ -15,7 +15,6 @@ import type {
   Session,
   TeammateConfig,
   UUID,
-  ZoneBoardObject,
 } from '@agor/core/types';
 import {
   getBranchCleanupBlockReason,
@@ -24,7 +23,7 @@ import {
   OWNERSHIP_TRANSFER_SERVICES,
   resolveRepoCleanupPolicy,
 } from '@agor/core/types';
-import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
+import { BRANCH_CARD_HEIGHT, BRANCH_CARD_WIDTH } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -39,6 +38,10 @@ import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import {
+  commitZoneEntityPlacementGrowth,
+  planZoneEntityPlacement,
+} from '../../utils/zone-placement.js';
 import {
   BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
   type BranchFilesystemReadinessResult,
@@ -1311,7 +1314,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Finds a contained free position among non-archived branches and existing card placements, using the zone's layout padding, gaps, and title reserve, and creates board association. If the branch cannot fit and the zone's layout policy allows resizing (resize height/both), the zone grows to hold it (reflowing neighbouring zones when onOverflow is reflow_board); a fixed-size zone rejects without changing the branch's current placement — resize or arrange the zone first. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create with enableCallback:true and omit callbackSessionId for the current caller, or agor_sessions_prompt callback). Only supply callbackSessionId for an intentional authorized alternate destination.",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1446,14 +1449,33 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         throw new Error(`Zone ${zoneId} not found on board ${branch.board_id}`);
       }
 
-      // Calculate position RELATIVE to zone (not absolute canvas coordinates)
-      // The UI expects relative positions and adds zone.x/zone.y when rendering
-      const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
-
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
         await runWithMcpTenantDatabaseScope(ctx, () =>
           boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
         );
+
+      // Calculate position RELATIVE to zone (not absolute canvas coordinates).
+      // The UI expects relative positions and adds zone.x/zone.y when rendering.
+      //
+      // Placement is collision-aware and uses the zone's own layout frame
+      // (padding, gaps, title reserve), so it lands where an arrange of the
+      // zone would. The branch's own placement is excluded so re-pinning it to
+      // the same zone doesn't treat its current rectangle as an obstacle. A
+      // zone whose resize policy allows growth grows to hold the pin (and
+      // reflows its neighbours when onOverflow is reflow_board); a fixed zone
+      // with no room rejects before anything is written, leaving the branch's
+      // current placement untouched.
+      const measured = (value: number | undefined) =>
+        value !== undefined && Number.isFinite(value) && value > 0 ? value : undefined;
+      const placement = await planZoneEntityPlacement(ctx.app, ctx.baseServiceParams, {
+        board,
+        zoneId,
+        entityWidth: measured(boardObject?.size?.width) ?? BRANCH_CARD_WIDTH,
+        entityHeight: measured(boardObject?.size?.height) ?? BRANCH_CARD_HEIGHT,
+        excludeObjectId: boardObject?.object_id,
+      });
+      await commitZoneEntityPlacementGrowth(ctx.app, ctx.baseServiceParams, board, placement);
+      const { x: relativeX, y: relativeY } = placement.position;
 
       if (!boardObject) {
         // Create new board object
@@ -1624,6 +1646,16 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         zone_id: zoneId,
         position: { x: relativeX, y: relativeY },
         board_object_id: boardObject.object_id,
+        ...(placement.growth
+          ? {
+              zone_resize: {
+                width: placement.width,
+                height: placement.height,
+                resized_over_zone_ids: placement.growth.resizedOverZoneIds,
+                moved_zone_ids: placement.growth.movedZoneIds,
+              },
+            }
+          : {}),
         ...(promptResult ? { trigger: promptResult } : {}),
       });
     }

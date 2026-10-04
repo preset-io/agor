@@ -24,6 +24,157 @@
   fill: currentColor;
 }
 
+.canvas-alignment-guides {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.canvas-marquee-selection {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  border: 1px solid var(--ant-color-primary);
+  background: color-mix(in srgb, var(--ant-color-primary) 12%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ant-color-primary) 16%, transparent);
+}
+
+.canvas-layout-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 24px);
+  padding: 6px 8px;
+  transform: translateX(-50%);
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 8px;
+  background: var(--ant-color-bg-elevated);
+  box-shadow: var(--ant-box-shadow-secondary);
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.canvas-alignment-guide {
+  position: absolute;
+  display: block;
+  background: color-mix(in srgb, var(--ant-color-primary) 58%, transparent);
+}
+
+.canvas-alignment-guide.vertical {
+  width: 1px;
+}
+
+.canvas-alignment-guide.horizontal {
+  height: 1px;
+}
+
+.canvas-alignment-guide[data-guide-kind="size"] {
+  background: color-mix(in srgb, var(--ant-color-primary) 68%, transparent);
+}
+
+.canvas-alignment-guide[data-guide-kind="gap"] {
+  background: color-mix(in srgb, var(--ant-color-success) 72%, transparent);
+}
+
+.canvas-alignment-guide[data-guide-kind="size"]::before,
+.canvas-alignment-guide[data-guide-kind="size"]::after,
+.canvas-alignment-guide[data-guide-kind="gap"]::before,
+.canvas-alignment-guide[data-guide-kind="gap"]::after {
+  position: absolute;
+  display: block;
+  background: inherit;
+  content: "";
+}
+
+.canvas-alignment-guide.horizontal[data-guide-kind="size"]::before,
+.canvas-alignment-guide.horizontal[data-guide-kind="size"]::after,
+.canvas-alignment-guide.horizontal[data-guide-kind="gap"]::before,
+.canvas-alignment-guide.horizontal[data-guide-kind="gap"]::after {
+  top: -3px;
+  width: 1px;
+  height: 7px;
+}
+
+.canvas-alignment-guide.horizontal::before {
+  left: 0;
+}
+
+.canvas-alignment-guide.horizontal::after {
+  right: 0;
+}
+
+.canvas-alignment-guide.vertical[data-guide-kind="size"]::before,
+.canvas-alignment-guide.vertical[data-guide-kind="size"]::after,
+.canvas-alignment-guide.vertical[data-guide-kind="gap"]::before,
+.canvas-alignment-guide.vertical[data-guide-kind="gap"]::after {
+  left: -3px;
+  width: 7px;
+  height: 1px;
+}
+
+.canvas-alignment-guide.vertical::before {
+  top: 0;
+}
+
+.canvas-alignment-guide.vertical::after {
+  bottom: 0;
+}
+
+.canvas-alignment-guide-label,
+.canvas-size-readout {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  padding: 2px 5px;
+  border: 1px solid var(--ant-color-border-secondary);
+  border-radius: 4px;
+  background: var(--ant-color-bg-elevated);
+  color: var(--ant-color-text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+/*
+ * Auto Zone overflow shingles are real React Flow nodes rather than a painted
+ * preview. Their exposed header strips therefore retain normal pointer/focus
+ * handling, including every title-row action. A called-out item floats above
+ * its stack without moving, so collapsing it restores the exact prior slot.
+ */
+.react-flow__node.auto-zone-stack-item {
+  pointer-events: auto;
+  overflow: visible;
+}
+
+.react-flow__node.auto-zone-stack-called-out {
+  filter: drop-shadow(0 8px 18px color-mix(in srgb, var(--ant-color-text) 24%, transparent));
+}
+
+.canvas-size-readout {
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+}
+
+.canvas-alignment-guide.vertical .canvas-alignment-guide-label {
+  top: 50%;
+  left: 0;
+  transform: translate(5px, -50%);
+}
+
+.canvas-alignment-guide.horizontal .canvas-alignment-guide-label {
+  top: 0;
+  left: 50%;
+  transform: translate(-50%, calc(-100% - 4px));
+}
+
 /* Tool mode cursors - override React Flow defaults */
 .react-flow.tool-mode-zone .react-flow__pane {
   cursor: crosshair;
@@ -116,4 +267,52 @@
 .react-flow__node-appNode .react-flow__resize-control.line.top,
 .react-flow__node-appNode .react-flow__resize-control.line.bottom {
   height: 12px;
+}
+
+/*
+ * Deal animation for an arrange.
+ *
+ * Scoped to a class the canvas adds for the duration of one arrange, never to
+ * `.react-flow__node` at large: a permanent transform transition would also
+ * animate dragging, so every card would lag a half-beat behind the cursor.
+ *
+ * Qualified with `.react-flow` so the specificity matches the tool-mode rules
+ * above rather than descending below them — an unqualified `.agor-dealing`
+ * would lose to them and silently not apply.
+ *
+ * Motion is monotonic: the earlier overshooting curve visibly reversed each
+ * item's direction just before it landed, which read as a layout correction.
+ * Per-node delay and duration arrive as custom properties from
+ * `arrangeAnimation.ts`, which owns the timing.
+ */
+.react-flow.agor-dealing .react-flow__node {
+  transition:
+    transform var(--agor-deal-duration, 380ms) cubic-bezier(0.22, 1, 0.36, 1)
+    var(--agor-deal-delay, 0ms),
+    width var(--agor-deal-duration, 380ms) ease-out var(--agor-deal-delay, 0ms),
+    height var(--agor-deal-duration, 380ms) ease-out var(--agor-deal-delay, 0ms);
+  will-change: transform;
+}
+
+/*
+ * A zone resizes rather than travels, and a container overshooting its own
+ * edges reads as a rendering fault instead of a flourish, so zones ease flat.
+ */
+.react-flow.agor-dealing .react-flow__node-zone {
+  transition:
+    transform var(--agor-deal-duration, 380ms) ease-out var(--agor-deal-delay, 0ms),
+    width var(--agor-deal-duration, 380ms) ease-out var(--agor-deal-delay, 0ms),
+    height var(--agor-deal-duration, 380ms) ease-out var(--agor-deal-delay, 0ms);
+}
+
+/* A node the viewer is dragging must never lag behind the cursor. */
+.react-flow.agor-dealing .react-flow__node.dragging {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .react-flow.agor-dealing .react-flow__node,
+  .react-flow.agor-dealing .react-flow__node-zone {
+    transition: none;
+  }
 }

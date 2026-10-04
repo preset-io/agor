@@ -57,10 +57,13 @@ export function ForcePasswordChangeModal({
   // via authorityScope but deliberately does not erase a same-user draft.
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally resets the Ant form for a replacement caller
   useLayoutEffect(() => {
+    // Modal contents are lazy. Touching the form while closed warns because
+    // its <Form> has not mounted yet; opening also runs this identity reset.
+    if (!open) return;
     form.resetFields();
     setLoading(false);
     setError(null);
-  }, [form, identityKey]);
+  }, [form, identityKey, open]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityScope intentionally releases stale generation-owned UI locks
   useLayoutEffect(() => {
