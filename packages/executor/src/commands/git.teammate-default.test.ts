@@ -170,6 +170,35 @@ it('ordinary branch still refuses an explicit ambiguous source ref', async () =>
   await expect(stat(branch.path)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
+it('clone storage resolves an explicit bare branch name against the live remote', async () => {
+  delete branch.custom_context;
+  branch.storage_mode = 'clone';
+  branch.base_ref = 'trunk';
+  expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+  expect(branch.base_sha).toBe(remoteSha);
+  expect(branch.base_source).toEqual({ name: 'trunk', remote_url: repo.remote_url });
+  expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(remoteSha);
+  expect((await simpleGit(repo.local_path).revparse('trunk')).trim()).toBe(localSha);
+});
+
+it('clone storage keeps commit SHAs on full resolution', async () => {
+  delete branch.custom_context;
+  branch.storage_mode = 'clone';
+  branch.base_ref = localSha;
+  expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+  expect(branch.base_sha).toBe(localSha);
+  expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(localSha);
+});
+
+it('clone storage still rejects a branch missing everywhere', async () => {
+  delete branch.custom_context;
+  branch.storage_mode = 'clone';
+  branch.base_ref = 'no-such-branch';
+  const result = await handleGitBranchAdd(payload, {});
+  expect(result.success).toBe(false);
+  expect(result.error?.message).toContain('does not exist');
+});
+
 it.each(['teammate', 'ordinary'])('keeps local-only defaults local (%s)', async (kind) => {
   if (kind === 'ordinary') delete branch.custom_context;
   repo.remote_url = undefined;
