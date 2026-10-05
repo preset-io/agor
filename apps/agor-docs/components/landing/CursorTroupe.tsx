@@ -449,7 +449,7 @@ function driveBoard(root: HTMLElement, phase: 'before' | 'play' | 'done', t: num
   const video = panel.querySelector('video');
   let state = boardState.get(panel);
   if (phase === 'done') {
-    if (state && state.offset) {
+    if (state?.offset) {
       panel.style.transform = '';
       state.offset = '';
     }

@@ -1721,6 +1721,10 @@
 /* Higher-specificity overrides — kept last so specificity ascends file-wide
  * (biome noDescendingSpecificity). */
 
+.rosterSection {
+  scroll-margin-top: 80px;
+}
+
 /* Above sibling sections (which sit at z-index 1): the radar's fixed phone
  * detail card must never be painted over by the CTA scrolling in beneath it. */
 .landingShell .rosterSection {
@@ -1733,25 +1737,6 @@
   box-shadow:
     0 0 0 3px rgba(52, 230, 196, 0.18),
     0 4px 12px rgba(0, 0, 0, 0.35);
-}
-
-/* Inline links inside landing body copy (e.g. the AI Enablement Engineer
- * post) — explicit so they read as links regardless of site theme. */
-.workspaceCopy p a,
-.controlSection p a {
-  color: var(--landing-teal);
-  text-decoration: underline;
-  text-decoration-color: rgba(52, 230, 196, 0.45);
-  text-underline-offset: 3px;
-  transition:
-    color 0.25s ease,
-    text-decoration-color 0.25s ease;
-}
-
-.workspaceCopy p a:hover,
-.controlSection p a:hover {
-  color: #a8f5ed;
-  text-decoration-color: #a8f5ed;
 }
 
 /* Problem-section crash choreography. Slots hold opacity 0 until the
@@ -2181,10 +2166,6 @@
   list-style: none;
 }
 
-.pageLinksList li + li {
-  margin-top: 10px;
-}
-
 /* --- Landing-page detail blocks --------------------------------------------
  * Copy beside media, alternating sides down the page. Anchored by id so the
  * home page can deep-link; scroll-margin clears the sticky navbar. */
@@ -2337,10 +2318,6 @@
     color: var(--landing-ink);
   }
 
-  .landingShell a.detailNavLink:hover .detailNavDot {
-    border-color: var(--landing-teal);
-  }
-
   .landingShell a.detailNavLinkActive {
     background: none;
     color: var(--landing-teal);
@@ -2351,6 +2328,10 @@
     background: var(--landing-teal);
     box-shadow: 0 0 10px rgba(52, 230, 196, 0.6);
     animation: busPulse 3s ease-in-out infinite;
+  }
+
+  .landingShell a.detailNavLink:hover .detailNavDot {
+    border-color: var(--landing-teal);
   }
 
   .detailColumn .detailSection {
@@ -2413,6 +2394,10 @@
   border-left: 2px solid rgba(52, 230, 196, 0.45);
 }
 
+.pageLinksList li + li {
+  margin-top: 10px;
+}
+
 .detailPoints strong {
   color: var(--landing-ink);
   font-weight: 600;
@@ -2439,6 +2424,25 @@
 .detailLinks a:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* Inline links inside landing body copy (e.g. the AI Enablement Engineer
+ * post) — explicit so they read as links regardless of site theme. */
+.workspaceCopy p a,
+.controlSection p a {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.45);
+  text-underline-offset: 3px;
+  transition:
+    color 0.25s ease,
+    text-decoration-color 0.25s ease;
+}
+
+.workspaceCopy p a:hover,
+.controlSection p a:hover {
+  color: #a8f5ed;
+  text-decoration-color: #a8f5ed;
 }
 
 .detailMediaFrame {
@@ -2476,10 +2480,6 @@
   color: var(--landing-teal);
   text-decoration: underline;
   text-underline-offset: 3px;
-}
-
-.rosterSection {
-  scroll-margin-top: 80px;
 }
 
 /* A home section promoted to its landing page's hero: fills the first
@@ -2561,6 +2561,20 @@
   line-height: 1.5;
 }
 
+.radarBlipQuiet {
+  cursor: default;
+}
+
+.radarBlipQuiet .blipIcon {
+  border-color: rgba(94, 233, 208, 0.2);
+  background: #0b1714;
+  color: rgba(95, 233, 208, 0.55);
+}
+
+.radarBlipQuiet .blipName {
+  color: #7f9994;
+}
+
 /* Written-up members are links to their /agent-roster listing: a brighter,
  * ringed blip that lifts on hover. The rest are quieter and not clickable. */
 a.radarBlip {
@@ -2583,20 +2597,6 @@ a.radarBlip:focus-visible .blipIcon {
 
 a.radarBlip .blipName {
   color: #eafff9;
-}
-
-.radarBlipQuiet {
-  cursor: default;
-}
-
-.radarBlipQuiet .blipIcon {
-  border-color: rgba(94, 233, 208, 0.2);
-  background: #0b1714;
-  color: rgba(95, 233, 208, 0.55);
-}
-
-.radarBlipQuiet .blipName {
-  color: #7f9994;
 }
 
 .tooltipStory {
@@ -2800,12 +2800,12 @@ a.radarBlip .blipName {
   -webkit-text-fill-color: #4fd6c8;
 }
 
-.homePitch h1 .headingAccent {
-  font-weight: 600;
-}
-
 .homeSub .headingAccent {
   font-weight: 500;
+}
+
+.homePitch h1 .headingAccent {
+  font-weight: 600;
 }
 
 .homeCtaRow {

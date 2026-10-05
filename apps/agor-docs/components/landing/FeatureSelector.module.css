@@ -90,18 +90,24 @@ div.head {
   transition: color 0.3s;
 }
 
+.rowActive .chevron {
+  color: var(--bs-teal);
+  transform: rotate(90deg);
+}
+
+.rowActive .rowTitle {
+  color: #fff;
+}
+
 .rowButton:hover .rowTitle,
 .rowButton:hover .chevron {
   color: #a9c4bf;
 }
 
-.rowActive .chevron,
 .rowActive .rowButton:hover .chevron {
   color: var(--bs-teal);
-  transform: rotate(90deg);
 }
 
-.rowActive .rowTitle,
 .rowActive .rowButton:hover .rowTitle {
   color: #fff;
 }
