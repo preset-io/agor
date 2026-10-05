@@ -30,7 +30,7 @@ import {
   shortId,
   UserApiKeysRepository,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import {
   MCP_CLIENT_HINT_HEADER,
   PERSONAL_API_KEY_PREFIX,
@@ -46,6 +46,7 @@ import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import { createApiKeyHostTenantResolver } from '../auth/api-key-host-tenant.js';
 import type { ApiKeyMembershipCheck } from '../auth/api-key-membership-check.js';
+import { assertRuntimeTenantAccess } from '../auth/tenant-access.js';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
 import type { McpPromptProvenanceStamp } from '../utils/prompt-provenance.js';
 import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
@@ -638,6 +639,8 @@ export function setupMCPRoutes(
       let userId: UserID;
       let sessionId: SessionID | undefined;
       let tenant: TenantContext;
+      // Personal API keys are primary credentials; only issued session tokens carry a generation.
+      let sessionTokenCredential: { payload: unknown } | undefined;
       const isPersonalApiKey = credential.startsWith(PERSONAL_API_KEY_PREFIX);
 
       if (isPersonalApiKey) {
@@ -778,6 +781,7 @@ export function setupMCPRoutes(
 
         userId = context.userId;
         sessionId = context.sessionId;
+        sessionTokenCredential = context.credential;
 
         // An outage leaves a token nobody refused working until it expires, so a running agent keeps its tools.
         const membership = await options.apiKeyMembershipCheck?.({
@@ -816,6 +820,22 @@ export function setupMCPRoutes(
         return res.status(401).json({
           ...jsonRpcError(req, -32001, 'Authenticated identity is not valid for this tenant'),
         });
+      }
+
+      // MCP reaches repositories without service hooks, so revalidate every request, issued tokens included.
+      try {
+        await assertRuntimeTenantAccess(db, tenant.tenant_id, sessionTokenCredential);
+      } catch (error) {
+        if (error instanceof Forbidden || error instanceof Unavailable) {
+          return res.status(error.code).json(jsonRpcError(req, -32001, error.message));
+        }
+        // A session token from an earlier restriction generation is simply no longer valid.
+        if (error instanceof NotAuthenticated) {
+          return res
+            .status(401)
+            .json(jsonRpcError(req, -32001, 'Invalid or expired session token'));
+        }
+        throw error;
       }
 
       // Keep tenant identity ambient for the complete MCP request without

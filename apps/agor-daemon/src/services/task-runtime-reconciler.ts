@@ -17,6 +17,7 @@ import {
 } from '@agor/core/db';
 import type { AuthenticatedParams, Task, TenantID } from '@agor/core/types';
 import { isAwaitingRemoteExecutor, TaskStatus } from '@agor/core/types';
+import { readTerminationEntity } from '../auth/termination-read-authority.js';
 import type { Application, TasksServiceImpl } from '../declarations.js';
 import { getTrackedExecutor } from '../executor-tracking.js';
 import { requestExecutorTermination } from '../termination-coordinator.js';
@@ -231,9 +232,15 @@ export class TaskRuntimeReconciler {
     if (!tenantId) throw new Error(`Task ${candidate.task_id} discovery omitted tenant routing`);
     return runWithTenantContext(tenantId, async () => {
       const params = tenantParams(tenantId);
-      const tasks = this.options.app.service('tasks') as unknown as TasksServiceImpl;
+      // Termination reads stay admitted while the tenant is restricted; recovery must not stall.
       const task = await this.runInFreshTenantWriteDatabase(tenantId, () =>
-        tasks.get(candidate.task_id, params)
+        readTerminationEntity(
+          this.options.app,
+          'tasks',
+          candidate.task_id,
+          params,
+          candidate.task_id
+        )
       );
       switch (candidate.kind) {
         case 'dispatch_timeout':
@@ -274,7 +281,7 @@ export class TaskRuntimeReconciler {
       return !!warned;
     }
     const session = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
-      this.options.app.service('sessions').get(task.session_id, params)
+      readTerminationEntity(this.options.app, 'sessions', task.session_id, params, task.task_id)
     );
     const result = await requestExecutorTermination({
       app: this.options.app,
@@ -313,7 +320,7 @@ export class TaskRuntimeReconciler {
     // reload, do not turn that new fact into a new stale-termination claim.
     if (task.last_executor_heartbeat_at !== candidate.executor_heartbeat_at) return false;
     const session = await this.runInFreshTenantWriteDatabase(params.tenant!.tenant_id, () =>
-      this.options.app.service('sessions').get(task.session_id, params)
+      readTerminationEntity(this.options.app, 'sessions', task.session_id, params, task.task_id)
     );
     // A tracked local process whose leader has not exited distinguishes a
     // hung/unreachable executor (or a stalled daemon write path) from a crash.

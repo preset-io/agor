@@ -1125,6 +1125,36 @@ describe('remote cleanup integration', () => {
       })
     );
   }
+  it('reads the cleanup session through a termination read, so a closed tenant still reaches cleanup', async () => {
+    const state = appDouble('codex', { config });
+    const readParams: object[] = [];
+    state.sessionGet.mockImplementation(async (...args: unknown[]) => {
+      readParams.push(args[1] as object);
+      return { session_id: sessionId, agentic_tool: 'codex', branch_id: 'branch-a' };
+    });
+    state.claim({ ...stopping('tenant_suspension'), executor_mode: 'templated' as const });
+    state.settle(task(TaskStatus.STOPPED));
+    await runWithTenantContext('tenant-a', () =>
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'tenant_suspension',
+        errorMessage: 'Workspace suspended',
+        cooperativeGraceMs: 0,
+        remoteConnectDeadlineExpired: true,
+        runInFreshTenantWriteDatabase,
+      })
+    );
+    // v1 helpers reject unknown causes; a suspension travels as a deliberate stop.
+    expect(runCleanup).toHaveBeenCalledWith(
+      'trusted-cleanup',
+      expect.objectContaining({ cause: 'user_stop' }),
+      20000
+    );
+    // Only readTerminationEntity attaches its single-call grant symbol.
+    expect(readParams.at(-1)).toMatchObject({ provider: undefined });
+    expect(Object.getOwnPropertySymbols(readParams.at(-1))).toHaveLength(1);
+  });
   it('uses exact trusted context, waits for confirmation, then settles', async () => {
     const state = appDouble('codex', { config });
     state.claim({

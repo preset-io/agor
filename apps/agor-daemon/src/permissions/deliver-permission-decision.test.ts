@@ -2,6 +2,7 @@ import { NotFound } from '@agor/core/feathers';
 import type { BranchPermissionLevel, Message, SessionID, TaskID } from '@agor/core/types';
 import { PermissionScope, PermissionStatus, ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { skipsSessionMcpToken } from '../utils/session-mcp-token-hook.js';
 import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
@@ -113,7 +114,9 @@ describe('deliverPermissionDecision', () => {
       })
     ).resolves.toEqual({ success: true });
 
-    expect(sessions.get).toHaveBeenCalledWith(SESSION_ID, params);
+    // The hooked read keeps the caller's provider and auth but mints no MCP token.
+    expect(sessions.get).toHaveBeenCalledWith(SESSION_ID, expect.objectContaining(params));
+    expect(skipsSessionMcpToken(sessions.get.mock.calls[0]?.[1])).toBe(true);
     expect(messages.findByTask).toHaveBeenCalledWith(TASK_ID);
     expect(messages.patch).not.toHaveBeenCalled();
     expect(messages.emit).toHaveBeenCalledOnce();

@@ -31,6 +31,7 @@ import type {
   TenantID,
 } from '@agor/core/types';
 import { isDiscordDirectMessagesEnabled } from '@agor/core/types';
+import { isCurrentTenantRuntimeActive } from '../auth/tenant-access.js';
 import {
   boundedBackoff,
   boundedProviderCall,
@@ -211,6 +212,8 @@ export class DiscordMessageDeliveryWorker {
   }
 
   private async processRef(ref: DiscordMessageDeliveryDiscoveryRef): Promise<void> {
+    // Hold a closed tenant's outbox; delivery resumes after reactivation.
+    if (!(await isCurrentTenantRuntimeActive(this.db).catch(() => false))) return;
     const claim = await this.deliveryRepo.claim(
       ref.delivery_id,
       generateId(),
