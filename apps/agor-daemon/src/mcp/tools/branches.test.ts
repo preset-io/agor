@@ -1,7 +1,8 @@
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel } from '@agor/core/types';
-import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport, McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
 import { loadBranch } from '../../utils/branch-authorization.js';
@@ -813,6 +814,148 @@ describe('agor_branches_create', () => {
     expect(payload).toMatchObject({
       ...failed,
       _readiness: { outcome: 'failed', message: 'clone authentication failed' },
+    });
+  });
+
+  it('returns parseable created JSON over tools/call when the readiness read fails after creation', async () => {
+    const { app, branchId, creating, observed, createBranch, branchesGet } = waitFixture({
+      name: 'flaky-read',
+    });
+    branchesGet
+      .mockResolvedValueOnce(observed)
+      .mockRejectedValueOnce(new Error('Connection terminated unexpectedly'));
+    const server = new McpServer({ name: 'branches-create-test', version: '1.0.0' });
+    registerBranchTools(server, {
+      app: app as unknown as Parameters<typeof registerBranchTools>[1]['app'],
+      db: { run: () => undefined } as unknown as Parameters<typeof registerBranchTools>[1]['db'],
+      userId: 'user-1' as Parameters<typeof registerBranchTools>[1]['userId'],
+      authenticatedUser: {
+        user_id: 'user-1',
+        email: 'user@example.test',
+        role: 'member',
+      } as Parameters<typeof registerBranchTools>[1]['authenticatedUser'],
+      baseServiceParams: {},
+    } as Parameters<typeof registerBranchTools>[1]);
+    const client = new Client({ name: 'branches-create-client', version: '1.0.0' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    let result: { content: Array<{ type: string; text: string }>; isError?: boolean };
+    try {
+      result = (await client.callTool({
+        name: 'agor_branches_create',
+        arguments: {
+          repoId: 'repo-1',
+          branchName: 'flaky-read',
+          boardId: 'board-1',
+          autoSuffix: false,
+          waitForReady: true,
+        },
+      })) as typeof result;
+    } finally {
+      await client.close();
+      await server.close();
+    }
+
+    expect(createBranch).toHaveBeenCalledOnce();
+    expect(() => JSON.parse(result.content[0].text)).not.toThrow();
+    const payload = JSON.parse(result.content[0].text);
+    expect(result.isError).toBeFalsy();
+    expect(payload).toMatchObject({
+      ...creating,
+      _create: { outcome: 'created', branch_id: branchId, retry_safe: false },
+      _resolution: { outcome: 'resolved' },
+      _readiness: {
+        outcome: 'unknown',
+        reason: 'read_failed',
+        poll: { tool: 'agor_branches_wait_for_ready', arguments: { branchId } },
+      },
+    });
+  });
+
+  it('reports created with unknown resolution and readiness when the first read after creation fails', async () => {
+    const { app, branchId, createBranch, branchesGet } = waitFixture({ name: 'no-read' });
+    branchesGet.mockRejectedValue(new Error('statement timeout'));
+    const create = registerAndCaptureHandler('agor_branches_create', { app, userId: 'user-1' });
+
+    const result = await create(
+      {
+        repoId: 'repo-1',
+        branchName: 'no-read',
+        boardId: 'board-1',
+        autoSuffix: false,
+        waitForReady: true,
+      },
+      requestContext()
+    );
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(createBranch).toHaveBeenCalledOnce();
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch_id: branchId,
+      _create: { outcome: 'created', branch_id: branchId, retry_safe: false },
+      _resolution: { outcome: 'unknown', reason: 'read_failed' },
+      _readiness: {
+        outcome: 'unknown',
+        poll: { tool: 'agor_branches_wait_for_ready', arguments: { branchId } },
+      },
+    });
+  });
+
+  it('returns a structured created result when the request is cancelled during the readiness wait', async () => {
+    vi.useFakeTimers();
+    const { app, branchId, createBranch } = waitFixture({ name: 'cancelled-wait' });
+    const create = registerAndCaptureHandler('agor_branches_create', { app, userId: 'user-1' });
+    const controller = new AbortController();
+
+    const waiting = create(
+      {
+        repoId: 'repo-1',
+        branchName: 'cancelled-wait',
+        boardId: 'board-1',
+        autoSuffix: false,
+        waitForReady: true,
+      },
+      requestContext(controller.signal)
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(createBranch).toHaveBeenCalledOnce();
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch_id: branchId,
+      _create: { outcome: 'created', branch_id: branchId, retry_safe: false },
+      _readiness: { outcome: 'unknown', reason: 'cancelled' },
+    });
+  });
+
+  it('does not flag a still-creating branch as an error when ref resolution times out', async () => {
+    vi.useFakeTimers();
+    const { app, branchId, branchesGet } = waitFixture({
+      name: 'slow-resolve',
+      observed: { base_ref: undefined, base_sha: undefined },
+    });
+    const create = registerAndCaptureHandler('agor_branches_create', { app, userId: 'user-1' });
+
+    const waiting = create(
+      { repoId: 'repo-1', branchName: 'slow-resolve', boardId: 'board-1', autoSuffix: false },
+      requestContext()
+    );
+    await vi.advanceTimersByTimeAsync(45_100);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(branchesGet).toHaveBeenCalled();
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch_id: branchId,
+      _create: { outcome: 'created', branch_id: branchId, retry_safe: false },
+      _resolution: { outcome: 'timeout' },
     });
   });
 
