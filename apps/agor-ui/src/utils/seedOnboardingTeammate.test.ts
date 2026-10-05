@@ -2,6 +2,7 @@ import type { Branch, Repo, Session, UserID } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { FRAMEWORK_REPO_SLUG, findFrameworkRepo } from '../hooks/useFrameworkRepo';
 import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
+import { stagePromptDraftSeed } from './promptDrafts';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
@@ -12,6 +13,7 @@ import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 vi.mock('./teammateCreation', () => ({ createTeammateBranch: vi.fn() }));
 vi.mock('./startTeammateBootstrapSession', () => ({ startTeammateBootstrapSession: vi.fn() }));
 vi.mock('./waitForBranchFilesystemReady', () => ({ waitForBranchFilesystemReady: vi.fn() }));
+vi.mock('./promptDrafts', () => ({ stagePromptDraftSeed: vi.fn() }));
 
 const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
@@ -43,6 +45,7 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
     teammateName: 'Rusty',
     teammateEmoji: '🤖',
     agent: 'claude-code',
+    startInitialTurn: true,
     suggestedIntegrations: [
       ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack,
       ONBOARDING_INTEGRATION_RECOMMENDATIONS.github,
@@ -75,6 +78,39 @@ describe('seedOnboardingTeammate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(waitForBranchFilesystemReady).mockReset().mockResolvedValue(undefined);
+  });
+
+  it('opens an idle session with an owner-scoped starter draft when AI setup was skipped', async () => {
+    createTeammateBranchMock.mockResolvedValue({ branch_id: 'branch-1' } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue(completeInitialization);
+    const { input } = setup({ startInitialTurn: false });
+
+    expect(await seedOnboardingTeammate(input)).toMatchObject({
+      sessionId: 'session-1',
+      workspaceReady: true,
+    });
+    expect(startTeammateBootstrapSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionConfig: expect.objectContaining({ agent: 'claude-code', initialPrompt: undefined }),
+      })
+    );
+    expect(stagePromptDraftSeed).toHaveBeenCalledWith(
+      USER_ID,
+      'session-1',
+      expect.stringContaining('Rusty')
+    );
+  });
+
+  it('does not stage the starter after the authenticated owner changes during session creation', async () => {
+    createTeammateBranchMock.mockResolvedValue({ branch_id: 'branch-1' } as Branch);
+    let current = true;
+    startTeammateBootstrapSessionMock.mockImplementationOnce(async () => {
+      current = false;
+      return completeInitialization;
+    });
+    const { input } = setup({ startInitialTurn: false, isCurrentUser: () => current });
+    expect(await seedOnboardingTeammate(input)).toEqual({});
+    expect(stagePromptDraftSeed).not.toHaveBeenCalled();
   });
 
   it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {

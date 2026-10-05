@@ -1437,6 +1437,44 @@ describe('OnboardingWizard', () => {
     );
   });
 
+  it('restores saved selections before a board has been allocated', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({
+      onComplete,
+      user: makeUser({
+        preferences: {
+          onboarding: {
+            goals: ['ship-without-busywork'],
+            teammateDisplayName: 'Rusty',
+            teammateEmoji: '⚖️',
+            teammateTemplateId: 'legal-analyst',
+          },
+        },
+      }),
+    });
+    clickButton(/continue/i); // Saved goal, not Skip.
+    expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
+    expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(boardsService.create).not.toHaveBeenCalled();
+    clickButton(/continue/i);
+    clickButton(/skip for now/i); // AI
+    clickButton(/skip for now/i); // Tools
+    clickButton(/meet rusty/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: ['ship-without-busywork'],
+        teammateName: 'Rusty',
+        teammateEmoji: '⚖️',
+        templateId: 'legal-analyst',
+      }),
+      expect.anything()
+    );
+  });
+
   it('resumes an incomplete setup from its saved, still-visible board', async () => {
     const onComplete = vi.fn();
     const resumedBoard = makeBoard({ board_id: 'board-resume', name: 'Rusty', icon: '⚖️' });

@@ -3,6 +3,7 @@ import { getTeammateConfig } from '@agor-live/client';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import type { OnboardingSlackGatewayIntent } from './onboardingSlack';
+import { stagePromptDraftSeed } from './promptDrafts';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
   buildTeammateBootstrapPrompt,
@@ -33,6 +34,8 @@ export interface SeedOnboardingTeammateInput {
    * `null`/`undefined` means no agent is available, so only the workspace is required.
    */
   agent?: AgenticToolName | null;
+  /** False for a fallback tool after skipping AI setup: create an idle session and draft. */
+  startInitialTurn: boolean;
   /** Goal-tailored tools/connections with their real Agor setup surface. */
   suggestedIntegrations?: OnboardingIntegrationRecommendation[];
   /** Onboarding goal ids (order-preserving, primary first); [] when skipped. */
@@ -266,8 +269,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     }
 
     // Callers resolve a fallback agent so onboarding lands in the first-task
-    // composer even when the LLM step was skipped (the composer then surfaces
-    // the inline connect-model panel). This branch only remains for the rare
+    // composer even when the LLM step was skipped. This branch only remains for the rare
     // case where no agentic tool is available at all — then there is nothing to
     // open a session with, so stop at the workspace with guidance.
     if (!input.agent) {
@@ -277,6 +279,17 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
       return { branchId: branch.branch_id, workspaceReady: true };
     }
 
+    const starterPrompt = buildTeammateBootstrapPrompt({
+      displayName: teammateName,
+      emoji: input.teammateEmoji,
+      userName: input.user?.name,
+      userEmail: input.user?.email,
+      goals: input.goals,
+      templateId: input.templateId,
+      localHome: getTeammateConfig(branch)?.localHome,
+      suggestedIntegrations: input.suggestedIntegrations,
+      slackGatewayIntent: input.slackGatewayIntent,
+    });
     const initialization = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
@@ -291,23 +304,16 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
           displayName: teammateName,
           emoji: input.teammateEmoji,
         }),
-        initialPrompt: buildTeammateBootstrapPrompt({
-          displayName: teammateName,
-          emoji: input.teammateEmoji,
-          userName: input.user?.name,
-          userEmail: input.user?.email,
-          goals: input.goals,
-          templateId: input.templateId,
-          localHome: getTeammateConfig(branch)?.localHome,
-          suggestedIntegrations: input.suggestedIntegrations,
-          slackGatewayIntent: input.slackGatewayIntent,
-        }),
+        initialPrompt: input.startInitialTurn ? starterPrompt : undefined,
       },
       onCreateSession: input.onCreateSession,
       shouldContinue: isCurrentUser,
     });
 
     if (!isCurrentUser()) return {};
+    if (!input.startInitialTurn) {
+      stagePromptDraftSeed(input.expectedUserId, initialization.sessionId, starterPrompt);
+    }
     return {
       branchId: branch.branch_id,
       sessionId: initialization.sessionId,

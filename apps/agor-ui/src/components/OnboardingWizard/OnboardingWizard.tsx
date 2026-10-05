@@ -661,20 +661,19 @@ export function OnboardingWizard({
     } else {
       setSelectedAgent(null);
     }
+    // Dismissal saves selections even before the final step allocates a board.
+    setSelectedGoals(savedOnboarding?.goals ?? []);
+    setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
+    setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
+    const savedTemplateId = savedOnboarding?.teammateTemplateId;
+    const savedTemplate = getTeammateTemplate(savedTemplateId);
+    setSelectedTemplateId(savedTemplate?.id ?? null);
+    setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
     if (savedBoardId) {
-      setSelectedGoals(savedOnboarding?.goals ?? []);
-      setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
-      setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
-      const savedTemplateId = savedOnboarding?.teammateTemplateId;
-      const savedTemplate = getTeammateTemplate(savedTemplateId);
-      setSelectedTemplateId(savedTemplate?.id ?? null);
-      setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
       setCreatedBoardId(savedBoardId);
       createdBoardIdRef.current = savedBoardId;
       boardCreationConfirmedRef.current = !!savedBoard;
       if (!initialStep) setCurrentStep('done');
-    } else {
-      setTeammateName('');
     }
   }, [
     open,

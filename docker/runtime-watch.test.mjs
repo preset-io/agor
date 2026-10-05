@@ -79,6 +79,22 @@ test('proxy rejects cross-origin WebSocket upgrades before reaching a backend', 
   }
 });
 
+test('slashless UI navigation redirects to the Vite base and preserves query parameters', async () => {
+  const proxy = createProxy('https://preview.example');
+  await new Promise((resolve) => proxy.server.listen(0, '127.0.0.1', resolve));
+  try {
+    for (const suffix of ['', '?tab=profile&return_to=%2Fui%2F']) {
+      const response = await fetch(`http://127.0.0.1:${proxy.server.address().port}/ui${suffix}`, {
+        redirect: 'manual',
+      });
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get('location'), `/ui/${suffix}`);
+    }
+  } finally {
+    proxy.close();
+  }
+});
+
 test('readiness preserves the daemon configuration contract consumed by the UI', async () => {
   const payload = { status: 'ok', identity: { mode: 'local' }, config: { login: true } };
   for (const uiReady of [true, false]) {

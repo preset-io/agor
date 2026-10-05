@@ -724,9 +724,8 @@ function AppContent() {
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     // Always end onboarding inside the first-task composer: if the user skipped
     // the LLM step, fall back to their governed default agent so the pre-seeded
-    // bootstrap session still opens. When no model is connected, that session's
-    // first turn surfaces the inline connect-model panel (MissingCredentialPanel)
-    // rather than dropping the user on a bare board with a passive banner.
+    // session still opens. Without a configured model, keep the starter as an
+    // editable draft instead of manufacturing a failed credential-less turn.
     const bootstrapAgent =
       result.agent ??
       resolveAvailableUserAgenticTool(
@@ -744,6 +743,7 @@ function AppContent() {
       sourceBranch: result.sourceBranch,
       sourceRemoteUrl: result.sourceRemoteUrl,
       agent: bootstrapAgent,
+      startInitialTurn: result.agent != null,
       suggestedIntegrations: result.suggestedIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
       // follow-the-user guidance. Passed straight from the wizard.

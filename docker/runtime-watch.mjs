@@ -27,6 +27,13 @@ export function createProxy(origin, { healthRequest = fetch } = {}) {
       res.end();
       return;
     }
+    // Vite's /ui/ base rejects the slashless path produced by client navigation.
+    // Preserve query parameters without accepting a caller-controlled redirect host.
+    if (req.url === '/ui' || req.url.startsWith('/ui?')) {
+      res.writeHead(302, { Location: `/ui/${req.url.slice('/ui'.length)}` });
+      res.end();
+      return;
+    }
     if (req.url === '/health') {
       try {
         const checks = await Promise.all(
