@@ -786,10 +786,13 @@ function AppContent() {
       ...(sessionId ? { sessionId } : {}),
     });
 
-    if (result.teammateName?.trim() && (!branchId || (bootstrapAgent && !sessionId))) {
+    if (
+      result.teammateName?.trim() &&
+      (!seeded.workspaceReady || !branchId || (bootstrapAgent && !sessionId))
+    ) {
       throw new Error(
         branchId
-          ? 'Your board and teammate are saved, but the first session could not start. Check the teammate workspace status; if setup failed, use Retry on that teammate, then finish onboarding again.'
+          ? 'Your board and teammate are saved, but setup has not finished. Check the teammate workspace status; if setup failed, use Retry on that teammate, then finish onboarding again.'
           : 'Your board is saved, but the teammate workspace could not be created. Check repository setup and your board permissions, then try again.'
       );
     }

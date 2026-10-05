@@ -39,9 +39,12 @@ Goals, teammate setup, AI, and tools are optional; the final action always creat
 
 Agor prepares the teammate repository in the background while you fill in the wizard.
 This optional prefetch does not show global error notifications. If you named a teammate,
-finishing setup requires its repository to be ready: a failure stays in the wizard with
+finishing setup requires its repository and teammate workspace to be ready, even when no
+agent is available to start a session: a failure stays in the wizard with
 an actionable message and **Try again**, rather than marking onboarding complete.
-Retries reuse the same repository and preserve existing branches. Repository setup status
+Retries reuse the same repository and preserve its name, saved environment configuration,
+and existing branches. Automatic `.agor.yml` import is only attempted on an administrator's
+initial registration; after recovery, use the explicit import action if needed. Repository setup status
 and credential-redacted diagnostics remain available to administrators; never delete a
 repository or its branches just to retry onboarding. A pending setup is not automatically
 restarted on a timer because a slow worker may still be running.

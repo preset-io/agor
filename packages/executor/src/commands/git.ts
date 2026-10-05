@@ -695,7 +695,8 @@ export async function handleGitClone(
             (payload.params.default_branch ? ' (user-supplied)' : ' (auto-detected)')
         );
         await client.service('repos').patch(repoId, {
-          name: repoName,
+          // The daemon owns the display name, including names customized
+          // between attempts. Clone finalization only supplies filesystem facts.
           local_path: cloneResult.path,
           default_branch: defaultBranch,
           clone_status: 'ready',

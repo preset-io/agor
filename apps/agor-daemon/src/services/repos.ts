@@ -451,7 +451,9 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
                 outputPath: repo.local_path,
                 ...(repo.default_branch ? { default_branch: repo.default_branch } : {}),
                 createDbRecord: true,
-                importEnvironmentConfig: hasMinimumRole(user.role, ROLES.ADMIN),
+                // Recovery must not replace saved variants/template overrides.
+                // Existing repos can import YAML through the explicit admin action.
+                importEnvironmentConfig: claim.created && hasMinimumRole(user.role, ROLES.ADMIN),
                 userId,
               },
             },

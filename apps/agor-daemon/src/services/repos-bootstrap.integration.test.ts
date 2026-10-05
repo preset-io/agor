@@ -81,7 +81,9 @@ describe('repository bootstrap (real SQLite, guarded tenant scope)', () => {
     'failed clone with existing branches retries same row; stale exit cannot fail retry',
     async ({ db }) => {
       const { service, scoped } = setup(db);
-      const first = await service.cloneRepository(request, params);
+      const admin = { ...params, user: { ...params.user!, role: 'admin' } } as RepoParams;
+      const first = await service.cloneRepository(request, admin);
+      expect(mocks.spawn.mock.calls[0][0].params.importEnvironmentConfig).toBe(true);
       const oldExit = mocks.spawn.mock.calls[0][1].onExit;
       await runWithTenantDatabaseScope(scoped, 'tenant-a', async () => {
         await service.patch(first.repo_id!, { clone_status: 'failed', clone_generation: 1 });
@@ -94,10 +96,11 @@ describe('repository bootstrap (real SQLite, guarded tenant scope)', () => {
           branch_unique_id: 4567,
         });
       });
-      const retry = await service.cloneRepository(request, { ...params, query: { cleanup: true } });
+      const retry = await service.cloneRepository(request, { ...admin, query: { cleanup: true } });
       expect(retry).toEqual(first);
       expect(mocks.spawn).toHaveBeenCalledTimes(2);
       expect(mocks.spawn.mock.calls[1][0].params.cloneGeneration).toBe(2);
+      expect(mocks.spawn.mock.calls[1][0].params.importEnvironmentConfig).toBe(false);
       await oldExit(1);
       await runWithTenantDatabaseScope(scoped, 'tenant-a', async () => {
         expect(await service.get(first.repo_id!)).toMatchObject({

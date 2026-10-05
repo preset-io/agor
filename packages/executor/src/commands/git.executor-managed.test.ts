@@ -1390,6 +1390,54 @@ describe('managed executor git/fs commands', () => {
     );
   });
 
+  it('successful retry preserves the saved name and environment, including DB-only overrides', async () => {
+    const saved = {
+      repo_id: repoId,
+      name: 'Customized teammate repository',
+      environment: {
+        version: 2,
+        default: 'custom',
+        variants: { custom: { start: 'custom-start' } },
+        template_overrides: { start: 'db-only-start' },
+      },
+    };
+    const patchedRepos: Array<Record<string, unknown>> = [];
+    createClient({ repo: saved, patchedRepos });
+    mocks.parseAgorYml.mockReturnValue({
+      version: 2,
+      default: 'checkout',
+      variants: { checkout: { start: 'checkout-start' } },
+    });
+
+    const result = await handleGitClone(
+      {
+        command: 'git.clone',
+        sessionToken: 'tenant-bound-service-token',
+        params: {
+          url: 'https://github.com/preset-io/agor-teammate.git',
+          outputPath: '/tenant/acme/repos/preset-io/agor-teammate',
+          slug: 'preset-io/agor-teammate',
+          repoId,
+          cloneGeneration: 2,
+          createDbRecord: true,
+          importEnvironmentConfig: false,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.parseAgorYml).not.toHaveBeenCalled();
+    expect(patchedRepos).toHaveLength(1);
+    expect(patchedRepos[0]).not.toHaveProperty('name');
+    expect(patchedRepos[0]).not.toHaveProperty('environment');
+    expect({ ...saved, ...patchedRepos[0] }).toMatchObject({
+      ...saved,
+      clone_status: 'ready',
+      clone_generation: 2,
+    });
+  });
+
   it.each([false, true])(
     'imports executable clone environment only when the daemon grants it (%s)',
     async (importEnvironmentConfig) => {

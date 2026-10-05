@@ -247,7 +247,8 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     /**
      * Import executable environment configuration from the cloned
      * `.agor.yml`. This capability is derived by the daemon from the
-     * initiating user's admin role and defaults closed for direct callers.
+     * initiating user's admin role for initial registration only; recovery
+     * preserves saved configuration. Defaults closed for direct callers.
      */
     importEnvironmentConfig: z.boolean().optional().default(false),
 

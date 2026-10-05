@@ -5,11 +5,13 @@ import { ONBOARDING_INTEGRATION_RECOMMENDATIONS } from './onboardingGoals';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
+import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 // These are the two collaborators the completion path must actually invoke —
 // the original bug meant neither ever ran (the fallback fired instead).
 vi.mock('./teammateCreation', () => ({ createTeammateBranch: vi.fn() }));
 vi.mock('./startTeammateBootstrapSession', () => ({ startTeammateBootstrapSession: vi.fn() }));
+vi.mock('./waitForBranchFilesystemReady', () => ({ waitForBranchFilesystemReady: vi.fn() }));
 
 const createTeammateBranchMock = vi.mocked(createTeammateBranch);
 const startTeammateBootstrapSessionMock = vi.mocked(startTeammateBootstrapSession);
@@ -70,7 +72,10 @@ function setup(overrides: Partial<SeedOnboardingTeammateInput> = {}) {
 }
 
 describe('seedOnboardingTeammate', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(waitForBranchFilesystemReady).mockReset().mockResolvedValue(undefined);
+  });
 
   it('creates a teammate branch + goal-primed onboarding session when the framework repo is present', async () => {
     createTeammateBranchMock.mockResolvedValue({
@@ -126,6 +131,7 @@ describe('seedOnboardingTeammate', () => {
     expect(initialPrompt).toContain('otherwise, read BOOTSTRAP.md');
 
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: completeInitialization,
@@ -176,6 +182,7 @@ describe('seedOnboardingTeammate', () => {
     const result = await seedOnboardingTeammate(setup().input);
 
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: incompleteInitialization,
@@ -230,6 +237,7 @@ describe('seedOnboardingTeammate', () => {
       expect.anything()
     );
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-1',
       sessionId: 'session-1',
       initialization: completeInitialization,
@@ -328,12 +336,10 @@ describe('seedOnboardingTeammate', () => {
     }
   );
 
-  // The LLM step is skippable, so `agent` can legitimately be null at completion.
-  // Bootstrapping a claude-code session anyway would fail on the first turn with
-  // no credentials — the workspace is still created, but the caller gets no
-  // session id and therefore lands the user on their board.
+  // If no fallback agent is available, readiness is still required, but no
+  // session should be started with an arbitrary provider.
   for (const agent of [null, undefined] as const) {
-    it(`creates the workspace but no session when the LLM step was skipped (agent: ${agent})`, async () => {
+    it(`waits for the workspace but creates no session when no agent is available (agent: ${agent})`, async () => {
       createTeammateBranchMock.mockResolvedValue({
         branch_id: 'branch-1',
         board_id: 'board-1',
@@ -347,7 +353,8 @@ describe('seedOnboardingTeammate', () => {
       // ...but nothing is prompted, and no claude-code default sneaks in.
       expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
       expect(onCreateSession).not.toHaveBeenCalled();
-      expect(result).toEqual({ branchId: 'branch-1' });
+      expect(result).toEqual({ branchId: 'branch-1', workspaceReady: true });
+      expect(waitForBranchFilesystemReady).toHaveBeenCalledWith(input.client, 'branch-1');
       expect(setPrimaryTeammateIfUnset).toHaveBeenCalledWith({
         branchId: 'branch-1',
         expectedUserId: USER_ID,
@@ -358,6 +365,43 @@ describe('seedOnboardingTeammate', () => {
       expect(onWarn.mock.calls[0][0]).toMatch(/connect an ai model/i);
     });
   }
+
+  it('does not report no-agent setup complete before filesystem readiness', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    let resolveReady!: () => void;
+    vi.mocked(waitForBranchFilesystemReady).mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveReady = resolve;
+      })
+    );
+    const { input } = setup({ agent: null });
+    const finished = vi.fn();
+    const seeding = seedOnboardingTeammate(input).then((result) => {
+      finished(result);
+      return result;
+    });
+    await vi.waitFor(() => expect(waitForBranchFilesystemReady).toHaveBeenCalled());
+    expect(finished).not.toHaveBeenCalled();
+    resolveReady();
+    await expect(seeding).resolves.toEqual({ branchId: 'branch-1', workspaceReady: true });
+  });
+
+  it('retains a failed no-agent workspace for retry without claiming readiness', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    vi.mocked(waitForBranchFilesystemReady).mockRejectedValueOnce(
+      new Error('Template fetch failed')
+    );
+    const { input, onWarn } = setup({ agent: null });
+    await expect(seedOnboardingTeammate(input)).resolves.toEqual({ branchId: 'branch-1' });
+    expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('Retry on that same teammate'));
+    expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
+  });
 
   it('does nothing when no teammate was named (the workspace step was skipped)', async () => {
     const { input, onWarn } = setup({ teammateName: '   ' });
@@ -406,6 +450,7 @@ describe('seedOnboardingTeammate', () => {
       branchId: 'branch-existing',
     });
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-existing',
       sessionId: 'session-existing',
     });
@@ -459,6 +504,7 @@ describe('seedOnboardingTeammate', () => {
     expect(createTeammateBranchMock).not.toHaveBeenCalled();
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(result).toEqual({
+      workspaceReady: true,
       branchId: 'branch-existing',
       sessionId: 'session-existing',
     });
