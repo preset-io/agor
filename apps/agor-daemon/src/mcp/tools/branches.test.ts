@@ -2533,3 +2533,26 @@ describe('management ownership transfer tool', () => {
     );
   });
 });
+
+it('MCP branch get preserves server runtime support separately from permissions', async () => {
+  const capabilities = {
+    archive_preserve: { supported: true },
+    archive_clean: { supported: true },
+    archive_remove: { supported: true },
+    permanent_delete: { supported: false, reason: 'Operator storage opt-in required' },
+  };
+  const branch = { branch_id: 'branch-1', maintenance_capabilities: capabilities };
+  const get = vi.fn(async () => branch);
+  const permissions = { find: vi.fn(async () => ({ can: 'all' })) };
+  const baseServiceParams = { tenant: { tenant_id: 'tenant-a' }, user: { user_id: 'caller' } };
+  const handler = registerAndCaptureHandler('agor_branches_get', {
+    userId: 'caller',
+    baseServiceParams,
+    app: { service: (name: string) => (name === 'branches' ? { get } : permissions) },
+  });
+  const result = await handler({ branchId: 'branch-1' });
+  expect(JSON.parse(result.content[0]!.text)).toMatchObject({
+    maintenance_capabilities: capabilities,
+  });
+  expect(get).toHaveBeenCalledWith('branch-1', expect.objectContaining(baseServiceParams));
+});

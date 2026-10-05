@@ -17,6 +17,7 @@ import {
   ENV_VAR_CONSTRAINTS,
   environmentCommandCapabilities,
   isEnvVarAllowed,
+  permanentBranchDeletionCapability,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
@@ -6662,6 +6663,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         features: {
           environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
           environmentCommands: environmentCommandCapabilities(config),
+          permanentBranchDeletion: permanentBranchDeletionCapability(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this

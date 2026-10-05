@@ -272,7 +272,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_get',
     {
       description:
-        'Get detailed information about a branch, including path, git ref, and git state',
+        'Get detailed information about a branch, including path, git ref, git state, and maintenance_capabilities. These describe runtime support for archive-preserve, archive-clean, archive-remove and permanent deletion, not authorization or verified storage readiness.',
       annotations: { readOnlyHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
@@ -1751,7 +1751,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_delete',
     {
       description:
-        'Request permanent deletion of owned branch files, SDK home, sessions, messages, and tasks. Stop active tasks and the environment first. Shared resources are retained. The branch remains visible until cleanup is verified; partial failures are reported on the branch.',
+        'Request permanent deletion of owned branch files, SDK home, sessions, messages, and tasks. Read agor_branches_get maintenance_capabilities before offering or requesting deletion; unsupported operations are refused, never converted to archive. Stop active tasks and the environment first. Shared resources are retained. The branch remains visible until cleanup is verified; partial failures are reported on the branch.',
       annotations: { destructiveHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch', 'Branch ID to delete (UUIDv7 or short ID)'),

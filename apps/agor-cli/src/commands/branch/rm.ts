@@ -4,7 +4,7 @@
  * Requests permanent removal of owned branch data and files.
  */
 
-import { shortId } from '@agor-live/client';
+import { getBranchMaintenanceBlockReason, shortId } from '@agor-live/client';
 import { Args, Flags } from '@oclif/core';
 import chalk from 'chalk';
 import inquirer from 'inquirer';
@@ -49,6 +49,11 @@ export default class BranchRemove extends BaseCommand {
 
       // Fetch branch first to show what we're removing
       const branch = await branchesService.get(args.branchId);
+      const reason = getBranchMaintenanceBlockReason(
+        branch.maintenance_capabilities,
+        'permanent_delete'
+      );
+      if (reason) throw new Error(reason);
 
       this.log('');
       this.log(chalk.yellow('⚠  Warning: You are about to remove:'));
