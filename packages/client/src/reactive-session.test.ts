@@ -4188,7 +4188,20 @@ describe('lean transcript window follows displayed turn order', () => {
     const answerFind = find.getMockImplementation()!;
     let failing = true;
     let failures = 0;
+    /** Holds the next suffix read open until the test rejects it. */
+    let hold: { reject?: (error: Error) => void } | undefined;
     find.mockImplementation(async (params) => {
+      if (
+        hold &&
+        !hold.reject &&
+        '$in' in Object(params?.query?.task_id) &&
+        params?.query?.$limit !== 0
+      ) {
+        const held = hold;
+        return new Promise<never>((_, reject) => {
+          held.reject = reject;
+        });
+      }
       if (failing && '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0) {
         // Bounded so a retry loop fails this test instead of exhausting memory.
         if (++failures > 20) return new Promise<never>(() => {});
@@ -4241,6 +4254,24 @@ describe('lean transcript window follows displayed turn order', () => {
     await handle.ready();
     expect(handle.getTask(another)).toBeDefined();
     expect(handle.getTaskMessages(another)).toHaveLength(1);
+
+    // An extension that lands while a suffix read is in flight is not lost if
+    // that read then fails: it earns exactly one retry.
+    hold = {};
+    const first = completionCallbackTaskId(earlierSource, turn(6) as unknown as SessionID);
+    opts.tasks.push(makeTask(first, TaskStatus.COMPLETED));
+    opts.messagesByTask[first] = [answer(first) as Message];
+    publish();
+    await vi.waitFor(() => expect(hold?.reject).toBeDefined());
+    const second = completionCallbackTaskId(earlierSource, turn(7) as unknown as SessionID);
+    opts.tasks.push(makeTask(second, TaskStatus.COMPLETED));
+    opts.messagesByTask[second] = [answer(second) as Message];
+    publish();
+    const pending = suffixReads();
+    hold.reject!(Object.assign(new Error('Service unavailable'), { code: 503 }));
+    await vi.waitFor(() => expect(handle.getTask(first)).toBeDefined());
+    expect(handle.getTask(second)).toBeDefined();
+    expect(suffixReads()).toBe(pending + 1);
     handle.dispose();
   });
 

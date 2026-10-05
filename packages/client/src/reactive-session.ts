@@ -313,6 +313,8 @@ export class ReactiveSessionHandle {
   private leanBasis: readonly string[] | undefined;
   // The next task-ID read starts a fresh cursor (display order was abandoned).
   private leanCursorReset = false;
+  // A suffix invalidation arrived while a history read was in flight.
+  private leanSuffixInvalidated = false;
   // Pins changed since firstProtectedTaskId was last computed.
   private leanPinsChanged = false;
   private retainedDetailBytes = 0;
@@ -1582,7 +1584,11 @@ export class ReactiveSessionHandle {
    * suffix read, which reads just the missing rows.
    */
   private invalidateLeanSuffix(): void {
-    if (this.leanSyncInflight || !this.stateSnapshot.connected || !this.leanSuffixGap()) return;
+    if (this.leanSyncInflight) {
+      this.leanSuffixInvalidated = true;
+      return;
+    }
+    if (!this.stateSnapshot.connected || !this.leanSuffixGap()) return;
     void this.syncLeanHistory('suffix').catch(() => {});
   }
 
@@ -1593,14 +1599,17 @@ export class ReactiveSessionHandle {
       return mode === 'sync'
         ? this.leanSyncInflight.then(() => this.syncLeanHistory())
         : this.leanSyncInflight;
+    this.leanSuffixInvalidated = false;
     const operation = this.doSyncLeanHistory(mode).then(
       (completed) => {
         if (this.leanSyncInflight !== operation) return;
         this.leanSyncInflight = null;
         // An extension can land between the last gap check and this cleanup.
-        // After a failed read, only a new invalidation (an extension, or the
-        // reconnect/auth/visibility resync) retries: never an immediate loop.
-        if (completed) this.invalidateLeanSuffix();
+        // After a failed read, retry once only for an invalidation that
+        // arrived during it, as refreshQueue does; a persistent failure with
+        // none waits for the next extension or the reconnect/auth/visibility
+        // resync, never an immediate loop.
+        if (completed || this.leanSuffixInvalidated) this.invalidateLeanSuffix();
       },
       (error) => {
         if (this.leanSyncInflight === operation) this.leanSyncInflight = null;

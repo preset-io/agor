@@ -328,6 +328,30 @@ it('trims again once the reader returns with the jump-to-bottom button', async (
   await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
 });
 
+it('keeps a reader who scrolls up right after jump-to-bottom where they went', async () => {
+  const { client, addTurn } = transport(10);
+  let jumpToBottom: (() => void) | undefined;
+  const viewport = await mount(client, (toBottom) => {
+    jumpToBottom = toBottom;
+  });
+  for (let i = 0; i < 25; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)));
+  await scrollTo(viewport, Math.floor((viewport.scrollHeight - viewport.clientHeight) / 2));
+  for (let i = 0; i < 15; i++) await addTurn();
+  await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
+  expect(mountedTurns(viewport)).toEqual(range(5, 49));
+
+  // The jump and a 25px upward wheel land together: the upward input wins.
+  act(() => {
+    jumpToBottom!();
+    viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: -25, bubbles: true }));
+    viewport.scrollTop -= 25;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(distanceFromBottom(viewport)).toBeGreaterThan(20);
+  expect(mountedTurns(viewport)).toEqual(range(5, 49));
+});
+
 it('trims again once the panel is reactivated after the reader scrolled away', async () => {
   const { client, addTurn } = transport(10);
   let setActive!: (active: boolean) => void;
