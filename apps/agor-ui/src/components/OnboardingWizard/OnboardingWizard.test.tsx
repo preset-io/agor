@@ -1571,6 +1571,54 @@ describe('OnboardingWizard', () => {
     );
   });
 
+  it.each([false, true])(
+    'can skip a removed saved template and complete without a teammate (saved board: %s)',
+    async (hasBoard) => {
+      const onComplete = vi.fn();
+      const board = makeBoard({ board_id: TEST_BOARD_ID });
+      const { boardsService } = renderWizard({
+        onComplete,
+        boardById: hasBoard ? new Map([[board.board_id, board]]) : undefined,
+        user: makeUser({
+          preferences: {
+            onboarding: {
+              ...(hasBoard ? { boardId: board.board_id } : {}),
+              teammateDisplayName: 'Rusty',
+              teammateTemplateId: 'removed-template',
+            },
+          },
+        }),
+      });
+      if (hasBoard) {
+        expect(
+          await screen.findByText(/removed-template.*no longer available/i)
+        ).toBeInTheDocument();
+        clickButton('Back'); // done → tools
+        clickButton('Back'); // tools → llm
+        clickButton('Back'); // llm → workspace
+      } else {
+        clickButton(/skip for now/i); // goals → workspace
+      }
+      expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
+      clickButton(/skip for now/i); // workspace → llm
+      clickButton(/skip for now/i); // llm → tools
+      clickButton(/skip for now/i); // tools → done
+      expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
+      clickButton(/open my board/i);
+      await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boardId: TEST_BOARD_ID,
+          teammateName: undefined,
+          templateId: null,
+          sourceBranch: undefined,
+        }),
+        expect.anything()
+      );
+      expect(boardsService.create).toHaveBeenCalledTimes(hasBoard ? 0 : 1);
+    }
+  );
+
   it('exposes progress semantics and moves focus to the new step heading', async () => {
     renderWizard({ initialStep: 'goals' });
 

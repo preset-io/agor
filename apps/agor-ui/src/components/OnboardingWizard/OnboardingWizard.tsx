@@ -1075,6 +1075,7 @@ export function OnboardingWizard({
       setTeammateName('');
       setTeammateEmoji('🤖');
       setSelectedTemplateId(null);
+      setInvalidSavedTemplateId(null);
     }
     // Skipping the LLM step must not leave a merely *highlighted* provider
     // behind. Selecting a card sets `selectedAgent` before any key is entered,
