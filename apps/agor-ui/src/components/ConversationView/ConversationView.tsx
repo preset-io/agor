@@ -198,6 +198,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
+        // A remounted container (reopening a session renders a spinner first)
+        // starts a fresh scroll baseline, as on first mount: the hook would
+        // otherwise read the old container's last position against this one's
+        // first scroll as an upward scroll and release the bottom lock.
+        state.lastScrollTop = undefined;
+        state.ignoreScrollToTop = undefined;
         let height = element.clientHeight;
         let resizeGeneration = 0;
         let guardedDifference = 0;
@@ -246,11 +252,16 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       // Clearing the escape on an explicit go-to-bottom intent lets the pin
       // survive until the round-tripped/streamed content actually arrives.
       state.escapedFromLock = false;
+      // Land first, synchronously: the library scrolls a frame later, but its
+      // isAtBottom flips now, and a trim that ran mid-jump would anchor on a
+      // turn above the bottom and fight the scroll.
+      const viewport = scrollRef.current;
+      if (viewport) viewport.scrollTop = viewport.scrollHeight;
       // initial/resize options do not apply to this explicit call: without
       // animation it springs through history. Late code-block shrinkage can
       // then look like upward user scrolling and cancel the initial bottom lock.
       scrollToBottom({ animation: 'instant' });
-    }, [state, scrollToBottom]);
+    }, [state, scrollRef, scrollToBottom]);
 
     // Scroll to top. While content is still streaming/growing, the library's
     // persistent observer can re-pin to the bottom before our scrollTop write
@@ -461,7 +472,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // request, a settled turn) moves the first protected turn: trim again then,
     // without waiting for another turn to arrive.
     const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn re-runs the trim when protection is released.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
     useLayoutEffect(() => {
       const viewport = scrollRef.current;
       if (
@@ -470,9 +481,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         loadingOlder ||
         tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW ||
         // The rendered flags re-run this when the reader returns to the bottom;
-        // the hook's live state confirms the lock is engaged right now.
+        // the hook's live state decides whether the lock is engaged right now.
+        // The rendered escape is no gate: handleScrollToBottom (jump button,
+        // send, panel activation) clears the live one, and the rendered copy
+        // follows only a manual scroll down.
         !isAtBottom ||
-        escapedFromLock ||
         !state.isAtBottom ||
         state.escapedFromLock
       )

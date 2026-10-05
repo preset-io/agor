@@ -13,6 +13,7 @@ import {
 } from '@agor-live/client';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
+import { useState } from 'react';
 import { afterEach, expect, it } from 'vitest';
 import { ConversationView } from './ConversationView';
 
@@ -145,12 +146,15 @@ function transport(persisted: number) {
   return { client, addTurn, emitMessage };
 }
 
-async function mount(client: AgorClient) {
+async function mount(
+  client: AgorClient,
+  onScrollRef?: (scrollToBottom: () => void, scrollToTop: () => void) => void
+) {
   render(
     <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
       <App>
         <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
-          <ConversationView client={client} sessionId={SESSION_ID} />
+          <ConversationView client={client} sessionId={SESSION_ID} onScrollRef={onScrollRef} />
         </div>
       </App>
     </ConfigProvider>
@@ -299,4 +303,64 @@ it('trims a parked reader once the last pending widget that held the window open
   await emitMessage('patched', widget('submitted'));
   await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(20, 49)), { timeout: 5_000 });
   await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
+});
+
+it('trims again once the reader returns with the jump-to-bottom button', async () => {
+  const { client, addTurn } = transport(10);
+  // The button (SessionPanelContent) calls exactly what onScrollRef hands out.
+  let jumpToBottom: (() => void) | undefined;
+  const viewport = await mount(client, (toBottom) => {
+    jumpToBottom = toBottom;
+  });
+  for (let i = 0; i < 25; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)));
+
+  // Scrolled up while turns arrive: nothing is trimmed under the reader.
+  await scrollTo(viewport, Math.floor((viewport.scrollHeight - viewport.clientHeight) / 2));
+  for (let i = 0; i < 15; i++) await addTurn();
+  await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
+  expect(mountedTurns(viewport)).toEqual(range(5, 49));
+
+  act(() => jumpToBottom!());
+  await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
+  for (let i = 0; i < 5; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(25, 54)), { timeout: 5_000 });
+  await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
+});
+
+it('trims again once the panel is reactivated after the reader scrolled away', async () => {
+  const { client, addTurn } = transport(10);
+  let setActive!: (active: boolean) => void;
+  function Panel() {
+    const [active, set] = useState(true);
+    setActive = set;
+    return (
+      <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+        <App>
+          <div style={{ height: 'calc(100dvh - 32px)', display: 'flex', flexDirection: 'column' }}>
+            <ConversationView client={client} sessionId={SESSION_ID} isActive={active} />
+          </div>
+        </App>
+      </ConfigProvider>
+    );
+  }
+  render(<Panel />);
+  await screen.findByText(/Answer 9\./);
+  const viewport = () => screen.getByTestId('conversation-scroll-container');
+  for (let i = 0; i < 25; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport())).toEqual(range(5, 34)));
+  await scrollTo(viewport(), Math.floor((viewport().scrollHeight - viewport().clientHeight) / 2));
+  for (let i = 0; i < 15; i++) await addTurn();
+  await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
+  expect(mountedTurns(viewport())).toEqual(range(5, 49));
+
+  // Switching away releases the session; back, it reopens at the latest turns
+  // and the reader is parked again: turns beyond the window are trimmed.
+  act(() => setActive(false));
+  act(() => setActive(true));
+  await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
+  await waitFor(() => expect(distanceFromBottom(viewport())).toBeLessThan(2), { timeout: 5_000 });
+  for (let i = 0; i < 30; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport())).toEqual(range(50, 79)), { timeout: 5_000 });
+  await waitFor(() => expect(distanceFromBottom(viewport())).toBeLessThan(2), { timeout: 5_000 });
 });
