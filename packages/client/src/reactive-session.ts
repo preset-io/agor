@@ -37,6 +37,8 @@ export const LEAN_TRANSCRIPT_TASK_WINDOW = 3 * LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
  */
 export const LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET = 32 * 1024 * 1024;
 const isLeanActive = isTaskExecuting;
+// Settled Task events the first page defers (bounded; see deferLeanTurn).
+const MAX_DEFERRED_LEAN_TURNS = 256;
 // Concurrent `$in` count probes while the first page checks Session.tasks.
 const LEAN_MEMBERSHIP_PROBE_CONCURRENCY = 4;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
@@ -313,6 +315,9 @@ export class ReactiveSessionHandle {
   private leanCursorReset = false;
   // Pins changed since firstProtectedTaskId was last computed.
   private leanPinsChanged = false;
+  // Settled Task events refused while the first page loads: they cannot be
+  // placed yet. Placed (read) once listed after the reconciled marker.
+  private readonly leanDeferredTaskIds = new Set<string>();
   private retainedDetailBytes = 0;
 
   /**
@@ -942,6 +947,7 @@ export class ReactiveSessionHandle {
     this.displayRanks = undefined;
     this.leanWindow = undefined;
     this.leanBasis = undefined;
+    this.leanDeferredTaskIds.clear();
     this.retiredStreamTasks.clear();
     this.queueSnapshot = [];
     this.detailInflight.clear();
@@ -1534,6 +1540,45 @@ export class ReactiveSessionHandle {
     return rank !== undefined && rank < this.leanWindow.start;
   }
 
+  /** A settled Task event the first page could not place yet (see outsideLeanWindow). */
+  private deferLeanTurn(taskId: string): void {
+    if (!this.stateSnapshot.loading) return;
+    this.leanDeferredTaskIds.add(taskId);
+    if (this.leanDeferredTaskIds.size > MAX_DEFERRED_LEAN_TURNS) {
+      const oldest = this.leanDeferredTaskIds.values().next().value;
+      if (oldest !== undefined) this.leanDeferredTaskIds.delete(oldest);
+    }
+  }
+
+  /**
+   * Place turns whose settled events arrived before the first page committed.
+   * Once Session.tasks lists one after the reconciled marker (its Session patch
+   * may land during the first page, which then plans again, or only after it
+   * committed), read it like a reconnect does: every unloaded position after
+   * the marker, by ID. One listed above the window is history and is dropped,
+   * so a trimmed or never-loaded turn is not resurrected; one not yet listed
+   * waits for its patch.
+   */
+  private placeDeferredLeanTurns(): void {
+    if (this.leanDeferredTaskIds.size === 0 || this.stateSnapshot.loading) return;
+    const window = this.leanWindow;
+    if (!window || !this.followsDisplayOrder()) {
+      // Task-ID order admits traffic without placing it by position.
+      this.leanDeferredTaskIds.clear();
+      return;
+    }
+    const loaded = this.indexStreamTasks(this.stateSnapshot.tasks).byId;
+    let listedAfter = false;
+    for (const taskId of this.leanDeferredTaskIds) {
+      const rank = this.displayRank(taskId);
+      if (!loaded.has(taskId) && rank === undefined) continue;
+      this.leanDeferredTaskIds.delete(taskId);
+      if (!loaded.has(taskId) && rank !== undefined && rank >= window.reconciled)
+        listedAfter = true;
+    }
+    if (listedAfter) void this.syncLeanHistory().catch(() => {});
+  }
+
   private syncLeanHistory(older = false): Promise<void> {
     if (this.disposed || this.stateSnapshot.terminal) return Promise.resolve();
     if (this.leanSyncInflight)
@@ -1874,6 +1919,7 @@ export class ReactiveSessionHandle {
           lastSyncedAt: new Date().toISOString(),
         };
       });
+      this.placeDeferredLeanTurns();
     } catch (error) {
       if (stale()) return false;
       const terminal = [403, 404].includes(errorStatusCode(error) ?? 0);
@@ -2037,6 +2083,7 @@ export class ReactiveSessionHandle {
         tasks: orderTasksBySession(prev.tasks, session.tasks),
         lastSyncedAt: new Date().toISOString(),
       }));
+      this.placeDeferredLeanTurns();
     };
     const onSessionRemoved = (session: Session) => {
       if (!this.matchesSession(session.session_id)) return;
@@ -2071,7 +2118,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.outsideLeanWindow(task.task_id, task)) return;
+      if (this.outsideLeanWindow(task.task_id, task)) return this.deferLeanTurn(task.task_id);
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -2089,7 +2136,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.outsideLeanWindow(task.task_id, task)) return;
+      if (this.outsideLeanWindow(task.task_id, task)) return this.deferLeanTurn(task.task_id);
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];

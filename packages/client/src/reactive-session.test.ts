@@ -4061,6 +4061,50 @@ describe('lean transcript window follows displayed turn order', () => {
     ).toBe('legacy');
   });
 
+  it('places a turn that settles during the first page once its Session patch arrives after commit', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 12; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(11);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(11))
+    );
+    // A low-ID callback completes while the first page's messages load; its
+    // Task and Message events arrive, but not yet the Session patch listing it.
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    opts.messagesByTask[callback] = [answer(callback) as Message];
+    mock.emitServiceEvent('tasks', 'patched', makeTask(callback, TaskStatus.COMPLETED));
+    mock.emitServiceEvent('messages', 'created', answer(callback));
+    // Late traffic for history above the first page is deferred alongside it.
+    mock.emitServiceEvent('tasks', 'patched', makeTask(turn(0), TaskStatus.COMPLETED));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
+      Array.from({ length: 10 }, (_, n) => turn(2 + n))
+    );
+    // Only now does the Session patch list it.
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: opts.tasks.map((task) => task.task_id),
+    });
+    await vi.waitFor(() => expect(handle.state.tasks.at(-1)?.task_id).toBe(callback));
+    await handle.ready();
+    expect(handle.getTaskMessages(callback)).toHaveLength(1);
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([
+      ...Array.from({ length: 10 }, (_, n) => turn(2 + n)),
+      callback,
+    ]);
+    while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
+    expect(handle.state.tasks).toHaveLength(13);
+    handle.dispose();
+  });
+
   it('keeps a turn that settles, with its Session patch, while the first page hydrates', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const add = (n: number) => {
