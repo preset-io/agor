@@ -66,6 +66,7 @@ export * from './tenant-deletion';
 export * from './tenant-deletion-manifest';
 export * from './tenant-imperative-tables';
 export * from './tenant-portability-manifest';
+export * from './tenant-restriction';
 export * from './tenant-scope';
 export * from './tenant-unit-of-work';
 // Tenant write gate (generation-bound per-tenant write freeze)
