@@ -398,13 +398,29 @@ For the Cloud runtime Helm chart, `daemon.config.mcp_oauth_relay` renders this
 block into `/home/agor/.agor/config.yaml`; `runtimeServiceCredential.existingSecret`
 supplies the existing cell's `AGOR_CLOUD_RUNTIME_SIGNING_KEY`. With a compatible
 Cloud control plane and Data Plane Agent, managed Cells receive this configuration
-through normal **Create Cell** or **Prepare → Apply Release**. Register the tested
-daemon artifact in Releases with **Daemon supports stable MCP OAuth callback
-relay v1** (`metadata.mcpOauthRelayConfigVersion: 1`). Eligible launch-enabled
-Cells then default on: Cloud derives the trusted console origin, and the agent
-renders the current realized credential IDs and Secret reference together.
-Unknown/older releases receive no unsupported relay configuration. Upgrade Data
-Plane Agents first; do not mark an incompatible daemon as supporting relay.
+through normal **Create Cell** or **Prepare → Apply Release**, including Reapply.
+Compatibility is discovered from the selected daemon image, not a Releases checkbox
+or manually edited artifact metadata. Cloud derives the trusted console origin,
+and the agent renders the current realized credential IDs and Secret reference.
+
+The daemon-owned source file `apps/agor-daemon/runtime-capabilities.json` declares
+`{"schemaVersion":1,"mcpOauthRelayConfigVersions":[1]}`. Maintain this declaration
+with the daemon's configuration schema and relay implementation. **Both this
+runtime source and the updated Cloud image recipe are required**: the recipe
+strictly validates the file and stamps `runtimeCapabilities` into
+`/app/dist/daemon/.build-info` alongside the actual `AGOR_GIT_SHA`. An older source
+without the file has no declaration; a malformed declaration fails the image build.
+Adding the source file alone does not update already-built images or the existing
+generic runtime build-info stamper.
+
+Before Helm, the compatible DPA reads that build-info from the selected target
+image using its owned read-only probe Job, without database or credential
+environment variables. It validates the declaration and matches the embedded SHA
+to the selected artifact tag. A valid matching SHA with no declaration means
+unsupported: use direct OAuth, including rollback to such an older image. Missing,
+malformed or mismatched build-info, or probe failure, instead makes compatibility
+unavailable and stops Apply before Helm; it must not silently select direct mode.
+Upgrade Data Plane Agents before using this discovery path.
 
 No per-cell YAML edits or copied IDs are needed for that managed route. Normal
 reapply and credential rotation preserve the desired intent; a raw image bump or
