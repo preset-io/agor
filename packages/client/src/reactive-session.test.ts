@@ -4100,6 +4100,22 @@ describe('lean transcript window follows displayed turn order', () => {
       ...Array.from({ length: 10 }, (_, n) => turn(2 + n)),
       callback,
     ]);
+    // Only the missing row is read: no resync, and repeated patches read nothing.
+    const suffixReads = () =>
+      vi
+        .mocked(mock.client.service('tasks').find)
+        .mock.calls.filter(
+          ([params]) => params?.query?.$limit !== 0 && '$in' in Object(params?.query?.task_id)
+        ).length;
+    const reads = suffixReads();
+    expect(mock.client.service('sessions').get).toHaveBeenCalledTimes(1);
+    for (let i = 0; i < 3; i++)
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    await handle.ready();
+    expect(suffixReads()).toBe(reads);
     while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(13);
     handle.dispose();
@@ -4168,10 +4184,20 @@ describe('lean transcript window follows displayed turn order', () => {
     opts.deferTaskMessageFetch = undefined;
     mock.releaseMessageFetch();
     await handle.ready();
+    // The first page (the latest ten) commits, then ready() waits while the
+    // suffix read appends the turn listed in flight: only its row, no resync.
     expect(handle.state.tasks.map((task) => task.task_id)).toEqual(
-      Array.from({ length: 10 }, (_, n) => turn(3 + n))
+      Array.from({ length: 11 }, (_, n) => turn(2 + n))
     );
     expect(handle.getTaskMessages(turn(12))).toHaveLength(1);
+    expect(mock.client.service('sessions').get).toHaveBeenCalledTimes(1);
+    expect(
+      vi
+        .mocked(mock.client.service('tasks').find)
+        .mock.calls.map(([params]) => params?.query)
+        .filter((query) => query?.$limit !== 0 && '$in' in Object(query?.task_id))
+        .at(-1)?.task_id
+    ).toEqual({ $in: [turn(12)] });
     while (handle.state.hasOlderTasks) await handle.loadOlderTasks();
     expect(handle.state.tasks).toHaveLength(13);
     handle.dispose();

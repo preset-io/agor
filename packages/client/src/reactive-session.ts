@@ -12,6 +12,8 @@ import {
 } from '@agor/core/client';
 
 export type TaskHydrationMode = 'none' | 'lazy' | 'eager' | 'lean';
+/** A lean history read: first page or resync, an older page, or the missing suffix. */
+type LeanRead = 'sync' | 'older' | 'suffix';
 
 /** POC task page, not a byte limit: an individual turn may still be large. */
 export const LEAN_TRANSCRIPT_TASK_PAGE_SIZE = 10;
@@ -37,8 +39,6 @@ export const LEAN_TRANSCRIPT_TASK_WINDOW = 3 * LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
  */
 export const LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET = 32 * 1024 * 1024;
 const isLeanActive = isTaskExecuting;
-// Settled Task events the first page defers (bounded; see deferLeanTurn).
-const MAX_DEFERRED_LEAN_TURNS = 256;
 // Concurrent `$in` count probes while the first page checks Session.tasks.
 const LEAN_MEMBERSHIP_PROBE_CONCURRENCY = 4;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
@@ -315,12 +315,6 @@ export class ReactiveSessionHandle {
   private leanCursorReset = false;
   // Pins changed since firstProtectedTaskId was last computed.
   private leanPinsChanged = false;
-  // Settled Task events refused while the first page loads: they cannot be
-  // placed yet. Placed (read) once listed after the reconciled marker.
-  private readonly leanDeferredTaskIds = new Set<string>();
-  // The deferred set overflowed: an evicted turn may be the only one that
-  // needed placing, so any unloaded position after the marker is read.
-  private leanDeferredOverflow = false;
   private retainedDetailBytes = 0;
 
   /**
@@ -950,8 +944,6 @@ export class ReactiveSessionHandle {
     this.displayRanks = undefined;
     this.leanWindow = undefined;
     this.leanBasis = undefined;
-    this.leanDeferredTaskIds.clear();
-    this.leanDeferredOverflow = false;
     this.retiredStreamTasks.clear();
     this.queueSnapshot = [];
     this.detailInflight.clear();
@@ -1315,7 +1307,7 @@ export class ReactiveSessionHandle {
       !this.stateSnapshot.hasOlderTasks
     )
       return Promise.resolve();
-    return this.syncLeanHistory(true);
+    return this.syncLeanHistory('older');
   }
 
   /**
@@ -1544,67 +1536,68 @@ export class ReactiveSessionHandle {
     return rank !== undefined && rank < this.leanWindow.start;
   }
 
-  /** A settled Task event the first page could not place yet (see outsideLeanWindow). */
-  private deferLeanTurn(taskId: string): void {
-    if (!this.stateSnapshot.loading) return;
-    this.leanDeferredTaskIds.add(taskId);
-    if (this.leanDeferredTaskIds.size > MAX_DEFERRED_LEAN_TURNS) {
-      const oldest = this.leanDeferredTaskIds.values().next().value;
-      if (oldest !== undefined) this.leanDeferredTaskIds.delete(oldest);
-      this.leanDeferredOverflow = true;
+  /**
+   * The one suffix planner: every Session.tasks position after the reconciled
+   * marker that the transcript does not hold (turns dispatched while offline, a
+   * turn that settled before the first page could place it, wherever its ID
+   * sorts). Live Session patches never move the marker, so they cannot hide
+   * one. Past a window of them, rebase onto the newest window, keeping
+   * everything from the first protected turn.
+   */
+  private planLeanSuffix(
+    order: readonly string[],
+    window: { start: number; reconciled: number },
+    shown: ReadonlySet<string>,
+    session: Session | null
+  ): { start: number; wanted: string[] } {
+    let start = window.start;
+    let wanted = order.slice(window.reconciled).filter((id) => !shown.has(id));
+    if (wanted.length > LEAN_TRANSCRIPT_TASK_WINDOW) {
+      start = Math.max(
+        start,
+        Math.min(
+          this.leanProtectedRank({ ...this.stateSnapshot, session }) ?? order.length,
+          order.length - LEAN_TRANSCRIPT_TASK_WINDOW
+        )
+      );
+      wanted = order.slice(Math.max(start, window.reconciled)).filter((id) => !shown.has(id));
     }
+    return { start, wanted };
+  }
+
+  /** Whether the accepted Session.tasks holds an unloaded position after the marker. */
+  private leanSuffixGap(): boolean {
+    const window = this.leanWindow;
+    const order = this.stateSnapshot.session?.tasks;
+    if (!window || !order || this.stateSnapshot.loading || !this.followsDisplayOrder())
+      return false;
+    const loaded = this.indexStreamTasks(this.stateSnapshot.tasks).byId;
+    return order.slice(window.reconciled).some((id) => !loaded.has(id));
   }
 
   /**
-   * Place turns whose settled events arrived before the first page committed.
-   * Once Session.tasks lists one after the reconciled marker (its Session patch
-   * may land during the first page, which then plans again, or only after it
-   * committed), read it like a reconnect does: every unloaded position after
-   * the marker, by ID. One listed above the window is history and is dropped,
-   * so a trimmed or never-loaded turn is not resurrected; one not yet listed
-   * waits for its patch. After the set overflowed, the first list with any
-   * unloaded position after the marker is read the same way.
+   * A Session.tasks extension may list turns the transcript does not hold.
+   * Like refreshQueue's invalidation: a running read re-checks the gap after
+   * it commits (and once more as it settles), so only an idle handle starts a
+   * suffix read, which reads just the missing rows.
    */
-  private placeDeferredLeanTurns(): void {
-    if (
-      (this.leanDeferredTaskIds.size === 0 && !this.leanDeferredOverflow) ||
-      this.stateSnapshot.loading
-    )
-      return;
-    const window = this.leanWindow;
-    if (!window || !this.followsDisplayOrder()) {
-      // Task-ID order admits traffic without placing it by position.
-      this.leanDeferredTaskIds.clear();
-      this.leanDeferredOverflow = false;
-      return;
-    }
-    const loaded = this.indexStreamTasks(this.stateSnapshot.tasks).byId;
-    let listedAfter = false;
-    for (const taskId of this.leanDeferredTaskIds) {
-      const rank = this.displayRank(taskId);
-      if (!loaded.has(taskId) && rank === undefined) continue;
-      this.leanDeferredTaskIds.delete(taskId);
-      if (!loaded.has(taskId) && rank !== undefined && rank >= window.reconciled)
-        listedAfter = true;
-    }
-    if (
-      this.leanDeferredOverflow &&
-      this.stateSnapshot.session?.tasks?.slice(window.reconciled).some((id) => !loaded.has(id))
-    ) {
-      this.leanDeferredOverflow = false;
-      listedAfter = true;
-    }
-    if (listedAfter) void this.syncLeanHistory().catch(() => {});
+  private invalidateLeanSuffix(): void {
+    if (this.leanSyncInflight || !this.stateSnapshot.connected || !this.leanSuffixGap()) return;
+    void this.syncLeanHistory('suffix').catch(() => {});
   }
 
-  private syncLeanHistory(older = false): Promise<void> {
+  private syncLeanHistory(mode: LeanRead = 'sync'): Promise<void> {
     if (this.disposed || this.stateSnapshot.terminal) return Promise.resolve();
+    // A running read drains the suffix itself; a resync runs after it.
     if (this.leanSyncInflight)
-      return older
-        ? this.leanSyncInflight
-        : this.leanSyncInflight.then(() => this.syncLeanHistory());
-    const operation = this.doSyncLeanHistory(older).finally(() => {
-      if (this.leanSyncInflight === operation) this.leanSyncInflight = null;
+      return mode === 'sync'
+        ? this.leanSyncInflight.then(() => this.syncLeanHistory())
+        : this.leanSyncInflight;
+    const operation = this.doSyncLeanHistory(mode).finally(() => {
+      if (this.leanSyncInflight !== operation) return;
+      this.leanSyncInflight = null;
+      // An extension can land between the last gap check and this cleanup.
+      this.invalidateLeanSuffix();
     });
     this.leanSyncInflight = operation;
     return operation;
@@ -1654,17 +1647,24 @@ export class ReactiveSessionHandle {
    *
    * Display order: the transcript is Session.tasks positions [start, …). The
    * first page loads the last page of positions; an older page the page above
-   * `start`; a reconnect every position after the reconciled marker it does
-   * not hold, and refreshes the turns it holds. Past a window of those it
-   * rebases onto the newest window, keeping everything from the first
-   * protected turn. Tasks are read by ID in bounded, session-scoped pages.
+   * `start`. A resync/reconnect refreshes the turns it holds and reads the
+   * suffix plan (planLeanSuffix); a `suffix` read only the plan's missing rows.
+   * After every commit the read drains the suffix while the accepted list still
+   * extends past the marker, so `ready()` covers a turn listed in flight. Tasks
+   * are read by ID in bounded, session-scoped pages.
    */
-  private async doSyncLeanHistory(older: boolean): Promise<void> {
-    while (await this.readLeanHistory(older));
+  private async doSyncLeanHistory(mode: LeanRead): Promise<void> {
+    let next: LeanRead | undefined = mode;
+    while (next) {
+      const outcome = await this.readLeanHistory(next);
+      if (outcome === 'replan') continue;
+      next = outcome === 'committed' && this.leanSuffixGap() ? 'suffix' : undefined;
+    }
   }
 
-  /** One read and commit; true when a rebase must plan again (see below). */
-  private async readLeanHistory(older: boolean): Promise<boolean> {
+  /** One read and commit; `replan` when it must plan again (see below). */
+  private async readLeanHistory(mode: LeanRead): Promise<'replan' | 'committed' | 'ended'> {
+    const older = mode === 'older';
     const generation = this.leanConnectionGeneration;
     const stale = () =>
       this.disposed || this.stateSnapshot.terminal || generation !== this.leanConnectionGeneration;
@@ -1679,7 +1679,7 @@ export class ReactiveSessionHandle {
         .filter((task) => task.status !== TaskStatus.QUEUED)
         .map((task) => task.task_id);
       const [fetchedSession, result, refreshed] = await Promise.all([
-        older && this.stateSnapshot.session
+        mode !== 'sync' && this.stateSnapshot.session
           ? Promise.resolve(this.stateSnapshot.session)
           : this.client.service('sessions').get(this.sessionId),
         // Display order reads Tasks by position below. The task-ID page is the
@@ -1695,19 +1695,21 @@ export class ReactiveSessionHandle {
                 ...(cursor ? { task_id: { $lte: cursor } } : {}),
               },
             }),
-        window && !older ? this.fetchLeanTasks(shownIds, stale) : Promise.resolve([] as Task[]),
-        older ? Promise.resolve() : this.refreshQueue(),
+        window && mode === 'sync'
+          ? this.fetchLeanTasks(shownIds, stale)
+          : Promise.resolve([] as Task[]),
+        mode === 'sync' ? this.refreshQueue() : Promise.resolve(),
       ]);
-      if (stale()) return false;
+      if (stale()) return 'ended';
       const session = fetchedSession;
       const rows = !result ? [] : Array.isArray(result) ? result : result.data;
       let display = !!window;
       if (!window && !older && this.options.cacheScope === 'session' && !this.leanOrder) {
         display = await this.listsEveryDispatchedTask(session.tasks, rows, stale);
-        if (stale()) return false;
+        if (stale()) return 'ended';
       }
       // A list that moved placed positions: plan again in task-ID order.
-      if (window && !this.acceptLeanOrder(session.tasks)) return true;
+      if (window && !this.acceptLeanOrder(session.tasks)) return 'replan';
       this.canonicalSessionId = session.session_id;
       const byId = new Map(this.stateSnapshot.tasks.map((task) => [task.task_id, task]));
       for (const task of this.queueSnapshot) byId.set(task.task_id, task);
@@ -1726,32 +1728,18 @@ export class ReactiveSessionHandle {
           start = Math.max(0, window.start - pageSize);
           wanted = order.slice(start, window.start);
         } else {
-          // Every position after the reconciled marker that the transcript does
-          // not hold: turns dispatched while offline, wherever their IDs sort. A
-          // live Session patch cannot hide them; it never moves the marker.
-          start = window.start;
-          wanted = order.slice(window.reconciled).filter((id) => !shown.has(id));
-          if (wanted.length > LEAN_TRANSCRIPT_TASK_WINDOW) {
-            start = Math.max(
-              start,
-              Math.min(
-                this.leanProtectedRank({ ...this.stateSnapshot, session }) ?? order.length,
-                order.length - LEAN_TRANSCRIPT_TASK_WINDOW
-              )
-            );
-            wanted = order.slice(Math.max(start, window.reconciled)).filter((id) => !shown.has(id));
-          }
+          ({ start, wanted } = this.planLeanSuffix(order, window, shown, session));
         }
         // The first page's task-ID page usually holds these turns already.
         const known = new Map<string, Task>(rows.map((task) => [task.task_id, task]));
         const missing = wanted.filter((id) => !known.has(id));
         for (const task of await this.fetchLeanTasks(missing, stale)) known.set(task.task_id, task);
-        if (stale()) return false;
+        if (stale()) return 'ended';
         page = wanted.flatMap((id) => {
           const task = known.get(id);
           return task && task.status !== TaskStatus.QUEUED ? [task] : [];
         });
-        if (window && !older) {
+        if (window && mode === 'sync') {
           // A loaded turn the refresh no longer returns is gone.
           for (const id of shownIds) byId.delete(id);
           for (const task of refreshed) byId.set(task.task_id, task);
@@ -1761,7 +1749,7 @@ export class ReactiveSessionHandle {
         const candidates = rows.filter((task) => task.task_id !== cursor);
         page = candidates.slice(0, pageSize);
         hasOlder = cursor ? candidates.length >= pageSize : candidates.length > pageSize;
-        if (!older) {
+        if (mode === 'sync') {
           // A reconnect can span more than ten newly completed turns. Fill the
           // already-open ID window so advancing the latest page cannot strand
           // an invisible gap above the older-history cursor. Never walk before
@@ -1769,7 +1757,7 @@ export class ReactiveSessionHandle {
           const through = rows[0]?.task_id;
           let after = this.leanOldestTaskId;
           while (this.options.cacheScope !== 'preview' && through && after && after < through) {
-            if (stale()) return false;
+            if (stale()) return 'ended';
             const window = await this.client.service('tasks').find({
               query: {
                 session_id: this.sessionId,
@@ -1786,17 +1774,19 @@ export class ReactiveSessionHandle {
             if (next <= after) throw new Error('History cursor did not advance');
             after = next;
           }
-          // Refresh previously reached history without widening its membership.
-          for (const task of this.stateSnapshot.tasks) {
-            if (stale()) return false;
-            if (page.some((item) => item.task_id === task.task_id)) continue;
-            try {
-              byId.set(task.task_id, await this.client.service('tasks').get(task.task_id));
-            } catch (error) {
-              if (errorStatusCode(error) === 404) byId.delete(task.task_id);
-              else throw error;
-            }
-          }
+          // Refresh previously reached history without widening its membership:
+          // one bounded read; a turn it no longer returns is gone.
+          const reached = this.stateSnapshot.tasks
+            .filter(
+              (task) =>
+                task.status !== TaskStatus.QUEUED &&
+                !page.some((item) => item.task_id === task.task_id)
+            )
+            .map((task) => task.task_id);
+          for (const id of reached) byId.delete(id);
+          for (const task of await this.fetchLeanTasks(reached, stale))
+            byId.set(task.task_id, task);
+          if (stale()) return 'ended';
         }
       }
       for (const task of page) byId.set(task.task_id, task);
@@ -1815,7 +1805,7 @@ export class ReactiveSessionHandle {
       const hydrateTasks = tasks.filter(
         (task) =>
           task.status !== TaskStatus.QUEUED &&
-          (!older || page.some((item) => item.task_id === task.task_id)) &&
+          (mode === 'sync' || page.some((item) => item.task_id === task.task_id)) &&
           !leaving(task)
       );
       for (const task of hydrateTasks) {
@@ -1828,12 +1818,12 @@ export class ReactiveSessionHandle {
         .filter((task) => !fullIds.has(task.task_id))
         .map((task) => task.task_id);
       const leanMessages = await this.fetchLeanTaskMessages(leanIds, stale);
-      if (stale()) return false;
+      if (stale()) return 'ended';
       for (const message of leanMessages) {
         if (message.task_id) snapshots.get(message.task_id)?.push(message);
       }
       for (const task of hydrateTasks) {
-        if (stale()) return false;
+        if (stale()) return 'ended';
         if (fullIds.has(task.task_id))
           snapshots.set(task.task_id, await this.fetchTaskMessagesAtHighWater(task.task_id));
       }
@@ -1842,7 +1832,7 @@ export class ReactiveSessionHandle {
         this.stateSnapshot.terminal ||
         generation !== this.leanConnectionGeneration
       )
-        return false;
+        return 'ended';
       // A rebase drops the turns above its start. If one became protected while
       // this read was in flight, plan again: never drop it, nor keep it above a gap.
       if (
@@ -1851,24 +1841,9 @@ export class ReactiveSessionHandle {
         plan.start > window.start &&
         (this.leanProtectedRank({ ...this.stateSnapshot, session }) ?? plan.start) < plan.start
       )
-        return true;
+        return 'replan';
       // Display order abandoned while this read was in flight: plan again.
-      if (display && this.leanOrder === 'legacy') return true;
-      if (plan && !older) {
-        // The newest list (a Session patch during this read) may name turns
-        // this read neither shows nor fetched: settled before the first page
-        // could place them, so their events were only journaled. Plan again
-        // rather than commit a transcript that ends before them.
-        const latest = this.stateSnapshot.session?.tasks;
-        const shown = new Set(this.stateSnapshot.tasks.map((task) => task.task_id));
-        if (
-          this.sessionMutationSequence > sessionSequence &&
-          latest &&
-          latest !== session.tasks &&
-          latest.slice(plan.reconciled).some((id) => !shown.has(id) && !fetchedIds.has(id))
-        )
-          return true;
-      }
+      if (display && this.leanOrder === 'legacy') return 'replan';
       const reset = !display && this.leanCursorReset;
       if (!display && page.length && (older || reset || !this.leanOldestTaskId))
         this.leanOldestTaskId = page.at(-1)!.task_id;
@@ -1937,9 +1912,9 @@ export class ReactiveSessionHandle {
           lastSyncedAt: new Date().toISOString(),
         };
       });
-      this.placeDeferredLeanTurns();
+      return 'committed';
     } catch (error) {
-      if (stale()) return false;
+      if (stale()) return 'ended';
       const terminal = [403, 404].includes(errorStatusCode(error) ?? 0);
       this.updateState((prev) => ({
         ...prev,
@@ -1960,7 +1935,7 @@ export class ReactiveSessionHandle {
       this.cancelTaskFetch(taskToken);
       this.cancelMessageFetch(messageToken);
     }
-    return false;
+    return 'ended';
   }
 
   private async bootstrap(): Promise<void> {
@@ -2101,7 +2076,7 @@ export class ReactiveSessionHandle {
         tasks: orderTasksBySession(prev.tasks, session.tasks),
         lastSyncedAt: new Date().toISOString(),
       }));
-      this.placeDeferredLeanTurns();
+      this.invalidateLeanSuffix();
     };
     const onSessionRemoved = (session: Session) => {
       if (!this.matchesSession(session.session_id)) return;
@@ -2136,7 +2111,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.outsideLeanWindow(task.task_id, task)) return this.deferLeanTurn(task.task_id);
+      if (this.outsideLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const tasks = prev.tasks.some((t) => t.task_id === task.task_id)
           ? prev.tasks
@@ -2154,7 +2129,7 @@ export class ReactiveSessionHandle {
       if (task.status === TaskStatus.QUEUED) return;
       if (isLeanActive(task)) this.markLeanLive(task.task_id);
       this.recordTaskMutation('upsert', task);
-      if (this.outsideLeanWindow(task.task_id, task)) return this.deferLeanTurn(task.task_id);
+      if (this.outsideLeanWindow(task.task_id, task)) return;
       this.updateState((prev) => {
         const index = prev.tasks.findIndex((t) => t.task_id === task.task_id);
         const nextTasks = index === -1 ? [...prev.tasks, task] : [...prev.tasks];
