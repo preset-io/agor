@@ -55,7 +55,12 @@ import {
   resolveSecurity,
   resolveValidExternalLaunchProvider,
 } from '@agor/core/config';
-import { generateId, resolveDatabaseUrl } from '@agor/core/db';
+import {
+  generateId,
+  isPostgresDatabaseHandle,
+  readTenantRestrictionState,
+  resolveDatabaseUrl,
+} from '@agor/core/db';
 import {
   authenticate,
   Forbidden,
@@ -71,7 +76,12 @@ import { MCP_OAUTH_RELAY } from '@agor/core/types';
 import cors from 'cors';
 import express from 'express';
 import expressStaticGzip from 'express-static-gzip';
-import { createRequireAuthHook } from './auth/require-auth.js';
+import { createTenantRestrictedAuthHook } from './auth/require-auth.js';
+import {
+  assertRuntimeTenantAccess,
+  assertRuntimeTenantRequestAccess,
+  readRequestTenantRestriction,
+} from './auth/tenant-access.js';
 import { reconcileTrackedExecutorGauge } from './executor-tracking.js';
 import { createHttpMetricsMiddleware } from './metrics/http.js';
 import {
@@ -292,7 +302,11 @@ async function startDaemonWithOwnedMetrics(
   // Auth configuration
   // --------------------------------------------------------------------------
   const authenticatedHook = authenticate({ strategies: ['api-key', 'jwt'] });
-  const requireAuthOnly = createRequireAuthHook(authenticatedHook, multiTenancy);
+  const requireAuthOnly = createTenantRestrictedAuthHook(
+    authenticatedHook,
+    multiTenancy,
+    (tenantId, context) => assertRuntimeTenantRequestAccess(db, tenantId, context)
+  );
 
   const enforcePasswordChange = async (context: HookContext) => {
     const user = context.params?.user as User | undefined;
@@ -792,6 +806,13 @@ async function startDaemonWithOwnedMetrics(
   await realtimeRuntime?.connect();
 
   const socketIOConfig = createSocketIOConfig(app, {
+    assertTenantAccess: (tenantId, payload) =>
+      assertRuntimeTenantAccess(db, tenantId, { payload }, readRequestTenantRestriction),
+    // Hosted restriction state is PostgreSQL-only; standalone SQLite observes an open tenant.
+    readTenantRestriction: async (tenantId) =>
+      isPostgresDatabaseHandle(db)
+        ? readTenantRestrictionState(db, tenantId)
+        : { records: [], closed: false },
     corsOrigin,
     credentialsAllowed,
     // Mirror the HTTP terminals service gate (register-hooks.ts) so the

@@ -1,0 +1,359 @@
+import { Forbidden } from '@agor/core/feathers';
+import {
+  BRANCH_CLEANUP_REPORT_SERVICE,
+  BRANCH_DELETION_REPORT_SERVICE,
+  ENVIRONMENT_COMMAND_REPORT_SERVICE,
+  TENANT_RESTRICTED_ERROR_CODE,
+} from '@agor/core/types';
+import {
+  isTenantRestrictedRejection,
+  TENANT_RESTRICTION_OBSERVATION_MS,
+  TENANT_RESTRICTION_READ_TIMEOUT_MS,
+} from './tenant-access.js';
+import { TENANT_SAFETY_TASK_METHODS } from './tenant-safety-settlement.js';
+
+/** This only preserves transport to authenticated service safety guards, never authorizes an RPC. */
+function isTenantSafetyPacket(packet: unknown[]): boolean {
+  const [method, path] = packet;
+  if (path === 'tasks') return TENANT_SAFETY_TASK_METHODS.includes(String(method));
+  return (
+    method === 'create' &&
+    [
+      ENVIRONMENT_COMMAND_REPORT_SERVICE,
+      BRANCH_CLEANUP_REPORT_SERVICE,
+      BRANCH_DELETION_REPORT_SERVICE,
+    ].includes(path as never)
+  );
+}
+
+/** Executor packets except safety RPCs, and service calls, await a read; raw customer packets never do. */
+export function tenantSocketPacketNeedsAdmission(input: {
+  executor: boolean;
+  serviceCall: boolean;
+  packet: unknown[];
+}): boolean {
+  // Safety RPCs are admitted whatever a read says, so they only keep their place in the queue.
+  if (input.executor) return !isTenantSafetyPacket(input.packet);
+  return input.serviceCall;
+}
+
+/** Executor streaming relays only re-emit through the per-tick publication gate; for an executor they write nothing. */
+const STREAMING_RELAY_PATHS = new Set(['messages/streaming', 'tasks/streaming']);
+
+export function isStreamingRelayPacket(packet: unknown[]): boolean {
+  const [method, path] = packet;
+  return (
+    method === 'create' &&
+    typeof path === 'string' &&
+    STREAMING_RELAY_PATHS.has(path.replace(/^\/+|\/+$/g, ''))
+  );
+}
+
+export async function admitTenantSocketPacket(input: {
+  tenantId: string;
+  executor: boolean;
+  packet: unknown[];
+  assertAccess: (tenantId: string) => Promise<void>;
+}): Promise<void> {
+  if (input.executor && isTenantSafetyPacket(input.packet)) return;
+  await input.assertAccess(input.tenantId);
+}
+
+type PacketNext = (error?: Error) => void;
+
+/** Packets one socket may hold behind pending admissions before the socket is disconnected. */
+export const TENANT_SOCKET_PACKET_QUEUE_LIMIT = 1000;
+
+/** Timed-out admission reads one socket may leave running before it starts no more. */
+export const TENANT_SOCKET_STALE_READ_LIMIT = 4;
+
+/** Per-socket packet gate: only `needsAdmission` packets await a read, and every packet dispatches in arrival order. */
+export function createOrderedTenantPacketGate(input: {
+  needsAdmission: (packet: unknown[]) => boolean;
+  admit: (packet: unknown[]) => Promise<void>;
+  /** Executor raw frames that may join this socket's read already in flight for another such frame, never a settled one. */
+  coalesce?: (packet: unknown[]) => boolean;
+  /** Wraps an admitted packet's read and dispatch so later checks in that call can share the read. */
+  scope?: <T>(work: () => T) => T;
+  /** A stuck read rejects its packet after this bound, so later packets never freeze behind it. */
+  admissionTimeoutMs?: number;
+  queueLimit?: number;
+  staleReadLimit?: number;
+  /** Called once when the queue would exceed its limit; every queued and later packet is then rejected. */
+  onOverflow?: () => void;
+}): (packet: unknown[], next: PacketNext) => void {
+  const timeoutMs = input.admissionTimeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
+  const limit = input.queueLimit ?? TENANT_SOCKET_PACKET_QUEUE_LIMIT;
+  const staleLimit = input.staleReadLimit ?? TENANT_SOCKET_STALE_READ_LIMIT;
+  let tail: Promise<void> = Promise.resolve();
+  let queued = 0;
+  let overflowed = false;
+  const running = new Set<Promise<void>>();
+  // Reads that outlived the bound still hold a database connection until they settle.
+  const stale = new Set<Promise<void>>();
+  let shared: Promise<void> | undefined;
+  const enqueue = (packet: unknown[], next: PacketNext, admitted: Promise<boolean>) => {
+    queued++;
+    // Registered in the caller's async context, so dispatch keeps the packet's shared read scope.
+    tail = tail
+      .then(() => admitted)
+      .then((ok) => {
+        queued--;
+        if (ok && !overflowed) next();
+        else rejectTenantSocketPacket(packet, next);
+      })
+      .catch(() => undefined);
+  };
+  const start = (packet: unknown[]): Promise<void> => {
+    const admission = input.admit(packet);
+    running.add(admission);
+    const settle = () => {
+      running.delete(admission);
+      stale.delete(admission);
+      if (shared === admission) shared = undefined;
+    };
+    admission.then(settle, settle);
+    return admission;
+  };
+  const bounded = (admission: Promise<void>): Promise<boolean> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => {
+        if (running.has(admission)) stale.add(admission);
+        // Later raw frames start a fresh read instead of joining one already timed out.
+        if (shared === admission) shared = undefined;
+        resolve(false);
+      }, timeoutMs);
+    });
+    return Promise.race([
+      admission.then(
+        () => true,
+        () => false
+      ),
+      timedOut,
+    ]).finally(() => clearTimeout(timer));
+  };
+  return (packet, next) => {
+    if (overflowed) return rejectTenantSocketPacket(packet, next);
+    if (queued >= limit) {
+      // A backlog this deep means admission is not keeping up; drop the connection rather than packets.
+      overflowed = true;
+      rejectTenantSocketPacket(packet, next);
+      input.onOverflow?.();
+      return;
+    }
+    if (!input.needsAdmission(packet)) {
+      // Raw realtime traffic never reads; it only waits behind an earlier admitted packet.
+      if (queued === 0) next();
+      else enqueue(packet, next, Promise.resolve(true));
+      return;
+    }
+    const joins = input.coalesce?.(packet) === true;
+    if (joins && shared) return enqueue(packet, next, bounded(shared));
+    if (stale.size >= staleLimit) {
+      // The database is not answering this socket: refuse fast rather than start another read.
+      if (queued === 0) rejectTenantSocketPacket(packet, next);
+      else enqueue(packet, next, Promise.resolve(false));
+      return;
+    }
+    const run = input.scope ?? ((work) => work());
+    run(() => {
+      const admission = start(packet);
+      if (joins) shared = admission;
+      enqueue(packet, next, bounded(admission));
+    });
+  };
+}
+
+const packetRejections = new WeakSet<Error>();
+
+/** Reject without dispatching; Socket.IO next(error) alone never settles an RPC ack. */
+export function rejectTenantSocketPacket(packet: unknown[], next: (error: Error) => void): void {
+  // Never serialize a database/observation error or private restriction metadata.
+  const error = new Forbidden('Tenant access cannot be verified');
+  const acknowledge = packet[packet.length - 1];
+  if (typeof acknowledge === 'function') acknowledge(error.toJSON());
+  else {
+    packetRejections.add(error);
+    next(error);
+  }
+}
+
+/** True only for an ack-less packet this gate refused, which Socket.IO reports as a socket 'error'. */
+export function isTenantSocketPacketRejection(error: unknown): boolean {
+  return error instanceof Error && packetRejections.has(error);
+}
+
+/** One warning per interval per replica, carrying how many occurrences it stands for. */
+export function createRateLimitedSocketWarning(
+  event: string,
+  intervalMs = 60_000,
+  now: () => number = () => performance.now()
+): (socketId: string) => void {
+  let lastAt: number | undefined;
+  let suppressed = 0;
+  return (socketId) => {
+    const at = now();
+    if (lastAt !== undefined && at - lastAt < intervalMs) {
+      suppressed++;
+      return;
+    }
+    console.warn(`[tenant.restriction] ${event} socket=${socketId} suppressed=${suppressed}`);
+    lastAt = at;
+    suppressed = 0;
+  };
+}
+
+/** One warning per interval per replica for refused ack-less packets. */
+export function createRejectedPacketLog(
+  intervalMs = 60_000,
+  now: () => number = () => performance.now()
+): (socketId: string) => void {
+  return createRateLimitedSocketWarning('socket packet refused', intervalMs, now);
+}
+
+export function missingSocketTenant(): Error {
+  return new Forbidden('Tenant access cannot be verified');
+}
+
+/** A codeless 503 from a restriction or generation read: transient, never a rejected credential. */
+export function unavailableSocketHandshakeError(
+  error: unknown
+): (Error & { data: { code: number; className: string } }) | null {
+  if (isTenantRestrictedRejection(error)) return null;
+  const candidate = error as { code?: unknown; className?: unknown } | null;
+  if (candidate?.code !== 503 && candidate?.className !== 'unavailable') return null;
+  const rejection = new Error('Authentication cannot be verified right now') as Error & {
+    data: { code: number; className: string };
+  };
+  rejection.data = { code: 503, className: 'unavailable' };
+  return rejection;
+}
+
+/** Handshake rejection carrying the stable code in `data`, only for the restriction denial itself. */
+export function restrictedSocketHandshakeError(
+  error: unknown
+): (Error & { data: { code: string } }) | null {
+  if (!isTenantRestrictedRejection(error)) return null;
+  const rejection = new Error('Tenant access is restricted') as Error & {
+    data: { code: string };
+  };
+  rejection.data = { code: TENANT_RESTRICTED_ERROR_CODE };
+  return rejection;
+}
+
+type MonitorSkip = 'timeout' | 'error' | 'saturated';
+
+/** Reads one sweep keeps in flight, abandoned ones included, so an outage cannot pile up database load. */
+const TENANT_SOCKET_MONITOR_CONCURRENCY = 8;
+
+interface TenantSocketRestrictionMonitorOptions {
+  timeoutMs?: number;
+  /** A sweep this much slower than its tick is logged, since tenants then wait longer than a tick. */
+  slowSweepMs?: number;
+  now?: () => number;
+}
+
+/** Bounded per-tenant reads; sockets retire only on a positive observation, and a skipped tenant is read again next tick. */
+export class TenantSocketRestrictionMonitor {
+  private readonly pending = new Map<string, { startedAt: number; read: Promise<void> }>();
+  /** At most one abandoned read per tenant may still be running against the database. */
+  private readonly abandoned = new Map<string, Promise<void>>();
+  /** When each monitored tenant was last handed a read, so sweeps start with the longest-waiting ones. */
+  private readonly lastReadAt = new Map<string, number>();
+  private lastWarning?: { at: number; suppressed: number };
+  private readonly timeoutMs: number;
+  private readonly slowSweepMs: number;
+  private readonly now: () => number;
+  constructor(
+    private readonly observe: (tenantId: string) => Promise<void>,
+    options: TenantSocketRestrictionMonitorOptions = {}
+  ) {
+    this.timeoutMs = options.timeoutMs ?? TENANT_RESTRICTION_READ_TIMEOUT_MS;
+    this.slowSweepMs = options.slowSweepMs ?? 10 * TENANT_RESTRICTION_OBSERVATION_MS;
+    this.now = options.now ?? (() => performance.now());
+  }
+
+  async check(tenantIds: Iterable<string>): Promise<void> {
+    const startedAt = this.now();
+    const present = new Set(tenantIds);
+    for (const tenantId of this.lastReadAt.keys())
+      if (!present.has(tenantId)) this.lastReadAt.delete(tenantId);
+    // Least recently read first (never-read tenants lead), so a bounded sweep cannot starve one.
+    const queue = [...present].sort(
+      (a, b) => (this.lastReadAt.get(a) ?? -1) - (this.lastReadAt.get(b) ?? -1)
+    );
+    // A rolling pool: each worker takes the next tenant as soon as its previous one settles or times out.
+    const worker = async () => {
+      for (let tenantId = queue.shift(); tenantId !== undefined; tenantId = queue.shift())
+        await this.checkOne(tenantId);
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(TENANT_SOCKET_MONITOR_CONCURRENCY, queue.length) }, worker)
+    );
+    const elapsed = this.now() - startedAt;
+    if (elapsed >= this.slowSweepMs)
+      this.warn(`sweep slow elapsed_ms=${Math.round(elapsed)} tenants=${present.size}`);
+  }
+
+  private async checkOne(tenantId: string): Promise<void> {
+    const read = this.readFor(tenantId);
+    if (!read) return this.warn('skipped reason=saturated');
+    this.lastReadAt.set(tenantId, this.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<MonitorSkip>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), this.timeoutMs);
+    });
+    // An unverifiable read retires nothing: every RPC still fails closed at admission.
+    const skipped = await Promise.race([
+      read.then(
+        () => undefined,
+        () => 'error' as const
+      ),
+      timedOut,
+    ]);
+    clearTimeout(timer);
+    if (skipped) this.warn(`skipped reason=${skipped}`);
+  }
+
+  /** Shared in-flight read; a read pending past two timeouts is abandoned once, never stacked. */
+  private readFor(tenantId: string): Promise<void> | undefined {
+    const at = this.now();
+    const current = this.pending.get(tenantId);
+    if (current) {
+      const wedged = at - current.startedAt >= 2 * this.timeoutMs;
+      if (!wedged || this.abandoned.has(tenantId)) return current.read;
+      this.pending.delete(tenantId);
+      this.abandoned.set(tenantId, current.read);
+      const forget = () => {
+        if (this.abandoned.get(tenantId) === current.read) this.abandoned.delete(tenantId);
+      };
+      void current.read.then(forget, forget);
+    }
+    // Abandoned reads still hold a connection, so they count toward the concurrency bound.
+    if (this.pending.size + this.abandoned.size >= TENANT_SOCKET_MONITOR_CONCURRENCY)
+      return undefined;
+    const read = Promise.resolve().then(() => this.observe(tenantId));
+    const entry = { startedAt: at, read };
+    this.pending.set(tenantId, entry);
+    const clear = () => {
+      if (this.pending.get(tenantId) === entry) this.pending.delete(tenantId);
+    };
+    void read.then(clear, clear);
+    return read;
+  }
+
+  private warn(detail: string): void {
+    const at = this.now();
+    // One line per minute across every reason; the count carries what was suppressed.
+    const last = this.lastWarning;
+    if (last && at >= last.at && at - last.at < 60_000) {
+      last.suppressed++;
+      return;
+    }
+    console.warn(
+      `[tenant.restriction] socket observation ${detail} suppressed=${last?.suppressed ?? 0}`
+    );
+    this.lastWarning = { at, suppressed: 0 };
+  }
+}
