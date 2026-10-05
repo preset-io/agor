@@ -171,6 +171,26 @@ function assertSessionReadShapeNotWritten(data: object): void {
   }
 }
 
+/**
+ * `tasks` is the Session's dispatch log: the Task repository appends each Task
+ * in the transaction that claims its dispatch, and nothing else writes it.
+ * Clients (the lean transcript) place history by its positions, so no caller
+ * may replace it, whatever its permission or provider.
+ */
+const SESSION_TASKS_SERVER_MANAGED = 'tasks is server-managed: only dispatch appends to it';
+
+function assertSessionTasksNotWritten(data: object): void {
+  if (Object.hasOwn(data, 'tasks')) throw new BadRequest(SESSION_TASKS_SERVER_MANAGED);
+}
+
+/** A new Session starts with no dispatched Tasks; an empty list is accepted for compatibility. */
+function withoutCreateTasks<T extends object>(data: T): T {
+  if (!Object.hasOwn(data, 'tasks')) return data;
+  const { tasks, ...rest } = data as T & { tasks?: unknown };
+  if (!Array.isArray(tasks) || tasks.length > 0) throw new BadRequest(SESSION_TASKS_SERVER_MANAGED);
+  return rest as T;
+}
+
 function normalizeCreateMcpServerIds(value: unknown): MCPServerID[] | undefined {
   if (value === undefined) return undefined;
   if (!Array.isArray(value)) {
@@ -502,6 +522,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
+    data = withoutCreateTasks(data);
     assertSessionReadShapeNotWritten(data);
     const explicitMcpServerIds = normalizeCreateMcpServerIds(
       (data as { mcpServerIds?: unknown }).mcpServerIds
@@ -1115,7 +1136,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         contextFiles: [...(parent.contextFiles || [])],
         permission_config: inherited.permission_config,
         model_config: inherited.model_config,
-        tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
       { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
@@ -1298,7 +1318,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           children: [],
         },
         contextFiles: [...(parent.contextFiles || [])],
-        tasks: [],
         permission_config: permissionConfig,
         model_config: modelConfig,
         callback_config: callbackConfig,
@@ -1833,6 +1852,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (Object.hasOwn(data, 'sdk_home_scope')) {
       throw new BadRequest('sdk_home_scope is immutable and server-managed');
     }
+    assertSessionTasksNotWritten(data);
     assertSessionReadShapeNotWritten(data);
     let replaceAgenticConfig = false;
     if (

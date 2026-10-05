@@ -161,6 +161,15 @@ export const MESSAGE_PAGINATION = {
 } as const;
 
 /**
+ * Tasks loaded by ID: the lean transcript reads a page of its Session's
+ * dispatch order (`Session.tasks`) in one session-scoped `task_id: { $in }`.
+ */
+export const TASK_PAGINATION = {
+  /** Maximum task IDs in one session-scoped Task query. */
+  MAX_TASK_IDS: 100,
+} as const;
+
+/**
  * Git Constants
  */
 export const GIT = {

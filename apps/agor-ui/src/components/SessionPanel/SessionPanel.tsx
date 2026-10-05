@@ -65,7 +65,7 @@ import {
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
 } from '../../store/selectors';
-import { getContextWindowGradient } from '../../utils/contextWindow';
+import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
@@ -632,36 +632,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     null
   );
 
-  // Get latest context window
-  const latestContextWindow = React.useMemo(() => {
-    if (!session?.agentic_tool) return null;
-
-    for (let i = tasks.length - 1; i >= 0; i--) {
-      const task = tasks[i];
-      if (task.computed_context_window !== undefined && task.normalized_sdk_response) {
-        const { contextWindowLimit, contextUsageSnapshot } = task.normalized_sdk_response;
-
-        if (task.computed_context_window > 0) {
-          return {
-            used: task.computed_context_window,
-            limit: contextUsageSnapshot?.maxTokens ?? contextWindowLimit ?? 0,
-            // Forward the full normalized response so ContextWindowPill can
-            // honor `contextUsageSnapshot.percentage` instead of recomputing
-            // from raw used/limit (which is wrong for Codex's baseline-adjusted
-            // display).
-            taskMetadata: {
-              model: task.model,
-              duration_ms: task.duration_ms,
-              agentic_tool: session.agentic_tool,
-              raw_sdk_response: task.raw_sdk_response,
-              normalized_sdk_response: task.normalized_sdk_response,
-            },
-          };
-        }
-      }
-    }
-    return null;
-  }, [tasks, session?.agentic_tool]);
+  // Survives the lean transcript trimming the turn that reported it.
+  const latestContextWindow = React.useMemo(
+    () =>
+      selectLatestContextWindow(
+        reactiveSessionState?.latestContextWindow,
+        tasks,
+        session?.agentic_tool
+      ),
+    [reactiveSessionState?.latestContextWindow, tasks, session?.agentic_tool]
+  );
 
   const attachmentItems = React.useMemo((): SessionAttachmentItem[] => {
     const acc: SessionAttachmentItem[] = [];

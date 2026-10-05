@@ -722,6 +722,7 @@ dbTest(
         const textBytes = dataset === 'tool-heavy' ? 256 : 16_384;
         const toolBytes = dataset === 'tool-heavy' ? 100_000 : 128;
         let latestTaskId!: TaskID;
+        const dispatched: TaskID[] = [];
         for (let index = 0; index < 100; index++) {
           const task = await tasks.create({
             session_id: sessionId,
@@ -732,6 +733,7 @@ dbTest(
             duration_ms: 1000,
           });
           latestTaskId = task.task_id;
+          dispatched.push(task.task_id);
           const input = { value: `CANARY${'x'.repeat(toolBytes)}` };
           await createMessages(repository, [
             {
@@ -767,6 +769,8 @@ dbTest(
             },
           ]);
         }
+        // Dispatch appends each turn to Session.tasks, the lean transcript's order.
+        await sessions.update(sessionId, { tasks: dispatched });
         const measure = async (mode: TaskHydrationMode) => {
           const client = await createRestClient(base);
           client.io = Object.assign(new EventEmitter(), {
@@ -791,8 +795,15 @@ dbTest(
           if (mode === 'lean') {
             expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
             expect(handle.state.tasks).toHaveLength(10);
-            // Subscription + session + task page + queue + one message batch.
-            expect(initial).toHaveLength(5);
+            // Subscription + session + task page + queue + one message batch,
+            // plus the Session.tasks completeness check: the nonqueued count and
+            // one listed-ID membership count (100 positions).
+            expect(initial).toHaveLength(7);
+            expect(
+              initial.filter(
+                (receipt) => receipt.path === '/tasks' && receipt.body.includes('"data":[]')
+              )
+            ).toHaveLength(2);
             expect(initial.filter((receipt) => receipt.path === '/messages')).toHaveLength(1);
           }
           const detailStart = receipts.length;

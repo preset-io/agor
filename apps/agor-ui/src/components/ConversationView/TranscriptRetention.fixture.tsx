@@ -19,6 +19,7 @@ import { ConversationView } from './ConversationView';
 const SESSION_ID = '0199a000-0000-7000-8000-000000000000' as SessionID;
 const PAYLOAD_BYTES = 256 * 1024;
 const THINKING_BYTES = 64 * 1024;
+const LEAN_TEXT_BYTES = 4 * 1024;
 const taskId = (n: number) => `0199a000-0000-7000-8000-${String(n).padStart(12, '0')}` as TaskID;
 let turns = 0;
 let detailReadDelay = 0;
@@ -27,6 +28,8 @@ let mountedHandle = false;
 const editTurns = new Set<number>();
 /** Turns whose answer has a table: Streamdown offers a portaled fullscreen viewer. */
 const tableTurns = new Set<number>();
+/** Turns whose answer carries a marked text payload: what lean history itself keeps. */
+const leanTextTurns = new Set<number>();
 /** Tool result sizes of turns that read a very large file. */
 const payloadBytes = new Map<number, number>();
 /**
@@ -60,6 +63,7 @@ function messages(n: number): Message[] {
   };
   const prefix = `TRANSCRIPT_RETENTION_${n}_`;
   const thinking = `TRANSCRIPT_THINKING_${n}_`;
+  const lean = `TRANSCRIPT_LEAN_${n}_`;
   const [tool, result, answer] = [
     {
       ...base,
@@ -111,6 +115,16 @@ function messages(n: number): Message[] {
             ? `Answer ${n}\n\n| Column | Value |\n| --- | --- |\n| row | TABLE_${n} |`
             : `Answer ${n}`,
         },
+        ...(leanTextTurns.has(n)
+          ? [
+              {
+                type: 'text',
+                text: JSON.parse(
+                  JSON.stringify(lean + 'z'.repeat(LEAN_TEXT_BYTES - lean.length))
+                ) as string,
+              },
+            ]
+          : []),
         ...(editTurns.has(n)
           ? [
               {
@@ -173,11 +187,16 @@ function events() {
 
 const io = Object.assign(events(), { connected: true });
 const tasks = Object.assign(events(), {
-  find: async ({ query }: { query: { task_id?: { $lte?: string } } }) => {
+  find: async ({
+    query,
+  }: {
+    query: { task_id?: { $lte?: string; $in?: string[] }; $limit?: number };
+  }) => {
     const rows = Array.from({ length: turns }, (_, n) => task(n, TaskStatus.COMPLETED))
       .filter((row) => !query.task_id?.$lte || row.task_id <= query.task_id.$lte)
+      .filter((row) => !query.task_id?.$in || query.task_id.$in.includes(row.task_id))
       .reverse();
-    return { data: rows, total: rows.length };
+    return { data: rows.slice(0, query.$limit ?? rows.length), total: rows.length };
   },
   get: async (id: string) => task(Number(id.slice(-12)), TaskStatus.COMPLETED),
 });
@@ -195,10 +214,14 @@ const messageService = Object.assign(events(), {
     return query.transcript === 'lean' ? rows.map(project) : rows;
   },
 });
+/** Session.tasks: the daemon appends each turn at dispatch. */
+const session = () => ({
+  session_id: SESSION_ID,
+  tasks: Array.from({ length: turns }, (_, n) => taskId(n)),
+});
+const sessions = Object.assign(events(), { get: async () => session() });
 const services: Record<string, unknown> = {
-  sessions: Object.assign(events(), {
-    get: async () => ({ session_id: SESSION_ID, tasks: [] }),
-  }),
+  sessions,
   tasks,
   messages: messageService,
   'session-streams': {
@@ -236,11 +259,13 @@ export const fixture = {
   addTurn({
     edit = false,
     table = false,
+    leanText = false,
     bytes = 0,
     inline,
   }: {
     edit?: boolean;
     table?: boolean;
+    leanText?: boolean;
     bytes?: number;
     inline?: Inline;
   } = {}) {
@@ -248,8 +273,10 @@ export const fixture = {
     if (inline) inlineTurns.set(n, inline);
     if (edit) editTurns.add(n);
     if (table) tableTurns.add(n);
+    if (leanText) leanTextTurns.add(n);
     if (bytes) payloadBytes.set(n, bytes);
     tasks.emit('created', task(n, TaskStatus.RUNNING));
+    sessions.emit('patched', session());
     for (const message of messages(n)) messageService.emit('created', message);
     tasks.emit('patched', task(n, TaskStatus.COMPLETED));
     return taskId(n);

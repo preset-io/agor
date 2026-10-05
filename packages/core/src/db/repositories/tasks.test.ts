@@ -835,6 +835,26 @@ describe('TaskRepository.findAll', () => {
 
     const visible = await taskRepo.findAll({ visibleToUserId: viewerId });
     expect(visible.map((task) => task.task_id)).toEqual([visibleTask.task_id]);
+    // Naming a hidden Task by ID does not bypass the Session access predicate.
+    const hiddenTask = (await taskRepo.findAll({})).find(
+      (task) => task.session_id === hiddenSession.session_id
+    )!;
+    await expect(
+      taskRepo.findPage({
+        sessionId: hiddenSession.session_id,
+        taskIds: [hiddenTask.task_id],
+        visibleToUserId: viewerId,
+      })
+    ).resolves.toEqual({ data: [], total: 0 });
+    expect(
+      (
+        await taskRepo.findPage({
+          sessionId: visibleSession.session_id,
+          taskIds: [visibleTask.task_id, hiddenTask.task_id],
+          visibleToUserId: viewerId,
+        })
+      ).data.map((task) => task.task_id)
+    ).toEqual([visibleTask.task_id]);
   });
 });
 

@@ -18,6 +18,7 @@ import {
   PAGINATION,
   resolveExecutorHeartbeatConfig,
   resolveSdkWatchdogConfig,
+  TASK_PAGINATION,
 } from '@agor/core/config';
 import {
   assertTenantWritable,
@@ -396,6 +397,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
     if (typeof query.task_id === 'string') {
       pageOptions.taskId = query.task_id as TaskID;
+    } else if (query.task_id && typeof query.task_id === 'object' && '$in' in query.task_id) {
+      // A page of one Session's dispatch order (the lean transcript).
+      const ids = query.task_id.$in;
+      if (
+        typeof sessionId !== 'string' ||
+        !Array.isArray(ids) ||
+        ids.length > TASK_PAGINATION.MAX_TASK_IDS ||
+        !ids.every((id: unknown) => typeof id === 'string')
+      ) {
+        throw new BadRequest('task_id $in requires an exact session_id and a bounded ID list');
+      }
+      pageOptions.taskIds = ids as TaskID[];
     } else if (query.task_id && typeof query.task_id === 'object') {
       if (typeof sessionId !== 'string') {
         throw new BadRequest('Task hydration cursors require an exact session_id filter');

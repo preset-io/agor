@@ -365,7 +365,6 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  * session metadata (name, model_config, permission_config, callback_config).
  *
  * Sources:
- *   - `/sessions/:id/prompt`  → `tasks`
  *   - `/sessions/:id/stop`    → `status`, `ready_for_prompt`
  *   - executor status updates → `status`, `ready_for_prompt`
  *     (claude/copilot permission-hooks, see packages/executor)
@@ -378,7 +377,10 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  *   - `'session'`           → can patch own session's prompt-flow fields
  *   - `'view'` or `'none'`  → denied
  *
- * Any mixed-field patch (e.g. `{ tasks: [...], name: 'x' }`) fails the
+ * `tasks` is not among them: it is server-managed (dispatch appends it in the
+ * Task repository) and the sessions service rejects it from every caller.
+ *
+ * Any mixed-field patch (e.g. `{ status: 'idle', name: 'x' }`) fails the
  * `isPromptFlowPatchOnly` check and falls through to the strict `'all'` path,
  * so widening the whitelist here cannot accidentally leak metadata writes.
  *
@@ -388,7 +390,6 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
  * writes are independently bound to the exact signed task context.
  */
 export const PROMPT_FLOW_PATCH_FIELDS: readonly string[] = [
-  'tasks',
   'status',
   'ready_for_prompt',
   'sdk_session_id',
