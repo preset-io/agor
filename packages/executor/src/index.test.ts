@@ -198,7 +198,7 @@ describe('AgorExecutor watchdog handoff', () => {
   it('reports quiescence for a stop claimed before this executor could connect', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
-    const get = vi.fn().mockResolvedValue({
+    const getTerminationState = vi.fn().mockResolvedValue({
       task_id: 'task-1',
       status: 'stopping',
       executor_mode: 'templated',
@@ -218,22 +218,54 @@ describe('AgorExecutor watchdog handoff', () => {
       client: {
         service: () => {
           reportTerminationComplete: typeof reportTerminationComplete;
-          get: typeof get;
+          getTerminationState: typeof getTerminationState;
         };
       };
       recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
-    executor.client = { service: () => ({ reportTerminationComplete, get }) };
+    executor.client = { service: () => ({ reportTerminationComplete, getTerminationState }) };
 
     // connectExecutor rejected with Conflict because the task was already
     // stopping; no termination request had been observed over the socket.
     await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
-    expect(get).toHaveBeenCalledOnce();
+    expect(getTerminationState).toHaveBeenCalledWith({ task_id: 'task-1' });
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',
     });
     expect(runtime.execute).not.toHaveBeenCalled();
+  });
+
+  it('recovers a pre-connect stop through the task read on a daemon without the projection', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const reportTerminationComplete = vi.fn().mockResolvedValue({});
+    const getTerminationState = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('not allowed'), { code: 405 }));
+    const get = vi.fn().mockResolvedValue({
+      task_id: 'task-1',
+      status: 'stopping',
+      termination_request: { cause: 'user_stop', requested_at: '2026-07-23T12:00:00.000Z' },
+    });
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: 'prompt',
+      tool: 'codex',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: { service: () => Record<string, unknown> };
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
+    };
+    executor.client = { service: () => ({ reportTerminationComplete, getTerminationState, get }) };
+
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
+    expect(get).toHaveBeenCalledWith('task-1');
+    expect(reportTerminationComplete).toHaveBeenCalledWith({
+      task_id: 'task-1',
+      requested_at: '2026-07-23T12:00:00.000Z',
+    });
   });
 
   it('warns once when provider cleanup remains active after Stop', async () => {
@@ -503,6 +535,8 @@ describe('AgorExecutor signal containment handoff', () => {
     const reportExecutorInterruption = vi.fn().mockResolvedValue(task);
     const reportTerminationComplete = vi.fn().mockResolvedValue(task);
     const get = vi.fn().mockResolvedValue(task);
+    // Stop state is read through the minimal projection, which stays reachable while a tenant is closed.
+    const getTerminationState = vi.fn(async () => task);
     const patch = vi.fn();
     const executor = new AgorExecutor({
       sessionToken: 'token',
@@ -519,9 +553,23 @@ describe('AgorExecutor signal containment handoff', () => {
       recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
     executor.client = {
-      service: () => ({ reportExecutorInterruption, reportTerminationComplete, get, patch }),
+      service: () => ({
+        reportExecutorInterruption,
+        reportTerminationComplete,
+        getTerminationState,
+        get,
+        patch,
+      }),
     };
-    return { executor, reportExecutorInterruption, reportTerminationComplete, get, patch, task };
+    return {
+      executor,
+      reportExecutorInterruption,
+      reportTerminationComplete,
+      getTerminationState,
+      get,
+      patch,
+      task,
+    };
   }
 
   it('aborts immediately but reports quiescence only after the SDK and cleanup return', async () => {
@@ -600,10 +648,11 @@ describe('AgorExecutor signal containment handoff', () => {
     const shutdown = h.executor.shutdownForSignal('SIGTERM', new AbortController().signal);
     await Promise.resolve();
     await Promise.resolve();
-    expect(h.get).not.toHaveBeenCalled();
+    expect(h.getTerminationState).not.toHaveBeenCalled();
     finish();
     await shutdown;
-    expect(h.get).toHaveBeenCalledOnce();
+    expect(h.getTerminationState).toHaveBeenCalledOnce();
+    expect(h.get).not.toHaveBeenCalled();
     expect(h.reportTerminationComplete).toHaveBeenCalledOnce();
   });
 
