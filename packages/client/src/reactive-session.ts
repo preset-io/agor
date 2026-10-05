@@ -1593,12 +1593,20 @@ export class ReactiveSessionHandle {
       return mode === 'sync'
         ? this.leanSyncInflight.then(() => this.syncLeanHistory())
         : this.leanSyncInflight;
-    const operation = this.doSyncLeanHistory(mode).finally(() => {
-      if (this.leanSyncInflight !== operation) return;
-      this.leanSyncInflight = null;
-      // An extension can land between the last gap check and this cleanup.
-      this.invalidateLeanSuffix();
-    });
+    const operation = this.doSyncLeanHistory(mode).then(
+      (completed) => {
+        if (this.leanSyncInflight !== operation) return;
+        this.leanSyncInflight = null;
+        // An extension can land between the last gap check and this cleanup.
+        // After a failed read, only a new invalidation (an extension, or the
+        // reconnect/auth/visibility resync) retries: never an immediate loop.
+        if (completed) this.invalidateLeanSuffix();
+      },
+      (error) => {
+        if (this.leanSyncInflight === operation) this.leanSyncInflight = null;
+        throw error;
+      }
+    );
     this.leanSyncInflight = operation;
     return operation;
   }
@@ -1653,13 +1661,16 @@ export class ReactiveSessionHandle {
    * extends past the marker, so `ready()` covers a turn listed in flight. Tasks
    * are read by ID in bounded, session-scoped pages.
    */
-  private async doSyncLeanHistory(mode: LeanRead): Promise<void> {
+  private async doSyncLeanHistory(mode: LeanRead): Promise<boolean> {
     let next: LeanRead | undefined = mode;
+    let outcome: Awaited<ReturnType<ReactiveSessionHandle['readLeanHistory']>> = 'ended';
     while (next) {
-      const outcome = await this.readLeanHistory(next);
+      outcome = await this.readLeanHistory(next);
       if (outcome === 'replan') continue;
       next = outcome === 'committed' && this.leanSuffixGap() ? 'suffix' : undefined;
     }
+    // Whether the drain completed: false after a failed or abandoned read.
+    return outcome === 'committed';
   }
 
   /** One read and commit; `replan` when it must plan again (see below). */

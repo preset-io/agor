@@ -4160,6 +4160,90 @@ describe('lean transcript window follows displayed turn order', () => {
     handle.dispose();
   });
 
+  it('stops reading a suffix that keeps failing until a new extension or a reconnect', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 12; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(11);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(11))
+    );
+    // A turn settles while the first page loads; it can only be placed by a
+    // suffix read, and that read keeps failing (a persistent 500).
+    const add = (taskId: string) => {
+      opts.tasks.push(makeTask(taskId, TaskStatus.COMPLETED));
+      opts.messagesByTask[taskId] = [answer(taskId) as Message];
+      mock.emitServiceEvent('tasks', 'patched', makeTask(taskId, TaskStatus.COMPLETED));
+    };
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    add(callback);
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    const find = vi.mocked(mock.client.service('tasks').find);
+    const answerFind = find.getMockImplementation()!;
+    let failing = true;
+    let failures = 0;
+    find.mockImplementation(async (params) => {
+      if (failing && '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0) {
+        // Bounded so a retry loop fails this test instead of exhausting memory.
+        if (++failures > 20) return new Promise<never>(() => {});
+        throw Object.assign(new Error('Server error'), { code: 500 });
+      }
+      return answerFind(params);
+    });
+    const suffixReads = () =>
+      find.mock.calls.filter(
+        ([params]) => '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0
+      ).length;
+    const before = suffixReads();
+    const publish = () =>
+      mock.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: opts.tasks.map((task) => task.task_id),
+      });
+    publish();
+    await vi.waitFor(() => expect(handle.state.error).toBe('Server error'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // One failed read, then quiet: no immediate retry loop.
+    expect(suffixReads()).toBe(before + 1);
+    expect(handle.getTask(callback)).toBeUndefined();
+
+    // A later real extension retries once, and recovers once reads succeed.
+    publish();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(suffixReads()).toBe(before + 2);
+    failing = false;
+    const next = turn(12);
+    add(next);
+    publish();
+    await vi.waitFor(() => expect(handle.getTask(callback)).toBeDefined());
+    expect(handle.state.tasks.at(-1)?.task_id).toBe(next);
+    expect(handle.state.error).toBeNull();
+
+    // A reconnect recovers a gap whose suffix read failed, too.
+    failing = true;
+    const another = completionCallbackTaskId(earlierSource, turn(5) as unknown as SessionID);
+    opts.tasks.push(makeTask(another, TaskStatus.COMPLETED));
+    opts.messagesByTask[another] = [answer(another) as Message];
+    publish();
+    await vi.waitFor(() => expect(handle.state.error).toBe('Server error'));
+    const settled = suffixReads();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(suffixReads()).toBe(settled);
+    failing = false;
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+    await handle.ready();
+    expect(handle.getTask(another)).toBeDefined();
+    expect(handle.getTaskMessages(another)).toHaveLength(1);
+    handle.dispose();
+  });
+
   it('keeps a turn that settles, with its Session patch, while the first page hydrates', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const add = (n: number) => {
