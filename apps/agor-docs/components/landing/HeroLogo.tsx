@@ -1,7 +1,9 @@
 'use client';
 
 import { type CSSProperties, useEffect, useId, useRef, useState } from 'react';
+import { CRT_INTRO_ATTR } from '../../lib/crtIntro';
 import styles from './HeroLogo.module.css';
+import { useCrtIntroLocked } from './useCrtIntroLocked';
 
 /*
  * The Agor mark's reveal, ported from the reel intro
@@ -45,6 +47,8 @@ export function HeroLogo({ className }: { className?: string }) {
   const [fading, setFading] = useState(false);
   const svgRef = useRef<SVGSVGElement>(null);
   const maskId = `agor-logo-mask-${useId().replace(/:/g, '')}`;
+  // Behind the CRT intro, hold the reveal until the terminal powers off.
+  const introLocked = useCrtIntroLocked();
 
   // Measure each drawn path (dash lengths), then start every animation on the
   // same frame. Padded by 2: at dashoffset === dasharray exactly, some
@@ -52,7 +56,7 @@ export function HeroLogo({ className }: { className?: string }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: re-measure per take (remount)
   useEffect(() => {
     const svg = svgRef.current;
-    if (!svg) return;
+    if (!svg || introLocked) return;
     setReady(false);
     setLanded(false);
     for (const path of svg.querySelectorAll<SVGPathElement>(`.${styles.drawable}`)) {
@@ -62,7 +66,7 @@ export function HeroLogo({ className }: { className?: string }) {
       raf = requestAnimationFrame(() => setReady(true));
     });
     return () => cancelAnimationFrame(raf);
-  }, [take]);
+  }, [take, introLocked]);
 
   useEffect(() => {
     if (!ready) return;
@@ -77,6 +81,9 @@ export function HeroLogo({ className }: { className?: string }) {
       className={`${styles.logo}${className ? ` ${className}` : ''}`}
       onClick={() => {
         if (fading) return;
+        // A replay is the logo's own show: the troupe emerges from its dots
+        // again, not from where the intro's CRT collapsed.
+        document.documentElement.removeAttribute(CRT_INTRO_ATTR);
         // Clear "landed" in this same render (not the effect's later one), so
         // the troupe never sees the old flag after its replay.
         setLanded(false);

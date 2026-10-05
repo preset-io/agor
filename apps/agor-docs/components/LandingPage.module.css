@@ -3194,3 +3194,9 @@ a.radarBlip .blipName {
     animation: none;
   }
 }
+
+/* Behind the CRT intro (lib/crtIntro.ts) the hero's own animations hold on
+ * their first frame, so they play as the terminal hands over the page. */
+:global(html[data-crt-intro="locked"]) .homeHero :is(*, *::before, *::after) {
+  animation-play-state: paused;
+}

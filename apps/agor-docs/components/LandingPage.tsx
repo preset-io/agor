@@ -2,6 +2,7 @@
 
 import { BoardSection } from './landing/BoardSection';
 import { CommandCenterSection } from './landing/CommandCenterSection';
+import { CrtIntro } from './landing/CrtIntro';
 import { CursorTroupe } from './landing/CursorTroupe';
 import { GovernanceSection } from './landing/GovernanceSection';
 import { HomeHero } from './landing/HomeHero';
@@ -19,6 +20,8 @@ import { TeammatesSection } from './landing/TeammatesSection';
 export function LandingPage() {
   return (
     <LandingShell ctaPrefix="landing">
+      {/* Flagged (?intro=true): the locked CRT intro. See lib/crtIntro.ts. */}
+      <CrtIntro />
       <HomeHero />
       {/* PROTOTYPE, flagged: see CursorTroupe.tsx. */}
       <CursorTroupe />

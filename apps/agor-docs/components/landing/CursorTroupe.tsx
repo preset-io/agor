@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { CRT_INTRO_ATTR } from '../../lib/crtIntro';
 import styles from './CursorTroupe.module.css';
 
 /**
@@ -227,6 +228,17 @@ const centerBand = (r: DOMRect, vh: number) => r.top < vh * 0.6 && r.bottom > vh
 const pill = q('[class*="homeBadge"]');
 /** The hero logo's dots (HeroLogo): top, bottom-left, and right. */
 const logoDot = (i: number): Anchor => nth('[data-logo-dot]', [0, 2, 3][i]);
+// After the CRT intro (lib/crtIntro.ts) the three burst out of the spot its
+// screen collapsed to, the middle of the viewport, instead of the logo.
+const fromCrt = () => document.documentElement.getAttribute(CRT_INTRO_ATTR) === 'done';
+const crtDot: Anchor = () => ({
+  getBoundingClientRect: () =>
+    new DOMRect(window.innerWidth / 2 - 1, window.innerHeight / 2 - 1, 2, 2),
+});
+const emergeFrom =
+  (i: number): Anchor =>
+  (root) =>
+    fromCrt() ? crtDot(root) : logoDot(i)(root);
 const ROW_ITEM = 'a[class*="homeRowItem"]';
 const rowItem = (i: number) => nth(ROW_ITEM, i);
 const team = q('[data-wave-word]');
@@ -522,11 +534,12 @@ const BEATS: Record<SectionId, Beat> = {
   // along the bottom, lighting each link; all three gather around "team"
   // pointing in, and its letters do a wave. Then three friends pop out of
   // Sign up, Book a demo, and Try Agor Cloud to join the huddle.
-  // They wait for the logo's dots to land, then emerge from behind them.
+  // They wait for the logo's dots to land, then emerge from behind them
+  // (after the CRT intro: out of the dot its screen collapsed to).
   hero: {
     delay: 0,
     active: (r, vh, root) =>
-      r.bottom > vh * 0.45 && Boolean(root.querySelector('[data-dots-landed]')),
+      r.bottom > vh * 0.45 && (fromCrt() || Boolean(root.querySelector('[data-dots-landed]'))),
     parts: [0, 1, 2, 3, 4, 5].map((i): Part => {
       const spot = around(team, 40, 19, TEAM_SPOTS[i]);
       if (i >= 3) {
@@ -544,7 +557,7 @@ const BEATS: Record<SectionId, Beat> = {
         appear: 0,
         marks: [
           // A speck behind its dot, then zooming out of it.
-          { at: 0, anchor: logoDot(i), size: 0.06, lock: true },
+          { at: 0, anchor: emergeFrom(i), size: 0.06, lock: true },
           { at: 0.12 + i * 0.14, anchor: pill, fx: (i - 1) * 0.6, dx: (i - 1) * 40, dy: 44 },
           ...(i === 1
             ? ROW_SWEEP.map((when, k) => ({ at: when, anchor: rowItem(k), fx: -0.3, fy: -0.2 }))
@@ -936,6 +949,8 @@ export function CursorTroupe() {
     try {
       flagged ||= localStorage.getItem(ENABLED_KEY) === '1';
     } catch {}
+    // The CRT intro's payoff is the cursors, so it brings the troupe along.
+    flagged ||= document.documentElement.hasAttribute(CRT_INTRO_ATTR);
     const fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
     const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setEnabled(flagged && fine && !calm);

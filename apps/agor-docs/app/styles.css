@@ -252,3 +252,17 @@ html:not(.dark) body:not(:has([class*="landingShell"])) main :is(h1, h2, h3) {
 a[target="_blank"] > svg.x\:align-baseline.x\:shrink-0:last-child {
   display: none;
 }
+
+/* Optional CRT intro on the home page (lib/crtIntro.ts): until it mounts and
+ * while it's up, a black cover hides the page and scrolling is held. */
+html[data-crt-intro="locked"] {
+  overflow: hidden;
+}
+
+html[data-crt-intro="locked"] body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: #050403;
+}
