@@ -756,7 +756,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             <Alert type="info" showIcon title={blockedReason} />
           ) : (
             <Flex vertical gap={token.marginXS}>
-              {(needsApiKey || configuredApp) && (
+              {needsApiKey && (
                 <Form layout="vertical" size="middle" component="div">
                   <Form.Item
                     label={entry.credentials?.label ?? 'Bearer access token'}
