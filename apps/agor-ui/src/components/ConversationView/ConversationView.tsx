@@ -31,6 +31,7 @@ import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
+import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -198,12 +199,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
-        // A remounted container (reopening a session renders a spinner first)
-        // starts a fresh scroll baseline, as on first mount: the hook would
-        // otherwise read the old container's last position against this one's
-        // first scroll as an upward scroll and release the bottom lock.
-        state.lastScrollTop = undefined;
-        state.ignoreScrollToTop = undefined;
+        resetScrollBaseline(state);
         let height = element.clientHeight;
         let resizeGeneration = 0;
         let guardedDifference = 0;
@@ -227,7 +223,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               }
             }, 1);
           });
-          if (state.isAtBottom && !state.escapedFromLock) {
+          if (isBottomLockEngaged(state)) {
             scrollToBottom({ animation: 'instant' });
           }
         });
@@ -244,24 +240,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
     // don't leak the library's optional ScrollToBottom options to callers.
-    const handleScrollToBottom = useCallback(() => {
-      // The library's scrollToBottom() sets isAtBottom=true but never clears
-      // escapedFromLock, so a prior scroll-up leaves the bottom lock half-engaged:
-      // the resize-driven re-pin that follows late/streamed content is gated on
-      // isAtBottom, which a stale escapedFromLock keeps flipping back to false.
-      // Clearing the escape on an explicit go-to-bottom intent lets the pin
-      // survive until the round-tripped/streamed content actually arrives.
-      state.escapedFromLock = false;
-      // Land first, synchronously: the library scrolls a frame later, but its
-      // isAtBottom flips now, and a trim that ran mid-jump would anchor on a
-      // turn above the bottom and fight the scroll.
-      const viewport = scrollRef.current;
-      if (viewport) viewport.scrollTop = viewport.scrollHeight;
-      // initial/resize options do not apply to this explicit call: without
-      // animation it springs through history. Late code-block shrinkage can
-      // then look like upward user scrolling and cancel the initial bottom lock.
-      scrollToBottom({ animation: 'instant' });
-    }, [state, scrollRef, scrollToBottom]);
+    const handleScrollToBottom = useCallback(
+      () => jumpToBottom(state, scrollToBottom),
+      [state, scrollToBottom]
+    );
 
     // Scroll to top. While content is still streaming/growing, the library's
     // persistent observer can re-pin to the bottom before our scrollTop write
@@ -482,12 +464,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW ||
         // The rendered flags re-run this when the reader returns to the bottom;
         // the hook's live state decides whether the lock is engaged right now.
-        // The rendered escape is no gate: handleScrollToBottom (jump button,
-        // send, panel activation) clears the live one, and the rendered copy
-        // follows only a manual scroll down.
         !isAtBottom ||
-        !state.isAtBottom ||
-        state.escapedFromLock
+        !isBottomLockEngaged(state)
       )
         return;
       const anchor = firstVisibleTurn(viewport);
