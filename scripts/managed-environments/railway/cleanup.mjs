@@ -29,6 +29,7 @@ function validateReceipt(preview, environment, receipt) {
       receipt.environmentId === environment.id &&
       environment.name === preview.name &&
       Object.entries(preview.owner).every(([key, value]) => receipt.owner?.[key] === value) &&
+      receipt.owner?.profile === preview.owner.profile &&
       (preview.owner.version === 1 || receipt.owner?.tenantId === undefined) &&
       ['serviceId', 'volumeId', 'volumeInstanceId'].every((key) => uuid(receipt[key])) &&
       phases.every((phase) => typeof receipt.requested?.[phase] === 'boolean'),
@@ -123,6 +124,7 @@ async function snapshot(preview, receipt) {
     }
     requireValue(
       Object.entries(preview.owner).every(([key, value]) => record?.[key] === value) &&
+        record?.profile === preview.owner.profile &&
         record.environmentId === environment.id &&
         record.serviceId === service.id &&
         record.volumeId === receipt.volumeId,

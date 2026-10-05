@@ -4,7 +4,14 @@ import { requireValue, uuid } from './api.mjs';
 export const MARKER = 'AGOR_PREVIEW_BINDING';
 // Non-secret deletion receipt survives removal of the service's binding marker.
 export const CLEANUP_MARKER = 'AGOR_PREVIEW_CLEANUP';
+export function profileSettings(profile = 'sqlite') {
+  requireValue(['sqlite', 'docs'].includes(profile), 'Expected --profile sqlite or docs.');
+  return profile === 'docs'
+    ? { dockerfile: 'docker/Dockerfile.docs-preview', appPath: '/', healthPath: '/' }
+    : { dockerfile: 'docker/Dockerfile', appPath: '/ui/', healthPath: '/health' };
+}
 export function configuration(env, input) {
+  profileSettings(input.profile);
   if (env.RAILWAY_AGOR_PROJECT_ID && !env.RAILWAY_PREVIEW_CONFIG) {
     requireValue(
       uuid(env.RAILWAY_AGOR_PROJECT_ID),
@@ -69,6 +76,8 @@ export function identity(config, input) {
     repository: config.repository,
     branchId: input.binding,
     ref: input.ref,
+    // Preserve every existing SQLite identity, including legacy receipts.
+    ...(input.profile === 'docs' ? { profile: 'docs' } : {}),
   };
 }
 export function resourceName(record) {
@@ -82,12 +91,27 @@ export function resourceName(record) {
         record.projectId,
         record.repository,
         record.branchId,
+        ...(record.profile === 'docs' ? ['docs'] : []),
       ])
     )
     .digest('hex')
     .slice(0, record.version === 2 ? 20 : 32)}`;
 }
 export function appVariables(record, domain, password, previewBase = 'runtime-build') {
+  if (record.profile === 'docs') {
+    return {
+      [MARKER]: JSON.stringify(record),
+      RAILWAY_DOCKERFILE_PATH: profileSettings('docs').dockerfile,
+      AGOR_SOURCE_REPO: `https://github.com/${record.repository}.git`,
+      AGOR_SOURCE_BRANCH: record.ref,
+      NEXT_PUBLIC_SITE_URL: `https://${domain}`,
+      AGOR_DOCS_PREVIEW_ORIGIN: `https://${domain}`,
+      NEXT_TELEMETRY_DISABLED: '1',
+      NODE_ENV: 'development',
+      HOME: '/home/agor',
+      PORT: '3030',
+    };
+  }
   return {
     [MARKER]: JSON.stringify(record),
     AGOR_ADMIN_PASSWORD: password,

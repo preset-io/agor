@@ -69,6 +69,65 @@ restarts never reset an existing password or clear an existing change requiremen
 
 ## Lifecycle and guardrails
 
+### Docs-only preview
+
+Select **`railway-docs`** to run `apps/agor-docs` (Next/Nextra) instead of the
+Agor application. It shares the same launcher, authorization/ownership checks,
+resource limits, lifecycle and cleanup receipts as `railway-sqlite`. It needs
+only secure `RAILWAY_AGOR_PROJECT_ID` and `RAILWAY_API_TOKEN`; the admin password
+is neither required nor forwarded. No daemon, database or agent runtimes start.
+
+1. Push the branch, including these runtime files and any dependency changes.
+2. Have a repo admin import `.agor.yml`, then render **railway-docs** on the
+   branch. Agent-assisted setup uses `agor_repos_import_environment` followed
+   by `agor_environment_set`; credentials belong in the secure variable widget.
+3. Start explicitly to provision a public, unauthenticated preview. The reported
+   app and health URLs both point to `/` on its Railway domain, not `/ui/`.
+4. Push content/component/style changes. The container's `--watch` mode polls
+   the same public GitHub branch every 10 seconds and syncs compatible changes
+   into the running Next dev server; local unpushed changes are never used.
+
+All lifecycle commands use `--profile docs`, including read-only checks:
+
+```sh
+node scripts/managed-environments/railway/launcher.mjs check --profile docs \
+  --repository preset-io/agor --ref YOUR_PUSHED_REF --binding AGOR_BRANCH_UUID
+```
+
+Docs uses a separate ownership/name namespace for the same Agor branch. It
+cannot adopt, stop or delete the SQLite preview; existing SQLite names and
+receipts are unchanged. Stop the old variant **before switching** so it does not
+keep billing unnoticed. Both retained variants count toward the project limit.
+The docs volume holds only the owned Git checkout/cache under
+`/home/agor/.agor/runtime-docs`; Stop retains it and storage charges, Nuke removes
+it with the docs service/environment. The same fail-closed cleanup rules apply.
+
+`docker/Dockerfile.docs-preview` installs just the docs/Git workspace selection
+from the committed lockfile, not the large app preview base. It fetches source
+at runtime using the shared checkout validator. Dependency fingerprints and
+ownership checks must pass before copying. A startup lock permits one writer;
+runtime Git and Next receive a narrow credential-free environment. Next binds
+to `0.0.0.0:3030` and allows its exact preview origin for dev assets/HMR.
+
+Dependency/lockfile/patch changes, Docker/runtime scripts, Next configuration,
+TypeScript configuration and docs build scripts require **push, then Stop/Start**.
+An incompatible update or fetch failure leaves the last applied source serving
+and emits a bounded diagnostic, rather than installing packages inside the live
+server. Start on an already-running service remains read-only. The image defaults
+to `--watch`; invoking its entrypoint without that argument fetches once and
+runs the dev server without subsequent polling.
+
+This is a public **development** preview, not a production deployment or access
+control boundary. Use trusted branches and preview-only provider credentials.
+Next telemetry is disabled; the website's own embeds/tracking remain website
+behavior. Pagefind's generated production search index is not built here; nav
+search works, but full docs search needs a separately built index. Console's
+signup-status CORS may reject preview origins, so the normal unknown-status
+fallback can appear. The dev-only `?cloud_status=` override is available for
+previewing CTA states; it does not change Console policy.
+
+### SQLite application runtime
+
 This runtime example currently supports only the public `preset-io/agor` source.
 Start reuses the runtime checkout validator before any network/provisioning calls,
 so unsupported repositories or branch formats fail before resource creation.

@@ -1,7 +1,7 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { nodes, requireValue, uuid } from './api.mjs';
 import { removePreview } from './cleanup.mjs';
-import { appVariables, identity, MARKER, resourceName } from './configuration.mjs';
+import { appVariables, identity, MARKER, profileSettings, resourceName } from './configuration.mjs';
 
 const inventoryQuery = `query PreviewInventory($id:String!){project(id:$id){id workspaceId
   environments(first:100){edges{node{id name}}pageInfo{hasNextPage}}
@@ -32,6 +32,7 @@ export class Preview {
     Object.assign(this, { api, config, input });
     this.owner = identity(config, input);
     this.name = resourceName(this.owner);
+    this.profile = profileSettings(input.profile);
   }
   async inventory() {
     const { project } = await this.api.query(inventoryQuery, { id: this.config.projectId });
@@ -108,6 +109,7 @@ export class Preview {
       }
       requireValue(
         record?.version === this.owner.version &&
+          (record.profile === undefined || record.profile === 'docs') &&
           uuid(record.branchId) &&
           typeof record.ref === 'string' &&
           (this.config.sharedProject
@@ -161,7 +163,9 @@ export class Preview {
       environment,
     };
     requireValue(
-      !owned.record || Object.entries(this.owner).every(([k, v]) => owned.record[k] === v),
+      !owned.record ||
+        (owned.record.profile === this.owner.profile &&
+          Object.entries(this.owner).every(([k, v]) => owned.record[k] === v)),
       'Wrong branch/ref ownership; refusing reuse.'
     );
     if (environment) {
@@ -447,10 +451,10 @@ export class Preview {
           ...location,
           input: {
             source: { repo: this.input.repository },
-            dockerfilePath: 'docker/Dockerfile',
+            dockerfilePath: this.profile.dockerfile,
             region: 'sfo',
             numReplicas: 1,
-            healthcheckPath: '/health',
+            healthcheckPath: this.profile.healthPath,
             healthcheckTimeout: 600,
             restartPolicyMaxRetries: 3,
             overlapSeconds: 0,
@@ -494,7 +498,10 @@ export class Preview {
     return this.urls(owned);
   }
   urls(owned) {
-    return { app: `https://${owned.domain}/ui/`, health: `https://${owned.domain}/health` };
+    return {
+      app: `https://${owned.domain}${this.profile.appPath}`,
+      health: `https://${owned.domain}${this.profile.healthPath}`,
+    };
   }
   async start(owned, sha) {
     if ((await this.active(owned)).length) return this.running(owned);
