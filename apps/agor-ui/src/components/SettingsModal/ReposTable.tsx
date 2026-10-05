@@ -2,10 +2,11 @@ import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live
 import { resolveRepoCleanupPolicy } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
+import { Alert, Button, Card, Collapse, Empty, Form, Input, Space, Typography } from 'antd';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';
+import { repositorySetupMessage } from '@/utils/repositorySetupMessage';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
@@ -276,6 +277,65 @@ export const ReposTable: React.FC<ReposTableProps> = ({
                   </Space>
                 }
               >
+                {(repo.clone_status === 'cloning' || repo.clone_status === 'failed') && (
+                  <Alert
+                    type={repo.clone_status === 'failed' ? 'warning' : 'info'}
+                    showIcon
+                    title={
+                      repo.clone_status === 'failed'
+                        ? 'Repository setup failed'
+                        : 'Repository setup in progress'
+                    }
+                    description={repositorySetupMessage(repo)}
+                    action={
+                      repo.clone_status === 'failed' && repo.remote_url && onCreate ? (
+                        <Button
+                          size="small"
+                          onClick={async () => {
+                            const operation = operationGuard.begin();
+                            if (!operation.isCurrent()) return;
+                            try {
+                              await onCreate(
+                                {
+                                  url: repo.remote_url!,
+                                  slug: repo.slug,
+                                  default_branch: repo.default_branch || 'main',
+                                },
+                                operation.isCurrent
+                              );
+                            } catch {
+                              // The explicit create handler owns the actionable notification.
+                            }
+                          }}
+                        >
+                          Retry setup
+                        </Button>
+                      ) : undefined
+                    }
+                  />
+                )}
+                {repo.clone_status === 'failed' && repo.clone_error && (
+                  <Collapse
+                    size="small"
+                    items={[
+                      {
+                        key: 'setup',
+                        label: 'Setup diagnostics',
+                        children: (
+                          <>
+                            <Typography.Paragraph>
+                              Attempt {repo.clone_generation ?? 'legacy'} ·{' '}
+                              {repo.clone_error.category} · exit {repo.clone_error.exit_code}
+                            </Typography.Paragraph>
+                            <Typography.Paragraph code>
+                              {repo.clone_error.message.slice(0, 2000)}
+                            </Typography.Paragraph>
+                          </>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
                 {/* Repo metadata */}
                 <Space orientation="vertical" size={8} style={{ width: '100%' }}>
                   <div>

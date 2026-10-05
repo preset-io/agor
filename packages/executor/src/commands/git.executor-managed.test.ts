@@ -270,6 +270,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://example.com/repo.git',
             outputPath: '/safe/repos/repo',
             repoId,
+            cloneGeneration: 2,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -282,6 +283,7 @@ describe('managed executor git/fs commands', () => {
       });
       expect(patchedRepos).toContainEqual({
         clone_status: 'failed',
+        clone_generation: 2,
         clone_error: { category: 'auth_failed', exit_code: 1, message: result.error?.message },
       });
       const surfaces = JSON.stringify({ result, patchedRepos, logs: log.mock.calls });
@@ -1322,6 +1324,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://github.com/preset-io/agor-assistant.git',
             slug: 'smoke/agor-assistant-pr1258',
             repoId,
+            cloneGeneration: 3,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -1341,6 +1344,7 @@ describe('managed executor git/fs commands', () => {
         expect.objectContaining({
           local_path: '/safe/repos/smoke/agor-assistant-pr1258',
           clone_status: 'ready',
+          clone_generation: 3,
         }),
       ]);
     } finally {

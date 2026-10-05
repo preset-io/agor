@@ -412,6 +412,8 @@ export interface OnboardingCompletionAttempt {
 
 export interface OnboardingWizardProps {
   open: boolean;
+  /** Optional prefetch status, shown contextually at the required workspace step. */
+  repositorySetupNotice?: string;
   /** Synchronous owner fence for every async continuation in this wizard instance. */
   isCurrent?: () => boolean;
   onComplete: (
@@ -482,6 +484,7 @@ const WIZARD_SELECTED_SHADOW =
 
 export function OnboardingWizard({
   open,
+  repositorySetupNotice,
   isCurrent = ALWAYS_CURRENT,
   onComplete,
   onDismiss,
@@ -2011,6 +2014,9 @@ export function OnboardingWizard({
     if (completionError) {
       headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
       subline = 'Nothing was lost. Review the error below, then try again.';
+    } else if (name && repositorySetupNotice) {
+      headline = `${name} needs workspace setup.`;
+      subline = 'Continue to retry setup, or close this wizard and finish later.';
     } else if (!name) {
       headline = completing ? 'Almost ready…' : "You're ready to build.";
       subline = "Your board is ready. Open it and start whenever you're ready.";
@@ -2137,6 +2143,15 @@ export function OnboardingWizard({
           />
         )}
 
+        {repositorySetupNotice && !completionError && !completing && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Your teammate workspace needs setup"
+            description={repositorySetupNotice}
+            style={{ marginTop: 18, textAlign: 'left' }}
+          />
+        )}
         {completionError && !completionSlow && (
           <Alert
             type="error"

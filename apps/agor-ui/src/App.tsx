@@ -101,11 +101,12 @@ import {
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
-import { cloneErrorHint } from './utils/cloneErrorHint';
+import { createRepository } from './utils/createRepository';
 import {
   enrichAuthenticatedUser,
   hasObservedOnboardingCompletion,
 } from './utils/currentUserAuthority';
+import { ensureOnboardingFrameworkRepo } from './utils/ensureOnboardingFrameworkRepo';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
@@ -125,7 +126,6 @@ import {
   runSessionUpdateWithLatestNotification,
 } from './utils/sessionUpdateNotifications';
 import { getRouterBasename, isMobileShellPath } from './utils/uiRoutes';
-import { waitForFrameworkRepoReady } from './utils/waitForFrameworkRepoReady';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
 
@@ -623,164 +623,15 @@ function AppContent() {
     onboardingSeedResultRef.current.clear();
   }, [onboardingWizardOwner]);
 
-  // Clone a repository (framework repo, GitHub repos, etc.). Defined here —
-  // above the early returns and the onboarding auto-clone hook below — so it can
-  // be passed directly to `useEnsureFrameworkRepo` without a ref indirection
-  // that could race the hook's one-shot clone effect.
   const handleCreateRepo = useCallback(
-    async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
-      if (options.shouldApply && !options.shouldApply()) return;
-      if (!client) {
-        showError('Not connected to daemon — cannot clone repository');
-        return;
-      }
-
-      // POST /repos/clone returns `{ status: 'pending', repo_id }` immediately;
-      // the daemon pre-creates the repo row with `clone_status: 'cloning'` and
-      // the executor patches it to `'ready'`/`'failed'`. Listen for `patched`
-      // (the durable outcome) — `created` only fires for the placeholder now,
-      // unless the row is a legacy `create_local` (no `clone_status`).
-      // `repo:cloneError` is kept as a belt-and-suspenders fallback so older
-      // executors that don't patch still surface failures.
-      const toastKey = `clone-repo-${data.slug}`;
-      const CLONE_TIMEOUT_MS = 120_000;
-      if (!options.silent) showLoading(`Cloning ${data.slug}...`, { key: toastKey });
-
-      const reposService = client.service('repos');
-      let settled = false;
-
-      const cleanup = () => {
-        reposService.removeListener('created', handleCreated);
-        reposService.removeListener('patched', handlePatched);
-        client.io.off('repo:cloneError', handleCloneError);
-        clearTimeout(timeoutHandle);
-      };
-      const handleCreated = (repo: Repo) => {
-        if (settled || repo.slug !== data.slug) return;
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-        // Skip the `'cloning'` placeholder — `handlePatched` will declare the
-        // outcome once the executor finishes. `undefined` covers legacy rows
-        // and any direct executor-path that bypasses the placeholder.
-        if (repo.clone_status === 'cloning') return;
-        settled = true;
-        if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
-        cleanup();
-      };
-      const handlePatched = (repo: Repo) => {
-        if (settled || repo.slug !== data.slug) return;
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-        if (repo.clone_status === 'ready') {
-          settled = true;
-          if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
-          cleanup();
-        } else if (repo.clone_status === 'failed') {
-          settled = true;
-          const err = repo.clone_error;
-          // Keep Git's first-line diagnostic, then add category-specific
-          // remediation. In particular, TLS failures need a CA-store hint;
-          // never suggest disabling certificate verification.
-          const hint = cloneErrorHint(err);
-          if (!options.silent || options.showErrors) {
-            showError(`Failed to clone ${data.slug}: ${err?.message ?? 'unknown error'}${hint}`, {
-              key: toastKey,
-            });
-          }
-          cleanup();
-        }
-      };
-      const handleCloneError = (payload: {
-        slug?: string;
-        url?: string;
-        error?: string;
-        clone_error?: Repo['clone_error'];
-      }) => {
-        if (settled) return;
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-        if (payload.slug !== data.slug && payload.url !== data.url) return;
-        settled = true;
-        const hint = cloneErrorHint(payload.clone_error);
-        if (!options.silent || options.showErrors) {
-          showError(
-            `Failed to clone ${data.slug}: ${payload.clone_error?.message ?? payload.error ?? 'unknown error'}${hint}`,
-            { key: toastKey }
-          );
-        }
-        cleanup();
-      };
-      const timeoutHandle = setTimeout(() => {
-        if (settled) return;
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-        settled = true;
-        if (!options.silent || options.showErrors) {
-          showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
-            key: toastKey,
-          });
-        }
-        cleanup();
-      }, CLONE_TIMEOUT_MS);
-
-      reposService.on('created', handleCreated);
-      reposService.on('patched', handlePatched);
-      client.io.on('repo:cloneError', handleCloneError);
-
-      try {
-        const result = await client.service('repos/clone').create({
-          url: data.url,
-          slug: data.slug,
-          default_branch: data.default_branch,
-        });
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-
-        // Daemon short-circuits with `status: 'exists'` when a repo with this
-        // slug is already registered — no `repos.created` event will fire, so
-        // resolve the loading toast here instead of waiting for the timeout.
-        if (result?.status === 'exists' && !settled) {
-          settled = true;
-          if (!options.silent) {
-            showWarning(`Repository "${data.slug}" is already added`, { key: toastKey });
-          }
-          cleanup();
-        }
-        return result;
-      } catch (error) {
-        if (options.shouldApply && !options.shouldApply()) {
-          settled = true;
-          cleanup();
-          return;
-        }
-        if (!settled) {
-          settled = true;
-          if (!options.silent || options.showErrors) {
-            showError(
-              `Failed to clone repository: ${error instanceof Error ? error.message : String(error)}`,
-              { key: toastKey }
-            );
-          }
-          cleanup();
-        }
-        throw error;
-      }
-    },
+    (data: CreateRepoRequest, options: CreateRepoOptions = {}) =>
+      createRepository(
+        client,
+        data,
+        options,
+        { showError, showLoading, showSuccess, showWarning },
+        repoPatched
+      ),
     [client, showError, showLoading, showSuccess, showWarning]
   );
 
@@ -798,15 +649,20 @@ function AppContent() {
     () => (frameworkRepo ? [frameworkRepo] : EMPTY_REPOS),
     [frameworkRepo]
   );
-  // Suppress loading/success toasts for the onboarding auto-clone — a fresh user
-  // mid-wizard shouldn't see "Cloning…"/"Cloned" toasts from behind the modal.
-  // Keep failures visible: a CA/Git/auth error needs to be actionable now.
+  // Prefetch is not a user request: no global toasts. Keep local status and
+  // durable repo diagnostics; completion below owns required-step errors.
   const onboardingCreateRepo = useCallback(
-    (data: CreateRepoRequest) => handleCreateRepo(data, { silent: true, showErrors: true }),
-    [handleCreateRepo]
+    (data: CreateRepoRequest) =>
+      handleCreateRepo(data, {
+        silent: true,
+        shouldApply: () =>
+          !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner),
+      }),
+    [handleCreateRepo, onboardingWizardOwner, isOnboardingOwnerCurrent]
   );
-  useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
+  const frameworkSetup = useEnsureFrameworkRepo(frameworkRepoList, onboardingCreateRepo, {
     enabled: onboardingWizardOpen && canRunOnboarding,
+    ownerKey: onboardingWizardOwner,
   });
 
   // Handle wizard completion
@@ -839,42 +695,24 @@ function AppContent() {
     }
     if (!isCurrentUser()) return;
 
-    // Seed the user's first AI teammate on the board they just named. The
-    // framework repo has been cloning in the background since the wizard opened
-    // (useEnsureFrameworkRepo above). This is best-effort: any failure must NOT
-    // block completion — seedOnboardingTeammate falls back to a non-fatal
-    // warning so the user can always finish and add a teammate later. It reuses
-    // the wizard's board (createTeammateBranch's optional `boardId`) so the user
-    // never ends up with two boards for one teammate.
-    //
-    // Resolve the framework repo FRESH and READY-ONLY at completion time. The
-    // daemon pre-creates the repo row as `clone_status: 'cloning'`, so the
-    // render-time `frameworkRepo` above is truthy the instant the wizard opens —
-    // branching from it before the clone lands would fail with a bare "Failed to
-    // create branch". `readyOnly` skips the cloning/failed placeholder so the
-    // `!frameworkRepo` guard in seedOnboardingTeammate takes the graceful path.
-    let readyFrameworkRepo = findFrameworkRepo(agorStore.getState().repoById, {
-      readyOnly: true,
-    })?.[1];
-
-    // A fresh user can finish the wizard while the background clone is just a
-    // beat from done. If we have a teammate to seed but no ready repo yet, wait
-    // for readiness with a HARD deadline before falling back to the warning, so
-    // the common near-miss still yields a teammate. The wizard stays in its
-    // loading state throughout, so a short wait reads as part of setup.
-    // The wait re-reads the server: the store can miss the clone's ready event (#2941).
-    if (!readyFrameworkRepo && result.teammateName?.trim() && client) {
-      readyFrameworkRepo = await waitForFrameworkRepoReady({
-        getRepoById: () => agorStore.getState().repoById,
-        subscribe: (listener) => agorStore.subscribe(listener),
-        fetchRepos: () =>
-          client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-        applyRepo: (repo) => {
-          if (isCurrentUser()) repoPatched(repo);
-        },
-        deadlineMs: 20_000,
-      });
-    }
+    // A named teammate is a required step. Re-read shared metadata, retry a
+    // settled failure in place, and keep the wizard open on a contextual error.
+    // Prefetch failure must not masquerade as completed onboarding.
+    const readyFrameworkRepo = result.teammateName?.trim()
+      ? await ensureOnboardingFrameworkRepo({
+          getRepoById: () => agorStore.getState().repoById,
+          subscribe: (listener) => agorStore.subscribe(listener),
+          fetchRepos: () =>
+            client.service('repos').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          applyRepo: (repo) => {
+            if (isCurrentUser()) repoPatched(repo);
+          },
+          createRepo: (data) =>
+            handleCreateRepo(data, { silent: true, shouldApply: isCurrentUser }),
+          isCurrent: isCurrentUser,
+          deadlineMs: 20_000,
+        })
+      : undefined;
     if (!isCurrentUser()) return;
 
     const slackGatewayIntent = await resolveOnboardingSlackIntent(
@@ -948,9 +786,17 @@ function AppContent() {
       ...(sessionId ? { sessionId } : {}),
     });
 
+    if (result.teammateName?.trim() && (!branchId || (bootstrapAgent && !sessionId))) {
+      throw new Error(
+        branchId
+          ? 'Your board and teammate are saved, but the first session could not start. Check the teammate workspace status; if setup failed, use Retry on that teammate, then finish onboarding again.'
+          : 'Your board is saved, but the teammate workspace could not be created. Check repository setup and your board permissions, then try again.'
+      );
+    }
+
     // Completion is the commit point of the client-side saga. Do it only after
-    // durable teammate work has either succeeded or reached its documented
-    // best-effort fallback, so closing/reloading during provisioning leaves an
+    // required teammate work has succeeded (or the user skipped naming one),
+    // so closing/reloading during provisioning leaves an
     // incomplete wizard that can resume instead of a falsely completed user.
     // Fetch immediately before the whole-preferences patch to preserve any
     // unrelated setting changed while the wizard was open.
@@ -2270,6 +2116,7 @@ function AppContent() {
           <OnboardingWizard
             key={`${onboardingWizardOwner?.userId ?? '__anon__'}:${onboardingWizardOwner?.authenticationGeneration ?? authenticationGeneration}:${onboardingWizardOwner?.activationGeneration ?? 0}`}
             open={onboardingWizardOpen}
+            repositorySetupNotice={frameworkSetup.error}
             isCurrent={() =>
               !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
             }

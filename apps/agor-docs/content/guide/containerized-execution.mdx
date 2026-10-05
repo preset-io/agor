@@ -86,6 +86,18 @@ the base clone is visible, so nothing detects the mismatch at create time — th
 up later, inside sessions. See [Borrowed objects](/guide/branches) for the full explanation and for
 how to repair a branch that already has an unresolvable pointer.
 
+### Repository bootstrap is separate from branch storage
+
+Clone-only branch storage and `base_repository: unavailable` do **not** currently
+make repository registration metadata-only. `repos/clone` still dispatches a
+`git.clone` command without a branch ID, reads `.agor.yml` from its checkout
+(admin callers only), and marks the repository ready only after successful setup.
+A delegated launcher must support that command and its tenant-scoped repository
+path as well as per-branch commands. If it cannot, registration must report a
+setup failure; do not fabricate a ready row or delete existing branches to retry.
+Existing clone-mode branches do not thereby acquire a dependency on that base
+checkout when object borrowing is disabled.
+
 ## Shared Filesystem Setup
 
 ### Persistence Must Match the Database

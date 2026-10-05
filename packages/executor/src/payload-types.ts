@@ -261,6 +261,9 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
      */
     repoId: z.string().optional(),
 
+    /** Echo on terminal reports to fence superseded clone attempts. */
+    cloneGeneration: z.number().int().positive().optional(),
+
     /** User ID of the requesting user (for per-user credential resolution) */
     userId: z.string().uuid().optional(),
   }),

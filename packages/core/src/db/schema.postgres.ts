@@ -710,6 +710,7 @@ export const repos = pgTable(
         // Async clone lifecycle: 'cloning' → 'ready' | 'failed'. Undefined for
         // legacy rows and for local-type repos. See packages/core/src/types/repo.ts.
         clone_status?: 'cloning' | 'ready' | 'failed';
+        clone_generation?: number;
         clone_error?: {
           exit_code: number;
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';

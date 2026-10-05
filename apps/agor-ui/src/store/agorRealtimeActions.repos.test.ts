@@ -31,6 +31,20 @@ describe('repo realtime events', () => {
     expect(agorStore.getState().repoById.get('repo-fw')?.clone_status).toBe('failed');
   });
 
+  it('accepts an in-place retry and rejects delayed reports from the previous generation', () => {
+    repoCreated({ ...placeholder, clone_status: 'failed', clone_generation: 1 });
+    repoPatched({ ...placeholder, clone_generation: 2 });
+    expect(agorStore.getState().repoById.get('repo-fw')?.clone_status).toBe('cloning');
+    repoPatched({ ...placeholder, clone_status: 'failed', clone_generation: 1 });
+    repoPatched({ ...placeholder, clone_status: 'ready', clone_generation: 2 });
+    repoPatched({ ...placeholder, clone_status: 'failed', clone_generation: 1 });
+    repoPatched({ ...placeholder, clone_generation: 2 });
+    expect(agorStore.getState().repoById.get('repo-fw')).toMatchObject({
+      clone_status: 'ready',
+      clone_generation: 2,
+    });
+  });
+
   it('applies in-order clone progress and later ready-row updates', () => {
     repoCreated(placeholder);
     repoPatched({ ...placeholder, local_path: '/repos/fw' });

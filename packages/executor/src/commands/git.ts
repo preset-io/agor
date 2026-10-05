@@ -699,8 +699,11 @@ export async function handleGitClone(
           local_path: cloneResult.path,
           default_branch: defaultBranch,
           clone_status: 'ready',
+          ...(payload.params.cloneGeneration
+            ? { clone_generation: payload.params.cloneGeneration }
+            : {}),
           // Explicit null clears any prior `clone_error` (e.g. from a retry
-          // through the daemon's failed-row replace path). `deepMerge` in
+          // through the daemon's in-place retry path). `deepMerge` in
           // `RepoRepository.update` propagates the null; `repoToInsert`
           // coerces it back to `undefined` so the stored shape stays
           // aligned with the `clone_error?: RepoCloneError` invariant.
@@ -759,6 +762,9 @@ export async function handleGitClone(
         const category = categorizeGitError(rawMessage);
         await client.service('repos').patch(payload.params.repoId, {
           clone_status: 'failed',
+          ...(payload.params.cloneGeneration
+            ? { clone_generation: payload.params.cloneGeneration }
+            : {}),
           clone_error: {
             // simple-git wraps git's exit code in the message rather than
             // surfacing it as a numeric field; default to 1 since the
