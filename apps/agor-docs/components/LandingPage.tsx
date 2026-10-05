@@ -23,7 +23,7 @@ export function LandingPage() {
       {/* Flagged (?intro=true): the locked CRT intro. See lib/crtIntro.ts. */}
       <CrtIntro />
       <HomeHero />
-      {/* PROTOTYPE, flagged: see CursorTroupe.tsx. */}
+      {/* On by default; ?cursors=off turns it off. See CursorTroupe.tsx. */}
       <CursorTroupe />
       {/* Positioning order: Multiplayer AI, the board, teammates (with the
           roster as their proof), then the builder and trust stories. Matches

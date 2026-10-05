@@ -5,10 +5,9 @@ import { CRT_INTRO_ATTR } from '../../lib/crtIntro';
 import styles from './CursorTroupe.module.css';
 
 /**
- * PROTOTYPE (behind a flag): three cursors (Maya, Ari, and Sam in the code;
- * unnamed on screen) follow the reader down the home page and act out each
- * section's point, with three guest cursors who join for the hero and the
- * final CTA. A director picks the section on stage (sections mark themselves
+ * Three cursors (Maya, Ari, and Sam in the code; unnamed on screen) follow
+ * the reader down the home page and act out each section's point, with
+ * three guest cursors who join for the hero and the final CTA. A director picks the section on stage (sections mark themselves
  * with data-troupe-section) and plays its beat once.
  *
  * Positions live in page coordinates and every target is re-read from the
@@ -19,9 +18,9 @@ import styles from './CursorTroupe.module.css';
  * hero's "team" letter wave, or drive an element (the board panel they haul
  * in, the "confidence" they stretch). Scrolling back up finds them parked
  * where each beat ended; once they've left at the final CTA they stay gone.
- * Clicking the hero's "Multiplayer AI" pill starts the show again. Shown in
- * dev, or after visiting with `?cursors` once; never under reduced motion or
- * on touch.
+ * Clicking the hero's Agor logo starts the show again. On by default;
+ * `?cursors=off` turns it off for that browser (`?cursors` turns it back on).
+ * Never under reduced motion or on touch.
  */
 
 const ENABLED_KEY = 'agor-cursor-troupe';
@@ -938,22 +937,22 @@ export function CursorTroupe() {
   const ringRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   useEffect(() => {
+    // On by default. `?cursors=off` (or `false`/`0`) turns it off for this
+    // browser; `?cursors` / `?cursors=on` turns it back on.
+    const param = new URLSearchParams(window.location.search).get('cursors');
+    let off = param !== null && ['off', 'false', '0'].includes(param);
     try {
-      if (new URLSearchParams(window.location.search).has('cursors')) {
-        localStorage.setItem(ENABLED_KEY, '1');
+      if (param !== null) {
+        if (off) localStorage.setItem(ENABLED_KEY, '0');
+        else localStorage.removeItem(ENABLED_KEY);
       }
+      off ||= param === null && localStorage.getItem(ENABLED_KEY) === '0';
     } catch {
-      // Storage blocked: dev still shows it.
+      // Storage blocked: only the query param counts.
     }
-    let flagged = process.env.NODE_ENV === 'development';
-    try {
-      flagged ||= localStorage.getItem(ENABLED_KEY) === '1';
-    } catch {}
-    // The CRT intro's payoff is the cursors, so it brings the troupe along.
-    flagged ||= document.documentElement.hasAttribute(CRT_INTRO_ATTR);
     const fine = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
     const calm = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    setEnabled(flagged && fine && !calm);
+    setEnabled(!off && fine && !calm);
   }, []);
 
   useEffect(() => {
