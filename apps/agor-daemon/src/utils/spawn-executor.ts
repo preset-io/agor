@@ -32,6 +32,7 @@ import {
 import {
   type AgorExecutionSettings,
   buildAllowlistedEnv,
+  EXECUTOR_SCRATCH_ROOT_ENV,
   type ResolvedExecutorResponseConfig,
   resolveExecutorResponseConfig,
   resolveExecutorResponseTimeoutMs,
@@ -825,7 +826,11 @@ function resolveLocalExecutorEnvironment(
   // host runtime, never the daemon's entire credential-bearing process.env.
   const env = options.env ?? buildAllowlistedEnv();
   const source = options.preparedEnv ?? env;
-  return withDaemonExecutorEnv(source, getDaemonUrl());
+  const executorEnv = withDaemonExecutorEnv(source, getDaemonUrl());
+  // Local process env already contains user settings before payload filtering.
+  // Only a delegated launcher may supply Job-local scratch.
+  delete executorEnv[EXECUTOR_SCRATCH_ROOT_ENV];
+  return executorEnv;
 }
 
 function prepareLocalExecutorSpawn(

@@ -4,9 +4,9 @@ import * as fs from 'node:fs/promises';
 import { hostname } from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
+import { EXECUTOR_SCRATCH_ROOT_ENV } from '@agor/core/config';
 import { PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
 import type * as SDK from '@google/gemini-cli-core';
-import { EXECUTOR_SCRATCH_ROOT_ENV } from '../../prompt-payload-env.js';
 
 export const GEMINI_KEY_MESSAGE =
   'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).';

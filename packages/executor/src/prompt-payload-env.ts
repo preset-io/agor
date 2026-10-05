@@ -1,7 +1,4 @@
-import { filterEnv } from '@agor/core/config';
-
-/** Job-local scratch directory a delegated launcher may provide for per-task temporary files. */
-export const EXECUTOR_SCRATCH_ROOT_ENV = 'AGOR_EXECUTOR_SCRATCH_ROOT';
+import { EXECUTOR_SCRATCH_ROOT_ENV, filterEnv } from '@agor/core/config';
 
 const PAYLOAD_IDENTITY_DENY = new Set([
   'HOME',

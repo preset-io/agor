@@ -35,6 +35,17 @@ afterEach(() => {
 });
 
 describe('prompt payload process environment boundary', () => {
+  it('cannot install scratch through a payload when the launcher supplied none', () => {
+    const environment: NodeJS.ProcessEnv = {};
+    const result = applyPromptPayloadEnvironment(
+      { AGOR_EXECUTOR_SCRATCH_ROOT: '/synthetic/payload/scratch' },
+      environment
+    );
+
+    expect(environment.AGOR_EXECUTOR_SCRATCH_ROOT).toBeUndefined();
+    expect(result.identityDenied).toEqual(['AGOR_EXECUTOR_SCRATCH_ROOT']);
+  });
+
   it('retains pod-owned HOME and loader policy while applying ordinary payload env', () => {
     Object.assign(process.env, POD_OWNED_ENVIRONMENT);
 
