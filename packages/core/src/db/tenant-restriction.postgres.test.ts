@@ -1,0 +1,508 @@
+import { sql } from 'drizzle-orm';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { generateId } from '../lib/ids';
+import type { TenantRestrictionCommand } from '../types/tenant-restriction';
+import { createDatabase, type Database } from './client';
+import { executeRaw, isPostgresDatabase } from './database-wrapper';
+import { initializeDatabase } from './migrate';
+import { EnvironmentCommandRepository } from './repositories/environment-commands';
+import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
+import { deleteTenantData } from './tenant-deletion';
+import { buildTenantDeletionManifest } from './tenant-deletion-manifest';
+import {
+  NON_PORTABLE_TENANT_TABLES,
+  tenantPortabilityTableNames,
+} from './tenant-portability-manifest';
+import {
+  applyTenantRestrictionIntent,
+  assertTenantExecutionAdmission,
+  listRestrictedTenantIds,
+  readTenantRestrictionState,
+  TenantRestrictedError,
+  TenantRestrictionDataError,
+} from './tenant-restriction';
+import {
+  createTenantScopedDatabaseProxy,
+  runWithSystemDatabaseScope,
+  runWithTenantDatabaseScope,
+} from './tenant-scope';
+import { acquireTenantWriteGate, readTenantWriteGate } from './tenant-write-gate';
+
+const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
+const usesPostgres = process.env.AGOR_DB_DIALECT === 'postgresql';
+const command = (patch: Partial<TenantRestrictionCommand> = {}): TenantRestrictionCommand => ({
+  version: 1,
+  controllerId: 'control-one',
+  placementId: 'placement-one',
+  operationId: 'suspend-one',
+  revision: 1,
+  action: 'restrict',
+  ...patch,
+});
+
+const recordsOf = async (db: Database, tenant: string) =>
+  (await readTenantRestrictionState(db, tenant)).records;
+const isClosed = async (db: Database, tenant: string) =>
+  (await readTenantRestrictionState(db, tenant)).closed;
+
+async function close(db: Database) {
+  await (db as Database & { $client: { end: () => Promise<void> } }).$client.end();
+}
+
+describe.skipIf(!postgresUrl || !usesPostgres)('tenant restriction intent (PostgreSQL)', () => {
+  let db: Database;
+  beforeAll(async () => {
+    db = createDatabase({ url: postgresUrl! });
+    await initializeDatabase(db);
+    expect(isPostgresDatabase(db)).toBe(true);
+  }, 60_000);
+  afterAll(async () => {
+    if (db) await close(db);
+  });
+
+  it('prepares missing history closed and fences delayed restriction and mismatched activation', async () => {
+    const tenant = `restriction-missing-${generateId()}`;
+    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release-two' });
+    expect((await applyTenantRestrictionIntent(db, tenant, release)).changed).toBe(true);
+    expect(await isClosed(db, tenant)).toBe(true);
+    await expect(applyTenantRestrictionIntent(db, tenant, command())).rejects.toThrow();
+    await expect(
+      applyTenantRestrictionIntent(db, tenant, {
+        ...release,
+        action: 'activate',
+        operationId: 'different-release',
+      })
+    ).rejects.toThrow();
+    expect(await isClosed(db, tenant)).toBe(true);
+    await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
+    expect(await isClosed(db, tenant)).toBe(false);
+  });
+
+  it('persists through connection replacement; prepares closed, retains release watermark and rejects stale replay', async () => {
+    const tenant = `restriction-${generateId()}`;
+    expect(await isClosed(db, tenant)).toBe(false);
+    expect(await readTenantRestrictionState(db, tenant)).toEqual({ records: [], closed: false });
+    const first = await applyTenantRestrictionIntent(db, tenant, command());
+    expect(first.changed).toBe(true);
+    expect(await isClosed(db, tenant)).toBe(true);
+    const other = createDatabase({ url: postgresUrl! });
+    try {
+      expect(await recordsOf(other, tenant)).toEqual([first.record]);
+      expect((await applyTenantRestrictionIntent(other, tenant, command())).changed).toBe(false);
+      const release = command({
+        action: 'prepare_release',
+        revision: 2,
+        operationId: 'release-two',
+      });
+      await applyTenantRestrictionIntent(other, tenant, release);
+      expect(await isClosed(db, tenant)).toBe(true);
+      await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
+      expect(await isClosed(other, tenant)).toBe(false);
+      expect(await readTenantRestrictionState(other, tenant)).toMatchObject({
+        closed: false,
+        resumeAfter: expect.any(Number),
+      });
+      expect((await applyTenantRestrictionIntent(other, tenant, release)).changed).toBe(false);
+      await expect(applyTenantRestrictionIntent(other, tenant, command())).rejects.toThrow(
+        'stale_revision'
+      );
+      expect(await recordsOf(db, tenant)).toEqual([
+        { ...first.record, operationId: 'release-two', revision: 2, phase: 'active' },
+      ]);
+    } finally {
+      await close(other);
+    }
+  });
+
+  it('fences environment start admission and old claims but preserves Stop settlement', async () => {
+    const tenant = `environment-restriction-${generateId()}`;
+    const seeded = await runWithTenantDatabaseScope(db, tenant, seedEnvironmentCommandBranch);
+    const invoke = <T>(work: (commands: EnvironmentCommandRepository) => Promise<T>) =>
+      runWithTenantDatabaseScope(db, tenant, (scoped) =>
+        work(new EnvironmentCommandRepository(scoped))
+      );
+    const attemptId = generateId();
+    const input = {
+      branch: seeded.branch,
+      userId: seeded.user.user_id,
+      action: 'start' as const,
+      attemptId,
+    };
+    await invoke((commands) => commands.admit(input));
+    await applyTenantRestrictionIntent(db, tenant, command());
+    await expect(
+      invoke((commands) => commands.admit({ ...input, attemptId: generateId() }))
+    ).rejects.toBeInstanceOf(TenantRestrictedError);
+    const claim = {
+      branch_id: seeded.branch.branch_id,
+      attempt_id: attemptId,
+      action: 'start' as const,
+      kind: 'claim' as const,
+    };
+    await expect(invoke((commands) => commands.report(claim))).rejects.toBeInstanceOf(
+      TenantRestrictedError
+    );
+    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release-env' });
+    await applyTenantRestrictionIntent(db, tenant, release);
+    await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
+    await expect(invoke((commands) => commands.report(claim))).rejects.toBeInstanceOf(
+      TenantRestrictedError
+    );
+    // Retire the unclaimed command as unknown, not proof that its environment is absent.
+    await invoke((commands) => commands.dispatchFailed(seeded.branch.branch_id, attemptId));
+    await applyTenantRestrictionIntent(
+      db,
+      tenant,
+      command({ revision: 3, operationId: 'restrict-again' })
+    );
+    const stopId = generateId();
+    await invoke((commands) => commands.admit({ ...input, action: 'stop', attemptId: stopId }));
+    const stop = { ...claim, attempt_id: stopId, action: 'stop' as const };
+    await invoke((commands) => commands.report(stop));
+    await expect(
+      invoke((commands) =>
+        commands.report({
+          ...stop,
+          kind: 'result',
+          outcome: 'succeeded',
+          message: 'stop command completed',
+        })
+      )
+    ).resolves.toMatchObject({ status: 'stopped' });
+  });
+
+  it('owns a short tenant scope when passed the guarded daemon handle', async () => {
+    const tenant = `restriction-${generateId()}`;
+    const guarded = createTenantScopedDatabaseProxy(db);
+    const first = await applyTenantRestrictionIntent(guarded, tenant, command());
+    expect(await recordsOf(guarded, tenant)).toEqual([first.record]);
+    expect(await isClosed(guarded, tenant)).toBe(true);
+  });
+
+  it('serializes conflicting first writers and same-operation replay on an absent row', async () => {
+    const tenant = `restriction-${generateId()}`;
+    const results = await Promise.allSettled([
+      applyTenantRestrictionIntent(db, tenant, command()),
+      applyTenantRestrictionIntent(db, tenant, command({ operationId: 'competitor' })),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(await recordsOf(db, tenant)).toHaveLength(1);
+    const replayTenant = `restriction-${generateId()}`;
+    const replays = await Promise.all([
+      applyTenantRestrictionIntent(db, replayTenant, command()),
+      applyTenantRestrictionIntent(db, replayTenant, command()),
+    ]);
+    expect(replays.map((r) => r.changed).sort()).toEqual([false, true]);
+  });
+
+  it('shares the execution fence between admissions; a transition waits for in-flight ones', async () => {
+    const tenant = `restriction-fence-${generateId()}`;
+    const settled = (promise: Promise<unknown>) =>
+      Promise.race([promise.then(() => true), new Promise((r) => setTimeout(() => r(false), 750))]);
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstAdmitted!: () => void;
+    const firstIn = new Promise<void>((resolve) => {
+      firstAdmitted = resolve;
+    });
+    const first = runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      await assertTenantExecutionAdmission(scoped);
+      firstAdmitted();
+      await firstHeld;
+    });
+    await firstIn;
+    // A second admission for the same tenant must not queue behind the open one.
+    const second = runWithTenantDatabaseScope(db, tenant, (scoped) =>
+      assertTenantExecutionAdmission(scoped)
+    );
+    expect(await settled(second)).toBe(true);
+    const restrict = applyTenantRestrictionIntent(db, tenant, command());
+    expect(await settled(restrict)).toBe(false);
+    releaseFirst();
+    await first;
+    expect((await restrict).changed).toBe(true);
+    await expect(
+      runWithTenantDatabaseScope(db, tenant, (scoped) => assertTenantExecutionAdmission(scoped))
+    ).rejects.toBeInstanceOf(TenantRestrictedError);
+  });
+
+  it('seeds a re-home destination open at the watermark, once, and never repairs a recorded runtime', async () => {
+    const seeded = `restriction-${generateId()}`;
+    const seed = command({ action: 'seed_active', revision: 4, operationId: 'reactivate-four' });
+    const written = await applyTenantRestrictionIntent(db, seeded, seed);
+    expect(written).toMatchObject({ changed: true, record: { phase: 'active', revision: 4 } });
+    expect(await isClosed(db, seeded)).toBe(false);
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
+    // A transport replay of this seed is an untouched-row no-op, not a conflict.
+    const replayed = await applyTenantRestrictionIntent(db, seeded, seed);
+    expect(replayed).toEqual({ record: written.record, changed: false });
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
+    // Every other recorded state still refuses it — the seed writes on empty history only.
+    for (const patch of [
+      { operationId: 'other-operation' },
+      { revision: 5 },
+      { placementId: 'placement-two' },
+    ])
+      await expect(
+        applyTenantRestrictionIntent(db, seeded, command({ ...seed, ...patch }))
+      ).rejects.toThrow('revision_conflict');
+    expect(await recordsOf(db, seeded)).toEqual([written.record]);
+    // A CLOSED row at the seed's own revision is never reopened by a replay.
+    const closed = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, closed, command({ revision: 4 }));
+    await expect(applyTenantRestrictionIntent(db, closed, seed)).rejects.toThrow(
+      'revision_conflict'
+    );
+    expect(await isClosed(db, closed)).toBe(true);
+    // A runtime that already recorded anything is never seeded open.
+    const recorded = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, recorded, command());
+    await expect(applyTenantRestrictionIntent(db, recorded, seed)).rejects.toThrow(
+      'revision_conflict'
+    );
+    expect(await isClosed(db, recorded)).toBe(true);
+    // Concurrent seeds on empty history serialize into one write and one replay no-op.
+    const raced = `restriction-${generateId()}`;
+    const results = await Promise.all([
+      applyTenantRestrictionIntent(db, raced, seed),
+      applyTenantRestrictionIntent(db, raced, seed),
+    ]);
+    expect(results.map((result) => result.changed).sort()).toEqual([false, true]);
+    expect(await recordsOf(db, raced)).toMatchObject([{ phase: 'active' }]);
+  });
+
+  it('never lets release races reopen a newer restriction', async () => {
+    const tenant = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, tenant, command());
+    const release = command({ action: 'prepare_release', operationId: 'release-two', revision: 2 });
+    await applyTenantRestrictionIntent(db, tenant, release);
+    await Promise.allSettled([
+      applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' }),
+      applyTenantRestrictionIntent(
+        db,
+        tenant,
+        command({ operationId: 'suspend-three', revision: 3 })
+      ),
+    ]);
+    expect(await recordsOf(db, tenant)).toMatchObject([{ phase: 'restricted', revision: 3 }]);
+    expect(await isClosed(db, tenant)).toBe(true);
+  });
+
+  it('composes controller restrictions without modifying the portability gate', async () => {
+    const tenant = `restriction-${generateId()}`;
+    const gate = await acquireTenantWriteGate(db, tenant);
+    await applyTenantRestrictionIntent(db, tenant, command());
+    await applyTenantRestrictionIntent(db, tenant, command({ controllerId: 'second-control' }));
+    const release = command({ action: 'prepare_release', operationId: 'release-two', revision: 2 });
+    await applyTenantRestrictionIntent(db, tenant, release);
+    await applyTenantRestrictionIntent(db, tenant, { ...release, action: 'activate' });
+    expect(await isClosed(db, tenant)).toBe(true);
+    expect(await readTenantWriteGate(db, tenant)).toMatchObject({
+      active: true,
+      generation: gate.generation,
+    });
+  });
+
+  it('enforces RLS against cross-tenant reads, changes, and forged inserts; scoped helper cannot switch tenant', async () => {
+    const a = `restriction-${generateId()}`;
+    const b = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, a, command());
+    expect(await isClosed(db, b)).toBe(false);
+    await runWithTenantDatabaseScope(db, b, async (scoped) => {
+      expect(
+        await executeRaw(
+          scoped,
+          sql`SELECT * FROM public.tenant_restrictions WHERE tenant_id = ${a}`
+        )
+      ).toHaveLength(0);
+      expect(
+        await executeRaw(
+          scoped,
+          sql`UPDATE public.tenant_restrictions SET phase = 'active' WHERE tenant_id = ${a} RETURNING *`
+        )
+      ).toHaveLength(0);
+      await expect(readTenantRestrictionState(scoped, a)).rejects.toThrow();
+    });
+    await expect(
+      runWithTenantDatabaseScope(db, b, (scoped) =>
+        executeRaw(
+          scoped,
+          sql`
+      INSERT INTO public.tenant_restrictions (tenant_id, controller_id, placement_id, operation_id, revision, phase)
+      VALUES (${a}, 'forged', 'p', 'o', 1, 'active')
+    `
+        )
+      )
+    ).rejects.toThrow();
+    expect(await isClosed(db, a)).toBe(true);
+    await expect(
+      applyTenantRestrictionIntent(db, a, command({ placementId: 'wrong-placement', revision: 2 }))
+    ).rejects.toThrow('identity_mismatch');
+    expect(await recordsOf(db, a)).toHaveLength(1);
+  });
+
+  it('rolls back on transaction failure and rejects corrupt persisted authority', async () => {
+    const tenant = `restriction-${generateId()}`;
+    await expect(
+      runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+        await applyTenantRestrictionIntent(scoped, tenant, command());
+        throw new Error('rollback-fixture');
+      })
+    ).rejects.toThrow('rollback-fixture');
+    expect(await recordsOf(db, tenant)).toEqual([]);
+    await applyTenantRestrictionIntent(db, tenant, command());
+    await runWithTenantDatabaseScope(db, tenant, (scoped) =>
+      executeRaw(
+        scoped,
+        sql`
+      UPDATE public.tenant_restrictions SET phase = 'unknown' WHERE tenant_id = ${tenant}
+    `
+      )
+    );
+    await expect(readTenantRestrictionState(db, tenant)).rejects.toBeInstanceOf(
+      TenantRestrictionDataError
+    );
+    await expect(
+      applyTenantRestrictionIntent(db, tenant, command({ revision: 2 }))
+    ).rejects.toBeInstanceOf(TenantRestrictionDataError);
+  });
+
+  it('requires explicit tenant scope even for default and denies system scopes', async () => {
+    const c = command({ controllerId: `default-${generateId()}` });
+    await applyTenantRestrictionIntent(db, 'default', c);
+    expect(
+      await executeRaw(
+        db,
+        sql`SELECT * FROM public.tenant_restrictions WHERE controller_id = ${c.controllerId}`
+      )
+    ).toHaveLength(0);
+    await runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      await executeRaw(
+        scoped,
+        sql`SELECT set_config('agor.system_scope', 'unrelated_operator', true)`
+      );
+      expect(
+        await executeRaw(
+          scoped,
+          sql`SELECT * FROM public.tenant_restrictions WHERE controller_id = ${c.controllerId}`
+        )
+      ).toHaveLength(0);
+      await expect(readTenantRestrictionState(scoped, 'default')).rejects.toBeInstanceOf(
+        TenantRestrictionDataError
+      );
+      await expect(applyTenantRestrictionIntent(scoped, 'default', c)).rejects.toBeInstanceOf(
+        TenantRestrictionDataError
+      );
+    });
+    await expect(
+      runWithSystemDatabaseScope(db, 'restriction-test', (scoped) =>
+        readTenantRestrictionState(scoped, 'default')
+      )
+    ).rejects.toThrow('Cannot enter tenant scope');
+    await runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      await executeRaw(scoped, sql`SELECT set_config('agor.tenant_id', 'different', true)`);
+      await expect(readTenantRestrictionState(scoped, 'default')).rejects.toBeInstanceOf(
+        TenantRestrictionDataError
+      );
+    });
+  });
+
+  it('discovers only closed tenant ids, read-only, and only under its capability', async () => {
+    const restricted = `restriction-${generateId()}`;
+    const prepared = `restriction-${generateId()}`;
+    const reopened = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, restricted, command());
+    await applyTenantRestrictionIntent(
+      db,
+      prepared,
+      command({ action: 'prepare_release', revision: 2 })
+    );
+    const release = command({ action: 'prepare_release', revision: 2, operationId: 'release' });
+    await applyTenantRestrictionIntent(db, reopened, command());
+    await applyTenantRestrictionIntent(db, reopened, release);
+    await applyTenantRestrictionIntent(db, reopened, { ...release, action: 'activate' });
+
+    const discover = <T>(work: (scoped: Database) => Promise<T>) =>
+      runWithSystemDatabaseScope(db, 'restriction-discovery-test', work, {
+        capability: 'tenant_restriction_discovery',
+      });
+    const ids = await discover((scoped) => listRestrictedTenantIds(scoped));
+    expect(ids).toEqual(expect.arrayContaining([restricted, prepared]));
+    expect(ids).not.toContain(reopened);
+    expect(
+      await discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`SELECT * FROM public.tenant_restrictions WHERE tenant_id = ${reopened}`
+        )
+      )
+    ).toHaveLength(0);
+    // The function resets its transaction-local flag, so a later read in the same transaction sees nothing.
+    expect(
+      await discover(async (scoped) => {
+        await listRestrictedTenantIds(scoped);
+        return executeRaw(
+          scoped,
+          sql`SELECT tenant_id FROM public.tenant_restrictions WHERE tenant_id = ${restricted}`
+        );
+      })
+    ).toHaveLength(0);
+    // The capability learns ids only: a direct read of a closed tenant's row sees nothing.
+    expect(
+      await discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`SELECT controller_id, placement_id, operation_id, revision
+            FROM public.tenant_restrictions WHERE tenant_id IN (${restricted}, ${prepared})`
+        )
+      )
+    ).toHaveLength(0);
+    expect(
+      await runWithSystemDatabaseScope(db, 'restriction-discovery-test', (scoped) =>
+        executeRaw(scoped, sql`SELECT tenant_id FROM public.agor_restricted_tenant_ids()`)
+      )
+    ).toHaveLength(0);
+    await expect(
+      discover((scoped) =>
+        executeRaw(scoped, sql`UPDATE public.tenant_restrictions SET phase = 'active'`)
+      )
+    ).resolves.toBeDefined();
+    expect(await isClosed(db, restricted)).toBe(true);
+    await expect(
+      discover((scoped) =>
+        executeRaw(
+          scoped,
+          sql`INSERT INTO public.tenant_restrictions
+            (tenant_id, controller_id, placement_id, operation_id, revision, phase)
+            VALUES (${reopened}, 'forged', 'p', 'o', 9, 'restricted')`
+        )
+      )
+    ).rejects.toThrow();
+    await expect(
+      runWithSystemDatabaseScope(db, 'restriction-discovery-test', (scoped) =>
+        listRestrictedTenantIds(scoped)
+      )
+    ).rejects.toBeInstanceOf(TenantRestrictionDataError);
+  });
+
+  it('erases only the selected tenant restriction rows through the audited deletion engine', async () => {
+    const a = `restriction-${generateId()}`;
+    const b = `restriction-${generateId()}`;
+    await applyTenantRestrictionIntent(db, a, command());
+    await applyTenantRestrictionIntent(db, b, command());
+    await deleteTenantData(db, a);
+    expect(await recordsOf(db, a)).toEqual([]);
+    expect(await recordsOf(db, b)).toHaveLength(1);
+  });
+
+  it('is tenant-owned for erasure but does not export deployment-bound controller authority', () => {
+    expect(
+      buildTenantDeletionManifest().some((entry) => entry.name === 'tenant_restrictions')
+    ).toBe(true);
+    expect(NON_PORTABLE_TENANT_TABLES.has('tenant_restrictions')).toBe(true);
+    expect(tenantPortabilityTableNames()).not.toContain('tenant_restrictions');
+  });
+});
