@@ -5,6 +5,11 @@ import {
   resolveExternalLaunchSettings,
 } from '@agor/core/config';
 import {
+  asMCPExternalError,
+  type MCPExternalErrorCategory,
+  type MCPExternalErrorReason,
+} from '@agor/core/mcp';
+import {
   MCP_OAUTH_RELAY,
   type MCPOAuthRelayCallback,
   type MCPOAuthRelayPrepare,
@@ -105,27 +110,35 @@ export class MCPOAuthRelay {
   }
 
   async prepare(input: MCPOAuthRelayPrepare): Promise<string> {
-    if (input.redirect_uri !== this.redirectUri(input.issuer))
-      throw new Error('MCP relay callback binding mismatch');
-    const body = JSON.stringify(input);
-    const authorization = jwt.sign(
-      {
-        cell_id: this.cellId,
-        credential_id: this.credentialId,
-        scope: MCP_OAUTH_RELAY.serviceScope,
-        body_sha256: relayBodyHash(body),
-      },
-      this.privateKey,
-      {
-        algorithm: 'RS256',
-        issuer: `agor-cell:${this.cellId}`,
-        audience: MCP_OAUTH_RELAY.serviceAudience,
-        expiresIn: 60,
-        jwtid: randomUUID(),
-        ...(this.keyId ? { keyid: this.keyId } : {}),
-      }
-    );
+    // Retain only closed phase/status/code metadata. Do not retain the original
+    // exception/cause, response prose, prepared URL, state or signed credential.
+    // The owning OAuth Start handler logs the sanitized failure once.
+    let reason: MCPExternalErrorReason = 'oauth_relay_prepare_binding_failed';
+    let category: MCPExternalErrorCategory | undefined = 'configuration_required';
     try {
+      if (input.redirect_uri !== this.redirectUri(input.issuer))
+        throw new Error('MCP relay callback binding mismatch');
+      reason = 'oauth_relay_prepare_signing_failed';
+      const body = JSON.stringify(input);
+      const authorization = jwt.sign(
+        {
+          cell_id: this.cellId,
+          credential_id: this.credentialId,
+          scope: MCP_OAUTH_RELAY.serviceScope,
+          body_sha256: relayBodyHash(body),
+        },
+        this.privateKey,
+        {
+          algorithm: 'RS256',
+          issuer: `agor-cell:${this.cellId}`,
+          audience: MCP_OAUTH_RELAY.serviceAudience,
+          expiresIn: 60,
+          jwtid: randomUUID(),
+          ...(this.keyId ? { keyid: this.keyId } : {}),
+        }
+      );
+      reason = 'oauth_relay_prepare_transport_failed';
+      category = undefined;
       const response = await safeOutboundFetch(`${this.origin}${MCP_OAUTH_RELAY.preparePath}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authorization}` },
@@ -134,7 +147,14 @@ export class MCPOAuthRelay {
         timeoutMs: 10_000,
         maxResponseBytes: 8192,
       });
-      if (response.status !== 201) throw new Error();
+      if (response.status !== 201) {
+        reason = 'oauth_relay_prepare_http_rejected';
+        // Response bodies (including proxy/Cloud rejection prose) are not needed.
+        if (response.status < 300) category = 'invalid_response';
+        throw Object.assign(new Error('Cloud preparation rejected'), { status: response.status });
+      }
+      reason = 'oauth_relay_prepare_invalid_response';
+      category = 'invalid_response';
       const result = z
         .object({ start_url: z.string().url(), redirect_uri: z.string(), expires_at: z.string() })
         .strict()
@@ -153,10 +173,8 @@ export class MCPOAuthRelay {
       )
         throw new Error();
       return result.start_url;
-    } catch {
-      throw new Error(
-        'Cloud callback preparation failed. Start a new connection; no direct fallback was attempted.'
-      );
+    } catch (error) {
+      throw asMCPExternalError(error, { stage: 'oauth', reason, category });
     }
   }
 

@@ -1,5 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import type { AgorConfig } from '@agor/core/config';
+import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import { MCP_OAUTH_RELAY, type MCPOAuthRelayCallback } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -53,7 +54,9 @@ function fixture() {
   };
   const sign = (overrides: Record<string, unknown> = {}, lifetime = 30) =>
     `Bearer ${jwt.sign({ ...claims, ...overrides }, cloud.privateKey, { algorithm: 'RS256', issuer: 'https://cloud.test', audience: 'agor-cell:cell-a:mcp-oauth-relay', expiresIn: lifetime, jwtid: 'delivery-id' })}`;
-  return { client, input, body, sign };
+  const { code: _code, iss: _iss, ...binding } = input;
+  const prepare = { ...binding, authorization_url: 'https://provider.test/authorize' };
+  return { client, input, body, sign, prepare };
 }
 describe('Cloud relay v1 trust boundary', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -114,7 +117,10 @@ describe('Cloud relay v1 trust boundary', () => {
       authorization_url: 'https://provider.test/authorize',
     });
     if (accepted) await expect(result).resolves.toBe('https://cloud.test/start/opaque');
-    else await expect(result).rejects.toThrow('no direct fallback');
+    else
+      await expect(result).rejects.toMatchObject({
+        diagnostic: { reason: 'oauth_relay_prepare_invalid_response' },
+      });
   });
   it('uses existing Cell service claims and binds exact prepare bytes', async () => {
     const { client, input } = fixture();
@@ -167,7 +173,85 @@ describe('Cloud relay v1 trust boundary', () => {
     const { code: _code, iss: _iss, ...prepare } = input;
     await expect(
       client.prepare({ ...prepare, authorization_url: 'https://provider.test/authorize' })
-    ).rejects.toThrow('no direct fallback');
+    ).rejects.toMatchObject({ diagnostic: { reason: 'oauth_relay_prepare_invalid_response' } });
+  });
+  it.each([400, 401, 403, 404, 409, 429, 500, 503])(
+    'preserves only safe prepare HTTP status %s for the OAuth Start diagnostic',
+    async (status) => {
+      const { client, prepare } = fixture();
+      const response = Response.json({ error: 'SENTINEL_PROVIDER_BODY' }, { status });
+      const readBody = vi.spyOn(response, 'json');
+      fetch.mockResolvedValue(response);
+      const error = await client.prepare(prepare).catch((error: unknown) => error);
+      const safe = sanitizeMCPExternalError(error, { stage: 'oauth' });
+      expect(safe.diagnostic).toMatchObject({
+        stage: 'oauth',
+        type: 'HTTPError',
+        status,
+        reason: 'oauth_relay_prepare_http_rejected',
+      });
+      expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+      expect(readBody).not.toHaveBeenCalled();
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(fetch.mock.calls[0][1].redirect).toBe('error');
+    }
+  );
+  it.each(['ETIMEDOUT', 'ENOTFOUND', 'EAGOROUTBOUND'])(
+    'retains safe transport code %s without exception text or causes',
+    async (code) => {
+      const { client, prepare } = fixture();
+      fetch.mockRejectedValue(
+        Object.assign(new Error('SENTINEL_URL_TOKEN'), { code, cause: new Error('SENTINEL_CAUSE') })
+      );
+      const error = await client.prepare(prepare).catch((error: unknown) => error);
+      expect(sanitizeMCPExternalError(error, { stage: 'oauth' }).diagnostic).toMatchObject({
+        code,
+        reason: 'oauth_relay_prepare_transport_failed',
+      });
+      expect(error).not.toHaveProperty('cause');
+      expect(JSON.stringify(error)).not.toContain('SENTINEL');
+      expect(fetch).toHaveBeenCalledOnce();
+    }
+  );
+  it.each([
+    'not JSON: SENTINEL_BODY',
+    JSON.stringify({
+      start_url: 'https://attacker.test/SENTINEL',
+      redirect_uri: 'SENTINEL',
+      expires_at: 'invalid',
+    }),
+  ])('rejects invalid 201 responses without reflecting them (%#)', async (body) => {
+    const { client, prepare } = fixture();
+    fetch.mockResolvedValue(new Response(body, { status: 201 }));
+    const error = await client.prepare(prepare).catch((error: unknown) => error);
+    expect(sanitizeMCPExternalError(error, { stage: 'oauth' })).toMatchObject({
+      category: 'invalid_response',
+      diagnostic: { reason: 'oauth_relay_prepare_invalid_response' },
+    });
+    expect(JSON.stringify(error)).not.toContain('SENTINEL');
+  });
+  it('classifies local binding and signing failures without dispatch', async () => {
+    const { client, prepare } = fixture();
+    await expect(
+      client.prepare({
+        ...prepare,
+        redirect_uri: 'https://wrong.test',
+        authorization_url: 'https://provider.test/authorize',
+      })
+    ).rejects.toMatchObject({
+      category: 'configuration_required',
+      diagnostic: { reason: 'oauth_relay_prepare_binding_failed' },
+    });
+    vi.spyOn(jwt, 'sign').mockImplementation(() => {
+      throw new Error('SENTINEL_PRIVATE_KEY');
+    });
+    const error = await client.prepare(prepare).catch((error: unknown) => error);
+    expect(sanitizeMCPExternalError(error, { stage: 'oauth' })).toMatchObject({
+      category: 'configuration_required',
+      diagnostic: { reason: 'oauth_relay_prepare_signing_failed' },
+    });
+    expect(JSON.stringify(error)).not.toContain('SENTINEL');
+    expect(fetch).not.toHaveBeenCalled();
   });
   it('accepts only Cloud purpose/audience/body/tenant/user/cell-bound short-lived delivery', async () => {
     const { client, body, input, sign } = fixture();
