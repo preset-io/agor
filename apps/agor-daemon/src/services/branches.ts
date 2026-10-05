@@ -97,6 +97,7 @@ import {
   BRANCH_DELETION_COMMAND,
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   BRANCH_WORKSPACE_OPERATION_BUDGET_MS,
+  BRANCH_WORKSPACE_SERVER_FIELDS,
   type BranchCleanAccepted,
   type BranchWorkspaceRequest,
   branchCleanupCommandId,
@@ -1451,15 +1452,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('filesystem_status is managed by branch materialization.');
       }
     }
-    if (
-      [
-        'workspace_snapshot',
-        'workspace_operation',
-        'cleanup_last_error',
-        'last_cleanup_succeeded_at',
-        'last_cleanup_operation_id',
-      ].some((key) => Object.hasOwn(data, key))
-    )
+    if (BRANCH_WORKSPACE_SERVER_FIELDS.some((key) => Object.hasOwn(data, key)))
       throw new BadRequest('Workspace operation state is server-managed');
     if (Object.hasOwn(data, 'sdk_home')) {
       throw new BadRequest(

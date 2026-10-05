@@ -452,3 +452,37 @@ it('allows clone archive removal while permanent deletion is disabled, and keeps
   fireEvent.click(screen.getByRole('radio', { name: /^Leave untouched/ }));
   expect(screen.getByRole('button', { name: 'Archive Branch' })).toBeEnabled();
 });
+
+it('describes permanent file deletion independently of unsupported archive removal', async () => {
+  const { client, branch } = fixture();
+  branch.maintenance_capabilities = branchMaintenanceCapabilities(
+    { execution: { unix_user_mode: 'delegated', delegated_branch_deletion: true } },
+    'worktree'
+  );
+  const confirm = vi.fn();
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser()}
+      branch={branch}
+      open
+      initialMetadataAction="delete"
+      onConfirm={confirm}
+      onCancel={vi.fn()}
+    />
+  );
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeEnabled()
+  );
+  expect(
+    screen.getByRole('radio', {
+      name: 'Delete completely Removes workspace, branch SDK home, and owned uploads',
+    })
+  ).toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
+  expect(confirm).toHaveBeenCalledWith({ metadataAction: 'delete', filesystemAction: 'deleted' });
+  fireEvent.click(screen.getByRole('radio', { name: /Archive \(recommended\)/ }));
+  expect(
+    screen.getByRole('radio', { name: /Delete completely External workspace cleanup/ })
+  ).toBeDisabled();
+});

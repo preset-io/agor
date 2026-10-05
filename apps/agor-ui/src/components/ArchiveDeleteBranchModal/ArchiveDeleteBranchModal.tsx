@@ -147,15 +147,15 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
         : 'cleaned'
       : filesystemAction;
 
+  const filesystemDeletionReason =
+    metadataAction === 'delete' ? eligibility.deletionReason : eligibility.workspaceReason;
   const actionReason =
     primaryReason ??
-    (metadataAction === 'delete'
-      ? eligibility.deletionReason
-      : selectedFilesystemAction === 'deleted'
-        ? eligibility.workspaceReason
-        : selectedFilesystemAction === 'cleaned'
-          ? eligibility.cleanupReason
-          : eligibility.managementReason);
+    (metadataAction === 'delete' || selectedFilesystemAction === 'deleted'
+      ? filesystemDeletionReason
+      : selectedFilesystemAction === 'cleaned'
+        ? eligibility.cleanupReason
+        : eligibility.managementReason);
   const handleOk = () => {
     if (actionReason) return;
     onConfirm(
@@ -344,11 +344,14 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
                   </Text>
                 </div>
               </Radio>
-              <Radio value="deleted" disabled={!!eligibility.workspaceReason || !!primaryReason}>
+              <Radio value="deleted" disabled={!!filesystemDeletionReason || !!primaryReason}>
                 <div>
                   <div>Delete completely</div>
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {eligibility.workspaceReason || 'Removes entire branch directory from disk'}
+                    {filesystemDeletionReason ||
+                      (metadataAction === 'delete'
+                        ? 'Removes workspace, branch SDK home, and owned uploads'
+                        : 'Removes entire branch directory from disk')}
                   </Text>
                 </div>
               </Radio>
