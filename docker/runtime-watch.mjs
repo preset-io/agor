@@ -122,10 +122,16 @@ export function createProxy(origin, { healthRequest = fetch } = {}) {
   };
 }
 
-export async function syncIfChanged({ prepare, appliedSha, changedPaths, sync }) {
+export async function syncIfChanged({
+  prepare,
+  appliedSha,
+  changedPaths,
+  sync,
+  needsRedeploy = requiresRedeploy,
+}) {
   const result = await prepare();
   if (result.sha === appliedSha) return appliedSha;
-  if (requiresRedeploy(await changedPaths(appliedSha, result.sha))) {
+  if (needsRedeploy(await changedPaths(appliedSha, result.sha))) {
     throw new Error('Startup or migration changes require redeploy');
   }
   await sync(result.checkout);

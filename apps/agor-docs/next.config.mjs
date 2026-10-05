@@ -13,6 +13,11 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH
 export default withNextra({
   reactStrictMode: true,
   devIndicators: false,
+  // Remote docs previews allow only their own public origin for dev assets/HMR.
+  // Never a wildcard, and ordinary local/production builds are unchanged.
+  ...(process.env.AGOR_DOCS_PREVIEW_ORIGIN
+    ? { allowedDevOrigins: [new URL(process.env.AGOR_DOCS_PREVIEW_ORIGIN).hostname] }
+    : {}),
   output: 'export',
   images: {
     unoptimized: true,
