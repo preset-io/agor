@@ -8,6 +8,13 @@ import {
 import type { MCPSlackRecoveryNotice, Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+
+const tenantAccess = vi.hoisted(() => ({ active: true }));
+vi.mock('../auth/tenant-access.js', async () => ({
+  ...(await vi.importActual<Record<string, unknown>>('../auth/tenant-access.js')),
+  isCurrentTenantRuntimeActive: async () => tenantAccess.active,
+}));
+
 import {
   GatewayService,
   mcpSlackRecoveryExpiryDelay,
@@ -423,6 +430,26 @@ describe('Slack MCP recovery durable delivery', () => {
       if (previousBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
       else process.env.AGOR_BASE_URL = previousBaseUrl;
     }
+  });
+
+  it('posts nothing for a restricted tenant and posts from the kept marker after release', async () => {
+    const sendMessage = vi.fn(async () => '1700000000.000002');
+    const harness = deliveryHarness(sendMessage);
+    const before = harness.current();
+    tenantAccess.active = false;
+    try {
+      await harness.deliver();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(harness.current()).toEqual(before);
+      expect(harness.current()?.next_repair_at).toEqual(expect.any(String));
+    } finally {
+      tenantAccess.active = true;
+    }
+
+    await harness.deliver();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(harness.current()?.slack_message_ts).toBe('1700000000.000002');
+    await harness.service.stopListeners();
   });
 
   it('retries a terminal projection within a durable window after browser expiry', async () => {

@@ -37,7 +37,7 @@ import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { getUploadStagingStore } from '../utils/upload-staging.js';
 import { deletionErrorCategory } from './branch-deletion-diagnostics';
-import { issueExecutorCommandToken } from './session-token-service';
+import { issueExecutorSafetyCommandToken } from './session-token-service';
 
 const reportSchema = z
   .object({
@@ -243,7 +243,7 @@ export class BranchDeletionStepsService {
               'write',
               this.app.get('config').execution?.allow_superadmin === true
             );
-            return issueExecutorCommandToken(
+            return issueExecutorSafetyCommandToken(
               this.app,
               branchDeletionCommandId(execution),
               params.user!.user_id,

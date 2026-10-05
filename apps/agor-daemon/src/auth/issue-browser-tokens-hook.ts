@@ -1,8 +1,13 @@
 import { analyticsLogger } from '@agor/core/analytics';
-import { runWithTenantContext } from '@agor/core/db';
+import { runWithTenantContext, type TenantScopeAwareDatabase } from '@agor/core/db';
 import { PRODUCT_ANALYTICS_EVENTS } from '@agor/core/types';
 import type { SignOptions } from 'jsonwebtoken';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
+import {
+  assertTenantCredentialEpoch,
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './tenant-credential-epoch.js';
 import { authCredentialGenerationClaim, authTokenIssuedAtClaim } from './token-invalidation.js';
 import { redactUserAuthMetadata } from './user-redaction.js';
 
@@ -13,6 +18,7 @@ import { redactUserAuthMetadata } from './user-redaction.js';
 const MACHINE_TOKEN_TYPES = new Set(['executor-session', 'service']);
 
 export interface IssueBrowserTokensHookOptions {
+  db?: TenantScopeAwareDatabase;
   jwtSecret: string;
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
@@ -74,12 +80,23 @@ export function createIssueBrowserTokensHook(options: IssueBrowserTokensHookOpti
     const tenantId =
       context.params?.tenant?.tenant_id ??
       (context.result.user as { tenant_id?: string }).tenant_id;
+    const epoch =
+      options.db && tenantId
+        ? context.result.authentication?.strategy === 'jwt'
+          ? await assertTenantCredentialEpoch(
+              options.db,
+              tenantId,
+              context.result.authentication?.payload
+            )
+          : await readTenantCredentialEpoch(options.db, tenantId)
+        : undefined;
     const tokens = issueRuntimeTokenPair(
       context.result.user,
       jwtSecret,
       accessTokenTtl,
       refreshTokenTtl,
       {
+        ...tenantCredentialEpochClaims(epoch),
         ...authCredentialGenerationClaim(context.result.user),
         ...authTokenIssuedAtClaim(now(), context.result.user),
         ...runtimeTenantClaims(tenantId, tenantClaim),

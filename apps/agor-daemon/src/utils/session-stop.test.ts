@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionsServiceImpl } from '../declarations.js';
 
+import { skipsSessionMcpToken } from './session-mcp-token-hook.js';
 import {
   markStoppedSessionPromptableNoDrain,
   stopRequester,
@@ -265,6 +266,10 @@ describe('stopSessionPreserveQueue', () => {
       })
     );
     expect(withTenantDatabase).toHaveBeenCalledOnce();
+    // The Stop read keeps the caller's provider and auth but mints no MCP token.
+    const [, readParams] = sessionsService.get.mock.calls[0] as unknown as [string, object];
+    expect(readParams).toMatchObject(params);
+    expect(skipsSessionMcpToken(readParams)).toBe(true);
   });
 
   it('stops an awaiting_input task when the session is awaiting input', async () => {

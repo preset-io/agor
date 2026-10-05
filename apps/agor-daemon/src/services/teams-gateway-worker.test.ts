@@ -1,10 +1,14 @@
 import { Forbidden } from '@agor/core/feathers';
 import type { GatewayChannel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isCurrentTenantEventAdmitted } from '../auth/tenant-access.js';
 import { isVerifiedHttpGatewayCreate, verifiedHttpGatewayAuthority } from './gateway-authority';
 import { TeamsGatewayWorker } from './teams-gateway-worker';
 
 vi.stubEnv('AGOR_MASTER_SECRET', 'teams-worker-test-secret');
+vi.mock('../auth/tenant-access.js', () => ({
+  isCurrentTenantEventAdmitted: vi.fn(async () => true),
+}));
 
 const now = new Date('2026-08-27T12:00:00.000Z');
 
@@ -179,6 +183,18 @@ describe('TeamsGatewayWorker inbound admission', () => {
     });
     expect(setup.complete).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', taskId: 'task-1' })
+    );
+  });
+
+  it('consumes an event received while the tenant was closed without creating a Task', async () => {
+    const setup = makeWorker({ activity: activity() });
+    vi.mocked(isCurrentTenantEventAdmitted).mockResolvedValueOnce(false);
+    await setup.worker.checkOnce();
+
+    expect(setup.create).not.toHaveBeenCalled();
+    expect(setup.complete).toHaveBeenCalledOnce();
+    expect(setup.complete).toHaveBeenCalledWith(
+      expect.not.objectContaining({ taskId: expect.anything() })
     );
   });
 

@@ -1,3 +1,4 @@
+import { readTerminationEntity } from '../auth/termination-read-authority.js';
 /**
  * Tasks Service
  *
@@ -47,7 +48,14 @@ import {
   type TerminationSettlementResult,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+  Unavailable,
+} from '@agor/core/feathers';
 import { isValidUUID } from '@agor/core/ids';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import { escapePromptProvenanceSentinels } from '@agor/core/templates/prompt-provenance';
@@ -86,7 +94,15 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
-import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
+import {
+  authenticatedTaskExecutorRuntimeAuthority,
+  authenticatedTaskExecutorRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
+import {
+  assertRuntimeTenantAccess,
+  isCurrentTenantRuntimeActive,
+  isTenantRestrictedRejection,
+} from '../auth/tenant-access.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -128,6 +144,11 @@ const COMPLETION_SIDE_EFFECT_TASK_STATUSES = new Set<Task['status']>([
   TaskStatus.FAILED,
   TaskStatus.STOPPED,
 ]);
+
+/** A closed or unverifiable (503) tenant: completion projects the session hook-free; only an unverifiable one still drains the queue. */
+function isCompletionAdmissionRefusal(error: unknown): boolean {
+  return isTenantRestrictedRejection(error) || error instanceof Unavailable;
+}
 
 function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): boolean {
   return isTerminalTaskStatus(status);
@@ -194,6 +215,7 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'cancelQueued',
   'reorderQueued',
   'connectExecutor',
+  'getTerminationState',
   'reportTerminationComplete',
   'reportExecutorInterruption',
   'reportRuntimeTelemetry',
@@ -643,9 +665,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         params,
       });
       if (claimed) {
-        const session = await this.app
-          .service('sessions')
-          .get(result.task.session_id, { ...(params ?? {}), provider: undefined });
+        const session = await readTerminationEntity(
+          this.app,
+          'sessions',
+          result.task.session_id,
+          params,
+          result.task.task_id
+        );
         emitServiceEvent(this.app, {
           path: 'sessions',
           event: 'patched',
@@ -807,7 +833,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
     }
 
-    this.heartbeatCallbackRunner.run(payload);
+    // One restriction read, immediately before the callback it gates.
+    if (await isCurrentTenantRuntimeActive(this.db)) this.heartbeatCallbackRunner.run(payload);
   }
 
   /**
@@ -888,12 +915,47 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (!task.session_id || !this.app) return false;
     const runCompletionSideEffects = isCompletionSideEffectTaskStatus(status);
     try {
+      // Settlement is committed; while restricted or unverifiable, skip completion automation (no durable retry replays it) except an unverifiable queue drain.
+      let automationAdmitted = true;
+      let restrictionObserved = false;
+      const skipAutomation = (reason: 'restricted' | 'unverifiable') => {
+        automationAdmitted = false;
+        if (reason === 'restricted') restrictionObserved = true;
+        // Unverifiable drops callbacks and gateway flush for good; only the queue drain still runs.
+        const kept = reason === 'unverifiable' ? ' kept=queue' : '';
+        console.warn(
+          `[tasks.completion] automation skipped reason=${reason}${kept} task=${shortId(task.task_id)}`
+        );
+      };
+      try {
+        if (!(await isCurrentTenantRuntimeActive(this.db))) skipAutomation('restricted');
+      } catch {
+        // Unverifiable: the repository already projected the terminal session; run no automation.
+        skipAutomation('unverifiable');
+      }
       // Internal read: caller params can hold the Session its auth hooks cached before commit.
-      const session = await this.app
-        .service('sessions')
-        .get(task.session_id, { tenant: params?.tenant } as TaskParams);
+      const sessionReadParams = { tenant: params?.tenant } as TaskParams;
+      const readSettledSession = () =>
+        readTerminationEntity(
+          this.app,
+          'sessions',
+          task.session_id,
+          sessionReadParams,
+          task.task_id
+        ) as Promise<Session>;
+      let session: Session;
+      try {
+        session = automationAdmitted
+          ? await this.app.service('sessions').get(task.session_id, sessionReadParams)
+          : await readSettledSession();
+      } catch (error) {
+        // The tenant closed after the check, or the read became unverifiable: continue without automation.
+        if (!automationAdmitted || !isCompletionAdmissionRefusal(error)) throw error;
+        skipAutomation(isTenantRestrictedRejection(error) ? 'restricted' : 'unverifiable');
+        session = await readSettledSession();
+      }
 
-      if (session.branch_id) {
+      if (session.branch_id && automationAdmitted) {
         // Preserve fire-and-forget behavior, but never let Git orchestration
         // inherit a live (or already committed) completion transaction.
         deferWithTenantContext(
@@ -920,7 +982,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         console.log(
           `⏭️ [TasksService] Skipping session terminal-state update - task ${shortId(task.task_id)} is not the latest (latest: ${shortId(latestTaskId)})`
         );
-        if (runCompletionSideEffects && !isStop) {
+        if (runCompletionSideEffects && !isStop && automationAdmitted) {
           await this.dispatchCompletionCallbacksAfterCommit(task, session, params);
         }
         return false;
@@ -936,6 +998,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         id: session.session_id,
         params,
       });
+
+      if (!automationAdmitted) {
+        // A failed read is not a closure: dispatch re-checks the restriction under the execution fence.
+        if (!restrictionObserved && !params?.suppressTerminalQueueProcessing)
+          await this.triggerQueueProcessingAfterCommit(task.session_id, params);
+        return true;
+      }
 
       // Timeouts are terminal lifecycle results, but they are not successful,
       // failed, or stopped provider completions. Publish the projection and
@@ -1649,6 +1718,34 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return this.taskRepo.findById(taskId);
   }
 
+  async getTerminationState(
+    data: { task_id: string },
+    params?: TaskParams
+  ): Promise<import('@agor/core/types').ExecutorTerminationState> {
+    const authority = authenticatedTaskExecutorRuntimeScope(params);
+    if (!authority || authority.taskId !== data.task_id)
+      throw new Forbidden('A token scoped to this executor task is required');
+    const task = await this.taskRepo.findById(data.task_id);
+    if (!task || task.session_id !== authority.sessionId)
+      throw new Forbidden('Executor task is unavailable');
+    const request = task.termination_request;
+    return {
+      task_id: task.task_id,
+      status: task.status,
+      ...(request
+        ? {
+            termination_request: {
+              cause: request.cause,
+              requested_at: request.requested_at,
+              ...(request.executor_quiesced_at
+                ? { executor_quiesced_at: request.executor_quiesced_at }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
+
   async connectExecutor(data: { task_id: string }, params?: TaskParams): Promise<Task> {
     const connection = await this.taskRepo.connectExecutor(data.task_id);
     if (!connection) {
@@ -1687,9 +1784,21 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       throw new BadRequest('invalid executor interruption signal');
     }
     const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
-    const current = await this.get(data.task_id, params);
+    const current = await readTerminationEntity(
+      this.app,
+      'tasks',
+      data.task_id,
+      params,
+      data.task_id
+    );
     if (isTerminalTaskStatus(current.status)) return current;
-    const session = await this.app.service('sessions').get(current.session_id, params);
+    const session = await readTerminationEntity(
+      this.app,
+      'sessions',
+      current.session_id,
+      params,
+      current.task_id
+    );
     // The task-scoped runtime hook authenticates this report. The existing
     // row-locked claim preserves a winning Stop/completion and owns all release;
     // receiving a signal itself never proves that the provider has stopped.
@@ -1830,6 +1939,33 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // Do not let a wrong-scope credential stop somebody else's runtime.
       throw new Forbidden('Executor task authority does not match this runtime');
     }
+    // Restricted telemetry installs the durable Stop even before the restriction observer reaches this task.
+    try {
+      await assertRuntimeTenantAccess(
+        this.db,
+        authority.tenantId,
+        params?.authentication?.strategy === 'jwt'
+          ? { payload: params.authentication.payload }
+          : undefined
+      );
+    } catch (error) {
+      if (!(error instanceof Forbidden) && !(error instanceof NotAuthenticated)) throw error;
+      // A closed tenant or a codeless stale generation (it moves only with restriction records) is a suspension.
+      const revoked = report.outcome === 'authorization_revoked';
+      return beginExecutorTermination({
+        app: this.app,
+        taskId: data.task_id,
+        cause: revoked ? 'authorization_revoked' : 'tenant_suspension',
+        durableRevocation: revoked,
+        errorMessage: revoked
+          ? AUTHORIZATION_REVOKED_TERMINATION_MESSAGE
+          : 'Tenant access is restricted.',
+        params,
+        runInFreshTenantWriteDatabase: (work) =>
+          withFreshTenantWrite(this.db, authority.tenantId, work),
+      });
+    }
+
     if (report.outcome === 'authorization_revoked') {
       console.warn(
         `[task.authorization] event=runtime_revoked task_id=${shortId(data.task_id)} ` +
@@ -1839,6 +1975,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         app: this.app,
         taskId: report.task.task_id,
         cause: 'authorization_revoked',
+        durableRevocation: true,
         errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
         params,
         runInFreshTenantWriteDatabase: (work) =>
@@ -2001,7 +2138,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
       withFreshTenantWrite(this.db, terminationTenantId, work);
 
-    const current = await this.get(data.task_id, params);
+    const current = await readTerminationEntity(
+      this.app,
+      'tasks',
+      data.task_id,
+      params,
+      data.task_id
+    );
     const mode = current.sdk_watchdog_mode ?? 'observe';
     if (mode === 'disabled') throw new Conflict('SDK watchdog is disabled for this Task');
     const action =
@@ -2024,7 +2167,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     ) {
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
-    const session = await this.app.service('sessions').get(current.session_id, params);
+    const session = await readTerminationEntity(
+      this.app,
+      'sessions',
+      current.session_id,
+      params,
+      current.task_id
+    );
     const failure: SdkFailure = {
       reason: data.reason,
       detected_at: new Date().toISOString(),

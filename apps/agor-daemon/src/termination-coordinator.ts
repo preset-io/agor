@@ -13,12 +13,14 @@ import type {
   TerminationRequest,
 } from '@agor/core/types';
 import {
+  executorCleanupCause,
   executorOutOfMemoryMessage,
   isAgenticToolName,
   isAwaitingRemoteExecutor,
   isTerminalTaskStatus,
   TaskStatus,
 } from '@agor/core/types';
+import { readTerminationEntity } from './auth/termination-read-authority.js';
 import type { TasksServiceImpl } from './declarations.js';
 import {
   type ContainmentResult,
@@ -62,6 +64,10 @@ export interface TerminationInput {
   expectedHeartbeatAt?: string;
   heartbeatStaleBefore?: string;
   requireExecutorDisconnected?: boolean;
+  /** The revocation was recorded durably by the heartbeat authority; see TerminationClaimInput. */
+  durableRevocation?: boolean;
+  /** Claim only while the tenant is still closed under the execution fence; see TerminationClaimInput. */
+  requireTenantClosed?: boolean;
   /** Permit guarded recovery when this daemon does not own a local process handle. */
   allowUnownedLocalContainment?: boolean;
   /**
@@ -189,9 +195,14 @@ async function containRemoteExecution(input: TerminationInput, task: Task, waite
   const context = await runInFreshTenantWriteDatabase(input, async () => {
     const tenantId = getCurrentTenantId();
     if (!tenantId) return null; // Never ask a shared supervisor to resolve an unscoped Task.
-    const session = await input.app
-      .service('sessions')
-      .get(task.session_id, internalParams(input.params));
+    // A termination read: suspension Stops must still reach remote cleanup while the tenant is closed.
+    const session = await readTerminationEntity(
+      input.app,
+      'sessions',
+      task.session_id,
+      internalParams(input.params),
+      task.task_id
+    );
     if (!session.branch_id) return null;
     const started = await tasks.beginCleanupAttempt(
       task.task_id,
@@ -208,7 +219,7 @@ async function containRemoteExecution(input: TerminationInput, task: Task, waite
       branch_id: session.branch_id,
       requested_at: request.requested_at,
       attempt_id: request.cleanup_attempt.attempt_id,
-      cause: request.cause,
+      cause: executorCleanupCause(request.cause),
     };
   });
   if (!context)
@@ -248,6 +259,8 @@ async function claimRequest(input: TerminationInput) {
         expectedHeartbeatAt: input.expectedHeartbeatAt,
         heartbeatStaleBefore: input.heartbeatStaleBefore,
         requireExecutorDisconnected: input.requireExecutorDisconnected,
+        durableRevocation: input.durableRevocation,
+        requireTenantClosed: input.requireTenantClosed,
       },
       internalParams(input.params)
     )
@@ -256,10 +269,20 @@ async function claimRequest(input: TerminationInput) {
 
 async function loadAgenticTool(input: TerminationInput): Promise<PersistedAgenticToolName> {
   return runInFreshTenantWriteDatabase(input, async () => {
-    const task = await input.app.service('tasks').get(input.taskId, internalParams(input.params));
-    const session = await input.app
-      .service('sessions')
-      .get(task.session_id, internalParams(input.params));
+    const task = await readTerminationEntity(
+      input.app,
+      'tasks',
+      String(input.taskId),
+      input.params,
+      String(input.taskId)
+    );
+    const session = await readTerminationEntity(
+      input.app,
+      'sessions',
+      task.session_id,
+      input.params,
+      String(input.taskId)
+    );
     return session.agentic_tool;
   });
 }
@@ -286,7 +309,6 @@ async function waitForExecutorQuiescence(
   if (graceMs <= 0) return { task: requested, waitedMs: 0 };
   const startedAt = Date.now();
 
-  const tasks = input.app.service('tasks');
   const requestedAt = requested.termination_request?.requested_at;
   const coordinationToken = requested.termination_request?.coordination?.claim_token;
   const deadline = Date.now() + graceMs;
@@ -296,7 +318,7 @@ async function waitForExecutorQuiescence(
       setTimeout(resolve, Math.min(COOPERATIVE_POLL_MS, Math.max(0, deadline - Date.now())))
     );
     current = await runInFreshTenantWriteDatabase(input, () =>
-      tasks.get(requested.task_id, internalParams(input.params))
+      readTerminationEntity(input.app, 'tasks', requested.task_id, input.params, requested.task_id)
     );
     if (
       isTerminalTaskStatus(current.status) ||
