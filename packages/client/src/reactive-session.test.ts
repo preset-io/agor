@@ -3209,6 +3209,89 @@ describe('lean transcript detail retention', () => {
     expect(f.fullIds()).toEqual([turnId(0)]);
     f.handle.dispose();
   });
+  it('keeps byte accounting and retention membership consistent through trims and a reconnect', async () => {
+    const f = await fixture();
+    const sets = () => ({
+      recent: Reflect.get(f.handle, 'recentDetailTaskIds') as Set<string>,
+      detail: Reflect.get(f.handle, 'detailTaskIds') as Set<string>,
+      live: Reflect.get(f.handle, 'leanLiveTaskIds') as Set<string>,
+      inflight: Reflect.get(f.handle, 'detailInflight') as Map<string, unknown>,
+    });
+    const strings = (value: unknown): number =>
+      typeof value === 'string'
+        ? value.length
+        : value && typeof value === 'object'
+          ? Object.values(value).reduce((sum: number, item) => sum + strings(item), 0)
+          : 0;
+    /** The budget's total is exactly the retained buckets of loaded turns. */
+    const expectConsistent = (gone: string[] = []) => {
+      const { recent, detail, live, inflight } = sets();
+      const loaded = new Set<string>(f.handle.state.tasks.map((task) => task.task_id));
+      for (const id of [...recent, ...detail, ...live]) expect(loaded.has(id), id).toBe(true);
+      for (const id of gone) {
+        expect(f.handle.state.messagesByTask.has(id), id).toBe(false);
+        for (const held of [recent, detail, live, new Set(inflight.keys())])
+          expect(held.has(id), id).toBe(false);
+      }
+      expect(f.handle.getRetainedDetailBytes()).toBe(
+        [...detail].reduce((sum, id) => sum + strings(f.handle.state.messagesByTask.get(id)), 0)
+      );
+    };
+    // The daemon appends Session.tasks at dispatch.
+    const publish = () =>
+      f.emitServiceEvent('sessions', 'patched', {
+        session_id: SESSION_ID,
+        tasks: f.opts.tasks.map((task) => task.task_id),
+      });
+    // A reader's load pin (TaskBlock) holds an over-budget turn at the top.
+    const unpin = f.handle.retainTaskDetails(turnId(0));
+    f.runTurn(0, publish, BUDGET * 0.6);
+    for (let n = 1; n < 40; n++) f.runTurn(n, publish);
+    expect(f.handle.state.tasks).toHaveLength(40);
+    expect(f.fullIds()).toContain(turnId(0));
+    expect(f.handle.trimOlderTasks()).toBe(false);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET * 0.6);
+    expectConsistent();
+
+    // A detail read for a turn about to be trimmed is still in flight.
+    f.opts.deferTaskMessageFetch = turnId(1);
+    const stale = f.handle.loadTaskMessages(turnId(1));
+    f.opts.deferTaskMessageFetch = undefined;
+
+    unpin();
+    await Promise.resolve();
+    expect(f.handle.trimOlderTasks()).toBe(true);
+    const trimmed = range(0, 9);
+    expect(f.handle.state.tasks.map((task) => task.task_id)).toEqual(range(10, 39));
+    expect(f.handle.getRetainedDetailBytes()).toBeLessThan(BUDGET * 0.1);
+    expectConsistent(trimmed);
+
+    // Offline: more than a window of turns, the newest still running a large read.
+    f.fireIo('disconnect');
+    for (let n = 40; n < 75; n++) {
+      const id = turnId(n);
+      f.opts.tasks.push(makeTask(id, n === 74 ? TaskStatus.RUNNING : TaskStatus.COMPLETED));
+      f.opts.messagesByTask[id] = [fullMessage(id, n, n === 74 ? BUDGET * 0.6 : 0)];
+    }
+    f.fireIo('connect');
+    await f.handle.ready();
+    expect(f.handle.state.tasks.map((task) => task.task_id)).toEqual(range(45, 74));
+    expect(f.fullIds()).toEqual([turnId(74)]);
+    expect(f.handle.getRetainedDetailBytes()).toBeGreaterThan(BUDGET * 0.6);
+    expectConsistent([...trimmed, ...range(10, 44)]);
+
+    // Paged back in, the trimmed turn reloads with its own read; the stale one
+    // resurrects nothing.
+    while (!f.handle.getTask(turnId(1))) await f.handle.loadOlderTasks();
+    const fresh = f.handle.loadTaskMessages(turnId(1));
+    f.releaseMessageFetch();
+    await Promise.all([fresh, stale]);
+    expect(f.handle.isTaskLoaded(turnId(1))).toBe(true);
+    expect(f.fullIds()).toEqual([turnId(1), turnId(74)]);
+    expectConsistent();
+    f.handle.dispose();
+    expect(f.handle.getRetainedDetailBytes()).toBe(0);
+  });
 });
 
 describe('lean transcript window trimming', () => {

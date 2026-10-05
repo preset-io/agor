@@ -1472,15 +1472,21 @@ export class ReactiveSessionHandle {
     return undefined;
   }
 
-  /** Remove turns from the lean transcript and every per-turn record of them. */
+  /**
+   * Remove turns from the lean transcript and every per-turn record of them,
+   * including detail retention: the byte budget's total is re-summed from the
+   * remaining buckets by the update that commits this state.
+   */
   private forgetLeanTurns(state: ReactiveSessionState, dropped: ReadonlySet<string>) {
     if (dropped.size === 0) return state;
     for (const id of dropped) {
       this.recentDetailTaskIds.delete(id);
       this.detailTaskIds.delete(id);
       this.leanLiveTaskIds.delete(id);
-      // Also fences a detail read still in flight for the turn.
+      // Fences a detail read still in flight for the turn, and lets a reload
+      // after the turn pages back in start its own read instead of joining it.
       this.messageCacheMutationsByTask.delete(id);
+      this.detailInflight.delete(id);
     }
     const kept = <V>(map: Map<string, V>) => new Map([...map].filter(([id]) => !dropped.has(id)));
     return {
