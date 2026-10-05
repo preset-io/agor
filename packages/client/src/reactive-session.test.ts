@@ -4105,6 +4105,45 @@ describe('lean transcript window follows displayed turn order', () => {
     handle.dispose();
   });
 
+  it('still places a deferred turn when history traffic overflows what the first page remembers', async () => {
+    const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
+    for (let n = 0; n < 300; n++) {
+      opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
+      opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
+    }
+    opts.deferTaskMessageFetch = turn(299);
+    const mock = createMockClient(opts);
+    const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
+    await vi.waitFor(() =>
+      expect(JSON.stringify(mock.messageFindAll.mock.calls)).toContain(turn(299))
+    );
+    // A new callback settles first, then 256 distinct history events follow.
+    const callback = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
+    opts.tasks.push(makeTask(callback, TaskStatus.COMPLETED));
+    opts.messagesByTask[callback] = [answer(callback) as Message];
+    mock.emitServiceEvent('tasks', 'patched', makeTask(callback, TaskStatus.COMPLETED));
+    mock.emitServiceEvent('messages', 'created', answer(callback));
+    for (let n = 0; n < 256; n++)
+      mock.emitServiceEvent('tasks', 'patched', makeTask(turn(n), TaskStatus.COMPLETED));
+    opts.deferTaskMessageFetch = undefined;
+    mock.releaseMessageFetch();
+    await handle.ready();
+    expect(handle.state.tasks.at(-1)?.task_id).toBe(turn(299));
+    mock.emitServiceEvent('sessions', 'patched', {
+      session_id: SESSION_ID,
+      tasks: opts.tasks.map((task) => task.task_id),
+    });
+    await vi.waitFor(() => expect(handle.state.tasks.at(-1)?.task_id).toBe(callback));
+    await handle.ready();
+    expect(handle.getTaskMessages(callback)).toHaveLength(1);
+    // History stays where it was: nothing above the first page came back.
+    expect(handle.state.tasks.map((task) => task.task_id)).toEqual([
+      ...Array.from({ length: 10 }, (_, n) => turn(290 + n)),
+      callback,
+    ]);
+    handle.dispose();
+  });
+
   it('keeps a turn that settles, with its Session patch, while the first page hydrates', async () => {
     const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
     const add = (n: number) => {

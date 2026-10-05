@@ -318,6 +318,9 @@ export class ReactiveSessionHandle {
   // Settled Task events refused while the first page loads: they cannot be
   // placed yet. Placed (read) once listed after the reconciled marker.
   private readonly leanDeferredTaskIds = new Set<string>();
+  // The deferred set overflowed: an evicted turn may be the only one that
+  // needed placing, so any unloaded position after the marker is read.
+  private leanDeferredOverflow = false;
   private retainedDetailBytes = 0;
 
   /**
@@ -948,6 +951,7 @@ export class ReactiveSessionHandle {
     this.leanWindow = undefined;
     this.leanBasis = undefined;
     this.leanDeferredTaskIds.clear();
+    this.leanDeferredOverflow = false;
     this.retiredStreamTasks.clear();
     this.queueSnapshot = [];
     this.detailInflight.clear();
@@ -1547,6 +1551,7 @@ export class ReactiveSessionHandle {
     if (this.leanDeferredTaskIds.size > MAX_DEFERRED_LEAN_TURNS) {
       const oldest = this.leanDeferredTaskIds.values().next().value;
       if (oldest !== undefined) this.leanDeferredTaskIds.delete(oldest);
+      this.leanDeferredOverflow = true;
     }
   }
 
@@ -1557,14 +1562,20 @@ export class ReactiveSessionHandle {
    * committed), read it like a reconnect does: every unloaded position after
    * the marker, by ID. One listed above the window is history and is dropped,
    * so a trimmed or never-loaded turn is not resurrected; one not yet listed
-   * waits for its patch.
+   * waits for its patch. After the set overflowed, the first list with any
+   * unloaded position after the marker is read the same way.
    */
   private placeDeferredLeanTurns(): void {
-    if (this.leanDeferredTaskIds.size === 0 || this.stateSnapshot.loading) return;
+    if (
+      (this.leanDeferredTaskIds.size === 0 && !this.leanDeferredOverflow) ||
+      this.stateSnapshot.loading
+    )
+      return;
     const window = this.leanWindow;
     if (!window || !this.followsDisplayOrder()) {
       // Task-ID order admits traffic without placing it by position.
       this.leanDeferredTaskIds.clear();
+      this.leanDeferredOverflow = false;
       return;
     }
     const loaded = this.indexStreamTasks(this.stateSnapshot.tasks).byId;
@@ -1575,6 +1586,13 @@ export class ReactiveSessionHandle {
       this.leanDeferredTaskIds.delete(taskId);
       if (!loaded.has(taskId) && rank !== undefined && rank >= window.reconciled)
         listedAfter = true;
+    }
+    if (
+      this.leanDeferredOverflow &&
+      this.stateSnapshot.session?.tasks?.slice(window.reconciled).some((id) => !loaded.has(id))
+    ) {
+      this.leanDeferredOverflow = false;
+      listedAfter = true;
     }
     if (listedAfter) void this.syncLeanHistory().catch(() => {});
   }
