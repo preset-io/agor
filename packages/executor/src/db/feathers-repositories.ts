@@ -28,6 +28,7 @@ import type {
   User,
 } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 
 /**
  * Messages Repository - proxies to 'messages' Feathers service
@@ -90,8 +91,10 @@ export class FeathersSessionsRepository {
     try {
       const service = this.client.service('sessions');
       return await service.get(sessionId);
-    } catch (_error) {
-      return null;
+    } catch (error) {
+      // Only absence is null; a failed read must not pass for a missing fork parent or unset sdk_session_id.
+      if (isNotFoundError(error)) return null;
+      throw error;
     }
   }
 
