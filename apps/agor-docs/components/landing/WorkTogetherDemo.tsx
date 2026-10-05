@@ -23,8 +23,10 @@ import styles from './WorkTogetherDemo.module.css';
  *
  * Everything derives from one clock, `t` (seconds, 0 → END): scene(t) is a
  * port of the prototype's scene() and is the source of truth for timing and
- * geometry. Plays when the section is 30% visible, resets once it has fully
- * left the viewport, and skips to the end state under reduced motion.
+ * geometry. Plays when the section is 30% visible and skips to the end state
+ * under reduced motion. Leaving the viewport mid-play starts it over next
+ * time; once it has settled it stays settled (Play again replays it), so the
+ * board never grows back under a reader who has scrolled past.
  */
 
 const END = 13;
@@ -370,7 +372,9 @@ export function WorkTogetherDemo() {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.intersectionRatio >= 0.3) play();
-        else if (!entry.isIntersecting) reset();
+        // Before the settle the board's height hasn't changed, so starting
+        // over is free; after it, re-growing would shove the page down.
+        else if (!entry.isIntersecting && clock.current.t < SETTLE_AT) reset();
       },
       { threshold: [0, 0.3] }
     );
@@ -383,6 +387,25 @@ export function WorkTogetherDemo() {
   }, [reduced]);
 
   const s = scene(reduced ? END : t);
+
+  // The settle changes the board's height. If the reader has scrolled so the
+  // board's top is off screen, apply it at once and scroll by the same amount,
+  // so what they're looking at (further down) doesn't move.
+  const lastHeight = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const board = boardRef.current;
+    const height = scale * (s.settled ? BOARD_H_SETTLED : BOARD_H);
+    const previous = lastHeight.current;
+    lastHeight.current = height;
+    if (!board || previous === null || previous === height) return;
+    if (board.getBoundingClientRect().top >= 0) return;
+    board.style.transition = 'none';
+    void board.offsetHeight;
+    window.scrollBy(0, height - previous);
+    requestAnimationFrame(() => {
+      board.style.transition = '';
+    });
+  }, [s.settled, scale]);
 
   return (
     <div className={styles.demo} ref={sectionRef} data-troupe-section="work-together">
