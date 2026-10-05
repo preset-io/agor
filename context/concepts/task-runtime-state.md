@@ -193,7 +193,11 @@ an explicit mapping-review point.
   below the immutable launch floor denies the write. Higher access does not
   change existing mounts.
 - An explicit denial claims the normal fenced `stopping` path with cause
-  `authorization_revoked`. Authority-store/query errors throw and do not stamp
+  `authorization_revoked`. A closed tenant or a stale restriction generation
+  claims `tenant_suspension` instead; only a durable denial may replace that
+  cause, decided under the claim's row lock. The restriction reconciler's
+  claim also re-reads closure under the execution fence, so it never stops a
+  reopened tenant's task. Authority-store/query errors throw and do not stamp
   liveness. The existing stale-heartbeat threshold supplies the bounded
   fail-closed backstop; there is no authority cache, Redis dependency, second
   watchdog, or uncertainty-specific timer.
@@ -207,7 +211,8 @@ an explicit mapping-review point.
   Tasks or tenants. PostgreSQL uses database time; startup offset, saturated
   drain jitter, and idle backoff reduce contention but never confer correctness.
 - Candidate writes assert the tenant write gate in the same fresh tenant
-  transaction as the mutation.
+  transaction as the mutation. Candidate and session reloads use single-call
+  termination reads, so recovery continues while the tenant is restricted.
 - Every daemon may discover the same routing refs. A Task-specific opaque
   coordination token and expiring lease unconditionally fence normal
   containment settlement. Guarded-unverified state clears the token and
@@ -385,6 +390,11 @@ admission/UI projection:
 - terminal settlement writes the task terminal state, then projects the
   session back to its appropriate resting state in the same transaction;
   queue processing and other side effects run after commit;
+- a Task settling while its tenant is restricted (or whose restriction read
+  or session read cannot verify admission) keeps that atomic projection, so
+  the session still leaves `running`; completion automation does not run and
+  is not replayed after reactivation (see
+  [tenant-restrictions.md](tenant-restrictions.md));
 - reconciliation repairs a failed/not-ready session when no non-queued task
   still owns that busy state;
 - the browser confirms executing-to-resting Session events with caller-scoped
