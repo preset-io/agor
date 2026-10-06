@@ -110,6 +110,10 @@ describe('BranchesTable — server pages with the store empty', { timeout: 10_00
         query: { archived: false, search: 'feat', $limit: 10, $skip: 0, $sort: { created_at: -1 } },
       })
     );
+    // The search starts on page 1 in the same update: no read of its page 2.
+    expect(branchesFind).not.toHaveBeenCalledWith({
+      query: expect.objectContaining({ search: 'feat', $skip: 10 }),
+    });
   });
 
   it('sends the daemon at most its 8 distinct search terms', async () => {

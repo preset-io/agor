@@ -118,13 +118,15 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const [initialArchiveDeleteAction, setInitialArchiveDeleteAction] = useState<
     'archive' | 'delete'
   >('archive');
-  const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const { debouncedQuery } = useDebouncedSearchQuery(searchTerm);
   const search = debouncedQuery.trim();
-  // A new filter or search starts again on its first page.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the filters are reset triggers
-  useEffect(() => setPage(1), [archiveFilter, search]);
+  // A new filter or search starts again on its first page, in the same
+  // render: the page belongs to the filter and search it was chosen under.
+  const pageKey = `${archiveFilter}\u0000${search}`;
+  const [paged, setPaged] = useState({ key: pageKey, page: 1 });
+  const page = paged.key === pageKey ? paged.page : 1;
+  const setPage = (next: number) => setPaged({ key: pageKey, page: next });
 
   // Every filter but Teammates pages on the daemon (`search` included). The
   // daemon can't combine `teammate` with `search`; the user scope already
