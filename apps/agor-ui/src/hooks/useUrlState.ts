@@ -102,6 +102,19 @@ export function buildBoardPath(
 /**
  * Hook for bidirectional URL state synchronization.
  */
+/** Warn (in dev) that a short id matched several entities of `kind`. */
+const warnAmbiguous =
+  (kind: 'board' | 'session' | 'branch' | 'artifact') => (param: string, n: number) => {
+    if (import.meta.env.DEV) {
+      const capitalized = kind.charAt(0).toUpperCase() + kind.slice(1);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[useUrlState] ${capitalized} short ID "${param}" matched ${n} ${kind}s; ` +
+          `treating as not-found (URL must use full UUID or unambiguous prefix).`
+      );
+    }
+  };
+
 export function useUrlState(options: UseUrlStateOptions) {
   const {
     currentBoardId,
@@ -219,45 +232,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
   }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
 
-  const warnAmbiguous = useCallback(
-    (kind: 'board' | 'session' | 'branch' | 'artifact', param: string, n: number) => {
-      if (import.meta.env.DEV) {
-        const capitalized = kind.charAt(0).toUpperCase() + kind.slice(1);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[useUrlState] ${capitalized} short ID "${param}" matched ${n} ${kind}s; ` +
-            `treating as not-found (URL must use full UUID or unambiguous prefix).`
-        );
-      }
-    },
-    []
-  );
-
-  const resolveBoardFromUrl = useCallback(
-    (boardParam: string) =>
-      resolveBoardFromUrlPure(boardParam, boardById, (p, n) => warnAmbiguous('board', p, n)),
-    [boardById, warnAmbiguous]
-  );
-
-  const resolveSessionFromShortId = useCallback(
-    (shortId: string) =>
-      resolveSessionFromShortIdPure(shortId, sessionById, (p, n) => warnAmbiguous('session', p, n)),
-    [sessionById, warnAmbiguous]
-  );
-
-  const resolveBranchFromShortId = useCallback(
-    (shortId: string) =>
-      resolveBranchFromShortIdPure(shortId, branchById, (p, n) => warnAmbiguous('branch', p, n)),
-    [branchById, warnAmbiguous]
-  );
-
-  const resolveArtifactFromShortId = useCallback(
-    (shortId: string) =>
-      resolveArtifactFromShortIdPure(shortId, artifactById, (p, n) =>
-        warnAmbiguous('artifact', p, n)
-      ),
-    [artifactById, warnAmbiguous]
-  );
+  // The resolvers are plain calls inside the URL→state effect, not memoized
+  // callbacks: a memoized callback that survives renders keeps its render's
+  // closure context, which also holds that render's session/branch Maps, and
+  // callbacks recreated at different cadences chain those contexts, retaining
+  // every replaced Map for the life of the tab.
 
   // URL → State sync
   useEffect(() => {
@@ -355,14 +334,18 @@ export function useUrlState(options: UseUrlStateOptions) {
     let recenterSessionId: string | null = null;
 
     if (urlBoardParam) {
-      resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
+      resolvedBoardId = resolveBoardFromUrlPure(urlBoardParam, boardById, warnAmbiguous('board'));
       if (resolvedBoardId) urlParamsResolvedRef.current.board = true;
     } else {
       urlParamsResolvedRef.current.board = true;
     }
 
     if (urlSessionShortId) {
-      resolvedSessionId = resolveSessionFromShortId(urlSessionShortId);
+      resolvedSessionId = resolveSessionFromShortIdPure(
+        urlSessionShortId,
+        sessionById,
+        warnAmbiguous('session')
+      );
       if (resolvedSessionId) {
         urlParamsResolvedRef.current.session = true;
         // Chain session → board to drive board switch + recenter. The
@@ -381,7 +364,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     if (urlBranchShortId) {
-      const branchId = resolveBranchFromShortId(urlBranchShortId);
+      const branchId = resolveBranchFromShortIdPure(
+        urlBranchShortId,
+        branchById,
+        warnAmbiguous('branch')
+      );
       if (branchId) {
         urlParamsResolvedRef.current.branch = true;
         activeUrlTarget = { kind: 'branch', id: branchId };
@@ -396,7 +383,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     if (urlArtifactShortId) {
-      const artifactId = resolveArtifactFromShortId(urlArtifactShortId);
+      const artifactId = resolveArtifactFromShortIdPure(
+        urlArtifactShortId,
+        artifactById,
+        warnAmbiguous('artifact')
+      );
       if (artifactId) {
         urlParamsResolvedRef.current.artifact = true;
         activeUrlTarget = { kind: 'artifact', id: artifactId };
@@ -480,14 +471,10 @@ export function useUrlState(options: UseUrlStateOptions) {
     urlSessionShortId,
     urlBranchShortId,
     urlArtifactShortId,
-    boardById.size,
+    boardById,
     sessionById,
     branchById,
     artifactById,
-    resolveBoardFromUrl,
-    resolveSessionFromShortId,
-    resolveBranchFromShortId,
-    resolveArtifactFromShortId,
     onBoardChange,
     onSessionChange,
     onActiveUrlTargetChange,
