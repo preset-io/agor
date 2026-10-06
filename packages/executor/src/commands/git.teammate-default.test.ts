@@ -162,6 +162,7 @@ it('clone storage resolves an explicit bare branch name against the live remote'
   branch.storage_mode = 'clone';
   branch.base_ref = 'trunk';
   expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+  expect(branch.base_ref).toBe('origin/trunk');
   expect(branch.base_sha).toBe(remoteSha);
   expect(branch.base_source).toEqual({ name: 'trunk', remote_url: repo.remote_url });
   expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(remoteSha);
