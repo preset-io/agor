@@ -9,8 +9,8 @@ import type { LandingPageId } from './pages';
 // "The problem" cards — the diagnosis before the pitch. Amber accents (see
 // .problemCard in the CSS module) mark these as the warning register; the
 // mint solution palette arrives at the pivot line below the grid.
-// Each card links to the landing page that answers it, and the link text
-// foreshadows that answer (problem on the card, solution on the link).
+// Each card is just the problem (its title) and a link to the landing page
+// that answers it; the link text foreshadows that answer.
 /** The problem words in a card title, in amber (aqua once the card's
  * solution link is hovered). */
 function Key({ children }: { children: ReactNode }) {
@@ -26,7 +26,6 @@ const problemCards: Array<{
   anchor: string;
   /** Link text: a hint at the answer waiting on the landing page. */
   cta: string;
-  body: ReactNode;
 }> = [
   {
     id: 'alone',
@@ -39,12 +38,6 @@ const problemCards: Array<{
     page: 'multiplayer',
     anchor: 'learn-together',
     cta: 'Get better at AI together',
-    body: (
-      <>
-        Each person experiments behind <strong>their own screen</strong>. Good techniques stay
-        private, and the team repeats the same mistakes.
-      </>
-    ),
   },
   {
     id: 'track',
@@ -57,12 +50,6 @@ const problemCards: Array<{
     page: 'command-center',
     anchor: 'zones-and-prompts',
     cta: 'Give every agent a place',
-    body: (
-      <>
-        More agents and conversations mean more coordination. Which one is <strong>blocked</strong>?
-        Which one <strong>needs you</strong>?
-      </>
-    ),
   },
   {
     id: 'starting-over',
@@ -75,12 +62,6 @@ const problemCards: Array<{
     page: 'teammates',
     anchor: 'memory',
     cta: 'Pick up where you left off',
-    body: (
-      <>
-        Good context gets buried in old conversations, so every recurring task needs the{' '}
-        <strong>same explanation</strong> again.
-      </>
-    ),
   },
   {
     id: 'one-person',
@@ -93,12 +74,6 @@ const problemCards: Array<{
     page: 'teammates',
     anchor: 'shared-ownership',
     cta: 'Raise teammates together',
-    body: (
-      <>
-        That useful PR reviewer lives in <strong>one person’s setup</strong>. Nobody else can
-        improve it or take it over.
-      </>
-    ),
   },
   {
     id: 'scattered',
@@ -111,12 +86,6 @@ const problemCards: Array<{
     page: 'command-center',
     anchor: 'knowledge',
     cta: 'Keep context close',
-    body: (
-      <>
-        Knowledge is <strong>spread</strong> across repos, docs, and DMs, so agents answer without
-        your team’s <strong>actual context</strong>.
-      </>
-    ),
   },
   {
     id: 'habits',
@@ -129,12 +98,6 @@ const problemCards: Array<{
     page: 'multiplayer',
     anchor: 'enablers',
     cta: 'Turn wins into team practice',
-    body: (
-      <>
-        Handing out AI accounts doesn’t create <strong>shared practices</strong>. Individual wins
-        never become the way the team works.
-      </>
-    ),
   },
 ];
 
@@ -244,7 +207,6 @@ export function ProblemSection() {
                 </span>
                 <h3>{card.title}</h3>
               </div>
-              <p>{card.body}</p>
               <LandingLink
                 page={card.page}
                 anchor={card.anchor}
