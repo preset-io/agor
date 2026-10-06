@@ -33,8 +33,9 @@ export default class KnowledgeImport extends BaseCommand {
     try {
       await withKnowledgeTransfer(
         {
-          failureNote:
-            'Import incomplete. Committed documents are retained. Re-run the same command with --resume --apply. Conflicts are never overwritten.',
+          failureNote: flags.apply
+            ? 'Import incomplete. Any previously committed documents are retained; conflicts are never overwritten. Resolve the reported error, then check the same bundle with --resume --dry-run (without --apply) before applying again.'
+            : 'Planning incomplete. This run sent no import writes. Resolve the reported error before retrying; existing destination data and local checkpoints are unchanged.',
           cleanup: () => this.cleanupClient(client),
         },
         async ({ signal, progress }) => {

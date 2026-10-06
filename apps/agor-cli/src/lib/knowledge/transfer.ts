@@ -17,6 +17,7 @@ import {
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { KnowledgeDirectory } from './directory';
 import type { KnowledgeProgress } from './progress';
+import { transferRequest } from './transfer-errors';
 
 // Canonical SDK overload, kept separate from the generic service fallback.
 export function knowledgeTransferClient(client: AuthenticatedAgorClient) {
@@ -57,7 +58,7 @@ async function inventory(
   do {
     checkAbort(signal);
     progress.report('Planning: source inventory', entries.length);
-    const page = await progress.waiting(() =>
+    const page = await transferRequest(progress, 'Planning: source inventory', 'GET', () =>
       client.find({ query: { namespace, ...(cursor ? { cursor } : {}) } })
     );
     ns = page.namespace;
@@ -194,10 +195,15 @@ export async function exportKnowledge(
       let sha256 = action.row.sha256;
       let length = action.row.bytes;
       if (!action.skip) {
-        const body = await progress.waiting(() =>
-          client.get(action.row.document_id, {
-            query: { namespace: options.namespace, version: action.row.version_id },
-          })
+        const body = await transferRequest(
+          progress,
+          'Exporting document',
+          'GET',
+          () =>
+            client.get(action.row.document_id, {
+              query: { namespace: options.namespace, version: action.row.version_id },
+            }),
+          'document'
         );
         if (
           transferSha256(body.content) !== body.sha256 ||
@@ -360,7 +366,7 @@ export async function importKnowledge(
     const planned = new Map(plan.map((action) => [action.entry.key, action]));
     do {
       checkAbort(options.signal);
-      const page = await progress.waiting(() =>
+      const page = await transferRequest(progress, 'Planning: destination inventory', 'GET', () =>
         client.find({
           query: { namespace: options.namespace, bundle, ...(cursor ? { cursor } : {}) },
         })
@@ -389,7 +395,7 @@ export async function importKnowledge(
     if (options.dryRun)
       return { dryRun: true, documents: plan.length, unchanged, pending, bytesNeeded, unresolved };
     checkAbort(options.signal);
-    await progress.waiting(() =>
+    await transferRequest(progress, 'Creating import namespace', 'POST', () =>
       client.create({
         action: 'namespace',
         bundle,
@@ -413,7 +419,7 @@ export async function importKnowledge(
         throw new Error('Local file changed after planning');
       const { content } = rewriteTransferLinks(original, manifest, options.namespace);
       if (transferSha256(content) !== action.entry.sha256) throw new Error('Import plan changed');
-      await progress.waiting(() =>
+      await transferRequest(progress, 'Importing document', 'POST', () =>
         client.create({
           action: 'document',
           bundle,
@@ -431,7 +437,7 @@ export async function importKnowledge(
     progress.report('Reconciling references', 0, references.length);
     for (const action of references) {
       checkAbort(options.signal);
-      await progress.waiting(() =>
+      await transferRequest(progress, 'Reconciling references', 'POST', () =>
         client.create({
           action: 'reconcile',
           bundle,

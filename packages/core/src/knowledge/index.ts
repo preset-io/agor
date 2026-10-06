@@ -1,3 +1,4 @@
 export * from './edit-ops.js';
 export * from './transfer.js';
 export * from './transfer-links.js';
+export * from './transfer-validation.js';

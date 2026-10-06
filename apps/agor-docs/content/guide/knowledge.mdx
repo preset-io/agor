@@ -255,6 +255,26 @@ An unrelated existing namespace is never merged or overwritten. A modified bundl
 is a new import and needs a new destination namespace. Keep the destination private
 and unchanged until import and reference reconciliation finish.
 
+If planning stops with **Invalid Knowledge transfer request**, do not repeatedly
+retry with `--apply`. Transfer errors identify the stage, HTTP method/route and
+sanitized invalid fields when the daemon supplies them. Compare `agor --version`
+with the destination's public `/health` version to investigate compatibility;
+the error alone does not prove a version mismatch. Transfer inventories use
+cursor pagination, not `$limit`/`$skip`, and `--namespace` takes a slug, not an ID.
+
+After resolving the reported error, validate without import writes:
+
+```bash
+agor kb import ./team-docs-export --namespace migrated-docs --resume --dry-run
+```
+
+This reads the bundle and destination transfer receipts; it does not change local
+checkpoints or destination documents. A `0 discovered` progress line is emitted
+before the first inventory response and is **not** evidence that the destination
+is empty or that an earlier attempt committed nothing. Keep the bundle and
+checkpoints intact. When reporting a failure, share CLI/daemon versions and the
+sanitized stage/field diagnostic, not credentials, request bodies or private docs.
+
 An export interrupted before its first completed manifest can resume only against
 the same source inventory; if that source changed, use a fresh output directory.
 Completed exports can be refreshed. Independently altered content-addressed files
