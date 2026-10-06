@@ -171,6 +171,8 @@
 
 .ctaSlot {
   display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .cta {
@@ -193,9 +195,34 @@
   color: #062321;
 }
 
+/* Outlined pill beside the Cloud CTA; opens the meeting scheduler. */
+.ctaSecondary {
+  display: inline-flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: transparent;
+  color: #dfe6e6;
+  font: 600 14px var(--body);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.ctaSecondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
 .trigger:focus-visible,
 .iconButton:focus-visible,
 .cta:focus-visible,
+.ctaSecondary:focus-visible,
 .logo:focus-visible,
 .navItem:focus-visible,
 .feature:focus-visible,

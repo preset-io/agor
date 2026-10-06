@@ -333,6 +333,15 @@ export function IslandNav() {
               <Search size={17} aria-hidden />
             </button>
             <span className={styles.ctaSlot}>
+              {/* Same HubSpot meeting scheduler as the hero's "Book a demo" and
+                  the sign-up modal's "book a demo instead" view. */}
+              <button
+                type="button"
+                className={styles.ctaSecondary}
+                onClick={() => setDemoOpen(true)}
+              >
+                Talk to Us
+              </button>
               <CloudCtaLink placement="navbar" compact className={styles.cta} />
             </span>
             <button
