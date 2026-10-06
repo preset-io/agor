@@ -238,7 +238,10 @@ Both wait paths check immediately and then once per second. The default wait is 
 single call is capped at 5 minutes. Values longer than the MCP client's request deadline require a
 matching client or host timeout. After a timeout, keep the returned branch ID and safely call the
 read-only wait tool again. Losing a waited create response does not cancel the already-created branch,
-so do not blindly replay branch creation.
+so do not blindly replay branch creation. Once the branch exists, every create response is JSON with a
+`_create` object carrying its `branch_id`; if the wait itself fails (for example, a read error or
+cancellation), the interrupted wait (`_resolution` or `_readiness`) reports `outcome: "unknown"`
+with a reason, and `_readiness` names the wait tool to call next.
 
 - **Repository bootstrap:** "Clone this GitHub repo, create a branch off `main`, and start the dev environment automatically."
 - **Zone-based workflows:** "Create a 'Human PR Review' zone on the board, positioned based on existing zones, with a trigger that prompts for review feedback."

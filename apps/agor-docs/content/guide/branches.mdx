@@ -123,9 +123,12 @@ The standalone wait tool is the safer choice when request replay is possible: br
 idempotent, and losing a waited create response does not cancel the branch that was already created.
 Long clones can safely repeat the read-only wait call. A timeout preserves the branch and does not
 cancel or retry materialization; terminal failures return the refreshed branch and its persisted safe
-error. Client cancellation only stops further polling. No database transaction or connection is
-retained between reads; each individual read remains subject to the daemon's normal database query
-timeout.
+error. Every `agor_branches_create` response after the branch exists includes `_create.branch_id`.
+If a wait cannot finish because a read fails or the request is cancelled, the call still returns the
+created branch, with `outcome: "unknown"` on the interrupted wait (`_resolution`, or `_readiness`
+when `waitForReady` is set) instead of a failed create. Client cancellation
+only stops further polling. No database transaction or connection is retained between reads; each
+individual read remains subject to the daemon's normal database query timeout.
 
 ### Source ref resolution
 
