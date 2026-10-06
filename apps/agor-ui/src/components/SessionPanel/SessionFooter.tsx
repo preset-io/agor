@@ -1759,11 +1759,19 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     onClick={onStop}
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
                   >
-                    {isStopping
-                      ? recoveryTask?.termination_request?.cause === 'user_stop'
-                        ? 'Stopping…'
-                        : 'Recovering…'
-                      : 'Stop'}
+                    {/* Reserve the longest label so recovery does not move the controls. */}
+                    <span style={{ display: 'inline-grid' }}>
+                      <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden' }}>
+                        Recovering…
+                      </span>
+                      <span style={{ gridArea: '1 / 1' }}>
+                        {isStopping
+                          ? recoveryTask?.termination_request?.cause === 'user_stop'
+                            ? 'Stopping…'
+                            : 'Recovering…'
+                          : 'Stop'}
+                      </span>
+                    </span>
                   </Button>
                 </Tooltip>
               )}
