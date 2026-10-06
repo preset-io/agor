@@ -272,3 +272,37 @@ it('pins reviewed configured-client issuer and refuses recipe drift', async () =
     configuredCatalogIssuer({ ...server, source: 'user' }, [configured])
   ).resolves.toBeUndefined();
 });
+
+it.each(['per_user', 'shared'] as const)(
+  'accepts a %s-mode install of the shipped Asana recipe and still pins everything else',
+  async (oauthMode) => {
+    // The real curated entry and loader, not a fixture or stub.
+    const asana = (await loadCatalog()).find((candidate) => candidate.name === 'com.asana/mcp')!;
+    expect(asana.oauth?.configured_client).toBeDefined();
+    const server = catalogServer({
+      catalog_entry_name: asana.name,
+      url: asana.remote_url,
+      auth: {
+        type: 'oauth',
+        oauth_mode: oauthMode,
+        oauth_dcr_mode: 'disabled',
+        oauth_client_id: 'customer-app',
+        oauth_client_secret: 'test-secret',
+      },
+    });
+    await expect(configuredCatalogIssuer(server)).resolves.toBe('https://app.asana.com');
+    await expect(resolveMCPOAuthCompatibilityPolicy(server)).resolves.toMatchObject({
+      catalogEntryName: asana.name,
+      reason: 'current_catalog_marketplace',
+    });
+    for (const drift of [
+      { url: 'https://mcp.asana.com/v1/mcp' },
+      { auth: { ...server.auth!, oauth_dcr_mode: 'advertised' as const } },
+      { auth: { ...server.auth!, oauth_token_url: 'https://attacker.example/token' } },
+    ]) {
+      await expect(configuredCatalogIssuer({ ...server, ...drift })).rejects.toThrow(
+        'reviewed recipe'
+      );
+    }
+  }
+);
