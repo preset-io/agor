@@ -17,17 +17,16 @@ const config: AgorConfig = {
     audience: 'normal-launch-audience',
     public_key: cloud.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
   },
-  mcp_oauth_relay: {
-    callback_origin: 'https://cloud.test',
-    cell_id: 'cell-a',
-    credential_id: 'credential-a',
-    private_key_env: 'TEST_CELL_KEY',
-  },
+  mcp_oauth_relay: { callback_origin: 'https://cloud.test' },
 };
-const relay = () =>
-  new MCPOAuthRelay(config, {
-    TEST_CELL_KEY: cell.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-  });
+const relayEnv = {
+  AGOR_CLOUD_CELL_ID: 'cell-a',
+  AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'credential-a',
+  AGOR_CLOUD_RUNTIME_SIGNING_KEY: cell.privateKey
+    .export({ type: 'pkcs8', format: 'pem' })
+    .toString(),
+};
+const relay = () => new MCPOAuthRelay(config, relayEnv);
 function fixture() {
   const client = relay();
   const input: MCPOAuthRelayCallback = {
@@ -165,9 +164,7 @@ describe('Cloud relay v1 trust boundary', () => {
       ...config,
       mcp_oauth_relay: { ...config.mcp_oauth_relay!, callback_origin: 'https://10.35.68.50' },
     };
-    const client = new MCPOAuthRelay(privateConfig, {
-      TEST_CELL_KEY: cell.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
-    });
+    const client = new MCPOAuthRelay(privateConfig, relayEnv);
     const { prepare } = fixture();
     const redirect_uri = client.redirectUri(prepare.issuer);
     fetch.mockResolvedValue(
@@ -196,6 +193,44 @@ describe('Cloud relay v1 trust boundary', () => {
       category: 'invalid_response',
       diagnostic: { reason: 'oauth_relay_prepare_invalid_response' },
     });
+  });
+  it('reads the Cell service identity and RS256 key from the AGOR_CLOUD_* environment', async () => {
+    const { prepare } = fixture();
+    const weak = generateKeyPairSync('rsa', { modulusLength: 1024 });
+    for (const env of [
+      { ...relayEnv, AGOR_CLOUD_CELL_ID: '' },
+      { ...relayEnv, AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: undefined },
+      { ...relayEnv, AGOR_CLOUD_RUNTIME_KEY_ID: 'k'.repeat(201) },
+      { ...relayEnv, AGOR_CLOUD_RUNTIME_SIGNING_KEY: undefined },
+      {
+        ...relayEnv,
+        AGOR_CLOUD_RUNTIME_SIGNING_KEY: weak.privateKey
+          .export({ type: 'pkcs8', format: 'pem' })
+          .toString(),
+      },
+    ])
+      expect(() => new MCPOAuthRelay(config, env)).toThrow();
+    expect(
+      () =>
+        new MCPOAuthRelay(
+          { ...config, mcp_oauth_relay: { callback_origin: 'https://cloud.test/' } },
+          relayEnv
+        )
+    ).toThrow('exact trusted HTTPS origin');
+    const client = new MCPOAuthRelay(config, { ...relayEnv, AGOR_CLOUD_RUNTIME_KEY_ID: 'kid-a' });
+    fetch.mockImplementation(async (_url, init) => {
+      const token = init.headers.Authorization.slice(7);
+      expect(jwt.decode(token, { complete: true })?.header.kid).toBe('kid-a');
+      return Response.json(
+        {
+          start_url: 'https://cloud.test/start/opaque',
+          redirect_uri: prepare.redirect_uri,
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        },
+        { status: 201 }
+      );
+    });
+    await expect(client.prepare(prepare)).resolves.toBe('https://cloud.test/start/opaque');
   });
   it('requires exact issuer bytes and rejects arbitrary preparation redirects', async () => {
     const { client, input } = fixture();

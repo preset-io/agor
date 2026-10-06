@@ -93,12 +93,20 @@ export class MCPOAuthRelay {
     ) {
       throw new Error('MCP callback relay requires an exact trusted HTTPS origin');
     }
-    for (const value of [relay.cell_id, relay.credential_id])
-      if (!value || value.length > 200) throw new Error('Invalid MCP relay service identity');
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(relay.private_key_env))
-      throw new Error('Invalid MCP relay key environment reference');
+    // The Cell's existing runtime service credential, provisioned by Cloud.
+    const cellId = env.AGOR_CLOUD_CELL_ID;
+    const credentialId = env.AGOR_CLOUD_RUNTIME_CREDENTIAL_ID;
+    const keyId = env.AGOR_CLOUD_RUNTIME_KEY_ID || undefined;
+    if (
+      !cellId ||
+      cellId.length > 200 ||
+      !credentialId ||
+      credentialId.length > 200 ||
+      (keyId?.length ?? 0) > 200
+    )
+      throw new Error('Invalid MCP relay service identity');
     try {
-      this.privateKey = createPrivateKey(env[relay.private_key_env] ?? '');
+      this.privateKey = createPrivateKey(env.AGOR_CLOUD_RUNTIME_SIGNING_KEY ?? '');
       if (
         this.privateKey.asymmetricKeyType !== 'rsa' ||
         (this.privateKey.asymmetricKeyDetails?.modulusLength ?? 0) < 2048
@@ -108,9 +116,9 @@ export class MCPOAuthRelay {
       throw new Error('MCP callback relay requires the Cell RS256 service key');
     }
     this.origin = origin.origin;
-    this.cellId = relay.cell_id;
-    this.credentialId = relay.credential_id;
-    this.keyId = relay.key_id;
+    this.cellId = cellId;
+    this.credentialId = credentialId;
+    this.keyId = keyId;
     this.launch = launch.settings;
   }
 

@@ -1550,14 +1550,13 @@ export interface AgorConfig {
 
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
-  /** Optional hosted callback relay. App credentials and user tokens stay in this runtime. */
+  /**
+   * Optional hosted callback relay. App credentials and user tokens stay in this
+   * runtime. The Cell identity and RS256 signing key come from the existing
+   * `AGOR_CLOUD_CELL_ID` / `AGOR_CLOUD_RUNTIME_*` environment.
+   */
   mcp_oauth_relay?: {
     callback_origin: string;
-    cell_id: string;
-    credential_id: string;
-    /** Name of the existing Cell service RS256 PEM key environment variable. */
-    private_key_env: string;
-    key_id?: string;
   };
 
   /** User identity, lifecycle, role, and local-login authority. */

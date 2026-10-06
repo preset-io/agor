@@ -768,13 +768,7 @@ function validateConfig(config: AgorConfig): void {
     'return_host_param',
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
-  only(config.mcp_oauth_relay, 'mcp_oauth_relay', [
-    'callback_origin',
-    'cell_id',
-    'credential_id',
-    'private_key_env',
-    'key_id',
-  ]);
+  only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
   only(config.identity, 'identity', [
     'user_lifecycle',
     'role_authority',

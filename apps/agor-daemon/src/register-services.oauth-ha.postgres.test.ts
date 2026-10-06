@@ -1142,8 +1142,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('binds signed relay delivery to tenant/user/server and one durable callback winner across replicas', async () => {
       const cloud = generateKeyPairSync('rsa', { modulusLength: 2048 });
       const cell = generateKeyPairSync('rsa', { modulusLength: 2048 });
-      const keyEnv = 'AGOR_TEST_RELAY_CELL_KEY';
-      process.env[keyEnv] = cell.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+      const relayEnv = {
+        AGOR_CLOUD_CELL_ID: 'cell-a',
+        AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'credential-a',
+        AGOR_CLOUD_RUNTIME_SIGNING_KEY: cell.privateKey
+          .export({ type: 'pkcs8', format: 'pem' })
+          .toString(),
+      };
+      Object.assign(process.env, relayEnv);
       const relayConfig: RegisterServicesContext['config'] = {
         external_launch: {
           enabled: true,
@@ -1152,12 +1158,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           exchange_url: 'https://cloud.test/launch',
           public_key: cloud.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
         },
-        mcp_oauth_relay: {
-          callback_origin: 'https://cloud.test',
-          cell_id: 'cell-a',
-          credential_id: 'credential-a',
-          private_key_env: keyEnv,
-        },
+        mcp_oauth_relay: { callback_origin: 'https://cloud.test' },
       };
       const preparations: import('@agor/core/types').MCPOAuthRelayPrepare[] = [];
       const prepare = vi
@@ -1323,7 +1324,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(oauthFixture.exchanges).toBe(count + 1);
       } finally {
         prepare.mockRestore();
-        delete process.env[keyEnv];
+        for (const key of Object.keys(relayEnv)) delete process.env[key];
         await Promise.all(
           [a, b].map((replica) =>
             (replica.raw as RawDatabase & { $client: { end(): Promise<void> } }).$client.end()
