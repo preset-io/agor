@@ -858,7 +858,6 @@ describe('agor_branches_create', () => {
     }
 
     expect(createBranch).toHaveBeenCalledOnce();
-    expect(() => JSON.parse(result.content[0].text)).not.toThrow();
     const payload = JSON.parse(result.content[0].text);
     expect(result.isError).toBeFalsy();
     expect(payload).toMatchObject({
@@ -921,7 +920,7 @@ describe('agor_branches_create', () => {
     );
     await vi.advanceTimersByTimeAsync(100);
     await vi.advanceTimersByTimeAsync(0);
-    controller.abort();
+    controller.abort('Request cancelled by client');
     const result = await waiting;
     const payload = JSON.parse(result.content[0].text);
 
@@ -956,6 +955,25 @@ describe('agor_branches_create', () => {
       branch_id: branchId,
       _create: { outcome: 'created', branch_id: branchId, retry_safe: false },
       _resolution: { outcome: 'timeout' },
+    });
+  });
+
+  it('flags a terminal ref-resolution failure as an error', async () => {
+    const { app, branchId } = waitFixture({
+      name: 'bad-ref',
+      initial: { filesystem_status: 'failed', error_message: 'ref not found' },
+    });
+    const create = registerAndCaptureHandler('agor_branches_create', { app, userId: 'user-1' });
+
+    const result = await create(
+      { repoId: 'repo-1', branchName: 'bad-ref', boardId: 'board-1', autoSuffix: false },
+      requestContext()
+    );
+
+    expect(result.isError).toBe(true);
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      _create: { outcome: 'created', branch_id: branchId },
+      _resolution: { outcome: 'failed', message: 'ref not found' },
     });
   });
 
