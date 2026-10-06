@@ -319,185 +319,38 @@ To propose or maintain catalog entries, see
 [Contributing to the MCP catalog](/guide/development#contributing-to-the-mcp-catalog).
 Hiding an entry prevents new catalog installs, but does not revoke existing connections.
 
-## Customer-owned OAuth apps and the optional Cloud callback relay
+## Customer-owned OAuth apps
 
-Catalog entries with a reviewed **Use your own OAuth app** recipe ask for your
-app's client ID and, for confidential apps, its client secret in the secure
-Catalog form. These are not PATs or Agor service credentials. The recipe includes
-the provider's setup documentation; register the exact callback shown in the
-form before connecting. Agor saves the configured app, then each user separately
-consents to their own provider grant. Catalog keeps configured-app installations
-private; its shared-install option accepts no embedded credentials. An administrator
-can instead configure one
-shared server definition with **Per User** OAuth; sharing an app is not sharing
-its users' access tokens.
+Some Catalog entries offer **Use your own OAuth app**: you register an OAuth app
+with the provider and enter its client ID (and, for confidential apps, client
+secret) in the secure Catalog form. Each user then consents to their own provider
+grant; sharing an app does not share users' tokens. On PostgreSQL, app secrets are
+encrypted with `AGOR_MASTER_SECRET` and redacted on reads. Never paste a client
+secret into agent chat; MCP configuration tools accept only a
+`{{ user.env.NAME }}` reference for it. Rotating app credentials invalidates
+pending attempts and stored grants, so affected users must reconnect.
 
-App secrets entered through Catalog or Settings are encrypted with the existing
-deployment `AGOR_MASTER_SECRET`, bound to the tenant and saved server, and redacted
-on reads. Legacy plaintext configurations remain readable and are encrypted on
-their next save; this is not a retroactive database re-encryption migration.
-Literal app client IDs and secrets are refused by MCP configuration tools: use
-the form, or a secure user-environment reference. Model-visible readback omits
-literal client IDs and reports only whether one is configured; authorized browser
-Settings can still display and edit the ID. Never paste either into agent chat. Rotating an app
-credential invalidates the server's pending attempts and stored user grants;
-reconnect affected users after saving the change.
+### Asana recipe
 
-### Asana V2 recipe
+1. In Asana's developer console, create an **MCP app** (not a standard API app).
+2. Set its redirect URL to the exact callback the Agor Catalog form shows, and
+   select the permitted workspaces under distribution.
+3. Enter the client ID and secret in the Catalog form, then connect.
 
-Create an **MCP app**, not a standard API app, in Asana's developer console. Set
-its redirect URL to the value Agor shows, then select the permitted workspaces
-under distribution. Catalog uses `https://mcp.asana.com/v2/mcp`, configured-client
-OAuth, and no DCR. Asana's app-distribution restrictions still apply; an empty
-workspace allowlist is not fixed by a stable callback. MCP tokens do not authorize
-Asana's ordinary API. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+Catalog uses `https://mcp.asana.com/v2/mcp` with configured-client OAuth and no
+DCR. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
 
-The recipe is conditional on the provider continuing to advertise a compatible
-issuer, S256 PKCE and confidential-client authentication. Agor does not fall back
-to weaker discovery or a PAT after a refusal. Fake-provider tests do not establish
-live Asana consent, approved distribution, or acceptance of every scope/resource
-combination. Existing V1 installs are not silently migrated: configure V2 and
-reconnect explicitly.
+### Stable hosted callback
 
-### Operator setup: stable hosted callback
-
-Direct self-hosted OAuth remains the default. Relay mode requires PostgreSQL,
-the existing asymmetric Cloud launch trust, and an existing Cell-scoped RS256
-service credential authorized by Cloud for `mcp_oauth:relay`. It does not create
-an Agor-owned provider app, provider-secret broker, or token-exchange proxy.
-Relay mode requires **Per User** OAuth even for administrators; shared app
-configuration is allowed, but shared user grants are not. Direct self-hosted
-shared-grant behavior is unchanged.
+By default the redirect URI is this daemon's own OAuth callback. An operator can
+instead route callbacks through a stable Agor Cloud origin:
 
 ```yaml
 mcp_oauth_relay:
   callback_origin: https://<trusted-cloud-console-origin>
-  cell_id: <existing-cell-id>
-  credential_id: <existing-cell-service-credential-id>
-  private_key_env: AGOR_CLOUD_RUNTIME_SIGNING_KEY
-  key_id: <existing-cell-service-key-id> # optional when Cloud permits no kid
 ```
 
-Use the deployment's existing secret provisioning for the named PEM variable;
-never put its value in the file, chat, or a tool call. The existing
-`external_launch` configuration supplies Cloud's issuer/JWKS (or pinned public
-key). No browser or MCP-server setting can override these trust anchors.
-
-Put this block in the **daemon's** `AGOR_HOME/config.yaml` (`~/.agor/config.yaml`
-by default), not a branch's `.agor.yml`. Keep the existing `external_launch`
-`enabled`, `exchange_url`, `issuer`, `audience`, and `jwks_url` (or `public_key`)
-settings; relay delivery requires RS256, not the development shared secret.
-The service credential must belong to the named cell, be active in Cloud, and
-allow `mcp_oauth:relay` with audience `agor-cloud:executor-runs`. The existing
-launch-exchange bearer and customer OAuth app secret are **not** substitutes.
-Cell ID, credential ID and key ID above are literal non-secret identifiers;
-only `private_key_env` names an environment variable. There is no automatic
-projection from the `AGOR_CLOUD_*` environment into this config block.
-
-For the Cloud runtime Helm chart, `daemon.config.mcp_oauth_relay` renders this
-block into `/home/agor/.agor/config.yaml`; `runtimeServiceCredential.existingSecret`
-supplies the existing cell's `AGOR_CLOUD_RUNTIME_SIGNING_KEY`. With a compatible
-Cloud control plane and Data Plane Agent, managed Cells receive this configuration
-through normal **Create Cell** or **Prepare → Apply Release**, including Reapply.
-Compatibility is discovered from the selected daemon image, not a Releases checkbox
-or manually edited artifact metadata. Cloud derives the trusted console origin,
-and the agent renders the current realized credential IDs and Secret reference.
-
-The daemon-owned source file `apps/agor-daemon/runtime-capabilities.json` declares
-`{"schemaVersion":1,"mcpOauthRelayConfigVersions":[1]}`. Maintain this declaration
-with the daemon's configuration schema and relay implementation. **Both this
-runtime source and the updated Cloud image recipe are required**: the recipe
-strictly validates the file and stamps `runtimeCapabilities` into
-`/app/dist/daemon/.build-info` alongside the actual `AGOR_GIT_SHA`. An older source
-without the file has no declaration; a malformed declaration fails the image build.
-Adding the source file alone does not update already-built images or the existing
-generic runtime build-info stamper.
-
-Before Helm, the compatible DPA reads that build-info from the selected target
-image using its owned read-only probe Job, without database or credential
-environment variables. It validates the declaration and matches the embedded SHA
-to the selected artifact tag. A valid matching SHA with no declaration means
-unsupported: use direct OAuth, including rollback to such an older image. Missing,
-malformed or mismatched build-info, or probe failure, instead makes compatibility
-unavailable and stops Apply before Helm; it must not silently select direct mode.
-Upgrade Data Plane Agents before using this discovery path.
-
-No per-cell YAML edits or copied IDs are needed for that managed route. Normal
-reapply and credential rotation preserve the desired intent; a raw image bump or
-one-off pod/ConfigMap edit is not a substitute for Release Apply. Standalone
-operator-managed installs can use the explicit block above and remain direct by
-default. Never put a PEM or provider secret into Helm values or commands.
-
-Upgrade all callback-serving replicas before enabling relay. New attempts use
-sealed-envelope v4; older replicas reject them instead of silently dropping
-relay bindings. Valid older v2/v3 direct attempts remain readable. This feature
-adds no runtime schema migration, but normal main-version migrations still apply.
-
-### Small sandbox check and rollback
-
-After both halves and their configuration are deployed by the operator:
-
-1. In Catalog, open Asana, copy the **displayed exact callback**, and register it
-   on the provider MCP app. Save its client ID/secret only in the secure form.
-2. Connect as one user, confirm the matching Cloud identity, and complete provider
-   consent. Confirm **Connected** in the workspace; a popup redirect alone is not
-   success. Make one permitted read-only MCP request.
-3. Repeat as a different user: they must consent independently. After the first
-   grant expires, repeat the read to verify refresh without sharing grants.
-4. On failure, inspect only sanitized status/reason fields. Do not capture callback
-   query strings, request bodies or Authorization headers. Reconnect after expired,
-   ambiguous or interrupted attempts; do not replay a callback.
-
-To turn off managed relay, stop new connections and set
-`MCP_OAUTH_RELAY_ENABLED=false` on all Cloud manager replicas. Let admitted
-callbacks finish or expire (ten minutes), then use normal **Prepare → Apply**
-with the compatible control plane/agent to remove runtime relay configuration.
-Do this before downgrading the control plane or agent; older versions may reject
-new spec fields. For standalone operator-managed installs, remove the explicit
-runtime block after draining. Existing grants are not revoked by this switch;
-disconnect/revoke them explicitly if intended, and reconnect using the chosen
-callback registration. Do not downgrade a shared database schema or remove the
-deployment master secret as a rollback step.
-Fake-provider tests cover exchange and refresh; they are not evidence of live
-Asana consent or of a sandbox deployment having been performed.
-
-For issuer `https://provider.example`, the callback is exactly:
-
-```text
-https://<trusted-cloud-console-origin>/api/mcp-oauth/relay/callback/<SHA256-hex-of-exact-issuer-UTF8>
-```
-
-The hash includes the exact issuer spelling, including any trailing slash.
-Registration, authorization and code exchange use the same URI. The runtime
-prepares a short-lived route using a body-bound Cell service assertion; the
-browser opens Cloud's authenticated Continue page, not a user-supplied return
-URL. Cloud checks the initiating identity, membership and current placement,
-then sends a single body-bound, purpose/audience-separated assertion and callback
-to the trusted workspace route. Only the cell exchanges the code, persists the
-grant, or refreshes it. Cloud never receives app secrets or access/refresh tokens.
-Runtime verification allows at most 30 seconds of ordinary clock skew while
-retaining the callback assertion's maximum 30-second signed lifetime. This does
-not extend durable attempt expiry or permit delivery/exchange retries.
-
-### Trust and failure boundaries
-
-Tenant/user/server ownership, sealed state/PKCE, issuer/resource binding,
-configuration generation and the durable exchange claim remain runtime
-responsibilities. Callback signatures are not login assertions. Direct/manual
-completion cannot bypass the Cloud binding of a relay attempt. Duplicate or
-ambiguous delivery does not authorize a second exchange; reconnect after an
-uncertain outcome. Reset, disconnect, cancellation, expiry and configuration
-changes retain the existing pending/grant invalidation rules. Rehoming is not
-credential transfer: Cloud must reject a route whose stored placement is no
-longer current. Work already admitted before a lifecycle change is governed by
-the existing runtime write/configuration fences, not a new global revocation
-protocol.
-
-This trusts the cell that already holds the customer's app credential, and the
-Cloud launch signing authority. It does not contain either authority's compromise.
-Issuer-distinct callbacks plus RFC 9207 checks where advertised defend mix-up;
-see [OAuth Security BCP §4.4](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.4).
-Stable routing alone does not confer provider approval. Callback HTTP responses
-use no-store/no-referrer; configure ingress and observability to omit callback
-queries, Authorization headers and request bodies. A provider's initial browser
-GET can still enter upstream/browser history: response headers cannot erase it.
+The redirect URI the UI then shows is
+`<callback_origin>/api/mcp-oauth/relay/callback/<sha256-hex-of-exact-issuer>`.
+Register it exactly as shown. Relay mode requires PostgreSQL and **Per User**
+OAuth, plus the Cloud launch trust and Cell credentials that Agor Cloud provisions.
