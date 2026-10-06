@@ -52,6 +52,13 @@ export async function markStoppedSessionPromptableNoDrain(
   );
 }
 
+/** The authenticated caller; MCP calls come from an agent acting for that user. */
+export function stopRequester(params: Params): TerminationInput['requestedBy'] {
+  const userId = (params as { user?: { user_id?: string } }).user?.user_id;
+  if (!userId) return { requested_via: 'agor' };
+  return { requested_by_user_id: userId, requested_via: params.provider === 'mcp' ? 'mcp' : 'ui' };
+}
+
 /**
  * Stop semantics, in one place:
  * - target only the active task for the session;
@@ -137,6 +144,7 @@ export async function stopSessionPreserveQueue(
     taskId: latestTask.task_id,
     cause: 'user_stop',
     errorMessage: options.reason ?? 'Stopped by user.',
+    requestedBy: stopRequester(params),
     params,
     runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });

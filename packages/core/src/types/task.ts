@@ -129,9 +129,15 @@ export interface TerminationCoordinationClaim {
   boot_id: string;
 }
 
+/** How a termination request reached Agor; absent on requests recorded before this existed. */
+export type TerminationRequestVia = 'ui' | 'mcp' | 'agor';
+
 export interface TerminationRequest {
   cause: TerminationCause;
   requested_at: string;
+  /** Authenticated user whose request won the claim, when a person or their agent asked. */
+  requested_by_user_id?: string;
+  requested_via?: TerminationRequestVia;
   /** Failure/stop reason captured with the winning claim. */
   error_message?: string;
   /**

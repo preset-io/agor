@@ -291,6 +291,11 @@ one final exhaustion event rather than every retry. Provider cleanup that is
 still running after 15 seconds emits one warning but is not falsely reported as
 quiescent.
 
+The termination request also records who asked when the winning cause carries
+it: `requested_by_user_id` and `requested_via` (`ui`, `mcp` for an agent acting
+for that user, `agor` for internal stops). It is attribution only and never
+changes containment or settlement.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
 `stopping`, the session stays non-promptable, and an authorized owner/admin must

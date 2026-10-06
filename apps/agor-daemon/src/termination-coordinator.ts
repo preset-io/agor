@@ -10,6 +10,7 @@ import type {
   TaskID,
   TerminationCause,
   TerminationCoordinationPendingCode,
+  TerminationRequest,
 } from '@agor/core/types';
 import {
   isAgenticToolName,
@@ -41,6 +42,8 @@ export interface TerminationInput {
   taskId: TaskID | string;
   cause: TerminationCause;
   errorMessage: string;
+  /** Who asked, recorded on the request so the UI can name them. */
+  requestedBy?: Pick<TerminationRequest, 'requested_by_user_id' | 'requested_via'>;
   params?: Params;
   signalDelayMs?: number;
   /** Test/configuration seam for the cooperative socket-stop grace window. */
@@ -173,6 +176,7 @@ async function claimRequest(input: TerminationInput) {
         taskId: String(input.taskId),
         cause: input.cause,
         errorMessage: input.errorMessage,
+        requestedBy: input.requestedBy,
         sdkFailure: input.sdkFailure,
         expectedStatus: input.expectedStatus,
         expectedHeartbeatAt: input.expectedHeartbeatAt,
