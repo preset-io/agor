@@ -11,6 +11,7 @@ import {
   generateId,
   initializeDatabase,
   isPostgresDatabase,
+  MCPCatalogCandidateRepository,
   MCPServerRepository,
   type RawDatabase,
   runWithTenantDatabaseScope,
@@ -21,12 +22,14 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
+import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@agor/core/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { safeMcpServerConfigReadback } from '../mcp/tools/mcp-servers.js';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
+import { MCPCatalogReadinessService } from './mcp-catalog-readiness.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -165,6 +168,20 @@ const CREDENTIAL_ENTRY = {
   name: 'test/catalog-connect-postgres-credentials',
   auth_type: 'credentials',
   credentials: { scheme: 'bearer' },
+} as unknown as MCPCatalogEntry;
+
+const BYO_ENTRY = {
+  ...ENTRY,
+  name: 'test/catalog-connect-postgres-byo',
+  oauth: {
+    compatibility_mode: 'strict',
+    dcr_mode: 'disabled',
+    configured_client: {
+      setup_url: 'https://provider.example.test/apps',
+      issuer: 'https://provider.example.test',
+      secret_required: true,
+    },
+  },
 } as unknown as MCPCatalogEntry;
 
 function rowsOf(result: unknown): Array<Record<string, unknown>> {
@@ -746,20 +763,103 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('shares a configured app install: credentials once, per-user grants, secret never returned', async () => {
-      const BYO = {
-        ...ENTRY,
-        name: 'test/catalog-connect-postgres-byo',
-        oauth: {
-          compatibility_mode: 'strict',
-          dcr_mode: 'disabled',
-          configured_client: {
-            setup_url: 'https://provider.example.test/apps',
-            issuer: 'https://provider.example.test',
-            secret_required: true,
+    /**
+     * A second daemon replica running the real OAuth start and callback, so a
+     * test can mint a grant exactly as a user's browser sign-in would.
+     */
+    async function oauthReplica() {
+      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
+        requireScope: true,
+        label: 'catalog BYO OAuth replica',
+      });
+      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
+      oauthApp.io = {
+        local: { to: () => ({ emit() {} }) },
+        to: () => ({ emit() {} }),
+        sockets: { sockets: new Map() },
+      };
+      const originalBaseUrl = process.env.AGOR_BASE_URL;
+      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      const close = async () => {
+        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = originalBaseUrl;
+        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      };
+      try {
+        const { oauthCallbackHandler } = await registerMCPServices({
+          db: oauthDb,
+          app: oauthApp as RegisterServicesContext['app'],
+          config: {} as RegisterServicesContext['config'],
+          jwtSecret: 'test-jwt',
+          daemonUrl: 'https://public-agor.example.test',
+          bundledUiAvailable: false,
+          DAEMON_PORT: 3030,
+          UI_PORT: 5173,
+          allowSuperadmin: false,
+          requireAuth: async (context) => context,
+          deployment: {
+            mode: 'ha',
+            capabilities: { mcpOAuth: true },
+            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          } as RegisterServicesContext['deployment'],
+          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
+            assertCurrent?.();
+            return new Response('', {
+              status: 401,
+              headers: {
+                'www-authenticate':
+                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+              },
+            });
           },
-        },
-      } as unknown as MCPCatalogEntry;
+        });
+        const connectGrant = async (user: User, tenantId: string, serverId: string) => {
+          const started = (await oauthApp
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: serverId }, params(user, tenantId))) as {
+            success: boolean;
+            authorizationUrl: string;
+          };
+          expect(started.success).toBe(true);
+          let status = 0;
+          await (
+            oauthCallbackHandler as unknown as (
+              request: unknown,
+              response: unknown
+            ) => Promise<void>
+          )(
+            {
+              query: {
+                code: 'code',
+                state: new URL(started.authorizationUrl).searchParams.get('state'),
+                iss: 'https://provider.example.test',
+              },
+            },
+            {
+              setHeader() {},
+              status(code: number) {
+                status = code;
+                return this;
+              },
+              send() {
+                return this;
+              },
+            }
+          );
+          expect(status).toBe(200);
+        };
+        return { connectGrant, close };
+      } catch (error) {
+        await close();
+        throw error;
+      }
+    }
+
+    it('shares a configured app install: credentials once, per-user grants, secret never returned', async () => {
+      const BYO = BYO_ENTRY;
       const installer = await buildTenant('byo-shared');
       const member = await runWithTenantDatabaseScope(db, installer.tenantId, (scoped) =>
         buildUser(scoped, 'byo-member')
@@ -797,84 +897,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         'byo-app-secret'
       );
 
-      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
-      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
-      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
-        requireScope: true,
-        label: 'catalog BYO OAuth replica',
-      });
-      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
-      oauthApp.io = {
-        local: { to: () => ({ emit() {} }) },
-        to: () => ({ emit() {} }),
-        sockets: { sockets: new Map() },
-      };
-      const originalBaseUrl = process.env.AGOR_BASE_URL;
-      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      const replica = await oauthReplica();
       try {
-        const { oauthCallbackHandler } = await registerMCPServices({
-          db: oauthDb,
-          app: oauthApp as RegisterServicesContext['app'],
-          config: {} as RegisterServicesContext['config'],
-          jwtSecret: 'test-jwt',
-          daemonUrl: 'https://public-agor.example.test',
-          bundledUiAvailable: false,
-          DAEMON_PORT: 3030,
-          UI_PORT: 5173,
-          allowSuperadmin: false,
-          requireAuth: async (context) => context,
-          deployment: {
-            mode: 'ha',
-            capabilities: { mcpOAuth: true },
-            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
-          } as RegisterServicesContext['deployment'],
-          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
-          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
-            assertCurrent?.();
-            return new Response('', {
-              status: 401,
-              headers: {
-                'www-authenticate':
-                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
-              },
-            });
-          },
-        });
         oauthProviderFixture.clients = [];
         for (const user of [installer.user, member]) {
-          const started = (await oauthApp
-            .service('mcp-servers/oauth-start')
-            .create({ mcp_server_id: serverId }, params(user, installer.tenantId))) as {
-            success: boolean;
-            authorizationUrl: string;
-          };
-          expect(started.success).toBe(true);
-          let status = 0;
-          await (
-            oauthCallbackHandler as unknown as (
-              request: unknown,
-              response: unknown
-            ) => Promise<void>
-          )(
-            {
-              query: {
-                code: 'code',
-                state: new URL(started.authorizationUrl).searchParams.get('state'),
-                iss: 'https://provider.example.test',
-              },
-            },
-            {
-              setHeader() {},
-              status(code: number) {
-                status = code;
-                return this;
-              },
-              send() {
-                return this;
-              },
-            }
-          );
-          expect(status).toBe(200);
+          await replica.connectGrant(user, installer.tenantId, serverId);
         }
         expect(oauthProviderFixture.clients).toEqual([
           { clientId: 'byo-app', clientSecret: 'byo-app-secret' },
@@ -892,9 +919,66 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           expect(await tokens.getToken(null, serverId)).toBeNull();
         });
       } finally {
-        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
-        else process.env.AGOR_BASE_URL = originalBaseUrl;
-        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+        await replica.close();
+      }
+    });
+
+    it("lets members reuse a Shared-mode app grant, but never another user's per-user grant", async () => {
+      const { tenantId, user: member } = await buildTenant('byo-shared-mode');
+      const admin = await runWithTenantDatabaseScope(
+        db,
+        tenantId,
+        async (scoped) =>
+          (await new UsersRepository(scoped).create({
+            email: `byo-admin-${generateId()}@example.test`,
+            name: 'byo-admin',
+            role: 'admin',
+          })) as User
+      );
+      const app = connectApp(BYO_ENTRY);
+      const service = createRegisteredMCPCatalogConnectService(app, db);
+      const request = { ...REQUEST, catalog_key: BYO_ENTRY.name, sharing: 'shared' as const };
+      const created = await service.create(
+        { ...request, oauth_client: { client_id: 'byo-app', client_secret: 'byo-app-secret' } },
+        params(admin, tenantId)
+      );
+      const serverId = created.mcp_server.mcp_server_id;
+      // Production readiness deps, over the real candidate repository.
+      const readiness = new MCPCatalogReadinessService(app as never, {
+        listCandidates: (userId) =>
+          runWithTenantDatabaseScope(db, tenantId, () =>
+            new MCPCatalogCandidateRepository(db).listForUser(userId)
+          ),
+        isGrantAuthorized: async (candidate) => candidate.grant?.binding_ready === true,
+      });
+      const readFor = (user: User) =>
+        readiness.get(BYO_ENTRY.name, { ...params(user, tenantId), query: { sharing: 'shared' } });
+      const replica = await oauthReplica();
+      try {
+        // Per User: the admin's own grant is not the member's.
+        await replica.connectGrant(admin, tenantId, serverId);
+        expect(await readFor(admin)).toMatchObject({ state: 'installed_ready' });
+        expect(await readFor(member)).toMatchObject({ state: 'oauth_required' });
+
+        // Shared: the admin's shared grant serves every member.
+        await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new MCPServerRepository(scoped).update(serverId, { auth: { oauth_mode: 'shared' } })
+        );
+        await replica.connectGrant(admin, tenantId, serverId);
+        expect(await readFor(member)).toMatchObject({ state: 'installed_ready' });
+        const starts = oauthProviderFixture.clients.length;
+        const reused = await service.create(request, params(member, tenantId));
+        expect(reused).toMatchObject({
+          reused_existing_server: true,
+          reuse_kind: 'catalog_install',
+          mcp_server: {
+            mcp_server_id: serverId,
+            auth: { oauth_mode: 'shared', oauth_access_token: MCP_HEADER_REDACTED_SENTINEL },
+          },
+        });
+        expect(oauthProviderFixture.clients).toHaveLength(starts);
+      } finally {
+        await replica.close();
       }
     });
   }

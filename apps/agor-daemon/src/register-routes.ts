@@ -771,13 +771,18 @@ export function createRegisteredMCPCatalogConnectService(
       const userId = params.user?.user_id as UserID | undefined;
       if (!userId) return false;
       const read = async () => {
+        // Verify against the full saved row: the candidate projection redacts
+        // configured client secrets, which the grant binding covers.
+        const server = await new MCPServerRepository(db).findById(candidate.server.mcp_server_id);
+        if (!server) return false;
+        // Same subject rule as execution: a Shared server's grant is the
+        // shared one; otherwise only the caller's own per-user grant.
         const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
-          userId,
-          candidate.server.mcp_server_id
+          server.auth?.oauth_mode === 'shared' ? null : userId,
+          server.mcp_server_id
         );
         return Boolean(
-          grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+          grant?.has_access_token && (await isMCPOAuthGrantAuthorizedForServer(db, server, grant))
         );
       };
       return runInTenantDatabaseScope(params, read);
