@@ -28,7 +28,7 @@ export const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'board',
     href: '/board',
-    navLabel: 'Live board',
+    navLabel: 'Live boards',
     tagline: 'See the work and shape it together.',
     docs: [
       { label: 'Boards & zones', href: '/guide/boards' },

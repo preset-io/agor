@@ -1,6 +1,6 @@
 # Agor
 
-> Agor is Multiplayer AI: a live spatial board where teams work together with AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
+> Agor is Multiplayer AI. Teams work together on live spatial boards with AI coding agents (Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor in beta) and long-lived AI teammates. It manages branches (isolated workspaces backed by git worktrees or self-standing clones), tracks AI conversations, visualizes work on spatial boards, and enables real-time collaboration. Think Figma, but for AI coding agents.
 
 Agor is source-available software licensed under BSL 1.1 (never describe it as open source). The npm-installed, self-hosted version is **Agor Community Edition**; **Agor Cloud** is the managed service. Production use is permitted by its Additional Use Grant; commercializing Agor itself as the defined Agor Offering is not. Each version later converts to Apache License 2.0 under the license terms.
 
@@ -87,8 +87,8 @@ Real-time events for sessions, tasks, messages, and multiplayer presence updates
 
 ## Product Overview
 
-- [Multiplayer AI](https://agor.live/multiplayer): Bring your team and agents together on one live board, learn from how colleagues work with AI, and build on what works
-- [Live Spatial Board](https://agor.live/board): Organize agent work with boards and zones, follow agents as they work, and bring colleagues into the same view
+- [Multiplayer AI](https://agor.live/multiplayer): Bring your team and agents together on live boards, learn from how colleagues work with AI, and build on what works
+- [Live Spatial Boards](https://agor.live/board): Organize agent work with boards and zones, follow agents as they work, and bring colleagues into the same view
 - [AI Teammates](https://agor.live/teammates): Raise AI teammates with memory, shared knowledge, skills, and tool connections; work with them on the board or in Slack
 - [Agent Roster](https://agor.live/agent-roster): The AI teammates Preset runs on its own Agor instance, and the framework they're built on
 - [Command Center](https://agor.live/command-center): Reusable prompts and workflows, a knowledge base, artifacts, branch environments, and an MCP server agents drive themselves

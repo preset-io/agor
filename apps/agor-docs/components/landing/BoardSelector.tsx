@@ -50,9 +50,9 @@ export function BoardSelector() {
           <span className={landing.headingAccent}>together</span>
         </h2>
         <p className={styles.sub}>
-          <span className={styles.subLead}>A live board for all your agent work.</span> Organize it,
-          see what needs you, and follow every session, from the canvas or the threads your team
-          already uses.
+          <span className={styles.subLead}>Live boards for your agent work.</span> Organize it, see
+          what needs you, and follow every session, from the canvas or the threads your team already
+          uses.
         </p>
       </div>
       <FeatureSelector

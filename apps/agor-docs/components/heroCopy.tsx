@@ -25,7 +25,7 @@ export const HOME_HERO: HeroCopy = {
 // headline, widened past "coding", with the category in the subhead.
 export const HOME_HERO_PROBLEM: HeroCopy = {
   headline: 'Your AI agents\nare working [alone]',
-  subheadline: 'Agor is {Multiplayer AI}: bring your team and agents together on one live board.',
+  subheadline: 'Agor is {Multiplayer AI}: bring your team and agents together on live boards.',
 };
 
 // {word} → bold ink highlight (.headingStrong), [word] → teal/sky gradient

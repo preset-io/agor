@@ -30,8 +30,8 @@ export function BoardSection({ hero = false }: { sampler?: boolean; hero?: boole
           <span className={styles.headingAccent}>together</span>
         </h1>
         <p className={selector.sub}>
-          <span className={selector.subLead}>A live board for all your agent work.</span> Organize
-          it, see what needs you, and follow every session, from the canvas or the threads your team
+          <span className={selector.subLead}>Live boards for your agent work.</span> Organize it,
+          see what needs you, and follow every session, from the canvas or the threads your team
           already uses.
         </p>
         <SectionHeroActions page="board" align="start" />

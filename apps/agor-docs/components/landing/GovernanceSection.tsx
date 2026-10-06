@@ -45,7 +45,7 @@ const busItems: Array<{
     title: 'Governance & visibility',
     page: 'governance',
     anchor: 'visibility',
-    desc: 'Every session and prompt on one board, with usage tracked along the way. Know what’s running and what it costs.',
+    desc: 'Visibility across your boards and agent sessions, with usage tracked along the way. Know what’s running and what it costs.',
     rippleSize: 17,
     rippleDelays: [0, 750, 1500, 2250],
   },
