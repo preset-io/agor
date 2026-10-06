@@ -141,6 +141,14 @@ Agor resolves a branch creation's source ref before either worktree or clone mat
 - If matching refs point to different commits, creation fails with an actionable error listing each
   candidate and SHA. Qualify the intended ref rather than relying on a remote-name default.
 - A missing ref fails instead of being rewritten as `origin/<name>`.
+- An omitted source ref (no MCP `sourceBranch`, no CLI `--from`) means the repository's default
+  branch on its registered remote URL. Agor resolves the live commit without resetting the
+  registered checkout's possibly stale local branch, and a retry reuses that recorded remote source.
+  An unavailable remote fails rather than falling back to the local copy; repositories without a
+  remote use their local default.
+- With clone storage, the registered checkout is only a cache. When its refs disagree about an
+  explicit bare branch name, a new branch starts from that branch on the registered remote instead
+  of failing. Everything else keeps the rules above, and worktree storage keeps the strict check.
 
 Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
 explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call

@@ -713,9 +713,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ),
         sourceBranch: mcpOptionalString(
           'sourceBranch',
-          'Base branch to fork from when creating a new branch (defaults to the repo default branch, usually "main"). ' +
+          'Base branch to fork from when creating a new branch (defaults to the repo default branch on its registered remote, usually "main"). ' +
             'Accepts local branches, remote-qualified branches (for example origin/main), tags, and commit SHAs. ' +
             'A bare branch name is rejected when matching local or remote refs disagree; qualify it explicitly. ' +
+            'With clone storage, a new branch instead starts from that branch on the registered remote. ' +
             'The response reports _resolution.resolved_ref and resolved_sha. Clone storage requires the resolved object to be cloneable from its selected source.'
         ),
         autoSuffix: z
@@ -982,7 +983,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
 
       if (createBranch) {
         if (!ref) ref = branchName;
-        if (!sourceBranch) sourceBranch = defaultBranch;
+        // Omission stays implicit so the executor resolves the remote default, not a stale local one.
         if (pullLatest === undefined) pullLatest = true;
       } else {
         if (!ref) throw new Error('ref is required when createBranch is false');
@@ -1079,7 +1080,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } else if (resolutionResult.outcome === 'resolved') {
         response._resolution = {
           outcome: 'resolved',
-          requested_ref: sourceBranch ?? ref,
+          requested_ref: sourceBranch ?? (createBranch ? defaultBranch : ref),
           resolved_ref: resolutionResult.branch.base_ref,
           resolved_sha: resolutionResult.branch.base_sha,
         };

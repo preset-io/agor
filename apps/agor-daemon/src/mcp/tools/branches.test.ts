@@ -1084,6 +1084,55 @@ describe('agor_branches_create', () => {
     expect(passed).not.toHaveProperty('custom_context');
   });
 
+  it('leaves an omitted sourceBranch implicit so the executor resolves the remote default', async () => {
+    const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
+      branch_id: 'plain-branch',
+      created_by: 'user-a',
+      ...(data as Record<string, unknown>),
+      base_ref: 'master',
+      base_sha: 'a'.repeat(40),
+    }));
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'repos') {
+          return {
+            get: vi.fn(async () => ({ repo_id: 'repo-1', default_branch: 'master' })),
+            createBranch,
+          };
+        }
+        if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-a',
+      baseServiceParams: {},
+    });
+
+    const implicit = await create({
+      repoId: 'repo-1',
+      branchName: 'plain',
+      boardId: 'board-1',
+      autoSuffix: false,
+    });
+    await create({
+      repoId: 'repo-1',
+      branchName: 'explicit',
+      boardId: 'board-1',
+      sourceBranch: 'master',
+      autoSuffix: false,
+    });
+
+    expect(createBranch.mock.calls[0][1]).not.toHaveProperty('sourceBranch');
+    expect(createBranch.mock.calls[1][1]).toMatchObject({ sourceBranch: 'master' });
+    expect(JSON.parse(implicit.content[0].text)._resolution).toMatchObject({
+      outcome: 'resolved',
+      requested_ref: 'master',
+    });
+  });
+
   it('auto-creates a dedicated board for a teammate when no boardId is given', async () => {
     const createBranch = vi.fn(async (_repoId: string, data: unknown) => ({
       branch_id: 'teammate-branch',
