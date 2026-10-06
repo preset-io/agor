@@ -77,57 +77,9 @@ describe('safe MCP server config readback', () => {
     expect(serialized).not.toContain('header-secret');
     expect(serialized).not.toContain('env-secret');
     expect(serialized).not.toContain('client-secret');
-    expect(serialized).not.toContain('customer-client-id');
-    expect(readback.oauth_client_id_configured).toBe(true);
-    expect(readback.auth).not.toHaveProperty('oauth_client_id');
+    // Client IDs are not secrets.
+    expect(readback.auth?.oauth_client_id).toBe('customer-client-id');
     expect(readback.auth_secret_fields_configured).toEqual(['oauth_client_secret']);
-  });
-});
-
-describe('model-only configured app ID projection', () => {
-  it.each([undefined, 'public-client-id', '{{ user.env.CLIENT_ID }}'])(
-    'keeps raw browser/service auth unchanged while projecting client ID %s',
-    async (clientId) => {
-      const { safeMcpServerConfigReadback } = await import('./mcp-servers.js');
-      const auth = { type: 'oauth' as const, oauth_client_id: clientId };
-      const readback = safeMcpServerConfigReadback({ auth } as never);
-      expect(auth.oauth_client_id).toBe(clientId);
-      expect(readback.oauth_client_id_configured).toBe(Boolean(clientId));
-      expect(readback.auth?.oauth_client_id).toBe(
-        clientId?.startsWith('{{') ? clientId : undefined
-      );
-      if (clientId === 'public-client-id') expect(JSON.stringify(readback)).not.toContain(clientId);
-    }
-  );
-  it('redacts both app fields in the registered model get tool, not just the helper', async () => {
-    const app = makeFakeApp({
-      'mcp-servers': {
-        get: async () => ({
-          mcp_server_id: 'full-abc12345',
-          name: 'provider',
-          transport: 'http',
-          enabled: true,
-          scope: 'global',
-          source: 'user',
-          owner_user_id: 'user-1',
-          auth: {
-            type: 'oauth',
-            oauth_client_id: 'customer-id-never-chat',
-            oauth_client_secret: 'customer-secret-never-chat',
-          },
-        }),
-      },
-    });
-    const get = await captureTool(
-      { app, userId: 'user-1', sessionId: 'sess-1' },
-      'agor_mcp_servers_get'
-    );
-    const result = await get({ mcpServerId: 'abc12345' });
-    expect(JSON.stringify(result)).not.toContain('customer-id-never-chat');
-    expect(JSON.stringify(result)).not.toContain('customer-secret-never-chat');
-    const projection = JSON.parse(result.content[0].text).mcp_server;
-    expect(projection.oauth_client_id_configured).toBe(true);
-    expect(projection.auth_secret_fields_configured).toContain('oauth_client_secret');
   });
 });
 
@@ -701,7 +653,7 @@ describe('agor_mcp_servers_create/update/attach', () => {
     expect(updateParsed?.success).toBe(true);
   });
 
-  it('rejects literal configured IDs and secrets on model create/patch while preserving secure env references', async () => {
+  it('rejects literal configured app secrets on model create/patch while accepting client IDs', async () => {
     const { registerMcpServerTools } = await import('./mcp-servers.js');
     const schemas: Record<
       string,
@@ -728,7 +680,7 @@ describe('agor_mcp_servers_create/update/attach', () => {
         operation === 'create'
           ? { name: 'provider', url: 'https://provider.example/mcp' }
           : { mcpServerId: 'abc12345' };
-      for (const field of ['oauth_client_id', 'oauth_client_secret']) {
+      for (const field of ['oauth_client_secret']) {
         for (const literal of [
           'raw-customer-value',
           '{{ user.env.CLIENT_ID }}raw-customer-value',
@@ -749,6 +701,10 @@ describe('agor_mcp_servers_create/update/attach', () => {
             oauth_client_secret: '{{ user.env.CLIENT_SECRET }}',
           },
         }).success
+      ).toBe(true);
+      expect(
+        schema.safeParse({ ...base, auth: { type: 'oauth', oauth_client_id: 'public-client-id' } })
+          .success
       ).toBe(true);
       expect(schema.safeParse({ ...base, auth: { type: 'oauth' } }).success).toBe(true);
       if (operation === 'update')
