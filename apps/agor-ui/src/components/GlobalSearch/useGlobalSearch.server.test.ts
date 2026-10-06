@@ -124,13 +124,17 @@ describe('useGlobalSearch server results', () => {
     expect(result.current.results.session[0].item.session_id).toBe('s-all');
   });
 
-  it('fills nothing a daemon that ignored the search returned', async () => {
-    const { client, finds } = makeClient({ sessions: [session('s-other', 'Unrelated')] });
-    renderSearch(client, 'login');
-    await waitFor(() => expect(finds.sessions).toHaveBeenCalled());
-    await waitFor(() => expect(finds.branches).toHaveBeenCalled());
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(agorStore.getState().sessionById.has('s-other')).toBe(false);
+  it('shows rows the daemon matched on fields only it searches (a repo name)', async () => {
+    // The daemon also matches a branch's repo slug and name, path and ids.
+    const { client } = makeClient({
+      sessions: [session('s-remote', 'Fix login')],
+      branches: [branch('br-remote', 'login-fix')],
+    });
+    const { result } = renderSearch(client, 'demo webapp');
+    await waitFor(() =>
+      expect(result.current.results.branch.map((r) => r.item.branch_id)).toEqual(['br-remote'])
+    );
+    expect(result.current.results.session.map((r) => r.item.session_id)).toEqual(['s-remote']);
   });
 });
 

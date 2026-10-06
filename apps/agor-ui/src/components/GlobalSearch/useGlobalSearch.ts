@@ -2,11 +2,13 @@ import {
   type AgorClient,
   type Branch,
   isTeammate,
+  MAX_SEARCH_TOKENS,
   matchSearchTokens,
   SEARCHABLE_FIELDS,
   type Session,
   serverSearchText,
   tokenizeSearchQuery,
+  uniqueSearchTokens,
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEnsureBranches } from '../../hooks/useEnsureRows';
@@ -51,21 +53,31 @@ export function useDebouncedSearchQuery(query: string) {
   return { debouncedQuery, flush };
 }
 
+/** The ids the daemon matched for `query`. */
+interface ServerMatches {
+  query: string;
+  sessionIds: ReadonlySet<string>;
+  branchIds: ReadonlySet<string>;
+}
+
 /**
  * The server half of a search: read the sessions and branches matching
  * `query` from the daemon (its `search` key, under the caller's visibility)
  * and fill them into the store, so the local pass below finds rows the store
  * never loaded. Display only: the rows join no scope, and are held
  * (`holdRows`) until the next query's results replace them or the search
- * closes; a read the search outlived inserts nothing. Rows the query can't
- * have matched (a daemon that ignores `search`) are dropped.
+ * closes; a read the search outlived inserts nothing. The daemon also matches
+ * fields the local registry lacks (a branch's repo, path and ids), so its
+ * matches are returned for the local pass to show; only the terms past its
+ * cap (`MAX_SEARCH_TOKENS`) are checked locally.
  */
 function useServerSearch(
   client: AgorClient | null | undefined,
   query: string,
   createdBy: string | undefined
-) {
+): ServerMatches | null {
   const shown = useRef<RowHold | null>(null);
+  const [matches, setMatches] = useState<ServerMatches | null>(null);
   useEffect(
     () => () => {
       shown.current?.release();
@@ -82,6 +94,10 @@ function useServerSearch(
       return;
     }
     const hold = holdRows();
+    // Terms the daemon didn't receive; every term it did, it matched.
+    const unsent = uniqueSearchTokens(search).slice(MAX_SEARCH_TOKENS);
+    const matchesUnsent = (fields: Array<string | undefined | null>) =>
+      unsent.length === 0 || matchSearchTokens(unsent, fields);
     const filter = {
       // At most the daemon's term cap; every term still filters below.
       search: serverSearchText(search),
@@ -97,10 +113,10 @@ function useServerSearch(
       ]);
       return {
         sessions: rowsOf<Session>(sessions).filter((s) =>
-          matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s))
+          matchesUnsent(SEARCHABLE_FIELDS.session(s))
         ),
         branches: rowsOf<Branch>(branches).filter((b) =>
-          matchSearchTokens(tokens, SEARCHABLE_FIELDS.branch(b))
+          matchesUnsent(SEARCHABLE_FIELDS.branch(b))
         ),
       };
     }, hold)
@@ -108,12 +124,18 @@ function useServerSearch(
         if (!rows || hold.released) return;
         shown.current?.release();
         shown.current = hold;
+        setMatches({
+          query: search,
+          sessionIds: new Set(rows.sessions.map((s) => s.session_id)),
+          branchIds: new Set(rows.branches.map((b) => b.branch_id)),
+        });
       })
       .catch((err) => console.warn('[GlobalSearch] server search failed:', err));
     return () => {
       if (shown.current !== hold) hold.release();
     };
   }, [client, query, createdBy]);
+  return matches;
 }
 
 /**
@@ -147,7 +169,11 @@ export function useGlobalSearch({
   flush: () => void;
 } {
   const { debouncedQuery, flush } = useDebouncedSearchQuery(query);
-  useServerSearch(client, debouncedQuery, ownedByMe ? currentUserId : undefined);
+  const serverMatches = useServerSearch(
+    client,
+    debouncedQuery,
+    ownedByMe ? currentUserId : undefined
+  );
 
   const { results, counts } = useMemo<{ results: ResultsByType; counts: SearchCounts }>(() => {
     const trimmed = debouncedQuery.trim();
@@ -159,6 +185,7 @@ export function useGlobalSearch({
     if (tokens.length === 0) {
       return { results: EMPTY_RESULTS, counts: EMPTY_COUNTS };
     }
+    const served = serverMatches?.query === trimmed ? serverMatches : null;
 
     // Counts must be independent of `activeTypeChip`: an inactive chip still
     // shows its real match count so the badge tells you what's behind that
@@ -173,7 +200,11 @@ export function useGlobalSearch({
     const sessions = Array.from(sessionById.values())
       .filter((s) => !s.archived)
       .filter((s) => !ownedByMe || s.created_by === currentUserId)
-      .filter((s) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s)))
+      .filter(
+        (s) =>
+          served?.sessionIds.has(s.session_id) ||
+          matchSearchTokens(tokens, SEARCHABLE_FIELDS.session(s))
+      )
       .sort(byTimestamp((s) => s.last_updated));
 
     // Branches + Teammates share one registry entry: the field set covers
@@ -181,7 +212,11 @@ export function useGlobalSearch({
     // split below uses `isTeammate()` to bucket matched rows.
     const allBranches = Array.from(branchById.values())
       .filter((b) => !ownedByMe || b.created_by === currentUserId)
-      .filter((b) => matchSearchTokens(tokens, SEARCHABLE_FIELDS.branch(b)))
+      .filter(
+        (b) =>
+          served?.branchIds.has(b.branch_id) ||
+          matchSearchTokens(tokens, SEARCHABLE_FIELDS.branch(b))
+      )
       .sort(byTimestamp((b) => b.updated_at));
     const branches = allBranches.filter((b) => !isTeammate(b));
     const teammates = allBranches.filter((b) => isTeammate(b));
@@ -255,6 +290,7 @@ export function useGlobalSearch({
     artifactById,
     boardById,
     mcpServerById,
+    serverMatches,
   ]);
 
   // Parent-branch labels come from the map: read the shown rows' parents it lacks.
