@@ -247,7 +247,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   /**
    * Envelope contract version.
    *
-   * New envelopes are always sealed at the current version. An older version
+   * New envelopes are sealed at the lowest version that can carry their
+   * bindings (v4 only for relay flows, otherwise v3). An older version
    * is accepted on read ONLY while every field it lacks is optional-and-absent
    * by construction, which is what lets a rolling upgrade finish the attempts
    * an older daemon already started. The reverse never holds: a daemon that

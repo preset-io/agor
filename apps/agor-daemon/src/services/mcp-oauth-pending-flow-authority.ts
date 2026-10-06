@@ -61,12 +61,15 @@ export function fingerprintMCPOAuthState(state: string): string {
 }
 
 /**
- * Sealed-envelope version this daemon writes.
+ * Sealed-envelope versions this daemon writes.
  *
  * v3 added `slackConnect`; v4 adds the Cloud `relay` delivery binding. A daemon
  * predating either field must refuse the newer envelope, not ignore a binding
  * and complete a callback without re-proving its authority during an upgrade.
+ * Direct flows stay at v3 so older replicas keep completing them during a
+ * rolling upgrade; only relay-bound flows are written as v4.
  */
+const DIRECT_PENDING_FLOW_MATERIAL_VERSION = 3;
 const PENDING_FLOW_MATERIAL_VERSION = 4;
 
 /**
@@ -76,7 +79,11 @@ const PENDING_FLOW_MATERIAL_VERSION = 4;
  * relay bindings, and v2 cannot carry a connect binding. Older versions with
  * those fields are rejected, not silently treated as direct attempts.
  */
-const ACCEPTED_PENDING_FLOW_MATERIAL_VERSIONS = new Set([2, 3, PENDING_FLOW_MATERIAL_VERSION]);
+const ACCEPTED_PENDING_FLOW_MATERIAL_VERSIONS = new Set([
+  2,
+  DIRECT_PENDING_FLOW_MATERIAL_VERSION,
+  PENDING_FLOW_MATERIAL_VERSION,
+]);
 
 function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingFlowSealedMaterial {
   if (!value || typeof value !== 'object') return false;
@@ -188,7 +195,9 @@ export class MCPOAuthPendingFlowAuthority {
         subjectUserId,
       });
       const material: MCPOAuthPendingFlowSealedMaterial = {
-        version: PENDING_FLOW_MATERIAL_VERSION,
+        version: input.context.relay
+          ? PENDING_FLOW_MATERIAL_VERSION
+          : DIRECT_PENDING_FLOW_MATERIAL_VERSION,
         attemptId,
         tenantId: input.tenantId,
         userId: input.userId,

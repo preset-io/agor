@@ -339,7 +339,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         };
         const attemptId = await startFlow(bound, context, slackConnect);
         await resealMaterial(bound, attemptId, (material) => {
-          expect(material.version).toBe(4);
+          expect(material.version).toBe(3);
           return { ...material, version };
         });
 
@@ -383,6 +383,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toEqual(
         context.relay
       );
+    });
+
+    it('seals direct flows at v3 so pre-relay replicas can complete them mid-rollout', async () => {
+      const bound = await seed('direct-v3');
+      const context = flowContext(crypto.randomUUID());
+      const attemptId = await startFlow(bound, context);
+      await resealMaterial(bound, attemptId, (material) => {
+        expect(material.version).toBe(3);
+        expect(material).not.toHaveProperty('relay');
+        return { ...material };
+      });
+      const claimed = await authorityB.claimForCallback(context.state);
+      if (claimed.outcome !== 'claimed') throw new Error('Expected a callback claim');
+      expect(authorityB.openClaim(claimed.flow, context.state).context.relay).toBeUndefined();
     });
 
     it('still opens an in-flight version 2 envelope written by an older daemon', async () => {
