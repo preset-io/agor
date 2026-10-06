@@ -127,6 +127,17 @@ export function projectClaudeResultResponse(value: unknown): SafeClaudeResultRes
 }
 
 /**
+ * The closed failure code of a non-success Claude result, safe to store as
+ * diagnostic detail. Provider prose (`errors[]`, `result`) is never read here.
+ */
+export function claudeResultFailureCode(value: unknown): string | undefined {
+  const result = projectClaudeResultResponse(value);
+  if (!result) return undefined;
+  if (result.subtype !== 'success' && result.subtype !== 'unknown') return result.subtype;
+  return result.is_error === true ? 'is_error' : undefined;
+}
+
+/**
  * Close an SDK context response to the three canonical scalar fields used by
  * Task/UI state. Claude's richer response includes memory paths, MCP tool
  * names, prompt sections, and future extension objects; none cross this
