@@ -3207,3 +3207,10 @@ a.radarBlip .blipName {
 :global(html[data-crt-intro="locked"]) .homeHero :is(*, *::before, *::after) {
   animation-play-state: paused;
 }
+
+/* Privacy Policy · Terms of Use · Cookie settings (FooterLegal). */
+.footerLegal {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #6f928c;
+}

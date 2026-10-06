@@ -1,4 +1,5 @@
 import { Footer } from 'nextra-theme-docs';
+import { FooterLegal } from '../components/FooterLegal';
 import { IslandNav } from '../components/nav/IslandNav';
 
 // The floating-island global nav replaces Nextra's navbar site-wide; it owns
@@ -14,6 +15,7 @@ export const footer = (
       <br />
       Agor is not affiliated with or endorsed by the companies mentioned on this site. All product
       names, logos, and brands are property of their respective owners.
+      <FooterLegal className="agor-docs-footer-legal" />
     </span>
   </Footer>
 );

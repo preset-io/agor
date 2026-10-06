@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useRef } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL, PRESET_URL, presetUtm } from '../../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
 import { CloudCtaLink } from '../CloudCtaLink';
+import { FooterLegal } from '../FooterLegal';
 import styles from '../LandingPage.module.css';
 import { SocialLinks } from '../SocialLinks';
 import { DemoButton } from './DemoButton';
@@ -162,6 +163,7 @@ export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
             Preset, Inc.
           </Link>
         </p>
+        <FooterLegal className={styles.footerLegal} />
         <p className={styles.footerTrademarks}>
           Agor is not affiliated with or endorsed by the companies mentioned on this site. All
           product names, logos, and brands are property of their respective owners.
