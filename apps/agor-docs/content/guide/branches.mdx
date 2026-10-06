@@ -143,9 +143,9 @@ Agor resolves a branch creation's source ref before either worktree or clone mat
   registered checkout's possibly stale local branch, and a retry reuses that recorded remote source.
   An unavailable remote fails rather than falling back to the local copy; repositories without a
   remote use their local default.
-- With clone storage, the registered checkout is only a cache, so an explicit bare branch name that
-  exists on the remote also resolves to the live remote branch. Commit SHAs, full refs, and
-  remote-qualified names keep the rules above, and worktree storage keeps the strict check.
+- With clone storage, the registered checkout is only a cache. When its refs disagree about an
+  explicit bare branch name, a new branch starts from that branch on the registered remote instead
+  of failing. Everything else keeps the rules above, and worktree storage keeps the strict check.
 
 Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
 explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call

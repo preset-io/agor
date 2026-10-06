@@ -1031,37 +1031,32 @@ export async function handleGitBranchAdd(
           env,
         });
       }
-      // Clone storage treats the registered checkout as a cache, so a bare branch name on the remote means that remote branch.
-      if (
-        shouldCreateBranch &&
-        storageMode === 'clone' &&
-        (refType || 'branch') === 'branch' &&
-        !sourceRemoteUrl &&
-        remoteUrl &&
-        !requestedStartingRef.startsWith('refs/') &&
-        !/^[0-9a-f]{7,64}$/i.test(requestedStartingRef)
-      ) {
-        try {
-          return await resolveGitRef(undefined, requestedStartingRef, {
-            refType: 'branch',
-            remote: { url: remoteUrl, name: 'origin' },
-            remoteOnly: true,
-            env,
-          });
-        } catch (error) {
-          // Not a remote branch (e.g. remote-qualified input): fall through to full resolution.
-          if (!(error instanceof Error && error.message.includes('does not exist'))) throw error;
-        }
+      try {
+        return await resolveGitRef(resolutionPath, requestedStartingRef, {
+          refType: refType || 'branch',
+          ...(sourceRemoteUrl
+            ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
+            : remoteUrl
+              ? { remote: { url: remoteUrl, name: 'origin' } }
+              : {}),
+          env,
+        });
+      } catch (error) {
+        // Clone storage treats the registered checkout as a cache, so the live remote settles a new branch's source the cache disagrees with.
+        if (
+          !shouldCreateBranch ||
+          storageMode !== 'clone' ||
+          !remoteUrl ||
+          !(error instanceof Error && error.message.includes('is ambiguous'))
+        )
+          throw error;
+        return resolveGitRef(undefined, requestedStartingRef, {
+          refType: 'branch',
+          remote: { url: remoteUrl, name: 'origin' },
+          remoteOnly: true,
+          env,
+        });
       }
-      return resolveGitRef(resolutionPath, requestedStartingRef, {
-        refType: refType || 'branch',
-        ...(sourceRemoteUrl
-          ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
-          : remoteUrl
-            ? { remote: { url: remoteUrl, name: 'origin' } }
-            : {}),
-        env,
-      });
     };
     let resolvedStartingRef =
       restoreMode || alreadyMaterialized ? undefined : await resolveStartingRef();

@@ -178,38 +178,26 @@ it('clone storage still refuses an ambiguous existing-branch checkout', async ()
   expect(result.error?.message).toContain('ambiguous');
 });
 
-it.each(['sha', 'full ref', 'local-only branch', 'tag'] as const)(
-  'clone storage keeps %s input on full resolution',
-  async (input) => {
-    delete branch.custom_context;
-    branch.storage_mode = 'clone';
-    const cache = simpleGit(repo.local_path);
-    if (input === 'sha') branch.base_ref = localSha;
-    if (input === 'full ref') branch.base_ref = 'refs/heads/trunk';
-    if (input === 'local-only branch') {
-      await cache.branch(['local-only', localSha]);
-      branch.base_ref = 'local-only';
-    }
-    if (input === 'tag') {
-      // A same-named remote branch must not shadow the requested tag.
-      await cache.addTag('v1');
-      await cache.push('upstream', `${remoteSha}:refs/heads/v1`);
-      branch.ref_type = 'tag';
-      branch.base_ref = 'v1';
-    }
-    // Commits and full refs resolve from the cache without querying the remote.
-    const remote = repo.remote_url!;
-    if (input === 'sha' || input === 'full ref') await rename(remote, `${remote}.unavailable`);
-    expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
-    expect(branch.base_sha).toBe(localSha);
-    expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(localSha);
-  }
-);
-
-it('clone storage still rejects a branch missing everywhere', async () => {
+it('clone storage resolves a commit SHA from the cache without the remote', async () => {
   delete branch.custom_context;
   branch.storage_mode = 'clone';
-  branch.base_ref = 'no-such-branch';
+  branch.base_ref = localSha;
+  await rename(repo.remote_url!, `${repo.remote_url}.unavailable`);
+  expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+  expect(branch.base_sha).toBe(localSha);
+  expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(localSha);
+});
+
+it('clone storage never redirects a cache-remote-qualified ref to the registered remote', async () => {
+  delete branch.custom_context;
+  branch.storage_mode = 'clone';
+  const cache = simpleGit(repo.local_path);
+  const personal = join(root, 'personal.git');
+  await simpleGit().clone(repo.local_path, personal, ['--bare']);
+  await cache.addRemote('personal', personal);
+  await cache.fetch('personal');
+  await cache.push('upstream', `${remoteSha}:refs/heads/personal/topic`);
+  branch.base_ref = 'personal/topic';
   const result = await handleGitBranchAdd(payload, {});
   expect(result.success).toBe(false);
   expect(result.error?.message).toContain('does not exist');

@@ -702,8 +702,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'sourceBranch',
           'Base branch to fork from when creating a new branch (defaults to the repo default branch on its registered remote, usually "main"). ' +
             'Accepts local branches, remote-qualified branches (for example origin/main), tags, and commit SHAs. ' +
-            'With clone storage, a bare branch name that exists on the remote resolves to that live remote branch. ' +
-            'Otherwise a bare branch name is rejected when matching local or remote refs disagree; qualify it explicitly. ' +
+            'A bare branch name is rejected when matching local or remote refs disagree; qualify it explicitly. ' +
+            'With clone storage, a new branch instead starts from that branch on the registered remote. ' +
             'The response reports _resolution.resolved_ref and resolved_sha. Clone storage requires the resolved object to be cloneable from its selected source.'
         ),
         autoSuffix: z
