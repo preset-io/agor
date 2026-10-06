@@ -40,7 +40,7 @@ function serviceFor(current = task, observationAccepted = true) {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
       if (name === 'sessions') return { get: vi.fn().mockResolvedValue({ agentic_tool: 'codex' }) };
-      if (name === 'tasks') return { emit: vi.fn() };
+      if (name === 'tasks') return { get: service.get, emit: vi.fn() };
       throw new Error(`unexpected service ${name}`);
     },
   };

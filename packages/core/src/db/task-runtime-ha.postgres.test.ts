@@ -24,6 +24,7 @@ import {
   TaskRepository,
   UsersRepository,
 } from './repositories';
+import { applyTenantRestrictionIntent } from './tenant-restriction';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from './tenant-scope';
 import { setTestBranchUserRole } from './test-helpers';
 
@@ -426,6 +427,202 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
       });
     });
   });
+
+  it.each([
+    ['tenant_suspension', 'verified_absent', TaskStatus.STOPPED],
+    ['authorization_revoked', 'verified_absent', TaskStatus.FAILED],
+    ['tenant_suspension', 'forced_unverified', TaskStatus.FAILED],
+  ] as const)(
+    'settles %s / %s precisely without relabeling auth or unverified containment',
+    async (cause, outcome, expected) => {
+      const seed = await seedTenant(db, `suspension-${cause}-${outcome}`);
+      await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        const task = await tasks.create(taskInput(seed, TaskStatus.RUNNING));
+        const request = await tasks.claimTermination({
+          taskId: task.task_id,
+          cause,
+          errorMessage: 'Scoped test stop',
+        });
+        const requestedAt = request.task.termination_request!.requested_at;
+        const claim = async (token: string) =>
+          tasks.claimTerminationCoordination({
+            taskId: task.task_id,
+            claimToken: token,
+            leaseDurationMs: 30_000,
+            instanceId: 'test-daemon',
+            bootId: 'test-boot',
+          });
+        await claim('first');
+        if (outcome === 'forced_unverified') {
+          const unverified = await tasks.settleTermination({
+            taskId: task.task_id,
+            outcome: 'unverified',
+            coordinationToken: 'first',
+            errorMessage: 'Executor quiescence not verified',
+            sdkFailure: {
+              reason: 'termination_unverified',
+              detected_at: new Date().toISOString(),
+              tool: 'codex',
+              termination: 'unverified',
+            },
+          });
+          expect(unverified.task.status).toBe(TaskStatus.STOPPING);
+        }
+        const result = await tasks.settleTermination({
+          taskId: task.task_id,
+          ...(outcome === 'forced_unverified'
+            ? { outcome, expectedTerminationRequestedAt: requestedAt }
+            : { outcome, coordinationToken: 'first' }),
+        });
+        expect(result).toMatchObject({
+          outcome: 'transitioned',
+          task: { status: expected, termination_request: { cause } },
+        });
+        expect((await tasks.findById(task.task_id))?.status).toBe(expected);
+      });
+    }
+  );
+
+  it.each([
+    ['tenant_suspension', 'authorization_revoked'],
+    ['authorization_revoked', 'tenant_suspension'],
+  ] as const)('keeps real revocation authoritative when %s races %s', async (first, second) => {
+    const seed = await seedTenant(db, 'suspension-revocation-race');
+    await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+      const tasks = new TaskRepository(scoped);
+      const task = await tasks.create(taskInput(seed, TaskStatus.RUNNING));
+      // A real revocation is one the heartbeat authority recorded durably.
+      await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: first,
+        errorMessage: 'First stop',
+        durableRevocation: first === 'authorization_revoked',
+      });
+      await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: second,
+        errorMessage: 'Second stop',
+        durableRevocation: second === 'authorization_revoked',
+      });
+      await tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'race-stop',
+        leaseDurationMs: 30_000,
+        instanceId: 'test-daemon',
+        bootId: 'test-boot',
+      });
+      expect(
+        await tasks.settleTermination({
+          taskId: task.task_id,
+          outcome: 'verified_absent',
+          coordinationToken: 'race-stop',
+        })
+      ).toMatchObject({
+        outcome: 'transitioned',
+        task: {
+          status: TaskStatus.FAILED,
+          termination_request: { cause: 'authorization_revoked' },
+        },
+      });
+    });
+  });
+
+  it('claims a restriction Stop only while the tenant is still closed under the execution fence', async () => {
+    const seed = await seedTenant(db, 'closure-claim');
+    const [closedTask, reopenedTask] = await runWithTenantDatabaseScope(
+      db,
+      seed.tenantId,
+      async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        return Promise.all([
+          tasks.create(taskInput(seed, TaskStatus.RUNNING)),
+          tasks.create(taskInput(seed, TaskStatus.RUNNING)),
+        ]);
+      }
+    );
+    const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+      applyTenantRestrictionIntent(db, seed.tenantId, {
+        version: 1,
+        controllerId: 'control-one',
+        placementId: 'placement-one',
+        operationId: action === 'restrict' ? 'suspend' : 'release',
+        revision,
+        action,
+      });
+    const claim = (taskId: string) =>
+      runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).claimTermination({
+          taskId,
+          cause: 'tenant_suspension',
+          errorMessage: 'Tenant access is restricted.',
+          requireTenantClosed: true,
+        })
+      );
+    await apply(1, 'restrict');
+    await expect(claim(closedTask.task_id)).resolves.toMatchObject({
+      outcome: 'claimed',
+      task: { status: TaskStatus.STOPPING },
+    });
+    await apply(2, 'prepare_release');
+    await apply(2, 'activate');
+    // A reconciler still holding its closed observation cannot stop the reopened tenant's task.
+    await expect(claim(reopenedTask.task_id)).resolves.toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.RUNNING },
+    });
+  });
+
+  it.each([TaskStatus.QUEUED, TaskStatus.CREATED] as const)(
+    'directly admits a new prompt past a restriction-held %s prompt after reactivation',
+    async (status) => {
+      const seed = await seedTenant(db, `held-${status}`);
+      const held = await runWithTenantDatabaseScope(db, seed.tenantId, (scoped) =>
+        new TaskRepository(scoped).create(
+          taskInput(seed, status, status === TaskStatus.QUEUED ? { queue_position: 1 } : {})
+        )
+      );
+      const apply = (revision: number, action: 'restrict' | 'prepare_release' | 'activate') =>
+        applyTenantRestrictionIntent(db, seed.tenantId, {
+          version: 1,
+          controllerId: 'control-one',
+          placementId: 'placement-one',
+          operationId: action === 'restrict' ? 'suspend' : 'release',
+          revision,
+          action,
+        });
+      await apply(1, 'restrict');
+      await apply(2, 'prepare_release');
+      await apply(2, 'activate');
+      await runWithTenantDatabaseScope(db, seed.tenantId, async (scoped) => {
+        const tasks = new TaskRepository(scoped);
+        expect((await tasks.findById(held.task_id))?.tenant_restriction_hold?.reason).toBe(
+          'tenant_restricted'
+        );
+        const next = await tasks.createPending({
+          session_id: seed.sessionId,
+          created_by: seed.userId,
+          full_prompt: 'after reactivation',
+          status: TaskStatus.QUEUED,
+          dispatchIfIdle: {
+            status: TaskStatus.DISPATCHING,
+            executor_mode: 'local',
+            message_range: {
+              start_index: 0,
+              end_index: 1,
+              start_timestamp: new Date().toISOString(),
+            },
+            git_state: { ref_at_start: 'unknown', sha_at_start: 'unknown' },
+          },
+        });
+        expect(next.status).toBe(TaskStatus.DISPATCHING);
+        expect(await tasks.findById(held.task_id)).toMatchObject({
+          status,
+          tenant_restriction_hold: { reason: 'tenant_restricted' },
+        });
+      });
+    }
+  );
 
   it('reconciles late executor quiescence through RLS without exposing it cross-tenant', async () => {
     const owner = await seedTenant(db, 'late-quiescence-owner');

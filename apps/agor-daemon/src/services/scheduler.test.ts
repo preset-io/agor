@@ -25,6 +25,7 @@ import {
 } from '@agor/core/types';
 import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import * as tenantAccess from '../auth/tenant-access.js';
 import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities.js';
 import {
   materializeScheduleAgenticToolConfig,
@@ -195,6 +196,34 @@ describe('scheduler deployment capability admission', () => {
 });
 
 describe('scheduler HA occurrence recovery', () => {
+  dbTest('skips a restricted occurrence without disabling its future schedule', async ({ db }) => {
+    const { schedule } = await seedRunnableSchedule(
+      db,
+      { email: `suspended-${generateId()}@example.test`, name: 'Scheduler' },
+      { agentic_tool: 'claude-code' }
+    );
+    const { app, prompt } = createSchedulerApp(db);
+    const scheduler = new SchedulerService(db, app);
+    const admission = vi
+      .spyOn(tenantAccess, 'isCurrentTenantEventAdmitted')
+      .mockResolvedValue(false);
+    try {
+      await (
+        scheduler as unknown as { processSchedule(schedule: Schedule, now: number): Promise<void> }
+      ).processSchedule(schedule, NOW + 30_000);
+      const updated = await new ScheduleRepository(db).findById(schedule.schedule_id);
+      expect(updated?.enabled).toBe(true);
+      expect(updated?.next_run_at).toBeGreaterThan(NOW + 30_000);
+      expect(updated?.last_run_at).toBeUndefined();
+      expect(prompt).not.toHaveBeenCalled();
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        0
+      );
+    } finally {
+      admission.mockRestore();
+    }
+  });
+
   const killStages = [
     'afterSessionAdmission',
     'afterMcpAttachments',
@@ -282,8 +311,11 @@ describe('scheduler HA occurrence recovery', () => {
     });
   }
 
-  dbTest('background recovery is independent of cron grace and manual retry', async ({ db }) => {
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+  dbTest('recovers a same-minute manual run after activation', async ({ db }) => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW + 30_000);
+    const admission = vi
+      .spyOn(tenantAccess, 'isCurrentTenantEventAdmitted')
+      .mockImplementation(async (_db, at) => at > NOW + 10_000);
     try {
       const { creator, schedule } = await seedRunnableSchedule(
         db,
@@ -323,6 +355,7 @@ describe('scheduler HA occurrence recovery', () => {
         await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
       ).toBe(true);
     } finally {
+      admission.mockRestore();
       nowSpy.mockRestore();
     }
   });

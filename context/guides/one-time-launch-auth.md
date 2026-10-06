@@ -166,6 +166,10 @@ The exchange endpoint should consume the launch code exactly once and return:
 }
 ```
 
+A `409` whose body is `{"error":"team_busy"}` means transient contention with the
+code left unconsumed: the daemon retries that exchange once after 150-300 ms of
+jitter. Every other non-2xx answer, and a second `team_busy`, fails the launch.
+
 Required assertion claims:
 
 - `iss`: expected issuer

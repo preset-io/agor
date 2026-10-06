@@ -2,7 +2,7 @@ import type { Server } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import { type Session, SessionStatus, type Task, TaskStatus } from '@agor/core/types';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type BaseTool,
   executeToolTask,
@@ -185,6 +185,7 @@ describe('executor acknowledgement failure convergence', () => {
       id: string;
       emit: () => boolean;
     };
+    Reflect.set(taskService, 'db', { run: vi.fn() });
     taskService.app = app;
     taskService.get = async () => task;
     taskService.taskRepo = {

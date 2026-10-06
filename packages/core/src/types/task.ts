@@ -90,7 +90,8 @@ export type TerminationCause =
   | 'startup_timeout'
   | 'heartbeat_lost'
   | 'sdk_health_failure'
-  | 'authorization_revoked';
+  | 'authorization_revoked'
+  | 'tenant_suspension';
 
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
@@ -149,6 +150,13 @@ export interface ExecutorTerminationCompleteInput {
   task_id: string;
   /** Fences a late report from a previous termination request. */
   requested_at: string;
+}
+
+/** Exact-task control read; never contains prompts, reports, metadata or credentials. */
+export interface ExecutorTerminationState {
+  task_id: TaskID;
+  status: TaskStatus;
+  termination_request?: Pick<TerminationRequest, 'cause' | 'requested_at' | 'executor_quiesced_at'>;
 }
 
 /**
@@ -396,6 +404,9 @@ export interface Task {
    * Undefined for non-queued tasks.
    */
   queue_position?: number;
+
+  /** Server-owned durable prompt hold; only explicit resubmission creates runnable work. */
+  tenant_restriction_hold?: { reason: 'tenant_restricted'; held_at: string };
 
   /**
    * Structured metadata for the task. Fields here are load-bearing for

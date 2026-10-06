@@ -1963,6 +1963,40 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     }
   );
 
+  dbTest(
+    'lets only a durable revocation replace a suspension cause under the claim lock',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
+      );
+      await taskRepo.connectExecutor(task.task_id);
+      await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'tenant_suspension',
+        errorMessage: 'Tenant access is restricted.',
+      });
+      // A caller acting on a stale snapshot cannot turn the suspension into a revocation.
+      const stale = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+      });
+      expect(stale.task.termination_request?.cause).toBe('tenant_suspension');
+      const durable = await taskRepo.claimTermination({
+        taskId: task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: 'Revoked',
+        durableRevocation: true,
+      });
+      expect(durable).toMatchObject({
+        outcome: 'claimed',
+        task: { termination_request: { cause: 'authorization_revoked' } },
+      });
+    }
+  );
+
   dbTest('rejects late telemetry after executor quiescence', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db);
@@ -3288,6 +3322,34 @@ describe('TaskRepository.createPending', () => {
       expect(next.queue_position).toBe(status === TaskStatus.QUEUED ? 2 : 1);
     }
   });
+
+  dbTest(
+    'direct admission is not blocked by prompts held by a tenant restriction',
+    async ({ db }) => {
+      const repo = new TaskRepository(db);
+      const hold = { reason: 'tenant_restricted' as const, held_at: new Date().toISOString() };
+      for (const status of [TaskStatus.QUEUED, TaskStatus.CREATED]) {
+        const sessionId = await createSessionWithDeps(db);
+        const held = await repo.create(
+          createTaskData({
+            session_id: sessionId,
+            status,
+            ...(status === TaskStatus.QUEUED ? { queue_position: 1 } : {}),
+            tenant_restriction_hold: hold,
+          })
+        );
+        const next = await repo.createPending({
+          ...createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED }),
+          dispatchIfIdle: dispatchFields(),
+        });
+        expect(next.status).toBe(TaskStatus.DISPATCHING);
+        expect(await repo.findById(held.task_id)).toMatchObject({
+          status,
+          tenant_restriction_hold: hold,
+        });
+      }
+    }
+  );
 
   dbTest(
     'queue mutations preserve direct dispatch and subsequent admission order',

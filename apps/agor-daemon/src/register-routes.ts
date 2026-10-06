@@ -1,5 +1,16 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
+import {
+  assertRuntimeTenantAccess,
+  endTenantRestrictionRequest,
+  readRequestTenantRestriction,
+  withTenantRestrictionRequest,
+} from './auth/tenant-access.js';
+import {
+  assertTenantCredentialEpoch,
+  readTenantCredentialEpoch,
+  tenantCredentialEpochClaims,
+} from './auth/tenant-credential-epoch.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -69,6 +80,7 @@ import {
   LocalStrategy,
   NotAuthenticated,
   NotFound,
+  Unavailable,
 } from '@agor/core/feathers';
 import {
   isMCPServerNotUsableError,
@@ -149,6 +161,7 @@ import {
   issueRuntimeToken,
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
+  runtimeTenantClaims,
 } from './auth/runtime-tokens.js';
 import {
   assertAuthenticationUserAuthMetadata,
@@ -277,6 +290,7 @@ import {
   type InternalPromptTaskMetadataInput,
 } from './utils/prompt-task-metadata.js';
 import { ensureScheduleRunsAsCaller } from './utils/schedule-hooks.js';
+import { withoutSessionMcpToken } from './utils/session-mcp-token-hook.js';
 import {
   deferWithSessionQueueTenantScope,
   runWithSessionQueueTenantScope,
@@ -430,6 +444,19 @@ export async function authorizeTaskExecutorSessionMcpRead(
     throw new Forbidden('Executor task scope is no longer current');
   }
   return true;
+}
+
+/** Only signed runtime JWTs carry the generation claim; an API key gets the closed-tenant check only, as on /mcp. */
+export async function assertMcpProjectionTenantCredential(
+  db: Parameters<typeof assertRuntimeTenantAccess>[0],
+  tenantId: string,
+  authentication: RouteParams['authentication']
+): Promise<string | undefined> {
+  if (authentication?.strategy === 'api-key') {
+    await assertRuntimeTenantAccess(db, tenantId);
+    return undefined;
+  }
+  return assertTenantCredentialEpoch(db, tenantId, authentication?.payload);
 }
 
 /**
@@ -798,7 +825,8 @@ interface BearerHttpAuthenticationService {
  * is reused in the result so verified tenant context cannot be lost between
  * user lookup and the route's authorization checks.
  */
-export async function authenticateBearerHttpRequest(input: {
+async function authenticateBearerHttp(input: {
+  db: TenantScopeAwareDatabase;
   authentication: BearerHttpAuthenticationService;
   multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
   headers: Record<string, unknown>;
@@ -809,7 +837,7 @@ export async function authenticateBearerHttpRequest(input: {
     { strategy: 'jwt', accessToken: input.token },
     authParams
   );
-  return {
+  const params: AuthenticatedParams = {
     ...authParams,
     user: result.user,
     provider: 'rest',
@@ -825,6 +853,98 @@ export async function authenticateBearerHttpRequest(input: {
         headers: input.headers,
       }),
   };
+  // Compare the signed generation here too: executor-session bearers skip the strategy's check.
+  await assertRuntimeTenantAccess(
+    input.db,
+    params.tenant!.tenant_id,
+    { payload: result.authentication?.payload },
+    readRequestTenantRestriction
+  );
+  return params;
+}
+
+/** The strategy's generation check and tenant admission share one read; route work reads fresh. */
+export const authenticateBearerHttpRequest = (
+  input: Parameters<typeof authenticateBearerHttp>[0]
+) =>
+  withTenantRestrictionRequest(async () => {
+    try {
+      return await authenticateBearerHttp(input);
+    } finally {
+      endTenantRestrictionRequest();
+    }
+  });
+
+export function createExecutorUploadContentHandler(input: {
+  db: TenantScopeAwareDatabase;
+  authentication: BearerHttpAuthenticationService;
+  multiTenancy: ReturnType<typeof resolveMultiTenancyConfig>;
+}) {
+  const { db, authentication, multiTenancy } = input;
+  // biome-ignore lint/suspicious/noExplicitAny: Express route request/response augmentation
+  return async (req: any, res: any) => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+      const params = await authenticateBearerHttpRequest({
+        db,
+        authentication,
+        multiTenancy,
+        headers: req.headers,
+        token: authHeader.slice(7),
+      });
+      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
+      const uploadRef = req.params.uploadRef;
+      const sessionId = String(req.headers['x-agor-session-id'] ?? '');
+      const branchId = claims?.branch_id;
+      const tenant = params.tenant;
+      if (
+        typeof branchId !== 'string' ||
+        !tenant?.tenant_id ||
+        !sessionId ||
+        !matchesExecutorCommandRuntimeScope(
+          params,
+          uploadMaterializeExecutorCommandId(sessionId, uploadRef),
+          branchId
+        )
+      ) {
+        return res.status(403).json({ error: 'Upload transfer capability denied' });
+      }
+      const store = getUploadStagingStore();
+      const owner = {
+        tenantId: tenant.tenant_id,
+        sessionId: sessionId as SessionID,
+        branchId: branchId as import('@agor/core/types').BranchID,
+        ref: uploadRef as import('@agor/core/types').UploadRef,
+      };
+      const metadata = await store.inspect(owner);
+      const stream = await store.read(owner);
+      res.status(200);
+      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
+      res.setHeader('Content-Length', String(metadata.size));
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      stream.once('error', (error) => {
+        if (!res.headersSent) res.status(500);
+        res.destroy(error as Error);
+      });
+      res.once('close', () =>
+        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
+      );
+      stream.pipe(res);
+    } catch (error) {
+      const status =
+        error instanceof Forbidden ||
+        error instanceof Unavailable ||
+        error instanceof NotAuthenticated
+          ? error.code
+          : ((error as { status?: number }).status ?? 404);
+      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
+      else res.destroy();
+    }
+  };
 }
 
 /** Expose a bounded auth-failure reason to the upload route's failure log. */
@@ -836,6 +956,7 @@ function recordUploadAuthFailure(res: any, diagnostics: UploadAuthFailureDiagnos
 }
 
 export function createUploadAuthMiddleware(input: {
+  db: TenantScopeAwareDatabase;
   authentication: {
     create(
       data: { strategy: 'jwt'; accessToken: string },
@@ -856,12 +977,16 @@ export function createUploadAuthMiddleware(input: {
 
       try {
         req.feathers = await authenticateBearerHttpRequest({
+          db: input.db,
           authentication: input.authentication,
           multiTenancy: input.multiTenancy,
           headers: req.headers,
           token,
         });
       } catch (error) {
+        if (error instanceof Forbidden || error instanceof Unavailable) {
+          return res.status(error.code).json({ error: error.message });
+        }
         // Decoded without verification purely so the failure log can report
         // the token's claimed subject and expiry; it grants nothing.
         const unverified = jwt.decode(token, { json: true });
@@ -870,6 +995,9 @@ export function createUploadAuthMiddleware(input: {
       }
       next();
     } catch (error) {
+      if (error instanceof Forbidden || error instanceof Unavailable) {
+        return res.status(error.code).json({ error: error.message });
+      }
       recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
@@ -1109,6 +1237,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   authentication.register(
     'jwt',
     new RuntimeJWTStrategy({
+      db,
       sessionTokenService,
       executorRevocationFence: getOrCreateExecutorConnectionRevocationFence(app),
       multiTenancy,
@@ -1193,6 +1322,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     after: {
       create: [
         createIssueBrowserTokensHook({
+          db,
           jwtSecret,
           accessTokenTtl: ACCESS_TOKEN_TTL,
           refreshTokenTtl: REFRESH_TOKEN_TTL,
@@ -1242,6 +1372,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.use(
     '/authentication/refresh',
     createRefreshTokenService({
+      db,
       jwtSecret,
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
@@ -1316,6 +1447,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       const requestedExpiry = data.expiry_ms ?? maxExpiry;
       const expiryMs = Math.min(requestedExpiry, maxExpiry);
 
+      // Keep a JWT caller's verified epoch across the target lookup; fresh auth uses current admission.
+      const impersonationTenant = authParams.tenant?.tenant_id;
+      const impersonationEpoch = impersonationTenant
+        ? authParams.authentication?.strategy === 'jwt'
+          ? await assertTenantCredentialEpoch(db, impersonationTenant, authPayload)
+          : await readTenantCredentialEpoch(db, impersonationTenant)
+        : undefined;
       // 9. Generate token
       const jti = generateId();
       const expiresAt = new Date(Date.now() + expiryMs);
@@ -1324,6 +1462,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         {
           sub: targetUser.user_id,
           type: 'access',
+          ...tenantCredentialEpochClaims(impersonationEpoch),
+          ...runtimeTenantClaims(impersonationTenant, tenantTokenClaim),
           impersonated_by: caller.user_id,
           is_impersonated: true,
           jti,
@@ -2670,63 +2810,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // delegated-user command token stays in the Authorization header (never
   // URL/query/logs) and binds exactly one tenant + branch + session + handle.
   // biome-ignore lint/suspicious/noExplicitAny: Express route method not on FeathersJS Application type
-  (app as any).get('/executor/uploads/:uploadRef/content', async (req: any, res: any) => {
-    try {
-      const authHeader = req.headers.authorization;
-      if (typeof authHeader !== 'string' || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: 'Authentication required' });
-      }
-      const params = await authenticateBearerHttpRequest({
-        authentication: app.service('authentication'),
-        multiTenancy,
-        headers: req.headers,
-        token: authHeader.slice(7),
-      });
-      const claims = params.authentication?.payload as Record<string, unknown> | undefined;
-      const uploadRef = req.params.uploadRef;
-      const sessionId = String(req.headers['x-agor-session-id'] ?? '');
-      const branchId = claims?.branch_id;
-      const tenant = params.tenant;
-      if (
-        typeof branchId !== 'string' ||
-        !tenant?.tenant_id ||
-        !sessionId ||
-        !matchesExecutorCommandRuntimeScope(
-          params,
-          uploadMaterializeExecutorCommandId(sessionId, uploadRef),
-          branchId
-        )
-      ) {
-        return res.status(403).json({ error: 'Upload transfer capability denied' });
-      }
-      const store = getUploadStagingStore();
-      const owner = {
-        tenantId: tenant.tenant_id,
-        sessionId: sessionId as SessionID,
-        branchId: branchId as import('@agor/core/types').BranchID,
-        ref: uploadRef as import('@agor/core/types').UploadRef,
-      };
-      const metadata = await store.inspect(owner);
-      const stream = await store.read(owner);
-      res.status(200);
-      res.setHeader('Content-Type', metadata.mimeType || 'application/octet-stream');
-      res.setHeader('Content-Length', String(metadata.size));
-      res.setHeader('Cache-Control', 'private, no-store');
-      res.setHeader('X-Content-Type-Options', 'nosniff');
-      stream.once('error', (error) => {
-        if (!res.headersSent) res.status(500);
-        res.destroy(error as Error);
-      });
-      res.once('close', () =>
-        (stream as NodeJS.ReadableStream & { destroy?: () => void }).destroy?.()
-      );
-      stream.pipe(res);
-    } catch (error) {
-      const status = (error as { status?: number }).status ?? 404;
-      if (!res.headersSent) res.status(status).json({ error: 'Upload transfer unavailable' });
-      else res.destroy();
-    }
-  });
+  (app as any).get(
+    '/executor/uploads/:uploadRef/content',
+    createExecutorUploadContentHandler({
+      db,
+      authentication: app.service('authentication'),
+      multiTenancy,
+    })
+  );
 
   // Raw streaming executor -> daemon Slack upload data plane. Metadata is
   // bounded in headers; file bytes never enter Feathers/JSON/base64.
@@ -2738,6 +2829,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         return res.status(401).json({ error: 'Authentication required' });
       }
       const params = await authenticateBearerHttpRequest({
+        db,
         authentication: app.service('authentication'),
         multiTenancy,
         headers: req.headers,
@@ -2960,6 +3052,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     };
 
   const uploadAuthMiddleware = createUploadAuthMiddleware({
+    db,
     authentication: app.service('authentication'),
     multiTenancy,
   });
@@ -3197,7 +3290,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
           withFreshTenantWrite(db, terminationTenantId, work);
         const session = await inCurrentTenantDatabaseScope(() =>
-          app.service('sessions').get(id, params)
+          app.service('sessions').get(id, withoutSessionMcpToken(params))
         );
 
         // Stop is Session lifecycle control. Managers may stop any Session on
@@ -3259,7 +3352,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (body.force_unverified === true) {
           const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () => {
             const target = await inCurrentTenantDatabaseScope(async () => {
-              const session = await app.service('sessions').get(id, params);
+              const session = await app.service('sessions').get(id, withoutSessionMcpToken(params));
               return authorizeForceFailRoute({
                 session,
                 params,
@@ -4747,6 +4840,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       (params as RouteParams & { tenant?: { tenant_id?: string } }).tenant?.tenant_id ??
       getCurrentTenantId();
     if (!tenantId) throw new NotAuthenticated('MCP gateway projection requires tenant identity');
+    const credentialEpoch = await assertMcpProjectionTenantCredential(
+      db,
+      tenantId,
+      params.authentication
+    );
     const mode = await getMCPEgressGatewayMode(db);
     if (!executorScope) {
       if (mode === 'compatibility' || mode === 'enforced') {
@@ -4816,6 +4914,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const toolPolicyHash = mcpToolPolicyHash(server.tool_permissions, jwtSecret);
         const capability = issueMCPEgressCapability(
           {
+            ...tenantCredentialEpochClaims(credentialEpoch),
             tid: tenantId,
             task_id: task.task_id,
             session_id: session.session_id,

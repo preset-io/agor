@@ -51,6 +51,7 @@ export type SystemDatabaseCapability =
   | 'scheduler_discovery'
   | 'task_queue_discovery'
   | 'task_runtime_discovery'
+  | 'tenant_restriction_discovery'
   | 'branch_maintenance_discovery'
   | 'executor_token_maintenance'
   | 'mcp_oauth_callback'

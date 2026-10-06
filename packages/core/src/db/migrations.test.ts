@@ -1164,6 +1164,17 @@ describe('GitHub install state migrations', () => {
   });
 });
 
+describe('Tenant restriction migrations', () => {
+  it('keeps controller restriction intent PostgreSQL-only', async () => {
+    const [postgresJournal, sqliteJournal] = await readJournals();
+    expect(postgresJournal.entries.map(({ tag }) => tag)).toContain('0118_tenant_restrictions');
+    expect(sqliteJournal.entries.some(({ tag }) => tag.includes('tenant_restrictions'))).toBe(
+      false
+    );
+    expect(await import('./schema.sqlite')).not.toHaveProperty('tenantRestrictions');
+  });
+});
+
 describe('SDK session storage retirement migrations', () => {
   it('discards SQLite snapshot payloads while preserving task data', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agor-session-storage-migration-'));

@@ -1,3 +1,4 @@
+import { tenantCredentialEpochClaims } from '../auth/tenant-credential-epoch.js';
 /**
  * Executor Spawning Utility
  *
@@ -1552,9 +1553,15 @@ export function generateDaemonServiceToken(
   app: {
     settings: { authentication?: { secret?: string } };
   },
-  expiresIn?: SignOptions['expiresIn']
+  expiresIn?: SignOptions['expiresIn'],
+  credentialEpoch?: string
 ): string {
-  return issueReservedServiceTokenFromApp(app, serviceTokenScopeForCurrentTenant(), expiresIn);
+  // The generation is the only extra claim: its calls still pass ordinary admission, which compares it.
+  return issueReservedServiceTokenFromApp(
+    app,
+    { ...serviceTokenScopeForCurrentTenant(), ...tenantCredentialEpochClaims(credentialEpoch) },
+    expiresIn
+  );
 }
 
 export interface TerminalExecutorTokenScope {
@@ -1570,11 +1577,16 @@ export function generateTerminalExecutorToken(
     settings: { authentication?: { secret?: string } };
   },
   scope: TerminalExecutorTokenScope,
-  expiresIn: SignOptions['expiresIn']
+  expiresIn: SignOptions['expiresIn'],
+  credentialEpoch?: string
 ): string {
   return issueReservedServiceTokenFromApp(
     app,
-    { ...scope, ...serviceTokenScopeForCurrentTenant() },
+    {
+      ...scope,
+      ...serviceTokenScopeForCurrentTenant(),
+      ...tenantCredentialEpochClaims(credentialEpoch),
+    },
     expiresIn
   );
 }

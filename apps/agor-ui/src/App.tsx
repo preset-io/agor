@@ -50,6 +50,7 @@ import { type OnboardingCompletionResult, OnboardingWizard } from './components/
 import { buildPromptWithAttachments } from './components/SessionPanel/composerAttachments';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
+import { WorkspaceSuspended } from './components/WorkspaceSuspended/WorkspaceSuspended';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -320,6 +321,7 @@ function AppContent() {
     loading: authLoading,
     error: authError,
     accessToken,
+    tenantRestricted: authTenantRestricted,
     authenticationGeneration,
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
@@ -340,6 +342,7 @@ function AppContent() {
     connected,
     connecting,
     authGeneration,
+    tenantRestricted,
     error: connectionError,
     retryConnection,
   } = useAgorClient({
@@ -425,8 +428,16 @@ function AppContent() {
   // Referentially stable context value: without the memo, every App render
   // hands consumers a fresh object and defeats their own memoization.
   const connectionContextValue = useMemo(
-    () => ({ connected, connecting, authGeneration, outOfSync, capturedSha, currentSha }),
-    [connected, connecting, authGeneration, outOfSync, capturedSha, currentSha]
+    () => ({
+      connected,
+      connecting,
+      authGeneration,
+      tenantRestricted,
+      outOfSync,
+      capturedSha,
+      currentSha,
+    }),
+    [connected, connecting, authGeneration, tenantRestricted, outOfSync, capturedSha, currentSha]
   );
 
   const directSessionIdFromPath =
@@ -979,6 +990,11 @@ function AppContent() {
   const hasTokens =
     typeof window !== 'undefined' &&
     !!(localStorage.getItem('agor-access-token') || localStorage.getItem('agor-refresh-token'));
+
+  // A closed tenant (seen by the socket or by authentication) replaces the shell before sign-in, connection or loading UI.
+  if (tenantRestricted || authTenantRestricted) {
+    return <WorkspaceSuspended />;
+  }
 
   if (!authLoading && !authenticated && !hasTokens) {
     return (

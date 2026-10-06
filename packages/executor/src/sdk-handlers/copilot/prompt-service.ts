@@ -19,7 +19,7 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS } from '@agor/core/types';
+import { MCP_CLIENT_HINT_HEADER, MCP_CLIENT_HINTS, type Session } from '@agor/core/types';
 import type * as CopilotSdk from '@github/copilot-sdk';
 import type { CopilotSession } from '@github/copilot-sdk';
 import { getDaemonUrl } from '../../config.js';
@@ -40,10 +40,7 @@ import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
 import type { McpToolPermissionIndex } from '../base/mcp-tool-permissions.js';
-import {
-  buildMcpToolPermissionIndex,
-  EMPTY_MCP_TOOL_PERMISSION_INDEX,
-} from '../base/mcp-tool-permissions.js';
+import { buildMcpToolPermissionIndex } from '../base/mcp-tool-permissions.js';
 import {
   collectWithheldMcpServers,
   reportWithheldMcpServers,
@@ -164,16 +161,11 @@ export class CopilotPromptService {
   private async buildMcpServers(
     sessionId: SessionID,
     taskId: TaskID,
-    mcpToken?: string
+    session: Session
   ): Promise<{ servers: Record<string, unknown>; toolPermissions: McpToolPermissionIndex }> {
     const copilotMcpServers: Record<string, unknown> = {};
-
-    // Fetch MCP servers for this session
-    const session = await this.sessionsRepo.findById(sessionId);
-    if (!session) {
-      console.warn(`⚠️  [Copilot MCP] Session ${sessionId} not found; skipping MCP servers`);
-      return { servers: copilotMcpServers, toolPermissions: EMPTY_MCP_TOOL_PERMISSION_INDEX };
-    }
+    const mcpToken = session.mcp_token;
+    // The launch's own session read: a second fetch that failed here would silently drop every MCP server.
     const contextUserId = await resolveContextUserId({
       session,
       taskId,
@@ -340,7 +332,7 @@ export class CopilotPromptService {
       const { servers: mcpServers, toolPermissions } = await this.buildMcpServers(
         sessionId,
         taskId || ('' as TaskID),
-        session.mcp_token
+        session
       );
 
       // Build session configuration with interactive permission support
