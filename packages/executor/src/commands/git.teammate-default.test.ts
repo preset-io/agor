@@ -168,6 +168,16 @@ it('clone storage resolves an explicit bare branch name against the live remote'
   expect((await simpleGit(repo.local_path).revparse('trunk')).trim()).toBe(localSha);
 });
 
+it('clone storage still refuses an ambiguous existing-branch checkout', async () => {
+  delete branch.custom_context;
+  branch.storage_mode = 'clone';
+  branch.new_branch = false;
+  branch.ref = 'trunk';
+  const result = await handleGitBranchAdd(payload, {});
+  expect(result.success).toBe(false);
+  expect(result.error?.message).toContain('ambiguous');
+});
+
 it.each(['sha', 'full ref', 'local-only branch', 'tag'] as const)(
   'clone storage keeps %s input on full resolution',
   async (input) => {
