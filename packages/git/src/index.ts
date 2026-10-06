@@ -975,6 +975,11 @@ function createGitClient(
     binary: getGitBinary(),
     abort,
     config: [],
+    // simple-git 4 rejects explicitly supplied GIT_* (and editor/pager) keys
+    // unless named here. `spawnEnv` is the exact child environment built by
+    // this module, so admit precisely its keys; the unsafe flags below remain
+    // the second opt-in for any vulnerability category those keys touch.
+    allowEnvironment: Object.keys(spawnEnv),
     ...(timeoutMs === undefined ? {} : { timeout: { block: timeoutMs } }),
     unsafe: {
       // simple-git's scanner cannot distinguish Agor's fixed defensive

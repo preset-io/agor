@@ -160,6 +160,7 @@ describe('buildAuthenticatedGitTransportEnvironment', () => {
     );
     const git = simpleGit({
       baseDir: root,
+      allowEnvironment: Object.keys(env),
       unsafe: {
         allowUnsafeConfigPaths: true,
         allowUnsafeConfigEnvCount: true,

@@ -121,6 +121,10 @@ test('readiness preserves the daemon configuration contract consumed by the UI',
 test('runtime git configures the real simple-git timeout option and strips inherited credentials', async () => {
   const require = createRequire(new URL('../packages/git/package.json', import.meta.url));
   const { simpleGit } = require('simple-git');
-  const git = runtimeGit(simpleGit, { PATH: process.env.PATH, HOME: process.env.HOME });
+  const git = runtimeGit(simpleGit, {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    GIT_TERMINAL_PROMPT: '0',
+  });
   assert.match((await git(process.cwd()).revparse(['HEAD'])).trim(), /^[0-9a-f]{40}$/);
 });
