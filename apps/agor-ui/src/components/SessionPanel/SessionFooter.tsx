@@ -222,6 +222,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           : effectiveModel
       )
     : null;
+  const modelChipMinWidth = token.controlHeight * 2;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -259,37 +260,123 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const spawnDisabled = connectionDisabled || isRunning || composerAttachmentsPresent;
   const sendDisabled = connectionDisabled || composerAttachmentUploading || !hasInput;
 
+  // Overflow menu scale: one row height, one label size, one control height.
+  const rowHeight = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
+  const controlSize = isMobile ? 'middle' : 'small';
+  const controlHeight = isMobile ? token.controlHeight : token.controlHeightSM;
+  const labelFontSize = isMobile ? token.fontSize : token.fontSizeSM;
+
   const sectionHeaderStyle: React.CSSProperties = {
-    padding: '6px 12px 3px',
-    fontSize: 11,
-    fontWeight: 600,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.4px',
+    padding: `${token.paddingXS}px ${token.paddingSM}px ${token.paddingXXS}px`,
+    fontSize: token.fontSizeSM,
+    fontWeight: token.fontWeightStrong,
     color: token.colorTextTertiary,
-    userSelect: 'none' as const,
+    userSelect: 'none',
   };
 
   const overflowRowStyle: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
-    gap: 8,
-    padding: '0 6px 0 12px',
-    height: isMobile ? MOBILE_TOUCH_TARGET : 32,
+    gap: token.marginXS,
+    padding: `0 ${token.paddingXXS}px 0 ${token.paddingSM}px`,
+    height: rowHeight,
   };
+  // Label stays on the first control line even when a control grows taller.
+  const settingRowStyle: React.CSSProperties = {
+    ...overflowRowStyle,
+    height: 'auto',
+    minHeight: rowHeight,
+    boxSizing: 'border-box',
+    paddingBlock: (rowHeight - controlHeight) / 2,
+    alignItems: 'flex-start',
+    cursor: 'default',
+  };
+  const labelGroupStyle: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: token.marginXS,
+    flex: 1,
+    minWidth: 0,
+    height: controlHeight,
+  };
+  const settingNameStyle: React.CSSProperties = { ...labelGroupStyle, minWidth: 'max-content' };
+  const settingControlStyle: React.CSSProperties = {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    minHeight: controlHeight,
+    flex: 2,
+    minWidth: 0,
+    pointerEvents: managedByPreset ? 'none' : undefined,
+    opacity: managedByPreset ? 0.65 : undefined,
+  };
+  const iconStyle: React.CSSProperties = {
+    fontSize: token.fontSize,
+    color: token.colorTextSecondary,
+    flexShrink: 0,
+  };
+  const labelStyle: React.CSSProperties = {
+    fontSize: labelFontSize,
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  };
+  const pinToggle = (pinned: boolean, label: string, tooltip: string, onToggle: () => void) => (
+    <Tooltip title={tooltip} placement="right">
+      <Button
+        type="text"
+        size={actionSize}
+        aria-label={label}
+        style={{
+          ...touchActionStyle,
+          flexShrink: 0,
+          color: pinned ? token.colorPrimary : token.colorTextTertiary,
+        }}
+        icon={
+          pinned ? (
+            <PushpinFilled style={{ fontSize: token.fontSizeSM }} />
+          ) : (
+            <PushpinOutlined style={{ fontSize: token.fontSizeSM }} />
+          )
+        }
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggle();
+        }}
+      />
+    </Tooltip>
+  );
+  const itemPin = (id: string, name: string) =>
+    pinToggle(
+      pinnedItems.includes(id),
+      `${pinnedItems.includes(id) ? 'Unpin' : 'Pin'} ${name}`,
+      pinnedItems.includes(id) ? 'Unpin from bar' : 'Pin to bar',
+      () => togglePin(id)
+    );
+  const chipPin = (id: string, name: string) =>
+    pinToggle(
+      pinnedChips.includes(id),
+      `${pinnedChips.includes(id) ? 'Hide' : 'Show'} ${name}`,
+      pinnedChips.includes(id) ? 'Hide from info bar' : 'Show in info bar',
+      () => toggleChip(id)
+    );
 
   // One effort control, shown in the controls panel and again in the phone chip bar.
-  const effortSelector = toolCaps?.reasoningEffortLevels ? (
-    <EffortSelector
-      value={effortLevel}
-      onChange={onEffortChange}
-      levels={toolCaps.reasoningEffortLevels}
-      fallbackValue={toolCaps.defaultReasoningEffort}
-      allowInherited={!toolCaps.defaultReasoningEffort}
-      size="small"
-      compact
-      plain
-    />
-  ) : null;
+  const renderEffortSelector = (size: 'small' | 'middle') =>
+    toolCaps?.reasoningEffortLevels ? (
+      <EffortSelector
+        value={effortLevel}
+        onChange={onEffortChange}
+        levels={toolCaps.reasoningEffortLevels}
+        fallbackValue={toolCaps.defaultReasoningEffort}
+        allowInherited={!toolCaps.defaultReasoningEffort}
+        size={size}
+        compact
+        plain
+      />
+    ) : null;
   const moreButton = (
     <Tooltip title="More options">
       <Button
@@ -316,125 +403,57 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         border: 0,
       }}
     >
-      {/* === Section: Settings === */}
       <div style={sectionHeaderStyle}>Settings</div>
 
-      {/* Model */}
-      <div
-        style={{
-          ...overflowRowStyle,
-          height: 'auto',
-          paddingTop: 6,
-          paddingBottom: 6,
-          alignItems: 'flex-start',
-          flexWrap: isMobile ? 'wrap' : undefined,
-          cursor: 'default',
-        }}
-      >
-        <RobotOutlined
-          style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0, marginTop: 7 }}
-        />
-        <Typography.Text
-          style={{
-            fontSize: 12,
-            color: token.colorTextSecondary,
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            minWidth: 0,
-            marginTop: 7,
-          }}
-        >
-          Model
-        </Typography.Text>
+      <div style={settingRowStyle}>
+        <span style={settingNameStyle}>
+          <RobotOutlined style={iconStyle} />
+          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
+            Model
+          </Typography.Text>
+        </span>
         <div
-          style={{
-            maxWidth: isMobile ? '100%' : 160,
-            width: isMobile ? '100%' : undefined,
-            flexShrink: 0,
-            pointerEvents: managedByPreset ? 'none' : undefined,
-            opacity: managedByPreset ? 0.65 : undefined,
-          }}
+          style={settingControlStyle}
           title={
             managedByPreset ? 'Managed by preset; switch presets in Session Settings' : undefined
           }
         >
-          <ModelSelector
-            key={session.session_id}
-            value={modelConfig}
-            onCommit={onModelConfigCommit}
-            agentic_tool={session.agentic_tool}
-            client={client}
-            branchId={session.branch_id}
-            catalogEnabled={session.created_by === currentUserId}
-            compact={!isMobile}
-            getPopupContainer={getMorePopupContainer}
-          />
+          <div style={{ width: '100%', minWidth: 0 }}>
+            <ModelSelector
+              key={session.session_id}
+              value={modelConfig}
+              onCommit={onModelConfigCommit}
+              agentic_tool={session.agentic_tool}
+              client={client}
+              branchId={session.branch_id}
+              catalogEnabled={session.created_by === currentUserId}
+              compact={!isMobile}
+              getPopupContainer={getMorePopupContainer}
+            />
+          </div>
         </div>
       </div>
 
-      {supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <PercentageOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 12,
-              flex: 1,
-              color: token.colorTextSecondary,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Effort
-          </Typography.Text>
-          <div
-            style={{
-              pointerEvents: managedByPreset ? 'none' : undefined,
-              opacity: managedByPreset ? 0.65 : undefined,
-            }}
-          >
-            {effortSelector}
-          </div>
+      {supportsLiveEffort && (
+        <div style={settingRowStyle}>
+          <span style={settingNameStyle}>
+            <PercentageOutlined style={iconStyle} />
+            <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
+              Effort
+            </Typography.Text>
+          </span>
+          <div style={settingControlStyle}>{renderEffortSelector(controlSize)}</div>
         </div>
       )}
 
-      {/* Permissions */}
-      <div
-        style={{
-          ...overflowRowStyle,
-          height: 'auto',
-          minHeight: overflowRowStyle.height,
-          alignItems: 'flex-start',
-          cursor: 'default',
-        }}
-      >
-        <LockOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text
-          style={{
-            fontSize: 12,
-            flex: 1,
-            color: token.colorTextSecondary,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            minWidth: 0,
-          }}
-        >
-          Permissions
-        </Typography.Text>
-        <div
-          style={{
-            pointerEvents: managedByPreset ? 'none' : undefined,
-            opacity: managedByPreset ? 0.65 : undefined,
-            minWidth: 0,
-            flex: 2,
-          }}
-        >
+      <div style={settingRowStyle}>
+        <span style={settingNameStyle}>
+          <LockOutlined style={iconStyle} />
+          <Typography.Text style={{ ...labelStyle, color: token.colorTextSecondary }}>
+            Permissions
+          </Typography.Text>
+        </span>
+        <div style={settingControlStyle}>
           <PermissionModeSelector
             value={permissionMode}
             onChange={onPermissionModeChange}
@@ -445,17 +464,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             compact
             iconOnly={false}
             plain
-            size="small"
+            size={controlSize}
           />
         </div>
       </div>
 
-      <Divider style={{ margin: '4px 0' }} />
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
 
-      {/* === Section: Actions === */}
       <div style={sectionHeaderStyle}>Actions</div>
 
-      {/* Attach files */}
       {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
       <div
         role="button"
@@ -495,66 +512,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
           placement="left"
         >
-          <span
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <PaperClipOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text
-              style={{
-                fontSize: 13,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Attach files
-            </Typography.Text>
+          <span style={labelGroupStyle}>
+            <PaperClipOutlined style={iconStyle} />
+            <Typography.Text style={labelStyle}>Attach files</Typography.Text>
           </span>
         </Tooltip>
-        <Tooltip
-          title={pinnedItems.includes('upload') ? 'Unpin from bar' : 'Pin to bar'}
-          placement="right"
-        >
-          <button
-            type="button"
-            aria-label={pinnedItems.includes('upload') ? 'Unpin Upload' : 'Pin Upload'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedItems.includes('upload') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: '4px',
-              flexShrink: 0,
-              borderRadius: token.borderRadiusSM,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePin('upload');
-            }}
-          >
-            {pinnedItems.includes('upload') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
-        </Tooltip>
+        {itemPin('upload', 'Upload')}
       </div>
 
-      {/* Advanced upload */}
       {/* biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent */}
       <div
         role="button"
@@ -594,72 +559,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
           placement="left"
         >
-          <span
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-            }}
-          >
-            <UploadOutlined
-              style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-            />
-            <Typography.Text
-              style={{
-                fontSize: 13,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Advanced upload
-            </Typography.Text>
+          <span style={labelGroupStyle}>
+            <UploadOutlined style={iconStyle} />
+            <Typography.Text style={labelStyle}>Advanced upload</Typography.Text>
           </span>
         </Tooltip>
-        <Tooltip
-          title={pinnedItems.includes('advanced-upload') ? 'Unpin from bar' : 'Pin to bar'}
-          placement="right"
-        >
-          <button
-            type="button"
-            aria-label={
-              pinnedItems.includes('advanced-upload')
-                ? 'Unpin Advanced upload'
-                : 'Pin Advanced upload'
-            }
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedItems.includes('advanced-upload')
-                ? token.colorPrimary
-                : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: '4px',
-              flexShrink: 0,
-              borderRadius: token.borderRadiusSM,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePin('advanced-upload');
-            }}
-          >
-            {pinnedItems.includes('advanced-upload') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
-        </Tooltip>
+        {itemPin('advanced-upload', 'Advanced upload')}
       </div>
 
-      {/* Fork */}
       {toolCaps?.supportsSessionFork !== false && (
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
@@ -702,67 +609,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             }
             placement="left"
           >
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flex: 1,
-                minWidth: 0,
-                overflow: 'hidden',
-              }}
-            >
-              <ForkOutlined
-                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-              />
-              <Typography.Text
-                style={{
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Fork session
-              </Typography.Text>
+            <span style={labelGroupStyle}>
+              <ForkOutlined style={iconStyle} />
+              <Typography.Text style={labelStyle}>Fork session</Typography.Text>
             </span>
           </Tooltip>
-          <Tooltip
-            title={pinnedItems.includes('fork') ? 'Unpin from bar' : 'Pin to bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedItems.includes('fork') ? 'Unpin Fork' : 'Pin Fork'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedItems.includes('fork') ? token.colorPrimary : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                togglePin('fork');
-              }}
-            >
-              {pinnedItems.includes('fork') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          {itemPin('fork', 'Fork')}
         </div>
       )}
 
-      {/* BTW fork */}
       {toolCaps?.supportsSessionFork !== false && (
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
@@ -805,69 +660,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             }
             placement="left"
           >
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flex: 1,
-                minWidth: 0,
-                overflow: 'hidden',
-              }}
-            >
-              <QuestionCircleOutlined
-                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-              />
-              <Typography.Text
-                style={{
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                BTW fork
-              </Typography.Text>
+            <span style={labelGroupStyle}>
+              <QuestionCircleOutlined style={iconStyle} />
+              <Typography.Text style={labelStyle}>BTW fork</Typography.Text>
             </span>
           </Tooltip>
-          <Tooltip
-            title={pinnedItems.includes('btw-fork') ? 'Unpin from bar' : 'Pin to bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedItems.includes('btw-fork') ? 'Unpin BTW fork' : 'Pin BTW fork'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedItems.includes('btw-fork')
-                  ? token.colorPrimary
-                  : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                togglePin('btw-fork');
-              }}
-            >
-              {pinnedItems.includes('btw-fork') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          {itemPin('btw-fork', 'BTW fork')}
         </div>
       )}
 
-      {/* Spawn */}
       {toolCaps?.supportsChildSpawn !== false && (
         // biome-ignore lint/a11y/useSemanticElements: row contains a nested pin <button>; can't use <button> as parent
         <div
@@ -912,317 +713,57 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             }
             placement="left"
           >
-            <span
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                flex: 1,
-                minWidth: 0,
-                overflow: 'hidden',
-              }}
-            >
-              <BranchesOutlined
-                style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-              />
-              <Typography.Text
-                style={{
-                  fontSize: 13,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                Spawn subsession
-              </Typography.Text>
+            <span style={labelGroupStyle}>
+              <BranchesOutlined style={iconStyle} />
+              <Typography.Text style={labelStyle}>Spawn subsession</Typography.Text>
             </span>
           </Tooltip>
-          <Tooltip
-            title={pinnedItems.includes('spawn') ? 'Unpin from bar' : 'Pin to bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedItems.includes('spawn') ? 'Unpin Spawn' : 'Pin Spawn'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedItems.includes('spawn') ? token.colorPrimary : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                togglePin('spawn');
-              }}
-            >
-              {pinnedItems.includes('spawn') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          {itemPin('spawn', 'Spawn')}
         </div>
       )}
 
-      <Divider style={{ margin: '4px 0' }} />
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
 
-      {/* === Section: Info bar chips === */}
       <div style={sectionHeaderStyle}>Info bar</div>
 
       {footerTimerTask && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <ClockCircleOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Timer
-          </Typography.Text>
-          <Tooltip
-            title={pinnedChips.includes('timer') ? 'Hide from info bar' : 'Show in info bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedChips.includes('timer') ? 'Hide timer' : 'Show timer'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedChips.includes('timer') ? token.colorPrimary : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={() => toggleChip('timer')}
-            >
-              {pinnedChips.includes('timer') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          <ClockCircleOutlined style={iconStyle} />
+          <Typography.Text style={labelStyle}>Timer</Typography.Text>
+          {chipPin('timer', 'timer')}
         </div>
       )}
 
       <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-        <ToolOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-        <Typography.Text
-          style={{
-            fontSize: 13,
-            flex: 1,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            minWidth: 0,
-          }}
-        >
-          Tools
-        </Typography.Text>
-        <Tooltip
-          title={pinnedChips.includes('tools') ? 'Hide from info bar' : 'Show in info bar'}
-          placement="right"
-        >
-          <button
-            type="button"
-            aria-label={pinnedChips.includes('tools') ? 'Hide tools' : 'Show tools'}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: pinnedChips.includes('tools') ? token.colorPrimary : token.colorTextTertiary,
-              lineHeight: 1,
-              padding: '4px',
-              flexShrink: 0,
-              borderRadius: token.borderRadiusSM,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-            onClick={() => toggleChip('tools')}
-          >
-            {pinnedChips.includes('tools') ? (
-              <PushpinFilled style={{ fontSize: 12 }} />
-            ) : (
-              <PushpinOutlined style={{ fontSize: 12 }} />
-            )}
-          </button>
-        </Tooltip>
+        <ToolOutlined style={iconStyle} />
+        <Typography.Text style={labelStyle}>Tools</Typography.Text>
+        {chipPin('tools', 'tools')}
       </div>
 
       {modelName && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <RobotOutlined style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }} />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Model
-          </Typography.Text>
-          <Tooltip
-            title={pinnedChips.includes('model') ? 'Hide from info bar' : 'Show in info bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedChips.includes('model') ? 'Hide model' : 'Show model'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedChips.includes('model') ? token.colorPrimary : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={() => toggleChip('model')}
-            >
-              {pinnedChips.includes('model') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          <RobotOutlined style={iconStyle} />
+          <Typography.Text style={labelStyle}>Model</Typography.Text>
+          {chipPin('model', 'model')}
         </div>
       )}
 
-      {
-        <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <NumberOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Usage
-          </Typography.Text>
-          <Tooltip
-            title={pinnedChips.includes('tokens') ? 'Hide from info bar' : 'Show in info bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedChips.includes('tokens') ? 'Hide usage' : 'Show usage'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedChips.includes('tokens')
-                  ? token.colorPrimary
-                  : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={() => toggleChip('tokens')}
-            >
-              {pinnedChips.includes('tokens') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
-        </div>
-      }
+      <div style={{ ...overflowRowStyle, cursor: 'default' }}>
+        <NumberOutlined style={iconStyle} />
+        <Typography.Text style={labelStyle}>Usage</Typography.Text>
+        {chipPin('tokens', 'usage')}
+      </div>
 
       {latestContextWindow && latestContextWindow.limit > 0 && (
         <div style={{ ...overflowRowStyle, cursor: 'default' }}>
-          <PercentageOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Context %
-          </Typography.Text>
-          <Tooltip
-            title={pinnedChips.includes('context') ? 'Hide from info bar' : 'Show in info bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={pinnedChips.includes('context') ? 'Hide context' : 'Show context'}
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedChips.includes('context')
-                  ? token.colorPrimary
-                  : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={() => toggleChip('context')}
-            >
-              {pinnedChips.includes('context') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          <PercentageOutlined style={iconStyle} />
+          <Typography.Text style={labelStyle}>Context %</Typography.Text>
+          {chipPin('context', 'context')}
         </div>
       )}
 
-      <Divider style={{ margin: '4px 0' }} />
+      <Divider style={{ margin: `${token.marginXXS}px 0` }} />
 
-      {/* Session IDs row */}
       <Popover
         trigger="click"
         placement="topLeft"
@@ -1250,73 +791,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             }
           }}
         >
-          <IdcardOutlined
-            style={{ fontSize: 14, color: token.colorTextSecondary, flexShrink: 0 }}
-          />
-          <Typography.Text
-            style={{
-              fontSize: 13,
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-            }}
-          >
-            Session IDs
-          </Typography.Text>
-          <Tooltip
-            title={pinnedChips.includes('session-ids') ? 'Hide from info bar' : 'Show in info bar'}
-            placement="right"
-          >
-            <button
-              type="button"
-              aria-label={
-                pinnedChips.includes('session-ids') ? 'Unpin Session IDs' : 'Pin Session IDs'
-              }
-              style={{
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: pinnedChips.includes('session-ids')
-                  ? token.colorPrimary
-                  : token.colorTextTertiary,
-                lineHeight: 1,
-                padding: '4px',
-                flexShrink: 0,
-                borderRadius: token.borderRadiusSM,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                toggleChip('session-ids');
-              }}
-            >
-              {pinnedChips.includes('session-ids') ? (
-                <PushpinFilled style={{ fontSize: 12 }} />
-              ) : (
-                <PushpinOutlined style={{ fontSize: 12 }} />
-              )}
-            </button>
-          </Tooltip>
+          <IdcardOutlined style={iconStyle} />
+          <Typography.Text style={labelStyle}>Session IDs</Typography.Text>
+          {chipPin('session-ids', 'session IDs')}
         </div>
       </Popover>
 
       {onOpenSessionSettings && (
         <>
-          <Divider style={{ margin: '4px 0' }} />
+          <Divider style={{ margin: `${token.marginXXS}px 0` }} />
           <Button
             block
             type="text"
-            icon={<SettingOutlined />}
+            icon={<SettingOutlined style={{ fontSize: token.fontSize }} />}
             aria-label="Session settings"
             style={{
-              height: 32,
+              height: rowHeight,
               justifyContent: 'flex-start',
-              paddingInline: 12,
-              fontSize: 13,
+              paddingInline: token.paddingSM,
+              fontSize: labelFontSize,
             }}
             onClick={() => {
               setMoreOpen(false);
@@ -1336,7 +829,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       ? 'Stopping...'
       : isStopping
         ? 'Agor is checking that the previous work has stopped.'
-        : 'Stop Execution';
+        : 'Stop';
 
   const recoveryFailed = recoveryTask?.sdk_failure?.termination === 'unverified';
   const showStop = !recoveryFailed && (isRunning || stopRequestInFlight);
@@ -1351,8 +844,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     : composerAttachmentUploading
       ? composerUploadTooltip
       : isRunning
-        ? 'Queue Message'
-        : 'Send Prompt';
+        ? 'Queue message'
+        : 'Send';
 
   return (
     <div
@@ -1398,7 +891,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       )}
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
+        {/* Row 1: Info bar (always shown on mobile as the compact chip bar).
+            One line: the model chip truncates first, then the row scrolls. */}
         {(isMobile ||
           showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
@@ -1414,8 +908,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               gap: token.sizeUnit,
               alignItems: 'center',
               marginBottom: token.sizeUnit * 2,
-              flexWrap: 'wrap',
+              flexWrap: 'nowrap',
+              whiteSpace: 'nowrap',
+              overflowX: 'auto',
+              scrollbarWidth: 'none',
             }}
+            data-testid="info-bar"
           >
             {footerTimerTask && pinnedChips.includes('timer') && (
               <div
@@ -1459,7 +957,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   opacity: managedByPreset ? 0.65 : undefined,
                 }}
               >
-                {effortSelector}
+                {renderEffortSelector('small')}
               </div>
             )}
 
@@ -1477,7 +975,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     height: MOBILE_CHIP_HEIGHT,
                     display: 'inline-flex',
                     alignItems: 'center',
-                    maxWidth: '100%',
+                    minWidth: modelChipMinWidth,
                   }}
                   data-testid="model-chip"
                 >
@@ -1523,6 +1021,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         height: 22,
                         display: 'inline-flex',
                         alignItems: 'center',
+                        minWidth: modelChipMinWidth,
                       }}
                       data-testid="model-chip"
                     >
@@ -1758,21 +1257,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     }
                     onClick={onStop}
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
-                  >
-                    {/* Reserve the longest label so recovery does not move the controls. */}
-                    <span style={{ display: 'inline-grid' }}>
-                      <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden' }}>
-                        Recovering…
-                      </span>
-                      <span style={{ gridArea: '1 / 1' }}>
-                        {isStopping
-                          ? recoveryTask?.termination_request?.cause === 'user_stop'
-                            ? 'Stopping…'
-                            : 'Recovering…'
-                          : 'Stop'}
-                      </span>
-                    </span>
-                  </Button>
+                  />
                 </Tooltip>
               )}
               <Tooltip title={sendTooltip}>
@@ -1795,9 +1280,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     icon={<SendOutlined />}
                     onClick={onSendPrompt}
                     disabled={sendDisabled}
-                  >
-                    {sendLabel}
-                  </Button>
+                  />
                 </Badge>
               </Tooltip>
             </Flex>

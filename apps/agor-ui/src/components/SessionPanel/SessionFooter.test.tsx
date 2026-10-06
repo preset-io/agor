@@ -677,16 +677,58 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).toHaveBeenCalledOnce();
     expect(onSendPrompt).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByText('Queue').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Queue'));
     expect(onSendPrompt).toHaveBeenCalledOnce();
     view.rerender(
       <SessionFooter {...baseProps} isRunning composerAttachmentUploading onStop={onStop} />
     );
-    expect(screen.getByText('Send').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toBeEnabled();
+    expect(screen.getByLabelText('Send')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeEnabled();
+  });
+
+  it('renders Send and Stop as icon-only buttons with accessible names', () => {
+    const view = render(<SessionFooter {...baseProps} isRunning />, { wrapper: Wrapper });
+    for (const name of ['Stop', 'Send']) {
+      expect(screen.getByLabelText(name).tagName).toBe('BUTTON');
+      expect(screen.getByLabelText(name).textContent).toBe('');
+    }
+    view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
+    expect(screen.getByLabelText('Queue').textContent).toBe('');
+  });
+
+  it('keeps the overflow menu on one type scale and one row height', async () => {
+    render(
+      <SessionFooter
+        {...baseProps}
+        latestContextWindow={{ used: 10, limit: 100, taskMetadata: null }}
+        onOpenSessionSettings={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.click(screen.getByLabelText('More options'));
+    const menu = await screen.findByRole('group', { name: 'More options' });
+    for (const title of ['Settings', 'Actions', 'Info bar']) {
+      expect(within(menu).getByText(title, { exact: true })).toBeInTheDocument();
+    }
+    for (const element of menu.querySelectorAll<HTMLElement>('*')) {
+      expect(['', '12px', '14px', '16px', '20px']).toContain(element.style.fontSize);
+      expect(element.style.textTransform).not.toBe('uppercase');
+    }
+    const rowHeight = width < 1024 ? '44px' : '32px';
+    const rows = [...menu.querySelectorAll<HTMLElement>(':scope > div')].filter(
+      (row) => !row.classList.contains('ant-divider') && row.style.height !== ''
+    );
+    expect(rows.length).toBeGreaterThan(8);
+    for (const row of rows) {
+      expect(row.style.height === 'auto' ? row.style.minHeight : row.style.height).toBe(rowHeight);
+    }
+    expect(within(menu).getByLabelText('Session settings').style.height).toBe(rowHeight);
+    const modelRow = within(menu).getByTestId('model-selector-stub').closest('fieldset > div')!;
+    expect(within(modelRow as HTMLElement).getByText('Model')).toBeInTheDocument();
+    expect((modelRow as HTMLElement).style.flexWrap).toBe('');
   });
 
   it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
@@ -695,21 +737,21 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       <SessionFooter {...baseProps} isRunning stopRequestInFlight onStop={onStop} />,
       { wrapper: Wrapper }
     );
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
+    fireEvent.click(screen.getByLabelText('Stop'));
     expect(onStop).not.toHaveBeenCalled();
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
-    expect(screen.getByText('Stop').closest('button')!).toHaveAttribute('aria-busy', 'true');
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toHaveAttribute('aria-busy', 'true');
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
     const recovering = screen.getByRole('button', { name: 'Recovering' });
     expect(recovering).toBeDisabled();
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
-    expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
+    expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
-    expect(screen.queryByText('Stop')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Stop')).not.toBeInTheDocument();
   });
 
   if (width < 1024) {
@@ -721,10 +763,9 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
       render(<SessionFooter {...baseProps} isRunning hasInput />, { wrapper: Wrapper });
       expect(screen.queryByLabelText('Fork session')).not.toBeInTheDocument();
       for (const name of ['Stop', 'Queue', 'More options', 'Attach files']) {
-        const button = ['Stop', 'Queue'].includes(name)
-          ? screen.getByText(name).closest('button')!
-          : screen.getByLabelText(name);
+        const button = screen.getByLabelText(name);
         expect(button.style.minHeight).toBe('44px');
+        expect(button.style.minWidth).toBe('44px');
       }
       fireEvent.click(screen.getByLabelText('More options'));
       const sheet = (await screen.findByText('Session controls')).closest('[role=dialog]')!;
