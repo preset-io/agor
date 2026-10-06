@@ -232,6 +232,7 @@ export interface TerminationClaimResult {
 }
 
 interface TerminationSettlementInputBase {
+  cleanupDiagnostic?: string;
   taskId: string;
   errorMessage?: string;
   sdkFailure?: SdkFailure;
@@ -248,6 +249,7 @@ export type TerminationSettlementInput =
       outcome: 'forced_unverified';
       /** Exact termination request confirmed by the authorized operator. */
       expectedTerminationRequestedAt: string;
+      expectedRecoveryRevision?: string;
       coordinationToken?: never;
     })
   | (TerminationSettlementInputBase & {
@@ -504,7 +506,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? {
             termination_request: {
               ...storedTerminationRequest,
-              ...(coordination ? { coordination } : {}),
+              coordination,
             },
           }
         : {}),
@@ -1637,7 +1639,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
               requested_by_user_id: existing?.requested_by_user_id,
               requested_via: existing?.requested_via,
             };
+
+      const { coordination: _existingCoordination, ...existingRequest } = existing ?? {};
       const request = {
+        ...existingRequest,
         cause,
         requested_at: requestedAt,
         ...(requestedBy?.requested_by_user_id
@@ -1753,6 +1758,77 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Commit before external side effects: a crashed daemon must not invoke cleanup again. */
+  async beginCleanupAttempt(taskId: string, claimToken: string): Promise<Task | null> {
+    return this.mutateLockedTask(taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      const now = await this.mutationNow(txDb, fullId);
+      if (
+        current.status !== TaskStatus.STOPPING ||
+        !request ||
+        request.cleanup_attempt ||
+        request.coordination?.claim_token !== claimToken ||
+        Date.parse(request.coordination.lease_expires_at) <= now.getTime() ||
+        row.termination_unverified_at
+      )
+        return null;
+      const { coordination: _coordination, ...storedRequest } = request;
+      const data = {
+        ...row.data,
+        termination_request: {
+          ...storedRequest,
+          cleanup_attempt: { attempt_id: generateId(), started_at: now.toISOString() },
+        },
+      };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
+  }
+
+  /** Explicit, authorized recovery only. Preserve failure-vs-user-stop cause and request epoch. */
+  async retryTermination(
+    taskId: string,
+    requestedAt: string,
+    revision: string
+  ): Promise<Task | null> {
+    return this.mutateLockedTask(taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      if (
+        current.status !== TaskStatus.STOPPING ||
+        !request ||
+        current.sdk_failure?.termination !== 'unverified' ||
+        request.requested_at !== requestedAt ||
+        (request.recovery_revision ?? request.requested_at) !== revision
+      )
+        return null;
+      const {
+        cleanup_attempt: _attempt,
+        cleanup_diagnostic: _diagnostic,
+        coordination: _coordination,
+        ...retained
+      } = request;
+      const data = {
+        ...row.data,
+        sdk_failure: { ...current.sdk_failure, termination: 'requested' as const },
+        termination_request: { ...retained, recovery_revision: generateId() },
+      };
+      delete data.error_message;
+      const values = {
+        data,
+        termination_unverified_at: null,
+        termination_coordination_token: null,
+        termination_coordination_claimed_at: null,
+        termination_coordination_expires_at: null,
+        termination_coordination_instance_id: null,
+        termination_coordination_boot_id: null,
+      };
+      await update(txDb, tasks).set(values).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, ...values });
+    });
+  }
+
   /** Atomically record containment evidence and, when safe, terminalize the task. */
   async settleTermination(input: TerminationSettlementInput): Promise<TerminationSettlementResult> {
     return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
@@ -1790,6 +1866,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const data = {
           ...row.data,
           sdk_failure: { ...failure, termination: 'unverified' as const },
+          termination_request: {
+            ...row.data.termination_request!,
+            ...(input.cleanupDiagnostic
+              ? { cleanup_diagnostic: input.cleanupDiagnostic.slice(0, 1000) }
+              : {}),
+          },
           error_message: input.errorMessage,
         };
         const unverifiedAt = await this.mutationNow(txDb, fullId, input.now);
@@ -1823,7 +1905,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (
         input.outcome === 'forced_unverified' &&
         (current.sdk_failure?.termination !== 'unverified' ||
-          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt)
+          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt ||
+          (current.termination_request.recovery_revision ??
+            current.termination_request.requested_at) !==
+            (input.expectedRecoveryRevision ?? input.expectedTerminationRequestedAt))
       ) {
         return { outcome: 'condition_changed', task: current };
       }

@@ -259,6 +259,7 @@ The termination coordinator is the single owner for executor-backed:
 - dispatch startup timeout;
 - lost heartbeat;
 - enforced SDK health failure;
+- executor-observed `SIGTERM`/`SIGINT` (`executor_interrupted`);
 - authorization revocation observed by the existing heartbeat.
 
 It first atomically claims `stopping` with a durable `termination_request`.
@@ -308,10 +309,36 @@ it: `requested_by_user_id` and `requested_via` (`ui` for the app's socket,
 user, `agor` for internal stops). It is attribution only and never
 changes containment or settlement.
 
+Out-of-band `SIGTERM`/`SIGINT` is not user cancellation. The executor marks
+daemon-owned terminality before aborting its provider, then uses the exact
+task-token-scoped `reportExecutorInterruption` method to claim the existing
+containment workflow. Only after provider execution and stop hooks return does
+it report the winning request's quiescence. Duplicate signals share one shutdown
+and a **10 second total deadline**, including daemon I/O. Deadline expiry exits
+without inventing quiescence; local process-group containment or remote substrate
+evidence is still required. The first signal determines exit 143/130, not OOM
+attribution. A concurrent user Stop retains its existing precedence; terminal
+completion remains immutable. Already persisted transcript output is retained,
+but final uploads/reporting are best effort, not guaranteed during an outage.
+
+`SIGKILL` and kernel/container OOM cannot be handled by the killed executor.
+Template-launcher exit is not a remote terminal-status channel: zero can mean
+detached submission, and a signal (`code === null` or shell-style exit >=128) is
+always ambiguous even when ordinary nonzero returns promise no dispatch. The
+optional cleanup command supplies a narrow, trusted containment assertion, not
+a general remote Job-status ingestion API. A Cloud integration must bind
+terminal evidence to tenant, Task and immutable launch/workload identity, prove
+no running/retry workload remains, and settle through the same coordination
+fences. Missing Jobs, network failures and accounting `lost` states alone are
+not that proof. Kubernetes reason `OOMKilled` (or equivalent authoritative
+evidence), not exit 137/signal 9, is required to attribute OOM. No dummy executor
+or generic hook is needed to deliver such evidence.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
-`stopping`, the session stays non-promptable, and an authorized owner/admin must
-explicitly force-fail it by typing `STOP`. Force-fail changes durable status to
+`stopping` and the session stays non-promptable. Explicit Retry cleanup starts
+one more attempt. As a last resort an authorized owner/admin can reopen it by
+typing `STOP`. This force-release changes durable status to
 `failed`; it does not prove or guarantee process termination. A daemon restart
 can logically release orphaned work as `stopped`, but records that termination
 was not verified. This last release exists only in explicit `standalone`
@@ -456,3 +483,27 @@ the present boundaries:
   with durable quiescence reporting.
 - [#2057](https://github.com/preset-io/agor/pull/2057) aligned Claude
   background-task lifetime with query and watchdog lifetime.
+
+### Explicit remote cleanup and retry
+
+`termination-coordinator.ts` invokes `utils/executor-cleanup-command.ts` only for
+remote tasks without cooperative quiescence and with
+`execution.executor_cleanup_command_template` configured. Trusted tenant/task
+context goes on stdin, never into shell interpolation. Only synchronous exit 0
+asserts containment (including suppression of delayed launches/retries).
+
+`TaskRepository.beginCleanupAttempt` records one attempt under the existing
+coordination token before external effects. The marker survives cause changes,
+lease expiry and daemon restart: replacement coordinators settle an uncertain
+attempt as unverified instead of rerunning it. `retryTermination` is reachable
+only through the authorized Session Stop route's `retry_cleanup` variant; it
+compares task/request/recovery revision, clears the guard, rotates the revision,
+and preserves the original cause. A retry does not turn unexpected death into
+user cancellation. Normal Stop retains user-stop precedence.
+
+Unverified settlement remains nonpromptable with no automatic rediscovery;
+fresh scoped quiescence evidence can still resolve it. Force-release is also
+fenced to the observed recovery revision. UI projects this as recovery in
+progress, Cleanup needs attention, or reopened without confirmed cleanup—not
+new branch lifecycle states. Failures use durable Task errors/realtime plus
+`executor.cleanup_failures`; Cloud owns paging and its trusted cleanup helper.

@@ -17,8 +17,10 @@ import type {
 import {
   getDefaultPermissionMode,
   hasFullSessionDetails,
+  hasMinimumRole,
   isAgenticToolName,
   mapToCodexPermissionConfig,
+  ROLES,
   SessionStatus,
   TaskStatus,
 } from '@agor-live/client';
@@ -534,8 +536,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [forceFailTarget, setForceFailTarget] = React.useState<{
     taskId: string;
     terminationRequestedAt: string;
+    recoveryRevision: string;
   } | null>(null);
   const [forceFailConfirmation, setForceFailConfirmation] = React.useState('');
+  const [recoveryFeedback, setRecoveryFeedback] = React.useState<{
+    key: string;
+    text: string;
+  } | null>(null);
   const forceFailInputRef = React.useRef<InputRef | null>(null);
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
@@ -548,6 +555,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
   const queuedTasks = reactiveSessionState?.queuedTasks ?? EMPTY_TASKS;
+  const recoveryTask = [...tasks].reverse().find((task) => task.status === TaskStatus.STOPPING);
+  const recoveryKey = `${session?.session_id}:${recoveryTask?.task_id}:${recoveryTask?.termination_request?.recovery_revision}`;
+  const recoveryError = recoveryFeedback?.key === recoveryKey ? recoveryFeedback.text : null;
+  const setRecoveryError = (text: string | null) =>
+    setRecoveryFeedback(text ? { key: recoveryKey, text } : null);
+
   React.useEffect(() => {
     if (
       forceFailTarget &&
@@ -556,7 +569,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.task_id === forceFailTarget.taskId &&
           task.status === TaskStatus.STOPPING &&
           task.sdk_failure?.termination === 'unverified' &&
-          task.termination_request?.requested_at === forceFailTarget.terminationRequestedAt
+          task.termination_request?.requested_at === forceFailTarget.terminationRequestedAt &&
+          (task.termination_request.recovery_revision ?? task.termination_request.requested_at) ===
+            forceFailTarget.recoveryRevision
       )
     ) {
       setForceFailTarget(null);
@@ -752,6 +767,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onModelConfigCommit: (config: ModelConfig) => void;
     onSendPrompt: () => void;
     onStop: () => void;
+    onRetryCleanup: () => void;
     onFork: () => void;
     onBtwSend: () => void;
     onSpawnOpen: () => void;
@@ -767,6 +783,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         footerHandlersRef.current?.onModelConfigCommit(config),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
+      onRetryCleanup: () => footerHandlersRef.current?.onRetryCleanup(),
       onFork: () => footerHandlersRef.current?.onFork(),
       onBtwSend: () => footerHandlersRef.current?.onBtwSend(),
       onSpawnOpen: () => footerHandlersRef.current?.onSpawnOpen(),
@@ -1101,6 +1118,49 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
+  const canReopenSession =
+    !!currentUserId &&
+    (branch?.primary_owner_user_id === currentUserId ||
+      hasMinimumRole(userById.get(currentUserId)?.role, ROLES.ADMIN));
+  const handleRetryCleanup = async () => {
+    const request = recoveryTask?.termination_request;
+    if (
+      !client ||
+      !session ||
+      !recoveryTask ||
+      !request ||
+      connectionDisabled ||
+      stopRequestInFlight
+    )
+      return;
+    setRecoveryError(null);
+    setStopRequestInFlight(true);
+    try {
+      const result = await requestSessionStop(
+        client,
+        session.session_id,
+        recoveryTask.task_id,
+        undefined,
+        {
+          retry_cleanup: true,
+          expected_task_id: recoveryTask.task_id,
+          termination_requested_at: request.requested_at,
+          recovery_revision: request.recovery_revision ?? request.requested_at,
+        }
+      );
+      if (result.outcome === 'condition_changed')
+        setRecoveryError(
+          'Recovery has already changed. Check the latest status before trying again.'
+        );
+    } catch {
+      setRecoveryError(
+        'We could not confirm the cleanup request. Reconnect and check the status before retrying.'
+      );
+    } finally {
+      setStopRequestInFlight(false);
+    }
+  };
+
   const handleStop = async () => {
     if (!session || !client || connectionDisabled || stopRequestInFlight) return;
 
@@ -1115,6 +1175,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       setForceFailTarget({
         taskId: unverifiedTask.task_id,
         terminationRequestedAt: unverifiedTask.termination_request.requested_at,
+        recoveryRevision:
+          unverifiedTask.termination_request.recovery_revision ??
+          unverifiedTask.termination_request.requested_at,
       });
       return;
     }
@@ -1186,12 +1249,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         confirmation: 'STOP',
         task_id: forceFailTarget.taskId,
         termination_requested_at: forceFailTarget.terminationRequestedAt,
+        recovery_revision: forceFailTarget.recoveryRevision,
       });
       setForceFailTarget(null);
       setForceFailConfirmation('');
     } catch (error) {
       console.error('Failed to force-fail execution:', error);
-      showError('Failed to force-fail execution. You can try again.');
+      setRecoveryError(
+        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+      );
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1379,6 +1445,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     onModelConfigCommit: handleModelConfigCommit,
     onSendPrompt: handleSendPrompt,
     onStop: handleStop,
+    onRetryCleanup: handleRetryCleanup,
     onFork: handleFork,
     onBtwSend: handleBtwSend,
     onSpawnOpen: handleSpawnOpen,
@@ -1403,6 +1470,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       isRunning={isRunning}
       isStopping={isStopping}
       stopRequestInFlight={stopRequestInFlight}
+      recoveryTask={recoveryTask}
+      recoveryError={recoveryError}
+      canReopenSession={canReopenSession}
+      onRetryCleanup={stableFooterHandlers.onRetryCleanup}
       hasInput={hasInput || hasComposerAttachments}
       composerAttachmentsPresent={hasComposerAttachments}
       composerAttachmentUploading={composerAttachmentUploading}
@@ -1778,9 +1849,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         {sessionFooter}
 
         <Modal
-          title="Force-fail task?"
+          title="Reopen without confirmed cleanup?"
           open={forceFailTarget !== null}
-          okText="Force fail"
+          okText="Reopen anyway"
           cancelText="Cancel"
           keyboard
           mask={{ closable: false }}
@@ -1803,16 +1874,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           <Alert
             type="warning"
             showIcon
-            title="Executor termination is unverified"
-            description="The executor may still be running and writing to this branch. Force-fail changes Agor's durable Task status to failed and makes the Session available again. It cannot prove or guarantee process termination."
+            title="The previous work may still be running"
+            description="This reopens the conversation without stopping the previous work. It may still change files or run commands, and queued prompts may start. Try cleanup first. If it keeps failing, ask for support before overriding this protection."
             style={{ marginBottom: token.marginMD }}
           />
           <Typography.Paragraph>
-            Type <Typography.Text code>STOP</Typography.Text> to continue.
+            Type <Typography.Text code>STOP</Typography.Text> to acknowledge the risk and reopen.
           </Typography.Paragraph>
+          {recoveryError && <Alert type="error" title={recoveryError} />}
           <Input
             ref={forceFailInputRef}
-            aria-label="Type STOP to confirm force-fail"
+            aria-label="Type STOP to reopen without confirmed cleanup"
             value={forceFailConfirmation}
             onChange={(event) => setForceFailConfirmation(event.target.value)}
             onPressEnter={() => {

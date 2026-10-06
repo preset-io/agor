@@ -751,6 +751,15 @@ export interface AgorExecutionSettings {
    */
   executor_command_template?: string;
 
+  /** Trusted, synchronous remote containment command. Context is JSON on stdin (no interpolation).
+   * Exit 0 asserts all execution for the exact tenant/task is stopped and cannot start later.
+   * Nonzero/timeout means unknown. Run once; further attempts require explicit user retry.
+   * Uses the launcher's sanitized environment. Not used for local execution.
+   */
+  executor_cleanup_command_template?: string;
+  /** Total cleanup command deadline, 1000..120000ms. Default 30000ms. */
+  executor_cleanup_timeout_ms?: number;
+
   /**
    * Filesystem guarantees provided to every executor invocation.
    *
@@ -769,7 +778,11 @@ export interface AgorExecutionSettings {
    */
   delegated_branch_deletion?: boolean;
 
-  /** A nonzero template launcher may still have submitted remote work. Default: false. */
+  /**
+   * An ordinary nonzero template launcher exit may still have submitted remote
+   * work. Default: false. Signal/null and shell-style >=128 exits are always
+   * ambiguous, irrespective of this assertion; none is OOM evidence.
+   */
   executor_command_nonzero_may_have_dispatched?: boolean;
 
   /**

@@ -548,6 +548,11 @@ export interface SessionsService
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Request fenced containment after an unexpected executor signal. */
+  reportExecutorInterruption(
+    data: import('../types/task').ExecutorInterruptionInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report that a requested cooperative stop has fully quiesced SDK work. */
   reportTerminationComplete(
     data: import('../types/task').ExecutorTerminationCompleteInput,
@@ -1400,6 +1405,7 @@ function extendTasksService(client: AgorClient): void {
     tasksService.methods(
       'connectExecutor',
       'reportTerminationComplete',
+      'reportExecutorInterruption',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
       'beginOpenCodeCheckpoint',

@@ -745,6 +745,8 @@ export async function executeToolTask(params: {
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
+    // Signal/Stop can win while git/accounting awaits above are in flight.
+    if (daemonOwnsTerminality()) return;
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
     if (daemonOwnsTerminality()) return;
@@ -775,6 +777,7 @@ export async function executeToolTask(params: {
       };
     }
 
+    if (daemonOwnsTerminality()) return;
     await settleTaskFailure(client, sessionId, taskId, err, patchData);
 
     throw err;

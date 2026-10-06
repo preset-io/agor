@@ -1,5 +1,12 @@
-import { AGENTIC_TOOL_NAMES, EXECUTOR_LAUNCH_REFUSED_MESSAGE, TaskStatus } from '@agor/core/types';
+import { runWithTenantContext } from '@agor/core/db';
+import { AGENTIC_TOOL_NAMES, EXECUTOR_LAUNCH_REFUSED_MESSAGE, type Task, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const runCleanup = vi.hoisted(() => vi.fn());
+vi.mock('./utils/executor-cleanup-command.js', () => ({
+  DEFAULT_CLEANUP_TIMEOUT_MS: 30000,
+  runExecutorCleanupCommand: runCleanup,
+}));
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
 const getTrackedExecutor = vi.hoisted(() => vi.fn());
@@ -22,8 +29,17 @@ const taskId = '018f0000-0000-7000-8000-000000000001';
 const sessionId = '018f0000-0000-7000-8000-000000000002';
 const runInFreshTenantWriteDatabase = <T>(work: () => Promise<T>): Promise<T> => work();
 
-function task(status = TaskStatus.RUNNING, extra: Record<string, unknown> = {}) {
-  return { task_id: taskId, session_id: sessionId, status, created_at: '2026-01-01', ...extra };
+function task(
+  status: Task['status'] = TaskStatus.RUNNING,
+  extra: Record<string, unknown> = {}
+): Task {
+  return {
+    task_id: taskId,
+    session_id: sessionId,
+    status,
+    created_at: '2026-01-01',
+    ...extra,
+  } as Task;
 }
 
 function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unknown } = {}) {
@@ -37,7 +53,7 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     current = {
       ...current,
       termination_request: {
-        ...current.termination_request,
+        ...current.termination_request!,
         coordination: {
           claim_token: input.claimToken,
           claimed_at: '2026-01-01T00:00:01.000Z',
@@ -49,8 +65,24 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     };
     return { outcome: 'claimed', task: current };
   });
+  const beginCleanupAttempt = vi.fn(async () => {
+    const request = current.termination_request!;
+    if (request.cleanup_attempt) return null;
+    current = {
+      ...current,
+      termination_request: {
+        ...request,
+        cleanup_attempt: { attempt_id: 'attempt-a', started_at: new Date().toISOString() },
+      },
+    };
+    return current;
+  });
   const settleTermination = vi.fn();
-  const sessionGet = vi.fn(async () => ({ session_id: sessionId, agentic_tool: tool }));
+  const sessionGet = vi.fn(async () => ({
+    session_id: sessionId,
+    agentic_tool: tool,
+    branch_id: 'branch-a',
+  }));
   const app = {
     service: (name: string) =>
       name === 'tasks'
@@ -58,6 +90,7 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
             get: getCurrent,
             claimTermination,
             claimTerminationCoordination,
+            beginCleanupAttempt,
             settleTermination,
           }
         : { get: sessionGet },
@@ -83,7 +116,7 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     current = {
       ...current,
       termination_request: {
-        ...current.termination_request,
+        ...current.termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
     };
@@ -94,6 +127,7 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     settle,
     setCurrent,
     markExecutorQuiesced,
+    beginCleanupAttempt,
     claimTermination,
     claimTerminationCoordination,
     settleTermination,
@@ -150,10 +184,10 @@ describe('termination coordinator', () => {
     const state = appDouble();
     const remoteStopping = {
       ...stopping('user_stop'),
-      executor_mode: 'templated',
+      executor_mode: 'templated' as const,
       executor_connected_at: '2026-01-01T00:00:00.000Z',
       termination_request: {
-        ...stopping('user_stop').termination_request,
+        ...stopping('user_stop').termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
     };
@@ -166,6 +200,43 @@ describe('termination coordinator', () => {
     });
     expect(containExecutorProcess).not.toHaveBeenCalled();
   });
+
+  it.each(['OOMKilled', 'Error'])(
+    'settles simulated authoritative substrate absence (%s), not merely lost contact',
+    async (reason) => {
+      const state = appDouble();
+      state.claim({
+        ...stopping('heartbeat_lost'),
+        executor_mode: 'templated' as const,
+        executor_connected_at: '2026-01-01T00:00:00.000Z',
+      });
+      state.settle(task(TaskStatus.FAILED));
+      // Internal seam only. Core does not yet ingest Cloud Job evidence. The
+      // future adapter must prove whole-workload absence before setting this;
+      // this fixture simulates that proof, never a launcher 137 inference.
+      const errorMessage = `Execution substrate confirmed container termination: ${reason}.`;
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'heartbeat_lost',
+          errorMessage,
+          absenceVerified: true,
+          cooperativeGraceMs: 0,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.FAILED } });
+      expect(state.settleTermination).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          outcome: 'verified_absent',
+          errorMessage,
+          coordinationToken: expect.any(String),
+        }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
 
   it('settles a quiesced hosted OpenCode executor without the blanket unverified reason', async () => {
     const state = appDouble('opencode', {
@@ -180,10 +251,10 @@ describe('termination coordinator', () => {
     });
     const remoteStopping = {
       ...stopping('user_stop'),
-      executor_mode: 'templated',
+      executor_mode: 'templated' as const,
       executor_connected_at: '2026-01-01T00:00:00.000Z',
       termination_request: {
-        ...stopping('user_stop').termination_request,
+        ...stopping('user_stop').termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
     };
@@ -204,7 +275,7 @@ describe('termination coordinator', () => {
     const state = appDouble();
     const remoteStopping = {
       ...stopping('user_stop'),
-      executor_mode: 'templated',
+      executor_mode: 'templated' as const,
       executor_connected_at: '2026-01-01T00:00:00.000Z',
     };
     state.claim(remoteStopping);
@@ -232,7 +303,7 @@ describe('termination coordinator', () => {
       const state = appDouble();
       const remoteStopping = {
         ...stopping('user_stop'),
-        executor_mode: 'templated',
+        executor_mode: 'templated' as const,
         executor_connected_at: '2026-01-01T00:00:00.000Z',
       };
       state.claim(remoteStopping);
@@ -257,7 +328,7 @@ describe('termination coordinator', () => {
       const state = appDouble();
       const remoteStopping = {
         ...stopping('user_stop'),
-        executor_mode: 'templated',
+        executor_mode: 'templated' as const,
         executor_connected_at: '2026-01-01T00:00:00.000Z',
       };
       state.claim(remoteStopping);
@@ -280,7 +351,7 @@ describe('termination coordinator', () => {
       expect(state.settleTermination).toHaveBeenCalledWith(
         expect.objectContaining({
           outcome: 'unverified',
-          errorMessage: expect.stringContaining('did not acknowledge quiescence'),
+          errorMessage: expect.stringContaining('could not confirm that the previous work stopped'),
         }),
         expect.anything()
       );
@@ -294,10 +365,10 @@ describe('termination coordinator', () => {
     const state = appDouble();
     const localStopping = {
       ...stopping('user_stop'),
-      executor_mode: 'local',
+      executor_mode: 'local' as const,
       executor_connected_at: '2026-01-01T00:00:00.000Z',
       termination_request: {
-        ...stopping('user_stop').termination_request,
+        ...stopping('user_stop').termination_request!,
         executor_quiesced_at: '2026-01-01T00:00:01.100Z',
       },
     };
@@ -548,9 +619,7 @@ describe('termination coordinator', () => {
       expect.objectContaining({
         taskId,
         outcome: 'unverified',
-        errorMessage: expect.stringContaining(
-          'OpenCode server-side execution termination is not verified.'
-        ),
+        errorMessage: expect.stringContaining('could not confirm that the previous work stopped'),
       }),
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
@@ -748,7 +817,7 @@ describe('termination coordinator: remote executor not yet connected', () => {
 
   const remoteDispatching = () => ({
     ...stopping('user_stop'),
-    executor_mode: 'templated',
+    executor_mode: 'templated' as const,
     started_at: '2026-01-01T00:00:00.500Z',
   });
 
@@ -785,7 +854,12 @@ describe('termination coordinator: remote executor not yet connected', () => {
     state.claim(
       {
         ...remoteDispatching(),
-        sdk_failure: { reason: 'termination_unverified', termination: 'unverified' },
+        sdk_failure: {
+          reason: 'termination_unverified',
+          termination: 'unverified',
+          detected_at: '2026-01-01T00:00:00Z',
+          tool: 'codex',
+        },
       },
       'unchanged'
     );
@@ -821,7 +895,7 @@ describe('termination coordinator: remote executor not yet connected', () => {
       {
         ...remoteDispatching(),
         termination_request: {
-          ...stopping('user_stop').termination_request,
+          ...stopping('user_stop').termination_request!,
           executor_quiesced_at: '2026-01-01T00:00:40.000Z',
         },
       },
@@ -864,7 +938,7 @@ describe('termination coordinator: remote executor not yet connected', () => {
     expect(state.settleTermination).toHaveBeenCalledWith(
       expect.objectContaining({
         outcome: 'unverified',
-        errorMessage: expect.stringContaining('never connected before the startup deadline'),
+        errorMessage: expect.stringContaining('could not confirm that the previous work stopped'),
       }),
       expect.anything()
     );
@@ -877,7 +951,7 @@ describe('termination coordinator: remote executor not yet connected', () => {
     const state = appDouble('codex', { getDelayMs: 250 });
     const remoteStopping = {
       ...stopping('user_stop'),
-      executor_mode: 'templated',
+      executor_mode: 'templated' as const,
       executor_connected_at: '2026-01-01T00:00:00.000Z',
     };
     state.claim(remoteStopping);
@@ -1005,5 +1079,117 @@ describe('termination coordinator: remote executor not yet connected', () => {
     ).resolves.toMatchObject({ status: TaskStatus.STOPPING });
     expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
     expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+});
+
+describe('remote cleanup integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    runCleanup.mockResolvedValue({ confirmed: true, diagnostic: 'exit 0' });
+  });
+  const config = {
+    execution: {
+      executor_cleanup_command_template: 'trusted-cleanup',
+      executor_cleanup_timeout_ms: 20000,
+    },
+  };
+  async function execute(state: ReturnType<typeof appDouble>, tenant = 'tenant-a') {
+    return runWithTenantContext(tenant, () =>
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Lost contact',
+        cooperativeGraceMs: 0,
+        runInFreshTenantWriteDatabase,
+      })
+    );
+  }
+  it('uses exact trusted context, waits for confirmation, then settles', async () => {
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated' as const,
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    state.settle(task(TaskStatus.FAILED));
+    expect((await execute(state)).status).toBe('terminal');
+    expect(runCleanup).toHaveBeenCalledWith(
+      'trusted-cleanup',
+      expect.objectContaining({
+        tenant_id: 'tenant-a',
+        task_id: taskId,
+        session_id: sessionId,
+        branch_id: 'branch-a',
+        attempt_id: 'attempt-a',
+      }),
+      20000
+    );
+    expect(state.beginCleanupAttempt.mock.invocationCallOrder[0]).toBeLessThan(
+      runCleanup.mock.invocationCallOrder[0]
+    );
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'verified_absent' }),
+      expect.anything()
+    );
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+  });
+  it('persists a failed attempt without claiming termination', async () => {
+    runCleanup.mockResolvedValue({ confirmed: false, diagnostic: 'Cleanup timed out.' });
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated' as const,
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    state.settle(task(TaskStatus.STOPPING), 'unverified');
+    expect((await execute(state)).status).toBe('unverified');
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.anything()
+    );
+  });
+  it('does not re-invoke an attempt whose daemon disappeared', async () => {
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated' as const,
+      executor_connected_at: '2026-01-01T00:00:00Z',
+      termination_request: {
+        ...stopping('heartbeat_lost').termination_request!,
+        cleanup_attempt: { attempt_id: 'previous', started_at: '2026-01-01T00:00:00Z' },
+      },
+    });
+    state.settle(task(TaskStatus.STOPPING), 'unverified');
+    expect((await execute(state)).status).toBe('unverified');
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+  it('does not send a shared supervisor an unscoped execution', async () => {
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated' as const,
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    state.settle(task(TaskStatus.STOPPING), 'unverified');
+    await requestExecutorTermination({
+      app: state.app,
+      taskId,
+      cause: 'heartbeat_lost',
+      errorMessage: 'Lost',
+      cooperativeGraceMs: 0,
+      runInFreshTenantWriteDatabase,
+    });
+    expect(runCleanup).not.toHaveBeenCalled();
+  });
+  it('keeps local containment when a cleanup command is configured', async () => {
+    containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
+    getTrackedExecutor.mockReturnValue({ pid: 123 });
+    const state = appDouble('codex', { config });
+    state.claim(stopping('heartbeat_lost'));
+    state.settle(task(TaskStatus.FAILED));
+    await execute(state);
+    expect(runCleanup).not.toHaveBeenCalled();
+    expect(containExecutorProcess).toHaveBeenCalled();
   });
 });

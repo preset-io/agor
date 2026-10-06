@@ -1,3 +1,4 @@
+import type { MessageID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isTaskFailurePersisted } from '../../terminal-task.js';
 import { markCoordinatorTerminationAbort } from '../../termination-state.js';
@@ -27,9 +28,9 @@ describe('createStreamingCallbacks', () => {
     await callbacks.onStreamChunk('message-1' as never, 'hello');
     await callbacks.onStreamEnd('message-1' as never);
     await callbacks.onStreamError('message-2' as never, new Error('failed'));
-    await callbacks.onThinkingStart('message-3' as never, {});
-    await callbacks.onThinkingChunk('message-3' as never, 'hmm');
-    await callbacks.onThinkingEnd('message-3' as never);
+    await callbacks.onThinkingStart!('message-3' as never, {});
+    await callbacks.onThinkingChunk!('message-3' as never, 'hmm');
+    await callbacks.onThinkingEnd!('message-3' as never);
 
     expect(create).toHaveBeenCalledTimes(7);
     for (const [envelope] of create.mock.calls) {
@@ -337,11 +338,13 @@ describe('executeToolTask provider-failure settlement', () => {
     { handoff: false, subtype: 'error_during_execution' },
     { handoff: false, subtype: 'success' },
     { handoff: true, subtype: 'success' },
+    { handoff: 'during_git_capture', subtype: 'success' },
   ])(
     'respects daemon terminal authority after Claude returns ($subtype, handoff=$handoff)',
     async ({ handoff, subtype }) => {
       const secret = 'provider-secret-body';
       const taskPatch = vi.fn().mockResolvedValue(undefined);
+      let sessionReads = 0;
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const safeRawResponse = {
         type: 'result',
@@ -373,7 +376,17 @@ describe('executeToolTask provider-failure settlement', () => {
               }),
             };
           }
-          if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+          if (name === 'sessions')
+            return {
+              get: vi.fn(async () => {
+                sessionReads += 1;
+                if (handoff === 'during_git_capture' && sessionReads === 2) {
+                  markCoordinatorTerminationAbort(abortController);
+                  abortController.abort();
+                }
+                return {};
+              }),
+            };
           if (name === 'tasks') return { patch: taskPatch };
           if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
           if (name === '/tasks/streaming') return { create: vi.fn() };
@@ -383,12 +396,12 @@ describe('executeToolTask provider-failure settlement', () => {
       const abortController = new AbortController();
       const createTool = vi.fn(() => ({
         executePromptWithStreaming: vi.fn(async () => {
-          if (handoff) {
+          if (handoff === true) {
             markCoordinatorTerminationAbort(abortController);
             abortController.abort();
           }
           return {
-            userMessageId: 'user-1',
+            userMessageId: 'user-1' as MessageID,
             assistantMessageIds: [],
             hadError: true,
             errorDetails: ['Safe SDK failure'],

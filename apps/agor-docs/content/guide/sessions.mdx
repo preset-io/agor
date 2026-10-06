@@ -48,6 +48,36 @@ bytes, so one very large turn can still use a lot of memory.
 
 ---
 
+## Interrupted tasks and lost contact
+
+If the agent loses contact, Agor shows **Connection interrupted — recovering…**.
+You do not need to press Stop again. Messages already received stay in the
+conversation, and queued prompts wait while Agor checks that the previous work
+has stopped. Once recovery succeeds, the interrupted turn is marked failed and
+you can **Continue conversation**. A turn you explicitly stopped is marked stopped.
+
+If Agor cannot confirm shutdown, the notice changes to **Cleanup needs attention**.
+Automatic cleanup is attempted once, not retried indefinitely. Choose **Retry
+cleanup** to try again. A lost connection does not necessarily mean the previous
+work stopped; Agor keeps the session blocked to avoid overlapping execution.
+
+As a last resort, a branch owner or administrator can choose **Reopen anyway…**
+and acknowledge the risk by typing `STOP`. This reopens the conversation but
+**does not stop the previous work**. It may still change files or run commands,
+and queued prompts may start. Ask for support if cleanup keeps failing rather
+than routinely bypassing this protection. The conversation records that cleanup
+was not confirmed; technical diagnostics are available under **Technical details**.
+
+Local execution uses Agor's existing process-group cleanup. Remote deployments
+need an operator-configured [cleanup command](./containerized-execution#remote-execution-cleanup)
+for automatic recovery after the executor dies. Without one, Agor can still
+recover when the agent acknowledges that its work stopped, but cannot independently
+confirm remote death.
+
+Catchable termination signals allow bounded, best-effort cleanup and reporting.
+Abrupt kills and host failures do not. Unsaved output or uploads cannot be
+guaranteed when the daemon is unavailable.
+
 ## Three ways to branch
 
 ### Fork — copy the context, keep the conversation

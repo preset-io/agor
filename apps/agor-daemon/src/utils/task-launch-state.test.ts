@@ -30,6 +30,11 @@ describe('classifyExecutorExit', () => {
     [{ mode: 'templated', code: 0, nonzeroMayHaveDispatched: false }, 'passive'],
     [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: false }, 'authoritative'],
     [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: null, nonzeroMayHaveDispatched: false }, 'ambiguous'],
+    [{ mode: 'templated', code: null, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: 137, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: 137, nonzeroMayHaveDispatched: false }, 'ambiguous'],
+    [{ mode: 'templated', code: 143, nonzeroMayHaveDispatched: false }, 'ambiguous'],
   ] as const)('classifies %# as %s', (input, expected) => {
     expect(classifyExecutorExit(input)).toBe(expected);
   });

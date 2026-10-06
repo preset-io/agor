@@ -55,6 +55,7 @@ import type {
   BranchID,
   CancelQueuedTasksInput,
   ContentBlock,
+  ExecutorInterruptionInput,
   ExecutorTerminationCompleteInput,
   MessageID,
   OpenCodeCheckpointAdmission,
@@ -187,6 +188,7 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reorderQueued',
   'connectExecutor',
   'reportTerminationComplete',
+  'reportExecutorInterruption',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
   'beginOpenCodeCheckpoint',
@@ -667,6 +669,40 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return result;
   }
 
+  /** Internal only; the authenticated Stop route owns retry authorization. */
+  async retryTermination(
+    taskId: string,
+    requestedAt: string,
+    revision: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.retryTermination(taskId, requestedAt, revision);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  async beginCleanupAttempt(
+    taskId: string,
+    claimToken: string,
+    params?: TaskParams
+  ): Promise<Task | null> {
+    const task = await this.taskRepo.beginCleanupAttempt(taskId, claimToken);
+    if (task) await this.publishRecoveryTask(task, params);
+    return task;
+  }
+
+  private async publishRecoveryTask(task: Task, params?: TaskParams): Promise<void> {
+    await this.runAfterTenantDatabaseCommit('publish cleanup progress', async () => {
+      emitServiceEvent(this.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: task,
+        id: task.task_id,
+        params,
+      });
+    });
+  }
+
   async settleTermination(
     input: TerminationSettlementInput,
     params?: TaskParams
@@ -680,6 +716,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     await this.runAfterTenantDatabaseCommit('publish termination settlement', async () => {
       if (result.outcome === 'unverified') {
+        getDaemonMetrics(this.app).increment('executor.cleanup_failures', 1, {
+          mode: result.task.executor_mode ?? 'local',
+        });
         console.warn(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +
             `outcome=unverified mode=${result.task.executor_mode ?? 'local'} ` +
@@ -1618,6 +1657,37 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
     return connection.task;
+  }
+
+  async reportExecutorInterruption(
+    data: ExecutorInterruptionInput,
+    params?: TaskParams
+  ): Promise<Task> {
+    if (data.signal !== 'SIGTERM' && data.signal !== 'SIGINT') {
+      throw new BadRequest('invalid executor interruption signal');
+    }
+    const tenantId = getCurrentTenantId() ?? params?.tenant?.tenant_id;
+    const current = await this.get(data.task_id, params);
+    if (isTerminalTaskStatus(current.status)) return current;
+    const session = await this.app.service('sessions').get(current.session_id, params);
+    // The task-scoped runtime hook authenticates this report. The existing
+    // row-locked claim preserves a winning Stop/completion and owns all release;
+    // receiving a signal itself never proves that the provider has stopped.
+    return beginExecutorTermination({
+      app: this.app,
+      taskId: data.task_id,
+      cause: 'executor_interrupted',
+      errorMessage: `Executor received ${data.signal}; execution was interrupted.`,
+      sdkFailure: {
+        reason: 'executor_interrupted',
+        detected_at: new Date().toISOString(),
+        tool: session.agentic_tool,
+        last_pulse: current.latest_executor_pulse,
+        termination: 'requested',
+      },
+      params,
+      runInFreshTenantWriteDatabase: (work) => withFreshTenantWrite(this.db, tenantId, work),
+    });
   }
 
   async reportTerminationComplete(

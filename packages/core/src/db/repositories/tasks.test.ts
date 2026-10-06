@@ -4308,3 +4308,252 @@ describe('transcript-independent task queries', () => {
     }
   );
 });
+
+describe('executor signal settlement', () => {
+  for (const userStop of [false, true]) {
+    dbTest(
+      `settles an interrupted executor only through containment (user Stop=${userStop})`,
+      async ({ db }) => {
+        const tasks = new TaskRepository(db);
+        const sessions = new SessionRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const task = await tasks.create(
+          createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+        );
+        const request = {
+          taskId: task.task_id,
+          cause: 'executor_interrupted' as const,
+          errorMessage: 'Executor received SIGTERM; execution was interrupted.',
+        };
+        const claimed = await tasks.claimTermination(request);
+        const requestedAt = claimed.task.termination_request!.requested_at;
+        expect((await tasks.claimTermination(request)).outcome).toBe('unchanged');
+        await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+          status: SessionStatus.STOPPING,
+          ready_for_prompt: false,
+        });
+        // User cancellation keeps its precedence without changing the request epoch.
+        if (userStop)
+          await tasks.claimTermination({
+            taskId: task.task_id,
+            cause: 'user_stop',
+            errorMessage: 'Stopped by user',
+          });
+        const queued = await tasks.createPending(
+          createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+        );
+        expect(
+          (
+            await tasks.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
+              status: TaskStatus.DISPATCHING,
+            })
+          ).outcome
+        ).not.toBe('claimed');
+        await tasks.claimTerminationCoordination({
+          taskId: task.task_id,
+          claimToken: 'signal-claim',
+          leaseDurationMs: 30_000,
+          instanceId: 'daemon-a',
+          bootId: 'boot-a',
+        });
+        // Stale coordinator and stale acknowledgement must not release ownership.
+        expect(
+          await tasks.recordExecutorQuiescence({
+            task_id: task.task_id,
+            requested_at: '2000-01-01T00:00:00.000Z',
+          })
+        ).toBeNull();
+        expect(
+          (
+            await tasks.settleTermination({
+              taskId: task.task_id,
+              outcome: 'verified_absent',
+              coordinationToken: 'stale-claim',
+            })
+          ).outcome
+        ).toBe('condition_changed');
+        await tasks.recordExecutorQuiescence({ task_id: task.task_id, requested_at: requestedAt });
+        const settlement = {
+          taskId: task.task_id,
+          outcome: 'verified_absent' as const,
+          coordinationToken: 'signal-claim',
+        };
+        expect(await tasks.settleTermination(settlement)).toMatchObject({
+          outcome: 'transitioned',
+          task: { status: userStop ? TaskStatus.STOPPED : TaskStatus.FAILED },
+        });
+        expect((await tasks.settleTermination(settlement)).outcome).toBe('terminal');
+        expect((await tasks.claimTermination(request)).outcome).toBe('terminal');
+        await expect(sessions.findById(sessionId)).resolves.toMatchObject({
+          ready_for_prompt: true,
+          status: userStop ? SessionStatus.IDLE : SessionStatus.FAILED,
+        });
+        // Settlement does not replay the failed prompt. A normal queue drainer
+        // may now claim the next, distinct user Task, but not before containment.
+        expect((await tasks.findById(queued.task_id))?.status).toBe(TaskStatus.QUEUED);
+        expect(
+          (
+            await tasks.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
+              status: TaskStatus.DISPATCHING,
+            })
+          ).outcome
+        ).toBe('claimed');
+      }
+    );
+  }
+});
+
+describe('durable single-attempt cleanup and explicit retry', () => {
+  dbTest(
+    'fences duplicate launch, retries, stale force-release and late settlement',
+    async ({ db }) => {
+      const repo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await repo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_mode: 'templated',
+        })
+      );
+      const requested = await repo.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Lost contact',
+      });
+      const epoch = requested.task.termination_request!.requested_at;
+      const claim = (token: string) =>
+        repo.claimTerminationCoordination({
+          taskId: task.task_id,
+          claimToken: token,
+          leaseDurationMs: 60000,
+          instanceId: 'daemon',
+          bootId: 'boot',
+        });
+      await claim('first');
+      expect(await repo.beginCleanupAttempt(task.task_id, 'wrong')).toBeNull();
+      const attempts = await Promise.all([
+        repo.beginCleanupAttempt(task.task_id, 'first'),
+        new TaskRepository(db).beginCleanupAttempt(task.task_id, 'first'),
+      ]);
+      expect(attempts.filter(Boolean)).toHaveLength(1);
+      const started = attempts.find(Boolean);
+      expect(started?.termination_request?.cleanup_attempt?.attempt_id).toBeTruthy();
+      expect(await repo.beginCleanupAttempt(task.task_id, 'first')).toBeNull();
+      const fail = (token: string) =>
+        repo.settleTermination({
+          taskId: task.task_id,
+          outcome: 'unverified',
+          coordinationToken: token,
+          errorMessage: 'Cleanup needs attention',
+          sdkFailure: {
+            reason: 'heartbeat_lost',
+            tool: 'codex',
+            detected_at: epoch,
+            termination: 'unverified',
+          },
+        });
+      await fail('first');
+      expect(
+        (await repo.findById(task.task_id))?.termination_request?.coordination
+      ).toBeUndefined();
+      expect((await claim('automatic-retry')).outcome).toBe('condition_changed');
+      expect((await new SessionRepository(db).findById(sessionId))?.ready_for_prompt).toBe(false);
+      expect(await repo.retryTermination(task.task_id, 'old-request', epoch)).toBeNull();
+      const retried = await repo.retryTermination(task.task_id, epoch, epoch);
+      const revision = retried!.termination_request!.recovery_revision!;
+      expect(revision).not.toBe(epoch);
+      expect(retried?.termination_request?.cause).toBe('heartbeat_lost');
+      expect(await repo.retryTermination(task.task_id, epoch, epoch)).toBeNull();
+      await claim('second');
+      expect(
+        (
+          await repo.settleTermination({
+            taskId: task.task_id,
+            outcome: 'verified_absent',
+            coordinationToken: 'first',
+          })
+        ).outcome
+      ).toBe('condition_changed');
+      expect(
+        (await repo.beginCleanupAttempt(task.task_id, 'second'))?.termination_request
+          ?.cleanup_attempt?.attempt_id
+      ).not.toBe(started?.termination_request?.cleanup_attempt?.attempt_id);
+      await fail('second');
+      expect(
+        (
+          await repo.settleTermination({
+            taskId: task.task_id,
+            outcome: 'forced_unverified',
+            expectedTerminationRequestedAt: epoch,
+          })
+        ).outcome
+      ).toBe('condition_changed');
+      // New executor evidence can resolve failure without manual release; duplicates stay harmless.
+      await repo.recordExecutorQuiescence({ task_id: task.task_id, requested_at: epoch });
+      await claim('late-evidence');
+      const settled = await repo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+        coordinationToken: 'late-evidence',
+      });
+      expect(settled.task.status).toBe(TaskStatus.FAILED);
+      expect((await new SessionRepository(db).findById(sessionId))?.ready_for_prompt).toBe(true);
+      expect(await repo.retryTermination(task.task_id, epoch, revision)).toBeNull();
+      expect(
+        (
+          await repo.settleTermination({
+            taskId: task.task_id,
+            outcome: 'verified_absent',
+            coordinationToken: 'late-evidence',
+          })
+        ).outcome
+      ).toBe('terminal');
+    }
+  );
+
+  dbTest(
+    'does not repeat a cleanup attempt after coordinator crash or user Stop',
+    async ({ db }) => {
+      const repo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await repo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_mode: 'templated',
+        })
+      );
+      await repo.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Lost contact',
+      });
+      await repo.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'crashed',
+        leaseDurationMs: 60000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+      });
+      const started = await repo.beginCleanupAttempt(task.task_id, 'crashed');
+      await repo.claimTermination({
+        taskId: task.task_id,
+        cause: 'user_stop',
+        errorMessage: 'User stopped',
+      });
+      await repo.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'replacement',
+        leaseDurationMs: 60000,
+        instanceId: 'daemon-b',
+        bootId: 'boot-b',
+        now: new Date(Date.now() + 120000),
+      });
+      expect(await repo.beginCleanupAttempt(task.task_id, 'replacement')).toBeNull();
+      expect((await repo.findById(task.task_id))?.termination_request?.cleanup_attempt).toEqual(
+        started?.termination_request?.cleanup_attempt
+      );
+    }
+  );
+});

@@ -293,6 +293,55 @@ execution:
       -- agor-executor --stdin
 ```
 
+### Remote execution cleanup
+
+Operators can configure a synchronous containment helper alongside the remote launcher:
+
+```yaml
+execution:
+  executor_command_template: /opt/example/launch-agent
+  executor_cleanup_command_template: /opt/example/cleanup-agent
+  executor_cleanup_timeout_ms: 30000
+```
+
+These paths are examples, not bundled programs. The cleanup helper is invoked by
+the existing task supervisor after cooperative shutdown fails (including lost
+heartbeats and user Stop). Local execution continues to use owned process-group
+containment instead. The helper runs in the daemon's execution environment; it
+does **not** launch an agent or receive an agent's credentials.
+
+Unlike launch templates, the cleanup command does not interpolate placeholders.
+It receives one JSON object on stdin: `version: 1`, trusted `tenant_id`, `task_id`,
+`session_id`, `branch_id`, termination `requested_at`, unique `attempt_id`, and
+`cause`. The immutable Task ID identifies the dispatch; helpers must resolve it
+through a trusted, durable tenant/task-to-workload-UID binding, never process-name
+matching or unscoped Kubernetes name searches.
+
+- Exit **0** asserts that **all** work for that dispatch has stopped and cannot
+  start later. Already stopped is success. Accepted deletion/cancellation is not.
+- Any other exit or timeout means shutdown was **not confirmed**. Missing API
+  objects, network failures, or lost nodes are not sufficient proof.
+- The helper must also fence delayed launches and workload retries before
+  returning success. If that cannot be established, return nonzero.
+- The deadline defaults to 30 seconds and accepts 1–120 seconds. The daemon kills
+  only its helper process group on timeout; that does not prove remote shutdown.
+- The attempt is durably recorded **before** invocation. A crash may consume an
+  attempt without running the helper. No automatic repeat occurs; an authorized
+  **Retry cleanup** action creates a new fenced recovery revision. Helpers must
+  remain idempotent because manual retry can follow an ambiguous prior attempt.
+
+The helper uses the launcher's minimal environment plus the reserved `AGOR_CLOUD_*`
+credential namespace. Never put secrets in the command string. Raw stdout/stderr
+are discarded to prevent leaking credentials or unbounded output; Agor persists
+safe exit/timeout diagnostics and recovery state. Detailed platform diagnostics
+belong in the helper's secured operational logging. Exit 137 alone is not OOM
+attribution.
+
+Failed containment emits the `executor.cleanup_failures` metric and structured
+termination logs. Operators must configure alert delivery; enabling this setting
+does not automatically create paging rules. Cloud needs a companion helper using
+its existing manager's workload tracking/cancellation and retained terminal evidence.
+
 ### Template Variables
 
 Executor command templates use literal `{variable}` substitution, not

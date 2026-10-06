@@ -53,6 +53,13 @@ export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
 /** Authenticated Session Stop endpoint request. */
 export type SessionStopRequest =
   | {
+      retry_cleanup: true;
+      expected_task_id: TaskID;
+      termination_requested_at: string;
+      recovery_revision: string;
+      force_unverified?: false;
+    }
+  | {
       force_unverified?: false;
       reason?: string;
       expected_task_id?: TaskID;
@@ -62,6 +69,7 @@ export type SessionStopRequest =
     }
   | {
       force_unverified: true;
+      recovery_revision?: string;
       task_id: TaskID;
       termination_requested_at: string;
       confirmation: string;
