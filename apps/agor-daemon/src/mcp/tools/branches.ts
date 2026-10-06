@@ -1058,8 +1058,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           });
         }
       } catch (error) {
-        waitFailure =
-          error instanceof Error && error.name === 'AbortError' ? 'cancelled' : 'read_failed';
+        waitFailure = mcpRequestSignal(requestContext)?.aborted ? 'cancelled' : 'read_failed';
         console.warn(
           `[mcp] branch_create_wait_failed branch=${shortId(branch.branch_id)} error=${error instanceof Error ? error.name : 'unknown'}`
         );
