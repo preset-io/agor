@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MCPOAuthRelay, relayBodyHash } from './mcp-oauth-relay';
 
 const fetch = vi.hoisted(() => vi.fn());
-vi.mock('@agor/core/utils/safe-outbound-fetch', () => ({ safeOutboundFetch: fetch }));
 const cloud = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const cell = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const config: AgorConfig = {
@@ -59,9 +58,13 @@ function fixture() {
   return { client, input, body, sign, prepare };
 }
 describe('Cloud relay v1 trust boundary', () => {
-  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     fetch.mockReset();
+    vi.stubGlobal('fetch', fetch);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it.each([1, 29, 30, -1, -30, -59])(
@@ -156,6 +159,44 @@ describe('Cloud relay v1 trust boundary', () => {
       })
     ).resolves.toBe('https://cloud.test/start/opaque');
   });
+  it('prepares through a trusted callback origin on a private (RFC1918) network', async () => {
+    // SDX's control plane resolves the callback origin to an internal ALB.
+    const privateConfig: AgorConfig = {
+      ...config,
+      mcp_oauth_relay: { ...config.mcp_oauth_relay!, callback_origin: 'https://10.35.68.50' },
+    };
+    const client = new MCPOAuthRelay(privateConfig, {
+      TEST_CELL_KEY: cell.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    });
+    const { prepare } = fixture();
+    const redirect_uri = client.redirectUri(prepare.issuer);
+    fetch.mockResolvedValue(
+      Response.json(
+        {
+          start_url: 'https://10.35.68.50/start/opaque',
+          redirect_uri,
+          expires_at: new Date(Date.now() + 60_000).toISOString(),
+        },
+        { status: 201 }
+      )
+    );
+    await expect(client.prepare({ ...prepare, redirect_uri })).resolves.toBe(
+      'https://10.35.68.50/start/opaque'
+    );
+    expect(fetch).toHaveBeenCalledOnce();
+    const [url, init] = fetch.mock.calls[0];
+    expect(url).toBe(`https://10.35.68.50${MCP_OAUTH_RELAY.preparePath}`);
+    expect(init.redirect).toBe('error');
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+  it('rejects oversized prepare responses as invalid', async () => {
+    const { client, prepare } = fixture();
+    fetch.mockResolvedValue(new Response('x'.repeat(8193), { status: 201 }));
+    await expect(client.prepare(prepare)).rejects.toMatchObject({
+      category: 'invalid_response',
+      diagnostic: { reason: 'oauth_relay_prepare_invalid_response' },
+    });
+  });
   it('requires exact issuer bytes and rejects arbitrary preparation redirects', async () => {
     const { client, input } = fixture();
     expect(client.redirectUri('https://provider.test/')).not.toBe(input.redirect_uri);
@@ -180,7 +221,7 @@ describe('Cloud relay v1 trust boundary', () => {
     async (status) => {
       const { client, prepare } = fixture();
       const response = Response.json({ error: 'SENTINEL_PROVIDER_BODY' }, { status });
-      const readBody = vi.spyOn(response, 'json');
+      const readBody = vi.spyOn(response.body!, 'getReader');
       fetch.mockResolvedValue(response);
       const error = await client.prepare(prepare).catch((error: unknown) => error);
       const safe = sanitizeMCPExternalError(error, { stage: 'oauth' });

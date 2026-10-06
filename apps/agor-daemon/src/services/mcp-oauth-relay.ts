@@ -14,13 +14,13 @@ import {
   type MCPOAuthRelayCallback,
   type MCPOAuthRelayPrepare,
 } from '@agor/core/types';
-import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import jwt from 'jsonwebtoken';
 import { z } from 'zod';
 import { resolveVerificationKey } from '../auth/launch-auth.js';
 
 // Ordinary bounded clock skew, not a longer assertion lifetime or a retry permit.
 const CLOCK_SKEW_SECONDS = 30;
+const PREPARE_MAX_RESPONSE_BYTES = 8192;
 
 const id = z.string().min(1).max(200);
 const callbackSchema = z
@@ -42,6 +42,24 @@ const callbackSchema = z
 
 export function relayBodyHash(body: string | Buffer): string {
   return createHash('sha256').update(body).digest('hex');
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error('Response too large');
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
 }
 
 /** No provider exchange/refresh proxy. This client carries routing material only. */
@@ -139,13 +157,16 @@ export class MCPOAuthRelay {
       );
       reason = 'oauth_relay_prepare_transport_failed';
       category = undefined;
-      const response = await safeOutboundFetch(`${this.origin}${MCP_OAUTH_RELAY.preparePath}`, {
+      // Plain fetch, not safeOutboundFetch: the destination is the trusted,
+      // operator-configured callback origin (validated above), and private-network
+      // control planes (e.g. SDX's internal ALB) resolve it to RFC1918 addresses
+      // that the user-input SSRF guard rightly refuses. Launch JWKS does the same.
+      const response = await fetch(`${this.origin}${MCP_OAUTH_RELAY.preparePath}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authorization}` },
         body,
         redirect: 'error',
-        timeoutMs: 10_000,
-        maxResponseBytes: 8192,
+        signal: AbortSignal.timeout(10_000),
       });
       if (response.status !== 201) {
         reason = 'oauth_relay_prepare_http_rejected';
@@ -158,7 +179,7 @@ export class MCPOAuthRelay {
       const result = z
         .object({ start_url: z.string().url(), redirect_uri: z.string(), expires_at: z.string() })
         .strict()
-        .parse(await response.json());
+        .parse(JSON.parse(await readBoundedText(response, PREPARE_MAX_RESPONSE_BYTES)));
       const start = new URL(result.start_url);
       const expires = Date.parse(result.expires_at);
       if (
