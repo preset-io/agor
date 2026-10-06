@@ -53,7 +53,9 @@ export function docsEnvironment(env) {
     NEXT_PUBLIC_SITE_URL: origin.origin,
     AGOR_DOCS_PREVIEW_ORIGIN: origin.origin,
     NEXT_TELEMETRY_DISABLED: '1',
-    NODE_OPTIONS: '--max-old-space-size=2048',
+    // Nextra's real homepage compiles the docs page map, not just one route.
+    // 2 GiB makes Next repeatedly restart; leave headroom within the 8 GiB container.
+    NODE_OPTIONS: '--max-old-space-size=4096',
   };
 }
 

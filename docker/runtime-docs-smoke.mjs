@@ -30,33 +30,48 @@ const child = spawn(
   {
     cwd: '/app/apps/agor-docs',
     env,
-    stdio: 'inherit',
+    stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   }
 );
+let memoryRestart = false;
+for (const stream of [child.stdout, child.stderr]) {
+  let tail = '';
+  stream.on('data', (chunk) => {
+    process.stdout.write(chunk);
+    tail = `${tail}${chunk}`.slice(-4096);
+    if (tail.includes('Server is approaching the used memory threshold')) memoryRestart = true;
+  });
+}
 const exited = new Promise((resolve) => child.once('exit', resolve));
 child.once('error', (error) => {
   throw error;
 });
-async function expectText(text) {
+async function expectHtml(path, pattern) {
   for (let attempt = 0; attempt < 90; attempt++) {
+    assert.equal(memoryRestart, false, 'Next restarted under the configured heap limit');
     try {
-      const response = await fetch('http://127.0.0.1:3030/preview-runtime-smoke', {
+      const response = await fetch(`http://127.0.0.1:3030${path}`, {
         signal: AbortSignal.timeout(5000),
       });
-      if (response.ok && (await response.text()).includes(`<h1>${text}</h1>`)) return;
+      if (response.ok && pattern.test(await response.text())) return;
     } catch {
       /* initial compilation */
     }
     if (child.exitCode !== null) throw new Error('Next exited before readiness');
     await delay(1000);
   }
-  assert.fail(`Docs preview did not render ${text}`);
+  assert.fail(`Docs preview did not render ${path}`);
 }
 try {
-  await expectText('docs-preview-before');
+  // The synthetic route alone does not exercise Nextra's full page-map compiler.
+  // Railway probes / for readiness, so it must work within the real heap limit.
+  await expectHtml('/', /<h1\b/);
+  await expectHtml('/preview-runtime-smoke', /<h1>docs-preview-before<\/h1>/);
   await sync('docs-preview-after');
-  await expectText('docs-preview-after');
+  await expectHtml('/preview-runtime-smoke', /<h1>docs-preview-after<\/h1>/);
+  await expectHtml('/', /<h1\b/);
+  assert.equal(memoryRestart, false, 'Next restarted under the configured heap limit');
   console.log('Docs image serves source updates without a server restart.');
 } finally {
   try {

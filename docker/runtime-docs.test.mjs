@@ -57,7 +57,7 @@ test('docs passes only public preview configuration, not controller or app crede
   assert.equal(env.NODE_ENV, 'development');
   assert.equal(JSON.stringify(env).includes('secret'), false);
   assert.equal(env.NEXT_PUBLIC_GA_ID, undefined);
-  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=2048');
+  assert.equal(env.NODE_OPTIONS, '--max-old-space-size=4096');
   for (const origin of [
     'http://example.com',
     'https://example.com/path',
