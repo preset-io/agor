@@ -126,8 +126,8 @@ function useServerSearch(
         shown.current = hold;
         setMatches({
           query: search,
-          sessionIds: new Set(rows.sessions.map((s) => s.session_id)),
-          branchIds: new Set(rows.branches.map((b) => b.branch_id)),
+          sessionIds: new Set(rows.sessions?.map((s) => s.session_id)),
+          branchIds: new Set(rows.branches?.map((b) => b.branch_id)),
         });
       })
       .catch((err) => console.warn('[GlobalSearch] server search failed:', err));
