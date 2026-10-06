@@ -702,7 +702,6 @@ async function startDaemonWithOwnedMetrics(
   app.configure(rest());
 
   // JWT secret: env > existing config value > fail-fast with operator-actionable remediation.
-  // and context/explorations/daemon-fs-decoupling.md §1.5 (H3).
   //
   // Failing-fast is critical: a fresh JWT secret on every restart invalidates
   // every issued token, which silently breaks every active session.

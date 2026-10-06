@@ -27,11 +27,14 @@ import {
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import {
+  captureTokenAuthority,
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
+  invalidateTokenAuthority,
   type RefreshResult,
   RefreshSupersededError,
+  SupersededAuthenticationError,
   storeTokens,
 } from '../utils/tokenRefresh';
 import type { AuthorityOperation } from './useAuthorityOperationGuard';
@@ -150,6 +153,7 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const invalidateAuthentication = useCallback(() => {
+    invalidateTokenAuthority();
     activeAuthorityRef.current = null;
     advanceAuthenticationGeneration();
   }, [advanceAuthenticationGeneration]);
@@ -205,7 +209,8 @@ export function useAuth(): UseAuthReturn {
       // A fresh call supersedes any in-flight revalidation; internal retries
       // keep the epoch of the run that scheduled them.
       const epoch = ownEpoch ?? ++revalidationEpochRef.current;
-      const isStale = () => revalidationEpochRef.current !== epoch;
+      let isCurrent = captureTokenAuthority();
+      const isStale = () => revalidationEpochRef.current !== epoch || !isCurrent();
       localLoginAttemptRef.current = null;
       // Revalidation is not a new login. Keep the authenticated surface mounted
       // while checking the same credentials; login/authority replacement still
@@ -307,6 +312,8 @@ export function useAuth(): UseAuthReturn {
 
           try {
             const result = await exchangeLaunchCode(client, activeLaunchCode);
+            // Launch exchange intentionally replaces token authority on success.
+            isCurrent = captureTokenAuthority();
             if (isStale()) return;
             resetRefreshFailureState();
             noteAuthenticatedUser(result.user);
@@ -370,6 +377,7 @@ export function useAuth(): UseAuthReturn {
             : null,
         });
       } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
         if (isStale()) return;
         // Connection or authentication error - retry if daemon just restarted
         const isConnectionError = isTransientConnectionError(error);
@@ -482,6 +490,7 @@ export function useAuth(): UseAuthReturn {
         // State sync happens via TOKENS_REFRESHED_EVENT listener below —
         // no need to setState here.
       } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
         // Unrecoverable failures are handled by the unrecoverable-event
         // listener (clearTokens + unauthenticated). Bail out so we don't
         // kick off a reAuthenticate that will immediately fail again.
@@ -558,6 +567,7 @@ export function useAuth(): UseAuthReturn {
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
         // Unrecoverable: the unrecoverable-event listener already cleared
         // tokens and flipped to unauthenticated. Avoid double-handling.
         if (error instanceof RefreshUnrecoverableError || error instanceof RefreshSupersededError)

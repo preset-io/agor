@@ -56,8 +56,7 @@ export async function persistOAuthToken(
   },
   logPrefix: string
 ): Promise<void> {
-  // Walk the precedence cascade for the token TTL — see Phase 3.5 of
-  // `context/explorations/mcp-oauth-token-lifecycle.md`. Replaces the prior
+  // Walk the precedence cascade for the token TTL. Replaces the prior
   // `tokenResponse.expires_in ?? 3600` defaulting that was asymmetric with
   // the refresh path and lied to the DB for providers like Notion that omit
   // `expires_in` entirely.

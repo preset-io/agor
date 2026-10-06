@@ -51,10 +51,9 @@ Markdown summaries written by agents at task completion. Surfaces in board cards
 - Sessions reference branches, not the other way around. Cascading from branch → sessions, never the inverse.
 - Boards display branches. UIs that show "session list on board" are wrong shapes.
 - Fork/spawn happen on the same branch. They diverge in conversation, not in filesystem.
-- Tasks are inside sessions. Messages are inside tasks (after the never-lose-prompt redesign — see `docs/never-lose-prompt-design.md`).
+- Tasks are inside sessions. Messages are inside tasks.
 
 ## Related
 
 - [`architecture.md`](architecture.md) — system shape
 - [`branches.md`](branches.md) — branch details
-- [`ts-types.md`](ts-types.md) — type catalog

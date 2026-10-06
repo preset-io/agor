@@ -5,6 +5,7 @@ import {
   BranchRepository,
   createTenantScopedDatabaseProxy,
   runWithTenantContext,
+  runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -215,9 +216,21 @@ test.for<AgorConfig>([
       tenant: { tenant_id: 'default' as TenantID, source: 'explicit' },
     } as AuthenticatedParams;
     await runWithTenantContext('default', async () => {
-      await expect(service.remove(branch.branch_id, params)).rejects.toThrow(
-        'execution.delegated_branch_deletion. No deletion was started.'
+      const projected = await runWithTenantDatabaseScope(db, 'default', () =>
+        service.get(branch.branch_id, { ...params, _include_sessions: true })
       );
+      expect(projected.maintenance_capabilities?.permanent_delete.supported).toBe(false);
+      const capability = projected.maintenance_capabilities!.permanent_delete;
+      if (capability.supported) throw new Error('Expected disabled capability');
+      await expect(service.remove(branch.branch_id, params)).rejects.toThrow(capability.reason);
+      await expect(
+        new BranchRepository(db).update(branch.branch_id, {
+          maintenance_capabilities: {
+            ...projected.maintenance_capabilities!,
+            permanent_delete: { supported: true },
+          },
+        })
+      ).rejects.toThrow('server-managed');
       expect(
         (await new BranchRepository(db).findById(branch.branch_id))?.deletion_status
       ).toBeUndefined();
@@ -225,3 +238,34 @@ test.for<AgorConfig>([
     });
   }
 );
+
+test('a branch capability read cannot cross the trusted tenant database scope', async ({ db }) => {
+  const { branch, user } = await seedEnvironmentCommandBranch(db);
+  const app = {
+    get: () => ({ execution: { unix_user_mode: 'delegated' } }),
+  } as unknown as Application;
+  const service = new BranchesService(
+    createTenantScopedDatabaseProxy(db, { requireScope: true }),
+    app
+  );
+  await runWithTenantDatabaseScope(db, 'default', async () => {
+    const params = {
+      user,
+      tenant: { tenant_id: 'default' as TenantID, source: 'explicit' },
+    } as AuthenticatedParams;
+    const current = await service.get(branch.branch_id, params);
+    expect(current.maintenance_capabilities?.permanent_delete.supported).toBe(false);
+    // Model the registered get hook's tenant scope, including a stale prefetch.
+    // SQLite cannot prove PostgreSQL RLS, but the real scope guard must reject
+    // changing the originating tenant before exposing this branch's projection.
+    await expect(async () =>
+      runWithTenantDatabaseScope(db, 'foreign-tenant', () =>
+        service.get(branch.branch_id, {
+          ...params,
+          tenant: { tenant_id: 'foreign-tenant' as TenantID, source: 'explicit' },
+          _agorPrefetchedRecord: { id: branch.branch_id, idField: 'branch_id', record: current },
+        })
+      )
+    ).rejects.toThrow('Cannot enter tenant');
+  });
+});

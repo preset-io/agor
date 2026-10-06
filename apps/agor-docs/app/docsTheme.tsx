@@ -1,45 +1,22 @@
-import { DiscordIcon } from 'nextra/icons';
-import { Footer, Navbar } from 'nextra-theme-docs';
-import { NavbarCloudCTA } from '../components/NavbarCloudCTA';
-import { NavbarTalkToUs } from '../components/NavbarTalkToUs';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../lib/links';
-import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
+import { Footer } from 'nextra-theme-docs';
+import { IslandNav } from '../components/nav/IslandNav';
 
-const basePath = getBasePath();
+// The floating-island global nav replaces Nextra's navbar site-wide; it owns
+// search (⌘K palette over the nav IA plus Pagefind) and the mobile menu.
+// Keyed: Nextra places it in a children array, and a client element created
+// in this server module otherwise trips React's missing-key warning.
+export const navbar = <IslandNav key="island-nav" />;
 
-export const logo = (
-  <span style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-    {/* alt="": decorative — the adjacent wordmark text names the link, and a
-        non-empty alt would be flagged as redundant by screen readers/axe. */}
-    {/* eslint-disable-next-line @next/next/no-img-element */}
-    {/* biome-ignore lint/performance/noImgElement: Using img for static assets in docs */}
-    <img
-      src={`${basePath}${LOGO_MARK_PATH}`}
-      alt=""
-      width="42"
-      height="42"
-      style={{ height: '42px', width: '42px' }}
-      suppressHydrationWarning
-    />
-    <strong className="agor-docs-wordmark">agor</strong>
-  </span>
+export const footer = (
+  <Footer>
+    <span>
+      Agor Community Edition is source-available under BSL 1.1 · © 2025 Preset, Inc.
+      <br />
+      Agor is not affiliated with or endorsed by the companies mentioned on this site. All product
+      names, logos, and brands are property of their respective owners.
+    </span>
+  </Footer>
 );
-
-export const navbar = (
-  <Navbar
-    logo={logo}
-    projectLink={GITHUB_REPO_URL}
-    chatLink={DISCORD_INVITE_URL}
-    // Default chat icon ships without an accessible name (axe: link-name);
-    // role="img" + aria-label makes the icon-only link announce as "Discord".
-    chatIcon={<DiscordIcon width="24" role="img" aria-label="Discord" />}
-  >
-    <NavbarCloudCTA />
-    <NavbarTalkToUs />
-  </Navbar>
-);
-
-export const footer = <Footer>Open and self-hosted · BSL 1.1 © 2025 Preset, Inc.</Footer>;
 
 export const sharedLayoutProps = {
   docsRepositoryBase: 'https://github.com/preset-io/agor/tree/main/apps/agor-docs',

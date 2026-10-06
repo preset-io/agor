@@ -425,6 +425,8 @@ export interface Branch {
 
   /** Set only by permanent deletion; remains fenced after partial failure. */
   deletion_status?: BranchDeletionStatus;
+  /** Read-only runtime support, projected by branches.get; never a grant or readiness proof. */
+  maintenance_capabilities?: import('./branch-cleanup').BranchMaintenanceCapabilities;
   /** Bounded, sanitized latest error; never used to decide recovery. */
   deletion_error?: string;
   deletion_updated_at?: string;
@@ -498,7 +500,6 @@ export interface Branch {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See context/explorations/clone-redesign.md.
 
   /**
    * How this branch's filesystem is materialised.

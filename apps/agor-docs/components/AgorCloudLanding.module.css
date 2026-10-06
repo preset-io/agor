@@ -974,3 +974,44 @@
     max-width: 340px;
   }
 }
+
+.footerTrademarks {
+  max-width: 1180px;
+  margin: 24px auto 0;
+  color: #5b7b76;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+/* "What your team gets": product pillars, each a link to its landing page. */
+.pillarGrid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.pillarCard {
+  display: flex;
+  flex-direction: column;
+  color: inherit;
+  text-decoration: none;
+}
+
+.pillarCard h3 {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.pillarCard p {
+  flex: 1;
+  margin: 8px 0 0;
+  color: var(--landing-muted);
+  line-height: 1.5;
+}
+
+.pillarMore {
+  margin-top: 16px;
+  color: var(--landing-teal);
+  font-weight: 600;
+}

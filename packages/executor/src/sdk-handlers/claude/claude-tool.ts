@@ -291,8 +291,7 @@ export class ClaudeTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md). When the row is reused, advance
+    // Create user message (or reuse the daemon's pre-write). When the row is reused, advance
     // nextIndex from the returned message's actual index.
     const userMessage = await createUserMessage(
       sessionId,
@@ -1001,8 +1000,7 @@ export class ClaudeTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md).
+    // Create user message (or reuse the daemon's pre-write).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,

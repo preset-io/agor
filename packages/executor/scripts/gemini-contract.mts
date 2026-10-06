@@ -22,6 +22,7 @@ process.env.HOME = path.join(root, 'home');
 delete process.env.GITHUB_SHA;
 delete process.env.SURFACE;
 delete process.env.AGOR_MANAGED_AGENTIC_TOOLS;
+delete process.env.AGOR_EXECUTOR_SCRATCH_ROOT;
 globalThis.fetch = async () => {
   throw new Error('Network forbidden in offline contract');
 };

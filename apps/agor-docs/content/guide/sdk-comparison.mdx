@@ -1,6 +1,6 @@
 ---
 title: SDK Feature Comparison
-description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, and OpenCode integrations including streaming, tool approval, and SDK differences.
+description: Compare AI coding agent capabilities in agor. Feature matrix for Claude Code, Codex, Gemini, GitHub Copilot, OpenCode, and Cursor (beta) integrations including streaming, tool approval, and SDK differences.
 ---
 
 import { ScrollTable } from '../../components/ScrollTable';
@@ -8,6 +8,8 @@ import { ScrollTable } from '../../components/ScrollTable';
 # SDK Feature Comparison
 
 Agor integrates with multiple AI coding agents. Each SDK has different capabilities based on their native features and API design.
+
+> **Cursor support is in beta:** expect gaps and changes. Cursor sessions run autonomously (no approval prompts) and do not report token usage yet.
 
 > **Codex subagent policy:** Agor disables Codex's native multi-agent feature for every
 > Agor-launched Codex process with the per-process SDK override
@@ -49,6 +51,14 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
   To preserve both and start fresh, set `AGOR_GEMINI_RESET_HISTORY_FOR` to the Agor
   session ID in your environment variables and retry once. The matching recordings
   move into a quarantine folder in the SDK home; remove the variable afterward.
+- The executor's per-task temporary directory (`TMPDIR`) lives in the SDK home
+  unless a delegated launcher sets `AGOR_EXECUTOR_SCRATCH_ROOT` to an absolute local
+  scratch directory, keeping it off a shared network home. Shell commands inherit
+  it, so builds then share that scratch's size limit. Conversation recordings
+  always stay in the SDK home.
+- MCP servers use the SDK's 10-minute request timeout separately for each
+  connection attempt, tool listing and tool call, so a server that accepts a
+  connection and then stalls can hold up a turn for 10 minutes or more.
 - The default model is `gemini-3.8-flash`. The picker also offers `gemini-3.7-flash`,
   `gemini-3.5-flash-lite` and the paid preview `gemini-3.1-pro-preview`. Stored 2.5
   selections remain usable when the API key has access. Retired Flash selections
@@ -59,18 +69,18 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
 
 <ScrollTable>
 
-| Feature                     | Claude Code     | Codex              | Gemini              | Copilot         | OpenCode           | Notes                                                                                         |
-| --------------------------- | --------------- | ------------------ | ------------------- | --------------- | ------------------ | --------------------------------------------------------------------------------------------- |
-| **Streaming responses**     | ✅ Text + tools | ⚠️ Tools only      | ✅ Text + tools     | ✅ Text + tools | ✅ Text + tools    | Claude, Gemini, Copilot & OpenCode stream text token-by-token; Codex streams tool events only |
-| **Stop mid-execution**      | ✅ Yes          | ⚠️ Limited         | ⚠️ Limited          | ⚠️ Limited      | ⚠️ Limited         | Claude has `interrupt()`, others may lose partial work                                        |
-| **Session forkable**        | ✅ SDK-native   | ✅ App Server fork | ❌ Not yet          | ❌ Not yet      | ❌ Not yet         | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar    |
-| **MCP integration**         | ✅ Native       | ✅ Native          | ✅ Native           | ✅ Native       | ✅ Native          | All agents support MCP with Agor's built-in self-access server                                |
-| **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ❌ No Manual        | ✅ Interactive  | ✅ Interactive     | OpenCode routes permission decisions through Agor and honors session permission mode          |
-| **Project instructions**    | ✅ CLAUDE.md    | ✅ AGENTS.md       | ⚠️ Manual           | ⚠️ Manual       | ✅ opencode.json   | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md               |
-| **Tool execution**          | ✅ Rich widgets | ⚠️ Basic           | ✅ Standard results | ✅ Rich events  | ✅ Rich events     | OpenCode streams tool parts with state tracking (pending/running/completed)                   |
-| **Session continuity**      | ✅ SDK-managed  | ✅ History-based   | ✅ SDK-managed      | ✅ SDK-managed  | ✅ SDK-managed     | Gemini resumes native SDK conversation recordings                                             |
-| **Token usage tracking**    | ✅ Full         | ✅ Full            | ✅ Per-turn         | ⚠️ Via events   | ✅ Via step-finish | OpenCode provides token counts and cost via `step-finish` message parts                       |
-| **Context window tracking** | 🟡 Estimated    | 🟡 Estimated       | 🟡 Estimated        | 🟡 Estimated    | 🟡 Estimated       | Agor derives cumulative conversation usage from SDK metrics                                   |
+| Feature                     | Claude Code     | Codex              | Gemini              | Copilot         | OpenCode           | Cursor (Beta)   | Notes                                                                                                      |
+| --------------------------- | --------------- | ------------------ | ------------------- | --------------- | ------------------ | --------------- | ---------------------------------------------------------------------------------------------------------- |
+| **Streaming responses**     | ✅ Text + tools | ⚠️ Tools only      | ✅ Text + tools     | ✅ Text + tools | ✅ Text + tools    | ✅ Text + tools | Claude, Gemini, Copilot, OpenCode & Cursor stream text; Codex streams tool events only                     |
+| **Stop mid-execution**      | ✅ Yes          | ⚠️ Limited         | ⚠️ Limited          | ⚠️ Limited      | ⚠️ Limited         | ⚠️ Limited      | Claude has `interrupt()`, others may lose partial work                                                     |
+| **Session forkable**        | ✅ SDK-native   | ✅ App Server fork | ❌ Not yet          | ❌ Not yet      | ❌ Not yet         | ❌ Not yet      | Claude uses Agent SDK's `forkSession`; Codex uses `codex app-server` `thread/fork` sidecar                 |
+| **MCP integration**         | ✅ Native       | ✅ Native          | ✅ Native           | ✅ Native       | ✅ Native          | ✅ Native       | All agents support MCP with Agor's built-in self-access server                                             |
+| **Permission requests**     | ✅ Rich         | ⚠️ Basic           | ❌ No Manual        | ✅ Interactive  | ✅ Interactive     | ❌ Autonomous   | OpenCode routes decisions through Agor; Cursor's SDK exposes no approval callback, so Cursor runs autonomously |
+| **Project instructions**    | ✅ CLAUDE.md    | ✅ AGENTS.md       | ⚠️ Manual           | ⚠️ Manual       | ✅ opencode.json   | ⚠️ Manual       | OpenCode reads project config from `opencode.json`; Claude auto-loads CLAUDE.md                            |
+| **Tool execution**          | ✅ Rich widgets | ⚠️ Basic           | ✅ Standard results | ✅ Rich events  | ✅ Rich events     | ✅ Rich events  | OpenCode and Cursor stream tool calls with status updates                                                  |
+| **Session continuity**      | ✅ SDK-managed  | ✅ SDK-managed     | ✅ SDK-managed      | ✅ SDK-managed  | ✅ SDK-managed     | ✅ SDK-managed  | Each resumes a stored SDK session, thread, or agent ID; Gemini resumes native SDK conversation recordings  |
+| **Token usage tracking**    | ✅ Full         | ✅ Full            | ✅ Per-turn         | ⚠️ Via events   | ✅ Via step-finish | ❌ No           | OpenCode provides token counts and cost via `step-finish` message parts                                    |
+| **Context window tracking** | 🟡 Estimated    | 🟡 Estimated       | 🟡 Estimated        | 🟡 Estimated    | 🟡 Estimated       | ❌ No           | Agor derives cumulative conversation usage from SDK metrics                                                |
 
 </ScrollTable>
 
@@ -126,7 +136,13 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
 - Tool execution events stream with state transitions (pending → running → completed)
 - Supports 75+ LLM providers (OpenAI, Anthropic, Google, and self-hosted models)
 
-**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude, Gemini, Copilot, and OpenCode get the full typewriter experience; Codex text appears instantly once the model finishes generating.
+**Cursor (Beta):** ✅ **Text, thinking, and tool streaming**
+
+- Streams `assistant`, `thinking`, and `tool_call` events from the SDK's `run.stream()`
+- Text and thinking blocks arrive incrementally in the Agor UI
+- Tool calls update in place as their status changes
+
+**Agor Implementation:** StreamingCallbacks interface provides unified streaming for all agents. Claude, Gemini, Copilot, OpenCode, and Cursor get the full typewriter experience; Codex text appears instantly once the model finishes generating.
 
 ---
 
@@ -162,6 +178,11 @@ Settings → Gemini. Google-account sign-in and Vertex AI are not supported.
 - May lose partial work from in-progress tool executions
 - Event stream disconnection triggers cleanup
 
+**Cursor (Beta):** ⚠️ **Limited**
+
+- Stopping a task cancels the active Cursor run (`Run.cancel()`)
+- Text streamed before the stop is kept; in-progress tool work may be lost
+
 ---
 
 ### 3. Session Forking
@@ -180,7 +201,7 @@ Forking creates a sibling session that inherits the parent's full conversation h
 - On the fork's first prompt, Agor spawns `codex app-server` as a short-lived sidecar, calls `thread/fork` with the parent's thread id, and persists the returned thread id on the child session
 - All subsequent prompts go through the normal SDK `resumeThread(...).runStreamed(...)` path. The sidecar is only touched once
 
-**Gemini, Copilot, OpenCode:** ❌ **Not supported yet**
+**Gemini, Copilot, OpenCode, Cursor:** ❌ **Not supported yet**
 
 - These SDKs don't expose a fork primitive. Use **spawn subsession** to delegate a fresh-context child instead.
 
@@ -225,6 +246,13 @@ In every case Agor tracks `genealogy.forked_from_session_id` and `fork_point_mes
 - Agor injects its built-in MCP server with session token authentication
 - User-defined MCP servers injected per-session from Agor UI
 - OpenCode tries Streamable HTTP first, then falls back to SSE for remote servers
+
+**Cursor (Beta):** ✅ **Native support**
+
+- MCP servers passed inline through the SDK's `mcpServers` option
+- Agor's built-in MCP server injected over HTTP with the session token in the `Authorization: Bearer` header
+- User-defined STDIO and HTTP servers injected per session from the Agor UI
+- Cursor's MCP config has no per-tool filter, so servers whose tools are gated are withheld from Cursor sessions, and Agor reports what was withheld
 
 **Remote MCP headers:** For HTTP/SSE MCP servers that require service-account headers (for example `DD-API-KEY`), configure **Custom HTTP Headers** in Settings → MCP Servers. Header values can be literals or templates such as `{{ user.env.DATADOG_API_KEY }}`. Values are treated as secrets in UI/API responses, and `Authorization` is reserved for the Auth Type field so bearer/JWT/OAuth headers cannot be accidentally overridden.
 
@@ -273,6 +301,12 @@ See [Gemini Beta](#gemini-beta) for the permission boundary and limitations.
 - Auto modes approve only their documented scope; `question` and nested `task` remain denied
 - Permissions include `external_directory` access when working outside the default project
 
+**Cursor (Beta):** ❌ **Autonomous only**
+
+- The Cursor SDK does not expose a blocking permission callback Agor can route to the UI
+- Cursor sessions run autonomously; the permission selector shows a single **Autonomous** mode
+- Pair Cursor with `sandbox` execution mode when you need a filesystem boundary
+
 **Agor Implementation:** Permission modals adapt based on agent type. Claude shows persistent scope options (Project/User/Local); Copilot and OpenCode use task-scoped approve/deny decisions.
 
 ---
@@ -310,6 +344,12 @@ See [Gemini Beta](#gemini-beta) for the permission boundary and limitations.
 - Supports custom instructions, model defaults, and provider configuration
 - Directory-scoped operations ensure the correct project config is loaded
 - Agor passes the branch path to scope OpenCode to the correct project
+
+**Cursor (Beta):** ⚠️ **Manual injection**
+
+- Runs locally with the branch worktree as its working directory
+- Agor appends its session context to each prompt
+- Cursor's own project rule files are not yet documented as supported in Agor
 
 **Recommendation:** Use Claude Code or Codex for projects with rich context requirements. OpenCode is ideal for teams using multiple LLM providers. For Gemini and Copilot, manage instructions in Agor session config.
 
@@ -357,7 +397,12 @@ See [Gemini Beta](#gemini-beta) for the permission boundary and limitations.
 - Agor normalizes OpenCode tool parts to common `tool_use` / `tool_result` content blocks
 - File edit events and bash commands are all tracked as tool parts
 
-Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's event types provide a solid foundation for rich visualization.
+**Cursor (Beta):** ✅ **Rich event-based tool tracking**
+
+- `tool_call` events carry tool name, arguments, and status, and update in place
+- Agor maps Cursor's shell, read, write, edit, grep, glob, and todo tools onto the same renderers used for Claude (Bash, Edit, Write, TodoWrite), keeping the native tool name for reference
+
+Works best with Claude Code due to richer tool metadata. OpenCode, Copilot, and Cursor event types provide a solid foundation for rich visualization.
 
 ---
 
@@ -370,11 +415,11 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Seamless continuity across multiple prompts
 - No message replay needed
 
-**Codex:** 🟡 **History-based continuity**
+**Codex:** ✅ **SDK-managed thread**
 
-- No native session concept
-- Agor passes message history array to each API call
-- Seamless from user perspective, more work behind the scenes
+- Codex assigns a thread ID on the first prompt
+- Agor stores it as `sdk_session_id` and resumes it with `resumeThread()` on every later prompt
+- No message replay needed
 
 **Gemini:** **SDK-managed conversation recordings**
 
@@ -394,6 +439,12 @@ Works best with Claude Code due to richer tool metadata. OpenCode and Copilot's 
 - Agor captures and stores `sdk_session_id` from OpenCode session
 - Seamless continuity via session resume with the stored ID
 - No message replay needed (OpenCode server maintains conversation state)
+
+**Cursor (Beta):** ✅ **SDK-managed conversation**
+
+- The Cursor SDK assigns an agent ID on the first prompt
+- Agor stores it as `sdk_session_id` and resumes it with `Agent.resume()`
+- No message replay needed
 
 Gemini resumes its SDK recording rather than reconstructing history from rendered transcript messages.
 
@@ -443,7 +494,12 @@ Gemini resumes its SDK recording rather than reconstructing history from rendere
 - Agor stores these in message metadata under `opencode` key
 - Supports cost tracking across all 75+ providers
 
-**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini also records per-turn usage; Copilot support varies by event.
+**Cursor (Beta):** ❌ **Not available yet**
+
+- The Cursor SDK's public types do not expose token counts or cost, so Cursor sessions show no token or cost pills
+- Agor stores the raw run result for later extraction if usage data becomes available
+
+**Agor Implementation:** Token data stored in `messages` table, aggregated for session-level analytics. Claude, Codex, and OpenCode sessions display token/context pills today; Gemini also records per-turn usage; Copilot support varies by event; Cursor reports none yet.
 
 ---
 
@@ -456,13 +512,13 @@ evidence that the context window is empty.
 
 Use the meter to judge when to compact or start a focused session, not as a
 guarantee of remaining capacity. Cumulative token spend is not current context
-occupancy: repeated cached input can be billed across multiple tool calls.
+occupancy: repeated cached input can be billed across multiple tool calls. Cursor reports no usage yet, so its sessions have no meter.
 
 ---
 
 ## Advanced Claude Code SDK Features
 
-Claude Code's Agent SDK exposes several advanced features that Agor fully supports. These are **Claude-exclusive** and not available in Codex, Gemini, or Copilot integrations.
+Claude Code's Agent SDK exposes several advanced features that Agor fully supports. These are **Claude-exclusive** and not available in the other agent integrations.
 
 ### Task Tool & Nested Operations
 
@@ -676,7 +732,7 @@ When expanded:
 
 **MCP Integration (all agents):**
 
-- First-class MCP server support across Claude Code, Codex, Gemini, and Copilot
+- First-class MCP server support across Claude Code, Codex, Gemini, Copilot, OpenCode, and Cursor
 - Session-level MCP server selection via Agor UI
 - Agor's built-in MCP server for self-awareness (sessions, branches, boards)
 - Supports both STDIO and HTTP transports
@@ -755,6 +811,12 @@ Copilot supports multiple underlying models selectable via the SDK:
 - You need flexibility to switch between providers without changing tools
 - Cost optimization is important (bring your own keys, no middleman)
 
+### Use Cursor (Beta) when:
+
+- Your team already works in Cursor and wants its models and agent inside Agor
+- Autonomous execution suits the work (Cursor sessions cannot ask for approval yet), ideally with `sandbox` execution mode
+- You can live without token and cost tracking for now
+
 ---
 
 ## OpenCode-Specific Notes
@@ -823,6 +885,26 @@ Hosted workspaces run OpenCode by default when they meet the prerequisites in
   session, or during your later OpenCode turns. Copies from deleted shared sessions
   are not removed automatically. Removal is best-effort, not an erasure
   guarantee.
+
+---
+
+## Cursor-Specific Notes (Beta)
+
+### Authentication
+
+- Requires a Cursor API key (`CURSOR_API_KEY`), created in the Cursor dashboard's integrations page
+- Configured per user in Agor, like other agent keys
+
+### Runtime
+
+- Uses `@cursor/sdk` with Cursor's **local** runtime; the branch worktree is the working directory, and a session needs a branch
+- Cursor's config directory cannot be relocated per user yet (an upstream limitation), so per-user config isolation is not available for Cursor
+
+### Limitations
+
+- **No approval prompts:** sessions run autonomously
+- **No token or cost tracking:** the SDK does not expose usage data
+- **No session forking:** use spawn subsession to delegate instead
 
 ---
 

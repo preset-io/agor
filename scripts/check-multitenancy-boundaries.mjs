@@ -55,7 +55,6 @@ const checks = [
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 1,
-      'apps/agor-daemon/src/services/repos.ts': 1,
       // Real REST + Socket.IO contract harness: the one authenticated test
       // connection is joined to a local-only channel so transport-level
       // response and realtime secret redaction can be asserted end to end.
@@ -307,7 +306,6 @@ export const APPROVED_UNCLASSIFIED_SERVICE_BASELINE = [
   'board-comments/:id/toggle-reaction',
   'board-comments/:id/reposition',
   'repos/local',
-  'repos/clone',
   'repos/:id/branches',
   'repos/:id/branches/:name',
   'repos/:id/export-agor-yml',

@@ -13,6 +13,10 @@
 }
 
 .landingShell {
+  /* Animated sections resize (e.g. the Work together demo settling), and the
+   * browser's scroll anchoring would then scroll the page to compensate,
+   * jumping the content the reader is looking at. Opt the marketing pages out. */
+  overflow-anchor: none;
   /* Marketing type system — fonts loaded via next/font in app/layout.tsx */
   --font-display-stack: var(--font-display), "Space Grotesk", system-ui, sans-serif;
   --font-body-stack: var(--font-body), "Hanken Grotesk", system-ui, sans-serif;
@@ -38,63 +42,9 @@
     radial-gradient(circle at 82% 8%, rgba(46, 154, 146, 0.12), transparent 34rem),
     linear-gradient(180deg, #07100f 0%, #0a1614 36%, #081210 72%, #07100f 100%);
   /* clip (not hidden): still contains the problem-section fly-ins, but does
-   * not create a scroll container — position: sticky inside the shell (the
-   * scroll-locked surface carousel) must stick to the VIEWPORT. */
+   * not create a scroll container — position: sticky inside the shell must
+   * stick to the VIEWPORT. */
   overflow: clip;
-}
-
-/* Hero banner — looping product-demo video behind the hero copy */
-.heroBanner {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  min-height: calc(100vh - 64px);
-  overflow: hidden;
-}
-
-.heroVideo {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  /* Poster doubles as the reduced-motion / video-loading backdrop. */
-  background: url("/videos/agor-hero-poster.jpg") center top / cover no-repeat;
-}
-
-.heroVideo video {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center top;
-}
-
-/* Scrim keeps the centered copy legible over the busy board UI and fades the
- * banner into the page background at the bottom. Center-weighted radial
- * matches the centered hero layout. */
-.heroVideo::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(
-      ellipse 82% 72% at 50% 40%,
-      rgba(7, 16, 15, 0.38) 0%,
-      rgba(7, 16, 15, 0.22) 52%,
-      rgba(7, 16, 15, 0.08) 78%
-    ),
-    linear-gradient(
-      180deg,
-      rgba(7, 16, 15, 0.45) 0%,
-      rgba(7, 16, 15, 0.06) 32%,
-      rgba(7, 16, 15, 0.95) 100%
-    );
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .heroVideo video {
-    display: none;
-  }
 }
 
 /* Aurora (ReactBits) backdrop behind the harness + multiplayer band */
@@ -110,7 +60,7 @@
   height: 100%;
   z-index: 0;
   pointer-events: none;
-  /* Aurora shader glows from the top edge; flip so the warm light rises
+  /* Aurora shader glows from the top edge; flip so the light rises
    * from the bottom of the band instead. */
   transform: scaleY(-1);
 }
@@ -127,7 +77,6 @@
   z-index: 1;
 }
 
-.heroSection,
 .problemSection,
 .liveSection,
 .workspaceSection,
@@ -139,58 +88,11 @@
   padding: 88px 28px;
 }
 
-.heroSection {
-  padding-top: 128px;
-}
-
 /* The teammates ring is dense — give the section extra air on both sides so
  * it doesn't read as packed between the showcase and the capabilities. */
 .workspaceSection {
   padding-top: clamp(120px, 14vh, 190px);
   padding-bottom: clamp(120px, 14vh, 190px);
-}
-
-.heroCopy {
-  position: relative;
-  max-width: 1040px;
-  margin: 0 auto;
-  padding: clamp(30px, 3.4vw, 48px) clamp(24px, 4vw, 56px) clamp(32px, 3.8vw, 54px);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 28px;
-  background: rgba(7, 16, 15, 0.42);
-  backdrop-filter: blur(9px) saturate(1.15);
-  -webkit-backdrop-filter: blur(9px) saturate(1.15);
-  text-align: center;
-}
-
-/* Without backdrop-filter support the tint must carry legibility alone */
-@supports not (backdrop-filter: blur(1px)) {
-  .heroCopy {
-    background: rgba(7, 16, 15, 0.78);
-  }
-}
-
-/* Mono badge pill straddling the glass pane's top edge (50% in / 50% out) */
-.heroBadge {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  margin: 0;
-  padding: 7px 15px 7px 11px;
-  border: 1px solid rgba(52, 230, 196, 0.22);
-  border-radius: 100px;
-  background: rgba(7, 16, 15, 0.9);
-  white-space: nowrap;
-  color: var(--landing-teal);
-  font-family: var(--font-mono-stack);
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
 }
 
 .eyebrow {
@@ -204,12 +106,13 @@
   text-transform: uppercase;
 }
 
-.heroCopy h1,
-.heroCopy h2,
 .sectionHeader h2,
 .workspaceCopy h2,
 .controlSection h2,
-.finalCta h2 {
+.finalCta h2,
+.sectionHeader h1,
+.workspaceCopy h1,
+.controlSection h1 {
   margin: 0;
   color: var(--landing-ink);
   /* Hairline (100) headers use the body grotesque — Space Grotesk floors at 300. */
@@ -217,42 +120,6 @@
   font-weight: 100;
   letter-spacing: -0.03em;
   line-height: 1.02;
-}
-
-.heroCopy h1 {
-  max-width: 18ch;
-  margin: 0 auto;
-  font-size: clamp(3.45rem, 6.5vw, 5.75rem);
-  /* Slightly heavier than the shared hairline (100) — the hero's own h1 is
-   * large enough that 100 reads as too thin at this size. */
-  font-weight: 300;
-  overflow-wrap: normal;
-  word-break: normal;
-  hyphens: none;
-}
-
-/* Hero A/B variant sub-headline — only rendered when a heroVariant prop is
- * passed (see heroVariants.tsx); the default "/" hero has no h2. Same
- * hairline-heading family as h1, one size down. */
-.heroCopy h2 {
-  max-width: 44ch;
-  margin: 14px auto 0;
-  font-size: clamp(1.7rem, 3.2vw, 2.5rem);
-}
-
-/* Author-controlled line breaks for hero variant copy (\n in
- * heroVariants.tsx → <br/> from HighlightedText). Desktop-and-up only:
- * nowrap makes each authored line exactly one line (no extra browser-
- * chosen wraps), with max-width lifted since the author is now doing the
- * wrapping. Below 640px we deliberately fall back to normal wrapping —
- * nowrap has no built-in floor, so a long authored line would just run
- * off the edge of a narrow phone instead of reflowing. */
-@media (min-width: 640px) {
-  .heroCopy h1.heroForcedBreak,
-  .heroCopy h2.heroForcedBreak {
-    white-space: nowrap;
-    max-width: none;
-  }
 }
 
 /* Gradient accent phrase inside headings (mockup treatment, mint → sky).
@@ -482,7 +349,10 @@
 .sectionHeader h2,
 .workspaceCopy h2,
 .controlSection h2,
-.finalCta h2 {
+.finalCta h2,
+.sectionHeader h1,
+.workspaceCopy h1,
+.controlSection h1 {
   font-size: clamp(2.45rem, 4vw, 4.05rem);
 }
 
@@ -538,7 +408,8 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  padding: 8%;
+  /* % padding resolves against the stage, not the node: keep it small. */
+  padding: 3%;
   border: 1px solid rgba(52, 230, 196, 0.18);
   border-radius: 50%;
   background: linear-gradient(180deg, rgba(15, 34, 31, 0.72), rgba(10, 22, 20, 0.55));
@@ -580,6 +451,13 @@
 
 .ringNodeIcon svg {
   flex-shrink: 0;
+}
+
+/* Nodes are links: keep the ink color and no underline over the global
+ * `.dark a` rule. */
+.featureRing a.ringNode {
+  color: var(--landing-ink);
+  text-decoration: none;
 }
 
 .ringNodeActive {
@@ -761,76 +639,6 @@
   padding-top: 0;
 }
 
-/* Product-surfaces explorer: side rail + large screenshot stage */
-/* Phone-only scroll-locked surface carousel (see the compound media block at
- * the end of the file) — desktop and reduced-motion phones never show it. */
-.surfaceScrolly {
-  display: none;
-}
-
-/* Capabilities carousel — same grammar as the showcase reel above (tab
- * pills, chrome frame, sliding track, arrows). Slides stack an info bar over
- * the screenshot; clicking the screenshot advances. */
-.surfaceExplorer {
-  margin-top: 10px;
-}
-
-.surfaceSlide {
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-.surfaceShotButton {
-  display: block;
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-
-.surfaceShot {
-  display: block;
-  width: auto;
-  max-width: 100%;
-  height: auto;
-  /* Viewport-aware ceiling: header + tabs + info bar + nav cost
-   * ~533px, so the shot scales to the largest size that keeps the WHOLE
-   * section on screen — natural aspect ratio, never cropped. */
-  max-height: clamp(230px, calc(100dvh - 533px), 600px);
-  margin: 0 auto;
-}
-
-.surfaceInfo {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 28px;
-  padding: 20px 34px;
-  border-bottom: 1px solid rgba(52, 230, 196, 0.1);
-}
-
-.surfaceInfo .secondaryButton {
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.surfaceInfo h3 {
-  margin: 0;
-  color: var(--landing-teal);
-  font-family: var(--font-display-stack);
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-.surfaceInfo p {
-  max-width: 62ch;
-  margin: 10px 0 0;
-  color: var(--landing-muted);
-  line-height: 1.6;
-}
-
 /* "Compound Amplifying Bus" section — the calm mint answer that lands right
  * after the amber traffic pileup. Left: copy with the giant gradient
  * "compound"; right: six trust items strung down a vertical spine with
@@ -850,7 +658,8 @@
 }
 
 .controlSection h2,
-.controlSection p {
+.controlSection p,
+.controlSection h1 {
   color: white;
 }
 
@@ -997,12 +806,7 @@
 
 /* Link-styled button — opens the HubSpot beta modal (not a navigation). */
 .busBetaLink {
-  padding: 0;
-  border: 0;
-  background: none;
   color: var(--landing-teal);
-  font: inherit;
-  cursor: pointer;
   text-decoration: underline;
   text-decoration-color: rgba(52, 230, 196, 0.45);
   text-underline-offset: 3px;
@@ -1099,26 +903,6 @@
   color: var(--landing-teal);
 }
 
-/* Footer entry that opens the beta modal instead of navigating — dressed
- * exactly like the sibling anchors. */
-.footerLinkButton {
-  display: block;
-  margin-bottom: 10px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--landing-muted);
-  font-family: inherit;
-  font-size: 0.95rem;
-  text-align: left;
-  cursor: pointer;
-  transition: color 140ms ease;
-}
-
-.footerLinkButton:hover {
-  color: var(--landing-teal);
-}
-
 /* "Built by Preset" credit — last line of the footer, spanning both grid
  * columns. Same dim-to-mint hover register as the footer links. */
 .footerCredit {
@@ -1181,10 +965,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .showcaseTrack {
-    transition: none;
-  }
-
   .landingShell [data-reveal],
   .landingShell .isVisible {
     opacity: 1;
@@ -1227,166 +1007,6 @@
    * above; only the bottom dissolves into the page. */
   mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
   -webkit-mask-image: linear-gradient(180deg, #000, #000 55%, transparent 96%);
-}
-
-.showcaseHeader {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.showcaseTabs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.showcaseTab {
-  padding: 9px 18px;
-  border: 1px solid rgba(52, 230, 196, 0.16);
-  border-radius: 999px;
-  background: rgba(52, 230, 196, 0.04);
-  color: var(--landing-muted);
-  font-family: var(--font-display-stack);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition:
-    border-color 0.25s,
-    background 0.25s,
-    color 0.25s;
-}
-
-.showcaseTab:hover {
-  border-color: rgba(52, 230, 196, 0.4);
-  color: var(--landing-ink);
-}
-
-.showcaseTabActive,
-.showcaseTabActive:hover {
-  background: var(--landing-teal);
-  border-color: var(--landing-teal);
-  color: #04110e;
-}
-
-.showcaseFrame {
-  position: relative;
-  margin-top: 24px;
-  overflow: hidden;
-  border: 1px solid rgba(52, 230, 196, 0.14);
-  border-radius: 20px;
-  background: #081210;
-  box-shadow: 0 50px 120px -50px rgba(0, 0, 0, 0.8);
-}
-
-/* Invisible click layer over a carousel frame: clicking the media advances.
- * Arrows sit above it (z-index 2). Hidden on phones (scroll drives). */
-.frameAdvance {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  padding: 0;
-  border: 0;
-  background: none;
-  cursor: pointer;
-}
-
-/* Prev/next carousel arrows — circular glass buttons hugging the stage edges.
- * They sit inside the data-reveal section but not ON the reveal element, so
- * they own their transition list (hover animates instead of snapping). */
-.showcaseArrow {
-  position: absolute;
-  top: 50%;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  border: 1px solid rgba(52, 230, 196, 0.25);
-  border-radius: 50%;
-  background: rgba(8, 18, 16, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  color: var(--landing-muted);
-  cursor: pointer;
-  translate: 0 -50%;
-  transition:
-    border-color 0.25s ease,
-    background 0.25s ease,
-    color 0.25s ease,
-    scale 0.25s ease;
-}
-
-.showcaseArrow:hover {
-  border-color: rgba(52, 230, 196, 0.6);
-  background: rgba(10, 24, 21, 0.75);
-  color: var(--landing-teal);
-  scale: 1.07;
-}
-
-.showcaseArrowLeft {
-  left: 14px;
-}
-
-.showcaseArrowRight {
-  right: 14px;
-}
-
-.showcaseViewport {
-  overflow: hidden;
-}
-
-.showcaseTrack {
-  display: flex;
-  width: 400%;
-  transform: var(--showcase-transform);
-  transition: transform 0.55s cubic-bezier(0.65, 0, 0.35, 1);
-}
-
-/* Phone-only showcase indicator pieces (styled in the compound media block
- * at the end of the file) — hidden on desktop, where the tab pills and the
- * chrome-bar caption do this job. */
-.showcaseStatus,
-.showcaseSlideInfo,
-.showcaseDots {
-  display: none;
-}
-
-.showcaseSlide {
-  width: 25%;
-  min-height: 460px;
-  padding: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(closest-side at 50% 40%, rgba(52, 230, 196, 0.07), transparent);
-}
-
-/* Slide media: a 16:9 demo-video loop inside the browser-frame stage. The
- * poster is painted as the frame's background image so it doubles as the
- * reduced-motion / JS-off fallback (the video element hides via the media
- * query at the end of this file). */
-.slideVideoFrame {
-  position: relative;
-  width: min(940px, 100%);
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border: 1px solid rgba(52, 230, 196, 0.12);
-  border-radius: 12px;
-  background-color: #0b1715;
-  background-position: center;
-  background-size: cover;
-  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
-}
-
-.slideVideo {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 /* Two-tone statement headline + numbered card grid (multiplayer section) */
@@ -1718,6 +1338,7 @@
 
 .problemCard:hover {
   border-color: rgba(232, 196, 104, 0.35);
+  translate: none;
 }
 
 .problemIcon {
@@ -1731,21 +1352,33 @@
   border-radius: 10px;
   background: rgba(232, 196, 104, 0.08);
   color: #e8c468;
+  transition:
+    color 0.35s ease,
+    border-color 0.35s ease,
+    background-color 0.35s ease;
 }
 
-/* Rhetorical hinge ABOVE the pileup — "this operational nightmare" points
- * down at the cards, so nobody reads it against the next section. */
-.problemPivot {
-  max-width: 30ch;
-  margin: 48px auto 0;
-  color: var(--landing-ink);
-  font-family: var(--font-display-stack);
-  font-size: clamp(1.55rem, 2.7vw, 2.3rem);
-  font-weight: 300;
-  letter-spacing: -0.02em;
-  line-height: 1.18;
-  text-align: center;
-  text-wrap: balance;
+/* Icon rides left of the title, so the card reads as one headline row. */
+.problemHead {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.problemHead .problemIcon {
+  flex: none;
+  margin-bottom: 0;
+}
+
+.problemHead h3 {
+  line-height: 1.25;
+}
+
+/* The problem words in each title: amber, like the section's "silo". */
+.problemKey {
+  color: #e8c468;
+  transition: color 0.35s ease;
 }
 
 .controlActions {
@@ -1798,6 +1431,20 @@
   margin: 18px 0 0;
   color: var(--landing-muted);
   line-height: 1.7;
+}
+
+/* /agent-roster hero: the radar section opens the page. */
+.rosterHero {
+  min-height: calc(100vh - 64px);
+  padding-top: clamp(112px, 14vh, 150px);
+}
+
+.rosterHero .rosterCopy {
+  max-width: 480px;
+}
+
+.rosterLead {
+  color: #fff;
 }
 
 .rosterStatusLine {
@@ -2074,10 +1721,8 @@
 /* Higher-specificity overrides — kept last so specificity ascends file-wide
  * (biome noDescendingSpecificity). */
 
-/* Hero copy stacks above the video backdrop. */
-.heroBanner .heroSection {
-  position: relative;
-  z-index: 1;
+.rosterSection {
+  scroll-margin-top: 80px;
 }
 
 /* Above sibling sections (which sit at z-index 1): the radar's fixed phone
@@ -2094,57 +1739,98 @@
     0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
-/* Inline links inside landing body copy (e.g. the AI Enablement Engineer
- * post) — explicit so they read as links regardless of site theme. */
-.workspaceCopy p a,
-.controlSection p a {
-  color: var(--landing-teal);
-  text-decoration: underline;
-  text-decoration-color: rgba(52, 230, 196, 0.45);
-  text-underline-offset: 3px;
-  transition:
-    color 0.25s ease,
-    text-decoration-color 0.25s ease;
-}
-
-.workspaceCopy p a:hover,
-.controlSection p a:hover {
-  color: #a8f5ed;
-  text-decoration-color: #a8f5ed;
-}
-
 /* Problem-section crash choreography. Slots hold opacity 0 until the
  * IntersectionObserver stamps .isVisible on the section (it carries
  * data-reveal); then the six per-slot pile-up timelines run on one shared
- * 1400ms clock (fill-mode both covers the pre-start hold and the settled
- * end state; each keyframe's own 0% opacity + final transform match the
- * gate and resting pose, so there's no flash or double-fade). */
+ * 1400ms clock. Fill-mode is backwards, not both: every final keyframe equals
+ * .problemSlot's resting transform, so releasing the animation at the end is
+ * pixel-identical, and it hands transform back to the cascade so the hover
+ * below can straighten the card. */
 .problemSection:not(.isVisible) .problemSlot {
   opacity: 0;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(1) {
-  animation: problemCrash1 1400ms both;
+  animation: problemCrash1 1400ms backwards;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(2) {
-  animation: problemCrash2 1400ms both;
+  animation: problemCrash2 1400ms backwards;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(3) {
-  animation: problemCrash3 1400ms both;
+  animation: problemCrash3 1400ms backwards;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(4) {
-  animation: problemCrash4 1400ms both;
+  animation: problemCrash4 1400ms backwards;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(5) {
-  animation: problemCrash5 1400ms both;
+  animation: problemCrash5 1400ms backwards;
 }
 
 .problemSection.isVisible .problemSlot:nth-child(6) {
-  animation: problemCrash6 1400ms both;
+  animation: problemCrash6 1400ms backwards;
+}
+
+/* Problem card hover (desktop pile only): the card straightens out of the
+ * pile, flat and a hair larger, and rises above its neighbors. */
+@media (min-width: 981px) and (hover: hover) {
+  .problemSection .problemSlot {
+    transition:
+      rotate 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+      transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1),
+      scale 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .problemSection.isVisible .problemSlot:hover,
+  .problemSection.isVisible .problemSlot:focus-within {
+    z-index: 10;
+    rotate: 0deg;
+    scale: 1.04;
+    transform: rotateX(0deg) rotateY(0deg);
+  }
+}
+
+/* Hovering the solution link turns its card from problem amber to solution
+ * aqua. The aqua background is a fading overlay (gradients don't transition). */
+.problemCard {
+  position: relative;
+  isolation: isolate;
+  transition:
+    translate 0.3s ease,
+    border-color 0.35s ease;
+}
+
+.problemCard::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: linear-gradient(180deg, rgba(15, 42, 39, 0.92), rgba(10, 28, 26, 0.85));
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  pointer-events: none;
+}
+
+.problemCard:has(.problemLink:hover, .problemLink:focus-visible) {
+  border-color: rgba(52, 230, 196, 0.45);
+}
+
+.problemCard:has(.problemLink:hover, .problemLink:focus-visible)::before {
+  opacity: 1;
+}
+
+.problemCard:has(.problemLink:hover, .problemLink:focus-visible) .problemKey {
+  color: #45c4bb;
+}
+
+.problemCard:has(.problemLink:hover, .problemLink:focus-visible) .problemIcon {
+  border-color: rgba(69, 196, 187, 0.35);
+  background-color: rgba(69, 196, 187, 0.12);
+  color: #45c4bb;
 }
 
 /* --- Viewport media queries — kept AFTER every base rule they override
@@ -2197,18 +1883,6 @@
     animation: none;
   }
 
-  .surfaceShot {
-    height: clamp(240px, 52vw, 420px);
-  }
-
-  .surfaceInfo {
-    padding: 20px 22px 24px;
-  }
-
-  .showcaseSlide {
-    min-height: 340px;
-  }
-
   .liveSection,
   .workspaceSection,
   .controlSection {
@@ -2240,7 +1914,6 @@
     margin-top: -2rem;
   }
 
-  .heroSection,
   .problemSection,
   .liveSection,
   .workspaceSection,
@@ -2249,8 +1922,8 @@
     padding: 64px 24px;
   }
 
-  /* Problem entries drop the card chrome on phones: icon rides left of the
-   * text so each entry is shorter, and thin dividers replace the boxes. */
+  /* Problem entries drop the card chrome on phones; thin dividers replace
+   * the boxes. */
   .problemScatter {
     grid-template-columns: 1fr;
     gap: 0;
@@ -2258,30 +1931,18 @@
   }
 
   .problemCard {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    column-gap: 14px;
-    row-gap: 2px;
     padding: 18px 2px;
     border: 0;
     border-radius: 0;
     background: none;
   }
 
-  .problemIcon {
-    grid-row: 1 / span 2;
-    align-self: start;
-    margin-bottom: 0;
+  .problemHead {
+    margin-bottom: 8px;
   }
 
-  .problemCard h3,
   .problemCard p {
-    grid-column: 2;
     margin: 0;
-  }
-
-  .problemCard h3 {
-    align-self: center;
   }
 
   .problemCard:hover {
@@ -2341,14 +2002,6 @@
     letter-spacing: 0.05em;
   }
 
-  .heroSection {
-    padding-top: 96px;
-  }
-
-  .heroCopy h1 {
-    font-size: clamp(3.05rem, 14vw, 4.75rem);
-  }
-
   .heroActions {
     align-items: stretch;
     flex-direction: column;
@@ -2362,34 +2015,16 @@
   .sectionHeader h2,
   .workspaceCopy h2,
   .controlSection h2,
-  .finalCta h2 {
+  .finalCta h2,
+  .sectionHeader h1,
+  .workspaceCopy h1,
+  .controlSection h1 {
     font-size: clamp(2.25rem, 10.5vw, 3.65rem);
   }
 
   .controlSection {
     margin-inline: 24px;
     padding: 48px 24px;
-  }
-
-  /* Tab pills stay usable at phone widths; the floating arrows would sit on
-   * top of the slide content, so drop them. */
-  .showcaseArrow {
-    display: none;
-  }
-
-  /* The 16:9 video frame is short at phone widths — drop the desktop slide
-   * min-height so the stage hugs the media instead of floating it in a tall
-   * empty well. */
-  .showcaseSlide {
-    min-height: 0;
-    padding: 18px;
-  }
-
-  /* Info row can't fit copy + button side by side — stack them. */
-  .surfaceInfo {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
   }
 
   .landingFooter {
@@ -2431,255 +2066,1144 @@
     transform: scale(1.6);
     animation: none;
   }
-
-  /* Showcase carousel: hide the video loops — the poster frame painted on
-   * .slideVideoFrame's background shows instead (mirrors the hero video). */
-  .slideVideo {
-    display: none;
-  }
 }
 
-/* --- Phone carousels: native side-swipe via CSS scroll-snap, not a pinned
- * scroll-jack. Both tracks are normal-height, in-flow elements — flicking
- * vertically scrolls straight past them like any other section; a horizontal
- * flick within the frame swipes the cards. See the matching scroll-listener
- * effects in LandingPage.tsx that keep status line/dots/video-gating in
- * sync with wherever a swipe settles. --- */
 @media (max-width: 720px) {
   .showcaseSection {
     padding: 64px 24px 0;
   }
+}
 
-  /* Match the surface carousel's look: status line + dots instead of tab
-   * pills; the chrome caption moves below the video. */
-  .showcaseTabs {
-    display: none;
-  }
+/* --- Hub-and-spoke navigation ---------------------------------------------
+ * Jump-link chips (.heroHubLink, used by DetailNav), the "learn more"
+ * hand-off under each home sampler section, and the docs / sibling-page
+ * links at the foot of every landing page. */
+.heroHubLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--landing-ink);
+  font-family: var(--font-mono-stack);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
 
-  /* Swipe drives the carousels on phones — no click layer. */
-  .frameAdvance {
-    display: none;
-  }
+.heroHubLink:hover {
+  border-color: rgba(52, 230, 196, 0.6);
+  background: rgba(52, 230, 196, 0.1);
+  color: var(--landing-teal);
+}
 
-  .showcaseFrame {
-    margin-top: 12px;
-    overflow: visible;
-    border: 0;
-    border-radius: 0;
-    background: none;
-    box-shadow: none;
-  }
+.learnMore {
+  margin: 28px 0 0;
+  text-align: center;
+}
 
-  .showcaseViewport {
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
+.workspaceCopy .learnMore,
+.rosterCopy .learnMore,
+.controlSection .learnMore {
+  text-align: left;
+}
 
-  .showcaseViewport::-webkit-scrollbar {
-    display: none;
-  }
+.learnMoreLink,
+.problemLink,
+.pageLinksList a {
+  color: var(--landing-teal);
+  font-weight: 600;
+  text-decoration: none;
+}
 
-  /* Neutralize the desktop transform — position comes from native scroll
-   * instead — and let the track size itself to the (single) visible slide
-   * rather than the desktop 400%. */
-  .showcaseViewport .showcaseTrack {
-    width: 100%;
-    transform: none;
-    transition: none;
-  }
+.learnMoreLink:hover,
+.problemLink:hover,
+.pageLinksList a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 
-  .showcaseSlide {
-    width: 100%;
-    flex: 0 0 100%;
-    min-height: 0;
-    padding: 0;
-    scroll-snap-align: center;
-    background: none;
-  }
+.problemLink {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
 
-  .slideVideoFrame {
-    border-radius: 14px;
-  }
-
-  .showcaseStatus {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    margin: 14px 0 16px;
-  }
-
-  .showcaseSlideInfo {
+/* Phones (cards lose their chrome): the hint at the answer sits right. */
+@media (max-width: 720px) {
+  .problemCard .problemLink {
     display: block;
-    margin-top: 16px;
-  }
-
-  .showcaseSlideInfo h3 {
-    margin: 0 0 8px;
-    color: var(--landing-ink);
-    font-family: var(--font-display-stack);
-    font-size: 1.35rem;
-    font-weight: 600;
-  }
-
-  .showcaseSlideInfo p {
-    margin: 0;
-    color: var(--landing-muted);
-    font-size: 0.94rem;
-    line-height: 1.55;
-  }
-
-  .showcaseDots {
-    display: flex;
-    justify-content: center;
-    gap: 7px;
-    margin-top: 18px;
-  }
-
-  .surfaceExplorer {
-    display: none;
-  }
-
-  .surfaceScrolly {
-    display: block;
-    margin-top: 8px;
-  }
-
-  .scrollySticky {
-    padding: 0;
-  }
-
-  .scrollyStatus {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-    padding: 0 24px;
-    margin-bottom: 16px;
-  }
-
-  .scrollyStatusCount {
-    color: var(--landing-teal);
-    font-family: var(--font-mono-stack);
-    font-size: 0.78rem;
-    letter-spacing: 0.08em;
-  }
-
-  .scrollyStatusTitle {
-    color: var(--landing-muted);
-    font-family: var(--font-mono-stack);
-    font-size: 0.78rem;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-  }
-
-  /* .scrollyTrack is the scroll container itself (no separate viewport
-   * wrapper needed, unlike the showcase reel above). */
-  .scrollyTrack {
-    display: flex;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: none;
-  }
-
-  .scrollyTrack::-webkit-scrollbar {
-    display: none;
-  }
-
-  .scrollyCard {
-    flex: 0 0 100%;
-    box-sizing: border-box;
-    scroll-snap-align: center;
-    padding: 0 24px;
-  }
-
-  .scrollyShot {
-    width: 100%;
-    max-height: 44dvh;
-    object-fit: cover;
-    object-position: top left;
-    border: 1px solid rgba(52, 230, 196, 0.16);
-    border-radius: 16px;
-    background: #081210;
-  }
-
-  .scrollyCard h3 {
-    margin: 18px 0 8px;
-    color: var(--landing-ink);
-    font-family: var(--font-display-stack);
-    font-size: 1.35rem;
-    font-weight: 600;
-  }
-
-  .scrollyCard p {
-    margin: 0;
-    color: var(--landing-muted);
-    font-size: 0.94rem;
-    line-height: 1.55;
-  }
-
-  .scrollyDots {
-    display: flex;
-    justify-content: center;
-    gap: 7px;
-    margin-top: 22px;
-  }
-
-  .scrollyDot {
-    width: 8px;
-    height: 8px;
-    border-radius: 4px;
-    background: rgba(238, 244, 241, 0.22);
-    transition:
-      width 150ms ease,
-      background 150ms ease;
-  }
-
-  .scrollyDotActive {
-    width: 22px;
-    background: var(--landing-teal);
+    text-align: right;
   }
 }
 
-/* --- Short desktop viewports: the capability slide goes side-by-side (info
- * rail left, screenshot right) so the image keeps real size without pushing
- * the section past one screen. Tall viewports keep info stacked above. --- */
-@media (min-width: 721px) and (max-height: 980px) {
-  .surfaceSlide {
+.pageLinks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 40px;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 72px 28px 24px;
+}
+
+.pageLinksTitle {
+  margin: 0 0 16px;
+  color: var(--landing-ink);
+  font-family: var(--font-display-stack);
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.pageLinksList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* --- Landing-page detail blocks --------------------------------------------
+ * Copy beside media, alternating sides down the page. Anchored by id so the
+ * home page can deep-link; scroll-margin clears the sticky navbar. */
+/* Section nav + blocks. Narrow screens: the nav is a pill row above the
+ * blocks. Desktop: a sticky rail on the left, highlighting the block in view. */
+.detailLayout {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+.detailNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  padding: 40px 28px 0;
+}
+
+.detailNavTitle,
+.detailNavNode {
+  display: none;
+}
+
+.landingShell a.detailNavLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--landing-line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--landing-ink);
+  font-family: var(--font-mono-stack);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-decoration: none;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease;
+}
+
+.landingShell a.detailNavLink:hover {
+  border-color: rgba(52, 230, 196, 0.5);
+  color: var(--landing-teal);
+}
+
+.landingShell a.detailNavLinkActive {
+  border-color: rgba(52, 230, 196, 0.6);
+  background: rgba(52, 230, 196, 0.1);
+  color: var(--landing-teal);
+}
+
+.detailNavLink:focus-visible {
+  outline: 2px solid var(--landing-teal);
+  outline-offset: 2px;
+}
+
+@media (min-width: 1100px) {
+  .detailLayout {
     display: grid;
-    grid-template-columns: minmax(280px, 0.34fr) 1fr;
-    align-items: stretch;
+    grid-template-columns: 200px minmax(0, 1fr);
+    gap: 40px;
+    padding: 0 28px;
   }
 
-  .surfaceInfo {
+  .detailNav {
+    position: sticky;
+    top: 96px;
+    align-self: start;
     flex-direction: column;
-    align-items: flex-start;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    /* No gap: each item's line segment meets the next, so the rail is one
+     * continuous line. */
+    gap: 0;
+    margin-top: clamp(64px, 9vh, 110px);
+    padding: 0;
+  }
+
+  .detailNavTitle {
+    display: block;
+    margin: 0 0 10px 30px;
+    color: #6f8e89;
+    font-family: var(--font-mono-stack);
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  /* Bus-style rail: ring nodes on a thin vertical line. */
+  .landingShell a.detailNavLink {
+    position: relative;
+    min-height: 36px;
+    padding: 0 0 0 30px;
+    border: 0;
+    border-radius: 0;
+    background: none;
+    color: #8fa9a6;
+    font-family: var(--font-body-stack);
+    font-size: 0.95rem;
+    letter-spacing: 0;
+  }
+
+  .landingShell a.detailNavLink::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 9px;
+    width: 1px;
+    background: rgba(52, 230, 196, 0.22);
+  }
+
+  .landingShell a.detailNavLink:first-of-type::before {
+    top: 50%;
+  }
+
+  .landingShell a.detailNavLink:last-of-type::before {
+    bottom: 50%;
+  }
+
+  .detailNavNode {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    display: block;
+    width: 19px;
+    height: 19px;
+    margin-top: -9.5px;
+  }
+
+  .detailNavDot {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 9px;
+    height: 9px;
+    margin: -4.5px 0 0 -4.5px;
+    border: 1.5px solid rgba(52, 230, 196, 0.45);
+    border-radius: 50%;
+    background: #08110f;
+    transition:
+      border-color 160ms ease,
+      background-color 160ms ease;
+  }
+
+  .landingShell a.detailNavLink:hover {
+    background: none;
+    color: var(--landing-ink);
+  }
+
+  .landingShell a.detailNavLinkActive {
+    background: none;
+    color: var(--landing-teal);
+  }
+
+  .detailNavLinkActive .detailNavDot {
+    border: 2px solid var(--landing-teal);
+    background: var(--landing-teal);
+    box-shadow: 0 0 10px rgba(52, 230, 196, 0.6);
+    animation: busPulse 3s ease-in-out infinite;
+  }
+
+  .landingShell a.detailNavLink:hover .detailNavDot {
+    border-color: var(--landing-teal);
+  }
+
+  .detailColumn .detailSection {
+    max-width: none;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}
+
+.detailSection {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(32px, 5vw, 72px);
+  align-items: center;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(64px, 9vh, 110px) 28px;
+  /* The block's own top padding clears most of the floating nav island. */
+  scroll-margin-top: 56px;
+}
+
+.detailSection:nth-of-type(even) .detailCopy {
+  order: 2;
+}
+
+.detailTextOnly {
+  grid-template-columns: minmax(0, 760px);
+  justify-content: center;
+}
+
+.detailTitle {
+  margin: 0;
+  color: var(--landing-ink);
+  font-family: var(--font-body-stack);
+  font-size: clamp(2rem, 3.6vw, 3rem);
+  font-weight: 100;
+  letter-spacing: -0.02em;
+  line-height: 1.08;
+}
+
+.detailCopy p {
+  margin: 18px 0 0;
+  color: var(--landing-muted);
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.detailPoints {
+  display: grid;
+  gap: 14px;
+  margin: 26px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.detailPoints li {
+  display: grid;
+  gap: 4px;
+  padding-left: 16px;
+  border-left: 2px solid rgba(52, 230, 196, 0.45);
+}
+
+.pageLinksList li + li {
+  margin-top: 10px;
+}
+
+.detailPoints strong {
+  color: var(--landing-ink);
+  font-weight: 600;
+}
+
+.detailPoints span {
+  color: var(--landing-muted);
+  line-height: 1.55;
+}
+
+.detailCopy .detailLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin-top: 24px;
+}
+
+.detailLinks a {
+  color: var(--landing-teal);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.detailLinks a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* Inline links inside landing body copy (e.g. the AI Enablement Engineer
+ * post) — explicit so they read as links regardless of site theme. */
+.workspaceCopy p a,
+.controlSection p a {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-decoration-color: rgba(52, 230, 196, 0.45);
+  text-underline-offset: 3px;
+  transition:
+    color 0.25s ease,
+    text-decoration-color 0.25s ease;
+}
+
+.workspaceCopy p a:hover,
+.controlSection p a:hover {
+  color: #a8f5ed;
+  text-decoration-color: #a8f5ed;
+}
+
+.detailMediaFrame {
+  overflow: hidden;
+  border: 1px solid var(--landing-line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+.detailMedia {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@media (max-width: 860px) {
+  .detailSection {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detailSection:nth-of-type(even) .detailCopy {
+    order: 0;
+  }
+}
+
+/* Card/item titles that double as deep links: keep the heading look, reveal
+ * the link on hover. */
+.titleLink {
+  color: inherit;
+  text-decoration: none;
+}
+
+.titleLink:hover {
+  color: var(--landing-teal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* A home section promoted to its landing page's hero: fills the first
+ * screen below the navbar and clears it at the top. */
+.sectionHero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: calc(100vh - 64px);
+  padding-top: clamp(96px, 12vh, 140px);
+}
+
+.workspaceSection.sectionHero,
+.controlSection.sectionHero {
+  display: grid;
+}
+
+.sectionHeroActionsStart {
+  justify-content: flex-start;
+}
+
+/* The governance card is its own panel: keep it clear of the navbar instead
+ * of stretching it to the full first screen. */
+.controlSection.sectionHero {
+  min-height: 0;
+  margin-top: clamp(88px, 11vh, 120px);
+  padding-top: 66px;
+  align-items: start;
+}
+
+/* /multiplayer hero: no full-screen min-height (it's tall enough), so the
+ * cards don't float above an empty band before the harness strip. */
+.liveSection.sectionHero {
+  min-height: 0;
+  padding-bottom: 48px;
+}
+
+/* /multiplayer hero: statement beside the live-presence loop. */
+.liveHeroGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: clamp(32px, 4vw, 64px);
+  align-items: center;
+}
+
+.liveHeroMedia {
+  overflow: hidden;
+  border: 1px solid var(--landing-line);
+  border-radius: 20px;
+  background: center / cover no-repeat;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+}
+
+.liveHeroMedia video {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveHeroMedia video {
+    display: none;
+  }
+}
+
+@media (max-width: 860px) {
+  .liveHeroGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Third-party trademark notice: the site names and pictures other products
+ * (agent harnesses, chat tools, a Figma comparison). */
+.footerTrademarks {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #5b7b76;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.radarBlipQuiet {
+  cursor: default;
+}
+
+.radarBlipQuiet .blipIcon {
+  border-color: rgba(94, 233, 208, 0.2);
+  background: #0b1714;
+  color: rgba(95, 233, 208, 0.55);
+}
+
+.radarBlipQuiet .blipName {
+  color: #7f9994;
+}
+
+/* Written-up members are links to their /agent-roster listing: a brighter,
+ * ringed blip that lifts on hover. The rest are quieter and not clickable. */
+a.radarBlip {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.radarBlip .blipIcon {
+  border-color: rgba(94, 233, 208, 0.85);
+  background: #123029;
+  box-shadow: 0 0 0 4px rgba(94, 233, 208, 0.1);
+}
+
+a.radarBlip:hover .blipIcon,
+a.radarBlip:focus-visible .blipIcon {
+  box-shadow:
+    0 0 0 4px rgba(94, 233, 208, 0.2),
+    0 0 24px rgba(94, 233, 208, 0.5);
+}
+
+a.radarBlip .blipName {
+  color: #eafff9;
+}
+
+.tooltipStory {
+  display: block;
+  margin: 8px 0 0;
+  color: var(--landing-teal);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+/* Branch role matrix: a rendered stand-in for a Permissions screenshot on
+ * /governance. Lives in .detailMediaFrame, so it sits on the frame's glass. */
+.roleMatrix {
+  padding: clamp(18px, 2.4vw, 28px);
+  color: var(--landing-ink);
+}
+
+.roleMatrix table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.roleMatrix caption {
+  margin-bottom: 14px;
+  color: var(--landing-teal);
+  font-family: var(--font-mono-stack);
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.roleMatrix th,
+.roleMatrix td {
+  padding: 11px 8px;
+  border-bottom: 1px solid var(--landing-line);
+  text-align: center;
+  vertical-align: middle;
+}
+
+.roleMatrix thead th {
+  color: var(--landing-ink);
+  font-weight: 600;
+}
+
+.roleMatrix tbody th {
+  color: var(--landing-muted);
+  font-weight: 400;
+  text-align: left;
+}
+
+.roleYes {
+  display: inline-flex;
+  color: var(--landing-teal);
+}
+
+.roleNo {
+  display: inline-flex;
+  color: rgba(159, 196, 189, 0.4);
+}
+
+.roleMaybe {
+  color: #e8c468;
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.roleFootnote {
+  margin: 14px 0 0;
+  color: var(--landing-muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 520px) {
+  .roleMatrix table {
+    font-size: 0.8rem;
+  }
+
+  .roleMatrix th,
+  .roleMatrix td {
+    padding: 9px 4px;
+  }
+}
+
+/* --- Home hero (design handoff 2a) ----------------------------------------
+ * The pitch sits directly on the full-bleed video (no glass card), with one
+ * primary CTA, a text link, a copyable install command, and the landing
+ * pages as a quiet hairline row along the bottom edge. */
+.homeHero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: max(100svh, 640px);
+  overflow: hidden;
+}
+
+.homeHeroVideo {
+  position: absolute;
+  inset: 0;
+  background: url("/videos/agor-hero-poster.jpg") center top / cover no-repeat;
+  pointer-events: none;
+  /* Soft-focus the product loop so it reads as atmosphere behind the pitch.
+   * The slight scale pushes blur's feathered edges past the clipped hero. */
+  filter: blur(5px);
+  transform: scale(1.03);
+  /* Clips the tilting video; cqw units below resolve against this width. */
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+/* A slow "walking past a monitor" tilt. Perspective lives inside the
+ * transform in container units, so the look is identical at any width.
+ * Coverage: with a centered origin the receding edge still reaches the
+ * container edge when S >= 1 / (cos θ - (W/2 / d) · sin θ). With
+ * d = 150cqw, (W/2)/d = 1/3, so θ = 6° needs S >= 1.042; 1.045 leaves
+ * room for subpixel rounding. Height never binds before width does.
+ * Retuning: change θ (angle), d (depth: smaller = more dramatic) or the
+ * duration, then recompute S from the formula and round up. */
+.homeHeroVideo video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center top;
+  transform-origin: 50% 50%;
+  animation: homeHeroTilt 12s cubic-bezier(0.37, 0, 0.63, 1) infinite alternate;
+}
+
+@keyframes homeHeroTilt {
+  from {
+    transform: perspective(150cqw) rotateY(-6deg) scale(1.045);
+  }
+  to {
+    transform: perspective(150cqw) rotateY(6deg) scale(1.045);
+  }
+}
+
+/* Legibility scrim: a soft wash behind the centered pitch, and a deepening
+ * floor that also sits under the bottom row. */
+.homeHeroScrim {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse 58% 46% at 50% 46%,
+      rgba(5, 7, 7, 0.82),
+      rgba(5, 7, 7, 0.5) 60%,
+      transparent 100%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(5, 7, 7, 0.55) 0%,
+      rgba(5, 7, 7, 0.3) 30%,
+      rgba(5, 7, 7, 0.35) 60%,
+      rgba(5, 7, 7, 0.9) 100%
+    );
+  pointer-events: none;
+}
+
+.homePitch {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  padding: 136px 24px 40px;
+  text-align: center;
+}
+
+.homeBadge {
+  /* The Agor mark (HeroLogo) sits here now; spacing only. */
+  margin-bottom: -4px;
+}
+
+.homePitch h1 {
+  margin: 0;
+  color: #f4f7f7;
+  /* 100 is what it always rendered at (300 wasn't loaded until the subhead
+   * needed it). */
+  font: 100 clamp(2.9rem, 6.6vw, 5.25rem) / 1.02 var(--font-body-stack);
+  letter-spacing: -0.035em;
+}
+
+.homePromise {
+  display: block;
+  font-size: 0.82em;
+  line-height: 1.1;
+}
+
+.homeSub {
+  max-width: 58ch;
+  margin: 0;
+  color: #cfd8d9;
+  font: 300 clamp(1.2rem, 2vw, 1.5rem) / 1.4 var(--font-body-stack);
+  text-wrap: balance;
+}
+
+/* Flat accent color here instead of the gradient used elsewhere. */
+.homePitch .headingAccent {
+  background: none;
+  color: #4fd6c8;
+  -webkit-text-fill-color: #4fd6c8;
+}
+
+.homeSub .headingAccent {
+  font-weight: 500;
+}
+
+.homePitch h1 .headingAccent {
+  font-weight: 600;
+}
+
+.homeCtaRow {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.homeHero a.homePrimary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 34px;
+  border-radius: 999px;
+  background: #3fd9c4;
+  box-shadow: 0 0 50px rgba(63, 217, 196, 0.35);
+  color: #061010;
+  font: 600 24px / 1 var(--font-body-stack);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.homeHero a.homePrimary:hover {
+  background: #6fe3d3;
+  color: #061010;
+}
+
+.homeHero a.homePrimary:active {
+  background: #2bb8a5;
+}
+
+.homeHero .homeSecondary {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 34px;
+  border: 1.5px solid #3a4545;
+  border-radius: 999px;
+  background: #161c1c;
+  color: #fff;
+  font: 600 24px / 1 var(--font-body-stack);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background-color 0.15s;
+}
+
+.homeHero .homeSecondary:hover {
+  border-color: rgba(69, 196, 187, 0.6);
+  background: rgba(69, 196, 187, 0.1);
+}
+
+/* CTA tiers (handoff "hero CTA tiers"): a labelled Agor Cloud tier, then a
+ * smaller Agor Community Edition tier below it. */
+.homeTiers {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 52px;
+  margin-top: 8px;
+}
+
+.homeTier {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.homeTierCe {
+  gap: 12px;
+}
+
+.homeKicker {
+  margin: 0;
+  color: #3fd9c4;
+  font: 500 13px var(--font-mono-stack);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.homeKickerMuted {
+  color: #5f7d7a;
+  font-size: 12px;
+}
+
+.homeCeRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+}
+
+.homeHero a.homeCeBtn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: #e8f2f1;
+  font: 500 16px var(--font-body-stack);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.homeHero a.homeCeBtn:hover {
+  border-color: #3fd9c4;
+  color: #fff;
+}
+
+.homeRow {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 20px;
+  margin: 0 48px 28px;
+}
+
+.homeHero a.homeRowItem {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 12px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  text-decoration: none;
+  transition:
+    border-color 0.2s,
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Hover wash: a barely-there aqua gradient behind the item, exactly as wide
+ * as its rule. On a pseudo-element so it fades via opacity (gradients don't
+ * transition) and unfurls down from the rule on the same curve as the lift. */
+.homeHero a.homeRowItem::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 -12px;
+  z-index: -1;
+  border-radius: 0 0 12px 12px;
+  background: linear-gradient(180deg, rgba(69, 196, 187, 0.12), rgba(69, 196, 187, 0.02));
+  opacity: 0;
+  transform: scaleY(0.4);
+  transform-origin: top;
+  transition:
+    opacity 0.35s ease,
+    transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  pointer-events: none;
+}
+
+.homeRowLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #f2f6f6;
+  font: 500 15px var(--font-body-stack);
+  transition: color 0.2s;
+}
+
+.homeRowLabel span {
+  opacity: 0.55;
+}
+
+.homeRowDesc {
+  color: #9aa6a9;
+  font: 400 12.5px / 1.4 var(--font-body-stack);
+  text-wrap: pretty;
+}
+
+.homeHero a.homeRowItem:hover,
+.homeHero a.homeRowItem[data-troupe-hover] {
+  border-top-color: #45c4bb;
+  transform: translateY(-3px);
+}
+
+.homeHero a.homeRowItem:hover::before,
+.homeHero a.homeRowItem[data-troupe-hover]::before {
+  opacity: 1;
+  transform: none;
+}
+
+.homeHero a.homeRowItem:hover .homeRowLabel,
+.homeHero a.homeRowItem[data-troupe-hover] .homeRowLabel {
+  color: #8ee3db;
+}
+
+.homeVideoToggle {
+  position: absolute;
+  z-index: 2;
+  right: 14px;
+  bottom: 14px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(5, 7, 7, 0.55);
+  color: #c9d2d3;
+  cursor: pointer;
+}
+
+.homeVideoToggle:hover {
+  color: #fff;
+}
+
+.homeHero a.homePrimary:focus-visible,
+.homeHero .homeSecondary:focus-visible,
+.homeHero a.homeCeBtn:focus-visible,
+.homeHero a.homeRowItem:focus-visible,
+.homeVideoToggle:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .homeHeroVideo video {
+    display: none;
+    animation: none;
+  }
+
+  .homeHero a.homeRowItem:hover,
+  .homeHero a.homeRowItem::before {
+    transform: none;
+  }
+}
+
+/* Under ~1024px the row becomes a horizontal swipe strip with an edge fade. */
+@media (max-width: 1023px) {
+  .homeRow {
+    grid-auto-columns: 220px;
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    margin: 0 0 28px;
+    padding: 0 24px;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+
+  .homeHero a.homeRowItem {
+    scroll-snap-align: start;
+  }
+}
+
+/* Short laptop screens: keep the bottom row above the fold. */
+@media (max-height: 780px) and (min-width: 640px) {
+  .homePitch {
+    gap: 20px;
+    padding-top: 108px;
+    padding-bottom: 24px;
+  }
+
+  .homeTiers {
+    gap: 28px;
+  }
+
+  .homeHero a.homePrimary,
+  .homeHero .homeSecondary {
+    padding: 16px 34px;
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 639px) {
+  .homePitch {
+    gap: 22px;
+    padding-top: 112px;
+  }
+
+  .homePitch h1 {
+    font-size: clamp(2.75rem, 12vw, 3rem);
+  }
+
+  .homeCtaRow {
+    flex-direction: column;
+    align-self: stretch;
+    gap: 18px;
+  }
+
+  .homeHero a.homePrimary {
     justify-content: center;
-    gap: 14px;
-    /* Left padding clears the floating prev-arrow at the frame's edge. */
-    padding: 16px 28px 16px 86px;
-    border-bottom: 0;
-    border-right: 1px solid rgba(52, 230, 196, 0.1);
+    width: 100%;
   }
 
-  .surfaceInfo p {
-    margin-top: 6px;
-  }
-
-  .surfaceShotButton {
-    display: flex;
-    align-items: center;
+  .homeHero .homeSecondary {
     justify-content: center;
-    padding: 18px;
+    width: 100%;
   }
 
-  .surfaceShot {
-    /* Less vertical overhead with the info rail beside the image; the
-     * 300px floor keeps squat windows from shrinking the shot to a stamp
-     * (the section scrolls a little instead). */
-    max-height: max(300px, calc(100dvh - 438px));
+  /* Tiers span the column; Cloud buttons stack full width (above), the
+   * Community Edition pair stays side by side. */
+  .homeTiers {
+    align-self: stretch;
+    align-items: stretch;
+    gap: 36px;
   }
+
+  .homeTier {
+    align-items: stretch;
+    text-align: center;
+  }
+
+  .homeHero a.homePrimary,
+  .homeHero .homeSecondary {
+    padding: 18px 28px;
+    font-size: 20px;
+  }
+}
+
+/* /governance hero: trust-list titles are the page's jump links. */
+.busJump {
+  margin-left: 6px;
+  vertical-align: -2px;
+  opacity: 0.55;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+}
+
+.titleLink:hover .busJump {
+  opacity: 1;
+  transform: translateY(2px);
+}
+
+/* ^word^ in hero copy: an accent-colored word whose letters wave every few
+ * seconds once the home page's cursor troupe cues it (html[data-troupe-wave]).
+ * Each letter carries its slice of the accent gradient, since background-clip
+ * text doesn't reach into inline-block children. */
+.waveWord,
+.waveWord > span {
+  display: inline-block;
+}
+
+.waveWord > span {
+  background: linear-gradient(110deg, #34e6c4, #7ad9ff);
+  background-size: calc(var(--n) * 100%) 100%;
+  background-position: calc(var(--i) / (var(--n) - 1) * 100%) 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-weight: 600;
+}
+
+:global(html[data-troupe-wave]) .waveWord > span {
+  animation: letterWave 4.2s ease-in-out calc(var(--i) * 90ms) infinite;
+}
+
+/* A quick wave (the first ~17%), then a rest until the next one. */
+@keyframes letterWave {
+  0%,
+  17%,
+  100% {
+    transform: none;
+  }
+
+  7% {
+    transform: translateY(-0.32em);
+  }
+}
+
+/* The troupe does the radar's introductions, so its hint isn't needed. */
+:global(html[data-troupe-on]) .rosterStatusLine {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detailNavLinkActive .detailNavDot,
+  .detailNavNode .busRipple {
+    animation: none;
+  }
+
+  :global(html[data-troupe-wave]) .waveWord > span {
+    animation: none;
+  }
+}
+
+/* Behind the CRT intro (lib/crtIntro.ts) the hero's own animations hold on
+ * their first frame, so they play as the terminal hands over the page. */
+:global(html[data-crt-intro="locked"]) .homeHero :is(*, *::before, *::after) {
+  animation-play-state: paused;
 }

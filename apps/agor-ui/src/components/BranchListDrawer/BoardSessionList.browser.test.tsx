@@ -139,13 +139,17 @@ it('follows the teammate panel row grammar', async () => {
 it('reveals time and the board locator on hover or focus and opens rows by keyboard', async () => {
   const { onSessionClick } = mount();
   const target = row('Resync');
+  const search = page.elementLocator(screen.getByPlaceholderText(/search sessions/i));
+  // DOM cleanup does not reset the browser pointer. Establish an unhovered,
+  // unfocused row instead of depending on where the preceding test left it.
+  await act(async () => search.click());
   // The toolbar mounts once the list is idle (or on first hover/focus), hidden until used.
   // The idle callback has a 2s deadline, longer than waitFor's default 1s timeout.
   const toolbar = await waitFor(
     () => within(target.parentElement!).getByRole('group', { name: 'Session actions' }),
     { timeout: 5000 }
   );
-  expect(getComputedStyle(toolbar).opacity).toBe('0');
+  await waitFor(() => expect(getComputedStyle(toolbar).opacity).toBe('0'));
   expect(getComputedStyle(target.parentElement!).backgroundColor).toBe(TRANSPARENT);
 
   await act(async () => page.elementLocator(target).hover());
@@ -171,9 +175,13 @@ it('reveals time and the board locator on hover or focus and opens rows by keybo
   );
   expect(onSessionClick).not.toHaveBeenCalled();
 
-  act(() => row('Final independent').focus());
+  // Move both pointer and focus away, then reveal by keyboard focus alone.
+  await act(async () => search.click());
+  await waitFor(() => expect(getComputedStyle(toolbar).opacity).toBe('0'));
+  act(() => target.focus());
+  await waitFor(() => expect(getComputedStyle(toolbar).opacity).toBe('1'));
   await act(async () => userEvent.keyboard('{Enter}'));
-  expect(onSessionClick).toHaveBeenCalledExactlyOnceWith('ready');
+  expect(onSessionClick).toHaveBeenCalledExactlyOnceWith('read');
 });
 
 it('adds search context on a second line without breaking the row', async () => {

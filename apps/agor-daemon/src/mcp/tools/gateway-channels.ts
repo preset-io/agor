@@ -1144,7 +1144,9 @@ const discordSetupSchema = z
     allowedRoleIds: z
       .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord role snowflake.'))
       .default([])
-      .describe('Discord role snowflakes allowed to prompt the bot.'),
+      .describe(
+        'Discord role snowflakes allowed to prompt the bot. Include the guild ID to admit every member (@everyone); with a fixed run-as user, prefer alignUsers.'
+      ),
     agorUserId: mcpOptionalId(
       'agorUserId',
       'User',

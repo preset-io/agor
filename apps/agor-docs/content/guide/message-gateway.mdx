@@ -428,6 +428,12 @@ creates a Discord application or calls Discord. Before enabling a row:
    (or opt in to bounded PNG/JPEG inbound images with `files:true`),
    agent tools (off by default), and optional proactive target. Enter the bot token through
    the secure credential form; do not paste it into chat or MCP arguments.
+   To admit every current guild member, add the Guild ID itself to the role
+   allowlist: it is Discord's @everyone role, which Discord never lists among a
+   member's roles. With a fixed run-as user, that lets anyone who can join the
+   server (including through a public invite) run sessions with that user's
+   branch access, credentials, and channel history if enabled. Prefer aligned
+   identity mode, which still rejects unmapped authors.
 4. Keep the row disabled while translating an old implicit configuration. Run
    the connection test if useful, then enable only after the explicit contract
    validates. A passing probe does not verify future event delivery,

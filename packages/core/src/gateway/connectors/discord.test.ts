@@ -453,6 +453,67 @@ describe('Discord connector beta', () => {
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });
 
+  it('admits any guild member only when the guild ID (@everyone) is an allowed role', async () => {
+    const unlisted = {
+      id: '888888888888888888',
+      guild_id: config.guild_id,
+      channel_id: config.allowed_channel_ids[0],
+      type: 0,
+      content: `<@${config.application_id}> hello`,
+      author: { id: '101010101010101010', bot: false },
+      member: { roles: [] },
+      mentions: [{ id: config.application_id }],
+    };
+    for (const [allowedRoles, expected] of [
+      [config.allowed_role_ids, []],
+      [[config.guild_id], ['888888888888888888', '888888888888888889']],
+    ] as const) {
+      const { transport, dispatch } = makeTransport();
+      const connector = new DiscordConnector(
+        { ...config, allowed_user_ids: [], allowed_role_ids: [...allowedRoles] },
+        transport as never
+      );
+      const received: unknown[] = [];
+      await connector.startListening(async (message) => {
+        received.push(message);
+      });
+      const emit = dispatch();
+      emit?.({ t: 'MESSAGE_CREATE', s: 1, d: unlisted }, 0);
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 2,
+          d: { ...unlisted, id: '888888888888888889', member: { roles: ['121212121212121212'] } },
+        },
+        0
+      );
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 3,
+          d: { ...unlisted, id: '888888888888888890', member: undefined },
+        },
+        0
+      );
+      emit?.(
+        {
+          t: 'MESSAGE_CREATE',
+          s: 4,
+          d: { ...unlisted, id: '888888888888888891', guild_id: '131313131313131313' },
+        },
+        0
+      );
+      await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+      expect(
+        received.map(
+          (message) =>
+            (message as { metadata: { discord_message_id: string } }).metadata.discord_message_id
+        )
+      ).toEqual(expected);
+      await connector.stopListening();
+    }
+  });
+
   it('accepts text plus a signed PNG when inbound files are explicitly enabled', async () => {
     const { transport, gateway, dispatch } = makeTransport();
     const connector = new DiscordConnector({ ...config, files: true }, transport as never);
@@ -1178,6 +1239,26 @@ describe('Discord direct messages', () => {
     expect(receive).toHaveBeenCalledOnce();
     expect(onError).not.toHaveBeenCalled();
     expect(h.gateway.destroy).not.toHaveBeenCalled();
+    await connector.stopListening();
+  });
+
+  it('admits roleless current members when @everyone is allowed, but never nonmembers', async () => {
+    const h = makeTransport();
+    const connector = new DiscordConnector(
+      {
+        ...config,
+        allowed_user_ids: [],
+        allowed_role_ids: [config.guild_id],
+        direct_messages_enabled: true,
+      },
+      h.transport
+    );
+    const receive = vi.fn();
+    await connector.startListening(receive);
+    h.rest.get.mockRejectedValueOnce({ status: 404 }).mockResolvedValueOnce({ roles: [] });
+    await deliver(h, connector, dm, 1);
+    await deliver(h, connector, dm, 2);
+    expect(receive).toHaveBeenCalledOnce();
     await connector.stopListening();
   });
 

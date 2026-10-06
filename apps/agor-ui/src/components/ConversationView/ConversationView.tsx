@@ -19,7 +19,7 @@ import type {
   SessionID,
   User,
 } from '@agor-live/client';
-import { shortId, TaskStatus } from '@agor-live/client';
+import { LEAN_TRANSCRIPT_TASK_WINDOW, shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -31,6 +31,7 @@ import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
+import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -41,6 +42,14 @@ const EMPTY_USER_MAP = new Map<string, User>();
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
 const EMPTY_MESSAGES: Message[] = [];
+
+/** The first turn intersecting the viewport: the scroll anchor across paging and trimming. */
+function firstVisibleTurn(viewport: HTMLElement): HTMLElement | undefined {
+  const top = viewport.getBoundingClientRect().top;
+  return Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
+    (element) => element.getBoundingClientRect().bottom >= top
+  );
+}
 
 export interface ConversationViewProps {
   /**
@@ -167,7 +176,15 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // user scrolls up. `scrollRef` goes on the scroll container, `contentRef`
     // on the inner content wrapper. `initial`/`resize: 'instant'` avoids
     // smooth-scroll animation jank on first paint and on layout growth.
-    const { scrollRef, contentRef, scrollToBottom, stopScroll, state } = useStickToBottom({
+    const {
+      scrollRef,
+      contentRef,
+      scrollToBottom,
+      stopScroll,
+      state,
+      isAtBottom,
+      escapedFromLock,
+    } = useStickToBottom({
       initial: 'instant',
       resize: 'instant',
     });
@@ -182,6 +199,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
+        resetScrollBaseline(state);
         let height = element.clientHeight;
         let resizeGeneration = 0;
         let guardedDifference = 0;
@@ -205,7 +223,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               }
             }, 1);
           });
-          if (state.isAtBottom && !state.escapedFromLock) {
+          if (isBottomLockEngaged(state)) {
             scrollToBottom({ animation: 'instant' });
           }
         });
@@ -222,19 +240,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
     // don't leak the library's optional ScrollToBottom options to callers.
-    const handleScrollToBottom = useCallback(() => {
-      // The library's scrollToBottom() sets isAtBottom=true but never clears
-      // escapedFromLock, so a prior scroll-up leaves the bottom lock half-engaged:
-      // the resize-driven re-pin that follows late/streamed content is gated on
-      // isAtBottom, which a stale escapedFromLock keeps flipping back to false.
-      // Clearing the escape on an explicit go-to-bottom intent lets the pin
-      // survive until the round-tripped/streamed content actually arrives.
-      state.escapedFromLock = false;
-      // initial/resize options do not apply to this explicit call: without
-      // animation it springs through history. Late code-block shrinkage can
-      // then look like upward user scrolling and cancel the initial bottom lock.
-      scrollToBottom({ animation: 'instant' });
-    }, [state, scrollToBottom]);
+    const handleScrollToBottom = useCallback(
+      () => jumpToBottom(state, scrollToBottom),
+      [state, scrollToBottom]
+    );
 
     // Scroll to top. While content is still streaming/growing, the library's
     // persistent observer can re-pin to the bottom before our scrollTop write
@@ -377,9 +386,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       const viewport = scrollRef.current;
       if (!viewport) return;
       stopScroll();
-      const anchor = Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
-        (element) => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top
-      );
+      const anchor = firstVisibleTurn(viewport);
       if (anchor)
         olderAnchor.current = {
           element: anchor,
@@ -409,6 +416,77 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       }
       olderAnchor.current = null;
     }, [loadingOlder, scrollRef, sessionId]);
+
+    // A reader parked at the latest turns keeps a bounded transcript: beyond
+    // LEAN_TRANSCRIPT_TASK_WINDOW turns the handle drops the oldest ones above
+    // the first visible turn, and they return through Load older history. Never
+    // while the reader is scrolled up or paging. In-session search only walks
+    // mounted turns, so a trimmed turn is found again once paged back in, like
+    // any not-yet-loaded history.
+    const trimAnchor = useRef<{ element: HTMLElement; top: number; tasks: unknown } | null>(null);
+    // Declared before the trim so it sees the trim's own commit, not the one that requested it.
+    useLayoutEffect(() => {
+      const anchor = trimAnchor.current;
+      const viewport = scrollRef.current;
+      if (!anchor || anchor.tasks === reactiveTasks || !viewport) return;
+      trimAnchor.current = null;
+      // The browser may already have moved scrollTop (scroll anchoring or
+      // clamping). With a turn appended in the same frame the content height
+      // can net out, so no resize guards that scroll event. Share the hook's
+      // resize guard, as the viewport observer does, or it reads as the reader
+      // scrolling up and releases the bottom lock.
+      const shift = anchor.element.isConnected
+        ? anchor.element.getBoundingClientRect().top - anchor.top
+        : 0;
+      const guard = shift || -1;
+      state.resizeDifference = guard;
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (state.resizeDifference === guard) state.resizeDifference = 0;
+        }, 1);
+      });
+      if (shift) state.scrollTop = viewport.scrollTop + shift;
+      // Removal can outweigh a turn appended in the same frame; a negative resize
+      // does not re-pin, so follow the lock explicitly.
+      if (state.isAtBottom) void scrollToBottom({ animation: 'instant' });
+    });
+    // Releasing the protection that held the window open (a pin, a resolved
+    // request, a settled turn) moves the first protected turn: trim again then,
+    // without waiting for another turn to arrive.
+    const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
+    useLayoutEffect(() => {
+      const viewport = scrollRef.current;
+      if (
+        !reactiveSession ||
+        !viewport ||
+        loadingOlder ||
+        tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW ||
+        // The rendered flags re-run this when the reader returns to the bottom;
+        // the hook's live state decides whether the lock is engaged right now.
+        !isAtBottom ||
+        !isBottomLockEngaged(state)
+      )
+        return;
+      const anchor = firstVisibleTurn(viewport);
+      if (!anchor) return;
+      trimAnchor.current = {
+        element: anchor,
+        top: anchor.getBoundingClientRect().top,
+        tasks: reactiveTasks,
+      };
+      if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
+    }, [
+      reactiveSession,
+      reactiveTasks,
+      firstProtectedTurn,
+      tasks.length,
+      isAtBottom,
+      escapedFromLock,
+      loadingOlder,
+      scrollRef,
+      state,
+    ]);
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent

@@ -396,7 +396,6 @@ Preserve these invariants:
 | Runtime discovery and recovery                         | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                     |
 | Termination claims and containment settlement          | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts` |
 | Startup orphan reconciliation                          | `apps/agor-daemon/src/startup.ts`                                                              |
-| Full HA kill-point audit                               | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                   |
 
 ## Why the architecture has this shape
 

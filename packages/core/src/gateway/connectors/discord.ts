@@ -1339,8 +1339,13 @@ export class DiscordConnector implements GatewayConnector {
     const roles = Array.isArray(member?.roles)
       ? member.roles.filter((id): id is string => typeof id === 'string')
       : [];
+    // Discord never lists @everyone (role ID = guild ID) in member.roles, so an
+    // allowlisted guild ID explicitly admits every current member of the guild.
+    const everyoneAllowed =
+      member !== null && allowedRoles.includes(configuredString(this.config, 'guild_id'));
     if (
       !allowedUsers.includes(String(author.id)) &&
+      !everyoneAllowed &&
       !roles.some((role) => allowedRoles.includes(role))
     ) {
       return { accepted: false };

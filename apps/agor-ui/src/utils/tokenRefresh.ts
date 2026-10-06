@@ -10,6 +10,23 @@ import type { AuthenticatedAgorClient, User } from '@agor-live/client';
 export const ACCESS_TOKEN_KEY = 'agor-access-token';
 export const REFRESH_TOKEN_KEY = 'agor-refresh-token';
 
+// Bumped when this tab signs in or out; routine rotation keeps in-flight work current.
+let tokenGeneration = 0;
+export class SupersededAuthenticationError extends Error {
+  constructor() {
+    super('Authentication was superseded');
+    this.name = 'SupersededAuthenticationError';
+  }
+}
+export function invalidateTokenAuthority(): void {
+  tokenGeneration += 1;
+}
+/** Returns a check that stays true until this tab next signs in or out. */
+export function captureTokenAuthority(): () => boolean {
+  const generation = tokenGeneration;
+  return () => generation === tokenGeneration;
+}
+
 export interface RefreshResult {
   accessToken: string;
   refreshToken?: string;
@@ -85,9 +102,9 @@ export function clearTokens(): void {
  * rotation). The result belongs to a superseded identity and is discarded
  * rather than stored or broadcast.
  */
-export class RefreshSupersededError extends Error {
+export class RefreshSupersededError extends SupersededAuthenticationError {
   constructor() {
-    super('Refresh result discarded: the credentials it was issued for were replaced');
+    super();
     this.name = 'RefreshSupersededError';
   }
 }
@@ -108,7 +125,9 @@ export async function refreshAndStoreTokens(
   client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
+  const isCurrent = captureTokenAuthority();
   const result = await refreshAccessToken(client, refreshToken);
+  if (!isCurrent()) throw new SupersededAuthenticationError();
   if (getStoredRefreshToken() !== refreshToken) throw new RefreshSupersededError();
   storeTokens(result.accessToken, result.refreshToken);
   return result;

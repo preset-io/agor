@@ -182,9 +182,18 @@ export function repoCreated(repo: Repo) {
 }
 export function repoPatched(repo: Repo) {
   setMap('repoById', (prev) => {
-    // Events can arrive out of order and last_updated does not prove write order; a retry gets a new row.
-    const status = prev.get(repo.repo_id)?.clone_status;
-    if ((status === 'ready' || status === 'failed') && repo.clone_status === 'cloning') return prev;
+    // Attempts advance atomically on the server. A delayed old failure must not
+    // undo an in-place retry; a new generation may legitimately leave failed.
+    const current = prev.get(repo.repo_id);
+    const generation = repo.clone_generation ?? 0;
+    const previousGeneration = current?.clone_generation ?? 0;
+    if (generation < previousGeneration) return prev;
+    if (
+      generation === previousGeneration &&
+      (current?.clone_status === 'ready' || current?.clone_status === 'failed') &&
+      repo.clone_status === 'cloning'
+    )
+      return prev;
     return replaceIfChanged(prev, repo.repo_id, repo);
   });
 }

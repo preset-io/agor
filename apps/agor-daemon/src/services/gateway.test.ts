@@ -3671,6 +3671,26 @@ describe('GatewayService Discord beta routing', () => {
     expect(sessionsCreate).not.toHaveBeenCalled();
   });
 
+  it('admits a roleless unlisted author only when the guild ID (@everyone) is an allowed role', async () => {
+    for (const [allowedRoles, success] of [
+      [['523456789012345678'], false],
+      [['223456789012345678'], true],
+    ] as const) {
+      const channel = {
+        ...discordChannel,
+        config: {
+          ...(discordChannel.config as Record<string, unknown>),
+          allowed_user_ids: [],
+          allowed_role_ids: [...allowedRoles],
+        },
+      } as unknown as GatewayChannel;
+      const { service, sessionsCreate } = makeGatewayHarness({ channel });
+
+      await expect(service.create(validDiscordInbound())).resolves.toMatchObject({ success });
+      expect(sessionsCreate).toHaveBeenCalledTimes(success ? 1 : 0);
+    }
+  });
+
   it('keeps one provider thread independent for two Discord rows in one shared store', async () => {
     const sharedMappings: ThreadSessionMap[] = [];
     const channelA = {

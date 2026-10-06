@@ -631,8 +631,7 @@ export interface ReposService extends AgorService<Repo> {
       zoneId?: string;
       environment_variant?: string;
       /**
-       * Branch storage model — see
-       * context/explorations/clone-redesign.md.
+       * Branch storage model.
        * 'worktree' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */

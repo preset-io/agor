@@ -1,71 +1,81 @@
 import type { CreateRepoRequest, Repo } from '@agor-live/client';
-import { useEffect, useRef, useState } from 'react';
-import { FRAMEWORK_REPO_SLUG, FRAMEWORK_REPO_URL, useFrameworkRepo } from './useFrameworkRepo';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { repositorySetupMessage } from '../utils/repositorySetupMessage';
+import { FRAMEWORK_REPO_SLUG, FRAMEWORK_REPO_URL, findFrameworkRepo } from './useFrameworkRepo';
 
-/** If the repo hasn't appeared after this long, assume the clone failed. */
 const CLONE_TIMEOUT_MS = 120_000;
 
-/**
- * Wraps useFrameworkRepo with auto-clone behavior: if the framework repo
- * is not registered, triggers a clone via onCreateRepo. The clone is
- * fire-and-forget — the repo will appear in the repo list via WebSocket
- * once the executor finishes.
- *
- * Pass `enabled: false` to defer the auto-clone until the caller is ready
- * (e.g., until a create-modal is opened).
- *
- * Returns the framework repo (once available) and a cloning flag for UI feedback.
- */
+/** Optional prefetch. Failed setup is status, not success or an automatic retry loop. */
 export function useEnsureFrameworkRepo(
   repos: Repo[],
   onCreateRepo?: (data: CreateRepoRequest) => unknown,
-  { enabled = true }: { enabled?: boolean } = {}
-): { frameworkRepo: Repo | undefined; isCloning: boolean } {
-  const frameworkRepo = useFrameworkRepo(repos);
+  { enabled = true, ownerKey }: { enabled?: boolean; ownerKey?: unknown } = {}
+): { frameworkRepo: Repo | undefined; isCloning: boolean; error?: string } {
+  const entries = useMemo(() => new Map(repos.map((repo) => [repo.repo_id, repo])), [repos]);
+  const ready = findFrameworkRepo(entries, { readyOnly: true })?.[1];
+  const registered = ready ?? findFrameworkRepo(entries)?.[1];
   const [isCloning, setIsCloning] = useState(false);
-  const cloneTriggeredRef = useRef(false);
+  const [error, setError] = useState<string>();
+  const triggered = useRef(false);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: an authenticated owner or activation change retires the previous prefetch
   useEffect(() => {
-    // Already found — nothing to do
-    if (frameworkRepo) {
+    triggered.current = false;
+    setError(undefined);
+    setIsCloning(false);
+  }, [ownerKey, enabled]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ownerKey retires in-flight continuations even if the selected repo is unchanged
+  useEffect(() => {
+    if (!enabled) return;
+    if (ready) {
       setIsCloning(false);
-      cloneTriggeredRef.current = false;
+      setError(undefined);
       return;
     }
-
-    // Not enabled yet, no callback, or already triggered
-    if (!enabled || !onCreateRepo || cloneTriggeredRef.current) return;
-
-    // Trigger auto-clone once
-    cloneTriggeredRef.current = true;
-    setIsCloning(true);
-
-    // Fire-and-forget: errors are surfaced by the parent handler (toast).
-    // Wrap with .catch so a rejected promise doesn't bubble up as unhandled.
-    Promise.resolve(
-      onCreateRepo({
-        url: FRAMEWORK_REPO_URL,
-        slug: FRAMEWORK_REPO_SLUG,
-        default_branch: 'main',
-      })
-    ).catch(() => {});
-
-    // Safety timeout — if repo never appears, clear the loading state
-    // so the user can pick an alternate repo or retry on next open.
-    const timer = setTimeout(() => {
+    if (registered?.clone_status === 'failed') {
       setIsCloning(false);
-      cloneTriggeredRef.current = false;
-    }, CLONE_TIMEOUT_MS);
-
-    return () => clearTimeout(timer);
-  }, [frameworkRepo, onCreateRepo, enabled]);
-
-  // Reset when disabled (e.g., modal closed) so next open can retry
-  useEffect(() => {
-    if (!enabled && !frameworkRepo) {
-      cloneTriggeredRef.current = false;
+      setError(repositorySetupMessage(registered));
+      return;
     }
-  }, [enabled, frameworkRepo]);
+    if (!registered && !onCreateRepo) return;
+    let active = true;
+    setIsCloning(true);
+    const timer = setTimeout(() => {
+      if (!active) return;
+      setIsCloning(false);
+      setError(repositorySetupMessage({ clone_status: 'cloning' }));
+    }, CLONE_TIMEOUT_MS);
+    if (!registered && onCreateRepo && !triggered.current) {
+      void Promise.resolve()
+        .then(() => {
+          if (!active) return;
+          triggered.current = true;
+          return onCreateRepo({
+            url: FRAMEWORK_REPO_URL,
+            slug: FRAMEWORK_REPO_SLUG,
+            default_branch: 'main',
+          });
+        })
+        .catch((err: unknown) => {
+          if (!active) return;
+          clearTimeout(timer);
+          setIsCloning(false);
+          setError(repositorySetupMessage(undefined, err));
+          // No raw provider diagnostic or identity in the browser log. Persisted
+          // clone_error and executor logs retain redacted operator details.
+          console.warn('[onboarding] Repository prefetch failed; required setup can be retried.');
+        });
+    }
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [enabled, ownerKey, ready, registered, onCreateRepo]);
 
-  return { frameworkRepo, isCloning: isCloning && !frameworkRepo };
+  return {
+    frameworkRepo: ready,
+    isCloning: enabled && isCloning,
+    error: enabled ? error : undefined,
+  };
 }

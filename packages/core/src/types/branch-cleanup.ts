@@ -1,3 +1,27 @@
+/** Safe runtime support projection from branches.get; not admission or storage proof. */
+export interface BranchMaintenanceCapabilities {
+  archive_preserve: BranchMaintenanceCapability;
+  archive_clean: BranchMaintenanceCapability;
+  archive_remove: BranchMaintenanceCapability;
+  permanent_delete: BranchMaintenanceCapability;
+}
+export type BranchMaintenanceCapability =
+  | { supported: true }
+  | { supported: false; reason: string };
+
+/** Older daemons and missing diagnostics must not advertise destructive support. */
+export function getBranchMaintenanceBlockReason(
+  capabilities: BranchMaintenanceCapabilities | undefined,
+  operation: keyof BranchMaintenanceCapabilities
+): string | undefined {
+  const capability = capabilities?.[operation];
+  if (capability?.supported === true) return undefined;
+  return (
+    capability?.reason ||
+    'Runtime maintenance capability is unavailable. Refresh or ask an operator to upgrade the daemon; no operation was started.'
+  );
+}
+
 /** Repository-approved executable configuration; never loaded from a branch checkout. */
 export interface RepoCleanupPolicy {
   enabled: boolean;
@@ -136,6 +160,7 @@ export function projectBranchWorkspaceOperation(
 }
 
 export const BRANCH_WORKSPACE_SERVER_FIELDS = [
+  'maintenance_capabilities',
   'workspace_snapshot',
   'workspace_operation',
   'cleanup_last_error',

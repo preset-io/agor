@@ -109,7 +109,6 @@ export async function fireAlwaysNewZoneTrigger(
       created_by: userId,
       unix_username: user.unix_username,
       genealogy: { children: [] },
-      tasks: [],
     },
     params
   );

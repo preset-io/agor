@@ -120,7 +120,6 @@ const runnableExtensions = new Set([
 const excludedDirectories = new Set(['.git', 'node_modules']);
 const excludedPaths = new Set([
   workflowPath,
-  'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
   'scripts/managed-environments/railway/image.mjs',
 ]);
@@ -141,6 +140,7 @@ async function scan(directory) {
     const extension = path.extname(entry.name);
     const isSpecialName =
       entry.name === 'Dockerfile' ||
+      entry.name.startsWith('Dockerfile.') ||
       entry.name.endsWith('.Dockerfile') ||
       entry.name === 'Makefile';
     if (!isSpecialName && !runnableExtensions.has(extension)) continue;
@@ -172,7 +172,7 @@ const localWorktreeBuildStarts = [
 const codespacesWorktreeBuildStarts = [
   ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
 ].length;
-// Reviewed branch-local automatic Railway source build.
+// Reviewed branch-local automatic Railway source builds (app and docs only).
 const railwaySourceBuildStarts = [
   ...managedEnvironments.matchAll(
     /node scripts\/managed-environments\/railway\/launcher\.mjs start\b/g
@@ -185,10 +185,18 @@ assert.equal(
 );
 
 if (railwaySourceBuildStarts > 0) {
-  assert.equal(railwaySourceBuildStarts, 1, 'only one automatic Railway variant is reviewed');
+  assert.equal(
+    railwaySourceBuildStarts,
+    2,
+    'only the SQLite and docs Railway variants are reviewed'
+  );
   assert.match(
     managedEnvironments,
     /railway-sqlite:\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
+  );
+  assert.match(
+    managedEnvironments,
+    /railway-docs:\s+extends: railway-sqlite\s+start: >-\s+node scripts\/managed-environments\/railway\/launcher\.mjs start --profile docs\s+--repository \{\{shellQuote repo.github_slug\}\} --ref \{\{shellQuote branch.ref\}\}\s+--binding \{\{shellQuote branch.id\}\}/
   );
   const directory = path.join(root, 'scripts/managed-environments/railway');
   const launcher = await readFile(path.join(directory, 'launcher.mjs'), 'utf8');
@@ -198,7 +206,17 @@ if (railwaySourceBuildStarts > 0) {
   assert.match(launcher, /preview\.start\(owned, sha\)/);
   assert.match(preview, /serviceInstanceDeployV2\([^)]*commitSha:\$commitSha\)/);
   assert.match(preview, /source: \{ repo: this.input.repository \}/);
-  assert.match(preview, /dockerfilePath: 'docker\/Dockerfile'/);
+  assert.match(preview, /this.profile = profileSettings\(input.profile\)/);
+  assert.match(preview, /dockerfilePath: this.profile.dockerfile/);
+  assert.match(configuration, /\['sqlite', 'docs'\]\.includes\(profile\)/);
+  assert.match(
+    configuration,
+    /dockerfile: 'docker\/Dockerfile', appPath: '\/ui\/', healthPath: '\/health'/
+  );
+  assert.match(
+    configuration,
+    /dockerfile: 'docker\/Dockerfile.docs-preview', appPath: '\/', healthPath: '\/'/
+  );
   assert.match(configuration, /AGOR_RUNTIME_TARGET: 'railway-preview'/);
   assert.match(configuration, /AGOR_PREVIEW_BASE: previewBase/);
   const checkout = await readFile(path.join(root, 'docker/runtime-checkout.mjs'), 'utf8');
@@ -210,6 +228,23 @@ if (railwaySourceBuildStarts > 0) {
   for (const source of [launcher, preview, configuration])
     assert.doesNotMatch(source, imageReference);
 }
+
+// The docs image is built from frozen inputs, never from a published PR app
+// image. Its PR smoke must not publish artifacts/caches or use registry secrets.
+const docsWorkflow = await readFile(path.join(root, '.github/workflows/docs-pr-check.yml'), 'utf8');
+const docsImage = docsWorkflow.split('  docs-preview-image:')[1]?.split('  check-docs:')[0] ?? '';
+assert.match(docsImage, /file: docker\/Dockerfile.docs-preview/);
+assert.match(docsImage, /load: true/);
+assert.match(docsImage, /push: false/);
+assert.match(docsImage, /runtime-docs-smoke.mjs/);
+assert.doesNotMatch(docsImage, /cache-to:|login-action|secrets\.|push: true/);
+const docsDockerfile = await readFile(path.join(root, 'docker/Dockerfile.docs-preview'), 'utf8');
+assert.match(docsDockerfile, /COPY --chown=agor:agor patches\/ \.\/patches\//);
+assert.match(
+  docsDockerfile,
+  /pnpm --filter @agor\/docs --filter @agor\/git install --frozen-lockfile/
+);
+assert.doesNotMatch(docsDockerfile, /COPY \. \./);
 
 if (codespacesWorktreeBuildStarts > 0) {
   assert.equal(

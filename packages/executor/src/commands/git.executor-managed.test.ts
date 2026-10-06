@@ -270,6 +270,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://example.com/repo.git',
             outputPath: '/safe/repos/repo',
             repoId,
+            cloneGeneration: 2,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -282,6 +283,7 @@ describe('managed executor git/fs commands', () => {
       });
       expect(patchedRepos).toContainEqual({
         clone_status: 'failed',
+        clone_generation: 2,
         clone_error: { category: 'auth_failed', exit_code: 1, message: result.error?.message },
       });
       const surfaces = JSON.stringify({ result, patchedRepos, logs: log.mock.calls });
@@ -1322,6 +1324,7 @@ describe('managed executor git/fs commands', () => {
             url: 'https://github.com/preset-io/agor-assistant.git',
             slug: 'smoke/agor-assistant-pr1258',
             repoId,
+            cloneGeneration: 3,
             createDbRecord: true,
             importEnvironmentConfig: false,
           },
@@ -1341,6 +1344,7 @@ describe('managed executor git/fs commands', () => {
         expect.objectContaining({
           local_path: '/safe/repos/smoke/agor-assistant-pr1258',
           clone_status: 'ready',
+          clone_generation: 3,
         }),
       ]);
     } finally {
@@ -1384,6 +1388,54 @@ describe('managed executor git/fs commands', () => {
     expect(mocks.cloneRepo).toHaveBeenCalledWith(
       expect.objectContaining({ targetDir: '/tenant/acme/repos/preset-io/agor-teammate' })
     );
+  });
+
+  it('successful retry preserves the saved name and environment, including DB-only overrides', async () => {
+    const saved = {
+      repo_id: repoId,
+      name: 'Customized teammate repository',
+      environment: {
+        version: 2,
+        default: 'custom',
+        variants: { custom: { start: 'custom-start' } },
+        template_overrides: { start: 'db-only-start' },
+      },
+    };
+    const patchedRepos: Array<Record<string, unknown>> = [];
+    createClient({ repo: saved, patchedRepos });
+    mocks.parseAgorYml.mockReturnValue({
+      version: 2,
+      default: 'checkout',
+      variants: { checkout: { start: 'checkout-start' } },
+    });
+
+    const result = await handleGitClone(
+      {
+        command: 'git.clone',
+        sessionToken: 'tenant-bound-service-token',
+        params: {
+          url: 'https://github.com/preset-io/agor-teammate.git',
+          outputPath: '/tenant/acme/repos/preset-io/agor-teammate',
+          slug: 'preset-io/agor-teammate',
+          repoId,
+          cloneGeneration: 2,
+          createDbRecord: true,
+          importEnvironmentConfig: false,
+        },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.parseAgorYml).not.toHaveBeenCalled();
+    expect(patchedRepos).toHaveLength(1);
+    expect(patchedRepos[0]).not.toHaveProperty('name');
+    expect(patchedRepos[0]).not.toHaveProperty('environment');
+    expect({ ...saved, ...patchedRepos[0] }).toMatchObject({
+      ...saved,
+      clone_status: 'ready',
+      clone_generation: 2,
+    });
   });
 
   it.each([false, true])(

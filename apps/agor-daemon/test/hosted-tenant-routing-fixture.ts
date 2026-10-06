@@ -17,8 +17,6 @@
  * answered, a deployment-wide `AGOR_BASE_URL` that must never appear in a
  * tenant's link, and either an observed tenant origin or none — the
  * uninitialised case that makes `getBaseUrl` answer `''` rather than throw.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.14.
  */
 
 import fs from 'node:fs/promises';

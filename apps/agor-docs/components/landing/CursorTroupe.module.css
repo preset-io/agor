@@ -1,0 +1,30 @@
+/* PROTOTYPE: see CursorTroupe.tsx. */
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: 35; /* under the nav island (40) */
+  pointer-events: none;
+  transition: filter 0.6s ease;
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0;
+  transform-origin: 2px 1px;
+  will-change: transform, opacity;
+}
+
+/* Click pulse, centered on the cursor tip. */
+.ring {
+  position: absolute;
+  top: -30px;
+  left: -30px;
+  width: 60px;
+  height: 60px;
+  border: 2px solid;
+  border-radius: 50%;
+  opacity: 0;
+  will-change: transform, opacity;
+}

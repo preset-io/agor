@@ -158,6 +158,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // --------------------------------------------------------------------------
   // Catalog connect. Probes a remote endpoint before writing anything.
   // --------------------------------------------------------------------------
+  'repos/clone': {
+    scopeClass: 'scoped',
+    why: 'Authenticated tenant-scoped route; atomic clone claim and commit-bound executor dispatch.',
+  },
   'mcp-catalog/connect': {
     scopeClass: 'identity-only',
     why: 'Probes the entry endpoint over the network before installing; every write goes through a service that opens its own unit.',
@@ -304,7 +308,6 @@ export const UNCLASSIFIED_SERVICE_BASELINE: readonly string[] = [
   'board-comments/:id/toggle-reaction', // BASELINE-ENTRY
   'board-comments/:id/reposition', // BASELINE-ENTRY
   'repos/local', // BASELINE-ENTRY
-  'repos/clone', // BASELINE-ENTRY
   'repos/:id/branches', // BASELINE-ENTRY
   'repos/:id/branches/:name', // BASELINE-ENTRY
   'repos/:id/export-agor-yml', // BASELINE-ENTRY

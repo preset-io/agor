@@ -13,6 +13,7 @@ const POD_OWNED_ENVIRONMENT = {
   AGOR_MASTER_SECRET: 'synthetic-pod-master-secret',
   AGOR_OPENCODE_SCRATCH_ROOT: '/synthetic/pod/scratch',
   AGOR_OPENCODE_CHECKPOINT_ROOT: '/synthetic/pod/branch-home/opencode',
+  AGOR_EXECUTOR_SCRATCH_ROOT: '/synthetic/pod/executor-scratch',
   LD_PRELOAD: '/synthetic/pod/lib/policy.so',
   LD_AUDIT: '/synthetic/pod/lib/audit.so',
   LD_PROFILE: 'synthetic-pod-profile-policy',
@@ -34,6 +35,17 @@ afterEach(() => {
 });
 
 describe('prompt payload process environment boundary', () => {
+  it('cannot install scratch through a payload when the launcher supplied none', () => {
+    const environment: NodeJS.ProcessEnv = {};
+    const result = applyPromptPayloadEnvironment(
+      { AGOR_EXECUTOR_SCRATCH_ROOT: '/synthetic/payload/scratch' },
+      environment
+    );
+
+    expect(environment.AGOR_EXECUTOR_SCRATCH_ROOT).toBeUndefined();
+    expect(result.identityDenied).toEqual(['AGOR_EXECUTOR_SCRATCH_ROOT']);
+  });
+
   it('retains pod-owned HOME and loader policy while applying ordinary payload env', () => {
     Object.assign(process.env, POD_OWNED_ENVIRONMENT);
 
@@ -49,6 +61,7 @@ describe('prompt payload process environment boundary', () => {
       AGOR_MASTER_SECRET: 'synthetic-payload-master-secret',
       AGOR_OPENCODE_SCRATCH_ROOT: '/synthetic/payload/home/scratch',
       AGOR_OPENCODE_CHECKPOINT_ROOT: '/synthetic/payload/other-branch/opencode',
+      AGOR_EXECUTOR_SCRATCH_ROOT: '/synthetic/payload/home/executor-scratch',
       LD_PRELOAD: '/synthetic/payload/lib/inject.so',
       LD_AUDIT: '/synthetic/payload/lib/audit.so',
       LD_PROFILE: 'synthetic-payload-profile-control',

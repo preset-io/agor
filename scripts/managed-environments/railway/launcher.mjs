@@ -59,10 +59,11 @@ export async function run(action, input, env = process.env, request = fetch) {
     // Already running means no variable writes, rebuild or redeploy.
     if (owned.service && (await preview.active(owned)).length) return preview.running(owned);
     const password = env.RAILWAY_AGOR_ADMIN_PASSWORD;
-    requireValue(
-      password && [...password].length >= 15 && Buffer.byteLength(password, 'utf8') <= 72,
-      'Save RAILWAY_AGOR_ADMIN_PASSWORD (15+ characters, at most 72 UTF-8 bytes) in secure Global variables.'
-    );
+    if (input.profile !== 'docs')
+      requireValue(
+        password && [...password].length >= 15 && Buffer.byteLength(password, 'utf8') <= 72,
+        'Save RAILWAY_AGOR_ADMIN_PASSWORD (15+ characters, at most 72 UTF-8 bytes) in secure Global variables.'
+      );
     let sha;
     try {
       const response = await request(
@@ -82,7 +83,7 @@ export async function run(action, input, env = process.env, request = fetch) {
         'Cannot resolve the pushed public GitHub branch. Push it before Start; private source resolution is not supported.'
       );
     }
-    config.previewBase = await previewBase(request);
+    if (input.profile !== 'docs') config.previewBase = await previewBase(request);
     owned = await preview.ensure(owned, password);
     return preview.start(owned, sha);
   }
@@ -126,10 +127,13 @@ export async function main(args = process.argv.slice(2)) {
         binding: { type: 'string' },
         repository: { type: 'string' },
         ref: { type: 'string' },
+        profile: { type: 'string' },
       },
     });
   } catch {
-    throw new PreviewError('Use --binding UUID --repository owner/repo --ref pushed-branch.');
+    throw new PreviewError(
+      'Use --binding UUID --repository owner/repo --ref pushed-branch [--profile sqlite|docs].'
+    );
   }
   requireValue(parsed.positionals.length === 1, 'Expected one lifecycle action.');
   const result = await run(parsed.positionals[0], parsed.values);

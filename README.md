@@ -2,28 +2,30 @@
 
 # Agor
 
-**Team command center for all things agentic.**
+**Multiplayer AI. Work together again.**
 
-Agor is a self-hosted, multiplayer-ready web workspace for running coding agents — Claude Code,
-Codex, Gemini, and others — on isolated git branches. Each branch is a first-class git working
-directory with its own dev environment and conversation history. Agents run in the browser instead
-of a terminal, with per-prompt token and cost accounting, structured tool output, and an MCP
-endpoint agents can drive themselves. Run it solo in a few minutes; turn on multiplayer and
-Unix-level isolation when you bring your team.
+Agor brings your team and agents together on live spatial boards where you can see the work,
+collaborate, and learn from each other. Raise AI teammates with memory, shared knowledge, skills,
+and connections to your tools, then bring them where your team works. What works for one person
+becomes something the whole team can build on.
+
+Under the hood, Agor is a web workspace for running coding agents (Claude Code, Codex, Gemini, and
+others) on isolated git branches, each with its own dev environment and conversation history.
+Install it with npm and start on your own in a few minutes, then bring your team in.
 
 [![npm](https://img.shields.io/npm/v/agor-live?logo=npm&label=agor-live)](https://www.npmjs.com/package/agor-live)
 [![License: BSL 1.1](https://img.shields.io/badge/license-BSL%201.1-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-agor.live-1f6feb.svg)](https://agor.live/guide/getting-started)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2.svg?logo=discord&logoColor=white)](https://discord.gg/Qh4TrFQZpd)
 
-**[Documentation](https://agor.live/) · [Quick Start](#quick-start) · [Architecture](#architecture) · [Contributing](#development)**
+**[Documentation](https://agor.live/) · [Quick Start](#quick-start) · [Agor Cloud Open Beta](https://agor.live/cloud) · [Architecture](#architecture) · [Contributing](#development)**
 
 ---
 
 ## Built on the agent CLIs & SDKs you already use
 
 Agor ships no model of its own. It drives the coding-agent CLIs and SDKs you already run,
-interchangeable per session — bring your own provider and subscription, no vendor lock-in.
+interchangeable per session. Bring your own provider and subscription, with no vendor lock-in.
 [Compare the harnesses →](https://agor.live/guide/sdk-comparison)
 
 <p align="center">
@@ -47,35 +49,63 @@ interchangeable per session — bring your own provider and subscription, no ven
   Until then, the unscripted demo below stands in.
 -->
 
-![Agor board with live cursors, branch cards, zones, and agent dashboards](apps/agor-docs/public/screenshots/board-hero.png)
+![Agor board with live cursors, branch cards, zones, and agent sessions](apps/agor-docs/public/screenshots/board-hero.png)
 
-_The board: branches as cards, zones as regions, agent sessions, and — optionally — teammates present live._
+_The board: your team and agents in one place, with branches as cards, zones as regions, and sessions you can follow live._
 
 **▶ [Watch the unscripted demo on YouTube](https://www.youtube.com/watch?v=3in0qh7ZH0g)** (13 min)
 
 ---
 
-## What it does
+## Why Agor
 
-- **Branches as the anchor** — every piece of work is a git branch with its own working directory,
-  dev environment, conversation history, and PR. One entity to point at.
-- **Isolated dev environments** — a one-click dev server per branch, with ports auto-assigned so
-  parallel branches never collide.
-- **Multi-runtime** — Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor (beta) are
-  interchangeable per session. Bring your own provider; no vendor lock-in.
-- **Rich session UI** — per-prompt token and dollar accounting, structured tool blocks,
-  model/effort selectors, completion chimes. The terminal experience, in the browser.
-- **MCP-native** — Agor exposes itself over MCP; sessions are auto-issued a token, so agents fork,
-  spawn, schedule, and report on their own work.
-- **Long-lived AI teammates** — persistent coworkers, each with a Knowledge-base namespace for
-  durable, searchable memory, plus skills and schedules. They collaborate with the team and with
-  each other, beyond one-off sessions.
-- **Multiplayer when you want it** — live cursors, comments, and shared sessions/environments for
-  your team. Optional; works fine solo.
-- **Governance & observability** — branch-scoped RBAC and ACLs, per-user credentials and env
-  vars, and per-prompt token + dollar accounting with full, durable history across every session.
-- **Self-hosted, with explicit isolation** — your repos and database (LibSQL or Postgres), with
-  trusted local, fail-closed sandbox, or delegated external execution. BSL 1.1.
+Most teams are getting better at AI one person at a time. Good prompts sit in private chats, useful
+workflows live in one person's setup, and running more agents means more to keep track of. Agor
+makes AI work a team activity.
+
+### Bring your team and agents together
+
+- **See and join each other's work.** Live cursors, comments, and shared sessions let colleagues
+  follow an agent's progress and step in, instead of reconstructing it from screenshots and status
+  messages.
+- **Learn from each other.** See how colleagues prompt, share context, and turn the practices that
+  work into prompts and workflows the whole team can reuse.
+- **Start solo, expand when ready.** One person can install Agor and get value on day one, then
+  bring colleagues in.
+
+### See the work and shape it together
+
+- **A live spatial board.** Organize branches and agent sessions on a 2D canvas. Zones give the
+  work structure, show its stage, and can fire a templated prompt when a branch is dropped in.
+- **Branches as the anchor.** Every piece of work is a git branch with its own working directory,
+  dev environment, conversation history, and PR.
+- **Shared dev environments.** A one-click dev server per branch, with ports assigned
+  automatically so parallel branches never collide and anyone can inspect the result.
+- **Rich sessions and session trees.** Structured tool output, model and effort selectors, and
+  fork/spawn genealogy for exploring alternatives or coordinating specialist agents.
+- **Multi-runtime.** Claude Code, Codex, Gemini, OpenCode, Copilot, and Cursor (beta) are
+  interchangeable per session.
+
+### Raise AI teammates
+
+- **Memory and shared knowledge.** Each teammate gets a Knowledge-base namespace for durable,
+  searchable context that the team and other teammates can build on.
+- **Skills and MCP.** Capture repeatable ways of working as skills, and connect teammates to the
+  tools your team uses. Agor also exposes itself over MCP, so agents can fork, spawn, schedule, and
+  report on their own work.
+- **Where your team works.** Reach teammates through gateway channels such as Slack and GitHub.
+  Nobody has to live on the board to benefit.
+- **Schedules.** Run standups, audits, digests, and other recurring work without a fresh prompt
+  each time.
+
+### Know what's running, what it costs, and who can do what
+
+- **Governance and observability.** Branch-scoped RBAC, per-user credentials and env vars, and
+  per-prompt token and dollar accounting with durable history across sessions.
+- **Self-hosted or managed.** Run Agor on your own infrastructure with your repos and database
+  (LibSQL or Postgres) and explicit execution modes (trusted local, fail-closed sandbox, or
+  delegated external execution). Prefer not to run it yourself? See
+  [Agor Cloud Open Beta](https://agor.live/cloud).
 
 ---
 
@@ -93,25 +123,27 @@ agor open           # opens the web UI
 
 Use `agor install` later to change or repair the selected agentic tools; it does not initialize or recreate Agor.
 
-That's it — add a repo and create your first session from the onboarding wizard.
+That's it. The onboarding wizard creates your first board and helps you
+[raise your first AI teammate](https://agor.live/guide/first-teammate), which takes it from there.
 
-Prefer Homebrew? See the [Getting Started guide](https://agor.live/guide/getting-started) for the
-brew path. For Docker, source builds, Postgres, and team setups, see
-[Extended Installation](https://agor.live/guide/extended-install).
+The [Getting Started guide](https://agor.live/guide/getting-started) walks through the wizard and
+includes a Docker Compose path if you would rather not install Node. For source builds, Postgres,
+and team setups, see [Extended Installation](https://agor.live/guide/extended-install). For
+managed hosting, see [Agor Cloud Open Beta](https://agor.live/cloud).
 
 ---
 
 ## Core Concepts
 
-Agor is built on three foundational entities — everything else builds on these:
+Agor is built on three foundational entities. Everything else builds on these:
 
-- **[Branches](https://agor.live/guide/branches)** — the unit of work. A first-class git working
+- **[Branches](https://agor.live/guide/branches)**: the unit of work. A first-class git working
   directory on its own branch, with an isolated dev environment and its own conversations.
   Conventionally 1 branch = 1 feature/PR.
-- **[Sessions & Trees](https://agor.live/guide/sessions)** — agent conversations with genealogy.
+- **[Sessions & Trees](https://agor.live/guide/sessions)**: agent conversations with genealogy.
   **Fork** to explore alternatives (copies context), **spawn** subsessions for focused subtasks
   (fresh context window).
-- **[Boards & Zones](https://agor.live/guide/boards)** — a Figma-like 2D canvas of branches. Drop
+- **[Boards & Zones](https://agor.live/guide/boards)**: a live 2D canvas of branches and sessions. Drop
   a branch into a zone to fire a templated prompt.
 
 **[Read the Features Overview →](https://agor.live/guide/features-overview)**
@@ -120,19 +152,20 @@ Agor is built on three foundational entities — everything else builds on these
 
 ## Key Capabilities
 
-|                                                                           |                                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **[Teammates](https://agor.live/guide/teammates)**                        | Long-lived AI coworkers, each with its own Knowledge-base namespace for durable, semantically searchable memory — shared with the team and able to collaborate with other teammates. Taught conversationally, then equipped with skills, MCP tools, gateway channels, and schedules. |
-| **[Agor MCP Server](https://agor.live/guide/internal-mcp)**               | Agor exposes itself over MCP. Agents introspect sessions, branches, and boards, and drive the system themselves.                                                                                                                                                                     |
-| **[Multiplayer & Social](https://agor.live/guide/multiplayer-social)**    | Live cursors, facepiles, spatial comments, and a shared multiplayer terminal.                                                                                                                                                                                                        |
-| **[Rich Chat UX](https://agor.live/guide/rich-chat-ux)**                  | Per-prompt token + dollar accounting, model/effort selectors, structured tool blocks, completion chimes.                                                                                                                                                                             |
-| **[Environments](https://agor.live/guide/environment-configuration)**     | One-click dev servers per branch with auto-managed unique ports — no more port fights.                                                                                                                                                                                               |
-| **[Security & RBAC](https://agor.live/guide/multiplayer-unix-isolation)** | Branch-scoped permission tiers, per-user credentials and env vars, and explicit execution modes (`simple` / `sandbox` / `delegated`).                                                                                                                                                |
-| **[Knowledge](https://agor.live/guide/knowledge)**                        | A shared, searchable markdown knowledge base — one place for decisions, runbooks, prompts, and agent memory.                                                                                                                                                                         |
-| **[Scheduler](https://agor.live/guide/scheduler)**                        | Cron-style triggers for templated prompts. Powers teammate heartbeats, standups, and automated audits.                                                                                                                                                                               |
-| **[Message Gateway](https://agor.live/guide/message-gateway)**            | Slack and GitHub as portals into Agor sessions.                                                                                                                                                                                                                                      |
-| **[Artifacts](https://agor.live/guide/artifacts)**                        | Live, interactive apps (dashboards, mockups, tools) rendered directly on the board.                                                                                                                                                                                                  |
-| **[Cards](https://agor.live/guide/cards)** (Beta)                         | Generic workflow entities for non-code workflows.                                                                                                                                                                                                                                    |
+|                                                                           |                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **[Multiplayer & Social](https://agor.live/guide/multiplayer-social)**    | Live cursors, facepiles, spatial comments, and a shared multiplayer terminal, so the team can follow and join agent work.                                                                           |
+| **[Boards & Zones](https://agor.live/guide/boards)**                      | A live spatial board for organizing branches and sessions. Zones show the stage of the work and trigger reusable prompts.                                                                           |
+| **[Teammates](https://agor.live/guide/teammates)**                        | Persistent AI teammates, each with its own Knowledge-base namespace for durable, searchable memory. Taught conversationally, then equipped with skills, MCP tools, gateway channels, and schedules. |
+| **[Knowledge](https://agor.live/guide/knowledge)**                        | A shared, searchable markdown knowledge base. One place for decisions, runbooks, prompts, and agent memory.                                                                                         |
+| **[Message Gateway](https://agor.live/guide/message-gateway)**            | Work with teammates from Slack and GitHub, without opening the board.                                                                                                                               |
+| **[Scheduler](https://agor.live/guide/scheduler)**                        | Cron-style triggers for templated prompts. Powers teammate heartbeats, standups, and automated audits.                                                                                              |
+| **[Agor MCP Server](https://agor.live/guide/internal-mcp)**               | Agor exposes itself over MCP. Agents introspect sessions, branches, and boards, and drive the system themselves.                                                                                    |
+| **[Rich Chat UX](https://agor.live/guide/rich-chat-ux)**                  | Per-prompt token and dollar accounting, model/effort selectors, structured tool blocks, completion chimes.                                                                                          |
+| **[Environments](https://agor.live/guide/environment-configuration)**     | One-click dev servers per branch with automatically managed unique ports, so the team can inspect the same running build.                                                                           |
+| **[Artifacts](https://agor.live/guide/artifacts)**                        | Live, interactive apps (dashboards, mockups, tools) rendered directly on the board.                                                                                                                 |
+| **[Security & RBAC](https://agor.live/guide/multiplayer-unix-isolation)** | Branch-scoped permission tiers, per-user credentials and env vars, and explicit execution modes (`simple` / `sandbox` / `delegated`).                                                               |
+| **[Cards](https://agor.live/guide/cards)** (Beta)                         | Generic workflow entities for non-code workflows.                                                                                                                                                   |
 
 ---
 
@@ -143,7 +176,7 @@ Agor is built on three foundational entities — everything else builds on these
     <tr>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/marketing/agor-marketing-social-comment-context.png" alt="Multiplayer presence with comments on a branch card"/>
-        <p align="center"><em>Real-time multiplayer — cursors, facepile, scoped comments</em></p>
+        <p align="center"><em>Work together in real time: cursors, facepile, scoped comments</em></p>
       </td>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/conversation_full_page.png" alt="Task-centric conversation UI"/>
@@ -157,13 +190,13 @@ Agor is built on three foundational entities — everything else builds on these
       </td>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/mcp_environment.png" alt="MCP-native control surface"/>
-        <p align="center"><em>MCP-native — agents drive Agor themselves</em></p>
+        <p align="center"><em>MCP-native: agents drive Agor themselves</em></p>
       </td>
     </tr>
     <tr>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/scheduler-modal.png" alt="Scheduler configuration modal"/>
-        <p align="center"><em>Scheduler — cron-style triggers for templated prompts</em></p>
+        <p align="center"><em>Scheduler: cron-style triggers for recurring work</em></p>
       </td>
       <td width="50%">
         <img src="apps/agor-docs/public/screenshots/env_configuration.png" alt="Branch environment configuration"/>
@@ -234,9 +267,9 @@ agor/
 │   ├── agor-daemon/   # FeathersJS backend (REST + WebSocket + MCP)
 │   ├── agor-ui/       # React UI (Ant Design + React Flow)
 │   ├── agor-cli/      # oclif CLI
-│   └── agor-docs/     # Docs site (Nextra) — canonical reference, published at agor.live
+│   └── agor-docs/     # Docs site (Nextra), the canonical reference, published at agor.live
 ├── packages/
-│   ├── core/          # @agor/core — types, db (Drizzle), git, api
+│   ├── core/          # @agor/core: types, db (Drizzle), git, api
 │   └── executor/      # Process-isolated agent runtime
 └── context/           # Agent-oriented cheat sheets and design docs
 ```
@@ -276,9 +309,9 @@ for the agent-oriented map of the codebase.
 
 ## Community
 
-- **[Discord](https://discord.gg/Qh4TrFQZpd)** — support and discussion
-- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)** — questions and ideas
-- **[GitHub Issues](https://github.com/preset-io/agor/issues)** — bugs and feature requests
+- **[Discord](https://discord.gg/Qh4TrFQZpd)**: support and discussion
+- **[GitHub Discussions](https://github.com/preset-io/agor/discussions)**: questions and ideas
+- **[GitHub Issues](https://github.com/preset-io/agor/issues)**: bugs and feature requests
 
 ## License
 
@@ -304,7 +337,7 @@ this summary differs from it.
 [Apache Superset](https://github.com/apache/superset), [Apache Airflow](https://github.com/apache/airflow)),
 built by an army of Claudes and Codexes.
 
-**Read more:** [Agor Cloud — opening a private beta](https://agor.live/blog/agor-cloud) ·
+**Read more:** [Announcing Agor Cloud Open Beta](https://agor.live/blog/agor-cloud-open-beta) ·
 [Agent Modeling 101](https://agor.live/blog/agent-modeling-101) ·
 [Raise a team helper agent in an afternoon](https://agor.live/blog/raise-team-helper-agent) ·
 [all posts →](https://agor.live/blog)

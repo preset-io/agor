@@ -31,10 +31,12 @@
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { isDefiniteAuthFailure } from './authErrors';
 import {
+  captureTokenAuthority,
   getStoredRefreshToken,
   type RefreshResult,
   RefreshSupersededError,
   refreshAndStoreTokens,
+  SupersededAuthenticationError,
 } from './tokenRefresh';
 
 /** Custom DOM event fired after tokens have been successfully refreshed. */
@@ -144,6 +146,8 @@ export function refreshTokensSingleFlight(
   client: AuthenticatedAgorClient,
   refreshToken: string
 ): Promise<RefreshResult> {
+  // Logout must not start a new refresh request.
+  if (!getStoredRefreshToken()) return Promise.reject(new SupersededAuthenticationError());
   // Fast-fail if we already know the refresh token is dead. Without this,
   // every recovery caller would trigger a brand-new POST
   // to /authentication/refresh that also 401s, producing a tight loop as
@@ -156,8 +160,10 @@ export function refreshTokensSingleFlight(
   const existing = inflight.get(refreshToken);
   if (existing) return existing;
 
+  const isCurrent = captureTokenAuthority();
   const flight: Promise<RefreshResult> = refreshAndStoreTokens(client, refreshToken)
     .then((result) => {
+      if (!isCurrent()) throw new SupersededAuthenticationError();
       // Successful refresh clears any prior unrecoverable state — e.g. if
       // the user logged out and back in, or a transient failure was
       // misclassified, resume normal operation.
@@ -178,6 +184,7 @@ export function refreshTokensSingleFlight(
       // unrecoverable-event listener that just cleared tokens. Wrapping with
       // `cause` preserves diagnostics. Subsequent callers fast-fail with the
       // same type via the `unrecoverable` guard above.
+      if (!isCurrent()) throw new SupersededAuthenticationError();
       if (isDefiniteAuthFailure(err)) {
         // A rejection of a refresh token that is no longer the stored one
         // (rotated by another tab, replaced by a newer sign-in, or cleared by

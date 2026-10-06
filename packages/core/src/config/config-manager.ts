@@ -170,7 +170,7 @@ function configLoadError(configPath: string, error: unknown): Error {
       `${configPath} is masked by Agor's executor sandbox and is intentionally out of reach. ` +
         'Code inside the sandbox must not read the daemon config — it receives configuration ' +
         'via payload.resolvedConfig and DAEMON_URL. Run this on the daemon host instead. ' +
-        `See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
+        `See https://agor.live/guide/multiplayer-unix-isolation. (underlying error: ${detail})`
     );
   }
   return new Error(`Failed to load config: ${detail}`);
@@ -2275,7 +2275,6 @@ export function ensureBranchCloneDepthAllowed(
 //   2. paths.data_home in config.yaml
 //   3. AGOR_HOME (backward compatible default)
 //
-// @see context/explorations/executor-expansion.md
 // =============================================================================
 
 /**

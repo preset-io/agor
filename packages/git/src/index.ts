@@ -975,6 +975,11 @@ function createGitClient(
     binary: getGitBinary(),
     abort,
     config: [],
+    // simple-git 4 rejects explicitly supplied GIT_* (and editor/pager) keys
+    // unless named here. `spawnEnv` is the exact child environment built by
+    // this module, so admit precisely its keys; the unsafe flags below remain
+    // the second opt-in for any vulnerability category those keys touch.
+    allowEnvironment: Object.keys(spawnEnv),
     ...(timeoutMs === undefined ? {} : { timeout: { block: timeoutMs } }),
     unsafe: {
       // simple-git's scanner cannot distinguish Agor's fixed defensive
@@ -1280,6 +1285,29 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
     const isValid = await isGitRepo(targetPath);
 
     if (isValid) {
+      const origin = await getRemoteUrl(targetPath);
+      const canonical = (url: string) =>
+        stripGitUrlCredentials(url)
+          .replace(/\/+$/, '')
+          .replace(/\.git$/, '');
+      if (!origin || canonical(origin) !== canonical(cloneUrl)) {
+        throw new Error(
+          'The existing repository directory belongs to a different remote. Ask an administrator to inspect repository storage; no files were changed.'
+        );
+      }
+      // A previous user's successful clone is not this user's authorization.
+      // Probe in the clean credential-only transport, never inside cached Git config.
+      const refs = await listRemoteRef(
+        cloneUrl,
+        options.branch ? `refs/heads/${options.branch}` : '*',
+        options.env,
+        'heads'
+      );
+      if (options.branch && !refs.trim()) {
+        throw new Error(
+          `Remote branch '${options.branch}' was not found. Check repository access and the default branch.`
+        );
+      }
       await scrubGitConfigRemoteCredentials(targetPath);
       // Repository already exists and is valid — reuse it. If the caller
       // pinned a branch, the working tree has to actually be on that branch
@@ -1291,6 +1319,17 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
       console.log(`Repository already exists at ${targetPath}, using existing clone`);
 
       const existingGit = createGit(targetPath).git;
+      // A clone interrupted between object transfer and checkout still has .git.
+      // Never call that ready or reset it over potential user work on retry.
+      await existingGit.revparse(['--verify', 'HEAD^{commit}']);
+      if (
+        !options.bare &&
+        (await existingGit.status()).files.some((file) => file.index !== ' ' && file.index !== '?')
+      ) {
+        throw new Error(
+          'The existing repository checkout is incomplete or has staged changes. Ask an administrator to inspect and recover it; no files were removed or reset.'
+        );
+      }
 
       if (options.branch) {
         const branches = await existingGit.branch();
@@ -1341,7 +1380,7 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
       // Directory exists but is not a valid git repo
       throw new Error(
         `Directory exists but is not a valid git repository: ${targetPath}\n` +
-          `Please delete this directory manually and try again.`
+          `Ask an administrator to inspect the repository storage and recover the clone. No files were removed.`
       );
     }
     // Git supports retrying a clone into an existing empty real directory.
@@ -1863,8 +1902,7 @@ export async function createBranch(
  * Branch storage mode = 'clone' produces a working directory whose `.git/`
  * is a real directory (not a `gitdir:` pointer file), with its own
  * `.git/config`, refs, and credentials surface. Closes the cross-branch
- * leak vectors that the Layer A defenses exist to mitigate. See
- * `context/explorations/clone-redesign.md` §1.
+ * leak vectors that the Layer A defenses exist to mitigate.
  */
 export interface CreateBranchAsCloneOptions {
   /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */

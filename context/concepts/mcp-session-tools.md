@@ -83,4 +83,4 @@ branch sharing switch. The conversation and branch SDK state are preserved,
 while the task, execution home, managed credentials, MCP visibility, and
 branch filesystem projection use the actual caller. Execution-home Sessions
 are never shareable. See
-[`context/explorations/session-sharing.md`](../explorations/session-sharing.md).
+[`context/concepts/session-sharing.md`](../concepts/session-sharing.md).

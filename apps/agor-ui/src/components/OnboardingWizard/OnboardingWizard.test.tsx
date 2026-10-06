@@ -1437,6 +1437,44 @@ describe('OnboardingWizard', () => {
     );
   });
 
+  it('restores saved selections before a board has been allocated', async () => {
+    const onComplete = vi.fn();
+    const { boardsService } = renderWizard({
+      onComplete,
+      user: makeUser({
+        preferences: {
+          onboarding: {
+            goals: ['ship-without-busywork'],
+            teammateDisplayName: 'Rusty',
+            teammateEmoji: '⚖️',
+            teammateTemplateId: 'legal-analyst',
+          },
+        },
+      }),
+    });
+    clickButton(/continue/i); // Saved goal, not Skip.
+    expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
+    expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    expect(boardsService.create).not.toHaveBeenCalled();
+    clickButton(/continue/i);
+    clickButton(/skip for now/i); // AI
+    clickButton(/skip for now/i); // Tools
+    clickButton(/meet rusty/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        goals: ['ship-without-busywork'],
+        teammateName: 'Rusty',
+        teammateEmoji: '⚖️',
+        templateId: 'legal-analyst',
+      }),
+      expect.anything()
+    );
+  });
+
   it('resumes an incomplete setup from its saved, still-visible board', async () => {
     const onComplete = vi.fn();
     const resumedBoard = makeBoard({ board_id: 'board-resume', name: 'Rusty', icon: '⚖️' });
@@ -1532,6 +1570,54 @@ describe('OnboardingWizard', () => {
       expect.objectContaining({ isCurrent: expect.any(Function) })
     );
   });
+
+  it.each([false, true])(
+    'can skip a removed saved template and complete without a teammate (saved board: %s)',
+    async (hasBoard) => {
+      const onComplete = vi.fn();
+      const board = makeBoard({ board_id: TEST_BOARD_ID });
+      const { boardsService } = renderWizard({
+        onComplete,
+        boardById: hasBoard ? new Map([[board.board_id, board]]) : undefined,
+        user: makeUser({
+          preferences: {
+            onboarding: {
+              ...(hasBoard ? { boardId: board.board_id } : {}),
+              teammateDisplayName: 'Rusty',
+              teammateTemplateId: 'removed-template',
+            },
+          },
+        }),
+      });
+      if (hasBoard) {
+        expect(
+          await screen.findByText(/removed-template.*no longer available/i)
+        ).toBeInTheDocument();
+        clickButton('Back'); // done → tools
+        clickButton('Back'); // tools → llm
+        clickButton('Back'); // llm → workspace
+      } else {
+        clickButton(/skip for now/i); // goals → workspace
+      }
+      expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
+      clickButton(/skip for now/i); // workspace → llm
+      clickButton(/skip for now/i); // llm → tools
+      clickButton(/skip for now/i); // tools → done
+      expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
+      clickButton(/open my board/i);
+      await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({
+          boardId: TEST_BOARD_ID,
+          teammateName: undefined,
+          templateId: null,
+          sourceBranch: undefined,
+        }),
+        expect.anything()
+      );
+      expect(boardsService.create).toHaveBeenCalledTimes(hasBoard ? 0 : 1);
+    }
+  );
 
   it('exposes progress semantics and moves focus to the new step heading', async () => {
     renderWizard({ initialStep: 'goals' });

@@ -18,8 +18,7 @@
  * throwing where the gate said nothing.
  *
  * See `context/concepts/multitenancy.md` ("What the gate is, and what it does
- * not catch") and §7.1.12 of
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ * not catch").
  */
 import {
   createDatabaseAsync,

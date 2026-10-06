@@ -16,6 +16,8 @@ import { feathers } from '@agor/core/feathers';
 import {
   type Application,
   type BoardID,
+  BRANCH_WORKSPACE_SERVER_FIELDS,
+  type Branch,
   type BranchID,
   type CapabilityPolicyFsAccess,
   type CapabilityPolicyPresetId,
@@ -1031,6 +1033,28 @@ describe('BranchesService environment start async behavior', () => {
   });
 });
 
+describe('BranchesService server-managed workspace fields', () => {
+  it.each(BRANCH_WORKSPACE_SERVER_FIELDS)(
+    'rejects %s at the patch/update API boundary',
+    async (field) => {
+      const branchId = 'workspace-managed' as BranchID;
+      const { service, repository } = createPatchHarness({
+        current: { branch_id: branchId },
+        updated: { branch_id: branchId },
+      });
+      const data = { [field]: null } as Partial<Branch>;
+      for (const method of ['patch', 'update'] as const) {
+        await expect(service[method](branchId, data, { provider: 'rest' })).rejects.toMatchObject({
+          code: 400,
+          message: 'Workspace operation state is server-managed',
+        });
+      }
+      expect(repository.findById).not.toHaveBeenCalled();
+      expect(repository.update).not.toHaveBeenCalled();
+    }
+  );
+});
+
 describe('BranchesService.patch primary teammate invariants', () => {
   it('rejects attempts to change server-managed SDK-home intent', async () => {
     const branchId = 'sdk-home-managed' as BranchID;
@@ -1290,6 +1314,14 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 
 describe('BranchesService.unarchive', () => {
   const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
+  // The response is a fresh post-restore read, not the request's prefetched get.
+  const stubCommittedRead = (service: BranchesService, branch: unknown) =>
+    vi
+      .spyOn(
+        service as unknown as { getCanonicalBranch: () => Promise<unknown> },
+        'getCanonicalBranch'
+      )
+      .mockResolvedValue(branch);
 
   // Filesystem restoration, failure publication, and missing homes are tested
   // through real repositories and executor handlers in branches.restore.integration.test.ts.
@@ -1302,14 +1334,21 @@ describe('BranchesService.unarchive', () => {
       const requested = 'board-requested' as BoardID;
       const other = 'board-other' as BoardID;
       const base = { branch_id: branchId, name: 'Raced', archived: true };
-      vi.spyOn(service, 'get')
-        .mockResolvedValue({ ...base, board_id: moved ? other : requested } as never)
-        .mockResolvedValueOnce({ ...base, board_id: moved ? requested : other } as never);
+      // Preflight sees the request's cached row; the locked comparison reads committed state.
+      vi.spyOn(service, 'get').mockResolvedValue({
+        ...base,
+        board_id: moved ? requested : other,
+      } as never);
       const patch = vi.spyOn(service, 'patch').mockResolvedValue(base as never);
+      const committedRead = stubCommittedRead(service, {
+        ...base,
+        board_id: moved ? other : requested,
+      });
       await service.unarchive(branchId, { boardId: requested }, userParams);
       expect(patch).toHaveBeenCalledTimes(moved ? 1 : 0);
       if (moved) expect(patch).toHaveBeenCalledWith(branchId, { board_id: requested }, userParams);
       expect(reposService.retryBranchProvisioning).toHaveBeenCalledWith(branchId, userParams, true);
+      expect(committedRead).toHaveBeenCalledWith(branchId, userParams);
     }
   );
 
@@ -1337,8 +1376,11 @@ describe('BranchesService.unarchive', () => {
       x: 111,
       y: 222,
     });
+    const committed = { branch_id: branchId, archived: false, board_id: existingBoardId };
+    const committedRead = stubCommittedRead(service, committed);
 
-    await service.unarchive(branchId, undefined, userParams);
+    expect(await service.unarchive(branchId, undefined, userParams)).toBe(committed);
+    expect(committedRead).toHaveBeenCalledWith(branchId, userParams);
 
     expect(patchSpy).not.toHaveBeenCalled();
 
@@ -1376,6 +1418,7 @@ describe('BranchesService.unarchive', () => {
       board_id: boardId,
     } as never);
     boardObjectsService.findByBranchId.mockResolvedValue({ object_id: 'existing' });
+    stubCommittedRead(service, { branch_id: branchId, archived: false, board_id: boardId });
 
     await service.unarchive(branchId, undefined, userParams);
 
@@ -1408,6 +1451,11 @@ describe('BranchesService.unarchive', () => {
       x: 7,
       y: 8,
     });
+    stubCommittedRead(service, {
+      branch_id: branchId,
+      archived: false,
+      board_id: newBoardId,
+    }).mockResolvedValueOnce({ branch_id: branchId, archived: true, board_id: oldBoardId });
 
     await service.unarchive(branchId, { boardId: newBoardId }, userParams);
 
@@ -1433,10 +1481,13 @@ describe('BranchesService.archiveOrDelete', () => {
       const { service } = createServiceHarness();
       const branchId = 'wt-archive-op' as BranchID;
       const branch = { branch_id: branchId, archived: true };
-      vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+      vi.spyOn(
+        service as unknown as { getCanonicalBranch: () => Promise<unknown> },
+        'getCanonicalBranch'
+      ).mockResolvedValue(branch);
       const request = vi
         .spyOn(service as never, 'requestWorkspaceOperation')
-        .mockResolvedValue({ status: 'accepted' } as never);
+        .mockResolvedValue({ branch_id: branchId, status: 'accepted' } as never);
       const params = { user: { user_id: 'user-1' } } as never;
       markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
       expect(

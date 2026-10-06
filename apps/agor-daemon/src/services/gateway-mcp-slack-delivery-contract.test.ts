@@ -16,8 +16,7 @@
  *
  * This is deliberately a shared TEST, not a shared delivery engine. Extracting
  * the engine is a post-merge follow-up; pinning the contract first is what
- * makes that extraction checkable. See
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.6.
+ * makes that extraction checkable.
  */
 
 import { runWithTenantContext } from '@agor/core/db';

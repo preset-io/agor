@@ -1724,7 +1724,7 @@ const DiscordSetupFields: React.FC<{
             label="Allowed role IDs"
             name="discord_allowed_role_ids"
             rules={[{ validator: validateAuthorAllowlist }]}
-            tooltip="At least one user or role allowlist entry is required."
+            tooltip="At least one user or role allowlist entry is required. Add the Guild ID to admit every member (@everyone)."
           >
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Role snowflakes" />
           </Form.Item>
