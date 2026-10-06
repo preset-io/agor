@@ -4,12 +4,28 @@ import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/o
 import { describe, expect, it, vi } from 'vitest';
 import {
   classifyMCPAuthRecovery,
+  MCPCloudIdentityRequiredError,
   MCPLinkAdmissionError,
   recoveryForOAuthAttemptFailure,
 } from './mcp-auth-recovery';
 import { MCPClientCredentialsConfigurationError, MCPOAuthRefreshBusyError } from './mcp-oauth-use';
 
 describe('MCP auth recovery contract', () => {
+  it('names a missing Agor Cloud account instead of a generic permission change', () => {
+    const error = new MCPCloudIdentityRequiredError(
+      'MCP callback relay requires a bound Cloud user'
+    );
+    expect(error).toBeInstanceOf(Forbidden);
+    expect(classifyMCPAuthRecovery(error, { mcpServerId: 'server-a' })).toEqual({
+      mcp_server_id: 'server-a',
+      category: 'authentication_required',
+      action: 'reauthenticate',
+      failure_reason: 'cloud_identity_required',
+      message:
+        'This connection needs your Agor Cloud account. Sign in through Agor Cloud and try again.',
+    });
+    expect(classifyMCPAuthRecovery(new Forbidden('x')).category).toBe('permission_changed');
+  });
   it('distinguishes transient rotation and machine configuration from browser reauth', () => {
     expect(classifyMCPAuthRecovery(new MCPOAuthRefreshBusyError())).toMatchObject({
       action: 'retry',

@@ -282,6 +282,22 @@ export class MCPOAuthPendingFlowAuthority {
     );
   }
 
+  async failPendingForUser(
+    tenantId: string,
+    userId: UserID,
+    rawState: string,
+    failureCode: string
+  ): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
+      new MCPOAuthPendingFlowRepository(scoped).failPendingForUser(
+        tenantId,
+        userId,
+        fingerprintMCPOAuthState(rawState),
+        failureCode
+      )
+    );
+  }
+
   async claimForUser(
     tenantId: string,
     userId: UserID,

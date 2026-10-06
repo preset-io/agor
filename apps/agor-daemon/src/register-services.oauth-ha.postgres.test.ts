@@ -11,6 +11,7 @@ import {
   MCPServerRepository,
   type RawDatabase,
   rawRows,
+  runWithTenantContext,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   sql,
@@ -1176,6 +1177,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         mcp_oauth_relay: { callback_origin: 'https://cloud.test' },
       };
       const preparations: import('@agor/core/types').MCPOAuthRelayPrepare[] = [];
+      const realPrepare = MCPOAuthRelay.prototype.prepare;
       const prepare = vi
         .spyOn(MCPOAuthRelay.prototype, 'prepare')
         .mockImplementation(async (input) => {
@@ -1425,6 +1427,78 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           a.app.service('mcp-servers/oauth-status').find(params(member, tenant))
         )) as { authenticated_server_ids: string[] };
         expect(memberStatus.authenticated_server_ids).toContain(shared.mcp_server_id);
+
+        // A real prepare whose transport fails: the caller gets the sanitized
+        // relay error (not a scope error) and the attempt is failed, not left pending.
+        prepare.mockImplementationOnce(function (this: MCPOAuthRelay, input) {
+          return realPrepare.call(this, input);
+        });
+        vi.stubGlobal(
+          'fetch',
+          vi.fn().mockRejectedValue(Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }))
+        );
+        const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          // Production request hooks run oauth-start inside the caller's tenant context.
+          await expect(runWithTenantContext(tenant, start)).resolves.toMatchObject({
+            success: false,
+          });
+          const lines = logged.mock.calls.map((call) => String(call[0]));
+          expect(
+            lines.some((line) => line.includes('reason=oauth_relay_prepare_transport_failed'))
+          ).toBe(true);
+          expect(lines.join('\n')).not.toContain('system database scope');
+        } finally {
+          logged.mockRestore();
+          vi.unstubAllGlobals();
+        }
+        const [latest] = rawRows(
+          await runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
+            executeRaw(
+              scoped,
+              sql`SELECT status, failure_code FROM mcp_oauth_pending_flows
+                  WHERE mcp_server_id = ${server.mcp_server_id}
+                  ORDER BY created_at DESC LIMIT 1`
+            )
+          )
+        ) as Array<{ status: string; failure_code: string }>;
+        expect(latest).toEqual({ status: 'failed', failure_code: 'relay_prepare_failed' });
+
+        // A customer-owned app needs the user's bound Agor Cloud account; say so.
+        const unbound = await runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
+          new MCPServerRepository(scoped).create({
+            name: `relay-unbound-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: member.user_id,
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'per_user',
+              oauth_client_id: 'customer-app',
+              oauth_dcr_mode: 'disabled',
+              oauth_compatibility_mode: 'strict',
+            },
+          })
+        );
+        oauthFixture.configuredIssuers.set(unbound.mcp_server_id, 'https://provider.example.test');
+        const beforeUnbound = preparations.length;
+        await expect(
+          a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: unbound.mcp_server_id }, params(member, tenant))
+        ).resolves.toMatchObject({
+          success: false,
+          error:
+            'This connection needs your Agor Cloud account. Sign in through Agor Cloud and try again.',
+          recovery: {
+            category: 'authentication_required',
+            failure_reason: 'cloud_identity_required',
+          },
+        });
+        expect(preparations).toHaveLength(beforeUnbound);
       } finally {
         oauthFixture.configuredIssuers.clear();
         prepare.mockRestore();

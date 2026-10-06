@@ -143,6 +143,8 @@ export const MCP_OAUTH_FAILURE_REASONS = [
    * reach Agor. See {@link MCP_AUTH_RECOVERY_CATEGORIES}.
    */
   'redirect_uri_mismatch',
+  /** A customer-owned app's hosted callback needs the user's bound Agor Cloud account. */
+  'cloud_identity_required',
 ] as const;
 export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 

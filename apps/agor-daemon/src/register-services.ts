@@ -276,6 +276,7 @@ import { createKnowledgeVersionsService } from './services/knowledge-versions.js
 import { createLeaderboardService } from './services/leaderboard.js';
 import {
   classifyMCPAuthRecovery,
+  MCPCloudIdentityRequiredError,
   MCPLinkAdmissionError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
@@ -2055,7 +2056,7 @@ export async function registerMCPServices(
       !identities[0].subject.startsWith('user:') ||
       identities[0].subject.length <= 5
     )
-      throw new Forbidden('MCP callback relay requires a bound Cloud user');
+      throw new MCPCloudIdentityRequiredError('MCP callback relay requires a bound Cloud user');
     return identities[0].subject.slice(5);
   };
   const durableOAuthFlows =
@@ -2863,7 +2864,19 @@ export async function registerMCPServices(
           redirect_uri: context.redirectUri,
         });
       } catch (error) {
-        await durableOAuthFlows!.failPendingCallback(context.state, 'relay_prepare_failed');
+        // Fail the attempt in the caller's own tenant scope (this start request
+        // already runs inside it). The sanitized relay error is what the caller
+        // sees and logs, even if this bookkeeping fails; the row then expires.
+        await durableOAuthFlows!
+          .failPendingForUser(
+            durableBinding.tenantId,
+            durableBinding.userId,
+            context.state,
+            'relay_prepare_failed'
+          )
+          .catch(() => {
+            console.warn('[OAuth Start] relay attempt could not be marked failed; it will expire');
+          });
         throw error;
       }
     }
