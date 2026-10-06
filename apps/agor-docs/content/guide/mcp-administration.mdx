@@ -119,6 +119,28 @@ Use your existing authenticated API client and the saved server's `mcp_server_id
 
 DCR requests identify standalone HTTP loopback callbacks as `native` and public HTTPS callbacks as `web`. That choice is part of the durable credential binding, so a registration created under an older or different binding is not reused. HA activation and upgrades still require the public callback origin and offline cutover described in [Daemon HA](/guide/daemon-ha).
 
+## Turning off the Slack connect card (administrators)
+
+When an agent asks a Slack user to connect an MCP server, Agor posts a Connect card into the
+thread. If that card misbehaves during an incident, an administrator can turn it off per tenant:
+
+```http
+GET   /mcp-slack-connect/card                      → { "tenant_id": "...", "enabled": true }
+PATCH /mcp-slack-connect/card  {"enabled": false}
+```
+
+The `PATCH` response is a fresh read of the effective setting, so it confirms the change took
+effect. Repeat the call for each affected tenant, and `PATCH {"enabled": true}` to restore. The
+card is on by default, and an unrecognized stored value leaves it on.
+
+While off, unposted cards are not posted, existing card links are refused without being consumed,
+and a sign-in already returning from the provider is refused before its grant is saved. Users can
+still connect from the in-app Connect button or the link the agent relays. After you restore it:
+
+- an unposted card is delivered within about five minutes if it is less than 24 hours old;
+- a refused, unconsumed link works again unchanged;
+- a sign-in refused mid-flight shows as expired; asking again in the thread produces a new card.
+
 ## Upgrade: shared-grant attribution (`0105`, both databases)
 
 1. Inventory affected shared OAuth servers in each tenant and identify a current

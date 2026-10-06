@@ -2495,7 +2495,6 @@ export class GatewayService {
   // would be a second thing to keep in step. The card's presentation lives in
   // `services/mcp-slack-connect-card.ts`.
   //
-  // See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
   // ==========================================================================
 
   /**

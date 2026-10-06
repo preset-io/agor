@@ -51,8 +51,7 @@ network filesystem behind the owner's or branch SDK home. Each turn:
    holder, a manifest for this Task, and that the turn's input is still the
    accepted attempt; it then supersedes the old attempt and accepts the new one.
 
-The ledger is `opencode_checkpoint_attempts` (no foreign keys, additive
-migration). Correctness rests on: unique per-Task attempt paths, acceptance only
+The ledger is `opencode_checkpoint_attempts` (no foreign keys). Correctness rests on: unique per-Task attempt paths, acceptance only
 in the completion transaction, terminal Tasks never completing, and one active
 Task per Session. Cleanup therefore needs no proof that old executors exited: it
 removes only attempts the ledger says can never be restored (superseded, never

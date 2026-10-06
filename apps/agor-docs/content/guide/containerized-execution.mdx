@@ -115,8 +115,7 @@ paths that no longer exist. Opening a terminal or running a session will
 fail when the executor tries to `chdir` into a directory that's gone.
 
 The daemon will surface a clear error in this state (`cwd does not exist
-on disk: ...`, see [issue
-\#1109](https://github.com/preset-io/agor/issues/1109)), but the only
+on disk: ...`), but the only
 real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
 `agor branch remove` / `agor repo remove` before re-cloning.

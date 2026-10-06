@@ -1349,8 +1349,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Override patch to handle board_objects when board_id changes.
    *
-   * Schedule config lives on the `schedules` table now (see
-   * docs/internal/schedules-first-class-design-2026-05-24.md); patches
+   * Schedule config lives on the `schedules` table now; patches
    * to schedule fields go through the `schedules` service, not here.
    */
   async patch(

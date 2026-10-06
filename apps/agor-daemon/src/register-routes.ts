@@ -1808,8 +1808,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *     before the executor process is forked. Without this, any crash
    *     during executor startup loses the prompt from the chat transcript
    *     even though `tasks.full_prompt` still has the text. Gated by
-   *     `config.execution.daemon_writes_user_message` (kill switch — see
-   *     §5.E of `docs/never-lose-prompt-design.md`).
+   *     `config.execution.daemon_writes_user_message` (kill switch).
    *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
    *     re-stamped onto the new message so the UI's callback styling
    *     (`MessageBlock.tsx`) survives the queue → run transition.
@@ -3661,8 +3660,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Widget submission / dismissal endpoints
   //
-  // See `docs/internal/in-conversation-widgets-design-2026-05-19.md`. The
-  // resolver handles auth, idempotency, registry dispatch, message patching,
+  // The resolver handles auth, idempotency, registry dispatch, message patching,
   // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
 
@@ -3741,8 +3739,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // The OAuth lane. The browser has finished the provider flow and is asking
   // the daemon to check; it supplies no server id and no payload worth
   // trusting, so everything that decides the outcome is read server-side from
-  // the pinned widget params and the persisted grant. See
-  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  // the pinned widget params and the persisted grant.
   registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/oauth-resolve',
@@ -3898,7 +3895,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            *  passes the viewport center so the new card lands where the
            *  user invoked the dialog. */
           position?: { x: number; y: number };
-          // Branch storage model — see context/explorations/clone-redesign.md.
+          // Branch storage model.
           storage_mode?: 'worktree' | 'clone';
           clone_depth?: number;
         },
@@ -6311,8 +6308,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *    leaves the card ON (`isMCPSlackConnectCardEnabled`), deliberately, and
    *    this route never writes one.
    *
-   * The runbook — including what happens to work stranded while it is off — is
-   * §7.1.4 of `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+   * The operator runbook — including what happens to work stranded while it
+   * is off — is in the MCP Administration guide (`mcp-administration.mdx`).
    */
   registerAuthenticatedRoute(
     app,

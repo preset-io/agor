@@ -498,7 +498,6 @@ export interface Branch {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See context/explorations/clone-redesign.md.
 
   /**
    * How this branch's filesystem is materialised.

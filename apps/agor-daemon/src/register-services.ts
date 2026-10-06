@@ -787,7 +787,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
-  // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
     methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
@@ -1043,7 +1042,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
-  // See context/explorations/claude-code-oauth-signin.md.
   if (claudeOAuthAuthority) {
     const maintenance = setInterval(() => {
       void claudeOAuthAuthority.maintain().catch((error) => {

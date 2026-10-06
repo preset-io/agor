@@ -45,8 +45,7 @@ spawn made by a foreign caller is attributed to that caller and inherits the
 parent Session's branch SDK-home scope.
 
 People who can prompt a Session can read its conversation and influence its
-future context. That is the product warning; it is no longer a credential-home
-sharing exception.
+future context.
 
 ## Configuration and revocation
 
@@ -61,11 +60,3 @@ that tenant. Re-enabling therefore cannot silently restore stale sharing.
 Gateway, browser, API, MCP, scheduler, widget, fork, and spawn paths use the
 same `resolveSessionPromptAuthority` result and canonical denial copy. Gateway
 denials are terminal rather than retryable.
-
-## Migration
-
-The personal per-owner grant tables and legacy identity-borrowing JSON fields
-are removed. Existing grants are intentionally not broadened into branch-wide
-permission: the new tenant preference and every branch switch start off. The
-table removal is an offline protocol cutover because older daemons cannot
-operate against the new schema.

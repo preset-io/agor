@@ -1133,7 +1133,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
 
     // Copy parent's env var *names* to forked session.
     // Names resolve at execution time against the child session's owner's
-    // env vars (see env-var-access.md), so when a cross-user fork happens
+    // env vars, so when a cross-user fork happens
     // these names are looked up under the caller's namespace, not the parent
     // owner's — no leakage of parent credentials into a fork the caller owns.
     const parentEnvSelections = await this.sessionEnvSelectionRepo.listNames(

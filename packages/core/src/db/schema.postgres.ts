@@ -861,7 +861,7 @@ export const branches = pgTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see context/explorations/clone-redesign.md.
+    // Branch storage model.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //
@@ -1184,7 +1184,7 @@ export const users = pgTable(
         //
         // Writes always produce the object form. Scope validation lives in the app
         // layer — no SQL CHECK constraint — so adding future scope values stays
-        // schema-free. See `context/explorations/env-var-access.md`.
+        // schema-free.
         env_vars?: Record<
           string,
           | string // legacy

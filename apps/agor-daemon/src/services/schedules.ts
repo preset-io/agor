@@ -10,8 +10,6 @@
  *   - patch:   session for own / all for others
  *   - remove:  all
  *   - run-now: all (custom REST verb in register-routes.ts)
- *
- * See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';

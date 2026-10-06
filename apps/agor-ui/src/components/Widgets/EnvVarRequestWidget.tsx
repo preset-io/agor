@@ -14,8 +14,6 @@
  *   - submitted        ✅ NAME saved (scope)
  *   - dismissed        ⊘ NAME dismissed
  *   - already_present  ✓ NAME already configured
- *
- * See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import type { AgorClient, EnvVarScope, Message, WidgetMessageMetadata } from '@agor-live/client';

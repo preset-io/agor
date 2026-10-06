@@ -740,8 +740,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               '"worktree" (default) = native `git worktree add` — shares the per-repo base ' +
               '`.git/` and is the legacy behaviour. ' +
               '"clone" = self-standing `git clone` into the branch directory — own `.git/config`, ' +
-              'closes cross-branch credential/config leak vectors. ' +
-              'See context/explorations/clone-redesign.md.'
+              'closes cross-branch credential/config leak vectors.'
           ),
         clone_depth: mcpOptionalPositiveInt(
           'clone_depth',

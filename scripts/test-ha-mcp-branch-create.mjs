@@ -7,7 +7,7 @@
  * custom-method MCP calls) threw "Missing tenant database scope for daemon
  * database access" under `required_from_auth`, because the MCP tool boundary
  * enters only tenant *context* while those custom methods touch the guarded
- * daemon DB directly. See docs/internal/mcp-tenant-db-scope-createbranch-2026-08-29.md.
+ * daemon DB directly.
  *
  * This exercises the real `/mcp` endpoint on both HA replicas, with a minted
  * session MCP token, and asserts:

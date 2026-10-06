@@ -120,7 +120,6 @@ const runnableExtensions = new Set([
 const excludedDirectories = new Set(['.git', 'node_modules']);
 const excludedPaths = new Set([
   workflowPath,
-  'docs/internal/pr-image-publication-audit-2026-08-28.md',
   'scripts/check-image-publication-policy.mjs',
   'scripts/managed-environments/railway/image.mjs',
 ]);
