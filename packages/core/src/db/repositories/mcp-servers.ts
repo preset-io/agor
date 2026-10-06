@@ -57,7 +57,7 @@ import {
   sessionMcpServers,
 } from '../schema';
 import { requireCurrentTenantId } from '../tenant-context';
-import { runWithTenantDatabaseTransaction } from '../tenant-scope';
+import { isPostgresDatabaseHandle, runWithTenantDatabaseTransaction } from '../tenant-scope';
 import { AppVariableRepository } from './app-variables';
 import {
   AmbiguousIdError,
@@ -330,9 +330,9 @@ export class MCPServerRepository
       url: row.data.url,
       headers: row.data.headers,
       env: row.data.env,
-      auth: row.data.auth?.oauth_client_secret
-        ? openConfiguredClientSecret(row.data.auth, this.clientSecretBinding(row.mcp_server_id))
-        : row.data.auth,
+      auth: openConfiguredClientSecret(row.data.auth, () =>
+        this.clientSecretBinding(row.mcp_server_id)
+      ),
       config_version: projectedMCPConfigVersion(row.data.config_version, row.mcp_server_id),
 
       // Scope foreign key (nullable UUID string - DB stores null, type expects undefined)
@@ -420,9 +420,11 @@ export class MCPServerRepository
         env: data.env,
         // CREATE auth:null is the explicit unauthenticated form, never a JSON
         // null masquerading as an MCPAuth object in later read paths.
-        auth: normalizedAuth?.oauth_client_secret
-          ? sealConfiguredClientSecret(normalizedAuth, this.clientSecretBinding(serverId))
-          : normalizedAuth,
+        auth: sealConfiguredClientSecret(
+          normalizedAuth,
+          () => this.clientSecretBinding(serverId),
+          isPostgresDatabaseHandle(this.db)
+        ),
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,
