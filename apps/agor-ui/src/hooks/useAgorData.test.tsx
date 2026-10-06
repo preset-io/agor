@@ -2127,6 +2127,64 @@ describe('useAgorData — reauthentication reads the displayed board once', () =
   });
 });
 
+describe('useAgorData — a reconnect reconciles background-loaded boards', () => {
+  it('drops rows archived or revoked while disconnected', async () => {
+    const boards = [1, 2, 3].map((n) => ({
+      board_id: `board-${n}`,
+      slug: `board-${n}`,
+      name: `Board ${n}`,
+    }));
+    const theirs = (n: number) =>
+      makeBranch({ branch_id: `b-${n}`, board_id: `board-${n}`, created_by: 'user-b' }) as Row;
+    const session = (n: number) =>
+      makeSession({ session_id: `s-${n}`, branch_id: `b-${n}`, created_by: 'user-b' }) as Row;
+    const server = {
+      branches: [theirs(1), theirs(2), theirs(3)],
+      sessions: [session(1), session(2), session(3)],
+    };
+    const { client } = makeMockClient(
+      fakeServer(
+        { boards, 'boards:get': ((id: string) => boards.find((b) => b.board_id === id)) as never },
+        server
+      )
+    );
+    const options = (connectionReady: boolean) => ({
+      authenticatedUserId: 'user-a',
+      authenticatedUserRole: 'member',
+      authGeneration: 1,
+      connectionReady,
+    });
+    const { result, rerender } = renderHook(
+      ({ connected }) => useAgorData(client, options(connected)),
+      { initialProps: { connected: true } }
+    );
+    await waitForInitialLoad(result);
+    // Home, with three boards loaded in the background (navigated away from).
+    await act(async () => {
+      await Promise.all(
+        boards.map((b) =>
+          loadBoardPartition(client, b.board_id, { canUseMemberWorkspaceServices: true })
+        )
+      );
+    });
+    expect(['s-1', 's-2', 's-3'].every((id) => agorStore.getState().sessionById.has(id))).toBe(
+      true
+    );
+
+    // Disconnected: another user archives s-2, and board-3's branch is revoked.
+    rerender({ connected: false });
+    server.sessions = [session(1), { ...session(2), archived: true }];
+    server.branches = [theirs(1), theirs(2)];
+    rerender({ connected: true });
+    await waitFor(() => {
+      const state = agorStore.getState();
+      expect(state.sessionById.has('s-2')).toBe(false);
+      expect(state.sessionById.has('s-3')).toBe(false);
+      expect(state.branchById.has('b-3')).toBe(false);
+    });
+  });
+});
+
 describe('useAgorData — a branch moved back onto a loaded board', () => {
   it("restores another user's sessions it lost while on an unloaded board", async () => {
     window.history.pushState({}, '', '/b/board-one/');

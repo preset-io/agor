@@ -474,6 +474,10 @@ export function useAgorData(
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
   const lastSilentFetchFailedRef = useRef(false);
+  // Boards an authority transition unloaded (a disconnect forgets every
+  // partition). Their rows may have missed deletions, archives or revoked
+  // access meanwhile: the next resync evicts them unless loaded again.
+  const transitionUnloadedBoardsRef = useRef(new Set<string>());
   const oauthStatusRequestGenerationRef = useRef(0);
 
   // The opened session's transcript prefetch (see `openedTranscriptPrefetch`).
@@ -1232,8 +1236,12 @@ export function useAgorData(
           .then(() => {
             if (!authorityIsCurrent()) return;
             const displayed = getDisplayedBoardId();
+            const transitionUnloaded = [...transitionUnloadedBoardsRef.current];
+            transitionUnloadedBoardsRef.current.clear();
             evictUnloadedBoards(
-              unloadedBoardIds.filter((id) => id !== boardScope && id !== displayed)
+              [...unloadedBoardIds, ...transitionUnloaded].filter(
+                (id) => id !== boardScope && id !== displayed
+              )
             );
             releaseStaleScopes(userScopeRun);
           });
@@ -1320,7 +1328,13 @@ export function useAgorData(
     // Which session↔MCP links are visible depends on the caller.
     resetSessionMcpLinks();
     // Partition loads of the old authority are orphaned by the cancellation;
-    // forget their entries so the displayed board loads again under this one.
+    // forget their entries so the displayed board loads again under this one,
+    // and remember the boards for the resync to evict.
+    for (const key of agorStore.getState().coverage.keys()) {
+      if (key.startsWith(BOARD_SCOPE_PREFIX)) {
+        transitionUnloadedBoardsRef.current.add(key.slice(BOARD_SCOPE_PREFIX.length));
+      }
+    }
     agorStore.getState().resetBoardPartitions();
     refetchInflightRef.current = null;
     lastSilentFetchFailedRef.current = false;
