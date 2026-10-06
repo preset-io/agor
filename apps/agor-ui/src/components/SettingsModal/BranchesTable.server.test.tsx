@@ -116,6 +116,66 @@ describe('BranchesTable — server pages with the store empty', { timeout: 10_00
     });
   });
 
+  it.each(['filter', 'search'] as const)(
+    'a %s round trip starts on page 1, not the page left behind',
+    async (via) => {
+      const { client, branchesFind } = makeClient();
+      renderTable(client);
+      await screen.findByText('feature-1');
+      const pickFilter = (label: string) => {
+        fireEvent.mouseDown(screen.getByRole('combobox'));
+        fireEvent.click(
+          document.querySelector(`.ant-select-item-option[title="${label}"]`) as Element
+        );
+      };
+      const search = (value: string) =>
+        fireEvent.change(screen.getByPlaceholderText(/Search/), { target: { value } });
+      // Page 2 under the first filter or search.
+      if (via === 'search') {
+        search('feat');
+        await waitFor(() =>
+          expect(branchesFind).toHaveBeenLastCalledWith({
+            query: expect.objectContaining({ search: 'feat', $skip: 0 }),
+          })
+        );
+      }
+      fireEvent.click(screen.getByTitle('2'));
+      await waitFor(() =>
+        expect(branchesFind).toHaveBeenLastCalledWith({
+          query: expect.objectContaining({ archived: false, $skip: 10 }),
+        })
+      );
+
+      // Away and back, without paging in between.
+      if (via === 'filter') {
+        pickFilter('Archived');
+        await waitFor(() =>
+          expect(branchesFind).toHaveBeenLastCalledWith({
+            query: expect.objectContaining({ archived: true, $skip: 0 }),
+          })
+        );
+        pickFilter('Active');
+      } else {
+        search('feature');
+        await waitFor(() =>
+          expect(branchesFind).toHaveBeenLastCalledWith({
+            query: expect.objectContaining({ search: 'feature', $skip: 0 }),
+          })
+        );
+        search('feat');
+      }
+      await waitFor(() =>
+        expect(branchesFind).toHaveBeenLastCalledWith({
+          query: expect.objectContaining({
+            archived: false,
+            $skip: 0,
+            ...(via === 'search' ? { search: 'feat' } : {}),
+          }),
+        })
+      );
+    }
+  );
+
   it('sends the daemon at most its 8 distinct search terms', async () => {
     const { client, branchesFind } = makeClient();
     renderTable(client);

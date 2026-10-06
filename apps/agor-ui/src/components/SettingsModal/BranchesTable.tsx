@@ -125,6 +125,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   // render: the page belongs to the filter and search it was chosen under.
   const pageKey = `${archiveFilter}\u0000${search}`;
   const [paged, setPaged] = useState({ key: pageKey, page: 1 });
+  // Forget the old page when the key changes, so returning to it starts on 1.
+  if (paged.key !== pageKey) setPaged({ key: pageKey, page: 1 });
   const page = paged.key === pageKey ? paged.page : 1;
   const setPage = (next: number) => setPaged({ key: pageKey, page: next });
 
