@@ -217,4 +217,33 @@ describe('useBoardPartition', () => {
       vi.useRealTimers();
     }
   });
+
+  it('navigating to a retained board never evicts it first', async () => {
+    const visits = ['05', '01', '02', '03', '04', '06', '07', '06', '05', '01', '07'];
+    const ids = [...new Set(visits)].map((n) => `board-${n}`);
+    agorStore
+      .getState()
+      .setMap('boardById', new Map(ids.map((id) => [id, { board_id: id, name: id } as never])));
+    const reads = new Map<string, number>();
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: (name: string) => ({
+        findAll: vi.fn(async ({ query }: { query: { board_id: string } }) => {
+          if (name === 'sessions') reads.set(query.board_id, (reads.get(query.board_id) ?? 0) + 1);
+          return [];
+        }),
+        get: vi.fn(async (id: string) => ({ board_id: id, name: id, objects: {} })),
+      }),
+    } as unknown as AgorClient;
+    const { result, rerender } = renderHook(
+      ({ boardId }) => useBoardPartition(client, boardId, { canUseMemberWorkspaceServices: true }),
+      { initialProps: { boardId: `board-${visits[0]}` } }
+    );
+    for (const visit of visits) {
+      rerender({ boardId: `board-${visit}` });
+      await waitFor(() => expect(result.current.boardReady).toBe(true));
+    }
+    // 07 was among the three most recently used background boards (06, 05, 07).
+    expect(reads.get('board-07')).toBe(1);
+  });
 });

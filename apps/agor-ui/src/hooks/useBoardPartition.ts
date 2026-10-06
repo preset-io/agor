@@ -1,5 +1,5 @@
 import type { AgorClient } from '@agor-live/client';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { agorStore, useAgorStore } from '../store/agorStore';
 import {
   loadBoardPartition,
@@ -80,10 +80,22 @@ export function useBoardPartition(
 
   // Publish the use: a reconnect resync reconciles the displayed board in
   // place, and the LRU never evicts a mounted board (`registerBoardUse`).
+  // Register the new board before releasing the old one: a release runs the
+  // LRU, which would otherwise see no displayed board and could evict the
+  // board being navigated to.
+  const releaseUse = useRef<(() => void) | null>(null);
   useEffect(() => {
-    if (!boardId || !boardKnown) return;
-    return registerBoardUse(boardId, background);
+    const previous = releaseUse.current;
+    releaseUse.current = boardId && boardKnown ? registerBoardUse(boardId, background) : null;
+    previous?.();
   }, [background, boardId, boardKnown]);
+  useEffect(
+    () => () => {
+      releaseUse.current?.();
+      releaseUse.current = null;
+    },
+    []
+  );
 
   // A failed load retries automatically once the socket reconnects.
   useEffect(() => {
