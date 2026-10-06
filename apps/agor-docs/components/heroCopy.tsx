@@ -13,12 +13,12 @@ export interface HeroCopy {
   subheadline: string;
 }
 
-// Category-led hero (PMM v4: Multiplayer AI first), with the "Not Alone"
-// problem carried into the subhead. HOME_HERO_PROBLEM is the A/B alternate.
+// PMM v4: lead with team collaboration, make it tangible with live boards,
+// and connect shared learning to reusable team workflows.
 export const HOME_HERO: HeroCopy = {
-  headline: '[Multiplayer AI]\nis here',
+  headline: '[Multiplayer AI]\nWork together again.',
   subheadline:
-    'Your agents shouldn’t work alone. Bring every session onto one [board] your whole ^team^ can see.',
+    'Bring your ^team^ and agents together. See the work on [live boards], learn from each other, and turn useful practices into workflows your team can share.',
 };
 
 // A/B candidate (not wired up yet): keeps the tested "Not Alone" problem
