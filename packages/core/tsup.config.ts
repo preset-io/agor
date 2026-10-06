@@ -104,6 +104,8 @@ export default defineConfig({
     // Tenant-aware config resolution must use the DB entrypoint's ambient scope,
     // not an inlined copy.
     '@agor/core/db',
+    // The repository resolves curated.yaml through the catalog's own entry.
+    '@agor/core/mcp-catalog',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',

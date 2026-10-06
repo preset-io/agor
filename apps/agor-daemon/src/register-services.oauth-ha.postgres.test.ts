@@ -1218,11 +1218,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               oauth_compatibility_mode: 'strict',
             },
           });
-          const raw = await executeRaw(
-            scoped,
-            sql`SELECT data FROM mcp_servers WHERE mcp_server_id = ${server.mcp_server_id}`
-          );
-          expect(JSON.stringify(raw)).not.toContain('customer-app-secret');
           return { owner, server };
         });
         oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test');

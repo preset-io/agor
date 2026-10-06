@@ -327,8 +327,9 @@ secret) in the secure Catalog form. Like other Catalog apps, the install can be
 **Private** or **Shared**: a shared install's app credentials are entered once by
 whoever creates it, and other members reuse them without seeing the secret. Each
 user then consents to their own provider grant (or an admin connects one **Shared**
-grant), and sharing an app does not share users' tokens. On PostgreSQL, app secrets are
-encrypted with `AGOR_MASTER_SECRET` and redacted on reads. Never paste a client
+grant), and sharing an app does not share users' tokens. On PostgreSQL, these app
+secrets are encrypted with `AGOR_MASTER_SECRET`; other servers' client secrets are
+stored as before. All are redacted on reads. Never paste a client
 secret into agent chat; MCP configuration tools accept only a
 `{{ user.env.NAME }}` reference for it. Rotating app credentials invalidates
 pending attempts and stored grants, so affected users must reconnect.

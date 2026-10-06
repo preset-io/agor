@@ -5,20 +5,21 @@ import { isBoundSecretEnvelope, openBoundSecret, sealBoundSecret } from './oauth
 
 /**
  * Configured app credentials are not user grants. Seal at the repository
- * boundary, like MCP OAuth grants: only on PostgreSQL, and never a
- * `{{ user.env.* }}` reference. The tenant binding is resolved only when sealing.
+ * boundary when the repository asks (`seal`: PostgreSQL customer-owned app
+ * installs only), and never a `{{ user.env.* }}` reference. The tenant binding
+ * is resolved only when sealing.
  */
 export function sealConfiguredClientSecret(
   auth: MCPAuth | undefined,
   binding: () => string,
-  postgres: boolean
+  seal: boolean
 ): MCPAuth | undefined {
   const secret = auth?.oauth_client_secret;
   if (!secret) return auth;
   if (isBoundSecretEnvelope(secret)) {
     throw new MCPAuthValidationError('Submit a client secret, not stored encrypted material');
   }
-  if (!postgres || isUserEnvPlaceholder(secret)) return auth;
+  if (!seal || isUserEnvPlaceholder(secret)) return auth;
   if (!process.env.AGOR_MASTER_SECRET) {
     throw new MCPAuthValidationError(
       'Saving a configured OAuth client secret requires the deployment encryption key'

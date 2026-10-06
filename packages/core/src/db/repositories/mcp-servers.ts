@@ -354,9 +354,35 @@ export class MCPServerRepository
   /**
    * Convert MCPServer to database insert format
    */
+  /**
+   * Seal `oauth_client_secret` only for installs of a customer-owned
+   * (`configured_client`) catalog app on PostgreSQL. Every other server stores
+   * it exactly as before, so older daemons (rolling upgrade or rollback) keep
+   * reading their own rows unchanged.
+   */
+  private async sealsClientSecret(server: {
+    source?: MCPServer['source'];
+    catalog_entry_name?: string | null;
+    auth?: MCPAuth | null;
+  }): Promise<boolean> {
+    if (
+      !isPostgresDatabaseHandle(this.db) ||
+      server.source !== 'catalog' ||
+      !server.catalog_entry_name ||
+      !server.auth?.oauth_client_secret
+    )
+      return false;
+    // Package import (external in tsup, like config-manager's '@agor/core/db')
+    // so the built db entry resolves the catalog file from its own location.
+    const { findCatalogEntry, loadCatalog } = await import('@agor/core/mcp-catalog');
+    return Boolean(
+      findCatalogEntry(await loadCatalog(), server.catalog_entry_name)?.oauth?.configured_client
+    );
+  }
+
   private mcpServerToInsert(
     data: CreateMCPServerInput | Partial<MCPServer>,
-    options: { preserveDaemonRevisions?: boolean } = {}
+    options: { preserveDaemonRevisions?: boolean; sealClientSecret?: boolean } = {}
   ): MCPServerInsert {
     const submittedAuth = 'auth' in data ? (data.auth as unknown) : undefined;
     if (submittedAuth !== undefined) {
@@ -423,7 +449,7 @@ export class MCPServerRepository
         auth: sealConfiguredClientSecret(
           normalizedAuth,
           () => this.clientSecretBinding(serverId),
-          isPostgresDatabaseHandle(this.db)
+          options.sealClientSecret === true
         ),
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
@@ -545,7 +571,9 @@ export class MCPServerRepository
    */
   async create(data: CreateMCPServerInput): Promise<MCPServer> {
     try {
-      const insertData = this.mcpServerToInsert(data);
+      const insertData = this.mcpServerToInsert(data, {
+        sealClientSecret: await this.sealsClientSecret(data),
+      });
       await insert(this.db, mcpServers).values(insertData).run();
 
       const row = await select(this.db)
@@ -725,6 +753,7 @@ export class MCPServerRepository
           const merged = mergeServerConfiguration(current, updates, nextConfigVersion, options);
           const insertData = this.mcpServerToInsert(merged, {
             preserveDaemonRevisions: true,
+            sealClientSecret: await this.sealsClientSecret(merged),
           });
 
           await update(tx, mcpServers)
@@ -830,6 +859,7 @@ export class MCPServerRepository
         const merged = mergeServerConfiguration(current, updates, nextConfigVersion, {});
         const insertData = this.mcpServerToInsert(merged, {
           preserveDaemonRevisions: true,
+          sealClientSecret: await this.sealsClientSecret(merged),
         });
         await update(tx, mcpServers)
           .set({
