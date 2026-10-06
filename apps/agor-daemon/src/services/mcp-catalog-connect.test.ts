@@ -2376,9 +2376,27 @@ describe('customer-owned configured OAuth app', () => {
     });
     expect(fixture.generationFinalizations).toHaveLength(1);
   });
-  it('refuses shared Catalog BYO before probing or saving app material', async () => {
+  it('never overwrites shared install app credentials from Connect', async () => {
     probeRemoteAuthType.mockClear();
-    const fixture = buildApp(byo);
+    const fixture = buildApp(byo, [
+      {
+        mcp_server_id: 'shared-byo',
+        name: 'shared-byo',
+        transport: 'http',
+        url: CURATED.remote_url,
+        scope: 'session',
+        source: 'catalog',
+        catalog_entry_name: byo.name,
+        enabled: true,
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'installer-app',
+          oauth_client_secret: 'installer-secret',
+        },
+      },
+    ]);
     await expect(
       createMCPCatalogConnectService(fixture.app, fixture.deps).create(
         {
@@ -2388,10 +2406,10 @@ describe('customer-owned configured OAuth app', () => {
         },
         params
       )
-    ).rejects.toThrow('private Catalog installation');
+    ).rejects.toThrow('already has an OAuth app');
     expect(probeRemoteAuthType).not.toHaveBeenCalled();
     expect(fixture.created.mcpServers).toHaveLength(0);
-    expect(fixture.generationFinalizations).toHaveLength(0);
+    expect(fixture.patched).toHaveLength(0);
   });
   it('refuses app material for entries without a reviewed recipe', async () => {
     const fixture = buildApp(CURATED);

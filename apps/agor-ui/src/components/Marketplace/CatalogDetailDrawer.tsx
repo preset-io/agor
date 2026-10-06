@@ -407,18 +407,24 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
         : canUseShared
           ? 'Choose Use existing shared to connect without adding a private server.'
           : explainAddRestriction(connectCapability);
+  // An existing shared install already carries its OAuth app; only whoever
+  // creates an install enters the app credentials.
+  const reusesSharedApp = Boolean(
+    configuredApp && sharing === 'shared' && readiness?.shared_configuration_available
+  );
+  const appForm = configuredApp && !reusesSharedApp ? configuredApp : undefined;
   const canConnect = Boolean(
-    !(sharing === 'shared' && (needsApiKey || configuredApp)) &&
+    !(sharing === 'shared' && needsApiKey) &&
       !blockedReason &&
       !policyRefusal &&
       acknowledged &&
       !connecting &&
       (!needsApiKey || bearerToken) &&
-      (!configuredApp ||
+      (!appForm ||
         (readiness?.catalog_key === entryId &&
           readiness.redirect_uri &&
           appFields?.client_id.trim() &&
-          (!configuredApp.secret_required || appFields?.client_secret)))
+          (!appForm.secret_required || appFields?.client_secret)))
   );
   const connectDisabledReason = connecting
     ? 'Connection in progress.'
@@ -825,27 +831,27 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     {(canShare || canUseShared || sharing === 'shared') && (
                       <Radio
                         value="shared"
-                        disabled={
-                          needsApiKey ||
-                          Boolean(configuredApp) ||
-                          policyPending ||
-                          (!canShare && !canUseShared)
-                        }
+                        disabled={needsApiKey || policyPending || (!canShare && !canUseShared)}
                       >
                         {canShare ? 'Shared' : 'Use existing shared'}
                       </Radio>
                     )}
                   </Radio.Group>
                 </Form.Item>
-                {(needsApiKey || configuredApp) && (
+                {needsApiKey && (
                   <Text type="secondary">
-                    Bearer/API-key and configured OAuth app installations stay private because the
-                    credential is stored with the configuration.
+                    Bearer/API-key installations stay private because the credential is stored with
+                    the configuration.
+                  </Text>
+                )}
+                {reusesSharedApp && (
+                  <Text type="secondary">
+                    Uses the OAuth app already configured for this shared installation.
                   </Text>
                 )}
               </Form>
 
-              {configuredApp && (
+              {appForm && (
                 <Form layout="vertical">
                   <Alert
                     type="info"
@@ -853,11 +859,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     title="Use your own OAuth app"
                     description={
                       <>
-                        <Link
-                          href={configuredApp.setup_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
+                        <Link href={appForm.setup_url} target="_blank" rel="noopener noreferrer">
                           Create an app in the provider console
                         </Link>{' '}
                         and configure the callback shown by Agor. Provider distribution and approval
@@ -893,10 +895,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                       }
                     />
                   </Form.Item>
-                  <Form.Item
-                    label="OAuth app Client secret"
-                    required={configuredApp.secret_required}
-                  >
+                  <Form.Item label="OAuth app Client secret" required={appForm.secret_required}>
                     <Input.Password
                       aria-label="OAuth app Client secret"
                       value={appFields?.client_secret ?? ''}
@@ -950,7 +949,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
-                    ...(configuredApp && appFields
+                    ...(appForm && appFields
                       ? {
                           oauthClient: {
                             client_id: appFields.client_id.trim(),

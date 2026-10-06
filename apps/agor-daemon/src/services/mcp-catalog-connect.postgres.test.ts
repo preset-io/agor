@@ -23,6 +23,7 @@ import {
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@agor/core/types';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { safeMcpServerConfigReadback } from '../mcp/tools/mcp-servers.js';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
@@ -34,7 +35,12 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteBearerToken: vi.fn(),
 }));
 
-const oauthProviderFixture = vi.hoisted(() => ({ discoveries: 0, registrations: 0 }));
+const oauthProviderFixture = vi.hoisted(() => ({
+  discoveries: 0,
+  registrations: 0,
+  clients: [] as Array<{ clientId?: string; clientSecret?: string }>,
+  exchanges: 0,
+}));
 
 vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
   const original =
@@ -55,6 +61,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         clientId: string | undefined,
         redirectUri: string,
         options: {
+          clientSecret?: string;
           resolveDynamicClientRegistration?: (
             request: Record<string, unknown>,
             register: () => Promise<Record<string, unknown>>
@@ -64,6 +71,7 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           }>;
         }
       ) => {
+        oauthProviderFixture.clients.push({ clientId, clientSecret: options.clientSecret });
         const resolved = clientId
           ? { registration: { client_id: clientId } }
           : await options.resolveDynamicClientRegistration?.(
@@ -115,6 +123,12 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
         };
       }
     ),
+    completeMCPOAuthFlow: vi.fn(async () => ({
+      access_token: `catalog-access-${++oauthProviderFixture.exchanges}`,
+      refresh_token: 'catalog-refresh',
+      token_type: 'Bearer',
+      expires_in: 3600,
+    })),
   };
 });
 vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
@@ -730,6 +744,158 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(rows).toHaveLength(1);
         expect(rows[0]?.auth?.token).toBe(NEW_KEY);
       });
+    });
+
+    it('shares a configured app install: credentials once, per-user grants, secret never returned', async () => {
+      const BYO = {
+        ...ENTRY,
+        name: 'test/catalog-connect-postgres-byo',
+        oauth: {
+          compatibility_mode: 'strict',
+          dcr_mode: 'disabled',
+          configured_client: {
+            setup_url: 'https://provider.example.test/apps',
+            issuer: 'https://provider.example.test',
+            secret_required: true,
+          },
+        },
+      } as unknown as MCPCatalogEntry;
+      const installer = await buildTenant('byo-shared');
+      const member = await runWithTenantDatabaseScope(db, installer.tenantId, (scoped) =>
+        buildUser(scoped, 'byo-member')
+      );
+      const app = connectApp(BYO);
+      const service = createRegisteredMCPCatalogConnectService(app, db);
+      const request = { ...REQUEST, catalog_key: BYO.name, sharing: 'shared' as const };
+      const created = await service.create(
+        { ...request, oauth_client: { client_id: 'byo-app', client_secret: 'byo-app-secret' } },
+        params(installer.user, installer.tenantId)
+      );
+      expect(created.mcp_server.owner_user_id).toBeUndefined();
+      expect(JSON.stringify(created)).not.toContain('byo-app-secret');
+      // Another member reuses the shared install without re-entering credentials,
+      // and cannot overwrite them from Connect.
+      const reused = await service.create(request, params(member, installer.tenantId));
+      expect(reused).toMatchObject({ reused_existing_server: true });
+      expect(reused.mcp_server.mcp_server_id).toBe(created.mcp_server.mcp_server_id);
+      await expect(
+        service.create(
+          { ...request, oauth_client: { client_id: 'other-app', client_secret: 'other-secret' } },
+          params(member, installer.tenantId)
+        )
+      ).rejects.toThrow('already has an OAuth app');
+      const serverId = created.mcp_server.mcp_server_id;
+      const external = await runWithTenantDatabaseScope(db, installer.tenantId, () =>
+        app.service('mcp-servers').get(serverId, params(member, installer.tenantId))
+      );
+      expect(JSON.stringify(external)).not.toContain('byo-app-secret');
+      const internal = await runWithTenantDatabaseScope(db, installer.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).findById(serverId)
+      );
+      expect(internal?.auth?.oauth_client_secret).toBe('byo-app-secret');
+      expect(JSON.stringify(safeMcpServerConfigReadback(internal!))).not.toContain(
+        'byo-app-secret'
+      );
+
+      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
+        requireScope: true,
+        label: 'catalog BYO OAuth replica',
+      });
+      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
+      oauthApp.io = {
+        local: { to: () => ({ emit() {} }) },
+        to: () => ({ emit() {} }),
+        sockets: { sockets: new Map() },
+      };
+      const originalBaseUrl = process.env.AGOR_BASE_URL;
+      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      try {
+        const { oauthCallbackHandler } = await registerMCPServices({
+          db: oauthDb,
+          app: oauthApp as RegisterServicesContext['app'],
+          config: {} as RegisterServicesContext['config'],
+          jwtSecret: 'test-jwt',
+          daemonUrl: 'https://public-agor.example.test',
+          bundledUiAvailable: false,
+          DAEMON_PORT: 3030,
+          UI_PORT: 5173,
+          allowSuperadmin: false,
+          requireAuth: async (context) => context,
+          deployment: {
+            mode: 'ha',
+            capabilities: { mcpOAuth: true },
+            mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          } as RegisterServicesContext['deployment'],
+          mcpOAuthCallbackUrl: 'https://public-agor.example.test/mcp-servers/oauth-callback',
+          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
+            assertCurrent?.();
+            return new Response('', {
+              status: 401,
+              headers: {
+                'www-authenticate':
+                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+              },
+            });
+          },
+        });
+        oauthProviderFixture.clients = [];
+        for (const user of [installer.user, member]) {
+          const started = (await oauthApp
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: serverId }, params(user, installer.tenantId))) as {
+            success: boolean;
+            authorizationUrl: string;
+          };
+          expect(started.success).toBe(true);
+          let status = 0;
+          await (
+            oauthCallbackHandler as unknown as (
+              request: unknown,
+              response: unknown
+            ) => Promise<void>
+          )(
+            {
+              query: {
+                code: 'code',
+                state: new URL(started.authorizationUrl).searchParams.get('state'),
+                iss: 'https://provider.example.test',
+              },
+            },
+            {
+              setHeader() {},
+              status(code: number) {
+                status = code;
+                return this;
+              },
+              send() {
+                return this;
+              },
+            }
+          );
+          expect(status).toBe(200);
+        }
+        expect(oauthProviderFixture.clients).toEqual([
+          { clientId: 'byo-app', clientSecret: 'byo-app-secret' },
+          { clientId: 'byo-app', clientSecret: 'byo-app-secret' },
+        ]);
+        await runWithTenantDatabaseScope(db, installer.tenantId, async (scoped) => {
+          const tokens = new UserMCPOAuthTokenRepository(scoped, SECRET);
+          const [mine, theirs] = await Promise.all([
+            tokens.getToken(installer.user.user_id, serverId),
+            tokens.getToken(member.user_id, serverId),
+          ]);
+          expect(mine?.oauth_access_token).toBeTruthy();
+          expect(theirs?.oauth_access_token).toBeTruthy();
+          expect(mine?.oauth_access_token).not.toBe(theirs?.oauth_access_token);
+          expect(await tokens.getToken(null, serverId)).toBeNull();
+        });
+      } finally {
+        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = originalBaseUrl;
+        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      }
     });
   }
 );

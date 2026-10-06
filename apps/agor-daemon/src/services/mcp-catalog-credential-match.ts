@@ -89,7 +89,11 @@ export async function compatibleCatalogOAuthPeers(
     .sort((a, b) => (a.server.mcp_server_id < b.server.mcp_server_id ? -1 : 1));
 }
 
-/** Shared Catalog use is read-only and never admits embedded credentials. */
+/**
+ * Shared Catalog use is read-only and never admits embedded credentials, except
+ * a configured app's own client secret: the exact current-install comparison
+ * below admits no other credential field on such a row.
+ */
 export function isUsableSharedCatalogCandidate(
   candidate: MCPCatalogServerCandidate,
   entry: MCPCatalogEntry & { remote_url: string },
@@ -100,7 +104,7 @@ export function isUsableSharedCatalogCandidate(
     !server.owner_user_id &&
     server.enabled &&
     server.scope === 'session' &&
-    !has_row_secret &&
+    (!has_row_secret || Boolean(entry.oauth?.configured_client)) &&
     Object.keys(server.env ?? {}).length === 0 &&
     isCurrentCatalogInstall(server, entry, prescribed, { reconcileMissingCompatibilityMode: true })
   );

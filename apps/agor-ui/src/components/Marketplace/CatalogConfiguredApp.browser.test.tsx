@@ -79,7 +79,7 @@ it('shows Asana app setup without a bearer field, keeps IDs and secrets in the s
     .toBeVisible();
   const button = page.getByRole('button', { name: 'Connect', exact: true });
   await expect.element(button).toBeDisabled();
-  await expect.element(page.getByRole('radio', { name: 'Shared', exact: true })).toBeDisabled();
+  await expect.element(page.getByRole('radio', { name: 'Shared', exact: true })).toBeEnabled();
   await expect.element(page.getByRole('radio', { name: 'Private', exact: true })).toBeChecked();
   await page.getByLabelText('OAuth app Client ID', { exact: true }).fill('customer-app');
   await page.getByLabelText('OAuth app Client secret', { exact: true }).fill('fake-client-secret');
@@ -118,6 +118,34 @@ it('shows Asana app setup without a bearer field, keeps IDs and secrets in the s
     .element(page.getByLabelText('OAuth app Client secret', { exact: true }))
     .toHaveValue('');
   await expect.element(button).toBeDisabled();
+});
+
+it('reuses an existing shared app install without asking for or sending app credentials', async () => {
+  const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
+    input.oauthPopup?.close()
+  );
+  const props = makeProps(entry, connect);
+  render(
+    <ConfigProvider>
+      <App>
+        <CatalogDetailDrawer
+          {...props}
+          sharing="shared"
+          readiness={{ ...props.readiness!, shared_configuration_available: true }}
+        />
+      </App>
+    </ConfigProvider>
+  );
+  await expect
+    .element(page.getByText('Uses the OAuth app already configured for this shared installation.'))
+    .toBeVisible();
+  await expect
+    .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
+    .not.toBeInTheDocument();
+  await page.getByRole('checkbox').click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  expect(connect).toHaveBeenCalledOnce();
+  expect(connect.mock.calls[0][0]).not.toHaveProperty('oauthClient');
 });
 
 it('keeps genuine bearer setup private, submits only the key, and clears it on close', async () => {

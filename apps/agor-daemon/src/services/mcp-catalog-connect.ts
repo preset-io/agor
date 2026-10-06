@@ -958,8 +958,18 @@ export function createMCPCatalogConnectService(
       ) {
         throw new BadRequest('This entry does not accept configured OAuth app credentials');
       }
+      // A configured app's credentials are entered once, by whoever creates
+      // the install. Using an existing shared install reuses them as-is and
+      // never overwrites them from Connect; changing them is a Settings edit.
+      const reusesSharedConfiguredApp = Boolean(entry.oauth?.configured_client && initialShared);
+      if (reusesSharedConfiguredApp && configuredClient !== undefined) {
+        throw new BadRequest(
+          'This shared installation already has an OAuth app. Connect without app credentials, or ask an admin to change it in Settings.'
+        );
+      }
       if (
         entry.oauth?.configured_client &&
+        !reusesSharedConfiguredApp &&
         (!configuredClient ||
           typeof configuredClient.client_id !== 'string' ||
           !configuredClient.client_id.trim() ||
@@ -971,11 +981,6 @@ export function createMCPCatalogConnectService(
       ) {
         throw new BadRequest(
           'Configure your own OAuth app in the secure Catalog form before connecting'
-        );
-      }
-      if (sharing === 'shared' && entry.oauth?.configured_client) {
-        throw new BadRequest(
-          'Configured OAuth apps must use a private Catalog installation; administrators can configure a shared per-user server in Settings'
         );
       }
       // Every connect claims an operation generation, not only bearer
@@ -1087,7 +1092,7 @@ export function createMCPCatalogConnectService(
         sharing === 'shared' &&
         (needsReconciliation ||
           mcpServer.scope !== 'session' ||
-          selection?.candidate.has_row_secret ||
+          (selection?.candidate.has_row_secret && !entry.oauth?.configured_client) ||
           Object.keys(mcpServer.env ?? {}).length > 0)
       ) {
         throw new BadRequest(
