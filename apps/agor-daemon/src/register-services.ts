@@ -4263,20 +4263,8 @@ export async function registerMCPServices(
     try {
       if (!oauthRelay || !durableOAuthFlows || !Buffer.isBuffer(req.body)) throw new Error();
       const delivery = await oauthRelay.verifyDelivery(req.body, req.headers.authorization);
-      const userId = delivery.runtime_user_id as UserID;
-      if ((await cloudUserFor(delivery.workspace_id, userId)) !== delivery.cloud_user_id)
-        throw new Error();
-      const attempt = await durableOAuthFlows.getForUser(
-        delivery.workspace_id,
-        userId,
-        delivery.attempt_id as MCPOAuthAttemptID
-      );
-      if (
-        !attempt ||
-        attempt.mcpServerId !== delivery.server_id ||
-        attempt.stateHash !== createHash('sha256').update(delivery.state).digest('hex')
-      )
-        throw new Error();
+      // The tenant/user-scoped state claim plus bindDelivery() against the
+      // sealed relay binding are the attempt authority for a signed delivery.
       await handleOAuthCallback(req, res, delivery);
     } catch {
       res.status(401).json({ outcome: 'failed' });

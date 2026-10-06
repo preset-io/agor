@@ -1285,13 +1285,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           return { status, result };
         };
         const count = oauthFixture.exchanges;
+        // Another tenant/user cannot claim the state; a mixed issuer fails
+        // signature-body verification. None of these consume the attempt.
         for (const overrides of [
           { workspace_id: `${tenant}-other` },
           { runtime_user_id: generateId() },
-          { server_id: generateId() },
           { iss: 'https://wrong-provider.test' },
         ]) {
-          expect((await deliver(b, overrides)).status).toBe(401);
+          const refused = await deliver(b, overrides);
+          expect(refused.status).not.toBe(200);
+          expect(refused.result).toEqual({ outcome: 'failed' });
         }
         expect(oauthFixture.exchanges).toBe(count);
         const results = await Promise.all([deliver(a), deliver(b)]);
@@ -1311,6 +1314,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             { auth: { oauth_client_secret: 'rotated-customer-secret' } },
             params(owner, tenant)
           );
+        expect((await deliver(b)).result).toEqual({ outcome: 'failed' });
+        expect(oauthFixture.exchanges).toBe(count + 1);
+        // A claimed attempt whose sealed relay binding disagrees is consumed
+        // as failed, never exchanged.
+        await start();
+        expect((await deliver(b, { server_id: generateId() })).result).toEqual({
+          outcome: 'failed',
+        });
         expect((await deliver(b)).result).toEqual({ outcome: 'failed' });
         expect(oauthFixture.exchanges).toBe(count + 1);
         await start();
