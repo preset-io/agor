@@ -160,6 +160,40 @@ describe('HomePage teammates', () => {
     await waitFor(() => expect(onSessionClick).toHaveBeenCalledWith('new'));
   });
 
+  it('names the teammate in the phone picker and puts Continue on its own row', async () => {
+    seed({
+      sessions: [session('mine', { branch_id: 'primary', title: 'A long running thread' })],
+      branches: [primary],
+    });
+    renderHome({ client: client({}) });
+    await screen.findByRole('textbox', { name: 'Ask Teammate primary' });
+    const toolbar = document.querySelector<HTMLElement>('[data-home-ask-toolbar]') as HTMLElement;
+    const chip = within(toolbar).getByRole('button', { name: 'Teammate to ask: Teammate primary' });
+    expect(chip).toHaveTextContent('Teammate primary');
+    expect(chip).toHaveStyle({ maxWidth: '200px' });
+
+    // Exact name: the chevron is hidden from screen readers.
+    const resume = screen.getByRole('button', { name: 'Continue “A long running thread”' });
+    expect(toolbar).not.toContainElement(resume);
+    expect(toolbar.compareDocumentPosition(resume) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(resume).getByText(/^Continue/)).toHaveStyle({ textOverflow: 'ellipsis' });
+  });
+
+  it('shortens the placeholder to the name before a comma, keeping the full name as the label', async () => {
+    const named = {
+      ...primary,
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Pianka, planning assistant' } },
+    };
+    seed({ branches: [named] });
+    renderHome({
+      client: {
+        service: () => ({ getPrimaryTeammate: async () => named, find: async () => [] }),
+      } as unknown as AgorClient,
+    });
+    const input = await screen.findByRole('textbox', { name: 'Ask Pianka, planning assistant' });
+    expect(input).toHaveAttribute('placeholder', 'Ask Pianka…');
+  });
+
   it('puts both send buttons in the toolbar on desktop, primary last', async () => {
     asDesktop();
     seedTeammates();
@@ -178,6 +212,7 @@ describe('HomePage teammates', () => {
     renderHome({ client: client({ t: 'session' }) });
     const picker = await screen.findByRole('combobox', { name: 'Teammate to ask' });
     expect(picker).not.toHaveAttribute('readonly');
+    expect(picker.closest('.ant-select')).toHaveStyle({ maxWidth: '200px' });
     fireEvent.mouseDown(picker);
     const popup = await waitFor(() => {
       const found = document.querySelector<HTMLElement>('.ant-select-dropdown');

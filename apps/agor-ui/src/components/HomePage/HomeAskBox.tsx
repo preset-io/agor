@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Button, Flex, Input, Select, Typography, theme } from 'antd';
+import { Button, ConfigProvider, Flex, Input, Select, Typography, theme } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -113,22 +113,39 @@ function AskTargetSelect({
     onChange(branch);
   };
   const label = value ? `${teammateEmoji(value) ?? '🤖'} ${teammateLabel(value)}` : undefined;
+  // A quieter border than the default, so the chip reads as clickable without competing with Send.
+  const chipTheme = useMemo(
+    () => ({
+      components: {
+        Button: { defaultBorderColor: token.colorBorderSecondary },
+        Select: { colorBorder: token.colorBorderSecondary },
+      },
+    }),
+    [token.colorBorderSecondary]
+  );
 
   if (compact) {
     return (
       <>
-        <Button
-          type="text"
-          aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
-          onClick={() => {
-            openList();
-            setSheetOpen(true);
-          }}
-          style={{ flex: '0 0 auto', paddingInline: token.paddingXS }}
-        >
-          {value ? (teammateEmoji(value) ?? '🤖') : 'Pick an assistant'}
-          <DownOutlined style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }} />
-        </Button>
+        <ConfigProvider theme={chipTheme}>
+          <Button
+            aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
+            icon={
+              <DownOutlined
+                style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }}
+              />
+            }
+            iconPlacement="end"
+            onClick={() => {
+              openList();
+              setSheetOpen(true);
+            }}
+            styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
+            style={{ flex: '0 1 auto', minWidth: 0, maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
+          >
+            {label ?? 'Pick an assistant'}
+          </Button>
+        </ConfigProvider>
         <HomeSheet open={sheetOpen} title="Ask" onClose={() => setSheetOpen(false)}>
           <HomeList
             items={options}
@@ -152,22 +169,23 @@ function AskTargetSelect({
     );
   }
   return (
-    <Select
-      showSearch
-      variant="borderless"
-      value={value?.branch_id}
-      placeholder="Pick an assistant"
-      aria-label="Teammate to ask"
-      options={options}
-      optionFilterProp="searchText"
-      popupMatchSelectWidth={false}
-      notFoundContent={emptyText}
-      onOpenChange={(open) => open && openList()}
-      onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
-      labelRender={() => label}
-      optionRender={({ data }) => <TeammateOptionLabel option={data} />}
-      style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
-    />
+    <ConfigProvider theme={chipTheme}>
+      <Select
+        showSearch
+        value={value?.branch_id}
+        placeholder="Pick an assistant"
+        aria-label="Teammate to ask"
+        options={options}
+        optionFilterProp="searchText"
+        popupMatchSelectWidth={false}
+        notFoundContent={emptyText}
+        onOpenChange={(open) => open && openList()}
+        onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
+        labelRender={() => label}
+        optionRender={({ data }) => <TeammateOptionLabel option={data} />}
+        style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
+      />
+    </ConfigProvider>
   );
 }
 
@@ -260,18 +278,23 @@ export const HomeAskBox = memo(function HomeAskBox({
   const continueLink = hasSessions && latest && !target && (
     <HomeLink
       size="middle"
-      icon={<RightOutlined />}
+      icon={<RightOutlined aria-hidden />}
       iconPlacement="end"
       onClick={() => onOpenSession(latest.sessionId)}
       styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
-      style={{ minWidth: 0, maxWidth: '100%', justifyContent: 'flex-start' }}
+      style={{
+        alignSelf: compact ? 'stretch' : 'flex-start',
+        maxWidth: '100%',
+        paddingInline: 0,
+        justifyContent: 'space-between',
+      }}
     >
       Continue “{latest.title}”
     </HomeLink>
   );
 
-  // Composer layout: the input on its own row, then one toolbar row whose controls share
-  // a height (32px, or 44px on phones through HomeFrame's touch theme).
+  // Composer layout: the input, one toolbar row whose controls share a height (32px, or
+  // 44px on phones through HomeFrame's touch theme), then the continue row.
   return (
     <HomeCard padded>
       <Flex vertical gap={token.marginXS}>
@@ -286,9 +309,10 @@ export const HomeAskBox = memo(function HomeAskBox({
             e.preventDefault();
             send(e.metaKey || e.ctrlKey ? 'open' : 'background');
           }}
-          placeholder={`Ask ${name}…`}
+          // The name before any comma keeps the placeholder on one line on phones.
+          placeholder={`Ask ${name.split(',')[0]}…`}
           aria-label={`Ask ${name}`}
-          style={{ fontSize: token.fontSizeLG }}
+          style={{ fontSize: token.fontSizeLG, paddingInline: 0 }}
         />
         <Flex align="center" gap={token.marginXS} data-home-ask-toolbar>
           <AskTargetSelect
@@ -301,7 +325,6 @@ export const HomeAskBox = memo(function HomeAskBox({
               setTarget(branch && branch.branch_id !== primary?.branch_id ? branch : null)
             }
           />
-          {!compact && continueLink}
           <Flex gap={token.marginXS} style={{ flex: '0 0 auto', marginInlineStart: 'auto' }}>
             <ComposeSendButtons
               branch={assistant}
@@ -312,7 +335,7 @@ export const HomeAskBox = memo(function HomeAskBox({
             />
           </Flex>
         </Flex>
-        {compact && continueLink}
+        {continueLink}
         {!target && compose.resolveFailed && (
           <HomeSectionError
             message="Couldn’t load your primary assistant."

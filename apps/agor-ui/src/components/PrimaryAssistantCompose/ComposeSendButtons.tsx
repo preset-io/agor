@@ -1,6 +1,7 @@
 import type { Branch } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { teammateLabel } from '../../utils/teammateLabels';
 import type { ComposeSendMode } from './usePrimaryAssistantSend';
 
@@ -23,8 +24,14 @@ export const ComposeSendButtons: React.FC<ComposeSendButtonsProps> = ({
 }) => {
   const board = branch ? `${teammateLabel(branch)}'s board` : "your primary assistant's board";
   const inactive = disabled || submitting !== null;
+  // Hover tooltips stick after a tap on touch screens, so skip them there.
+  const touch = useMediaQuery('(hover: none), (pointer: coarse)');
   const background = (
-    <Tooltip title={`Creates the session in the background, on ${board} — check on it anytime.`}>
+    <Tooltip
+      title={
+        touch ? undefined : `Starts the session in the background on ${board}. Check on it anytime.`
+      }
+    >
       <Button
         type="primary"
         aria-label={compact ? 'Send in background' : undefined}
@@ -59,7 +66,9 @@ export const ComposeSendButtons: React.FC<ComposeSendButtonsProps> = ({
   // Primary last, so it sits on the right.
   return (
     <>
-      <Tooltip title={`Creates the session and takes you there now, on ${board}.`}>
+      <Tooltip
+        title={touch ? undefined : `Creates the session and takes you there now, on ${board}.`}
+      >
         <Button loading={submitting === 'open'} disabled={inactive} onClick={() => onSend('open')}>
           Send &amp; open
         </Button>

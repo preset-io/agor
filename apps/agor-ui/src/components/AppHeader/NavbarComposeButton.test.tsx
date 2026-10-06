@@ -387,7 +387,9 @@ describe('NavbarComposeButton', () => {
     expect(await screen.findByText(/takes you there now, on Ada's board/)).toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
-    expect(await screen.findByText(/in the background, on Ada's board/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/in the background on Ada's board\. Check on it anytime\./)
+    ).toBeInTheDocument();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {

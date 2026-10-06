@@ -33,6 +33,23 @@ describe('ComposeSendButtons', () => {
     expect(onSend).toHaveBeenLastCalledWith('background');
   });
 
+  it('skips the hover tooltips on touch screens, where they would stick after a tap', async () => {
+    const matchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      ...matchMedia(query),
+      matches: query.includes('hover: none'),
+    })) as typeof window.matchMedia;
+    try {
+      render(<ComposeSendButtons branch={ada} submitting={null} onSend={vi.fn()} />);
+      fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
+      fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & open' }));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    } finally {
+      window.matchMedia = matchMedia;
+    }
+  });
+
   it('disables both compact buttons while a send is in flight', () => {
     render(<ComposeSendButtons branch={ada} submitting="open" compact onSend={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Send in background' })).toBeDisabled();
