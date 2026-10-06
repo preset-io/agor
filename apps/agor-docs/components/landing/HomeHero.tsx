@@ -74,7 +74,11 @@ export function HomeHero() {
         {/* The troupe emerges from behind this (it anchors on .homeBadge). */}
         <HeroLogo className={styles.homeBadge} />
         <h1>
-          <HighlightedText text={HOME_HERO.headline} />
+          {HOME_HERO.headline.split('\n').map((line, index) => (
+            <span key={line} className={index > 0 ? styles.homePromise : undefined}>
+              <HighlightedText text={line} />
+            </span>
+          ))}
         </h1>
         <p className={styles.homeSub}>
           <HighlightedText text={HOME_HERO.subheadline} />
