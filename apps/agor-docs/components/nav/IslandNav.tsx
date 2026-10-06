@@ -377,7 +377,7 @@ export function IslandNav() {
                 className={styles.ctaSecondary}
                 onClick={() => trackNav({ href: AGOR_CLOUD_LOGIN_URL }, 'navbar')}
               >
-                Login
+                Log in
               </a>
               <CloudCtaLink placement="navbar" compact className={styles.cta} />
             </span>
@@ -546,7 +546,7 @@ export function IslandNav() {
             className={styles.sheetLogin}
             onClick={() => trackNav({ href: AGOR_CLOUD_LOGIN_URL }, 'mobile-nav')}
           >
-            Login
+            Log in
           </a>
           <CloudCtaLink placement="mobile-nav" className={styles.sheetCta} />
         </div>
