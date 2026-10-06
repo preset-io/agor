@@ -60,7 +60,7 @@ type Listener = (payload: unknown) => void;
  * so a method-specific key (`sessions:findAll`, `sessions:find`) takes
  * precedence over the bare name when present. `name:get` seeds `get`.
  */
-function makeMockClient(seed: Record<string, unknown[]> = {}) {
+function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>> = {}) {
   const serviceListeners = new Map<string, Map<string, Listener[]>>();
   const ioListeners = new Map<string, Listener[]>();
   // Side effects fired at call time of `service(name)[method]()` — used by the
