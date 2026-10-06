@@ -1000,11 +1000,14 @@ export async function handleGitBranchAdd(
     const resolveStartingRef = async () => {
       // Persisted source identity is a locator, not credential authority. Resolve
       // it without the mutable cache, and bound credentials independently just as
-      // we do for the eventual clone transport. A new-branch or teammate retry
-      // retains the selected source instead of reinterpreting its now-persisted
-      // bare ref. Older rows without provenance retain the legacy path.
+      // we do for the eventual clone transport. A teammate retry, or a new-branch
+      // retry whose persisted ref is the bare source name, retains the selected
+      // source instead of reinterpreting that bare ref; qualified refs re-resolve
+      // as spelled. Older rows without provenance retain the legacy path.
       if (
-        (restoreMode || shouldCreateBranch || getTeammateConfig(branchRecord)) &&
+        (restoreMode ||
+          getTeammateConfig(branchRecord) ||
+          (shouldCreateBranch && branchRecord.base_ref === branchRecord.base_source?.name)) &&
         branchRecord.base_source
       ) {
         const source = branchRecord.base_source;
@@ -1035,7 +1038,6 @@ export async function handleGitBranchAdd(
         (refType || 'branch') === 'branch' &&
         !sourceRemoteUrl &&
         remoteUrl &&
-        requestedStartingRef &&
         !requestedStartingRef.startsWith('refs/') &&
         !/^[0-9a-f]{7,64}$/i.test(requestedStartingRef)
       ) {

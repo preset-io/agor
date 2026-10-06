@@ -147,27 +147,14 @@ it.each(['trunk', 'refs/heads/trunk'])('preserves explicit ref %s', async (ref) 
   }
 });
 
-it.each(['worktree', 'clone'] as const)(
-  'ordinary branch without a source ref starts from the live remote default (%s)',
-  async (mode) => {
-    delete branch.custom_context;
-    branch.storage_mode = mode;
-    const git = simpleGit(repo.local_path);
-    expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
-    expect(branch.base_sha).toBe(remoteSha);
-    expect(branch.base_source).toEqual({ name: 'trunk', remote_url: repo.remote_url });
-    expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(remoteSha);
-    expect((await git.revparse('trunk')).trim()).toBe(localSha);
-  }
-);
-
-it('ordinary branch still refuses an explicit ambiguous source ref', async () => {
+it('ordinary branch without a source ref starts from the live remote default', async () => {
   delete branch.custom_context;
-  branch.base_ref = 'trunk';
-  const result = await handleGitBranchAdd(payload, {});
-  expect(result.success).toBe(false);
-  expect(result.error?.message).toContain('ambiguous');
-  await expect(stat(branch.path)).rejects.toMatchObject({ code: 'ENOENT' });
+  const git = simpleGit(repo.local_path);
+  expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+  expect(branch.base_sha).toBe(remoteSha);
+  expect(branch.base_source).toEqual({ name: 'trunk', remote_url: repo.remote_url });
+  expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(remoteSha);
+  expect((await git.revparse('trunk')).trim()).toBe(localSha);
 });
 
 it('clone storage resolves an explicit bare branch name against the live remote', async () => {
@@ -181,14 +168,33 @@ it('clone storage resolves an explicit bare branch name against the live remote'
   expect((await simpleGit(repo.local_path).revparse('trunk')).trim()).toBe(localSha);
 });
 
-it('clone storage keeps commit SHAs on full resolution', async () => {
-  delete branch.custom_context;
-  branch.storage_mode = 'clone';
-  branch.base_ref = localSha;
-  expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
-  expect(branch.base_sha).toBe(localSha);
-  expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(localSha);
-});
+it.each(['sha', 'full ref', 'local-only branch', 'tag'] as const)(
+  'clone storage keeps %s input on full resolution',
+  async (input) => {
+    delete branch.custom_context;
+    branch.storage_mode = 'clone';
+    const cache = simpleGit(repo.local_path);
+    if (input === 'sha') branch.base_ref = localSha;
+    if (input === 'full ref') branch.base_ref = 'refs/heads/trunk';
+    if (input === 'local-only branch') {
+      await cache.branch(['local-only', localSha]);
+      branch.base_ref = 'local-only';
+    }
+    if (input === 'tag') {
+      // A same-named remote branch must not shadow the requested tag.
+      await cache.addTag('v1');
+      await cache.push('upstream', `${remoteSha}:refs/heads/v1`);
+      branch.ref_type = 'tag';
+      branch.base_ref = 'v1';
+    }
+    // Commits and full refs resolve from the cache without querying the remote.
+    const remote = repo.remote_url!;
+    if (input === 'sha' || input === 'full ref') await rename(remote, `${remote}.unavailable`);
+    expect(await handleGitBranchAdd(payload, {})).toMatchObject({ success: true });
+    expect(branch.base_sha).toBe(localSha);
+    expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(localSha);
+  }
+);
 
 it('clone storage still rejects a branch missing everywhere', async () => {
   delete branch.custom_context;
@@ -285,10 +291,11 @@ it('auth failure exposes safe technical details without falling back to local re
   }
 });
 
-it.each(['teammate', 'ordinary'])(
+it.each(['teammate', 'ordinary', 'qualified'])(
   'fetch failure after resolution is fatal, never a stale fallback; retry keeps source provenance (%s)',
   async (kind) => {
-    if (kind === 'ordinary') delete branch.custom_context;
+    if (kind !== 'teammate') delete branch.custom_context;
+    if (kind === 'qualified') branch.base_ref = 'upstream/trunk';
     const remote = repo.remote_url!;
     patch.mockImplementationOnce(async (_id: string, data: Partial<Branch>) => {
       Object.assign(branch, data);
@@ -303,6 +310,7 @@ it.each(['teammate', 'ordinary'])(
     branch.filesystem_status = 'creating';
     expect((await handleGitBranchAdd(payload, {})).success).toBe(true);
     expect((await simpleGit(branch.path).revparse('HEAD')).trim()).toBe(remoteSha);
+    expect(branch.base_ref).toBe(kind === 'qualified' ? 'upstream/trunk' : 'trunk');
   }
 );
 
