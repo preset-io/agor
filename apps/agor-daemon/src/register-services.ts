@@ -2592,8 +2592,9 @@ export async function registerMCPServices(
       }
     }
 
-    if (oauthRelay && effectiveOAuthMode === 'shared')
-      throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
+    // Only customer-owned (configured_client) catalog apps use the hosted
+    // relay. Every other flow keeps the cell's direct callback, unchanged.
+    const relayFlow = Boolean(oauthRelay && configuredIssuer);
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -2635,10 +2636,11 @@ export async function registerMCPServices(
       presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
     );
     // Resolve trusted user mapping before provider registration or authorization.
-    if (oauthRelay && !durableBinding)
+    if (relayFlow && !durableBinding)
       throw new Forbidden('MCP callback relay requires a saved tenant/user-bound server');
+    // Shared grants bind the relay to the initiating admin, as per-user grants do.
     const relayBinding =
-      oauthRelay && durableBinding
+      oauthRelay && relayFlow && durableBinding
         ? {
             cellId: oauthRelay.cellId,
             cloudUserId: await cloudUserFor(durableBinding.tenantId, durableBinding.userId),
@@ -2649,7 +2651,7 @@ export async function registerMCPServices(
         resolveRedirectUri: (issuer: string) => {
           if (configuredIssuer && issuer !== configuredIssuer)
             throw new Forbidden('Configured app issuer no longer matches its reviewed recipe');
-          return oauthRelay ? oauthRelay.redirectUri(issuer) : redirectUri;
+          return oauthRelay && relayFlow ? oauthRelay.redirectUri(issuer) : redirectUri;
         },
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
         tokenUrlOverride: effectiveTokenUrlOverride,
@@ -3537,9 +3539,6 @@ export async function registerMCPServices(
   ): Promise<void> => {
     const record = pendingFlow.durableRecord;
     try {
-      // Also fence shared attempts admitted before relay mode was enabled.
-      if (oauthRelay && (record?.oauthMode ?? pendingFlow.oauthMode) === 'shared')
-        throw new Forbidden('MCP callback relay requires independent per-user OAuth grants');
       if (pendingFlow.context.relay && !pendingFlow.relayDelivered)
         throw new Forbidden('Hosted OAuth requires the authenticated Cloud callback');
       await assertFlowInitiatorStillEntitled(

@@ -35,7 +35,22 @@ const oauthFixture = vi.hoisted(() => ({
   afterDcrResolved: undefined as undefined | ((registrationId: string) => Promise<void>),
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
   beforeExchangeReturn: undefined as undefined | (() => Promise<void>),
+  /** Servers treated as current installs of a configured_client catalog entry. */
+  configuredIssuers: new Map<string, string>(),
 }));
+
+vi.mock('./services/mcp-oauth-compatibility.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./services/mcp-oauth-compatibility.js')>();
+  return {
+    ...original,
+    configuredCatalogIssuer: async (
+      server: Parameters<typeof original.configuredCatalogIssuer>[0],
+      entries?: Parameters<typeof original.configuredCatalogIssuer>[1]
+    ) =>
+      oauthFixture.configuredIssuers.get(server.mcp_server_id) ??
+      original.configuredCatalogIssuer(server, entries),
+  };
+});
 
 // These tests stop before MCP transport. Avoid loading the SDK's published
 // TypeScript parser in Node's test loader; constructing either client is a bug.
@@ -1210,6 +1225,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           expect(JSON.stringify(raw)).not.toContain('customer-app-secret');
           return { owner, server };
         });
+        oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test');
         await expect(
           runWithTenantDatabaseScope(b.db, `${tenant}-other`, (scoped) =>
             new MCPServerRepository(scoped).findById(server.mcp_server_id)
@@ -1219,24 +1235,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           a.app
             .service('mcp-servers/oauth-start')
             .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant));
-        const beforeShared = {
-          starts: oauthFixture.starts,
-          registrations: oauthFixture.registrations,
-          exchanges: oauthFixture.exchanges,
-        };
-        await a.app
-          .service('mcp-servers')
-          .patch(server.mcp_server_id, { auth: { oauth_mode: 'shared' } }, params(owner, tenant));
-        await expect(start()).resolves.toMatchObject({ success: false });
-        expect({
-          starts: oauthFixture.starts,
-          registrations: oauthFixture.registrations,
-          exchanges: oauthFixture.exchanges,
-        }).toEqual(beforeShared);
-        expect(preparations).toHaveLength(0);
-        await a.app
-          .service('mcp-servers')
-          .patch(server.mcp_server_id, { auth: { oauth_mode: 'per_user' } }, params(owner, tenant));
         expect(await start()).toMatchObject({
           success: true,
           authorizationUrl: 'https://cloud.test/start/opaque',
@@ -1333,7 +1331,107 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         });
         expect(direct.status).not.toBe(200);
         expect(oauthFixture.exchanges).toBe(count + 1);
+
+        // Only configured apps use the relay. On this relay-enabled cell, a
+        // pre-registered and a DCR server keep the direct callback, including
+        // for a member with no Cloud identity binding.
+        const { member, preRegistered, dcr } = await runWithTenantDatabaseScope(
+          a.db,
+          tenant,
+          async (scoped) => {
+            const member = await new UsersRepository(scoped).create({
+              email: `${crypto.randomUUID()}@test.example`,
+              name: 'Direct member',
+              role: 'member',
+            });
+            const create = (auth: Record<string, unknown>) =>
+              new MCPServerRepository(scoped).create({
+                name: `direct-${crypto.randomUUID()}`,
+                transport: 'http',
+                url: 'https://mcp.provider.example.test/mcp',
+                scope: 'global',
+                enabled: true,
+                source: 'user',
+                owner_user_id: member.user_id,
+                auth: { type: 'oauth', oauth_compatibility_mode: 'strict', ...auth },
+              });
+            return {
+              member,
+              preRegistered: await create({ oauth_client_id: 'cell-registered-client' }),
+              dcr: await create({}),
+            };
+          }
+        );
+        const prepared = preparations.length;
+        for (const direct of [preRegistered, dcr]) {
+          const started = (await a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: direct.mcp_server_id }, params(member, tenant))) as {
+            success: boolean;
+            authorizationUrl: string;
+          };
+          expect(started.success).toBe(true);
+          const url = new URL(started.authorizationUrl);
+          expect(url.origin).toBe('https://provider.example.test');
+          expect(url.searchParams.get('redirect_uri')).toBe(
+            'https://agor.example.test/mcp-servers/oauth-callback'
+          );
+          const before = oauthFixture.exchanges;
+          const completed = await b.callback({
+            code: 'fake-code',
+            state: url.searchParams.get('state')!,
+            iss: 'https://provider.example.test',
+          });
+          expect(completed.status).toBe(200);
+          expect(oauthFixture.exchanges).toBe(before + 1);
+        }
+        expect(preparations).toHaveLength(prepared);
+
+        // Shared OAuth mode also runs through the relay, bound to the
+        // initiating admin; the grant is stored shared and usable by others.
+        const shared = await runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
+          new MCPServerRepository(scoped).create({
+            name: `relay-shared-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'shared',
+              oauth_client_id: 'customer-app',
+              oauth_client_secret: 'customer-app-secret',
+              oauth_dcr_mode: 'disabled',
+              oauth_compatibility_mode: 'strict',
+            },
+          })
+        );
+        oauthFixture.configuredIssuers.set(shared.mcp_server_id, 'https://provider.example.test');
+        expect(
+          await a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: shared.mcp_server_id }, params(owner, tenant))
+        ).toMatchObject({ success: true, authorizationUrl: 'https://cloud.test/start/opaque' });
+        expect(preparations.at(-1)).toMatchObject({
+          cloud_user_id: 'cloud-alice',
+          runtime_user_id: owner.user_id,
+          server_id: shared.mcp_server_id,
+        });
+        expect((await deliver(b)).result).toEqual({ outcome: 'connected' });
+        await runWithTenantDatabaseScope(a.db, tenant, async (scoped) => {
+          const tokens = new UserMCPOAuthTokenRepository(scoped, masterSecret);
+          expect(await tokens.getToken(null, shared.mcp_server_id)).toMatchObject({
+            granted_by_user_id: owner.user_id,
+          });
+          expect(await tokens.getToken(owner.user_id, shared.mcp_server_id)).toBeNull();
+        });
+        const memberStatus = (await runWithTenantDatabaseScope(a.db, tenant, () =>
+          a.app.service('mcp-servers/oauth-status').find(params(member, tenant))
+        )) as { authenticated_server_ids: string[] };
+        expect(memberStatus.authenticated_server_ids).toContain(shared.mcp_server_id);
       } finally {
+        oauthFixture.configuredIssuers.clear();
         prepare.mockRestore();
         for (const key of Object.keys(relayEnv)) delete process.env[key];
         await Promise.all(
