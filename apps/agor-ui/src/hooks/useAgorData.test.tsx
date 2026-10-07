@@ -402,7 +402,7 @@ describe('useAgorData — socket-event bailouts', () => {
           query: expect.objectContaining({ board_id: boardId }),
         });
       }
-      // Comments are global on every route (design r3 §2), never board-scoped.
+      // Comments are global on every route, never board-scoped.
       expect(fetchArguments('board-comments', 'findAll')).toEqual([{ query: { $limit: 10000 } }]);
     } finally {
       window.history.pushState({}, '', '/');
@@ -1700,7 +1700,7 @@ describe('useAgorData — first paint holds the displayed board', () => {
   });
 });
 
-describe('useAgorData — user-scoped first paint (design r3 §3.1)', () => {
+describe('useAgorData — user-scoped first paint', () => {
   const authority = {
     authenticatedUserId: 'user-me',
     authenticatedUserRole: 'member',

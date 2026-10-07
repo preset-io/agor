@@ -1,5 +1,5 @@
 /**
- * Session ↔ MCP links, loaded per session on first need (design r3 §6).
+ * Session ↔ MCP links, loaded per session on first need.
  *
  * There is no global `session-mcp-servers` read. A surface that shows or edits
  * one session's links calls `loadSessionMcpServerIds` (via

@@ -156,7 +156,7 @@ function matchesQuery(session: Session, query: string, s: AgorState): boolean {
  * The person started this session and every fork ancestor: no spawn, schedule,
  * gateway run or delegation in its lineage. An ancestor missing from the store counts as not.
  * Limitation: a fork an agent makes through MCP looks user-started (the marker is only on its task).
- * Limitation (design r3 decision Q4): the user scope loads only the caller's own sessions, not
+ * Limitation (decision Q4): the user scope loads only the caller's own sessions, not
  * other users' fork ancestors, so a clean run forked from someone else's session doesn't
  * supersede a failure once that ancestor isn't otherwise loaded.
  */

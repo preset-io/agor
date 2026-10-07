@@ -709,7 +709,7 @@ export function useAgorData(
           track(
             'sessions',
             !silent && authenticatedUserId
-              ? // My newest sessions (user scope, design r3 §3.1), served from
+              ? // My newest sessions (user scope), served from
                 // SQL by `created_by`: correct however busy the rest of the
                 // workspace is. One page via find() (findAll would walk every
                 // page). The rest of mine load right after paint (`userScope`).
@@ -1198,7 +1198,7 @@ export function useAgorData(
         // would otherwise pass its quiet check and clobber this newer reconnect
         // snapshot (resurrecting data that changed while we were disconnected).
         bumpFirstPaintMergeRevisions();
-        // User scope (design r3 §3): the rest of my sessions, my branches, every
+        // User scope: the rest of my sessions, my branches, every
         // teammate I can view, and the branches my sessions and comment
         // threads reference. On a session route only its bulk U1 read is held
         // behind the opened transcript: Home and the teammate surfaces must

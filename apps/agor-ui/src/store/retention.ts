@@ -1,5 +1,5 @@
 /**
- * Retention (design r3 §4.5): a row stays while some scope or pin
+ * Retention: a row stays while some scope or pin
  * (`rowPins.ts`) holds it. Rows leave at natural points only — a partition
  * evicted from the LRU (`boardPartitions.ts`), a pin released, the end of a
  * reconnect resync — never on a timer.

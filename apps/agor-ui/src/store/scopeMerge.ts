@@ -1,6 +1,6 @@
 /**
  * Load scopes, their coverage, and the two reducers that apply a scope's
- * snapshot (design r3 §3.8, §4.5).
+ * snapshot (`context/explorations/user-first-scoped-hydration.md`).
  *
  * A scope is a set of rows one load is authoritative for: one board's
  * partition or a piece of the caller's user scope. Both reducers are fenced

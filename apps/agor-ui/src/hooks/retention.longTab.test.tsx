@@ -1,5 +1,5 @@
 /**
- * Long-tab retention (design r3 §4.5): with global hydration off, opening and
+ * Long-tab retention: with global hydration off, opening and
  * closing many boards and sessions keeps the store on a plateau — the
  * displayed board, `RETAINED_BACKGROUND_PARTITIONS` recent partitions, the
  * user scope and the pinned rows — instead of growing with every visit, and
