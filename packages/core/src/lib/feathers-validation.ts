@@ -152,6 +152,18 @@ const uuidOrIdList = () =>
   ]);
 
 /**
+ * A scalar id or `{ $in: [...] }` id-list filter as an id array; undefined
+ * when malformed. The schemas above admit only these two shapes; services use
+ * this for internal callers too.
+ */
+export function idFilterValues(filter: unknown): string[] | undefined {
+  if (typeof filter === 'string') return [filter];
+  const ids =
+    filter !== null && typeof filter === 'object' ? (filter as { $in?: unknown }).$in : undefined;
+  return Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? ids : undefined;
+}
+
+/**
  * Session query schema
  */
 export const sessionQuerySchema = createQuerySchema(
@@ -357,8 +369,8 @@ export const branchQuerySchema = createQuerySchema(
   Type.Object({
     branch_id: Type.Optional(uuidOrIdList()),
     created_by: Type.Optional(CommonSchemas.uuid),
-    // Teammate marker filter (`BranchRepository.findTeammateBranches`).
-    teammate: Type.Optional(CommonSchemas.boolean),
+    // Teammate marker filter (`BranchRepository.findTeammateBranches`); only `true`.
+    teammate: Type.Optional(Type.Literal(true)),
     // Every token, over `SEARCHABLE_FIELDS.branch`, the branch id, unique id and
     // path, and its repo's slug and name (SQL page only; `BranchRepository.findPage`).
     search: Type.Optional(CommonSchemas.searchText),

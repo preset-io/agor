@@ -46,7 +46,7 @@ import {
   NotFound,
   Unavailable,
 } from '@agor/core/feathers';
-import { assertSearchTerms } from '@agor/core/lib/feathers-validation';
+import { assertSearchTerms, idFilterValues } from '@agor/core/lib/feathers-validation';
 import { isMCPServerNotUsableError } from '@agor/core/mcp';
 import {
   formatModelToolMismatchWarning,
@@ -303,16 +303,7 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   if (query.created_by !== undefined && typeof query.created_by !== 'string') return false;
   if (wantsSearch && typeof query.search !== 'string') return false;
   if (wantsSessions && idFilterValues(query.session_id) === undefined) return false;
-  if (wantsBranch) {
-    const branchFilter = query.branch_id;
-    const validExact = typeof branchFilter === 'string';
-    const validSet =
-      branchFilter !== null &&
-      typeof branchFilter === 'object' &&
-      Array.isArray((branchFilter as { $in?: unknown }).$in) &&
-      (branchFilter as { $in: unknown[] }).$in.every((id) => typeof id === 'string');
-    if (!validExact && !validSet) return false;
-  }
+  if (wantsBranch && idFilterValues(query.branch_id) === undefined) return false;
   if (sort) {
     const sortKeys = Object.keys(sort);
     if (sortKeys.length !== 1 || !['updated_at', 'created_at'].includes(sortKeys[0])) return false;
@@ -320,14 +311,6 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
     if (direction !== 1 && direction !== -1) return false;
   }
   return true;
-}
-
-/** A scalar id or `{ $in: [...] }` id-list filter as an id array; undefined if malformed. */
-function idFilterValues(filter: unknown): string[] | undefined {
-  if (typeof filter === 'string') return [filter];
-  const ids =
-    filter !== null && typeof filter === 'object' ? (filter as { $in?: unknown }).$in : undefined;
-  return Array.isArray(ids) && ids.every((id) => typeof id === 'string') ? ids : undefined;
 }
 
 const remoteRelationshipsEnrichedResults = new WeakSet<object>();
@@ -2104,11 +2087,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const sortSpec = query?.$sort as { updated_at?: 1 | -1; created_at?: 1 | -1 } | undefined;
       const branchFilter = query?.branch_id;
       const branchIds =
-        branchFilter &&
-        typeof branchFilter === 'object' &&
-        Array.isArray((branchFilter as { $in?: unknown }).$in)
-          ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
-          : undefined;
+        typeof branchFilter === 'string'
+          ? undefined
+          : (idFilterValues(branchFilter) as BranchID[] | undefined);
       const { limit, skip } = this.pageWindow(query ?? {});
       const { data, total } = await this.sessionRepo.findPage({
         includeTotal: query?.$count !== false,

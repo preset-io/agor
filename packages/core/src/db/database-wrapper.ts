@@ -19,7 +19,7 @@ import type { LibSQLDatabase } from 'drizzle-orm/libsql';
 import type { PgTable } from 'drizzle-orm/pg-core';
 import type { PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import type { SQLiteTable } from 'drizzle-orm/sqlite-core';
-import { MAX_SEARCH_TOKENS, uniqueSearchTokens } from '../search/searchable-fields';
+import { uniqueSearchTokens } from '../search/searchable-fields';
 import type { Database } from './client';
 import type * as postgresSchema from './schema.postgres';
 import type * as sqliteSchema from './schema.sqlite';
@@ -191,7 +191,7 @@ export function jsonExtract(db: Database, column: SQL.Aliased | SQL | any, path:
 /**
  * `matchSearchTokens` (`@agor/core/search`) as SQL: the rows of `id` that
  * `scope` admits and where every distinct token of `search`
- * (`uniqueSearchTokens`, at most `MAX_SEARCH_TOKENS`) appears,
+ * (`uniqueSearchTokens`; the services cap them with `assertSearchTerms`) appears,
  * case-insensitively and literally, in at least one of `fields`. A search
  * without tokens matches nothing, as on the client.
  *
@@ -207,9 +207,6 @@ export function searchCondition(
 ): SQL {
   const tokens = uniqueSearchTokens(opts.search);
   if (tokens.length === 0) return sql`1 = 0`;
-  if (tokens.length > MAX_SEARCH_TOKENS) {
-    throw new Error(`search accepts at most ${MAX_SEARCH_TOKENS} distinct terms`);
-  }
   const haystack = sql`lower(${sql.join(
     opts.fields.map((field) => sql`coalesce(${field}, '')`),
     sql` || ' ' || `

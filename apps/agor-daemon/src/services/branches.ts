@@ -75,7 +75,7 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { stripGitUrlCredentials } from '@agor/core/git/pure';
-import { assertSearchTerms } from '@agor/core/lib/feathers-validation';
+import { assertSearchTerms, idFilterValues } from '@agor/core/lib/feathers-validation';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -161,7 +161,7 @@ export const BRANCH_MATERIALIZATION_INTENT = Symbol('branchMaterializationIntent
 export type BranchParams = QueryParams<{
   branch_id?: BranchID | { $in?: BranchID[] };
   created_by?: UUID;
-  teammate?: boolean;
+  teammate?: true;
   repo_id?: UUID;
   name?: string;
   ref?: string;
@@ -205,13 +205,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
       return false;
     }
   }
-  if (query.branch_id !== undefined) {
-    const value = query.branch_id;
-    if (typeof value !== 'string') {
-      const ids = value && typeof value === 'object' ? (value as { $in?: unknown }).$in : undefined;
-      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return false;
-    }
-  }
+  if (query.branch_id !== undefined && idFilterValues(query.branch_id) === undefined) return false;
   const sort = query.$sort as Record<string, unknown> | undefined;
   if (sort) {
     const columns = new Set(['branch_id', 'name', 'ref', 'created_at', 'updated_at']);
@@ -261,9 +255,6 @@ function parseStartWebhookResult(options: {
  */
 function isTeammateBranchQuery(query?: Record<string, unknown>): boolean {
   if (!query || query.teammate === undefined) return false;
-  if (query.teammate !== true) {
-    throw new BadRequest('teammate only supports true');
-  }
   const allowed = new Set(['teammate', 'archived', '$limit', '$skip']);
   const extra = Object.keys(query).filter((key) => !allowed.has(key));
   if (extra.length > 0) {
@@ -1768,20 +1759,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
-      let filteredBranchIds = branchIdsInZone;
-
-      if (typeof existingBranchFilter === 'string') {
-        filteredBranchIds = branchIdsInZone.includes(existingBranchFilter as BranchID)
-          ? [existingBranchFilter as BranchID]
-          : [];
-      } else if (
-        existingBranchFilter &&
-        typeof existingBranchFilter === 'object' &&
-        Array.isArray(existingBranchFilter.$in)
-      ) {
-        const allowed = new Set(existingBranchFilter.$in);
-        filteredBranchIds = branchIdsInZone.filter((branchId) => allowed.has(branchId));
-      }
+      const requested = idFilterValues(existingBranchFilter);
+      const filteredBranchIds = requested
+        ? branchIdsInZone.filter((branchId) => requested.includes(branchId))
+        : branchIdsInZone;
 
       const { zone_id: _zoneId, ...queryWithoutZone } = params?.query ?? {};
       findParams = {
@@ -1830,14 +1811,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     assertSearchTerms(query?.search);
     if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
-      const branchIds =
-        typeof branchFilter === 'string'
-          ? [branchFilter as BranchID]
-          : branchFilter &&
-              typeof branchFilter === 'object' &&
-              Array.isArray((branchFilter as { $in?: unknown }).$in)
-            ? (branchFilter as { $in: BranchID[] }).$in
-            : undefined;
+      const branchIds = idFilterValues(branchFilter) as BranchID[] | undefined;
       const { limit, skip } = this.pageWindow(query ?? {});
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
