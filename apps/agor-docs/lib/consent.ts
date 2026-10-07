@@ -20,6 +20,26 @@ export const CONSENT_KEY = 'agor-cookie-consent';
  * own tags (which follow Consent Mode) it carries third-party tags, such as
  * LinkedIn's, that don't. */
 export const GTM_ID = 'GTM-WL3Q29NW';
+/**
+ * Google Ads, mirrored from the Tag Manager container. Without consent Tag
+ * Manager doesn't load, so the direct Google tag (GoogleAnalytics.tsx) sends
+ * the Ads page hit and these conversions instead: cookieless under Consent
+ * Mode, so Google can still count and model them. Only while Tag Manager is
+ * absent, so a consenting visitor is never counted twice.
+ */
+export const ADS_ID = 'AW-18371499745';
+export const ADS_CONVERSIONS = {
+  /** Agor Cloud sign-up form submitted (GTM: hubspot_interest_form_success). */
+  signup: `${ADS_ID}/40o_CK6kiuEcEOGtm7hE`,
+  /** Demo booked (GTM: hubspot_meeting_booked). */
+  demo: `${ADS_ID}/8oqsCPHbl-EcEOGtm7hE`,
+} as const;
+
+/** Inline-script snippet: report a conversion when Tag Manager won't. */
+export function adsConversionSnippet(sendTo: string): string {
+  return `if(!window.__agorGtmLoaded&&window.gtag){window.gtag('event','conversion',{send_to:${JSON.stringify(sendTo)}})}`;
+}
+
 /** Fired on window to reopen the banner (the footer's Cookie settings). */
 export const CONSENT_SETTINGS_EVENT = 'agor:cookie-settings';
 

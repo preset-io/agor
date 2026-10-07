@@ -6,7 +6,7 @@ import { type ReactNode, Suspense } from 'react';
 import { CookieConsent } from '../components/CookieConsent';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
-import { consentBootScript } from '../lib/consent';
+import { ADS_CONVERSIONS, adsConversionSnippet, consentBootScript } from '../lib/consent';
 import { crtIntroBootScript } from '../lib/crtIntro';
 import {
   AGOR_CLOUD_DEMO_URL,
@@ -204,6 +204,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 form_name: 'agor_cloud_beta',
                 source_page: sourcePage || 'unknown',
               });
+              ${adsConversionSnippet(ADS_CONVERSIONS.signup)}
             });
           })();`}
         </Script>
@@ -237,6 +238,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   event: 'hubspot_meeting_booked',
                   form_name: 'agor_cloud_demo',
                 });
+                ${adsConversionSnippet(ADS_CONVERSIONS.demo)}
               } else if (payload.meetingBookFailed) {
                 window.dataLayer.push({ event: 'hubspot_meeting_book_failed' });
               }
