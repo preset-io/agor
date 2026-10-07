@@ -56,7 +56,12 @@ import type {
   MCPServerID,
   UserID,
 } from '@agor/core/types';
-import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
+import {
+  catalogDisplayName,
+  catalogEntryDeclaresOAuth,
+  catalogServerSlug,
+  isCanonicalFullUuid,
+} from '@agor/core/types';
 import { readCatalogSharing } from './mcp-catalog-access.js';
 import {
   hasLiveCallerOAuthGrant,
@@ -359,7 +364,12 @@ async function resolveAuthRequirement(
   sharing: MCPCatalogSharing,
   credentialHeaders?: Record<string, string>
 ): Promise<MCPAuth> {
-  const probed = await probeRemoteAuthType(entry.remote_url);
+  const answered = await probeRemoteAuthType(entry.remote_url);
+  // An entry that declares OAuth up front (a reviewed client recipe) is
+  // installed for OAuth even when the endpoint answers `initialize` without a
+  // challenge, as Google Workspace does; sign-in discovers from the server's
+  // own metadata. Only `none` is reinterpreted — a refusal stays a refusal.
+  const probed = answered === 'none' && catalogEntryDeclaresOAuth(entry) ? 'oauth' : answered;
   logProbeDisagreement(entry, probed);
   if (
     sharing === 'shared' &&

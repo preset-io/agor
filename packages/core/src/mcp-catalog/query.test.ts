@@ -310,11 +310,6 @@ describe('catalog visibility', () => {
       'com.newrelic/mcp-server',
       // 2026-10-07 additions held back; reasons are dated in curated.yaml.
       'com.shortcut/mcp',
-      'com.hubspot/mcp',
-      'com.googleapis.gmailmcp/mcp',
-      'com.googleapis.calendarmcp/mcp',
-      'com.googleapis.drivemcp/mcp',
-      'com.googleapis.docsmcp/mcp',
       'com.getdbt/mcp',
     ].sort();
     expect(

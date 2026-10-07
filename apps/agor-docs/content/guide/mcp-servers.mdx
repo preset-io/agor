@@ -358,6 +358,17 @@ Set the app's redirect URL to the callback the Catalog form shows.
 - **Zoom:** a Zoom Marketplace general app with the scopes Zoom documents for MCP.
 - **Salesforce** (beta, production orgs): an admin activates hosted MCP servers and
   creates an External Client App; its client secret is optional.
+- **HubSpot:** an MCP connector app on HubSpot's developer platform.
+- **Gmail, Google Calendar, Google Drive, Google Docs** (Google Developer Preview):
+  your Workspace account and the Google Cloud project holding your
+  Web-application OAuth client must be enrolled in Google's Workspace Developer
+  Preview Program, with both the product API and its MCP API enabled. These
+  servers don't challenge unauthenticated clients, so Agor starts sign-in from
+  the catalog recipe and requests Google's recommended scopes.
+
+Agor authenticates your app at the provider's token endpoint the way the
+provider advertises (HTTP Basic, or form-body credentials when that is all it
+supports), and refreshes the same way.
 
 ### Stable hosted callback
 

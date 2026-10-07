@@ -2411,6 +2411,24 @@ describe('customer-owned configured OAuth app', () => {
     expect(fixture.created.mcpServers).toHaveLength(0);
     expect(fixture.patched).toHaveLength(0);
   });
+  it('installs a declared-OAuth recipe for sign-in when the endpoint answers without a challenge', async () => {
+    // Google Workspace answers an unauthenticated initialize with 200.
+    probeRemoteAuthType.mockResolvedValue('none');
+    const fixture = buildApp({ ...byo, auth_type: 'oauth' });
+    await createMCPCatalogConnectService(fixture.app, fixture.deps).create(
+      { ...request, oauth_client: { client_id: 'customer-app', client_secret: 'customer-secret' } },
+      params
+    );
+    expect(fixture.created.mcpServers[0]).toMatchObject({
+      auth: { type: 'oauth', oauth_client_id: 'customer-app', oauth_dcr_mode: 'disabled' },
+    });
+  });
+  it('keeps the challenge-driven answer for an OAuth entry without a reviewed client', async () => {
+    probeRemoteAuthType.mockResolvedValue('none');
+    const fixture = buildApp({ ...CURATED, auth_type: 'oauth' });
+    await createMCPCatalogConnectService(fixture.app, fixture.deps).create(request, params);
+    expect(fixture.created.mcpServers[0]).toMatchObject({ auth: { type: 'none' } });
+  });
   it('refuses app material for entries without a reviewed recipe', async () => {
     const fixture = buildApp(CURATED);
     await expect(

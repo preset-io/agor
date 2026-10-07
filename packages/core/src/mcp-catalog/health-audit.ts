@@ -2,9 +2,11 @@ import type { MCPCatalogEntry, MCPCatalogProbedAuthType } from '@agor/core/types
 import { MCPExternalError, type MCPExternalErrorCategory } from '../tools/mcp/external-error';
 import {
   OAuthConfigurationError,
+  oauthIssuerIdentifiersMatch,
   resolveMCPOAuthDiscovery,
   validateMCPOAuthMetadata,
 } from '../tools/mcp/oauth-mcp-transport';
+import { catalogEntryDeclaresOAuth } from '../types/mcp-catalog';
 import { assertSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/safe-outbound-fetch';
 import { probeRemoteAuth, type RemoteAuthProbeResult } from './auth-probe';
 import { isCatalogEntryVisible } from './query';
@@ -78,7 +80,7 @@ async function assertOAuthMetadataReady(
     compatibilityMode,
   });
   if (entry.oauth?.configured_client) {
-    if (validated.issuer !== entry.oauth.configured_client.issuer)
+    if (!oauthIssuerIdentifiersMatch(validated.issuer, entry.oauth.configured_client.issuer))
       throw new OAuthConfigurationError(
         'issuer_mismatch',
         'Configured app issuer no longer matches its reviewed recipe'
@@ -161,9 +163,15 @@ export async function auditCatalogHealth(
         reason: 'catalog_entry_hidden',
       };
     }
-    const observed = entry.remote_url
+    const answered = entry.remote_url
       ? await probe(entry.remote_url)
       : ({ authType: 'unknown' } satisfies RemoteAuthProbeResult);
+    // Mirrors Connect: a declared-OAuth recipe on an endpoint that answers
+    // without a challenge is checked as OAuth, from its published metadata.
+    const observed =
+      answered.authType === 'none' && catalogEntryDeclaresOAuth(entry)
+        ? ({ authType: 'oauth' } satisfies RemoteAuthProbeResult)
+        : answered;
     const base = {
       name: entry.name,
       expectedAuth: entry.auth_type,

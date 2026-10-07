@@ -152,6 +152,7 @@ type TestProvider = {
     authorization?: string;
     transientHeader?: string;
     jsonBody?: Record<string, unknown>;
+    formBody?: URLSearchParams;
   }>;
   tokenRequested: Deferred<void>;
   refreshRequested: Deferred<void>;
@@ -202,6 +203,10 @@ async function createTestProvider(
     callbackIssuerSupported?: boolean;
     holdMcpChallenge?: boolean;
     clientCredentialsOnly?: boolean;
+    /** Answer unauthenticated MCP requests with 200, as Google Workspace does. */
+    noChallenge?: boolean;
+    /** Advertised `token_endpoint_auth_methods_supported`. */
+    tokenAuthMethods?: string[];
   } = {}
 ): Promise<TestProvider> {
   const requests: TestProvider['requests'] = [];
@@ -278,6 +283,9 @@ async function createTestProvider(
           ...(advertisesRegistration() ? { registration_endpoint: `${baseUrl}/register` } : {}),
           response_types_supported: ['code'],
           code_challenge_methods_supported: options.pkceMethods ?? ['S256'],
+          ...(options.tokenAuthMethods
+            ? { token_endpoint_auth_methods_supported: options.tokenAuthMethods }
+            : {}),
           // The DCR fixture deliberately omits RFC 9207 response-issuer
           // support. Reaching /register therefore proves that the canonical
           // catalog row selected Marketplace policy rather than strict.
@@ -380,6 +388,7 @@ async function createTestProvider(
     if (url.pathname === '/token') {
       let body = '';
       for await (const chunk of request) body += String(chunk);
+      recordedRequest.formBody = new URLSearchParams(body);
       const isRefresh = new URLSearchParams(body).get('grant_type') === 'refresh_token';
       if (isRefresh) {
         if (options.gitlab) {
@@ -442,7 +451,7 @@ async function createTestProvider(
     if (url.pathname === '/saved/mcp') {
       mcpRequested.resolve();
       if (options.holdMcpChallenge) await releaseMcp.promise;
-      if (request.headers.authorization !== 'Bearer sqlite-access-token') {
+      if (!options.noChallenge && request.headers.authorization !== 'Bearer sqlite-access-token') {
         response.writeHead(401, {
           'www-authenticate': options.clientCredentialsOnly
             ? 'Bearer'
@@ -3724,6 +3733,103 @@ describe('SQLite saved-row OAuth authority', () => {
 
     const callback = await harness.callback(authorizationUrl.searchParams.get('state')!);
     expect(callback.status).toBe(200);
+  });
+
+  it('starts a declared-OAuth configured app without a challenge and keeps its post-only client auth through refresh', async () => {
+    // Google Workspace shape: unauthenticated initialize answers 200. The
+    // token endpoint (HubSpot shape) advertises only form-body client auth.
+    const provider = await createTestProvider({
+      noChallenge: true,
+      tokenAuthMethods: ['client_secret_post'],
+    });
+    providers.push(provider);
+    const catalogEntry = {
+      ...dcrCatalogEntry('test/declared-oauth-byo', provider.savedMcpUrl),
+      oauth: {
+        dcr_mode: 'disabled',
+        configured_client: {
+          setup_url: 'https://provider.example.test/apps',
+          issuer: provider.baseUrl,
+          secret_required: true,
+        },
+      },
+    } as MCPCatalogEntry;
+    const catalogMock = vi.mocked(loadCatalog);
+    const previousImplementation = catalogMock.getMockImplementation();
+    catalogMock.mockResolvedValue([catalogEntry]);
+    onTestFinished(() => {
+      catalogMock.mockReset();
+      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+    });
+    const harness = await createHarness(provider, 'per_user', { catalogEntry });
+    databases.push(harness.rawDb);
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_dcr_mode: 'disabled',
+        oauth_client_id: 'customer-app',
+        oauth_client_secret: 'customer-secret',
+      },
+    });
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      success: boolean;
+      authorizationUrl?: string;
+    };
+    expect(started).toMatchObject({ success: true });
+    const authorizationUrl = new URL(started.authorizationUrl!);
+    expect(authorizationUrl.origin).toBe(provider.baseUrl);
+    expect(authorizationUrl.searchParams.get('client_id')).toBe('customer-app');
+    // Discovery came from well-known metadata, not from a challenge.
+    expect(provider.requests.map((entry) => entry.path)).toContain(
+      '/.well-known/oauth-protected-resource'
+    );
+
+    expect((await harness.callback(authorizationUrl.searchParams.get('state')!)).status).toBe(200);
+    const [exchange] = provider.requests.filter((entry) => entry.path === '/token');
+    expect(exchange?.authorization).toBeUndefined();
+    expect(exchange?.formBody?.get('client_id')).toBe('customer-app');
+    expect(exchange?.formBody?.get('client_secret')).toBe('customer-secret');
+    await expect(
+      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+        harness.user.user_id as UserID,
+        harness.server.mcp_server_id as MCPServerID
+      )
+    ).resolves.toMatchObject({ oauth_token_endpoint_auth_method: 'client_secret_post' });
+
+    await harness.app
+      .service('mcp-servers/oauth-auth-headers')
+      .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+        provider: undefined,
+        user: harness.user,
+        tenant: { tenant_id: 'default', source: 'static' },
+        authentication: { _isServiceAccount: true },
+      } as unknown as AuthenticatedParams);
+    const refresh = provider.requests
+      .filter((entry) => entry.path === '/token')
+      .find((entry) => entry.formBody?.get('grant_type') === 'refresh_token');
+    expect(refresh?.authorization).toBeUndefined();
+    expect(refresh?.formBody?.get('client_secret')).toBe('customer-secret');
+  });
+
+  it('still refuses to start sign-in for a non-catalog server that answers without a challenge', async () => {
+    const provider = await createTestProvider({ noChallenge: true });
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      success: boolean;
+      error?: string;
+    };
+    expect(started).toMatchObject({ success: false });
+    expect(started.error).toMatch(/did not request OAuth authentication/);
+    expect(provider.requests.filter((entry) => entry.path.startsWith('/.well-known/'))).toEqual([]);
   });
 
   it('cannot see a front-channel redirect-URI rejection, and leaves the attempt pending', async () => {

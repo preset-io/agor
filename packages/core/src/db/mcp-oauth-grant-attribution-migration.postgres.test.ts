@@ -58,7 +58,14 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
           expect(
             rawRows(await executeRaw(scoped, sql`SELECT * FROM user_mcp_oauth_tokens`))
-          ).toEqual([{ ...fixture.personal, granted_by_user_id: fixture.userId }]);
+          ).toEqual([
+            {
+              ...fixture.personal,
+              granted_by_user_id: fixture.userId,
+              // Added after 0105; historical grants keep HTTP Basic.
+              oauth_token_endpoint_auth_method: null,
+            },
+          ]);
         });
       }
       await runWithTenantDatabaseScope(db, 'not-a-fixture-tenant', async (scoped) => {

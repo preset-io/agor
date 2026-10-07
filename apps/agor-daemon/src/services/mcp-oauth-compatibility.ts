@@ -8,6 +8,7 @@ import type {
 } from '@agor/core/types';
 import {
   assertPublicMCPOAuthCompatibilityMode,
+  catalogEntryDeclaresOAuth,
   MCP_OAUTH_DEFAULT_DCR_MODE,
 } from '@agor/core/types';
 import { catalogOAuthConfig, isCurrentCatalogInstall } from './mcp-catalog-install-policy.js';
@@ -149,4 +150,28 @@ export async function configuredCatalogIssuer(
   )
     throw new Error('Configured catalog app no longer matches its reviewed recipe');
   return entry.oauth.configured_client.issuer;
+}
+
+/**
+ * Whether oauth-start may begin sign-in without a challenge: only a current
+ * install of a catalog entry that declares OAuth up front (see
+ * `catalogEntryDeclaresOAuth`). Manual and drifted rows keep the
+ * challenge-driven contract.
+ */
+export async function catalogInstallDeclaresOAuth(
+  server: MCPServer,
+  catalogEntries?: readonly MCPCatalogEntry[]
+): Promise<boolean> {
+  if (server.source !== 'catalog' || !server.catalog_entry_name) return false;
+  const entry = findCatalogEntry(
+    catalogEntries ?? (await loadCatalog()),
+    server.catalog_entry_name
+  );
+  if (!entry?.remote_url || !catalogEntryDeclaresOAuth(entry)) return false;
+  return isCurrentCatalogInstall(
+    server,
+    entry as MCPCatalogEntry & { remote_url: string },
+    catalogOAuthConfig(entry),
+    { reconcileMissingCompatibilityMode: true }
+  );
 }

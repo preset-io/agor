@@ -1147,6 +1147,69 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
     }
   );
 
+  it.each([
+    [['client_secret_post'], 'client_secret_post'],
+    [['client_secret_basic', 'client_secret_post'], 'client_secret_basic'],
+    [undefined, 'client_secret_basic'],
+  ] as const)(
+    'authenticates a configured confidential client per token_endpoint_auth_methods_supported %j',
+    async (supported, expected) => {
+      const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
+        clientSecret: 'configured-secret',
+        prefetchedAuthServerMetadata: {
+          issuer: 'https://auth.example.test',
+          authorization_endpoint: 'https://auth.example.test/authorize',
+          token_endpoint: 'https://auth.example.test/token',
+          ...(supported ? { token_endpoint_auth_methods_supported: [...supported] } : {}),
+        },
+        cacheKey: 'https://mcp.example.test/mcp',
+        resourceUri: 'https://mcp.example.test/mcp',
+        compatibilityMode: 'legacy',
+        allowLocalhostHttp: true,
+      });
+      expect(ctx.tokenEndpointAuthMethod).toBe(expected);
+
+      globalThis.fetch = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ access_token: 'issued' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      ) as unknown as typeof fetch;
+      await completeMCPOAuthFlow(ctx, 'auth-code', ctx.state, { cacheToken: false });
+
+      const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      const body = new URLSearchParams(String(init?.body));
+      if (expected === 'client_secret_post') {
+        expect(headers.Authorization).toBeUndefined();
+        expect(body.get('client_id')).toBe('configured-client');
+        expect(body.get('client_secret')).toBe('configured-secret');
+      } else {
+        expect(headers.Authorization).toBe(
+          `Basic ${Buffer.from('configured-client:configured-secret').toString('base64')}`
+        );
+        expect(body.get('client_id')).toBeNull();
+        expect(body.get('client_secret')).toBeNull();
+      }
+    }
+  );
+
+  it('records no token auth method for a public client', async () => {
+    const ctx = await startMCPOAuthFlow('', 'public-client', redirectUri, {
+      prefetchedAuthServerMetadata: {
+        issuer: 'https://auth.example.test',
+        authorization_endpoint: 'https://auth.example.test/authorize',
+        token_endpoint: 'https://auth.example.test/token',
+        token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
+      },
+      cacheKey: 'https://mcp.example.test/mcp',
+      resourceUri: 'https://mcp.example.test/mcp',
+      compatibilityMode: 'legacy',
+      allowLocalhostHttp: true,
+    });
+    expect(ctx.tokenEndpointAuthMethod).toBeUndefined();
+  });
+
   it('does not add Google-only offline parameters to another provider', async () => {
     const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
       prefetchedAuthServerMetadata: {

@@ -99,6 +99,7 @@ import type {
 import {
   OAuthCodeExchangeError,
   OAuthConfigurationError,
+  oauthIssuerIdentifiersMatch,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
@@ -289,6 +290,7 @@ import {
 } from './services/mcp-marketplace-actions.js';
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
+  catalogInstallDeclaresOAuth,
   configuredCatalogIssuer,
   logMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
@@ -2650,9 +2652,13 @@ export async function registerMCPServices(
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
         resolveRedirectUri: (issuer: string) => {
-          if (configuredIssuer && issuer !== configuredIssuer)
+          if (configuredIssuer && !oauthIssuerIdentifiersMatch(issuer, configuredIssuer))
             throw new Forbidden('Configured app issuer no longer matches its reviewed recipe');
-          return oauthRelay && relayFlow ? oauthRelay.redirectUri(issuer) : redirectUri;
+          // The recipe spelling, not the metadata spelling: it is what the
+          // Catalog form showed as the redirect URI to register.
+          return oauthRelay && relayFlow
+            ? oauthRelay.redirectUri(configuredIssuer ?? issuer)
+            : redirectUri;
         },
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
         tokenUrlOverride: effectiveTokenUrlOverride,
@@ -3684,6 +3690,7 @@ export async function registerMCPServices(
           ...pendingFlow,
           clientId: pendingFlow.context.clientId,
           clientSecret: pendingFlow.context.clientSecret,
+          tokenEndpointAuthMethod: pendingFlow.context.tokenEndpointAuthMethod,
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
           resourceUri: pendingFlow.context.resourceUri,
           ...(grantBinding ? { grantBinding } : {}),
@@ -6053,7 +6060,17 @@ export async function registerMCPServices(
           }
         }
 
-        if (probeResponse.status !== 401) {
+        // A current install of a catalog entry that declares OAuth up front
+        // starts sign-in without a challenge (e.g. Google Workspace answers
+        // initialize with 200); discovery below then reads the server's own
+        // protected-resource metadata. Everything else still needs a 401.
+        const declaredOAuth =
+          probeResponse.status !== 401 && savedServer
+            ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                catalogInstallDeclaresOAuth(savedServer)
+              )
+            : false;
+        if (probeResponse.status !== 401 && !declaredOAuth) {
           const recovery = {
             category: 'configuration_changed' as const,
             action: 'save_and_retry' as const,
@@ -6069,7 +6086,8 @@ export async function registerMCPServices(
           } satisfies MCPOAuthStartFailure;
         }
 
-        const wwwAuthenticate = probeResponse.headers.get('www-authenticate') || '';
+        const wwwAuthenticate =
+          probeResponse.status === 401 ? probeResponse.headers.get('www-authenticate') || '' : '';
         const { resolveMCPOAuthDiscovery } = await runWithinOAuthAuthority(
           assertRequestAuthority,
           () => import('@agor/core/tools/mcp/oauth-mcp-transport')

@@ -15,11 +15,16 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthFailureReason,
   MCPOAuthRuntimeCompatibilityMode,
+  MCPOAuthTokenEndpointAuthMethod,
 } from '../../types/mcp.js';
 import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
-import type { OAuthTokenResponse } from './oauth-auth.js';
+import {
+  applyTokenEndpointClientAuth,
+  type OAuthTokenResponse,
+  selectTokenEndpointAuthMethod,
+} from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
@@ -210,6 +215,7 @@ export interface AuthorizationServerMetadata {
   grant_types_supported?: string[];
   code_challenge_methods_supported?: string[];
   authorization_response_iss_parameter_supported?: boolean;
+  token_endpoint_auth_methods_supported?: string[];
 }
 
 // Re-export the canonical OAuthTokenResponse from oauth-auth to avoid duplication
@@ -829,7 +835,13 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  * while preserving strict RFC 8414 string comparison everywhere else. Host,
  * scheme, port, path, query, username and password must still agree.
  */
-function oauthIssuerIdentifiersMatch(left: unknown, right: unknown): boolean {
+/**
+ * Issuer identity for reviewed recipe pins: exact, or differing by exactly one
+ * trailing slash. A resource's `authorization_servers` entry and the AS's own
+ * `issuer` routinely disagree on that slash (Box, Google), and the audit and
+ * the runtime pin see one spelling each, so both must use this rule.
+ */
+export function oauthIssuerIdentifiersMatch(left: unknown, right: unknown): boolean {
   if (typeof left !== 'string' || typeof right !== 'string') return false;
   if (left === right) return true;
   try {
@@ -1098,7 +1110,8 @@ async function exchangeCodeForToken(
   clientSecret?: string,
   resourceUri?: string,
   allowLocalhostHttp = false,
-  clientRegistrationInvalidatable = false
+  clientRegistrationInvalidatable = false,
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod
 ): Promise<OAuthTokenResponse> {
   const body: Record<string, string> = {
     grant_type: 'authorization_code',
@@ -1118,13 +1131,10 @@ async function exchangeCodeForToken(
     Accept: 'application/json',
   };
 
-  if (clientSecret) {
-    // Slack and other providers recommend HTTP Basic auth for credentials
-    headers.Authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
-  } else {
-    // Public client — send client_id in body
-    body.client_id = clientId;
-  }
+  applyTokenEndpointClientAuth(
+    { headers, body },
+    { clientId, clientSecret, method: tokenEndpointAuthMethod }
+  );
 
   console.log('[MCP OAuth] Starting authorization-code exchange');
 
@@ -1421,7 +1431,9 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true
+      true,
+      false,
+      selectTokenEndpointAuthMethod(authServerMetadata.token_endpoint_auth_methods_supported)
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1564,6 +1576,8 @@ export interface OAuthFlowContext {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Require `iss` when the AS advertised RFC 9207 support for this flow. */
   authorizationResponseIssuerParameterSupported: boolean;
+  /** Confidential-client token auth chosen from AS metadata; absent means HTTP Basic. */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
 }
@@ -2312,6 +2326,13 @@ async function startMCPOAuthFlowWithAS(opts: {
     compatibilityMode,
     authorizationResponseIssuerParameterSupported:
       authServerMetadata?.authorization_response_iss_parameter_supported === true,
+    ...(resolvedClient.clientSecret
+      ? {
+          tokenEndpointAuthMethod: selectTokenEndpointAuthMethod(
+            authServerMetadata?.token_endpoint_auth_methods_supported
+          ),
+        }
+      : {}),
     allowLocalhostHttp,
   };
 }
@@ -2579,7 +2600,8 @@ export async function completeMCPOAuthFlow(
     context.clientSecret,
     context.resourceUri,
     context.allowLocalhostHttp,
-    Boolean(context.clientRegistrationId)
+    Boolean(context.clientRegistrationId),
+    context.tokenEndpointAuthMethod
   );
 
   console.log('[MCP OAuth] Access token received successfully');

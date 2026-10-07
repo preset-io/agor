@@ -14,14 +14,14 @@ import {
   ROTATING_GRANT_OBSERVE_TIMEOUT_MS,
   refreshRotatingGrant,
 } from '../../oauth/rotating-grant-refresh';
-import type { MCPServerID, UserID } from '../../types';
+import type { MCPOAuthTokenEndpointAuthMethod, MCPServerID, UserID } from '../../types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
 } from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
-import { inferOAuthTokenUrl } from './oauth-auth';
+import { applyTokenEndpointClientAuth, inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
 
 export const REFRESH_BUFFER_MS = 60_000;
@@ -154,6 +154,8 @@ export interface RefreshMCPTokenOptions {
   refreshToken: string;
   clientId: string;
   clientSecret?: string;
+  /** Method chosen when the grant was issued; absent means HTTP Basic. */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   resourceUri?: string;
   /** Exact redirect used to issue this grant (required by GitLab on refresh). */
   redirectUri?: string;
@@ -195,11 +197,14 @@ export async function refreshMCPToken(
     'Content-Type': 'application/x-www-form-urlencoded',
     Accept: 'application/json',
   };
-  if (opts.clientSecret) {
-    headers.Authorization = `Basic ${Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64')}`;
-  } else {
-    body.client_id = opts.clientId;
-  }
+  applyTokenEndpointClientAuth(
+    { headers, body },
+    {
+      clientId: opts.clientId,
+      clientSecret: opts.clientSecret,
+      method: opts.tokenEndpointAuthMethod,
+    }
+  );
 
   let response: Response;
   try {
@@ -509,6 +514,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         refreshToken: row.oauth_refresh_token!,
         clientId: row.oauth_client_id!,
         clientSecret: row.oauth_client_secret,
+        tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
         resourceUri: row.oauth_resource_uri,
         redirectUri: row.oauth_redirect_uri,
         allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
@@ -669,6 +675,11 @@ async function refreshStandalone(
       refreshToken: row.oauth_refresh_token,
       clientId,
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
+      // Only meaningful for the grant's own secret; a server-row fallback
+      // secret predates any recorded method and keeps HTTP Basic.
+      tokenEndpointAuthMethod: row.oauth_client_secret
+        ? row.oauth_token_endpoint_auth_method
+        : undefined,
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,

@@ -79,6 +79,24 @@ export type MCPOAuthMode = 'per_user' | 'shared';
  */
 export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as const;
 
+/** Confidential-client token endpoint authentication methods Agor can send. */
+export const MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS = [
+  'client_secret_basic',
+  'client_secret_post',
+] as const;
+
+export type MCPOAuthTokenEndpointAuthMethod =
+  (typeof MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS)[number];
+
+export function isMCPOAuthTokenEndpointAuthMethod(
+  value: unknown
+): value is MCPOAuthTokenEndpointAuthMethod {
+  return (
+    typeof value === 'string' &&
+    (MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS as readonly string[]).includes(value)
+  );
+}
+
 export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
 
 export const MCP_OAUTH_DEFAULT_DCR_MODE = 'advertised' satisfies MCPOAuthDCRMode;
@@ -286,6 +304,13 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
+  /**
+   * How a confidential client authenticates at the token endpoint, chosen from
+   * the AS metadata at start. Absent means HTTP Basic. Deliberately not a
+   * version bump: it binds nothing, and a daemon that predates it sends Basic,
+   * which is the pre-existing behavior and fails at the provider, not open.
+   */
+  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   allowLocalhostHttp: boolean;
   /** Non-secret durable routing back to an exact Slack recovery notice. */
   slackRecovery?: MCPSlackOAuthRecoveryContext;

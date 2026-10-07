@@ -356,6 +356,22 @@ export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'
  * it is usually the protocol's own name — so the publisher supplies it, and the
  * path segment is only a fallback for a name with no publisher left in it.
  */
+/**
+ * Whether a reviewed entry declares OAuth up front rather than waiting for a
+ * challenge: it states `auth_type: oauth` and brings a reviewed client (a
+ * customer-owned app recipe or a public client ID). Some such servers (Google
+ * Workspace) answer an unauthenticated `initialize` with no 401 at all, so for
+ * these entries the catalog, not the challenge, is what says sign-in is needed.
+ * Discovery still comes from the server's own protected-resource metadata.
+ */
+export function catalogEntryDeclaresOAuth(
+  entry: Pick<MCPCatalogEntry, 'auth_type' | 'oauth'>
+): boolean {
+  return (
+    entry.auth_type === 'oauth' && Boolean(entry.oauth?.configured_client || entry.oauth?.client_id)
+  );
+}
+
 export function catalogServerSlug(name: string): string {
   const slugify = (value: string): string =>
     value

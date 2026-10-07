@@ -85,10 +85,25 @@ to whatever a redirect names.
   mode wins; edited/imported installs, removed entries, or any drift fall back
   to `strict`. Monday, Cloudflare, ClickUp, and Preset are pinned `strict`
   (Preset defensively, pending production validation).
-- **Excluded providers.** Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and
-  Kagi are off the shelf because no safely bound client-registration/issuer path
-  exists (reasons at the bottom of `curated.yaml`). Don't re-add one just
-  because its endpoint returns an OAuth challenge.
+- **Excluded providers.** Prisma, MongoDB, and Kagi are off the shelf because
+  no safely bound client-registration/issuer path exists (reasons at the bottom
+  of `curated.yaml`). Box, HubSpot, Slack, and Google Workspace are offered only
+  as customer-owned app recipes; PagerDuty only via its user API token. Don't
+  re-add a DCR entry just because its endpoint returns an OAuth challenge.
+- **Declared OAuth.** An `auth_type: oauth` entry with a reviewed client
+  (`configured_client` or `client_id`, see `catalogEntryDeclaresOAuth`) is
+  installed for OAuth even when the endpoint answers `initialize` with no
+  challenge (Google Workspace), and oauth-start then discovers from the
+  server's well-known metadata. Only current installs of such entries skip the
+  401 requirement; manual and drifted rows keep the challenge-driven contract.
+- **Recipe issuer.** `configured_client.issuer` is compared exact-or-one-
+  trailing-slash (`oauthIssuerIdentifiersMatch`) by both the audit (resource
+  spelling) and the runtime pin (AS-metadata spelling); state the AS metadata
+  `issuer`. The hosted relay derives its callback from the recipe spelling.
+- **Token endpoint client auth** follows AS `token_endpoint_auth_methods_supported`:
+  HTTP Basic when advertised or unstated, else form-body `client_secret_post`.
+  The choice travels in the sealed pending flow and is stored on the grant
+  (`oauth_token_endpoint_auth_method`, NULL = Basic) so refresh matches it.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its
   OAuth challenge; the health audit flags if its OAuth metadata becomes usable.
 - **Sign-in completion.** Connect pre-opens the provider window during user

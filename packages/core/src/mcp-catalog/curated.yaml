@@ -1102,7 +1102,7 @@ unpublished:
       dcr_mode: disabled
       configured_client:
         setup_url: https://developer.box.com/guides/box-mcp/remote/
-        issuer: https://api.box.com/
+        issuer: https://api.box.com
         secret_required: true
 
   - name: com.frontapp/mcp
@@ -1147,10 +1147,9 @@ unpublished:
         secret_required: true
 
   - name: com.hubspot/mcp
-    # 2026-10-07: customer-owned app (MCP connector). Hidden because HubSpot's
-    # authorization server advertises only form-body client authentication and
-    # Agor sends HTTP Basic for confidential clients; unverified end to end.
-    hidden: true
+    # 2026-10-07: customer-owned app (MCP connector). HubSpot's token endpoint
+    # advertises only form-body client authentication; Agor now picks that
+    # from the metadata for the code exchange and every refresh.
     title: HubSpot
     category: productivity
     capabilities: [crm]
@@ -1197,18 +1196,21 @@ unpublished:
         secret_required: false
 
   # Google Workspace (2026-10-07): one customer-owned Web-application OAuth
-  # client per tenant, with the product's API and MCP API enabled. Hidden: the
-  # servers are Developer Preview (enrollment required), and an unauthenticated
-  # initialize currently succeeds with no OAuth challenge, so Connect would not
-  # reach sign-in. Scopes are Google's documented recommended set.
+  # client per tenant, with the product's API and MCP API enabled. Developer
+  # Preview enrolment is per customer (Workspace account + GCP project); Google
+  # documents no client/vendor allowlist. The servers answer an unauthenticated
+  # initialize (and tools/list) with 200 and no challenge, so these entries
+  # declare OAuth up front (`catalogEntryDeclaresOAuth`) and sign-in discovers
+  # from /.well-known/oauth-protected-resource/mcp/v1. Scopes are Google's
+  # documented recommended set (a subset of scopes_supported). Google's
+  # preview terms limit pre-GA use in public applications; revisit at GA.
   - name: com.googleapis.gmailmcp/mcp
-    hidden: true
     title: Gmail
     category: messaging
     capabilities: [email]
-    benefit: Search and read Gmail threads from the session and draft replies for you to review.
+    benefit: Search and read Gmail threads from the session and draft replies for you to review (Google Developer Preview).
     starter_prompt: Summarise unread Gmail threads from this week that mention the project I name. Do not send anything.
-    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Gmail and Gmail MCP APIs enabled. Reads your mail and labels and can create drafts.
+    permission_disclosure: Google Developer Preview. Your Google Workspace account and the Google Cloud project that owns your OAuth client must be enrolled in Google's Workspace Developer Preview Program. Requires your own Web-application OAuth client in that project, with Agor's callback as a redirect URI and the Gmail and Gmail MCP APIs enabled. Acts as your Google user with the gmail.readonly and gmail.compose scopes; it reads your mail and labels and can create drafts, and the compose scope also permits sending. Data returned by Google is sent to the agent and AI provider running this Agor session.
     icon_url: https://www.google.com/s2/favicons?domain=mail.google.com&sz=64
     website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
     popularity_rank: 81
@@ -1224,13 +1226,12 @@ unpublished:
         secret_required: true
 
   - name: com.googleapis.calendarmcp/mcp
-    hidden: true
     title: Google Calendar
     category: productivity
     capabilities: [tasks]
-    benefit: Check your Google Calendar availability and upcoming events from the session.
+    benefit: Check your Google Calendar availability and upcoming events from the session (Google Developer Preview).
     starter_prompt: List my Google Calendar events for the next three days and find a free hour. Do not change anything.
-    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Calendar and Calendar MCP APIs enabled. Reads your calendars, free/busy, and events.
+    permission_disclosure: Google Developer Preview. Your Google Workspace account and the Google Cloud project that owns your OAuth client must be enrolled in Google's Workspace Developer Preview Program. Requires your own Web-application OAuth client in that project, with Agor's callback as a redirect URI and the Calendar and Calendar MCP APIs enabled. Acts as your Google user with read-only calendar-list, free/busy, and event scopes. Data returned by Google is sent to the agent and AI provider running this Agor session.
     icon_url: https://www.google.com/s2/favicons?domain=calendar.google.com&sz=64
     website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
     popularity_rank: 82
@@ -1246,13 +1247,12 @@ unpublished:
         secret_required: true
 
   - name: com.googleapis.drivemcp/mcp
-    hidden: true
     title: Google Drive
     category: data-storage
     capabilities: [files, docs]
-    benefit: Search and read Google Drive files from the session without exporting them first.
+    benefit: Search and read Google Drive files from the session without exporting them first (Google Developer Preview).
     starter_prompt: Find the most recently edited Google Drive documents about the topic I name and summarise them. Do not change anything.
-    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Drive and Drive MCP APIs enabled. Reads your Drive files and can create files.
+    permission_disclosure: Google Developer Preview. Your Google Workspace account and the Google Cloud project that owns your OAuth client must be enrolled in Google's Workspace Developer Preview Program. Requires your own Web-application OAuth client in that project, with Agor's callback as a redirect URI and the Drive and Drive MCP APIs enabled. Acts as your Google user; it reads your Drive files and can create and change files it creates. Data returned by Google is sent to the agent and AI provider running this Agor session.
     icon_url: https://www.google.com/s2/favicons?domain=drive.google.com&sz=64
     website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
     popularity_rank: 83
@@ -1268,13 +1268,12 @@ unpublished:
         secret_required: true
 
   - name: com.googleapis.docsmcp/mcp
-    hidden: true
     title: Google Docs
     category: productivity
     capabilities: [docs, notes]
-    benefit: Read and update Google Docs from the session so specs and notes stay in the document people already use.
+    benefit: Read and update Google Docs from the session so specs and notes stay in the document people already use (Google Developer Preview).
     starter_prompt: Summarise the Google Doc I link and list its open questions. Do not change it.
-    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Docs and Docs MCP APIs enabled. Reads and edits your Google Docs.
+    permission_disclosure: Google Developer Preview. Your Google Workspace account and the Google Cloud project that owns your OAuth client must be enrolled in Google's Workspace Developer Preview Program. Requires your own Web-application OAuth client in that project, with Agor's callback as a redirect URI and the Docs, Drive, Docs MCP, and Drive MCP APIs enabled. Acts as your Google user; it reads Drive and Docs content and can create and edit your Google Docs. Data returned by Google is sent to the agent and AI provider running this Agor session.
     icon_url: https://www.google.com/s2/favicons?domain=docs.google.com&sz=64
     website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
     popularity_rank: 84

@@ -1972,6 +1972,9 @@ export const userMcpOauthTokens = sqliteTable(
     oauth_authorization_endpoint: text('oauth_authorization_endpoint'),
     oauth_token_endpoint: text('oauth_token_endpoint'),
     oauth_redirect_uri: text('oauth_redirect_uri'),
+    // Confidential-client token auth chosen from AS metadata at grant time
+    // (`client_secret_basic` | `client_secret_post`); NULL = HTTP Basic.
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     refresh_status: text('refresh_status').notNull().default('idle'),
     refresh_generation: integer('refresh_generation').notNull().default(0),
     refresh_success_generation: integer('refresh_success_generation').notNull().default(0),

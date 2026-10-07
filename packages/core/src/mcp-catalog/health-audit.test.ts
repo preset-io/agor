@@ -148,6 +148,47 @@ describe('auditCatalogHealth', () => {
     expect(oauthMetadataReady).toHaveBeenCalledWith(datadog, undefined);
   });
 
+  it('audits a declared-OAuth recipe from metadata when the endpoint answers without a challenge', async () => {
+    const google = {
+      ...entry('oauth'),
+      name: 'com.googleapis.gmailmcp/mcp',
+      remote_url: 'https://gmailmcp.googleapis.com/mcp/v1',
+      oauth: {
+        dcr_mode: 'disabled' as const,
+        configured_client: {
+          setup_url: 'https://developers.google.com/workspace/guides/configure-mcp-servers',
+          issuer: 'https://accounts.google.com',
+          secret_required: true,
+        },
+      },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({
+      kind: 'resource-metadata',
+      metadataUrl: 'https://gmailmcp.googleapis.com/.well-known/oauth-protected-resource/mcp/v1',
+      source: 'well-known',
+    });
+    // The resource names the issuer with a trailing slash; the recipe states
+    // the AS metadata spelling. Both are the same issuer.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer: 'https://accounts.google.com/',
+    });
+
+    const [declared, undeclared] = await auditCatalogHealth([google, entry('oauth')], {
+      probe: async () => ({ authType: 'none' }),
+    });
+
+    expect(declared).toMatchObject({
+      status: 'credential-required',
+      reason: 'configured_client_not_verified',
+      observedAuth: 'oauth',
+    });
+    expect(oauthMocks.resolveMCPOAuthDiscovery).toHaveBeenCalledWith(null, google.remote_url, {
+      compatibilityMode: 'marketplace',
+    });
+    // Without a reviewed client recipe, `none` is still drift.
+    expect(undeclared).toMatchObject({ status: 'auth-drift', observedAuth: 'none' });
+  });
+
   it('does not call a public credential challenge fully verified without a credential', async () => {
     const [result] = await auditCatalogHealth([entry('credentials')], {
       probe: async () => ({ authType: 'credentials' }),

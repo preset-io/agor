@@ -2153,6 +2153,9 @@ export const userMcpOauthTokens = pgTable(
     oauth_authorization_endpoint: text('oauth_authorization_endpoint'),
     oauth_token_endpoint: text('oauth_token_endpoint'),
     oauth_redirect_uri: text('oauth_redirect_uri'),
+    // Confidential-client token auth chosen from AS metadata at grant time
+    // (`client_secret_basic` | `client_secret_post`); NULL = HTTP Basic.
+    oauth_token_endpoint_auth_method: text('oauth_token_endpoint_auth_method'),
     refresh_status: text('refresh_status').notNull().default('idle'),
     refresh_generation: bigint('refresh_generation', { mode: 'number' }).notNull().default(0),
     // Highest refresh generation whose rotated token committed successfully.

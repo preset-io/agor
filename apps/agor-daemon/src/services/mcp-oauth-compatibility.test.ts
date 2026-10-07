@@ -225,8 +225,11 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
 });
 
 it('resolves actual hidden saved installs through the full runtime catalog, without mutation', async () => {
-  const definitions = (await loadCatalog()).filter((entry) => entry.hidden);
-  expect(definitions).toHaveLength(7);
+  const definitions = (await loadCatalog()).filter(
+    (entry) => entry.hidden && entry.auth_type === 'oauth'
+  );
+  // Seven 2026-09 provider holds plus Shortcut (2026-10-07).
+  expect(definitions).toHaveLength(8);
   for (const definition of definitions) {
     const server = catalogServer({
       catalog_entry_name: definition.name,

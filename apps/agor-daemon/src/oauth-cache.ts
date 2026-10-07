@@ -14,7 +14,7 @@ import {
 import { assertMcpGrantSubjectEntitled } from '@agor/core/tools/mcp/grant-entitlement';
 import type { OAuthTokenResponse } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { resolveTokenExpiry } from '@agor/core/tools/mcp/oauth-token-expiry';
-import type { MCPServerID, UserID } from '@agor/core/types';
+import type { MCPOAuthTokenEndpointAuthMethod, MCPServerID, UserID } from '@agor/core/types';
 
 // ============================================================================
 // Database Token Storage
@@ -45,6 +45,7 @@ export async function persistOAuthToken(
     clientId?: string;
     /** client_secret used for the grant (absent for public clients). */
     clientSecret?: string;
+    tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
     /**
      * Token endpoint discovered/used for this grant. Standalone SQLite grants
      * retain it on the grant row so later refreshes do not have to guess from
@@ -106,6 +107,7 @@ export async function persistOAuthToken(
       refreshToken: tokenResponse.refresh_token,
       clientId: pendingFlow.clientId,
       clientSecret: pendingFlow.clientSecret,
+      tokenEndpointAuthMethod: pendingFlow.tokenEndpointAuthMethod,
       tokenEndpoint: pendingFlow.tokenEndpoint,
       resourceUri: pendingFlow.resourceUri,
       grantBinding: pendingFlow.grantBinding,
