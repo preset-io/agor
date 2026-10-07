@@ -29,10 +29,12 @@ import {
 // Session `patched`/`updated` writes are coalesced to one flush per frame (see
 // realtimeBatch); flush synchronously in tests that assert the post-patch store.
 import { flushRealtimeNow } from '../store/realtimeBatch';
+import { holdRows } from '../store/retention';
 import { boardScopeKey, USER_SCOPE_KEYS } from '../store/scopeMerge';
 import { makeBranchesForBoardSelector } from '../store/selectors';
 import { loadSessionMcpServerIds } from '../store/sessionMcpLinks';
 import {
+  fillOnDemand,
   selectHomeBranchesLoaded,
   selectMySessionsLoaded,
   selectTeammatesLoaded,
@@ -2057,6 +2059,30 @@ describe('useAgorData — reconnect reconciles the displayed partition', () => {
     expect(
       [...agorStore.getState().coverage.keys()].filter((key) => key.startsWith('board:'))
     ).toEqual([]);
+  });
+});
+
+describe('useAgorData — reads in flight across a reconnect resync', () => {
+  it('an on-demand read sent before the resync is sent again instead of applying', async () => {
+    const { client, emitIo } = makeMockClient({});
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await flush();
+    const stale = deferred();
+    let reads = 0;
+    const hold = holdRows();
+    onTestFinished(() => hold.release());
+    const fill = fillOnDemand(async () => {
+      reads += 1;
+      if (reads === 1) await stale.promise;
+      return { sessions: [] };
+    }, hold);
+    act(() => emitIo('connect'));
+    await act(async () => {
+      stale.resolve();
+      await fill;
+    });
+    expect(reads).toBe(2);
   });
 });
 

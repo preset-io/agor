@@ -28,16 +28,7 @@
 import type { AgorClient, Board, Branch, CardWithType, Session } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { debounceWithMaxWait } from '../hooks/useServerRead';
-import {
-  beginPartitionLoad,
-  endPartitionLoad,
-  type HydratedCollection,
-  MAX_WHOLESALE_RESTARTS,
-  touchedIdsSince,
-  touchedSince,
-  WholesaleReplacementError,
-  wholesaleReplacedSince,
-} from './agorHydration';
+import { fencedRead, type HydratedCollection, touchedIdsSince } from './agorHydration';
 import { type AgorState, agorStore } from './agorStore';
 import { backgroundReadsClear, holdBackgroundReads } from './backgroundReads';
 import { captureLoadLifetime, isLoadLifetimeCurrent, type LoadLifetime } from './loadLifetime';
@@ -411,50 +402,38 @@ export function loadBoardPartition(
       await backgroundReadsClear();
       if (!isCurrent()) return false;
     }
-    for (let attempt = 0; ; attempt++) {
-      const fence = beginPartitionLoad();
-      try {
-        const snapshot = await fetchBoardPartition(
-          client,
-          boardId,
-          options.canUseMemberWorkspaceServices
-        );
-        if (!isCurrent()) return false;
-        if (wholesaleReplacedSince(fence)) {
-          // Never apply across a replacement: the snapshot could resurrect
-          // rows it removed. Restart, then surface a retryable error.
-          if (attempt < MAX_WHOLESALE_RESTARTS) continue;
-          throw new WholesaleReplacementError();
-        }
-        const touched = (collection: HydratedCollection, id: string) =>
-          touchedSince(collection, id, fence.startRevisions[collection]);
-        store().applyMaps(
-          (prev) =>
-            replaceScope(
-              prev,
-              boardPartitionScope(boardId),
-              snapshot,
-              touched,
-              otherCommittedMembers(store(), boardScopeKey(boardId))
-            ),
-          settleBoardPartition(boardId, lifetime, generation, snapshot, fence.startRevisions)
-        );
-        return true;
-      } catch (err) {
-        if (!isCurrent()) return false;
-        console.warn(`[boardPartitions] load failed for board ${boardId}:`, err);
-        if (inPlaceFrom !== null) return false;
-        setBoardPartition(boardId, {
-          status: 'error',
-          authorityScope,
-          loadEpoch,
-          generation,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return false;
-      } finally {
-        endPartitionLoad();
-      }
+    try {
+      const applied = await fencedRead(
+        () => fetchBoardPartition(client, boardId, options.canUseMemberWorkspaceServices),
+        (snapshot, fence) => {
+          store().applyMaps(
+            (prev) =>
+              replaceScope(
+                prev,
+                boardPartitionScope(boardId),
+                snapshot,
+                fence.touched,
+                otherCommittedMembers(store(), boardScopeKey(boardId))
+              ),
+            settleBoardPartition(boardId, lifetime, generation, snapshot, fence.startRevisions)
+          );
+          return true;
+        },
+        isCurrent
+      );
+      return applied ?? false;
+    } catch (err) {
+      if (!isCurrent()) return false;
+      console.warn(`[boardPartitions] load failed for board ${boardId}:`, err);
+      if (inPlaceFrom !== null) return false;
+      setBoardPartition(boardId, {
+        status: 'error',
+        authorityScope,
+        loadEpoch,
+        generation,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
   };
   const promise = run().finally(() => {

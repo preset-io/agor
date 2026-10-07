@@ -43,6 +43,7 @@ import {
   cancelAllHydrations,
   cancelAndFailAllHydrations,
   endPartitionLoad,
+  markWholesaleReplacement,
   resetHydrationRevisions,
   runHydration,
   touchedIdsSince,
@@ -575,6 +576,9 @@ export function useAgorData(
           )
         : undefined;
       const keptBoardId = resyncBoards?.kept;
+      // Reads in flight may have seen the store while disconnected: they
+      // restart rather than apply over what this resync reconciles.
+      if (silent) markWholesaleReplacement();
       let resyncFailed = false;
 
       try {

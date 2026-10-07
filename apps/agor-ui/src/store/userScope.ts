@@ -48,16 +48,7 @@
 import type { AgorClient, BoardComment, Branch, Session } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { getTimeMs } from '../utils/entityTime';
-import {
-  beginPartitionLoad,
-  endPartitionLoad,
-  type HydratedCollection,
-  MAX_WHOLESALE_RESTARTS,
-  touchedIdsSince,
-  touchedSince,
-  WholesaleReplacementError,
-  wholesaleReplacedSince,
-} from './agorHydration';
+import { fencedRead, RESTART_READ } from './agorHydration';
 import { applyEntityFill, type DataMaps } from './agorMaps';
 import { type AgorState, agorStore, type LoadMetaUpdate } from './agorStore';
 import {
@@ -290,9 +281,9 @@ const isCurrent = (run: ScopeRun) => currentRun === run && isLoadLifetimeCurrent
 export type FillRows = { branches?: Branch[]; sessions?: Session[] };
 
 /**
- * Read rows and fill-merge them; null once `current` turns false. Read errors
- * propagate, and so does a read whose every attempt spanned a wholesale
- * replacement (`WholesaleReplacementError`): its snapshot is never applied.
+ * Read rows and fill-merge them (`fencedRead`); null once `current` turns
+ * false. Read errors propagate, and so does a read whose every attempt
+ * spanned a wholesale replacement: its snapshot is never applied.
  *
  * With `piece`, the read commits that piece in the update that applies its
  * rows; with `commitIf`, the rows apply at once and the piece commits once it
@@ -320,17 +311,9 @@ async function fillRead(
   } = {}
 ): Promise<FillRows | null> {
   const { piece, replace, onDemand } = options;
-  for (let attempt = 0; ; attempt++) {
-    const fence = beginPartitionLoad();
-    try {
-      const rows = await read();
-      if (!current()) return null;
-      if (wholesaleReplacedSince(fence)) {
-        if (attempt < MAX_WHOLESALE_RESTARTS) continue;
-        throw new WholesaleReplacementError();
-      }
-      const touched = (collection: HydratedCollection, id: string) =>
-        touchedSince(collection, id, fence.startRevisions[collection]);
+  return fencedRead(
+    read,
+    async (rows, fence) => {
       const complete = piece ? piece.complete(rows) : true;
       const settle: CoverageUpdate | undefined =
         piece &&
@@ -344,7 +327,7 @@ async function fillRead(
                 userScopePiece(piece.key, piece.run.userId),
                 rows as ScopeRows,
                 maps,
-                (collection) => touchedIdsSince(collection, fence.startRevisions[collection])
+                fence.touchedIds
               ),
               complete,
             })
@@ -355,10 +338,10 @@ async function fillRead(
               prev,
               replace,
               { ...rows, complete },
-              touched,
+              fence.touched,
               otherCommittedMembers(agorStore.getState(), replace.key)
             )
-          : applyEntityFill(prev, rows, touched);
+          : applyEntityFill(prev, rows, fence.touched);
       let meta = options.meta?.(rows);
       if (onDemand) {
         const ids = {
@@ -375,10 +358,7 @@ async function fillRead(
         // memberships of the very pieces it waits for (a branch both pieces
         // hold would survive each one's replace through the other's old one).
         if (!(await piece.commitIf()) || !current()) return null;
-        if (wholesaleReplacedSince(fence)) {
-          if (attempt < MAX_WHOLESALE_RESTARTS) continue;
-          throw new WholesaleReplacementError();
-        }
+        if (fence.replaced()) return RESTART_READ;
       } else if (piece?.commitIf) {
         // A deferred fill publishes the rows now and the coverage once allowed.
         agorStore.getState().applyMaps(update, undefined, meta);
@@ -388,10 +368,9 @@ async function fillRead(
       }
       agorStore.getState().applyMaps(update, settle, meta);
       return rows;
-    } finally {
-      endPartitionLoad();
-    }
-  }
+    },
+    current
+  );
 }
 
 /**

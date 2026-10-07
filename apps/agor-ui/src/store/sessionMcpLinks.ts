@@ -17,13 +17,7 @@
  * selection and stamps the session itself: the live selection then wins whole.
  */
 import type { AgorClient } from '@agor-live/client';
-import {
-  beginPartitionLoad,
-  endPartitionLoad,
-  type HydratedCollection,
-  markTouched,
-  touchedSince,
-} from './agorHydration';
+import { fencedRead, type HydratedCollection, markTouched } from './agorHydration';
 import { agorStore } from './agorStore';
 import { captureLoadLifetime, isLoadLifetimeCurrent } from './loadLifetime';
 import { holdsSession } from './retention';
@@ -111,50 +105,51 @@ export function loadSessionMcpServerIds(client: AgorClient, sessionId: string): 
   if (existing) return existing;
 
   const isCurrent = () => isLoadLifetimeCurrent(lifetime) && loadGeneration === epoch();
+  const collection: HydratedCollection = 'sessionMcp';
   const run = async () => {
-    const fence = beginPartitionLoad();
     try {
-      const result = (await client
-        .service('session-mcp-servers')
-        .find({ query: { session_id: sessionId } })) as
-        | Array<{ session_id: string; mcp_server_id: string }>
-        | { data: Array<{ session_id: string; mcp_server_id: string }> };
-      if (!isCurrent()) return;
-      const collection: HydratedCollection = 'sessionMcp';
-      const start = fence.startRevisions[collection];
-      if (touchedSince(collection, deletedKey(sessionId), start)) return;
-      // Its session left meanwhile (unpinned, evicted): its links don't enter.
-      if (!holdsSession(sessionId)) return;
-      const rows = Array.isArray(result) ? result : result.data;
-      const snapshotIds = rows
-        .filter((row) => row.session_id === sessionId)
-        .map((row) => row.mcp_server_id);
-      // The links and their loaded mark publish in one update.
-      agorStore.getState().applyMaps(
-        (prev) => {
-          const sessionMcpServerIds = mergeSessionMcpSnapshot(
-            prev.sessionMcpServerIds,
-            sessionId,
-            snapshotIds,
-            {
-              deletedMcpServerIds: agorStore.getState().deletedMcpServerIds,
-              touched: (id) => touchedSince(collection, id, start),
-            }
+      await fencedRead(
+        async () =>
+          (await client
+            .service('session-mcp-servers')
+            .find({ query: { session_id: sessionId } })) as
+            | Array<{ session_id: string; mcp_server_id: string }>
+            | { data: Array<{ session_id: string; mcp_server_id: string }> },
+        (result, fence) => {
+          if (fence.touched(collection, deletedKey(sessionId))) return;
+          // Its session left meanwhile (unpinned, evicted): its links don't enter.
+          if (!holdsSession(sessionId)) return;
+          const rows = Array.isArray(result) ? result : result.data;
+          const snapshotIds = rows
+            .filter((row) => row.session_id === sessionId)
+            .map((row) => row.mcp_server_id);
+          // The links and their loaded mark publish in one update.
+          agorStore.getState().applyMaps(
+            (prev) => {
+              const sessionMcpServerIds = mergeSessionMcpSnapshot(
+                prev.sessionMcpServerIds,
+                sessionId,
+                snapshotIds,
+                {
+                  deletedMcpServerIds: agorStore.getState().deletedMcpServerIds,
+                  touched: (id) => fence.touched(collection, id),
+                }
+              );
+              return sessionMcpServerIds === prev.sessionMcpServerIds
+                ? prev
+                : { ...prev, sessionMcpServerIds };
+            },
+            undefined,
+            (_maps, state) =>
+              state.sessionMcpLoaded.has(sessionId)
+                ? {}
+                : { sessionMcpLoaded: new Set(state.sessionMcpLoaded).add(sessionId) }
           );
-          return sessionMcpServerIds === prev.sessionMcpServerIds
-            ? prev
-            : { ...prev, sessionMcpServerIds };
         },
-        undefined,
-        (_maps, state) =>
-          state.sessionMcpLoaded.has(sessionId)
-            ? {}
-            : { sessionMcpLoaded: new Set(state.sessionMcpLoaded).add(sessionId) }
+        isCurrent
       );
     } catch (err) {
       if (isCurrent()) console.warn(`[sessionMcpLinks] load failed for session ${sessionId}:`, err);
-    } finally {
-      endPartitionLoad();
     }
   };
   const promise = run().finally(() => inflight.delete(key));

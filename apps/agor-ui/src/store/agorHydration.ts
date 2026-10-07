@@ -138,10 +138,11 @@ const hydrationGeneration: Record<BackgroundHydratedCollection, number> = {
 let partitionLoadsInFlight = 0;
 let touchedIds = new Map<HydratedCollection, Map<string, number>>();
 
-// Wholesale (non-per-ID) replacement epoch. A reconnect resync or logout
-// replaces whole collections; a partition load that spans one cannot tell
-// which absent rows that replacement removed, so it restarts instead of
-// applying. Wholesale replacements are rare, so restarting cannot starve.
+// Wholesale (non-per-ID) replacement epoch. First paint replaces whole
+// collections, and a reconnect resync replaces whatever a read that began
+// before it saw while disconnected; a load that spans one cannot tell which
+// rows that replacement removed, so it restarts instead of applying (see
+// `fencedRead`). Wholesale replacements are rare, so restarting cannot starve.
 let wholesaleEpoch = 0;
 
 const stampTouched = (collection: HydratedCollection, id: string): void => {
@@ -216,22 +217,72 @@ export const endPartitionLoad = (): void => {
   if (partitionLoadsInFlight === 0) touchedIds = new Map();
 };
 
-/** Whether a wholesale replacement happened since the fence was captured. */
-export const wholesaleReplacedSince = (fence: PartitionLoadFence): boolean =>
-  wholesaleEpoch !== fence.epoch;
+/** A reconnect resync begins: every read in flight restarts (`fencedRead`). */
+export const markWholesaleReplacement = (): void => {
+  wholesaleEpoch += 1;
+};
 
-/** Restarts a fill-only load gets when wholesale replacements keep landing mid-read. */
+/** Restarts a read gets when wholesale replacements keep landing mid-read. */
 export const MAX_WHOLESALE_RESTARTS = 3;
 
 /**
- * A fill-only load whose every attempt spanned a wholesale replacement. Its
- * snapshot is never applied (it could resurrect rows the replacement removed);
- * the caller surfaces a retryable failure instead.
+ * A read whose every attempt spanned a wholesale replacement. Its snapshot is
+ * never applied (it could resurrect rows the replacement removed); the caller
+ * surfaces a retryable failure instead.
  */
 export class WholesaleReplacementError extends Error {
   constructor() {
     super('Data was replaced while loading; retry');
     this.name = 'WholesaleReplacementError';
+  }
+}
+
+/** Returned by a `fencedRead` apply to send the read again. */
+export const RESTART_READ: unique symbol = Symbol('restart read');
+
+/** The touched fence of one `fencedRead` attempt. */
+export interface ReadFence {
+  readonly startRevisions: Record<HydratedCollection, number>;
+  /** Whether a live event wrote `id` since the read began. */
+  touched(collection: HydratedCollection, id: string): boolean;
+  /** Every id a live event wrote in `collection` since the read began. */
+  touchedIds(collection: HydratedCollection): string[];
+  /** Whether a wholesale replacement landed since the read began. */
+  replaced(): boolean;
+}
+
+/**
+ * The one fenced read every store load uses: capture the touched fence, read,
+ * drop the result once `isCurrent` turns false, and otherwise `apply` it with
+ * the fence, so rows written live since the read began keep their live value.
+ * A read that spanned a wholesale replacement is sent again — an `apply`
+ * that awaits returns `RESTART_READ` when `fence.replaced()` — and after
+ * `MAX_WHOLESALE_RESTARTS` fails with `WholesaleReplacementError`. Resolves
+ * the apply's result, or `null` once no longer current; read errors propagate.
+ */
+export async function fencedRead<T, R>(
+  read: () => Promise<T>,
+  apply: (rows: T, fence: ReadFence) => R | typeof RESTART_READ | Promise<R | typeof RESTART_READ>,
+  isCurrent: () => boolean
+): Promise<R | null> {
+  for (let attempt = 0; ; attempt++) {
+    const { startRevisions, epoch } = beginPartitionLoad();
+    try {
+      const rows = await read();
+      if (!isCurrent()) return null;
+      const fence: ReadFence = {
+        startRevisions,
+        touched: (collection, id) => touchedSince(collection, id, startRevisions[collection]),
+        touchedIds: (collection) => touchedIdsSince(collection, startRevisions[collection]),
+        replaced: () => wholesaleEpoch !== epoch,
+      };
+      const result = fence.replaced() ? RESTART_READ : await apply(rows, fence);
+      if (result !== RESTART_READ) return result;
+      if (!isCurrent()) return null;
+      if (attempt >= MAX_WHOLESALE_RESTARTS) throw new WholesaleReplacementError();
+    } finally {
+      endPartitionLoad();
+    }
   }
 }
 
