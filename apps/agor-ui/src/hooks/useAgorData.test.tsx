@@ -20,6 +20,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { getRevision } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
+import { holdBackgroundReads } from '../store/backgroundReads';
 import {
   loadBoardPartition,
   makeBoardReadySelector,
@@ -43,6 +44,7 @@ import {
 import { markBoardLoaded } from '../test/userScopeCoverage';
 import { useAgorData } from './useAgorData';
 import { useBoardPartition } from './useBoardPartition';
+import { recentBoardsStorageKey } from './useRecentBoards';
 
 // The opened-transcript prefetch retains a real reactive session; the mock
 // client doesn't model one. Default: ready at once (no deferral). Tests below
@@ -122,7 +124,11 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
       fetchCounts.set(key, (fetchCounts.get(key) ?? 0) + 1);
       fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), id]);
       const gate = fetchHooks.get(key)?.(fetchCounts.get(key)!);
-      return Promise.resolve(gate).then(() => seed[key] ?? null);
+      // A function seed answers by id.
+      const entry: unknown = seed[key];
+      return Promise.resolve(gate).then(() =>
+        typeof entry === 'function' ? entry(id) : (entry ?? null)
+      );
     }),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
@@ -2756,5 +2762,151 @@ describe('useAgorData — scoped reconnect', () => {
     expect(selectMySessionsLoaded(state)).toBe(true);
     expect(has('b-mine')).toBe(true);
     expect(state.sessionById.has('s-mine')).toBe(true);
+  });
+});
+
+describe('useAgorData — recent-board preload', () => {
+  const boards = [1, 2, 3, 4, 5].map((n) => ({
+    board_id: `board-${n}`,
+    slug: `board-${n}`,
+    name: `Board ${n}`,
+  }));
+  const ids = boards.map((board) => board.board_id);
+  type Props = { generation: number; role: string };
+
+  /** On board-1's route (displayed), with boards 1–5 visited, most recent first. */
+  function workspace() {
+    window.history.pushState({}, '', '/b/board-1/');
+    localStorage.setItem(recentBoardsStorageKey('user-me'), JSON.stringify(ids));
+    onTestFinished(() => {
+      window.history.pushState({}, '', '/');
+      localStorage.removeItem(recentBoardsStorageKey('user-me'));
+    });
+    const mock = makeMockClient({
+      boards,
+      'boards:get': ((id: string) => boards.find((board) => board.board_id === id)) as never,
+    });
+    const query = (call: number) =>
+      (mock.fetchArguments('branches', 'findAll')[call - 1] as { query: Record<string, unknown> })
+        .query;
+    const boardReads = (boardId: string) =>
+      mock
+        .fetchArguments('branches', 'findAll')
+        .filter((args) => (args as { query: { board_id?: string } }).query.board_id === boardId)
+        .length;
+    const hook = renderHook(
+      ({ generation, role }: Props) => {
+        const data = useAgorData(mock.client, {
+          authenticatedUserId: 'user-me',
+          authenticatedUserRole: role,
+          authGeneration: generation,
+          connectionReady: true,
+        });
+        useBoardPartition(mock.client, 'board-1', { canUseMemberWorkspaceServices: true });
+        return data;
+      },
+      { initialProps: { generation: 1, role: 'member' } }
+    );
+    return { ...mock, ...hook, query, boardReads };
+  }
+  const status = (boardId: string) => selectBoardPartition(agorStore.getState(), boardId)?.status;
+  const scopeSettled = () => {
+    const state = agorStore.getState();
+    return selectMySessionsLoaded(state) && selectHomeBranchesLoaded(state);
+  };
+
+  it('loads the three most recent other boards once the user scope settles, one at a time, behind foreground reads', async () => {
+    const foreground = deferred();
+    holdBackgroundReads(foreground.promise);
+    const gates = new Map(ids.map((id) => [id, deferred()]));
+    const { result, onFetch, query, boardReads } = workspace();
+    onFetch('branches', 'findAll', (call) => {
+      const boardId = query(call).board_id as string | undefined;
+      return boardId && boardId !== 'board-1' ? gates.get(boardId)!.promise : undefined;
+    });
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(scopeSettled()).toBe(true));
+    await flush();
+    // Held behind the foreground read.
+    expect(ids.map(boardReads)).toEqual([1, 0, 0, 0, 0]);
+
+    await act(async () => foreground.resolve());
+    await waitFor(() => expect(boardReads('board-2')).toBe(1));
+    await flush();
+    expect(ids.map(boardReads)).toEqual([1, 1, 0, 0, 0]);
+    await act(async () => gates.get('board-2')!.resolve());
+    await waitFor(() => expect(boardReads('board-3')).toBe(1));
+    await flush();
+    expect(ids.map(boardReads)).toEqual([1, 1, 1, 0, 0]);
+    await act(async () => gates.get('board-3')!.resolve());
+    await waitFor(() => expect(boardReads('board-4')).toBe(1));
+    await act(async () => gates.get('board-4')!.resolve());
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+    await flush();
+    // At most RETAINED_BACKGROUND_PARTITIONS: board-5 is never read, nothing evicted.
+    expect(ids.map(boardReads)).toEqual([1, 1, 1, 1, 0]);
+    expect(ids.map(status)).toEqual(['loaded', 'loaded', 'loaded', 'loaded', undefined]);
+  });
+
+  it('opens a preloaded board ready at once, with no read', async () => {
+    const { result, client, fetchCount } = workspace();
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+    await flush();
+    const reads = () =>
+      [
+        fetchCount('branches', 'findAll'),
+        fetchCount('sessions', 'findAll'),
+        fetchCount('cards', 'findAll'),
+        fetchCount('board-objects', 'findAll'),
+        fetchCount('boards', 'get'),
+      ].join();
+    const before = reads();
+
+    const opened = renderHook(() =>
+      useBoardPartition(client, 'board-3', { canUseMemberWorkspaceServices: true })
+    );
+    expect(opened.result.current.boardReady).toBe(true);
+    await flush();
+    expect(reads()).toBe(before);
+    opened.unmount();
+  });
+
+  it('preloads nothing before the user scope settles', async () => {
+    const myBranches = deferred();
+    const { result, onFetch, query, boardReads } = workspace();
+    onFetch('branches', 'findAll', (call) =>
+      query(call).created_by ? myBranches.promise : undefined
+    );
+    await waitForInitialLoad(result);
+    await flush();
+    expect(scopeSettled()).toBe(false);
+    expect(ids.slice(1).map(boardReads)).toEqual([0, 0, 0, 0]);
+
+    await act(async () => myBranches.resolve());
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+  });
+
+  it('does not preload again on a reconnect, only after an authority change', async () => {
+    const { result, emitIo, rerender, boardReads } = workspace();
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+    await flush();
+    expect(ids.map(boardReads)).toEqual([1, 1, 1, 1, 0]);
+
+    // A socket reconnect: a resync, then a new auth generation for the same user and role.
+    act(() => emitIo('connect'));
+    await flush();
+    rerender({ generation: 2, role: 'member' });
+    await waitFor(() => expect(status('board-1')).toBe('loaded'));
+    await waitFor(() => expect(scopeSettled()).toBe(true));
+    await flush();
+    expect(ids.slice(1).map(boardReads)).toEqual([1, 1, 1, 0]);
+
+    // A role change preloads once more.
+    rerender({ generation: 3, role: 'admin' });
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+    await flush();
+    expect(ids.slice(1).map(boardReads)).toEqual([2, 2, 2, 0]);
   });
 });

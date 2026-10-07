@@ -55,6 +55,7 @@ import {
   evictUnloadedBoards,
   getDisplayedBoardId,
   loadBoardPartition,
+  preloadBoardPartitions,
   selectBoardPartition,
   unloadBoardsForResync,
 } from '../store/boardPartitions';
@@ -82,6 +83,8 @@ import {
   fillOnDemand,
   MY_SESSIONS_GATED_LIMIT,
   mySessionsQuery,
+  selectHomeBranchesLoaded,
+  selectMySessionsLoaded,
   startUserScope,
   stopUserScope,
   userScopeRunGeneration,
@@ -94,6 +97,8 @@ import {
   resolveBranchFromShortIdPure,
   resolveSessionFromShortIdPure,
 } from '../utils/urlResolution';
+import { readLocalStorageJson } from './localStorageJson';
+import { recentBoardsStorageKey } from './useRecentBoards';
 
 // Canonical list of initial-load items tracked by the loading checklist —
 // the ESSENTIAL set the first-paint gate blocks on. Internal only; consumers
@@ -455,6 +460,8 @@ export function useAgorData(
   // partition). Their rows may have missed deletions, archives or revoked
   // access meanwhile: the next resync evicts them unless loaded again.
   const transitionUnloadedBoardsRef = useRef(new Set<string>());
+  // The `user:role` whose recent boards were preloaded (`preloadBoardPartitions`).
+  const preloadedForRef = useRef<string | null>(null);
   const oauthStatusRequestGenerationRef = useRef(0);
 
   // The opened session's transcript prefetch (see `openedTranscriptPrefetch`).
@@ -1063,6 +1070,23 @@ export function useAgorData(
               )
             );
             releaseStaleScopes(userScopeRun);
+            // Once per user and role (not on every reconnect), once my
+            // sessions and branches are in: preload my recent boards.
+            const state = agorStore.getState();
+            const identityRole = fetchAuthorityScope.slice(0, fetchAuthorityScope.lastIndexOf(':'));
+            if (
+              authenticatedUserId &&
+              preloadedForRef.current !== identityRole &&
+              selectMySessionsLoaded(state) &&
+              selectHomeBranchesLoaded(state)
+            ) {
+              preloadedForRef.current = identityRole;
+              void preloadBoardPartitions(
+                client,
+                readLocalStorageJson<string[]>(recentBoardsStorageKey(authenticatedUserId), []),
+                { canUseMemberWorkspaceServices }
+              );
+            }
           });
 
         debugTimer?.endIndexing();
@@ -1160,6 +1184,7 @@ export function useAgorData(
       // OAuth state, credential presence), so an in-place identity replacement
       // gets the same map boundary as logout before the new authority resyncs.
       agorStore.getState().resetMaps();
+      preloadedForRef.current = null;
     } else if (!canUseMemberWorkspaceServices) {
       bumpRevision('boardObjects');
       agorStore.getState().applyMaps((previousMaps) => ({
