@@ -412,8 +412,8 @@ export function WorkTogetherDemo() {
       <div className={styles.head}>
         <div>
           <h2 className={landing.liveStatement}>
-            Work <span className={landing.headingStrong}>together</span>{' '}
-            <span className={landing.headingAccent}>again</span>
+            Work <span className={landing.headingAccent}>together</span>{' '}
+            <span className={landing.headingStrong}>again</span>
           </h2>
           <p className={landing.liveSub}>
             One shared board instead of ten private terminals.
