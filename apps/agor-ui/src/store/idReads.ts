@@ -26,7 +26,7 @@ export interface IdReaderOptions {
    * when the read was dropped (its load no longer current); throws on failure.
    */
   read: (chunk: string[]) => Promise<ReadonlySet<string> | null>;
-  /** Whether the reader still runs; nothing is sent or settled once false. */
+  /** Whether the reader still runs; nothing is sent or settled once false (or disposed). */
   isCurrent: () => boolean;
   /** After a chunk settles, fails for good, or is requeued. */
   onChange?: () => void;
@@ -47,16 +47,18 @@ export interface IdReader {
   forget(ids: Iterable<string>): void;
   /** Resolves once nothing is queued or in flight (a retry waiting doesn't count). */
   drained(): Promise<void>;
-  /** Stop: cancel retries and drop the queue. */
+  /** Stop for good: cancel retries, drop the queue, and send or settle nothing more. */
   dispose(): void;
 }
 
 export function createIdReader({
   read,
-  isCurrent,
+  isCurrent: current,
   onChange,
   retry = (ids) => ids,
 }: IdReaderOptions): IdReader {
+  let disposed = false;
+  const isCurrent = () => !disposed && current();
   let queue: string[] = [];
   let inflight = 0;
   const pending = new Set<string>();
@@ -146,6 +148,7 @@ export function createIdReader({
     drained: () =>
       !isCurrent() || idle() ? Promise.resolve() : new Promise((resolve) => waiters.push(resolve)),
     dispose() {
+      disposed = true;
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       queue = [];

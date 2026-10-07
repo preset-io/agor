@@ -88,7 +88,14 @@ function useEnsureRows(
   const authority = useAgorStore((s) => s.dataAuthority);
   const reader = useRef<EnsureReader | null>(null);
 
-  useEffect(() => () => reader.current?.ids.dispose(), []);
+  // A disposed reader is done: a remount (StrictMode) creates the next one.
+  useEffect(
+    () => () => {
+      reader.current?.ids.dispose();
+      reader.current = null;
+    },
+    []
+  );
 
   useEffect(() => {
     // What the reader knows follows current demand: an id no view asks for

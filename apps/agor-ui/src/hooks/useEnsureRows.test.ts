@@ -1,6 +1,7 @@
 import type { AgorClient, Branch } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { cancelAllHydrations } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
@@ -103,6 +104,33 @@ describe('useEnsureBranches', () => {
       find.mock.calls.filter(([{ query }]) => query.branch_id.$in.includes('b-2'))
     ).toHaveLength(MAX_ID_READ_ATTEMPTS);
     find.mockImplementation(real as never);
+  });
+
+  it('a read that fails after the view unmounted is not retried', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { client, find } = makeClient([branch('b-1')]);
+    const read = deferred<Branch[]>();
+    find.mockImplementationOnce(() => read.promise);
+    const { unmount } = renderHook(() => useEnsureBranches(client, ['b-1']));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(find).toHaveBeenCalledTimes(1);
+
+    unmount();
+    await act(async () => {
+      read.reject(new Error('offline'));
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(find).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads again when remounted after its reader was disposed', async () => {
+    const { client } = makeClient([branch('b-1')]);
+    // StrictMode unmounts and remounts every effect with the same refs.
+    renderHook(() => useEnsureBranches(client, ['b-1']), { wrapper: StrictMode });
+    await waitFor(() => expect(agorStore.getState().branchById.has('b-1')).toBe(true));
   });
 
   it('reads a row again once the store evicts it', async () => {
