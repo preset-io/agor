@@ -1,12 +1,12 @@
 /**
- * Settings → Boards counts each board's active sessions with count-only reads,
- * so the counts are right with the store's branch and session maps empty
- * (Step 3).
+ * Settings → Boards counts each board's active sessions with the
+ * `session-counts` aggregate, so the counts are right with the store's branch
+ * and session maps empty (Step 3).
  */
 import type { Board } from '@agor-live/client';
-import { screen, waitFor, within } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { expect, it } from 'vitest';
-import { fakeFeathersClient, mount, page, withTestAuthority } from '../../test/harness';
+import { fakeFeathersClient, mount, withTestAuthority } from '../../test/harness';
 import { BoardsTable } from './BoardsTable';
 
 const board = (n: number) =>
@@ -14,27 +14,11 @@ const board = (n: number) =>
 
 withTestAuthority('me:member:1', { dataAuthority: false });
 
-it('counts every board’s active sessions on the daemon', async () => {
+it('counts every board’s active sessions with one aggregate read', async () => {
   const fake = fakeFeathersClient({
-    sessions: { find: ({ query }) => page([], query.board_id === 'board-1' ? 4 : 0) },
+    'session-counts': { find: () => [{ id: 'board-1', session_count: 4 }] },
   });
-  mount(
-    <BoardsTable
-      client={fake.client}
-      boardById={new Map([board(1), board(2)].map((b) => [b.board_id, b]))}
-      branchById={new Map()}
-    />
-  );
-  const row = (await screen.findByText('Board 1')).closest('tr') as HTMLElement;
-  expect(await within(row).findByText('4')).toBeInTheDocument();
-  expect(fake.client.service('sessions').find).toHaveBeenCalledWith({
-    query: { board_id: 'board-1', archived: false, $limit: 0 },
-  });
-});
-
-it('counts sessions only for the boards on the visible page', async () => {
-  const fake = fakeFeathersClient({ sessions: { find: () => page([], 1) } });
-  const boards = Array.from({ length: 15 }, (_, i) => board(i + 10));
+  const boards = [board(1), ...Array.from({ length: 14 }, (_, i) => board(i + 10))];
   mount(
     <BoardsTable
       client={fake.client}
@@ -42,9 +26,11 @@ it('counts sessions only for the boards on the visible page', async () => {
       branchById={new Map()}
     />
   );
-  await screen.findByText('Board 10');
-  await waitFor(() => expect(fake.client.service('sessions').find).toHaveBeenCalled());
-  const counted = fake.queries('sessions', 'find').map((query) => query.board_id);
-  expect(new Set(counted).size).toBe(10);
-  expect(screen.queryByText('Board 24')).not.toBeInTheDocument();
+  const row = (await screen.findByText('Board 1')).closest('tr') as HTMLElement;
+  expect(await within(row).findByText('4')).toBeInTheDocument();
+  // A board without active sessions counts 0; every board is listed.
+  const other = (await screen.findByText('Board 23')).closest('tr') as HTMLElement;
+  expect(within(other).getByText('0')).toBeInTheDocument();
+  expect(fake.queries('session-counts', 'find')).toEqual([{ group_by: 'board_id' }]);
+  expect(fake.callsTo('sessions')).toEqual([]);
 });

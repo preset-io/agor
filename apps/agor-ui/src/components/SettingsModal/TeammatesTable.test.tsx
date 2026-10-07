@@ -139,7 +139,7 @@ it('waits for the user scope before saying "No teammates yet", and counts sessio
   // Step 3: the store holds only the user scope; nothing global backs this table.
   agorStore.getState().reset();
   setRealtimeAuthorityScope('me:member:1');
-  const sessionsFind = vi.fn(async () => ({ total: 4, limit: 0, skip: 0, data: [] }));
+  const sessionsFind = vi.fn(async () => [{ id: 'branch-1', session_count: 4 }]);
   const client = {
     service: () => ({ find: sessionsFind, on: () => {}, off: () => {} }),
   } as unknown as AgorClient;
@@ -156,7 +156,7 @@ it('waits for the user scope before saying "No teammates yet", and counts sessio
   act(() => agorStore.setState({ coverage: userScopeCoverage({ teammates: true }) }));
   expect(screen.getByText('No teammates yet')).toBeInTheDocument();
 
-  // U3 delivered a teammate: its delete warning counts sessions with a count-only read.
+  // U3 delivered a teammate: its delete warning counts sessions with the aggregate.
   const teammate = makeTeammate(1);
   rerender(
     <MemoryRouter>
@@ -170,7 +170,5 @@ it('waits for the user scope before saying "No teammates yet", and counts sessio
     </MemoryRouter>
   );
   fireEvent.click(screen.getByRole('button', { name: 'Archive or delete teammate' }));
-  expect(sessionsFind).toHaveBeenCalledWith({
-    query: { branch_id: 'branch-1', archived: false, $limit: 0 },
-  });
+  expect(sessionsFind).toHaveBeenCalledWith({ query: { group_by: 'branch_id' } });
 });

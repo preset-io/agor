@@ -167,11 +167,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     : branchPage.rows;
   const total = teammatesFilter ? teammates.length : branchPage.total;
   const loading = teammatesFilter ? !teammatesLoaded && teammates.length === 0 : branchPage.loading;
-  const sessionCounts = useSessionCounts(
-    client,
-    'branch_id',
-    rows.map((b) => b.branch_id)
-  );
+  const sessionCounts = useSessionCounts(client, 'branch_id');
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {

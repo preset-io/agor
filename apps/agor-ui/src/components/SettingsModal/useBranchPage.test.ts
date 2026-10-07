@@ -79,10 +79,16 @@ it('patches an on-page row in place without reading again', async () => {
 
 function makeCountsClient() {
   let count = 3;
-  const fake = fakeFeathersClient({ sessions: { find: () => ({ total: count, data: [] }) } });
+  const fake = fakeFeathersClient({
+    'session-counts': {
+      find: ({ query }) => [
+        { id: query.group_by === 'board_id' ? 'board-1' : 'branch-1', session_count: count },
+      ],
+    },
+  });
   return {
     client: fake.client,
-    find: fake.client.service('sessions').find as unknown as Mock,
+    find: fake.client.service('session-counts').find as unknown as Mock,
     setCount: (n: number) => (count = n),
     emitSession: (event: string, payload: unknown) =>
       act(() => fake.emit('sessions', event, payload)),
@@ -93,7 +99,7 @@ function makeCountsClient() {
 
 it('counts sessions again after a session create, archive or removal', async () => {
   const { client, setCount, emitSession } = makeCountsClient();
-  const { result } = renderHook(() => useSessionCounts(client, 'branch_id', ['branch-1']));
+  const { result } = renderHook(() => useSessionCounts(client, 'branch_id'));
   await waitFor(() => expect(result.current.get('branch-1')).toBe(3));
   setCount(4);
   emitSession('created', { session_id: 's-4', branch_id: 'branch-1', archived: false });
@@ -108,7 +114,7 @@ it('counts sessions again after a session create, archive or removal', async () 
 
 it('counts a board again after a branch moves, and after a reconnect', async () => {
   const { client, find, setCount, emitBranch } = makeCountsClient();
-  const { result } = renderHook(() => useSessionCounts(client, 'board_id', ['board-1']));
+  const { result } = renderHook(() => useSessionCounts(client, 'board_id'));
   await waitFor(() => expect(result.current.get('board-1')).toBe(3));
   setCount(5);
   emitBranch('patched', { branch_id: 'branch-9', board_id: 'board-1' });
@@ -122,7 +128,7 @@ it('counts a board again after a branch moves, and after a reconnect', async () 
 it('does not count again on a value-only session or branch patch once their membership is known', async () => {
   const session = { session_id: 's-1', branch_id: 'branch-1', branch_board_id: 'board-1' };
   const { client, find, emitSession, emitBranch } = makeCountsClient();
-  const { result } = renderHook(() => useSessionCounts(client, 'board_id', ['board-1']));
+  const { result } = renderHook(() => useSessionCounts(client, 'board_id'));
   await waitFor(() => expect(result.current.get('board-1')).toBe(3));
   // First sight of each: membership unknown, so one count again for both.
   emitSession('patched', { ...session, archived: false, status: 'idle' });
@@ -151,7 +157,7 @@ it('a partial value-only patch never hides a later partial archive', async () =>
     ]),
   });
   const { client, find, setCount, emitSession } = makeCountsClient();
-  const { result } = renderHook(() => useSessionCounts(client, 'branch_id', ['branch-1']));
+  const { result } = renderHook(() => useSessionCounts(client, 'branch_id'));
   await waitFor(() => expect(result.current.get('branch-1')).toBe(3));
   emitSession('patched', { session_id: 's-1', status: 'running' });
   await new Promise((resolve) => setTimeout(resolve, 600));
@@ -164,7 +170,7 @@ it('a partial value-only patch never hides a later partial archive', async () =>
 
 it('merges partial patches into what it knows of a session', async () => {
   const { client, find, emitSession } = makeCountsClient();
-  const { result } = renderHook(() => useSessionCounts(client, 'branch_id', ['branch-1']));
+  const { result } = renderHook(() => useSessionCounts(client, 'branch_id'));
   await waitFor(() => expect(result.current.get('branch-1')).toBe(3));
   emitSession('created', { session_id: 's-5', branch_id: 'branch-1', archived: false });
   await waitFor(() => expect(find).toHaveBeenCalledTimes(2));

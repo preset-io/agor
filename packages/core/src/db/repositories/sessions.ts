@@ -9,6 +9,7 @@ import type {
   SchedulerInitializationFailureCode,
   SchedulerInitializationStage,
   Session,
+  SessionCount,
   SessionID,
   SessionUpdate,
   UserID,
@@ -737,6 +738,35 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         error
       );
     }
+  }
+
+  /**
+   * Count active (non-archived) sessions per branch or per board (the
+   * session's branch's board), for settings tables. With `visibleToUserId`,
+   * only sessions on branches the caller can view count, the same visibility
+   * as `findPage`; tenancy comes from the tenant condition and RLS.
+   */
+  async countActive(opts: {
+    groupBy: 'branch_id' | 'board_id';
+    visibleToUserId?: UUID;
+  }): Promise<SessionCount[]> {
+    const key = opts.groupBy === 'board_id' ? branches.board_id : sessions.branch_id;
+    const conditions = [eq(sessions.archived, false), isNotNull(key)];
+    const tenantCondition = tenantInventoryCondition(this.db, sessions);
+    if (tenantCondition) conditions.push(tenantCondition);
+    if (opts.visibleToUserId) {
+      conditions.push(inVisibleBranchSet(this.db, opts.visibleToUserId, sessions.branch_id));
+    }
+    const rows = await select(this.db, { id: key, session_count: sql<number>`count(*)` })
+      .from(sessions)
+      .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
+      .where(and(...conditions))
+      .groupBy(key)
+      .all();
+    return (rows as Array<{ id: string; session_count: number | string }>).map((row) => ({
+      id: row.id,
+      session_count: Number(row.session_count),
+    }));
   }
 
   /**

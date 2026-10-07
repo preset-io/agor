@@ -14,7 +14,7 @@ import {
   UploadOutlined,
 } from '@ant-design/icons';
 import { App, Button, Form, Input, Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -59,11 +59,6 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const [editingBoard, setEditingBoard] = useState<Board | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [searchTerm, setSearchTerm] = useState('');
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  // A new filter or search starts again on its first page.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the filters are reset triggers
-  useEffect(() => setPage(1), [archiveFilter, searchTerm]);
   const [form] = Form.useForm();
 
   const handleCreate = () => {
@@ -211,15 +206,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       (board) => board.board_id,
     ]);
   }, [boardById, archiveFilter, searchTerm]);
-  // Clamped: archiving the last board of the last page shows the page before.
-  const currentPage = Math.min(page, Math.max(1, Math.ceil(boards.length / pageSize)));
-  const pageBoards = boards.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  // Counted for the visible page only: one count read per shown board.
-  const boardSessionCounts = useSessionCounts(
-    client,
-    'board_id',
-    pageBoards.map((board) => board.board_id)
-  );
+  const boardSessionCounts = useSessionCounts(client, 'board_id');
 
   const columns = [
     {
@@ -354,18 +341,10 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       />
 
       <ResponsiveTable
-        dataSource={pageBoards}
+        dataSource={boards}
         columns={columns}
         rowKey="board_id"
-        pagination={{
-          current: currentPage,
-          pageSize,
-          total: boards.length,
-          onChange: (nextPage, nextPageSize) => {
-            setPage(nextPageSize === pageSize ? nextPage : 1);
-            setPageSize(nextPageSize);
-          },
-        }}
+        pagination={false}
         size="small"
         scroll={{ x: 760 }}
         onRow={(record) => ({

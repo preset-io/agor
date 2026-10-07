@@ -390,6 +390,12 @@ export const branchQuerySchema = createQuerySchema(
 /** `branch-counts` takes no query: every count is of the caller's visible boards. */
 export const branchCountsQuerySchema = Type.Object({}, { additionalProperties: false });
 
+/** `session-counts` takes only its grouping. */
+export const sessionCountsQuerySchema = Type.Object(
+  { group_by: Type.Union([Type.Literal('branch_id'), Type.Literal('board_id')]) },
+  { additionalProperties: false }
+);
+
 /**
  * Board query schema
  */
@@ -578,6 +584,10 @@ export const messageQueryValidator = getValidator(messageQuerySchema, strictQuer
 export const branchQueryValidator = getValidator(branchQuerySchema, strictQueryValidator);
 export const branchCountsQueryValidator = getValidator(
   branchCountsQuerySchema,
+  strictQueryValidator
+);
+export const sessionCountsQueryValidator = getValidator(
+  sessionCountsQuerySchema,
   strictQueryValidator
 );
 export const boardQueryValidator = getValidator(boardQuerySchema, queryValidator);

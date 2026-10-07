@@ -2,12 +2,12 @@
  * Settings → Branches pages from the daemon: with the store's branch and
  * session maps empty (as after Step 3 drops global hydration), the table
  * still lists every branch, pages and searches on the server, and counts
- * sessions with count-only reads.
+ * sessions with the `session-counts` aggregate.
  */
 import type { AgorClient, Branch, Repo } from '@agor-live/client';
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, type Mock } from 'vitest';
-import { fakeFeathersClient, mount, page, withTestAuthority } from '@/test/harness';
+import { fakeFeathersClient, mount, withTestAuthority } from '@/test/harness';
 import { BranchesTable } from './BranchesTable';
 
 const repo = { repo_id: 'repo-1', name: 'repo-1', slug: 'org/repo-1' } as unknown as Repo;
@@ -38,7 +38,7 @@ function makeClient(total = 25) {
         };
       },
     },
-    sessions: { find: ({ query }) => page([], query.branch_id === 'branch-1' ? 3 : 0) },
+    'session-counts': { find: () => [{ id: 'branch-1', session_count: 3 }] },
   });
   const find = (name: string) => fake.client.service(name).find as unknown as Mock;
   const emit = (event: string, payload: unknown) =>
@@ -46,7 +46,7 @@ function makeClient(total = 25) {
   return {
     client: fake.client,
     branchesFind: find('branches'),
-    sessionsFind: find('sessions'),
+    sessionsFind: find('session-counts'),
     emit,
   };
 }
@@ -76,9 +76,7 @@ describe('BranchesTable — server pages with the store empty', { timeout: 10_00
     });
     // The total comes from the server, not from the rows on hand.
     expect(screen.getByTitle('3')).toBeInTheDocument();
-    expect(sessionsFind).toHaveBeenCalledWith({
-      query: { branch_id: 'branch-1', archived: false, $limit: 0 },
-    });
+    expect(sessionsFind).toHaveBeenCalledWith({ query: { group_by: 'branch_id' } });
     expect(await screen.findByText('3 sessions')).toBeInTheDocument();
   });
 

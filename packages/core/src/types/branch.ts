@@ -1022,6 +1022,16 @@ export interface BoardBranchCount {
   branch_count: number;
 }
 
+/**
+ * One row of `session-counts.find({ group_by })`: the active sessions on a
+ * branch, or on a board's branches, that the caller can view.
+ */
+export interface SessionCount {
+  /** The branch id or board id, per `group_by`. */
+  id: string;
+  session_count: number;
+}
+
 export function getTeammateConfig(branch: {
   custom_context?: Record<string, unknown>;
 }): TeammateConfig | null {

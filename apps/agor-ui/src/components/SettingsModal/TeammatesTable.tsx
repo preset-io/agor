@@ -75,11 +75,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
-  const sessionCounts = useSessionCounts(
-    client ?? null,
-    'branch_id',
-    selectedBranch ? [selectedBranch.branch_id] : []
-  );
+  const sessionCounts = useSessionCounts(client ?? null, 'branch_id', !!selectedBranch);
 
   const teammates = useMemo(() => {
     const teammateBranches = Array.from(branchById.values())

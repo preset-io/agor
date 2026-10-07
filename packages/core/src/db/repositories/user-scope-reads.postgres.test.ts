@@ -61,6 +61,14 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
             (row) => row.board_id
           );
           for (const boardId of foreign.boardIds) expect(counted).not.toContain(boardId);
+          for (const groupBy of ['branch_id', 'board_id'] as const) {
+            const sessionCounted = (await sessions.countActive({ groupBy, visibleToUserId })).map(
+              (row) => row.id
+            );
+            for (const id of [...foreign.branchIds, ...foreign.boardIds]) {
+              expect(sessionCounted).not.toContain(id);
+            }
+          }
           const mates = (
             await branches.findPage({ visibleToUserId, teammate: true, limit: 1000 })
           ).data.map((b) => b.branch_id);

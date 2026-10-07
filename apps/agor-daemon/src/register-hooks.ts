@@ -561,6 +561,7 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'kb/indexing/reindex',
   'leaderboard',
   'branch-counts',
+  'session-counts',
 ];
 
 // These endpoints perform network/process work after their tenant DB reads,

@@ -16,6 +16,7 @@ import { type Application, feathers } from '@agor/core/feathers';
 import {
   branchCountsQueryValidator,
   branchQueryValidator,
+  sessionCountsQueryValidator,
   sessionQueryValidator,
   typedValidateQuery,
 } from '@agor/core/lib/feathers-validation';
@@ -29,6 +30,7 @@ import {
 } from '../utils/branch-authorization';
 import { BranchCountsService } from './branch-counts';
 import { BranchesService } from './branches';
+import { createSessionCountsService } from './session-counts';
 import { SessionsService } from './sessions';
 
 const STUB_APP = {} as unknown as Application;
@@ -37,6 +39,7 @@ type Services = {
   sessions: SessionsService;
   branches: BranchesService;
   'branch-counts': BranchCountsService;
+  'session-counts': ReturnType<typeof createSessionCountsService>;
 };
 
 function buildApp(db: Database) {
@@ -46,6 +49,13 @@ function buildApp(db: Database) {
   app.use('sessions', new SessionsService(scoped, STUB_APP));
   app.use('branches', new BranchesService(scoped, STUB_APP));
   app.use('branch-counts', new BranchCountsService(scoped), { methods: ['find'] });
+  app.use('session-counts', createSessionCountsService(scoped), { methods: ['find'] });
+  app.service('session-counts').hooks({
+    before: {
+      all: [typedValidateQuery(sessionCountsQueryValidator)],
+      find: [scopeFindToAccessibleBranchesSql()],
+    },
+  });
   app.service('sessions').hooks({
     before: {
       all: [typedValidateQuery(sessionQueryValidator)],
@@ -165,6 +175,17 @@ describe('user-scope reads through transport hooks', () => {
       branch_count: number;
     }>;
     expect(counts).toEqual([{ board_id: fixture.boardIds[0], branch_count: 2 }]);
+    // Session counts: only sessions on branches the caller can view.
+    const sessionCounted = (
+      (await app.service('session-counts').find(asViewer({ group_by: 'branch_id' }) as never)) as {
+        id: string;
+      }[]
+    ).map((row) => row.id);
+    expect(sessionCounted).toContain(publicId);
+    expect(sessionCounted).not.toContain(privateId);
+    await expect(
+      app.service('session-counts').find(asViewer({ group_by: 'session_id' }) as never)
+    ).rejects.toThrow(/validation failed/);
     // A filter the counts don't model is rejected, never ignored.
     await expect(
       app.service('branch-counts').find(asViewer({ board_id: fixture.boardIds[0] }) as never)

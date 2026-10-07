@@ -76,7 +76,11 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { branchCountsQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
+import {
+  branchCountsQueryValidator,
+  sessionCountsQueryValidator,
+  typedValidateQuery,
+} from '@agor/core/lib/feathers-validation';
 import {
   hasTemplateMarker,
   isMCPServerUsableBy,
@@ -345,6 +349,7 @@ import {
   createSchedulesService,
   SCHEDULES_SERVICE_TRANSPORT_METHODS,
 } from './services/schedules.js';
+import { createSessionCountsService } from './services/session-counts.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
@@ -607,6 +612,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     before: {
       // No filter is modelled: one sent (`board_id`) is rejected, not ignored.
       all: [typedValidateQuery(branchCountsQueryValidator), ctx.requireAuth],
+      find: [scopeFindToAccessibleBranchesSql({ allowSuperadmin })],
+    },
+  });
+  // Active sessions per branch or board: the same branch visibility as
+  // `sessions.find`, pushed into SQL by the RBAC marker.
+  app.use('/session-counts', createSessionCountsService(db), { methods: ['find'] });
+  app.service('session-counts').hooks({
+    before: {
+      all: [typedValidateQuery(sessionCountsQueryValidator), ctx.requireAuth],
       find: [scopeFindToAccessibleBranchesSql({ allowSuperadmin })],
     },
   });

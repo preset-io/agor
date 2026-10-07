@@ -210,6 +210,24 @@ export async function exerciseUserScopeReads(db: Database) {
     { data: [], total: 0 }
   );
 
+  // ── Session counts: active sessions on visible branches, per branch or board. ──
+  const sessionCounts = async (groupBy: 'branch_id' | 'board_id', visibleToUserId?: UserID) =>
+    new Map(
+      (await sessionRepo.countActive({ groupBy, visibleToUserId })).map((row) => [
+        row.id,
+        row.session_count,
+      ])
+    );
+  expect(await sessionCounts('branch_id', viewer)).toEqual(new Map([[ids.public, 1]]));
+  expect(await sessionCounts('branch_id', owner)).toEqual(
+    new Map([
+      [ids.public, 1],
+      [ids.private, 1],
+    ])
+  );
+  expect(await sessionCounts('board_id', viewer)).toEqual(new Map([[sharedBoard.board_id, 1]]));
+  expect(await sessionCounts('board_id')).toEqual(new Map([[sharedBoard.board_id, 2]]));
+
   // ── search: every token in a searchable field, over the visible set. ────
   const branchSearch = async (search: string, visibleToUserId: UserID) =>
     new Set(
