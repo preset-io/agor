@@ -265,3 +265,27 @@ it.each(['https://issuer.example', 'https://wrong.example'])(
     );
   }
 );
+
+it.each([
+  ['https://issuer.example', 'metadata_incompatible'],
+  ['https://wrong.example', 'issuer_mismatch'],
+])(
+  'pins a stable-callback issuer and still audits its DCR endpoint (%s)',
+  async (issuer, reason) => {
+    const allowlisted = {
+      ...entry('oauth'),
+      oauth: { stable_callback: { issuer: 'https://issuer.example' } },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+    // A private-host endpoint fails before any DNS lookup, proving the issuer
+    // check passed through to the ordinary DCR checks.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer,
+      registrationEndpoint: 'https://127.0.0.1/register',
+    });
+    const [result] = await auditCatalogHealth([allowlisted], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject({ status: 'oauth-metadata-not-ready', reason });
+  }
+);

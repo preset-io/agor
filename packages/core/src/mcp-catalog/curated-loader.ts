@@ -63,6 +63,7 @@ const catalogEntryOAuthSchema = z
       .object({ setup_url: httpUrl, issuer: httpUrl, secret_required: z.boolean() })
       .strict()
       .optional(),
+    stable_callback: z.object({ issuer: httpUrl }).strict().optional(),
     client_id: nonEmpty.optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
     compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
@@ -95,7 +96,12 @@ const catalogEntryOAuthSchema = z
     {
       message: 'configured_client requires disabled DCR and no shared client ID',
     }
-  );
+  )
+  // A configured app already uses the stable callback; stating both would be
+  // two issuers for one flow.
+  .refine((value) => !value.configured_client || !value.stable_callback, {
+    message: 'stable_callback is implied by configured_client; state only one',
+  });
 
 const catalogEntryCredentialsSchema = z
   .object({

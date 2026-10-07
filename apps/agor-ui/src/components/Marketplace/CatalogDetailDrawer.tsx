@@ -912,6 +912,21 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
+              {!appForm &&
+                entry.oauth?.stable_callback &&
+                readiness?.catalog_key === entryId &&
+                readiness.redirect_uri && (
+                  <Form layout="vertical">
+                    <Form.Item
+                      label="Callback URL"
+                      extra="This provider accepts only callback URLs it has approved."
+                    >
+                      <Text code copyable>
+                        {readiness.redirect_uri}
+                      </Text>
+                    </Form.Item>
+                  </Form>
+                )}
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 

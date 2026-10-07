@@ -26,6 +26,15 @@ export function isCatalogEntryVisible(entry: MCPCatalogEntry): boolean {
   return entry.hidden !== true;
 }
 
+/**
+ * The issuer whose stable relay callback this entry's OAuth flows use when the
+ * cell runs the hosted callback relay: a customer-owned app's reviewed issuer,
+ * or an allowlisted DCR provider's. Undefined means the direct callback.
+ */
+export function catalogRelayIssuer(entry: Pick<MCPCatalogEntry, 'oauth'>): string | undefined {
+  return entry.oauth?.configured_client?.issuer ?? entry.oauth?.stable_callback?.issuer;
+}
+
 /** Case-insensitive substring test that tolerates an absent field. */
 function contains(haystack: string | undefined, needle: string): boolean {
   return Boolean(haystack?.toLowerCase().includes(needle));

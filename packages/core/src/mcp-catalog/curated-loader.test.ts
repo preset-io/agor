@@ -395,6 +395,31 @@ ${block}
     expect(entry.oauth).toEqual({ client_id: 'public-client-123', dcr_mode: 'disabled' });
   });
 
+  it('accepts a stable_callback issuer for an allowlisted DCR provider', () => {
+    const [entry] = parseCuratedCatalog(
+      withOAuth(`      stable_callback:
+        issuer: https://issuer.example.com`)
+    );
+    expect(entry.oauth).toEqual({ stable_callback: { issuer: 'https://issuer.example.com' } });
+  });
+
+  it.each([
+    ['a non-URL issuer', '      stable_callback:\n        issuer: issuer.example.com'],
+    ['an unknown key', '      stable_callback:\n        issuer: https://i.example\n        uri: x'],
+    [
+      'a configured_client as well',
+      `      dcr_mode: disabled
+      stable_callback:
+        issuer: https://issuer.example.com
+      configured_client:
+        setup_url: https://issuer.example.com/apps
+        issuer: https://issuer.example.com
+        secret_required: true`,
+    ],
+  ])('refuses stable_callback with %s', (_label, block) => {
+    expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
+  });
+
   it('leaves the block absent when an entry states nothing', () => {
     const [entry] = parseCuratedCatalog(VALID_ENTRY);
     expect(entry.oauth).toBeUndefined();
@@ -628,6 +653,40 @@ describe('the shipped catalog', () => {
       },
     });
     expect(entry?.oauth).not.toHaveProperty('client_id');
+  });
+
+  it.each([
+    ['com.canva/mcp', 'https://mcp.canva.com', 'https://www.canva.dev/docs/apps/mcp/access/', true],
+    [
+      'com.dropbox/mcp',
+      'https://www.dropbox.com',
+      'https://help.dropbox.com/integrations/connect-dropbox-mcp-server',
+      true,
+    ],
+    // Sign in with Vercel BYO is unverified; hidden until one real connection.
+    [
+      'com.vercel/vercel-mcp',
+      'https://vercel.com',
+      'https://vercel.com/docs/sign-in-with-vercel',
+      false,
+    ],
+  ])('ships %s as a customer-owned app recipe', async (name, issuer, setupUrl, visible) => {
+    const entry = (await loadCuratedCatalog()).find((candidate) => candidate.name === name);
+    expect(entry?.oauth).toEqual({
+      dcr_mode: 'disabled',
+      configured_client: { setup_url: setupUrl, issuer, secret_required: true },
+    });
+    expect(isCatalogEntryVisible(entry!)).toBe(visible);
+  });
+
+  it.each([
+    ['com.squareup/mcp', 'https://mcp.squareup.com'],
+    ['com.intercom/mcp', 'https://mcp.intercom.com'],
+  ])('keeps %s hidden on DCR with the stable callback until allowlisted', async (name, issuer) => {
+    const entry = (await loadCuratedCatalog()).find((candidate) => candidate.name === name);
+    expect(entry).toMatchObject({ hidden: true, oauth: { stable_callback: { issuer } } });
+    expect(entry?.oauth).not.toHaveProperty('dcr_mode');
+    expect(entry?.oauth).not.toHaveProperty('configured_client');
   });
 
   it('preserves Preset install identity and requires strict OAuth without hiding write authority', async () => {

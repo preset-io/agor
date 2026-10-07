@@ -1,4 +1,4 @@
-import { findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
+import { catalogRelayIssuer, findCatalogEntry, loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   MCPCatalogEntry,
   MCPOAuthDCRMode,
@@ -128,9 +128,16 @@ export function logMCPOAuthCompatibilityPolicy(
   );
 }
 
-/** A reviewed BYO recipe pins its issuer as well as its protected resource. */
-export async function configuredCatalogIssuer(
+/**
+ * The pinned issuer whose stable relay callback a current catalog install
+ * uses (see `catalogRelayIssuer`). A reviewed BYO recipe pins its issuer as
+ * well as its protected resource, so a drifted configured-app row fails closed;
+ * a drifted allowlisted-DCR row is an ordinary server and keeps the direct callback.
+ * Without the relay, `stable_callback` states nothing and the flow is unchanged.
+ */
+export async function catalogInstallRelayIssuer(
   server: MCPServer,
+  relayEnabled: boolean,
   catalogEntries?: readonly MCPCatalogEntry[]
 ): Promise<string | undefined> {
   if (server.source !== 'catalog' || !server.catalog_entry_name) return undefined;
@@ -138,7 +145,9 @@ export async function configuredCatalogIssuer(
     catalogEntries ?? (await loadCatalog()),
     server.catalog_entry_name
   );
-  if (!entry?.remote_url || !entry.oauth?.configured_client) return undefined;
+  const issuer =
+    entry && (relayEnabled ? catalogRelayIssuer(entry) : entry.oauth?.configured_client?.issuer);
+  if (!entry?.remote_url || !issuer) return undefined;
   if (
     !isCurrentCatalogInstall(
       server,
@@ -146,7 +155,9 @@ export async function configuredCatalogIssuer(
       catalogOAuthConfig(entry),
       { reconcileMissingCompatibilityMode: true }
     )
-  )
+  ) {
+    if (!entry.oauth?.configured_client) return undefined;
     throw new Error('Configured catalog app no longer matches its reviewed recipe');
-  return entry.oauth.configured_client.issuer;
+  }
+  return issuer;
 }

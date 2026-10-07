@@ -253,6 +253,13 @@ export interface MCPCatalogEntryCredentials {
 export interface MCPCatalogEntryOAuth {
   /** Reviewed customer-owned app setup; contains no credentials or endpoint overrides. */
   configured_client?: { setup_url: string; issuer: string; secret_required: boolean };
+  /**
+   * A DCR provider that admits only allowlisted redirect URIs. On a cell with
+   * the hosted callback relay, flows use the relay's fixed per-issuer callback
+   * (the same one `configured_client` uses) so one URI per Cloud environment can
+   * be submitted to the provider. Without the relay, the direct callback is used.
+   */
+  stable_callback?: { issuer: string };
   /** Space-separated OAuth scopes to request. */
   scope?: string;
   /** A pre-registered *public* client id. Never a confidential one. */

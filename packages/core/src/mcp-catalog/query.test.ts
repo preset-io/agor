@@ -11,7 +11,7 @@
 import { catalogDisplayName, type MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { findCatalogEntry, loadCatalog } from './catalog';
-import { filterCatalog } from './query';
+import { catalogRelayIssuer, filterCatalog } from './query';
 
 function entry(overrides: Partial<MCPCatalogEntry> & { name: string }): MCPCatalogEntry {
   return {
@@ -298,15 +298,13 @@ describe('catalog visibility', () => {
     expect(findCatalogEntry([hidden], hidden.name)).toBe(hidden);
   });
 
-  it('retains exactly the seven blocked definitions internally, with no extra providers hidden', async () => {
+  it('retains exactly the five blocked definitions internally, with no extra providers hidden', async () => {
     const full = await loadCatalog();
     const hiddenNames = [
       'com.figma.mcp/mcp',
       'com.vercel/vercel-mcp',
       'com.intercom/mcp',
       'com.squareup/mcp',
-      'com.canva/mcp',
-      'com.dropbox/mcp',
       'com.newrelic/mcp-server',
     ].sort();
     expect(
@@ -316,14 +314,35 @@ describe('catalog visibility', () => {
         .sort()
     ).toEqual(hiddenNames);
     const visible = filterCatalog(full);
-    expect(visible).toHaveLength(full.length - 7);
+    expect(visible).toHaveLength(full.length - 5);
     for (const name of hiddenNames) {
       expect(findCatalogEntry(full, name)).toBeDefined();
       expect(filterCatalog(full, { search: name })).toEqual([]);
     }
-    for (const publisher of ['asana', 'incident', 'datadog']) {
+    for (const publisher of ['asana', 'canva', 'dropbox', 'incident', 'datadog']) {
       expect(visible.some((e) => e.name.includes(publisher))).toBe(true);
     }
     expect(filterCatalog(full.map((e) => ({ ...e, hidden: false })))).toHaveLength(full.length);
+  });
+});
+
+describe('catalogRelayIssuer', () => {
+  it('names the configured app or allowlisted DCR issuer, and nothing else', async () => {
+    const full = await loadCatalog();
+    expect(
+      full
+        .filter((e) => catalogRelayIssuer(e))
+        .map((e) => [e.name, catalogRelayIssuer(e)])
+        .sort()
+    ).toEqual(
+      [
+        ['com.asana/mcp', 'https://app.asana.com'],
+        ['com.canva/mcp', 'https://mcp.canva.com'],
+        ['com.dropbox/mcp', 'https://www.dropbox.com'],
+        ['com.intercom/mcp', 'https://mcp.intercom.com'],
+        ['com.squareup/mcp', 'https://mcp.squareup.com'],
+        ['com.vercel/vercel-mcp', 'https://vercel.com'],
+      ].sort()
+    );
   });
 });

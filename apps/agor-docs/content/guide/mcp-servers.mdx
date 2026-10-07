@@ -344,12 +344,25 @@ pending attempts and stored grants, so affected users must reconnect.
 Catalog uses `https://mcp.asana.com/v2/mcp` with configured-client OAuth and no
 DCR. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
 
+### Other providers
+
+The same form, with the provider's client ID and secret, is used for:
+
+- **Canva**: a Canva Developer Portal integration with **Canva MCP** enabled. See
+  [Canva's MCP access guide](https://www.canva.dev/docs/apps/mcp/access/).
+- **Dropbox**: an App Console app with scoped access and **Full Dropbox**. See
+  [Dropbox's MCP guide](https://help.dropbox.com/integrations/connect-dropbox-mcp-server).
+
+In each case, set the app's redirect URL to the exact callback the Catalog form
+shows.
+
 ### Stable hosted callback
 
 By default the redirect URI is this daemon's own OAuth callback. An operator can
-instead route customer-owned app callbacks through a stable Agor Cloud origin. All
-other OAuth servers (including DCR and pre-registered ones) keep the daemon's own
-callback:
+instead route customer-owned app callbacks through a stable Agor Cloud origin.
+Providers that only accept pre-approved callback URLs for Dynamic Client
+Registration also use it once they have approved Agor's. All other OAuth servers
+(including other DCR and pre-registered ones) keep the daemon's own callback:
 
 ```yaml
 mcp_oauth_relay:

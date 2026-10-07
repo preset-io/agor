@@ -148,6 +148,35 @@ it('reuses an existing shared app install without asking for or sending app cred
   expect(connect.mock.calls[0][0]).not.toHaveProperty('oauthClient');
 });
 
+it('shows an allowlisted DCR entry its stable callback without asking for app credentials', async () => {
+  const allowlisted: MCPCatalogEntry = {
+    ...entry,
+    name: 'com.squareup/mcp',
+    title: 'Square',
+    oauth: { stable_callback: { issuer: 'https://mcp.squareup.com' } },
+  };
+  const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
+    input.oauthPopup?.close()
+  );
+  render(
+    <ConfigProvider>
+      <App>
+        <CatalogDetailDrawer {...makeProps(allowlisted, connect)} />
+      </App>
+    </ConfigProvider>
+  );
+  await expect
+    .element(page.getByText('https://relay.example.test/callback', { exact: true }))
+    .toBeVisible();
+  await expect
+    .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
+    .not.toBeInTheDocument();
+  await page.getByRole('checkbox').click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  expect(connect).toHaveBeenCalledOnce();
+  expect(connect.mock.calls[0][0]).not.toHaveProperty('oauthClient');
+});
+
 it('keeps genuine bearer setup private, submits only the key, and clears it on close', async () => {
   const bearerEntry: MCPCatalogEntry = {
     ...entry,

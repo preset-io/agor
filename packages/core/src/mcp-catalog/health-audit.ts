@@ -7,7 +7,7 @@ import {
 } from '../tools/mcp/oauth-mcp-transport';
 import { assertSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/safe-outbound-fetch';
 import { probeRemoteAuth, type RemoteAuthProbeResult } from './auth-probe';
-import { isCatalogEntryVisible } from './query';
+import { catalogRelayIssuer, isCatalogEntryVisible } from './query';
 
 export type CatalogHealthStatus =
   | 'skipped-hidden'
@@ -77,14 +77,14 @@ async function assertOAuthMetadataReady(
   const validated = await validateMCPOAuthMetadata(discovery, entry.remote_url, {
     compatibilityMode,
   });
-  if (entry.oauth?.configured_client) {
-    if (validated.issuer !== entry.oauth.configured_client.issuer)
-      throw new OAuthConfigurationError(
-        'issuer_mismatch',
-        'Configured app issuer no longer matches its reviewed recipe'
-      );
-    return; // Customer app input is required; the audit never registers a client.
-  }
+  const relayIssuer = catalogRelayIssuer(entry);
+  if (relayIssuer && validated.issuer !== relayIssuer)
+    throw new OAuthConfigurationError(
+      'issuer_mismatch',
+      'Catalog OAuth issuer no longer matches its reviewed recipe'
+    );
+  // Customer app input is required; the audit never registers a client.
+  if (entry.oauth?.configured_client) return;
   if (entry.oauth?.client_id) return;
   if (entry.oauth?.dcr_mode === 'disabled' || !validated.registrationEndpoint) {
     throw new OAuthConfigurationError(
