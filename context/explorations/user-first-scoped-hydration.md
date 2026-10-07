@@ -153,16 +153,19 @@ predicate and the tenant condition; none grants access.
 | ------------------------------------------- | -------------------------------------------------------------- |
 | `sessions{created_by}`, `session_id: {$in}` | `inVisibleBranchSet` + tenant                                  |
 | `branches{created_by}`, `branch_id: {$in}`  | `visibleBranchAccessCondition` + tenant                        |
-| `branches{teammate: true}`                  | `findTeammateBranches` (marker only), `view`; real `total`     |
+| `branches{teammate: true}`                  | marker condition on `findPage`, composes; real `total`         |
 | `sessions`/`branches{search}`               | visibility applied before the text is read (`searchCondition`) |
 | `branch-counts.find()`                      | visible branches on visible boards; `scoped`, never published  |
+| `session-counts.find({ group_by })`         | sessions on visible branches; `scoped`, never published        |
 
 - `search` uses the shared `SEARCHABLE_FIELDS` and token rules
   (`core/search/searchable-fields.ts`), so server and client match the same
   rows. The haystack is built only for rows the caller can see, so hidden
   rows cost nothing (no timing oracle).
 - `branch-counts` takes no filters (one sent is rejected) and is refetched,
-  debounced, on branch events (`UI/hooks/useBranchCounts.ts`).
+  debounced, on branch events (`UI/hooks/useBranchCounts.ts`);
+  `session-counts` takes only `group_by` (`branch_id` or `board_id`) and
+  backs the settings tables' counts (`useSessionCounts`).
 - Cross-tenant and capability-negative tests cover every key
   (`core/db/repositories/user-scope-reads.*`, `sessions.visibility-parity.*`).
 
