@@ -1,6 +1,7 @@
 import {
   CODEX_LIFECYCLE_MESSAGES,
   DAEMON_RESTART_RELEASED_MESSAGE,
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
   missingScopedCredentialMessage,
   permissionTimeoutMessage,
   SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
@@ -429,6 +430,49 @@ describe('describeTurnOutcome v3', () => {
     expect(describe3({ status: TaskStatus.COMPLETED, error_message: 'warning' })).toBeNull();
   });
 
+  describe('launch refused', () => {
+    const refused = {
+      cause: 'launch_refused',
+      type: 'warning',
+      message:
+        "Your team has reached its limit of work running at once, so the agent didn't start. No files changed.",
+    };
+    // As the daemon settles it: verified, failed, never connected, no tools.
+    const refusedTask = {
+      status: TaskStatus.FAILED,
+      error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+      executor_connected_at: undefined,
+      recorded_tool_count: 0,
+    };
+
+    it.each([
+      ['sdk_failure.reason', { sdk_failure: sdkFailure({ reason: 'launch_refused' }) }],
+      ['termination_request.cause', { ...cause('launch_refused') }],
+      [
+        'both',
+        { ...cause('launch_refused'), sdk_failure: sdkFailure({ reason: 'launch_refused' }) },
+      ],
+    ])('is a warning with no action from %s, not never_started', (_label, fields) => {
+      const copy = describe3({ ...refusedTask, ...fields });
+      expect(copy).toEqual(refused);
+      expect(copy).not.toHaveProperty('action');
+      expect(copy).not.toHaveProperty('detailsLead');
+    });
+
+    it('wins over a restart notice and over a connected run', () => {
+      const fields = { ...refusedTask, sdk_failure: sdkFailure({ reason: 'launch_refused' }) };
+      expect(describe3(fields, { restarted: true })).toEqual(refused);
+      expect(describe3({ ...fields, executor_connected_at: CONNECTED })).toEqual(refused);
+      expect(describe3({ ...fields, status: TaskStatus.TIMED_OUT })).toEqual(refused);
+    });
+
+    it('keeps never_started for a launch that was not refused', () => {
+      expect(
+        describe3({ ...refusedTask, ...cause('heartbeat_lost'), sdk_failure: sdkFailure() })?.cause
+      ).toBe('never_started');
+    });
+  });
+
   it('writes every message as a full sentence free of internal vocabulary', () => {
     const errors = [
       '',
@@ -447,18 +491,22 @@ describe('describeTurnOutcome v3', () => {
       { stoppedBy: 'you' },
       { stoppedBy: { name: 'Ada' } },
     ];
-    for (const error_message of errors) {
+    const variants = (termination: 'verified' | 'unverified'): Partial<Task>[] => [
+      { sdk_failure: sdkFailure({ termination }) },
+      { sdk_failure: sdkFailure({ termination, reason: 'launch_refused' }) },
+      { ...cause('launch_refused'), sdk_failure: sdkFailure({ termination }) },
+    ];
+    for (const error_message of [...errors, EXECUTOR_LAUNCH_REFUSED_MESSAGE]) {
       for (const status of statuses) {
         for (const termination of ['verified', 'unverified'] as const) {
-          for (const context of contexts) {
-            const copy = describe3(
-              { status, error_message, sdk_failure: sdkFailure({ termination }) },
-              context
-            );
-            if (!copy) continue;
-            expect(copy.message).not.toMatch(BANNED);
-            expect(copy.message).toMatch(/^[A-Z].*[.…]$/);
-            if (copy.detailsLead) expect(copy.detailsLead).not.toMatch(BANNED);
+          for (const variant of variants(termination)) {
+            for (const context of contexts) {
+              const copy = describe3({ status, error_message, ...variant }, context);
+              if (!copy) continue;
+              expect(copy.message).not.toMatch(BANNED);
+              expect(copy.message).toMatch(/^[A-Z].*[.…]$/);
+              if (copy.detailsLead) expect(copy.detailsLead).not.toMatch(BANNED);
+            }
           }
         }
       }

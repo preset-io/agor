@@ -19,6 +19,7 @@ export type TurnOutcomeCause =
   | 'stopping'
   | 'waiting_to_start'
   | 'working_with_problem'
+  | 'launch_refused'
   | 'restart'
   | 'stopped'
   | 'access_changed'
@@ -176,6 +177,15 @@ export function describeTurnOutcome(
         };
   }
   if (status === TaskStatus.COMPLETED) return null;
+  // Refused before anything was created, with no connect time or tools: it
+  // must win over never_started. Retrying now would usually be refused again.
+  if (reason === 'launch_refused' || cause === 'launch_refused') {
+    return {
+      cause: 'launch_refused',
+      type: 'warning',
+      message: `Your team has reached its limit of work running at once, so the agent didn't start. ${NO_FILES_CHANGED}`,
+    };
+  }
   const provenNothing = !sawTools && task.recorded_tool_count === 0;
   const work = provenNothing ? NO_FILES_CHANGED : EDITS_KEPT;
   if (wasRestart) {

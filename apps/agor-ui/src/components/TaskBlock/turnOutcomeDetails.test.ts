@@ -1,3 +1,4 @@
+import { EXECUTOR_LAUNCH_REFUSED_MESSAGE } from '@agor/core/types';
 import { type Task, TaskStatus } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { formatElapsed, turnOutcomeDetails } from './turnOutcomeDetails';
@@ -13,6 +14,23 @@ const base = {
 } as Task;
 
 describe('turnOutcomeDetails', () => {
+  it('shows the shared message and the launch_refused cause for a refused launch', () => {
+    const { rows, hasSignal } = turnOutcomeDetails({
+      ...base,
+      error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+      sdk_failure: {
+        reason: 'launch_refused',
+        detected_at: '',
+        tool: 'claude-code',
+        termination: 'verified',
+      },
+      termination_request: { cause: 'launch_refused', requested_at: '' },
+    } as Task);
+    expect(hasSignal).toBe(true);
+    expect(rows.find((row) => row.label === 'Error')?.value).toBe(EXECUTOR_LAUNCH_REFUSED_MESSAGE);
+    expect(rows.find((row) => row.label === 'Cause')?.value).toBe('launch_refused');
+  });
+
   it('lists only the rows that have data, in a fixed order', () => {
     const { rows, hasSignal } = turnOutcomeDetails(
       {
