@@ -25,18 +25,34 @@ export const CONSENT_SETTINGS_EVENT = 'agor:cookie-settings';
 
 export type ConsentChoice = 'granted' | 'denied';
 
-// Time zones in the EEA, the UK, and Switzerland that aren't under Europe/.
-// Every Europe/ zone counts too (a few non-EEA ones included, which only
-// errs toward asking first).
+// Time zones in the EEA, the UK, and Switzerland that aren't under Europe/:
+// Atlantic islands, Cyprus, Svalbard, and the EU's outermost regions in
+// Africa, the Caribbean, South America, and the Indian Ocean (GDPR applies
+// there too). Every Europe/ zone counts as well (a few non-EEA ones
+// included, which only errs toward asking first). Legacy alias spellings are
+// listed because browsers report whichever ID the OS gives them.
 const OPT_IN_ZONES = [
+  // Portugal, Spain, Iceland, Faroe Islands, Norway (Svalbard, Jan Mayen)
   'Atlantic/Azores',
-  'Atlantic/Canary',
-  'Atlantic/Faroe',
   'Atlantic/Madeira',
+  'Atlantic/Canary',
   'Atlantic/Reykjavik',
+  'Atlantic/Faroe',
+  'Atlantic/Faeroe',
   'Arctic/Longyearbyen',
+  'Atlantic/Jan_Mayen',
+  // Cyprus
   'Asia/Nicosia',
   'Asia/Famagusta',
+  // Spain: Ceuta and Melilla
+  'Africa/Ceuta',
+  // France: Guadeloupe, Martinique, Saint-Martin, French Guiana, Réunion, Mayotte
+  'America/Guadeloupe',
+  'America/Martinique',
+  'America/Marigot',
+  'America/Cayenne',
+  'Indian/Reunion',
+  'Indian/Mayotte',
 ];
 
 /** Script body (no tags) for the pre-paint head script. Kept dependency-free. */

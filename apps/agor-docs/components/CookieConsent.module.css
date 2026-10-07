@@ -1,10 +1,12 @@
-/* Cookie banner (CookieConsent.tsx): a small card in the bottom-left corner,
- * above the nav but below the CRT intro. Both choices carry equal weight. */
+/* Cookie banner (CookieConsent.tsx): a small card in the bottom-left corner.
+ * Both choices carry equal weight. z-index 38 keeps it above page content
+ * and the cursor troupe (35) but under every overlay: the mobile menu (39),
+ * the nav (40), the search palette (60), image zooms, and modals. */
 .banner {
   position: fixed;
   bottom: 16px;
   left: 16px;
-  z-index: 60;
+  z-index: 38;
   display: flex;
   flex-direction: column;
   gap: 14px;
