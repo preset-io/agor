@@ -4,43 +4,30 @@
  * that can change the page's membership or total (an off-page archive or
  * removal, a rename while searching) reads the page again.
  */
-import { EventEmitter } from 'node:events';
-import type { AgorClient, Branch } from '@agor-live/client';
+import type { Branch } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { expect, it, type Mock } from 'vitest';
 import { agorStore } from '@/store/agorStore';
 import { setRealtimeAuthorityScope } from '@/store/realtimeBatch';
+import { fakeFeathersClient, withTestAuthority } from '@/test/harness';
 import { useBranchPage, useSessionCounts } from './useBranchPage';
 
 const branch = (n: number, overrides: Partial<Branch> = {}) =>
   ({ branch_id: `branch-${n}`, name: `feature-${n}`, archived: false, ...overrides }) as Branch;
 
 function makeClient(total = 25) {
-  const events = new EventEmitter();
   const page = () => ({
     total,
     data: Array.from({ length: 10 }, (_, i) => branch(i + 1)),
   });
-  const find = vi.fn(async () => page());
-  const client = {
-    service: () => ({
-      find,
-      on: (e: string, fn: (...a: unknown[]) => void) => events.on(e, fn),
-      off: (e: string, fn: (...a: unknown[]) => void) => events.off(e, fn),
-    }),
-  } as unknown as AgorClient;
-  const emit = (event: string, payload: unknown) => act(() => void events.emit(event, payload));
-  return { client, find, emit, page, setTotal: (n: number) => (total = n) };
+  const fake = fakeFeathersClient({ branches: { find: page } });
+  const find = fake.client.service('branches').find as unknown as Mock;
+  const emit = (event: string, payload: unknown) =>
+    act(() => fake.emit('branches', event, payload));
+  return { client: fake.client, find, emit, page, setTotal: (n: number) => (total = n) };
 }
 
-beforeEach(() => {
-  agorStore.getState().reset();
-  setRealtimeAuthorityScope('me:member:1');
-});
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-});
+withTestAuthority('me:member:1', { dataAuthority: false });
 
 it('keeps a rename that lands while an older re-read is in flight', async () => {
   const { client, find, emit, page } = makeClient();
@@ -91,26 +78,16 @@ it('patches an on-page row in place without reading again', async () => {
 });
 
 function makeCountsClient() {
-  const sessions = new EventEmitter();
-  const branches = new EventEmitter();
   let count = 3;
-  const find = vi.fn(async () => ({ total: count, data: [] }));
-  const on = (emitter: EventEmitter) => ({
-    on: (e: string, fn: (...a: unknown[]) => void) => emitter.on(e, fn),
-    off: (e: string, fn: (...a: unknown[]) => void) => emitter.off(e, fn),
-  });
-  const client = {
-    service: (name: string) =>
-      name === 'sessions' ? { find, ...on(sessions) } : { find: vi.fn(), ...on(branches) },
-  } as unknown as AgorClient;
-  const emit = (emitter: EventEmitter, event: string, payload: unknown) =>
-    act(() => void emitter.emit(event, payload));
+  const fake = fakeFeathersClient({ sessions: { find: () => ({ total: count, data: [] }) } });
   return {
-    client,
-    find,
+    client: fake.client,
+    find: fake.client.service('sessions').find as unknown as Mock,
     setCount: (n: number) => (count = n),
-    emitSession: (event: string, payload: unknown) => emit(sessions, event, payload),
-    emitBranch: (event: string, payload: unknown) => emit(branches, event, payload),
+    emitSession: (event: string, payload: unknown) =>
+      act(() => fake.emit('sessions', event, payload)),
+    emitBranch: (event: string, payload: unknown) =>
+      act(() => fake.emit('branches', event, payload)),
   };
 }
 

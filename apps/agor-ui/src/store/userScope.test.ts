@@ -1,12 +1,19 @@
-import type { AgorClient, BoardComment, Branch, Session } from '@agor-live/client';
+import type { Branch, Session } from '@agor-live/client';
 import { hasFullSessionDetails, toLeanSessionListRow } from '@agor-live/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { boardCoverage, userScopeCoverage } from '../test/userScopeCoverage';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  bumpFirstPaintMergeRevisions,
-  cancelAllHydrations,
-  resetHydrationRevisions,
-} from './agorHydration';
+  AUTHORITY,
+  makeBranch as branch,
+  makeComment as comment,
+  deferred,
+  fakeFeathersClient,
+  gate,
+  ME,
+  makeSession,
+  withTestAuthority,
+} from '../test/harness';
+import { boardCoverage, userScopeCoverage } from '../test/userScopeCoverage';
+import { bumpFirstPaintMergeRevisions, cancelAllHydrations } from './agorHydration';
 import { applyEntityFill } from './agorMaps';
 import {
   branchPatched,
@@ -16,7 +23,7 @@ import {
 } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 import { captureLoadLifetime } from './loadLifetime';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from './realtimeBatch';
+import { setRealtimeAuthorityScope } from './realtimeBatch';
 import {
   boardPartitionScope,
   boardScopeKey,
@@ -39,9 +46,6 @@ import {
   stopUserScope,
 } from './userScope';
 
-const ME = 'user-me';
-// The caller's identity is the authority's first segment: realtime admits my rows.
-const AUTHORITY = `${ME}:member:1`;
 /** The current load lifetime (what `useAgorData` passes for its load). */
 const lifetime = () => {
   const current = captureLoadLifetime();
@@ -50,29 +54,11 @@ const lifetime = () => {
 };
 
 const session = (id: string, branchId: string, overrides: Partial<Session> = {}) =>
-  ({
-    session_id: id,
-    branch_id: branchId,
+  makeSession(id, branchId, {
     created_by: ME,
-    status: 'idle',
-    archived: false,
-    genealogy: { children: [] },
     last_updated: '2026-01-01T00:00:00.000Z',
     ...overrides,
-  }) as unknown as Session;
-const branch = (id: string, overrides: Partial<Branch> = {}) =>
-  ({ branch_id: id, board_id: 'board-1', name: id, archived: false, ...overrides }) as Branch;
-const comment = (id: string, overrides: Partial<BoardComment>) =>
-  ({
-    comment_id: id,
-    board_id: 'board-1',
-    content: id,
-    resolved: false,
-    created_at: '2026-01-01T00:00:00.000Z',
-    ...overrides,
-  }) as BoardComment;
-
-type Call = { service: string; method: 'find' | 'findAll'; query: Record<string, unknown> };
+  });
 
 /** Mock client answering by service + query shape; records every call. */
 function makeClient(handlers: {
@@ -83,29 +69,21 @@ function makeClient(handlers: {
   teammateTotal?: number;
   byIds?: (ids: string[]) => Branch[] | Promise<Branch[]>;
 }) {
-  const calls: Call[] = [];
-  const respond = async (
-    service: string,
-    method: Call['method'],
-    args: { query: Record<string, unknown> }
-  ) => {
-    const query = args.query;
-    calls.push({ service, method, query });
-    if (service === 'sessions') return (await handlers.mine?.(query.$limit as number)) ?? [];
-    if (query.teammate) {
-      const data = (await handlers.teammates?.()) ?? [];
-      return { data, total: handlers.teammateTotal ?? data.length };
+  const { client, calls } = fakeFeathersClient(
+    {},
+    {
+      fallback: async ({ service, query }) => {
+        if (service === 'sessions') return (await handlers.mine?.(query.$limit as number)) ?? [];
+        if (query.teammate) {
+          const data = (await handlers.teammates?.()) ?? [];
+          return { data, total: handlers.teammateTotal ?? data.length };
+        }
+        if (query.created_by) return (await handlers.myBranches?.()) ?? [];
+        const ids = (query.branch_id as { $in: string[] }).$in;
+        return { data: (await handlers.byIds?.(ids)) ?? [] };
+      },
     }
-    if (query.created_by) return (await handlers.myBranches?.()) ?? [];
-    const ids = (query.branch_id as { $in: string[] }).$in;
-    return { data: (await handlers.byIds?.(ids)) ?? [] };
-  };
-  const client = {
-    service: (name: string) => ({
-      find: vi.fn((args) => respond(name, 'find', args)),
-      findAll: vi.fn((args) => respond(name, 'findAll', args)),
-    }),
-  } as unknown as AgorClient;
+  );
   return { client, calls };
 }
 
@@ -135,19 +113,8 @@ const flags = () => {
   };
 };
 
-beforeEach(() => {
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-});
-afterEach(() => {
-  stopUserScope();
-  vi.useRealTimers();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-});
+withTestAuthority();
+afterEach(() => stopUserScope());
 
 describe('user scope', () => {
   it('skips the full read when the gated page already held all of my sessions', async () => {
@@ -217,13 +184,10 @@ describe('user scope', () => {
   });
 
   it('a session created live during the U1 read joins its membership at settlement', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const held = deferred();
     const { client } = makeClient({
       mine: async () => {
-        await gate;
+        await held.promise;
         return [session('s-read', 'br-1')];
       },
     });
@@ -236,7 +200,7 @@ describe('user scope', () => {
     sessionCreated(session('s-raced', 'br-1'));
     sessionCreated(session('s-gone', 'br-1'));
     sessionRemoved(session('s-gone', 'br-1'));
-    release();
+    held.resolve();
     await run;
     const members = agorStore.getState().coverage.get(USER_SCOPE_KEYS.sessions)?.members?.sessions;
     expect([...(members ?? [])].sort()).toEqual(['s-raced', 's-read']);
@@ -328,13 +292,10 @@ describe('user scope', () => {
   });
 
   it("publishes teammate rows before my branches settle, deferring only U3's coverage", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const held = deferred();
     const { client } = makeClient({
       myBranches: async () => {
-        await gate;
+        await held.promise;
         return [];
       },
       teammates: () => [branch('mate', { custom_context: { teammate: { kind: 'teammate' } } })],
@@ -346,7 +307,7 @@ describe('user scope', () => {
     });
     await vi.waitFor(() => expect(agorStore.getState().branchById.has('mate')).toBe(true));
     expect(flags().teammatesLoaded).toBe(false);
-    release();
+    held.resolve();
     await run;
     expect(flags().teammatesLoaded).toBe(true);
     expect([
@@ -394,20 +355,7 @@ describe('user scope', () => {
   });
 
   it('marks teammates truncated when the server reports more than the capped read', async () => {
-    const { client } = makeClient({ teammates: () => [branch('mate-1')] });
-    const find = client.service('branches').find;
-    const service = client.service;
-    (client as { service: unknown }).service = (name: string) => {
-      const svc = service(name);
-      if (name !== 'branches') return svc;
-      return {
-        ...svc,
-        find: async (args: { query: Record<string, unknown> }) => {
-          const result = (await find(args)) as { data: Branch[] };
-          return args.query.teammate ? { ...result, total: 1001 } : result;
-        },
-      };
-    };
+    const { client } = makeClient({ teammates: () => [branch('mate-1')], teammateTotal: 1001 });
     await startUserScope(client, { userId: ME, lifetime: lifetime(), gatedMineComplete: true });
     expect(flags().teammatesLoaded).toBe(true);
     expect(selectTeammatesTruncated(agorStore.getState())).toBe(true);
@@ -436,13 +384,10 @@ describe('user scope', () => {
       ...prev,
       sessionById: new Map([['s-1', session('s-1', 'br-ref')]]),
     }));
-    let releaseMine!: () => void;
-    const mineGate = new Promise<void>((resolve) => {
-      releaseMine = resolve;
-    });
+    const mineGate = deferred();
     const { client, calls } = makeClient({
       myBranches: async () => {
-        await mineGate;
+        await mineGate.promise;
         return [];
       },
       byIds: (ids) => ids.map((id) => branch(id)),
@@ -455,7 +400,7 @@ describe('user scope', () => {
     await vi.waitFor(() => expect(agorStore.getState().branchById.has('br-ref')).toBe(true));
     expect(calls.some((c) => c.query.branch_id)).toBe(true);
     expect(flags().homeBranchesLoaded).toBe(false);
-    releaseMine();
+    mineGate.resolve();
     await run;
     expect(flags().homeBranchesLoaded).toBe(true);
   });
@@ -546,13 +491,10 @@ describe('user scope', () => {
   });
 
   it('drops a run whose authority changed, and resets with the maps', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const held = deferred();
     const { client } = makeClient({
       mine: async () => {
-        await gate;
+        await held.promise;
         return [session('s-1', 'br-1')];
       },
     });
@@ -562,7 +504,7 @@ describe('user scope', () => {
       gatedMineComplete: false,
     });
     setRealtimeAuthorityScope('someone-else:member:1');
-    release();
+    held.resolve();
     await run;
     expect(agorStore.getState().sessionById.size).toBe(0);
     expect(flags().mySessionsLoaded).toBe(false);
@@ -588,17 +530,14 @@ describe('user scope', () => {
   });
 
   it('drops a run cancelled mid-read even when the authority is the same again', async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const held = deferred();
     const { client } = makeClient({
       mine: async () => {
-        await gate;
+        await held.promise;
         return [session('s-1', 'br-1')];
       },
       teammates: async () => {
-        await gate;
+        await held.promise;
         return [branch('mate')];
       },
     });
@@ -608,7 +547,7 @@ describe('user scope', () => {
       gatedMineComplete: false,
     });
     cancelAllHydrations();
-    release();
+    held.resolve();
     await run;
     expect(agorStore.getState().sessionById.size).toBe(0);
     expect(agorStore.getState().branchById.size).toBe(0);
@@ -637,14 +576,11 @@ describe('user scope', () => {
   });
 
   it('sees a reference that appears while the referenced-branch reads are in flight', async () => {
-    let releaseIds!: () => void;
-    const idGate = new Promise<void>((resolve) => {
-      releaseIds = resolve;
-    });
+    const idGate = deferred();
     const { client, calls } = makeClient({
       mine: () => [session('s-1', 'br-1')],
       byIds: async (ids) => {
-        if (ids.includes('br-1')) await idGate;
+        if (ids.includes('br-1')) await idGate.promise;
         return ids.map((id) => branch(id));
       },
     });
@@ -670,7 +606,7 @@ describe('user scope', () => {
       );
     await vi.waitFor(() => expect(agorStore.getState().branchById.has('br-late')).toBe(true));
     expect(flags().homeBranchesLoaded).toBe(false);
-    releaseIds();
+    idGate.resolve();
     await run;
     await vi.waitFor(() => expect(flags().homeBranchesLoaded).toBe(true));
     expect(agorStore.getState().branchById.has('br-1')).toBe(true);
@@ -718,7 +654,7 @@ describe('user scope', () => {
   });
 
   it('keeps at most three referenced-branch reads in flight', async () => {
-    const releases: Array<() => void> = [];
+    const held = gate();
     let inflight = 0;
     let peak = 0;
     const mine = Array.from({ length: 1000 }, (_, i) => session(`s-${i}`, `br-${i}`));
@@ -727,7 +663,7 @@ describe('user scope', () => {
       byIds: async (ids) => {
         inflight += 1;
         peak = Math.max(peak, inflight);
-        await new Promise<void>((resolve) => releases.push(resolve));
+        await held.wait();
         inflight -= 1;
         return ids.map((id) => branch(id));
       },
@@ -738,8 +674,8 @@ describe('user scope', () => {
       gatedMineComplete: false,
     });
     for (let i = 0; i < 20 && !flags().homeBranchesLoaded; i++) {
-      await vi.waitFor(() => expect(releases.length).toBeGreaterThan(0));
-      for (const release of releases.splice(0)) release();
+      await vi.waitFor(() => expect(held.waiting).toBeGreaterThan(0));
+      held.release();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     }
     await run;
@@ -787,13 +723,10 @@ describe('user scope', () => {
       ...prev,
       sessionById: new Map([['s-1', session('s-1', 'br-early')]]),
     }));
-    let releaseMine!: () => void;
-    const mineGate = new Promise<void>((resolve) => {
-      releaseMine = resolve;
-    });
+    const mineGate = deferred();
     const { client, calls } = makeClient({
       mine: async () => {
-        await mineGate;
+        await mineGate.promise;
         return [];
       },
       byIds: (ids) => ids.map((id) => branch(id)),
@@ -810,7 +743,7 @@ describe('user scope', () => {
     expect(order().indexOf('ids')).toBeGreaterThanOrEqual(0);
     expect(order().indexOf('ids')).toBeLessThan(order().indexOf('sessions'));
     await vi.waitFor(() => expect(agorStore.getState().branchById.has('br-early')).toBe(true));
-    releaseMine();
+    mineGate.resolve();
     await run;
     await vi.waitFor(() => expect(flags().homeBranchesLoaded).toBe(true));
   });
@@ -917,13 +850,10 @@ describe('user scope', () => {
     const { client } = makeClient({});
     await startUserScope(client, { userId: ME, lifetime: lifetime(), gatedMineComplete: true });
     expect(flags().homeBranchesLoaded).toBe(true);
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const held = deferred();
     const slow = makeClient({
       mine: async () => {
-        await gate;
+        await held.promise;
         return [];
       },
     });
@@ -933,7 +863,7 @@ describe('user scope', () => {
       gatedMineComplete: false,
     });
     expect(flags()).toMatchObject({ mySessionsLoaded: true, homeBranchesLoaded: true });
-    release();
+    held.resolve();
     await rerun;
     expect(flags()).toMatchObject({ mySessionsLoaded: true, homeBranchesLoaded: true });
   });
@@ -1009,13 +939,10 @@ describe('user scope — reconnect replace', () => {
     });
     expect(has('branchById', 'br-own-mate')).toBe(true);
     // Deleted while disconnected; on reconnect U3 answers first, U2 later.
-    let releaseU2!: () => void;
-    const u2 = new Promise<void>((resolve) => {
-      releaseU2 = resolve;
-    });
+    const u2 = deferred();
     const resync = makeClient({
       myBranches: async () => {
-        await u2;
+        await u2.promise;
         return [];
       },
       teammates: () => [],
@@ -1027,7 +954,7 @@ describe('user scope — reconnect replace', () => {
       replace: true,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    releaseU2();
+    u2.resolve();
     await run;
     expect(has('branchById', 'br-own-mate')).toBe(false);
     expect(flags().teammatesLoaded).toBe(true);

@@ -6,9 +6,8 @@
 import type { AgorClient, Branch, Session, User } from '@agor-live/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { Grid } from 'antd';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { agorStore } from '../../store/agorStore';
-import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { beforeEach, expect, it, vi } from 'vitest';
+import { withTestAuthority } from '../../test/harness';
 import { SettingsModal } from './SettingsModal';
 
 const branch = { branch_id: 'branch-1', repo_id: 'repo-1', name: 'feature' } as Branch;
@@ -41,13 +40,8 @@ vi.mock('../BranchModal', () => ({
     ) : null,
 }));
 
-beforeEach(() => {
-  agorStore.getState().reset();
-  setRealtimeAuthorityScope('u1:admin:1');
-  vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
-});
-
-afterEach(() => setRealtimeAuthorityScope(null));
+withTestAuthority('u1:admin:1', { dataAuthority: false });
+beforeEach(() => vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true }));
 
 const listeners = { on: () => {}, off: () => {} };
 

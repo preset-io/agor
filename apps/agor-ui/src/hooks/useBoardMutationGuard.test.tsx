@@ -1,6 +1,5 @@
 import type { CardWithType } from '@agor-live/client';
 import { act, render, renderHook, screen } from '@testing-library/react';
-import { App } from 'antd';
 import { type ReactNode, useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -16,6 +15,7 @@ import { publishConnectionSnapshot, withdrawConnectionSnapshot } from '../store/
 import { captureLoadLifetime } from '../store/loadLifetime';
 import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { boardScopeKey } from '../store/scopeMerge';
+import { CONNECTED, Providers, withTestAuthority } from '../test/harness';
 import { boardCoverage } from '../test/userScopeCoverage';
 import { useBoardMutationGuard } from './useBoardMutationGuard';
 
@@ -23,14 +23,11 @@ const BOARD = 'board-guard';
 const OTHER = 'board-other';
 
 const connection = (overrides: Partial<{ connected: boolean; authGeneration: number }> = {}) => ({
-  connected: true,
-  connecting: false,
-  authGeneration: 1,
-  outOfSync: false,
-  capturedSha: null,
-  currentSha: null,
+  ...CONNECTED,
   ...overrides,
 });
+
+withTestAuthority(null);
 
 function load(boardId = BOARD) {
   agorStore.getState().setCoverage(boardScopeKey(boardId), boardCoverage());
@@ -47,7 +44,6 @@ describe('board write tickets', () => {
     captureBoardWriteTicket(BOARD, { requirePartition, owner });
 
   beforeEach(() => {
-    agorStore.setState({ coverage: new Map() });
     owner.alive = true;
     publishConnectionSnapshot(publisher, connection());
   });
@@ -73,27 +69,22 @@ describe('board write tickets', () => {
 
   it('a membership update keeps a ticket current; a reload ends it', () => {
     setRealtimeAuthorityScope('guard:member:1');
-    try {
-      agorStore
-        .getState()
-        .setCoverage(boardScopeKey(BOARD), boardCoverage('loaded', captureLoadLifetime()!));
-      const ticket = capture(true);
-      const before = agorStore.getState().coverage.get(boardScopeKey(BOARD));
-      // A card created live on the board joins its membership.
-      cardCreated({ card_id: 'k-live', board_id: BOARD } as CardWithType);
-      const after = agorStore.getState().coverage.get(boardScopeKey(BOARD));
-      expect(after).not.toBe(before);
-      expect(after?.members?.cards?.has('k-live')).toBe(true);
-      expect(isBoardWriteTicketCurrent(ticket)).toBe(true);
-      expect(hasBoardWriteTicketEnded(ticket)).toBe(false);
-      // A reload is a new generation.
-      load();
-      expect(isBoardWriteTicketCurrent(ticket)).toBe(false);
-      expect(hasBoardWriteTicketEnded(ticket)).toBe(true);
-    } finally {
-      setRealtimeAuthorityScope(null);
-      agorStore.getState().setMap('cardById', new Map());
-    }
+    agorStore
+      .getState()
+      .setCoverage(boardScopeKey(BOARD), boardCoverage('loaded', captureLoadLifetime()!));
+    const ticket = capture(true);
+    const before = agorStore.getState().coverage.get(boardScopeKey(BOARD));
+    // A card created live on the board joins its membership.
+    cardCreated({ card_id: 'k-live', board_id: BOARD } as CardWithType);
+    const after = agorStore.getState().coverage.get(boardScopeKey(BOARD));
+    expect(after).not.toBe(before);
+    expect(after?.members?.cards?.has('k-live')).toBe(true);
+    expect(isBoardWriteTicketCurrent(ticket)).toBe(true);
+    expect(hasBoardWriteTicketEnded(ticket)).toBe(false);
+    // A reload is a new generation.
+    load();
+    expect(isBoardWriteTicketCurrent(ticket)).toBe(false);
+    expect(hasBoardWriteTicketEnded(ticket)).toBe(true);
   });
 
   it('a re-authentication or an unusable connection ends a ticket', () => {
@@ -144,21 +135,13 @@ describe('board write tickets', () => {
 });
 
 describe('useBoardMutationGuard', () => {
-  beforeEach(() => {
-    agorStore.setState({ coverage: new Map() });
-  });
-
   function renderGuard(
     initial: { boardId?: string; allowed?: boolean; connected?: boolean },
     options: { requirePartition?: boolean } = {}
   ) {
     let props = { boardId: BOARD, allowed: true, connected: true, ...initial };
     const wrapper = ({ children }: { children: ReactNode }) => (
-      <App>
-        <ConnectionProvider value={connection({ connected: props.connected })}>
-          {children}
-        </ConnectionProvider>
-      </App>
+      <Providers connection={connection({ connected: props.connected })}>{children}</Providers>
     );
     const view = renderHook(() => useBoardMutationGuard(props.boardId, props.allowed, options), {
       wrapper,
@@ -262,7 +245,6 @@ describe('useBoardMutationGuard unmount commit', () => {
   let previousActEnvironment: unknown;
 
   beforeEach(() => {
-    agorStore.setState({ coverage: new Map() });
     // Real scheduling: a default-priority unmount commits, then React runs
     // its passive effects in a later task. `act` would flush them at once.
     previousActEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: unknown })
@@ -299,12 +281,10 @@ describe('useBoardMutationGuard unmount commit', () => {
       return null;
     }
     const tree = (show: boolean) => (
-      <App>
-        <ConnectionProvider value={connection()}>
-          {show && <Guarded />}
-          <Probe show={show} />
-        </ConnectionProvider>
-      </App>
+      <Providers>
+        {show && <Guarded />}
+        <Probe show={show} />
+      </Providers>
     );
     const container = document.createElement('div');
     document.body.appendChild(container);

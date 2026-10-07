@@ -3,45 +3,32 @@
  * are right with the store's branch map empty (Step 3), and re-read it,
  * debounced, after branch events.
  */
-import type { AgorClient } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { agorStore } from '../store/agorStore';
+import { expect, it, vi } from 'vitest';
 import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
+import { fakeFeathersClient, withTestAuthority } from '../test/harness';
 import { useBranchCounts } from './useBranchCounts';
 import { SERVER_READ_DEBOUNCE_MS } from './useServerRead';
 
 function makeClient() {
-  const listeners = new Map<string, Set<() => void>>();
   let count = 2;
-  const find = vi.fn(async () => [{ board_id: 'board-1', branch_count: count }]);
-  const client = {
-    service: (name: string) =>
-      name === 'branch-counts'
-        ? { find }
-        : {
-            on: (event: string, fn: () => void) => {
-              if (!listeners.has(event)) listeners.set(event, new Set());
-              listeners.get(event)?.add(fn);
-            },
-            off: (event: string, fn: () => void) => listeners.get(event)?.delete(fn),
-          },
-  } as unknown as AgorClient;
-  const emit = (event: string) => {
-    for (const fn of listeners.get(event) ?? []) fn();
+  const fake = fakeFeathersClient({
+    'branch-counts': { find: () => [{ board_id: 'board-1', branch_count: count }] },
+  });
+  return {
+    client: fake.client,
+    find: fake.client.service('branch-counts').find as ReturnType<typeof vi.fn>,
+    emit: (event: string) => fake.emit('branches', event),
+    setCount: (n: number) => (count = n),
+    listenerCount: () =>
+      ['created', 'patched', 'updated', 'removed'].reduce(
+        (sum, event) => sum + fake.listenerCount('branches', event),
+        0
+      ),
   };
-  return { client, find, emit, setCount: (n: number) => (count = n), listeners };
 }
 
-beforeEach(() => {
-  agorStore.getState().reset();
-  setRealtimeAuthorityScope('user-1:member:1');
-});
-afterEach(() => {
-  vi.useRealTimers();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-});
+withTestAuthority('user-1:member:1', { dataAuthority: false });
 
 it('reads the per-board counts with the store empty', async () => {
   const { client } = makeClient();
@@ -68,13 +55,13 @@ it('re-reads once, debounced, after a burst of branch events', async () => {
 
 it('reads nothing without a realtime authority, and unsubscribes on unmount', async () => {
   setRealtimeAuthorityScope(null);
-  const { client, find, listeners } = makeClient();
+  const { client, find, listenerCount } = makeClient();
   const { unmount } = renderHook(() => useBranchCounts(client));
   expect(find).not.toHaveBeenCalled();
   act(() => setRealtimeAuthorityScope('user-1:member:1'));
   await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
   unmount();
-  expect([...listeners.values()].every((set) => set.size === 0)).toBe(true);
+  expect(listenerCount()).toBe(0);
 });
 
 it('never lets an older reply overwrite a newer one', async () => {

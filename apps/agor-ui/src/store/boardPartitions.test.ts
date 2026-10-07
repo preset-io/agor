@@ -1,12 +1,16 @@
-import type {
-  AgorClient,
-  Board,
-  BoardEntityObject,
-  Branch,
-  CardWithType,
-  Session,
-} from '@agor-live/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Board, BoardEntityObject, Branch, CardWithType, Session } from '@agor-live/client';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  BOARD,
+  makeBranch as branch,
+  makeCard as card,
+  deferred,
+  fakeFeathersClient,
+  makeBoard,
+  makeBoardObject,
+  makeSession,
+  withTestAuthority,
+} from '../test/harness';
 import { boardCoverage, markBoardLoaded } from '../test/userScopeCoverage';
 import {
   beginPartitionLoad,
@@ -42,12 +46,7 @@ import {
   settleBoardPartition,
 } from './boardPartitions';
 import { captureLoadLifetime, isLoadLifetimeCurrent } from './loadLifetime';
-import {
-  discardRealtimeNow,
-  enqueueSessionPatch,
-  flushRealtimeNow,
-  setRealtimeAuthorityScope,
-} from './realtimeBatch';
+import { enqueueSessionPatch, flushRealtimeNow, setRealtimeAuthorityScope } from './realtimeBatch';
 import {
   type BoardPartitionSnapshot,
   boardPartitionScope,
@@ -58,33 +57,23 @@ import {
 import { otherCommittedMembers } from './userScope';
 
 const AUTHORITY = 'user-a:member:1';
-const BOARD = 'board-1';
+withTestAuthority(AUTHORITY);
 
-const branch = (id: string, overrides: Partial<Branch> = {}) =>
-  ({ branch_id: id, board_id: BOARD, name: id, archived: false, ...overrides }) as Branch;
+const at = '2026-01-01T00:00:00.000Z';
 const session = (id: string, branchId: string, overrides: Partial<Session> = {}) =>
-  ({
-    session_id: id,
-    branch_id: branchId,
+  makeSession(id, branchId, {
     branch_board_id: BOARD,
-    status: 'idle',
-    archived: false,
-    title: id,
-    genealogy: { children: [] },
-    created_at: '2026-01-01T00:00:00.000Z',
-    last_updated: '2026-01-01T00:00:00.000Z',
+    created_at: at,
+    last_updated: at,
     ...overrides,
-  }) as unknown as Session;
-const boardObject = (id: string, branchId: string) =>
-  ({ object_id: id, board_id: BOARD, branch_id: branchId }) as BoardEntityObject;
-const card = (id: string) => ({ card_id: id, board_id: BOARD, title: id }) as CardWithType;
+  });
+const boardObject = (id: string, branchId: string) => makeBoardObject(id, { branch_id: branchId });
 const fullBoard = (overrides: Partial<Board> = {}) =>
-  ({
-    board_id: BOARD,
+  makeBoard(BOARD, {
     name: 'Board',
     objects: { 'zone-1': { type: 'zone' } },
     ...overrides,
-  }) as unknown as Board;
+  } as Partial<Board>);
 
 const snapshotOf = (overrides: Partial<BoardPartitionSnapshot> = {}): BoardPartitionSnapshot => ({
   boardId: BOARD,
@@ -128,49 +117,26 @@ function makePartitionClient(data: {
   cards?: CardWithType[];
   board?: Board;
 }) {
-  let release!: () => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const calls: string[] = [];
-  const queries = new Map<string, unknown>();
-  const respond = async <T>(name: string, value: T) => {
-    calls.push(name);
-    await gate;
-    return value;
-  };
+  const held = deferred();
   const byService: Record<string, unknown> = {
     branches: data.branches ?? [],
     sessions: data.sessions ?? [],
     'board-objects': data.boardObjects ?? [],
     cards: data.cards ?? [],
   };
-  const client = {
-    service: (name: string) => ({
-      findAll: vi.fn((args?: { query?: unknown }) => {
-        queries.set(name, args?.query);
-        return respond(name, byService[name]);
-      }),
-      get: vi.fn(() => respond(`${name}:get`, data.board ?? fullBoard())),
-    }),
-  } as unknown as AgorClient;
-  return { client, release: () => release(), calls, queries };
+  const fake = fakeFeathersClient(
+    {},
+    {
+      fallback: async ({ service, method }) => {
+        await held.promise;
+        return method === 'get' ? (data.board ?? fullBoard()) : byService[service];
+      },
+    }
+  );
+  return { ...fake, release: () => held.resolve() };
 }
 
 describe('loadBoardPartition', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-  });
-
   const ready = () => makeBoardReadySelector(BOARD)(agorStore.getState());
 
   it('marks the board loading, fills the snapshot, then marks it loaded', async () => {
@@ -189,7 +155,7 @@ describe('loadBoardPartition', () => {
 
   it('a load that settles incomplete reads the board again for a mounted consumer', async () => {
     const unregister = registerBoardUse(BOARD);
-    const { client, release, calls } = makePartitionClient({});
+    const { client, release, callsTo } = makePartitionClient({});
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     // A branch arrives during the read: the load settles incomplete.
     branchPatched(branch('br-late', { created_by: 'user-b' }));
@@ -197,7 +163,7 @@ describe('loadBoardPartition', () => {
     await load;
     expect(ready()).toBe(false);
     // The loader requests the follow-up itself; no retry has to race it.
-    await vi.waitFor(() => expect(calls.filter((c) => c === 'sessions')).toHaveLength(2));
+    await vi.waitFor(() => expect(callsTo('sessions', 'findAll')).toHaveLength(2));
     await vi.waitFor(() => expect(ready()).toBe(true));
     unregister();
   });
@@ -309,13 +275,13 @@ describe('loadBoardPartition', () => {
   });
 
   it('dedupes in-flight loads of the same board', async () => {
-    const { client, release, calls } = makePartitionClient({});
+    const { client, release, callsTo } = makePartitionClient({});
     const a = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     const b = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     expect(b).toBe(a);
     release();
     await a;
-    expect(calls.filter((c) => c === 'sessions')).toHaveLength(1);
+    expect(callsTo('sessions', 'findAll')).toHaveLength(1);
   });
 
   it("reads the board's sessions as lean rows", async () => {
@@ -323,23 +289,27 @@ describe('loadBoardPartition', () => {
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     release();
     await load;
-    expect(queries.get('sessions')).toMatchObject({ board_id: BOARD, archived: false, lean: true });
+    expect(queries('sessions', 'findAll').at(-1)).toMatchObject({
+      board_id: BOARD,
+      archived: false,
+      lean: true,
+    });
   });
 
   it('never reads comments: they are global and gated at first paint', async () => {
-    const { client, release, calls } = makePartitionClient({});
+    const { client, release, callsTo } = makePartitionClient({});
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     release();
     await load;
-    expect(calls).not.toContain('board-comments');
+    expect(callsTo('board-comments')).toEqual([]);
   });
 
   it('skips board objects for callers without member workspace services', async () => {
-    const { client, release, calls } = makePartitionClient({});
+    const { client, release, callsTo } = makePartitionClient({});
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: false });
     release();
     await load;
-    expect(calls).not.toContain('board-objects');
+    expect(callsTo('board-objects')).toEqual([]);
     expect(ready()).toBe(true);
   });
 
@@ -463,27 +433,24 @@ describe('loadBoardPartition', () => {
 
   it('restarts instead of applying across a wholesale reconnect replacement', async () => {
     let calls = 0;
-    let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((r) => {
-      releaseFirst = r;
-    });
-    const client = {
-      service: (name: string) => ({
-        findAll: vi.fn(async () => {
-          if (name === 'sessions') calls += 1;
-          if (calls === 1) await firstGate;
-          return name === 'sessions'
+    const firstGate = deferred();
+    const { client } = fakeFeathersClient(
+      { boards: { get: () => fullBoard() } },
+      {
+        fallback: async ({ service }) => {
+          if (service === 'sessions') calls += 1;
+          if (calls === 1) await firstGate.promise;
+          return service === 'sessions'
             ? calls === 1
               ? [session('s-deleted-while-offline', 'br-1')]
               : [session('s-1', 'br-1')]
             : [];
-        }),
-        get: vi.fn(async () => fullBoard()),
-      }),
-    } as unknown as AgorClient;
+        },
+      }
+    );
     const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     bumpFirstPaintMergeRevisions();
-    releaseFirst();
+    firstGate.resolve();
     await load;
     expect(calls).toBe(2);
     expect([...agorStore.getState().sessionById.keys()]).toEqual(['s-1']);
@@ -551,20 +518,17 @@ describe('loadBoardPartition', () => {
 
   it('never applies after the restart budget: records a retryable error instead', async () => {
     let calls = 0;
-    const client = {
-      service: (name: string) => ({
-        findAll: vi.fn(async () => {
-          if (name === 'sessions') {
-            calls += 1;
-            // Every attempt spans a wholesale replacement.
-            bumpFirstPaintMergeRevisions();
-            return [session(`s-stale-${calls}`, 'br-1')];
-          }
-          return [];
-        }),
-        get: vi.fn(async () => fullBoard()),
-      }),
-    } as unknown as AgorClient;
+    const { client } = fakeFeathersClient({
+      sessions: {
+        findAll: () => {
+          calls += 1;
+          // Every attempt spans a wholesale replacement.
+          bumpFirstPaintMergeRevisions();
+          return [session(`s-stale-${calls}`, 'br-1')];
+        },
+      },
+      boards: { get: () => fullBoard() },
+    });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     expect(calls).toBe(4);
@@ -575,14 +539,14 @@ describe('loadBoardPartition', () => {
   });
 
   it('records a failure and lets retry clear it', async () => {
-    const client = {
-      service: () => ({
-        findAll: vi.fn(async () => {
+    const { client } = fakeFeathersClient(
+      { boards: { get: () => fullBoard() } },
+      {
+        fallback: () => {
           throw new Error('boom');
-        }),
-        get: vi.fn(async () => fullBoard()),
-      }),
-    } as unknown as AgorClient;
+        },
+      }
+    );
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     await loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     expect(selectBoardPartition(agorStore.getState(), BOARD)?.status).toBe('error');
@@ -699,23 +663,10 @@ describe('loadBoardPartition', () => {
 });
 
 describe('partition LRU', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-  });
-
   const boardRows = (boardId: string) => ({
     branches: [branch(`br-${boardId}`, { board_id: boardId })],
     sessions: [session(`s-${boardId}`, `br-${boardId}`, { branch_board_id: boardId })],
-    cards: [{ card_id: `k-${boardId}`, board_id: boardId, title: boardId } as CardWithType],
+    cards: [card(`k-${boardId}`, { board_id: boardId, title: boardId })],
   });
   /** Load `boardId`'s partition: one branch, session and card of its own. */
   async function loadBoard(boardId: string) {
@@ -870,18 +821,6 @@ describe('partition LRU', () => {
 });
 
 describe('foreground priority', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-  });
-
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
   it("a background partition sends no read until the open session's transcript settles", async () => {
@@ -896,7 +835,7 @@ describe('foreground priority', () => {
     expect(background.calls).toEqual([]);
     transcriptLanded();
     await settle();
-    expect(background.calls).toContain('sessions');
+    expect(background.callsTo('sessions', 'findAll')).not.toEqual([]);
     background.release();
     await load;
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
@@ -907,7 +846,7 @@ describe('foreground priority', () => {
     const shown = loadBoardPartition(displayed.client, BOARD, {
       canUseMemberWorkspaceServices: true,
     });
-    expect(displayed.calls).toContain('sessions');
+    expect(displayed.callsTo('sessions', 'findAll')).not.toEqual([]);
     const background = makePartitionClient({});
     const other = loadBoardPartition(background.client, 'board-2', {
       canUseMemberWorkspaceServices: true,
@@ -918,7 +857,7 @@ describe('foreground priority', () => {
     displayed.release();
     await shown;
     await settle();
-    expect(background.calls).toContain('sessions');
+    expect(background.callsTo('sessions', 'findAll')).not.toEqual([]);
     background.release();
     await other;
   });

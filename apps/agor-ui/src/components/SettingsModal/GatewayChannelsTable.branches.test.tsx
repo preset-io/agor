@@ -3,17 +3,13 @@
  * branch map empty (Step 3): the table reads its channels' target branches by id.
  */
 import type { AgorClient, Branch, GatewayChannel, User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { App as AntdApp } from 'antd';
-import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { resetHydrationRevisions } from '../../store/agorHydration';
-import { agorStore, useAgorStore } from '../../store/agorStore';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { fireEvent, screen } from '@testing-library/react';
+import { expect, it, vi } from 'vitest';
+import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById } from '../../store/selectors';
+import { mount, withTestAuthority } from '../../test/harness';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 
-const AUTHORITY = 'user-1:admin:1';
 const user = { user_id: 'user-1', name: 'Ada', role: 'admin' } as User;
 const channel = {
   id: 'channel-1',
@@ -29,17 +25,7 @@ const channel = {
 } as unknown as GatewayChannel;
 const branch = { branch_id: 'branch-1', name: 'support-desk', archived: false } as Branch;
 
-beforeEach(() => {
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-  agorStore.getState().setDataAuthority(AUTHORITY);
-  agorStore.getState().setLoading(false);
-});
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-});
+withTestAuthority('user-1:admin:1');
 
 it("reads a channel's unloaded target branch by id, so its name is searchable", async () => {
   const find = vi.fn(async () => [branch]);
@@ -57,13 +43,7 @@ it("reads a channel's unloaded target branch by id, so its name is searchable", 
       />
     );
   }
-  render(
-    <MemoryRouter>
-      <AntdApp>
-        <Table />
-      </AntdApp>
-    </MemoryRouter>
-  );
+  mount(<Table />);
   fireEvent.change(screen.getByRole('textbox'), { target: { value: 'support-desk' } });
   expect(await screen.findByText('Team Slack')).toBeVisible();
   expect(find).toHaveBeenCalledWith({

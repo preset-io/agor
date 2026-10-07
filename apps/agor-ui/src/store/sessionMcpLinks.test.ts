@@ -1,7 +1,8 @@
-import type { AgorClient, Session } from '@agor-live/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Session } from '@agor-live/client';
+import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { deferred, fakeFeathersClient, makeSession, withTestAuthority } from '../test/harness';
 import { updateSessionMcpServers } from '../utils/sessionMcpServers';
-import { cancelAllHydrations, resetHydrationRevisions } from './agorHydration';
+import { cancelAllHydrations } from './agorHydration';
 import {
   branchRemoved,
   mcpServerRemoved,
@@ -9,7 +10,6 @@ import {
   sessionRemoved,
 } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
-import { setRealtimeAuthorityScope } from './realtimeBatch';
 import { pinRows } from './retention';
 import { sessionMcpCreated, sessionMcpPatched, sessionMcpRemoved } from './sessionMcpActions';
 import {
@@ -19,41 +19,31 @@ import {
   sessionMcpPairKey,
 } from './sessionMcpLinks';
 
-const AUTHORITY = 'user-a:member:1';
+withTestAuthority('user-a:member:1');
 
 type Row = { session_id: string; mcp_server_id: string };
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 /** A client whose `session-mcp-servers.find` answers from a held promise. */
 function makeClient() {
-  const calls: unknown[] = [];
   const responses: Array<ReturnType<typeof deferred<Row[]>>> = [];
-  const nested = { create: vi.fn(async () => ({})), remove: vi.fn(async () => ({})) };
-  const client = {
-    service: (name: string) => {
-      if (name === 'session-mcp-servers') {
-        return {
-          find: vi.fn((params: unknown) => {
-            calls.push(params);
-            const response = deferred<Row[]>();
-            responses.push(response);
-            return response.promise;
-          }),
-        };
-      }
-      return nested;
+  const fake = fakeFeathersClient(
+    {
+      'session-mcp-servers': {
+        find: () => {
+          const response = deferred<Row[]>();
+          responses.push(response);
+          return response.promise;
+        },
+      },
     },
-  } as unknown as AgorClient;
-  return { client, calls, responses, nested };
+    { fallback: () => ({}) }
+  );
+  return {
+    client: fake.client,
+    calls: () => fake.callsTo('session-mcp-servers', 'find').map((c) => c.args[0]),
+    responses,
+    nested: fake.client.service('sessions/s-1/mcp-servers') as Record<'create' | 'remove', Mock>,
+  };
 }
 
 const never = () => false;
@@ -112,22 +102,14 @@ describe('mergeSessionMcpSnapshot', () => {
 });
 
 describe('loadSessionMcpServerIds', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    setRealtimeAuthorityScope(AUTHORITY);
-    holdSession();
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-  });
+  beforeEach(holdSession);
 
   it('reads one session, marks it loaded, and deduplicates concurrent reads', async () => {
     const { client, calls, responses } = makeClient();
     const first = loadSessionMcpServerIds(client, 's-1');
     const second = loadSessionMcpServerIds(client, 's-1');
     expect(second).toBe(first);
-    expect(calls).toEqual([{ query: { session_id: 's-1' } }]);
+    expect(calls()).toEqual([{ query: { session_id: 's-1' } }]);
     expect(agorStore.getState().sessionMcpLoaded.has('s-1')).toBe(false);
 
     responses[0].resolve([{ session_id: 's-1', mcp_server_id: 'a' }]);
@@ -205,15 +187,7 @@ describe('loadSessionMcpServerIds', () => {
 });
 
 describe('updateSessionMcpServers before the links load', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    setRealtimeAuthorityScope(AUTHORITY);
-    holdSession();
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-  });
+  beforeEach(holdSession);
 
   it('refuses a diff for an unloaded session, so nothing it never saw is detached', async () => {
     const { client, responses, nested } = makeClient();
@@ -242,15 +216,7 @@ describe('updateSessionMcpServers before the links load', () => {
 });
 
 describe('session MCP links of deleted sessions', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    setRealtimeAuthorityScope(AUTHORITY);
-    holdSession();
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-  });
+  beforeEach(holdSession);
 
   const session = (id: string, branchId = 'b-1') =>
     ({ session_id: id, branch_id: branchId, archived: false }) as never;
@@ -291,25 +257,8 @@ describe('session MCP links of deleted sessions', () => {
 });
 
 describe('links of sessions nothing holds', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    agorStore.getState().reset();
-  });
-
   const other = (id: string) =>
-    ({
-      session_id: id,
-      branch_id: 'br-9',
-      branch_board_id: 'b9',
-      created_by: 'user-b',
-      archived: false,
-      genealogy: { children: [] },
-    }) as unknown as Session;
+    makeSession(id, 'br-9', { branch_board_id: 'b9', created_by: 'user-b' } as Partial<Session>);
 
   it('never enter: 100 rejected creates leave no links', () => {
     for (let i = 0; i < 100; i++) {

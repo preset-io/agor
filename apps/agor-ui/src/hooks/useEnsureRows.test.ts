@@ -1,17 +1,13 @@
 import type { AgorClient, Branch } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cancelAllHydrations, resetHydrationRevisions } from '../store/agorHydration';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { cancelAllHydrations } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { pinnedMembers } from '../store/rowPins';
 import { MAX_REFERENCE_READ_ATTEMPTS } from '../store/userScope';
+import { makeBranch as branch, deferred, withTestAuthority } from '../test/harness';
 import { useEnsureBranches } from './useEnsureRows';
-
-const AUTHORITY = 'me:member:1';
-const branch = (id: string) =>
-  ({ branch_id: id, board_id: 'board-1', name: `name-${id}`, archived: false }) as Branch;
 
 function makeClient(known: Branch[]) {
   const find = vi.fn(async ({ query }: { query: { branch_id: { $in: string[] } } }) =>
@@ -20,19 +16,7 @@ function makeClient(known: Branch[]) {
   return { client: { service: () => ({ find }) } as unknown as AgorClient, find };
 }
 
-beforeEach(() => {
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-  agorStore.getState().setDataAuthority(AUTHORITY);
-  agorStore.getState().setLoading(false);
-});
-afterEach(() => {
-  vi.useRealTimers();
-  cleanup();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-});
+withTestAuthority('me:member:1');
 
 describe('useEnsureBranches', () => {
   it('reads the branches the store lacks by id, in chunks, and fills them with no scope', async () => {
@@ -132,20 +116,15 @@ describe('useEnsureBranches', () => {
 
   it('reads an id again when its read was cancelled, never recording it absent', async () => {
     const { client, find } = makeClient([branch('b-1'), branch('b-2')]);
-    let resolveFirst: (rows: Branch[]) => void = () => {};
-    find.mockImplementationOnce(
-      () =>
-        new Promise<Branch[]>((resolve) => {
-          resolveFirst = resolve;
-        })
-    );
+    const first = deferred<Branch[]>();
+    find.mockImplementationOnce(() => first.promise);
     const { rerender } = renderHook(({ ids }) => useEnsureBranches(client, ids), {
       initialProps: { ids: ['b-1'] },
     });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
     // Hydration is cancelled under the same authority (a store remount).
     act(() => cancelAllHydrations());
-    await act(async () => resolveFirst([branch('b-1')]));
+    await act(async () => first.resolve([branch('b-1')]));
     rerender({ ids: ['b-1', 'b-2'] });
     await waitFor(() => expect(agorStore.getState().branchById.has('b-2')).toBe(true));
     await waitFor(() => expect(agorStore.getState().branchById.has('b-1')).toBe(true));
@@ -168,17 +147,12 @@ describe('useEnsureBranches retention', () => {
 
   it('a reply that lands after the view unmounted fills nothing', async () => {
     const { client, find } = makeClient([]);
-    let answer: (rows: Branch[]) => void = () => {};
-    find.mockImplementationOnce(
-      () =>
-        new Promise<Branch[]>((resolve) => {
-          answer = resolve;
-        })
-    );
+    const answer = deferred<Branch[]>();
+    find.mockImplementationOnce(() => answer.promise);
     const { unmount } = renderHook(() => useEnsureBranches(client, ['b-late']));
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
     unmount();
-    await act(async () => answer([branch('b-late')]));
+    await act(async () => answer.resolve([branch('b-late')]));
     expect(agorStore.getState().branchById.has('b-late')).toBe(false);
     expect(pinnedMembers.branches?.has('b-late')).toBe(false);
   });

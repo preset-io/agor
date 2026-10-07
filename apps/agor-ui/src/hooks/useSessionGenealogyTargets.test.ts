@@ -1,21 +1,12 @@
 import type { AgorClient, Session } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
-import { cleanup, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetHydrationRevisions } from '../store/agorHydration';
+import { renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../store/agorStore';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../store/realtimeBatch';
+import { makeSession, withTestAuthority } from '../test/harness';
 import { useSessionGenealogyTargets } from './useSessionGenealogyTargets';
 
-const AUTHORITY = 'me:member:1';
-const row = (id: string, extra: Partial<Session> = {}) =>
-  ({
-    session_id: id,
-    branch_id: `br-${id}`,
-    archived: false,
-    genealogy: { children: [] },
-    ...extra,
-  }) as unknown as Session;
+const row = (id: string, extra: Partial<Session> = {}) => makeSession(id, `br-${id}`, extra);
 
 function makeClient(known: Session[]) {
   const find = vi.fn(async ({ query }: { query: { session_id: { $in: string[] } } }) =>
@@ -25,20 +16,9 @@ function makeClient(known: Session[]) {
   return { client, find };
 }
 
-beforeEach(() => {
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-  agorStore.getState().setDataAuthority(AUTHORITY);
-  agorStore.getState().setLoading(false);
-});
-afterEach(() => {
-  cleanup();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-});
-
 describe('useSessionGenealogyTargets', () => {
+  withTestAuthority('me:member:1');
+
   it('reads the parent, fork source, callback target and children the store lacks by id', async () => {
     const opened = row('open', {
       genealogy: {

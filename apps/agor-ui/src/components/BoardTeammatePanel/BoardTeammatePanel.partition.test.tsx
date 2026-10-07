@@ -3,14 +3,19 @@
  * that board's partition (loaded in the background), so the teammate tab
  * works with the store's session map empty (Step 3).
  */
-import type { AgorClient, Board, Branch, Repo, Session, User } from '@agor-live/client';
+import type { Board, Branch, Repo, Session, User } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { resetHydrationRevisions } from '../../store/agorHydration';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
 import { getDisplayedBoardId } from '../../store/boardPartitions';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import {
+  fakeFeathersClient,
+  makeBoard,
+  makeBranch,
+  makeSession,
+  withTestAuthority,
+} from '../../test/harness';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
 vi.mock('../BranchCard', () => ({
@@ -23,30 +28,21 @@ vi.mock('../BranchCard', () => ({
   ),
 }));
 
-const board = { board_id: 'board-1', name: 'Shown', primary_teammate_id: 'mate' } as Board;
-const otherBoard = { board_id: 'board-2', name: 'Home of the teammate' } as Board;
-const teammate = {
-  branch_id: 'mate',
+const board = makeBoard('board-1', {
+  name: 'Shown',
+  primary_teammate_id: 'mate',
+} as Partial<Board>);
+const otherBoard = makeBoard('board-2', { name: 'Home of the teammate' });
+const teammate = makeBranch('mate', {
   board_id: 'board-2',
   repo_id: 'repo-1',
-  name: 'mate',
   filesystem_status: 'ready',
-  archived: false,
-} as unknown as Branch;
+} as Partial<Branch>);
 const repo = { repo_id: 'repo-1', slug: 'acme/app' } as Repo;
-const session = {
-  session_id: 's1',
-  branch_id: 'mate',
-  title: 'Teammate task',
-  status: 'idle',
-} as unknown as Session;
+const session = makeSession('s1', 'mate', { title: 'Teammate task' });
 
+withTestAuthority('user-1:member:1');
 beforeEach(() => {
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-  discardRealtimeNow();
-  setRealtimeAuthorityScope('user-1:member:1');
-  agorStore.getState().setLoading(false);
   agorStore.getState().setMap(
     'boardById',
     new Map([
@@ -58,22 +54,13 @@ beforeEach(() => {
     .getState()
     .setMap('userById', new Map([['user-1', { user_id: 'user-1', role: 'member' } as User]]));
 });
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-});
 
 it("loads the teammate's board in the background and lists its sessions", async () => {
-  const client = {
-    io: { on: vi.fn(), off: vi.fn() },
-    service: (name: string) => ({
-      findAll: vi.fn(async () =>
-        name === 'sessions' ? [session] : name === 'branches' ? [teammate] : []
-      ),
-      find: vi.fn(async () => []),
-      get: vi.fn(async () => ({ ...otherBoard, objects: {} })),
-    }),
-  } as unknown as AgorClient;
+  const { client } = fakeFeathersClient({
+    sessions: { findAll: () => [session] },
+    branches: { findAll: () => [teammate] },
+    boards: { get: () => ({ ...otherBoard, objects: {} }) },
+  });
   render(
     <AntApp>
       <BoardTeammatePanel

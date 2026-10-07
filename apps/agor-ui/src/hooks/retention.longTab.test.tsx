@@ -7,25 +7,31 @@
  * their view unmounted, realtime on boards never loaded, archived deep links
  * and board loads that settle after the user moved on.
  */
-import type { AgorClient, Board, Branch, CardWithType, Session } from '@agor-live/client';
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it } from 'vitest';
-import { resetHydrationRevisions } from '../store/agorHydration';
+import type { AgorClient, Branch, CardWithType, Session } from '@agor-live/client';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it } from 'vitest';
 import { branchPatched, sessionCreated } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
 import { makeBoardReadySelector, RETAINED_BACKGROUND_PARTITIONS } from '../store/boardPartitions';
 import { captureLoadLifetime } from '../store/loadLifetime';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { holdRows, pinRows } from '../store/retention';
 import { USER_SCOPE_KEYS } from '../store/scopeMerge';
 import { sessionMcpCreated } from '../store/sessionMcpActions';
 import { fillOnDemand } from '../store/userScope';
+import {
+  fakeFeathersClient,
+  gate,
+  ME,
+  makeBoard,
+  makeBranch,
+  makeCard,
+  makeSession,
+  withTestAuthority,
+} from '../test/harness';
 import { useBoardPartition } from './useBoardPartition';
 import { useEnsureSessions } from './useEnsureRows';
 import { usePinnedOpenRows } from './usePinnedRows';
 
-const AUTHORITY = 'user-me:member:1';
-const ME = 'user-me';
 const BOARDS = 20;
 const BRANCHES_PER_BOARD = 5;
 const SESSIONS_PER_BRANCH = 4;
@@ -41,26 +47,16 @@ function server() {
   const sessions: Session[] = [];
   const cards: CardWithType[] = [];
   for (let b = 0; b < BOARDS; b++) {
-    cards.push({ card_id: `k-${b}`, board_id: boardId(b), title: 'card' } as CardWithType);
+    cards.push(makeCard(`k-${b}`, { board_id: boardId(b), title: 'card' }));
     for (let r = 0; r < BRANCHES_PER_BOARD; r++) {
-      branches.push({
-        branch_id: branchId(b, r),
-        board_id: boardId(b),
-        name: branchId(b, r),
-        archived: false,
-        created_by: 'user-other',
-      } as Branch);
+      branches.push(makeBranch(branchId(b, r), { board_id: boardId(b), created_by: 'user-other' }));
       for (let s = 0; s < SESSIONS_PER_BRANCH; s++) {
-        sessions.push({
-          session_id: sessionId(b, r, s),
-          branch_id: branchId(b, r),
-          branch_board_id: boardId(b),
-          created_by: r === 0 && s === 0 ? ME : 'user-other',
-          status: 'idle',
-          archived: false,
-          title: sessionId(b, r, s),
-          genealogy: { children: [] },
-        } as unknown as Session);
+        sessions.push(
+          makeSession(sessionId(b, r, s), branchId(b, r), {
+            branch_board_id: boardId(b),
+            created_by: r === 0 && s === 0 ? ME : 'user-other',
+          } as Partial<Session>)
+        );
       }
     }
   }
@@ -70,21 +66,18 @@ function server() {
 function makeClient(rows: ReturnType<typeof server>) {
   const onBoard = <T extends { board_id?: string | null }>(list: T[], id: unknown) =>
     list.filter((row) => row.board_id === id);
-  const client = {
-    service: (name: string) => ({
-      findAll: async ({ query }: { query: Record<string, unknown> }) => {
-        if (name === 'branches') return onBoard(rows.branches, query.board_id);
-        if (name === 'sessions')
-          return rows.sessions.filter((s) => s.branch_board_id === query.board_id);
-        if (name === 'cards') return onBoard(rows.cards, query.board_id);
-        return [];
-      },
-      find: async ({ query }: { query: { session_id: { $in: string[] } } }) =>
-        rows.sessions.filter((s) => query.session_id.$in.includes(s.session_id)),
-      get: async (id: string) => ({ board_id: id, name: id, objects: {} }) as unknown as Board,
-    }),
-  } as unknown as AgorClient;
-  return client;
+  return fakeFeathersClient({
+    branches: { findAll: ({ query }) => onBoard(rows.branches, query.board_id) },
+    sessions: {
+      findAll: ({ query }) => rows.sessions.filter((s) => s.branch_board_id === query.board_id),
+      find: ({ query }) =>
+        rows.sessions.filter((s) =>
+          (query.session_id as { $in: string[] }).$in.includes(s.session_id)
+        ),
+    },
+    cards: { findAll: ({ query }) => onBoard(rows.cards, query.board_id) },
+    boards: { get: ({ id }) => ({ board_id: id, name: id, objects: {} }) },
+  }).client;
 }
 
 /** The user scope: my sessions, loaded with their rows. */
@@ -115,23 +108,13 @@ function useShell(client: AgorClient, board: string | null, session: string | nu
   usePinnedOpenRows({ sessions: [session] });
 }
 
+withTestAuthority();
 beforeEach(() => {
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-  const store = agorStore.getState();
-  store.setDataAuthority(AUTHORITY);
-  store.setLoading(false);
-  store.replaceMaps({
+  agorStore.getState().replaceMaps({
     boardById: new Map(
-      Array.from({ length: BOARDS }, (_, b) => [boardId(b), { board_id: boardId(b) } as Board])
+      Array.from({ length: BOARDS }, (_, b) => [boardId(b), makeBoard(boardId(b))])
     ),
   });
-});
-afterEach(() => {
-  cleanup();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
 });
 
 it('opening and closing 20 boards and 50 sessions keeps the store on a plateau', async () => {
@@ -245,26 +228,22 @@ it('opening and closing 20 boards and 50 sessions keeps the store on a plateau',
 /** `makeClient`, with every read held until `releaseAll`. */
 function deferredClient(rows: ReturnType<typeof server>) {
   const client = makeClient(rows);
-  const held: (() => void)[] = [];
-  const hold = <T,>(read: () => Promise<T>) =>
-    new Promise<T>((resolve, reject) => held.push(() => read().then(resolve, reject)));
-  const deferred = {
-    service: (name: string) => {
-      const service = client.service(name as never) as unknown as Record<
-        string,
-        (...args: unknown[]) => Promise<unknown>
-      >;
-      return {
-        findAll: (...args: unknown[]) => hold(() => service.findAll(...args)),
-        find: (...args: unknown[]) => hold(() => service.find(...args)),
-        get: (...args: unknown[]) => hold(() => service.get(...args)),
-      };
-    },
-  } as unknown as AgorClient;
+  const held = gate();
+  const deferred = fakeFeathersClient(
+    {},
+    {
+      fallback: async ({ service, method, args }) => {
+        await held.wait();
+        return (client.service(service as never)[method as 'find'] as (...a: unknown[]) => unknown)(
+          ...args
+        );
+      },
+    }
+  ).client;
   const releaseAll = async () => {
-    while (held.length > 0) {
+    while (held.waiting > 0) {
       await act(async () => {
-        for (const release of held.splice(0)) release();
+        held.release();
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
     }

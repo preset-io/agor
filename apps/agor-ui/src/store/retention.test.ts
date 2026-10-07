@@ -1,11 +1,7 @@
-import type { BoardEntityObject, Branch, CardWithType, Session } from '@agor-live/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  beginPartitionLoad,
-  endPartitionLoad,
-  resetHydrationRevisions,
-  touchedSince,
-} from './agorHydration';
+import type { BoardEntityObject, CardWithType, Session } from '@agor-live/client';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { makeBranch, makeSession, withTestAuthority } from '../test/harness';
+import { beginPartitionLoad, endPartitionLoad, touchedSince } from './agorHydration';
 import {
   boardObjectCreated,
   branchCreated,
@@ -16,12 +12,7 @@ import {
 } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 import { captureLoadLifetime } from './loadLifetime';
-import {
-  discardRealtimeNow,
-  enqueueSessionPatch,
-  flushRealtimeNow,
-  setRealtimeAuthorityScope,
-} from './realtimeBatch';
+import { enqueueSessionPatch, flushRealtimeNow, setRealtimeAuthorityScope } from './realtimeBatch';
 import { anyOf, evictRows, pinRows } from './retention';
 import { pinnedMembers } from './rowPins';
 import {
@@ -34,19 +25,11 @@ import {
 import { otherCommittedMembers } from './userScope';
 
 const AUTHORITY = 'user-a:member:1';
+withTestAuthority(AUTHORITY);
 
-const branch = (id: string, boardId: string) =>
-  ({ branch_id: id, board_id: boardId, name: id, archived: false }) as Branch;
+const branch = (id: string, boardId: string) => makeBranch(id, { board_id: boardId });
 const session = (id: string, branchId: string, boardId: string) =>
-  ({
-    session_id: id,
-    branch_id: branchId,
-    branch_board_id: boardId,
-    status: 'idle',
-    archived: false,
-    title: id,
-    genealogy: { children: [] },
-  }) as unknown as Session;
+  makeSession(id, branchId, { branch_board_id: boardId });
 
 const never = () => false;
 
@@ -76,21 +59,12 @@ const evictBoard = (boardId: string) =>
 const has = (map: 'branchById' | 'sessionById', id: string) => agorStore.getState()[map].has(id);
 
 describe('pins', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
+  beforeEach(() =>
     seedBoard('b1', {
       branches: [branch('br-1', 'b1')],
       sessions: [session('s-1', 'br-1', 'b1'), session('s-2', 'br-1', 'b1')],
-    });
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-  });
+    })
+  );
 
   it("keep the open session and its branch through their partition's eviction, until released", () => {
     const release = pinRows({ sessions: ['s-1'], branches: ['br-1'] });
@@ -198,18 +172,6 @@ describe('pins', () => {
 });
 
 describe('archived rows', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-  });
-
   /** An archived deep-link target, filled for display. */
   const fillArchived = (id: string, boardId: string) =>
     agorStore.getState().applyMaps((prev) => ({
@@ -245,18 +207,6 @@ describe('archived rows', () => {
 });
 
 describe('realtime admission (global hydration off)', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    discardRealtimeNow();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => {
-    setRealtimeAuthorityScope(null);
-    discardRealtimeNow();
-    agorStore.getState().reset();
-  });
-
   const other = (row: Session) => ({ ...row, created_by: 'user-b' }) as Session;
 
   it('on Home, 100 creates and patches on a board never loaded leave the store empty', () => {

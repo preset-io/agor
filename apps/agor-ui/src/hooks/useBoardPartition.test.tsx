@@ -1,7 +1,6 @@
-import type { AgorClient, Branch } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cancelAllHydrations, resetHydrationRevisions } from '../store/agorHydration';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { cancelAllHydrations } from '../store/agorHydration';
 import { branchPatched } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
 import {
@@ -11,54 +10,39 @@ import {
   registerBoardUse,
   selectBoardPartition,
 } from '../store/boardPartitions';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../store/realtimeBatch';
+import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
+import {
+  BOARD,
+  fakeFeathersClient,
+  gate,
+  makeBoard,
+  makeBranch,
+  withTestAuthority,
+} from '../test/harness';
 import { useBoardPartition } from './useBoardPartition';
-
-const AUTHORITY = 'user-a:member:1';
-const BOARD = 'board-1';
 
 /** A client whose partition reads wait for `release`; counts session reads. */
 function makeClient() {
-  const gates: Array<() => void> = [];
-  let sessionReads = 0;
-  const wait = () => new Promise<void>((resolve) => gates.push(resolve));
-  const client = {
-    io: { on: vi.fn(), off: vi.fn() },
-    service: (name: string) => ({
-      findAll: vi.fn(async () => {
-        if (name === 'sessions') sessionReads += 1;
-        await wait();
-        return [];
-      }),
-      get: vi.fn(async () => {
-        await wait();
-        return { board_id: BOARD, name: 'Board', objects: {} };
-      }),
-    }),
-  } as unknown as AgorClient;
+  const reads = gate();
+  const fake = fakeFeathersClient(
+    {},
+    {
+      fallback: async ({ method }) => {
+        await reads.wait();
+        return method === 'get' ? { board_id: BOARD, name: 'Board', objects: {} } : [];
+      },
+    }
+  );
   return {
-    client,
-    sessionReads: () => sessionReads,
-    releaseAll: () => {
-      for (const release of gates.splice(0)) release();
-    },
+    client: fake.client,
+    sessionReads: () => fake.callsTo('sessions', 'findAll').length,
+    releaseAll: reads.release,
   };
 }
 
+withTestAuthority('user-a:member:1', { dataAuthority: false });
 beforeEach(() => {
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-  discardRealtimeNow();
-  setRealtimeAuthorityScope(AUTHORITY);
-  agorStore.getState().setLoading(false);
-  agorStore
-    .getState()
-    .setMap('boardById', new Map([[BOARD, { board_id: BOARD, name: 'Board' } as never]]));
-});
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
+  agorStore.getState().setMap('boardById', new Map([[BOARD, makeBoard(BOARD, { name: 'Board' })]]));
 });
 
 describe('useBoardPartition', () => {
@@ -155,8 +139,7 @@ describe('useBoardPartition', () => {
   });
 
   // A branch arriving from a board that isn't loaded (nothing held it).
-  const arrive = (id: string) =>
-    branchPatched({ branch_id: id, board_id: BOARD, name: id, archived: false } as Branch);
+  const arrive = (id: string) => branchPatched(makeBranch(id));
 
   it('reads the board again when a branch arrives while its reload is in flight', async () => {
     const { client, sessionReads, releaseAll } = makeClient();
@@ -185,37 +168,33 @@ describe('useBoardPartition', () => {
 
   it('sustained arrivals end in a bounded number of reads and a ready board', async () => {
     vi.useFakeTimers();
-    try {
-      const { client, sessionReads, releaseAll } = makeClient();
-      renderHook(() => useBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true }));
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(0);
-        releaseAll();
-        await vi.advanceTimersByTimeAsync(0);
-      });
-      expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true);
-      const before = sessionReads();
+    const { client, sessionReads, releaseAll } = makeClient();
+    renderHook(() => useBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+      releaseAll();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true);
+    const before = sessionReads();
 
-      // A branch arrives every 50ms for 2.5s; every read answers at once.
-      for (let i = 0; i < 50; i++) {
-        await act(async () => {
-          arrive(`br-${i}`);
-          releaseAll();
-          await vi.advanceTimersByTimeAsync(50);
-          releaseAll();
-        });
-      }
+    // A branch arrives every 50ms for 2.5s; every read answers at once.
+    for (let i = 0; i < 50; i++) {
       await act(async () => {
-        for (let i = 0; i < 10; i++) {
-          releaseAll();
-          await vi.advanceTimersByTimeAsync(500);
-        }
+        arrive(`br-${i}`);
+        releaseAll();
+        await vi.advanceTimersByTimeAsync(50);
+        releaseAll();
       });
-      expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true);
-      expect(sessionReads() - before).toBeLessThanOrEqual(12);
-    } finally {
-      vi.useRealTimers();
     }
+    await act(async () => {
+      for (let i = 0; i < 10; i++) {
+        releaseAll();
+        await vi.advanceTimersByTimeAsync(500);
+      }
+    });
+    expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true);
+    expect(sessionReads() - before).toBeLessThanOrEqual(12);
   });
 
   it('navigating to a retained board never evicts it first', async () => {
@@ -224,17 +203,14 @@ describe('useBoardPartition', () => {
     agorStore
       .getState()
       .setMap('boardById', new Map(ids.map((id) => [id, { board_id: id, name: id } as never])));
-    const reads = new Map<string, number>();
-    const client = {
-      io: { on: vi.fn(), off: vi.fn() },
-      service: (name: string) => ({
-        findAll: vi.fn(async ({ query }: { query: { board_id: string } }) => {
-          if (name === 'sessions') reads.set(query.board_id, (reads.get(query.board_id) ?? 0) + 1);
-          return [];
-        }),
-        get: vi.fn(async (id: string) => ({ board_id: id, name: id, objects: {} })),
-      }),
-    } as unknown as AgorClient;
+    const fake = fakeFeathersClient(
+      {},
+      {
+        fallback: ({ method, id }) =>
+          method === 'get' ? { board_id: id, name: id, objects: {} } : [],
+      }
+    );
+    const client = fake.client;
     const { result, rerender } = renderHook(
       ({ boardId }) => useBoardPartition(client, boardId, { canUseMemberWorkspaceServices: true }),
       { initialProps: { boardId: `board-${visits[0]}` } }
@@ -244,6 +220,8 @@ describe('useBoardPartition', () => {
       await waitFor(() => expect(result.current.boardReady).toBe(true));
     }
     // 07 was among the three most recently used background boards (06, 05, 07).
-    expect(reads.get('board-07')).toBe(1);
+    expect(
+      fake.queries('sessions', 'findAll').filter((q) => q.board_id === 'board-07')
+    ).toHaveLength(1);
   });
 });

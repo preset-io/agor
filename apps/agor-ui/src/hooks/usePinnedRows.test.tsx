@@ -1,29 +1,15 @@
-import type { Session } from '@agor-live/client';
-import { cleanup, renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { renderHook } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { agorStore } from '../store/agorStore';
-import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { pinnedMembers } from '../store/rowPins';
+import { makeSession, withTestAuthority } from '../test/harness';
 import { usePinnedOpenRows, usePinnedRows } from './usePinnedRows';
 
-const session = (id: string, branchId: string) =>
-  ({
-    session_id: id,
-    branch_id: branchId,
-    archived: false,
-    genealogy: { children: [] },
-  }) as unknown as Session;
-
+withTestAuthority('me:member:1', { dataAuthority: false });
 beforeEach(() => {
-  setRealtimeAuthorityScope('me:member:1');
   agorStore.getState().replaceMaps({
-    sessionById: new Map(['s-a', 's-b', 's-c'].map((id) => [id, session(id, `br-${id}`)])),
+    sessionById: new Map(['s-a', 's-b', 's-c'].map((id) => [id, makeSession(id, `br-${id}`)])),
   });
-});
-afterEach(() => {
-  cleanup();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
 });
 
 const present = () => [...agorStore.getState().sessionById.keys()].sort();

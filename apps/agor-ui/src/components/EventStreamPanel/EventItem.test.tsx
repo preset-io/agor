@@ -2,11 +2,10 @@
  * An event's BranchCard popover reads that branch's active sessions when it
  * opens, so it lists them with the store's session map empty (Step 3).
  */
-import type { AgorClient, Branch, Repo, Session } from '@agor-live/client';
+import type { Branch, Repo, Session } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { agorStore } from '../../store/agorStore';
-import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { expect, it, vi } from 'vitest';
+import { fakeFeathersClient, withTestAuthority } from '../../test/harness';
 import { EventItem } from './EventItem';
 
 vi.mock('../BranchCard/BranchCard', () => ({
@@ -19,17 +18,11 @@ const branch = { branch_id: 'b1', repo_id: 'r1', name: 'feature-b1' } as Branch;
 const repo = { repo_id: 'r1', name: 'repo', slug: 'org/repo' } as Repo;
 const session = { session_id: 's1', branch_id: 'b1', title: 'Fix it' } as Session;
 
-beforeEach(() => setRealtimeAuthorityScope('user-1:member:1'));
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-});
+withTestAuthority('user-1:member:1');
 
 it("reads the branch's sessions when its popover opens", async () => {
-  const findAll = vi.fn(async () => [session]);
-  const client = {
-    service: () => ({ findAll, on: () => {}, off: () => {} }),
-  } as unknown as AgorClient;
+  const { client } = fakeFeathersClient({ sessions: { findAll: () => [session] } });
+  const findAll = client.service('sessions').findAll;
   render(
     <EventItem
       event={{

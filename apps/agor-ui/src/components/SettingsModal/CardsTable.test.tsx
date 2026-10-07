@@ -1,15 +1,14 @@
-import { EventEmitter } from 'node:events';
 import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 import { SERVER_READ_MAX_WAIT_MS } from '../../hooks/useServerRead';
 import {
   boardObjectCreated,
   boardObjectPatched,
   boardObjectRemoved,
 } from '../../store/agorRealtimeActions';
-import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { fakeFeathersClient, withTestAuthority } from '../../test/harness';
 import { CardsTable } from './CardsTable';
 
 vi.mock('@/utils/message', () => ({
@@ -36,39 +35,23 @@ const cardPlacement = {
 
 /** A client whose services and socket emit events like Feathers'. */
 function makeClient(cards: CardWithType[]) {
-  const emitters = new Map<string, EventEmitter>();
-  const emitter = (name: string) => {
-    let e = emitters.get(name);
-    if (!e) {
-      e = new EventEmitter();
-      emitters.set(name, e);
-    }
-    return e;
-  };
-  const cardsFindAll = vi.fn(async () => [...cards]);
-  const placementsFindAll = vi.fn(async () => [cardPlacement]);
-  const boardsGet = vi.fn(async () => fullBoard());
-  const listen = (name: string) => ({
-    on: (event: string, fn: (...args: unknown[]) => void) => emitter(name).on(event, fn),
-    removeListener: (event: string, fn: (...args: unknown[]) => void) =>
-      emitter(name).removeListener(event, fn),
+  const fake = fakeFeathersClient({
+    cards: { findAll: () => [...cards] },
+    'board-objects': { findAll: () => [cardPlacement] },
+    boards: { get: () => fullBoard() },
   });
-  const client = {
-    service: (name: string) => ({
-      ...listen(name),
-      ...(name === 'cards'
-        ? { findAll: cardsFindAll }
-        : name === 'board-objects'
-          ? { findAll: placementsFindAll }
-          : { get: boardsGet }),
-    }),
-    io: listen('io'),
-  } as unknown as AgorClient;
+  // The settings dataset unsubscribes from the socket with `removeListener`.
+  const fn = (service: string, method: 'findAll' | 'get') =>
+    (fake.client.service(service) as unknown as Record<string, Mock>)[method];
   const emit = (name: string, event: string, payload?: unknown) =>
-    act(() => {
-      emitter(name).emit(event, payload);
-    });
-  return { client, emit, cardsFindAll, placementsFindAll, boardsGet };
+    act(() => (name === 'io' ? fake.emitIo(event, payload) : fake.emit(name, event, payload)));
+  return {
+    client: fake.client,
+    emit,
+    cardsFindAll: fn('cards', 'findAll'),
+    placementsFindAll: fn('board-objects', 'findAll'),
+    boardsGet: fn('boards', 'get'),
+  };
 }
 
 function renderTable(client: AgorClient) {
@@ -84,11 +67,7 @@ function renderTable(client: AgorClient) {
 }
 
 describe('CardsTable', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    setRealtimeAuthorityScope('user-a:admin:1');
-  });
-  afterEach(() => setRealtimeAuthorityScope(null));
+  withTestAuthority('user-a:admin:1', { dataAuthority: false });
 
   it('reads every card on open, not just the loaded boards in the store', async () => {
     const { client, cardsFindAll, placementsFindAll, boardsGet } = makeClient([

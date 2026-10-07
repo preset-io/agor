@@ -4,40 +4,39 @@
  * row the store never loaded (Step 3: no global hydration) is found.
  */
 import type { AgorClient, Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { cleanup, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resetHydrationRevisions } from '../../store/agorHydration';
+import { renderHook, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { agorStore, useAgorStore } from '../../store/agorStore';
-import { discardRealtimeNow, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { pinnedMembers } from '../../store/rowPins';
 import { selectBranchById, selectSessionById } from '../../store/selectors';
+import {
+  deferred,
+  fakeFeathersClient,
+  ME,
+  makeBranch,
+  makeSession,
+  withTestAuthority,
+} from '../../test/harness';
 import { useGlobalSearch } from './useGlobalSearch';
 
-const ME = 'user-me';
 const session = (id: string, title: string, extra: Partial<Session> = {}) =>
-  ({
-    session_id: id,
-    branch_id: 'br-1',
+  makeSession(id, 'br-1', {
     created_by: ME,
-    archived: false,
     title,
-    genealogy: { children: [] },
     last_updated: '2026-10-01T00:00:00.000Z',
     ...extra,
-  }) as unknown as Session;
-const branch = (id: string, name: string) =>
-  ({ branch_id: id, board_id: 'board-1', name, archived: false }) as Branch;
+  });
+const branch = (id: string, name: string) => makeBranch(id, { name });
 
 function makeClient(answer: { sessions?: Session[]; branches?: Branch[] }) {
-  const finds: Record<string, ReturnType<typeof vi.fn>> = {};
-  const client = {
-    service: (name: string) => {
-      finds[name] ??= vi.fn(async () =>
-        name === 'sessions' ? (answer.sessions ?? []) : { data: answer.branches ?? [] }
-      );
-      return { find: finds[name] };
-    },
-  } as unknown as AgorClient;
+  const { client } = fakeFeathersClient({
+    sessions: { find: () => answer.sessions ?? [] },
+    branches: { find: () => ({ data: answer.branches ?? [] }) },
+  });
+  const finds = {
+    sessions: client.service('sessions').find,
+    branches: client.service('branches').find,
+  };
   return { client, finds };
 }
 
@@ -58,16 +57,9 @@ function renderSearch(client: AgorClient, query: string, ownedByMe = false) {
   );
 }
 
-beforeEach(() => {
-  discardRealtimeNow();
-  setRealtimeAuthorityScope('me:member:1');
-});
-afterEach(() => {
-  cleanup();
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-  resetHydrationRevisions();
-});
+withTestAuthority('me:member:1');
+// First paint pending (the store's initial state) unless a test settles it.
+beforeEach(() => agorStore.getState().setLoading(true));
 
 describe('useGlobalSearch server results', () => {
   it('finds sessions and branches the store never loaded, joining no scope', async () => {
@@ -142,22 +134,15 @@ describe('parent-branch labels', () => {
   it('reads the parent branches of the shown results the store lacks', async () => {
     agorStore.getState().setLoading(false); // first paint settled
     const parent = branch('br-parent', 'parent-branch');
-    const branchesFind = vi.fn(async ({ query }: { query: Record<string, unknown> }) =>
-      query.branch_id ? [parent] : { data: [] }
-    );
-    const client = {
-      service: (name: string) => ({
-        find:
-          name === 'sessions'
-            ? async () => [session('s-remote', 'Fix login', { branch_id: 'br-parent' })]
-            : branchesFind,
-      }),
-    } as unknown as AgorClient;
+    const { client } = fakeFeathersClient({
+      sessions: { find: () => [session('s-remote', 'Fix login', { branch_id: 'br-parent' })] },
+      branches: { find: ({ query }) => (query.branch_id ? [parent] : { data: [] }) },
+    });
     const { result } = renderSearch(client, 'login');
     await waitFor(() =>
       expect(result.current.results.session[0]?.parentBranch?.name).toBe('parent-branch')
     );
-    expect(branchesFind).toHaveBeenCalledWith({
+    expect(client.service('branches').find).toHaveBeenCalledWith({
       query: { branch_id: { $in: ['br-parent'] }, archived: false, $limit: 1 },
     });
   });
@@ -176,31 +161,25 @@ describe('parent-branch labels', () => {
   });
 
   it('a reply that lands after the search closed fills nothing', async () => {
-    let answer: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      answer = resolve;
+    const reply = deferred();
+    const { client } = fakeFeathersClient({
+      sessions: {
+        find: async () => {
+          await reply.promise;
+          return [session('s-late', 'Fix login', { created_by: 'user-other' })];
+        },
+      },
+      branches: {
+        find: async () => {
+          await reply.promise;
+          return { data: [branch('br-late', 'login-fix')] };
+        },
+      },
     });
-    const rows = {
-      sessions: [session('s-late', 'Fix login', { created_by: 'user-other' })],
-      branches: [branch('br-late', 'login-fix')],
-    };
-    const finds = {
-      sessions: vi.fn(async () => {
-        await gate;
-        return rows.sessions;
-      }),
-      branches: vi.fn(async () => {
-        await gate;
-        return { data: rows.branches };
-      }),
-    };
-    const client = {
-      service: (name: 'sessions' | 'branches') => ({ find: finds[name] }),
-    } as unknown as AgorClient;
     const { unmount } = renderSearch(client, 'login');
-    await waitFor(() => expect(finds.branches).toHaveBeenCalled());
+    await waitFor(() => expect(client.service('branches').find).toHaveBeenCalled());
     unmount();
-    answer();
+    reply.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(agorStore.getState().sessionById.has('s-late')).toBe(false);
     expect(agorStore.getState().branchById.has('br-late')).toBe(false);

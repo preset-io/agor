@@ -4,13 +4,10 @@
  * still lists every branch, pages and searches on the server, and counts
  * sessions with count-only reads.
  */
-import { EventEmitter } from 'node:events';
 import type { AgorClient, Branch, Repo } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { agorStore } from '@/store/agorStore';
-import { setRealtimeAuthorityScope } from '@/store/realtimeBatch';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { describe, expect, it, type Mock } from 'vitest';
+import { fakeFeathersClient, mount, page, withTestAuthority } from '@/test/harness';
 import { BranchesTable } from './BranchesTable';
 
 const repo = { repo_id: 'repo-1', name: 'repo-1', slug: 'org/repo-1' } as unknown as Repo;
@@ -27,56 +24,48 @@ const branch = (n: number, overrides: Partial<Branch> = {}) =>
   }) as unknown as Branch;
 
 function makeClient(total = 25) {
-  const branches = new EventEmitter();
-  const branchesFind = vi.fn(async ({ query }: { query: Record<string, number> }) => ({
-    total,
-    limit: query.$limit,
-    skip: query.$skip,
-    data: Array.from({ length: Math.min(query.$limit, total - query.$skip) }, (_, i) =>
-      branch(query.$skip + i + 1)
-    ),
-  }));
-  const sessionsFind = vi.fn(async ({ query }: { query: { branch_id: string } }) => ({
-    total: query.branch_id === 'branch-1' ? 3 : 0,
-    limit: 0,
-    skip: 0,
-    data: [],
-  }));
-  const client = {
-    service: (name: string) =>
-      name === 'branches'
-        ? {
-            find: branchesFind,
-            on: (e: string, fn: (...a: unknown[]) => void) => branches.on(e, fn),
-            off: (e: string, fn: (...a: unknown[]) => void) => branches.off(e, fn),
-          }
-        : { find: sessionsFind, on: () => {}, off: () => {} },
-  } as unknown as AgorClient;
-  const emit = (event: string, payload: unknown) => act(() => void branches.emit(event, payload));
-  return { client, branchesFind, sessionsFind, emit };
+  const fake = fakeFeathersClient({
+    branches: {
+      find: ({ query }) => {
+        const { $limit, $skip } = query as Record<string, number>;
+        return {
+          total,
+          limit: $limit,
+          skip: $skip,
+          data: Array.from({ length: Math.min($limit, total - $skip) }, (_, i) =>
+            branch($skip + i + 1)
+          ),
+        };
+      },
+    },
+    sessions: { find: ({ query }) => page([], query.branch_id === 'branch-1' ? 3 : 0) },
+  });
+  const find = (name: string) => fake.client.service(name).find as unknown as Mock;
+  const emit = (event: string, payload: unknown) =>
+    act(() => fake.emit('branches', event, payload));
+  return {
+    client: fake.client,
+    branchesFind: find('branches'),
+    sessionsFind: find('sessions'),
+    emit,
+  };
 }
 
-beforeEach(() => setRealtimeAuthorityScope('me:member:1'));
-afterEach(() => {
-  setRealtimeAuthorityScope(null);
-  agorStore.getState().reset();
-});
-
 function renderTable(client: AgorClient) {
-  render(
-    <MemoryRouter>
-      <BranchesTable
-        client={client}
-        branchById={new Map()}
-        repoById={new Map([[repo.repo_id, repo]])}
-        boardById={new Map()}
-        sessionsByBranch={new Map()}
-      />
-    </MemoryRouter>
+  mount(
+    <BranchesTable
+      client={client}
+      branchById={new Map()}
+      repoById={new Map([[repo.repo_id, repo]])}
+      boardById={new Map()}
+      sessionsByBranch={new Map()}
+    />
   );
 }
 
 describe('BranchesTable — server pages with the store empty', { timeout: 10_000 }, () => {
+  withTestAuthority('me:member:1', { dataAuthority: false });
+
   it('lists the daemon page and its total, with server session counts', async () => {
     const { client, branchesFind, sessionsFind } = makeClient();
     renderTable(client);
