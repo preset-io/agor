@@ -26,7 +26,7 @@ export function useSessionMcpServerIds(
   // Re-run when a load becomes possible again (an authenticated reconnect)
   // or a reset superseded a read in flight (it then applies nothing).
   const authority = useAgorStore((s) => s.dataAuthority);
-  const epoch = useAgorStore((s) => s.sessionMcpEpoch);
+  const epoch = useAgorStore((s) => s.scopeEpoch);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authority and epoch are re-run triggers
   useEffect(() => {

@@ -41,14 +41,14 @@ export function useBoardPartition(
   // loads again once the authority is valid (nothing else re-renders this).
   const authority = useAgorStore((s) => s.dataAuthority);
   // A reset orphans loads in flight; request the board again after one.
-  const partitionEpoch = useAgorStore((s) => s.partitionEpoch);
+  const scopeEpoch = useAgorStore((s) => s.scopeEpoch);
   const { canUseMemberWorkspaceServices, background = false } = options;
   // Nothing to load without a board, or for one that doesn't exist (boards
   // are global and gated, so after first paint an unknown id never resolves):
   // ready, like `BoardPartitionStatus` — never "Loading board…" forever.
   const boardReady = partitionReady || !boardId || (firstPaintSettled && !boardKnown);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: authority and partitionEpoch are re-run triggers
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authority and scopeEpoch are re-run triggers
   useEffect(() => {
     if (!client || !boardId || !boardKnown || !firstPaintSettled || !authority) return;
     if (partitionReady) return;
@@ -74,7 +74,7 @@ export function useBoardPartition(
     firstPaintSettled,
     status,
     authority,
-    partitionEpoch,
+    scopeEpoch,
     background,
   ]);
 

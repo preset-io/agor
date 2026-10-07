@@ -93,18 +93,17 @@ interface AgorMeta {
    */
   coverage: Coverage;
   /**
-   * Bumped (monotonically) by every reset of the board partitions. A partition
-   * load in flight across a reset is orphaned: it can no longer settle its
-   * board, so loads dedupe per epoch and the board is requested again.
+   * Bumped (monotonically) by every reset of the board partitions or of the
+   * session↔MCP loaded marks. A partition or link load in flight across a
+   * reset is orphaned: it applies nothing, loads dedupe per epoch, and
+   * mounted readers request again.
    */
-  partitionEpoch: number;
+  scopeEpoch: number;
   /**
    * Sessions whose MCP links are loaded (`sessionMcpLinks.ts`). For any other
    * session `sessionMcpServerIds` may be partial: "not loaded" is not "none".
    */
   sessionMcpLoaded: Set<string>;
-  /** Bumped by every `resetSessionMcpLoaded`; a read from an older epoch applies nothing. */
-  sessionMcpEpoch: number;
   /**
    * The realtime authority scope (identity, role, auth generation) loads run
    * under, or null while there is none (signed out, disconnected, reauth).
@@ -179,14 +178,14 @@ interface AgorActions {
   setUserScope: (partial: Partial<UserScopeMeta>) => void;
   /**
    * Forget every board partition's coverage (authority transitions orphan
-   * their loads) and bump `partitionEpoch`; the `keep` boards' entries survive
-   * (a reconnect resync keeps the boards whose loads started after it did).
+   * their loads) and bump `scopeEpoch`; the `keep` boards' entries survive
+   * (a reconnect resync keeps the board it reads again in place).
    * User-scope entries are kept: they belong to the identity.
    */
   resetBoardPartitions: (keep?: readonly string[]) => void;
   /** Record that one session's MCP links are loaded. */
   markSessionMcpLoaded: (sessionId: string) => void;
-  /** Forget which sessions' MCP links are loaded and bump their epoch. */
+  /** Forget which sessions' MCP links are loaded and bump `scopeEpoch`. */
   resetSessionMcpLoaded: () => void;
   /** Drop deleted sessions' MCP links and loaded marks. */
   forgetSessionMcp: (sessionIds: readonly string[]) => void;
@@ -202,10 +201,10 @@ export type AgorState = DataMaps & AgorMetaWithUserScope & AgorActions;
 
 /**
  * Load meta that describes rows the way coverage does: referenced branches
- * that are absent, the partition epoch, and the sessions whose MCP links are
+ * that are absent, the scope epoch, and the sessions whose MCP links are
  * loaded. A load publishes it with its rows.
  */
-export type LoadMeta = Pick<AgorState, 'absentBranchIds' | 'partitionEpoch' | 'sessionMcpLoaded'>;
+export type LoadMeta = Pick<AgorState, 'absentBranchIds' | 'scopeEpoch' | 'sessionMcpLoaded'>;
 /** A load-meta change published in the same store update as a maps change. */
 export type LoadMetaUpdate = (maps: DataMaps, state: AgorState) => Partial<LoadMeta>;
 
@@ -269,9 +268,8 @@ const INITIAL_META: AgorMetaWithUserScope = {
   agenticToolSettingsByName: new Map(),
   agenticToolSettingsHydrated: false,
   coverage: new Map(),
-  partitionEpoch: 0,
+  scopeEpoch: 0,
   sessionMcpLoaded: new Set(),
-  sessionMcpEpoch: 0,
   dataAuthority: null,
 };
 
@@ -285,7 +283,7 @@ export const agorStore = createStore<AgorState>()(
         ...EMPTY_MAPS,
         ...INITIAL_META,
         coverage: new Map(),
-        partitionEpoch: get().partitionEpoch + 1,
+        scopeEpoch: get().scopeEpoch + 1,
         absentBranchIds: new Set(),
         missingLinkTargets: new Set(),
         sessionMcpLoaded: new Set(),
@@ -303,7 +301,7 @@ export const agorStore = createStore<AgorState>()(
         agenticToolSettingsHydrated: false,
         // Coverage describes the maps being cleared, so it resets with them.
         coverage: new Map(),
-        partitionEpoch: get().partitionEpoch + 1,
+        scopeEpoch: get().scopeEpoch + 1,
         sessionMcpLoaded: new Set(),
         ...INITIAL_USER_SCOPE,
         absentBranchIds: new Set(),
@@ -360,7 +358,7 @@ export const agorStore = createStore<AgorState>()(
     resetBoardPartitions: (keep = []) => {
       set({
         coverage: withoutBoardPartitions(get().coverage, keep),
-        partitionEpoch: get().partitionEpoch + 1,
+        scopeEpoch: get().scopeEpoch + 1,
       });
     },
     markSessionMcpLoaded: (sessionId) => {
@@ -369,7 +367,7 @@ export const agorStore = createStore<AgorState>()(
       set({ sessionMcpLoaded: new Set(current).add(sessionId) });
     },
     resetSessionMcpLoaded: () =>
-      set({ sessionMcpLoaded: new Set(), sessionMcpEpoch: get().sessionMcpEpoch + 1 }),
+      set({ sessionMcpLoaded: new Set(), scopeEpoch: get().scopeEpoch + 1 }),
     forgetSessionMcp: (sessionIds) => {
       const { sessionMcpLoaded, sessionMcpServerIds } = get();
       const loaded = sessionIds.filter((id) => sessionMcpLoaded.has(id));

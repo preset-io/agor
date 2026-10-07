@@ -239,9 +239,9 @@ function ownsLoading(boardId: string, generation: number): boolean {
 
 const inflight = new Map<string, Promise<boolean>>();
 
-// Loads dedupe per (authority, lifetime, partition epoch, board).
-function inflightKey(lifetime: LoadLifetime, partitionEpoch: number, boardId: string): string {
-  return `${lifetime.authorityScope}\u0000${lifetime.loadEpoch}\u0000${partitionEpoch}\u0000${boardId}`;
+// Loads dedupe per (authority, lifetime, scope epoch, board).
+function inflightKey(lifetime: LoadLifetime, scopeEpoch: number, boardId: string): string {
+  return `${lifetime.authorityScope}\u0000${lifetime.loadEpoch}\u0000${scopeEpoch}\u0000${boardId}`;
 }
 
 /** Forget a failed partition so `useBoardPartition` loads it again. */
@@ -372,10 +372,9 @@ export function loadBoardPartition(
   const lifetime = captureLoadLifetime();
   if (!lifetime) return Promise.resolve(false);
   const { authorityScope, loadEpoch } = lifetime;
-  // Per partition epoch too: a load orphaned by a reset (its entry is gone,
+  // Per scope epoch too: a load orphaned by a reset (its entry is gone,
   // so it can never settle the board) must not absorb the board's next request.
-  const partitionEpoch = agorStore.getState().partitionEpoch;
-  const key = inflightKey(lifetime, partitionEpoch, boardId);
+  const key = inflightKey(lifetime, agorStore.getState().scopeEpoch, boardId);
   const existing = inflight.get(key);
   if (existing) return existing;
 

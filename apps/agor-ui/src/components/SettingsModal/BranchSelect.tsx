@@ -1,11 +1,13 @@
 import { type AgorClient, type Branch, serverSearchText } from '@agor-live/client';
 import { Select } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useServerRead } from '@/hooks/useServerRead';
 import { rowsOf } from '@/store/idReads';
 import { useDebouncedSearchQuery } from '../GlobalSearch/useGlobalSearch';
 
 /** Options per read; typing narrows them on the server. */
 const OPTION_LIMIT = 50;
+const NO_BRANCHES: Branch[] = [];
 
 interface BranchSelectProps {
   client: AgorClient | null;
@@ -35,53 +37,30 @@ export const BranchSelect: React.FC<BranchSelectProps> = ({
   const [searchText, setSearchText] = useState('');
   const { debouncedQuery } = useDebouncedSearchQuery(searchText);
   const search = debouncedQuery.trim();
-  const [branches, setBranches] = useState<Branch[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saved, setSaved] = useState<Branch | null>(null);
-
-  useEffect(() => {
-    if (!client) return;
-    let cancelled = false;
-    setLoading(true);
-    client
-      .service('branches')
-      .find({
-        query: {
-          archived: false,
-          ...(search ? { search: serverSearchText(search) } : {}),
-          $limit: OPTION_LIMIT,
-          $sort: { name: 1 },
-        },
-      })
-      .then((found) => {
-        if (!cancelled) setBranches(rowsOf<Branch>(found));
-      })
-      .catch((err) => console.warn('[BranchSelect] branch read failed:', err))
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, search]);
-
+  const { data: branches = NO_BRANCHES, loading } = useServerRead(
+    client,
+    `branch-select\u0000${search}`,
+    async (reader) =>
+      rowsOf<Branch>(
+        await reader.service('branches').find({
+          query: {
+            archived: false,
+            ...(search ? { search: serverSearchText(search) } : {}),
+            $limit: OPTION_LIMIT,
+            $sort: { name: 1 },
+          },
+        })
+      ),
+    { keepPrevious: true }
+  );
   const listed = !!value && branches.some((b) => b.branch_id === value);
-  useEffect(() => {
-    if (!client || !value || listed || saved?.branch_id === value) return;
-    let cancelled = false;
-    client
-      .service('branches')
-      .get(value)
-      .then((branch) => {
-        if (!cancelled) setSaved(branch as Branch);
-      })
-      .catch(() => {
-        // A missing or unreadable target keeps its id and reveals nothing.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, value, listed, saved?.branch_id]);
+  // A missing or unreadable target keeps its id and reveals nothing.
+  const { data: saved } = useServerRead(
+    client,
+    value && !listed ? `branch\u0000${value}` : null,
+    (reader) =>
+      (reader.service('branches').get(value as string) as Promise<Branch>).catch(() => undefined)
+  );
 
   const options = useMemo(() => {
     const rows =

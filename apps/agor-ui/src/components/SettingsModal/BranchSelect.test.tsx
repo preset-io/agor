@@ -5,6 +5,7 @@
 import type { AgorClient, Branch } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { withTestAuthority } from '../../test/harness';
 import { BranchSelect } from './BranchSelect';
 
 const branch = (id: string, name: string, archived = false) =>
@@ -22,6 +23,7 @@ function makeClient(get = vi.fn(async (id: string) => branch(id, 'saved-target',
 }
 
 describe('BranchSelect', { timeout: 10_000 }, () => {
+  withTestAuthority();
   it('offers the daemon page and searches with the server `search` key', async () => {
     const { client, find } = makeClient();
     render(<BranchSelect client={client} />);

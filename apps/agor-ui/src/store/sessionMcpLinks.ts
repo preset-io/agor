@@ -62,9 +62,9 @@ export function mergeSessionMcpSnapshot(
 }
 
 const inflight = new Map<string, Promise<void>>();
-// A read that started before a reset (`sessionMcpEpoch`) never marks its
+// A read that started before a reset (`scopeEpoch`) never marks its
 // session loaded afterwards; the epoch is reactive, so readers re-run.
-const epoch = () => agorStore.getState().sessionMcpEpoch;
+const epoch = () => agorStore.getState().scopeEpoch;
 
 /**
  * Forget which sessions are loaded (a reconnect may have missed link events;
