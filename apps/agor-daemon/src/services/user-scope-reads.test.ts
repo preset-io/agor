@@ -145,11 +145,13 @@ describe('user-scope reads through transport hooks', () => {
       query: { teammate: true, archived: false },
     } as never)) as { total: number; data: Branch[] };
     expect(complete.total).toBe(complete.data.length);
-    await expect(
-      app
+    // It composes with the other keys, under the same visibility.
+    const onBoard = rows<Branch>(
+      await app
         .service('branches')
         .find(asViewer({ teammate: true, board_id: fixture.boardIds[0] }) as never)
-    ).rejects.toThrow('teammate cannot be combined');
+    ).map((b) => b.branch_id);
+    expect(onBoard).toEqual(mates);
 
     const byIds = rows<Branch>(
       await app

@@ -62,8 +62,8 @@ describe.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           );
           for (const boardId of foreign.boardIds) expect(counted).not.toContain(boardId);
           const mates = (
-            await branches.findTeammateBranches({ userId: visibleToUserId, limit: 1000 })
-          ).map((b) => b.branch_id);
+            await branches.findPage({ visibleToUserId, teammate: true, limit: 1000 })
+          ).data.map((b) => b.branch_id);
           for (const branchId of foreign.branchIds) expect(mates).not.toContain(branchId);
         }
       });

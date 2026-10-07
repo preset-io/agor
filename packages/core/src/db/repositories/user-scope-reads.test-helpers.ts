@@ -158,36 +158,17 @@ export async function exerciseUserScopeReads(db: Database) {
     ).data.map((b) => b.branch_id)
   ).toEqual([ids.public]);
 
-  // ── Teammates: only teammate branches the caller can view. ──────────────
-  const viewerMates = await branchRepo.findTeammateBranches({
-    userId: viewer,
-    archived: false,
-    minimumPermission: 'view',
-    limit: 1000,
-  });
-  expect(viewerMates.map((b) => b.branch_id)).toEqual([ids.mate]);
-  const ownerMates = await branchRepo.findTeammateBranches({
-    userId: owner,
-    archived: false,
-    minimumPermission: 'view',
-    limit: 1000,
-  });
-  expect(new Set(ownerMates.map((b) => b.branch_id))).toEqual(new Set([ids.mate, ids.privateMate]));
-  // The count matches the same filter, so a capped read can report its real total.
-  expect(
-    await branchRepo.countTeammateBranches({
-      userId: viewer,
-      archived: false,
-      minimumPermission: 'view',
-    })
-  ).toBe(1);
-  expect(
-    await branchRepo.countTeammateBranches({
-      userId: owner,
-      archived: false,
-      minimumPermission: 'view',
-    })
-  ).toBe(2);
+  // ── Teammates: only teammate branches the caller can view, with the real total. ──
+  const mates = (visibleToUserId: UserID) =>
+    branchRepo.findPage({ visibleToUserId, archived: false, teammate: true, limit: 1000 });
+  const viewerMates = await mates(viewer);
+  expect(viewerMates.data.map((b) => b.branch_id)).toEqual([ids.mate]);
+  expect(viewerMates.total).toBe(1);
+  const ownerMates = await mates(owner);
+  expect(new Set(ownerMates.data.map((b) => b.branch_id))).toEqual(
+    new Set([ids.mate, ids.privateMate])
+  );
+  expect(ownerMates.total).toBe(2);
 
   // ── Per-board counts: active, visible branches on visible boards. ───────
   const countsFor = async (visibleToUserId?: UserID) =>

@@ -189,6 +189,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'created_by',
     'zone_id',
     'search',
+    'teammate',
     '$limit',
     '$skip',
     '$sort',
@@ -242,25 +243,6 @@ function parseStartWebhookResult(options: {
     throw new Error('environment start webhook returned invalid result JSON');
   }
   return validateEnvironmentLifecycleResult(decoded);
-}
-
-/**
- * `branches.find({ teammate: true, archived?, $limit?, $skip? })`: the teammate
- * branches the caller can view, through `BranchRepository.findTeammateBranches`,
- * at most `PAGINATION.MAX_TEAMMATE_BRANCHES` per page. `total` is the real
- * number of matching branches, so a caller can tell a capped page from a
- * complete one. It matches the teammate marker only (`markerOnly`), not the
- * enabled-schedule backfill, so its set is the one the client's `isTeammate`
- * sees and a live write can judge membership.
- */
-function isTeammateBranchQuery(query?: Record<string, unknown>): boolean {
-  if (!query || query.teammate === undefined) return false;
-  const allowed = new Set(['teammate', 'archived', '$limit', '$skip']);
-  const extra = Object.keys(query).filter((key) => !allowed.has(key));
-  if (extra.length > 0) {
-    throw new BadRequest(`teammate cannot be combined with ${extra.join(', ')}`);
-  }
-  return true;
 }
 
 /**
@@ -1775,44 +1757,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const query = findParams?.query as Record<string, unknown> | undefined;
-    if (isTeammateBranchQuery(query)) {
-      const requested = typeof query?.$limit === 'number' ? query.$limit : undefined;
-      const limit = Math.min(
-        requested ?? PAGINATION.MAX_TEAMMATE_BRANCHES,
-        PAGINATION.MAX_TEAMMATE_BRANCHES
-      );
-      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
-      const filter = {
-        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
-        userId: findParams?._agorSqlBranchAccessUserId,
-        minimumPermission: 'view' as const,
-        markerOnly: true,
-      };
-      // One row past the page tells a complete read from a capped one; only a
-      // capped read pays for the count.
-      const probe = await this.branchRepo.findTeammateBranches({
-        ...filter,
-        limit: limit + 1,
-        offset: skip,
-      });
-      const hasMore = probe.length > limit;
-      const data = await this.branchRepo.enrichManyWithZoneInfo(
-        hasMore ? probe.slice(0, limit) : probe
-      );
-      // A capped page can't know the total, and neither can an empty page
-      // past the end (`skip + 0` would invent one): count those. Otherwise
-      // the page ended inside the set, so the total is `skip + rows`.
-      const total =
-        hasMore || (skip > 0 && data.length === 0)
-          ? await this.branchRepo.countTeammateBranches(filter)
-          : skip + data.length;
-      return { total, limit, skip, data };
-    }
     assertSearchTerms(query?.search);
     if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
       const branchIds = idFilterValues(branchFilter) as BranchID[] | undefined;
-      const { limit, skip } = this.pageWindow(query ?? {});
+      const teammate = query?.teammate === true;
+      const window = this.pageWindow(query ?? {});
+      // `teammate` reads at most MAX_TEAMMATE_BRANCHES, newest first; the
+      // real `total` tells a capped page from a complete one.
+      const limit = teammate
+        ? Math.min(
+            (query?.$limit as number | undefined) ?? PAGINATION.MAX_TEAMMATE_BRANCHES,
+            PAGINATION.MAX_TEAMMATE_BRANCHES
+          )
+        : window.limit;
+      const skip = window.skip;
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
@@ -1821,10 +1780,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         branchIds,
         createdBy: typeof query?.created_by === 'string' ? (query.created_by as UUID) : undefined,
         search: typeof query?.search === 'string' ? query.search : undefined,
+        teammate: teammate || undefined,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,
         limit,
         offset: skip,
-        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+        sort:
+          (query?.$sort as Record<string, 1 | -1> | undefined) ??
+          (teammate ? { branch_id: -1 } : undefined),
       });
       const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
       return {

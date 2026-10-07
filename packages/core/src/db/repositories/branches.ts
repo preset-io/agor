@@ -495,6 +495,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
      * plus the branch id, unique id, path, and its repo's slug and name.
      */
     search?: string;
+    /** Restrict to branches carrying the teammate marker (`teammateMarkerCondition`). */
+    teammate?: boolean;
     visibleToUserId?: UUID;
     limit?: number;
     offset?: number;
@@ -515,6 +517,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (opts.archived !== undefined) conditions.push(eq(branches.archived, opts.archived));
     if (opts.branchIds) conditions.push(inArray(branches.branch_id, opts.branchIds));
     if (opts.createdBy) conditions.push(eq(branches.created_by, opts.createdBy));
+    if (opts.teammate) conditions.push(this.teammateMarkerCondition());
     if (opts.visibleToUserId) {
       conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
     }
@@ -651,32 +654,39 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
-   * Teammate marker predicate (plus repo/archived/visibility filters) shared by
-   * `findTeammateBranches` and `countTeammateBranches`.
+   * A branch carrying the canonical teammate marker in custom_context (new or
+   * legacy key): the set the client's `isTeammate` sees.
    */
-  private teammateBranchConditions(filter?: {
+  private teammateMarkerCondition(): SQL {
+    const kind = (path: string) => sql`${jsonExtract(this.db, branches.data, path)}`;
+    return (
+      or(
+        eq(kind('custom_context.teammate.kind'), 'teammate'),
+        eq(kind('custom_context.assistant.kind'), 'assistant'),
+        eq(kind('custom_context.assistant.kind'), 'teammate'),
+        eq(kind('custom_context.assistant.kind'), 'persisted-agent'),
+        eq(kind('custom_context.agent.kind'), 'assistant'),
+        eq(kind('custom_context.agent.kind'), 'persisted-agent')
+      ) ?? sql`false`
+    );
+  }
+
+  /**
+   * Find active teammate branches without paginating the whole branch list first.
+   *
+   * A branch is discoverable as a teammate when it has the canonical teammate
+   * marker in custom_context (new or legacy key), or as a read-time backfill for
+   * older hand-bootstrapped teammates, when it has at least one enabled
+   * first-class schedule.
+   */
+  async findTeammateBranches(filter?: {
     repo_id?: UUID;
     archived?: boolean;
     userId?: UUID;
     minimumPermission?: 'view' | 'session';
-    /** Only the teammate marker, not the enabled-schedule backfill. */
-    markerOnly?: boolean;
-  }): SQL[] {
-    const teammateKindConditions = [
-      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.teammate.kind')}`, 'teammate'),
-      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'assistant'),
-      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`, 'teammate'),
-      eq(
-        sql`${jsonExtract(this.db, branches.data, 'custom_context.assistant.kind')}`,
-        'persisted-agent'
-      ),
-      eq(sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`, 'assistant'),
-      eq(
-        sql`${jsonExtract(this.db, branches.data, 'custom_context.agent.kind')}`,
-        'persisted-agent'
-      ),
-    ];
-
+    limit?: number;
+    offset?: number;
+  }): Promise<Branch[]> {
     const hasEnabledSchedule = exists(
       // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
       (this.db as any)
@@ -685,10 +695,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         .where(and(eq(schedules.branch_id, branches.branch_id), eq(schedules.enabled, true)))
     );
 
-    const conditions: SQL[] = [
-      or(...teammateKindConditions, ...(filter?.markerOnly ? [] : [hasEnabledSchedule])) ??
-        sql`false`,
-    ];
+    const conditions = [or(this.teammateMarkerCondition(), hasEnabledSchedule) ?? sql`false`];
     if (filter?.repo_id) conditions.push(eq(branches.repo_id, filter.repo_id));
     if (filter?.archived !== undefined) conditions.push(eq(branches.archived, filter.archived));
     if (filter?.userId) {
@@ -698,45 +705,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           : visibleBranchAccessCondition(this.db, filter.userId)
       );
     }
-    return conditions;
-  }
-
-  /**
-   * Number of teammate branches matching the same filter as
-   * `findTeammateBranches`, so a capped read can report its real total.
-   */
-  async countTeammateBranches(filter?: {
-    repo_id?: UUID;
-    archived?: boolean;
-    userId?: UUID;
-    minimumPermission?: 'view' | 'session';
-    markerOnly?: boolean;
-  }): Promise<number> {
-    const rows = await select(this.db, { count: sql<number>`count(*)` })
-      .from(branches)
-      .where(and(...this.teammateBranchConditions(filter)))
-      .all();
-    return Number((rows as Array<{ count: number | string }>)[0]?.count ?? 0);
-  }
-
-  /**
-   * Find active teammate branches without paginating the whole branch list first.
-   *
-   * A branch is discoverable as a teammate when it has the canonical teammate
-   * marker in custom_context (new or legacy key), or as a read-time backfill for
-   * older hand-bootstrapped teammates, when it has at least one enabled
-   * first-class schedule (unless `markerOnly`).
-   */
-  async findTeammateBranches(filter?: {
-    repo_id?: UUID;
-    archived?: boolean;
-    userId?: UUID;
-    minimumPermission?: 'view' | 'session';
-    markerOnly?: boolean;
-    limit?: number;
-    offset?: number;
-  }): Promise<Branch[]> {
-    const conditions = this.teammateBranchConditions(filter);
 
     const rows = await select(this.db)
       .from(branches)
