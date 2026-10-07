@@ -369,6 +369,15 @@ it('preserves transcript queue exclusion and opt-in session accounting', async (
 });
 
 describe('knowledgeDocumentQueryValidator', () => {
+  it.each(['active', 'archived', 'all'])(
+    'preserves explicit archive filter %s',
+    async (archive_filter) => {
+      expect(await knowledgeDocumentQueryValidator({ archive_filter })).toEqual({ archive_filter });
+    }
+  );
+  it('rejects invalid archive filters instead of widening discovery', async () => {
+    await expect(knowledgeDocumentQueryValidator({ archive_filter: 'anything' })).rejects.toThrow();
+  });
   it('coerces REST list and hydration params', async () => {
     expect(
       await knowledgeDocumentQueryValidator({

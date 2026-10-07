@@ -130,6 +130,39 @@ This makes Knowledge a natural companion to [Teammates](/guide/teammates): teamm
 
 ---
 
+## Archive and restore
+
+Use **Archive** on a page to hide it from active lists, search, mentions, graphs, and
+teammate context. Select **Archived pages** in the browser to find it again, then
+**Restore** in the archived-page banner. Authorized direct links and history still
+work. Archive/restore requires the document owner or an admin, plus namespace write
+access; public editing alone is not enough.
+
+Archival preserves the document ID, content, versions, visibility, ownership, and
+grants. Restore does not create a content version. Archived paths stay reserved:
+ordinary upsert/edit cannot restore or replace an archived document. Restore first.
+For older archives whose path has an active replacement, rename that replacement
+before restoring by document ID.
+
+- **MCP:** `agor_kb_archive({ documentId, archived: true })`; use `false` to restore.
+  `agor_kb_archive_bulk({ archived, targets: [{ documentId }] })` accepts 1–50 explicit
+  targets. Each item is authorized and committed independently; results identify
+  failures without exposing inaccessible documents. Retry the same targets safely.
+- **Discovery:** `archiveFilter: "active" | "archived" | "all"` on MCP search/tree;
+  `archive_filter` on API document lists/search. Default: `active`. Legacy search
+  `includeArchived`/`include_archived: true` means `all`; list `archived: true` means
+  archived-only. Permissions always apply. Graphs and automatic context stay active-only.
+- **API:** metadata-only `PATCH /kb/documents/:id` with `{ "archived": true }` or
+  `false`. Optional `expected_version` and `expected_archived` guards reject stale
+  transitions (409); already-satisfied retries are no-ops, including timestamps.
+  MCP uses `expectedVersion`/`expectedArchived` per target. DELETE remains soft archive.
+- **CLI:** `agor kb document list --namespace team-docs --archive archived` (or `all`).
+  Direct `document get` can read authorized archives.
+
+These controls archive documents, not namespaces. Existing namespace archival still
+archives its documents; an archived namespace is not bypassed by these filters or
+by document restoration.
+
 ## Permissions and control plane fit
 
 Knowledge is tied into Agor's existing role-based control plane. Members can create and work with documents and namespaces, workspace admins manage semantic-search settings, and namespace owners/admins manage namespace governance. Each document also carries visibility and edit-policy controls.

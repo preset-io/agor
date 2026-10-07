@@ -4,6 +4,7 @@ import type {
   KnowledgeNamespace as CoreKnowledgeNamespace,
   KnowledgeNamespaceAclEntry as CoreKnowledgeNamespaceAclEntry,
   KnowledgeDocumentVersion as CoreKnowledgeVersion,
+  KnowledgeArchiveFilter,
   KnowledgeDocumentIndexingStatus,
   KnowledgeDocumentKind,
   KnowledgeDocumentStatus,
@@ -115,6 +116,7 @@ import {
   namespaceSlugFromUri,
   safeDecodeURIComponent,
 } from '../utils/knowledgeRoutes';
+import { useThemedMessage } from '../utils/message';
 import { useThemedModal } from '../utils/modal';
 import { slugify } from '../utils/repoSlug';
 import { searchableSelectProps } from '../utils/selectSearch';
@@ -721,6 +723,7 @@ export function KnowledgePage({
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const { confirm } = useThemedModal();
+  const { showSuccess, showError } = useThemedMessage();
   const navigate = useNavigate();
   const location = useLocation();
   const routeParams = useParams<{ namespaceSlug?: string; '*'?: string }>();
@@ -776,6 +779,9 @@ export function KnowledgePage({
   const [globalSearchResults, setGlobalSearchResults] = useState<KnowledgeSearchResult[]>([]);
   const [globalSearchResultsKey, setGlobalSearchResultsKey] = useState<string | null>(null);
   const [kindFilter, setKindFilter] = useState<string>('All');
+  const [archiveFilter, setArchiveFilter] = useState<KnowledgeArchiveFilter>('active');
+  const [archiveSaving, setArchiveSaving] = useState(false);
+  const [knowledgeRevision, setKnowledgeRevision] = useState(0);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1197,6 +1203,16 @@ export function KnowledgePage({
           (currentUser?.user_id && activeDoc.created_by === currentUser.user_id))
     );
 
+  const canArchiveActiveDocument = Boolean(
+    activeDoc &&
+      canManageActiveVisibility &&
+      namespaces.some(
+        (namespace) =>
+          namespace.namespace_id === activeDoc.namespace_id &&
+          (namespace.effective_permission === 'write' || namespace.effective_permission === 'own')
+      )
+  );
+
   const loadNamespaces = useCallback(async () => {
     if (!client) return [];
     const result = await client.service('kb/namespaces').find({ query: { archived: false } });
@@ -1252,7 +1268,7 @@ export function KnowledgePage({
         query: {
           namespace_slug: namespaceFilter,
           kind,
-          archived: false,
+          archive_filter: archiveFilter,
           include_indexing: true,
           $limit: KNOWLEDGE_DOCUMENT_PAGINATION.MAX_LIMIT,
         },
@@ -1266,7 +1282,7 @@ export function KnowledgePage({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [client, activeSpace, kindFilter, loadNamespaces, loadMentionDocs]);
+  }, [client, activeSpace, kindFilter, archiveFilter, loadNamespaces, loadMentionDocs]);
 
   useEffect(() => {
     loadDocuments();
@@ -1282,6 +1298,7 @@ export function KnowledgePage({
     if (nextSpace !== activeSpace) updateActiveSpace(nextSpace);
   }, [activeSpace, namespaces, routeNamespaceSlug, updateActiveSpace]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorized document events invalidate search results
   useEffect(() => {
     const query = globalSearchQuery.trim();
     if (!client || query.length < 2) {
@@ -1304,6 +1321,7 @@ export function KnowledgePage({
           query: {
             q: query,
             mode: globalSearchMode,
+            archive_filter: archiveFilter,
             limit: 8,
             include_chunks: true,
           },
@@ -1328,7 +1346,7 @@ export function KnowledgePage({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [client, globalSearchMode, globalSearchQuery]);
+  }, [client, globalSearchMode, globalSearchQuery, archiveFilter, knowledgeRevision]);
   const refreshKnowledgeSettings = useCallback(async () => {
     if (!client) return;
     setSettingsLoading(true);
@@ -1649,6 +1667,30 @@ export function KnowledgePage({
     }
   }, [client, activeSpace]);
 
+  useEffect(() => {
+    if (!client) return;
+    const service = client.service('kb/documents');
+    const onDocument = (document: CoreKnowledgeDocument) => {
+      if (document.document_id === activeDocIdRef.current) setActiveDocSnapshot(document);
+      setDocuments((previous) =>
+        previous
+          .map((row) => (row.document_id === document.document_id ? document : row))
+          .filter(
+            (row) => archiveFilter === 'all' || row.archived === (archiveFilter === 'archived')
+          )
+      );
+      setKnowledgeRevision((revision) => revision + 1);
+      void loadDocuments();
+      void loadGraph();
+    };
+    for (const event of ['created', 'patched', 'updated', 'removed'] as const)
+      service.on(event, onDocument);
+    return () => {
+      for (const event of ['created', 'patched', 'updated', 'removed'] as const)
+        service.off(event, onDocument);
+    };
+  }, [client, loadDocuments, loadGraph, archiveFilter]);
+
   // Refresh the graph whenever it becomes the visible view (no doc open), so
   // edges created by a just-saved edit show up on return.
   useEffect(() => {
@@ -1772,7 +1814,8 @@ export function KnowledgePage({
         query: {
           namespace_slug: routeNamespaceSlug,
           path: routeDocumentPath,
-          archived: false,
+          archive_filter: 'all',
+          include_other_user_drafts: true,
         },
       })
       .then((result) => {
@@ -1839,7 +1882,7 @@ export function KnowledgePage({
           query: {
             namespace_slug: routeNamespaceSlug,
             path: routeDocumentPath,
-            archived: false,
+            archive_filter: 'all',
             include_other_user_drafts: true,
             include_indexing: true,
           },
@@ -1849,11 +1892,6 @@ export function KnowledgePage({
         if (!directDoc) return;
         setRouteDocumentResolutionFailure((current) =>
           current?.key === routeDocumentKey ? null : current
-        );
-        setDocuments((prev) =>
-          prev.some((doc) => doc.document_id === directDoc.document_id)
-            ? prev
-            : [directDoc, ...prev]
         );
         setActiveDocSnapshot(directDoc);
         activeDocIdRef.current = directDoc.document_id;
@@ -2416,31 +2454,41 @@ export function KnowledgePage({
     }
   };
 
-  const archiveActiveDocument = () => {
-    if (!client || !activeDoc) return;
-    confirm({
-      title: 'Archive this page?',
-      content: 'This archives the page from Knowledge. Version history remains in the database.',
-      okText: 'Archive',
-      cancelText: 'Cancel',
-      async onOk() {
-        if (!activeDoc) return;
-        try {
-          await client.service('kb/documents').remove(activeDoc.document_id);
-          setDocuments((prev) => prev.filter((doc) => doc.document_id !== activeDoc.document_id));
-          activeDocIdRef.current = null;
-          setActiveDocId(null);
-          setActiveDocSnapshot(null);
-          setVersions([]);
-          setVersionsDocumentId(null);
-          setSelectedVersionId(null);
-        } catch (err) {
-          console.error('Failed to archive Knowledge document:', err);
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      },
-    });
+  const archiveActiveDocument = async () => {
+    if (!client || !activeDoc || !canArchiveActiveDocument) return;
+    setArchiveSaving(true);
+    try {
+      const archived = !activeDoc.archived;
+      const updated = await client.service('kb/documents').patch(activeDoc.document_id, {
+        archived,
+        expected_archived: activeDoc.archived,
+        ...(activeDoc.current_version_id ? { expected_version: activeDoc.current_version_id } : {}),
+      });
+      setActiveDocSnapshot(updated);
+      setDocuments((previous) =>
+        previous
+          .map((document) => (document.document_id === updated.document_id ? updated : document))
+          .filter(
+            (document) =>
+              archiveFilter === 'all' || document.archived === (archiveFilter === 'archived')
+          )
+      );
+      setKnowledgeRevision((revision) => revision + 1);
+      await loadDocuments();
+      showSuccess(archived ? 'Page archived' : 'Page restored');
+    } catch (err) {
+      showError(err instanceof Error ? err.message : 'Failed to change archive state');
+    } finally {
+      setArchiveSaving(false);
+    }
   };
+
+  useEffect(() => {
+    if (activeDoc?.archived) {
+      pendingEditModeRef.current = false;
+      setIsEditing(false);
+    }
+  }, [activeDoc?.archived]);
 
   const toggleFolderCollapsed = (folderPath: string) => {
     setCollapsedFolders((prev) => {
@@ -3167,6 +3215,20 @@ export function KnowledgePage({
                   </Button>
                   <Button icon={<FolderAddOutlined />} onClick={openFolderModal} />
                 </Flex>
+                <Select
+                  aria-label="Knowledge archive filter"
+                  value={archiveFilter}
+                  onChange={(value) => {
+                    documentsRequestSeqRef.current += 1;
+                    setArchiveFilter(value);
+                  }}
+                  options={[
+                    { value: 'active', label: 'Active pages' },
+                    { value: 'archived', label: 'Archived pages' },
+                    { value: 'all', label: 'All pages' },
+                  ]}
+                  style={{ width: '100%' }}
+                />
                 <Segmented
                   block
                   size="small"
@@ -3297,6 +3359,24 @@ export function KnowledgePage({
                         size={8}
                         style={{ width: '100%', minWidth: 0, flex: 1 }}
                       >
+                        {activeDoc.archived && (
+                          <Alert
+                            type="info"
+                            showIcon
+                            title="Archived page"
+                            description="Hidden from active lists and search. Content and history are preserved."
+                            action={
+                              canArchiveActiveDocument ? (
+                                <Button
+                                  loading={archiveSaving}
+                                  onClick={() => void archiveActiveDocument()}
+                                >
+                                  Restore
+                                </Button>
+                              ) : undefined
+                            }
+                          />
+                        )}
                         <Flex align="center" gap={12} style={{ width: '100%' }}>
                           <Popover
                             trigger="click"
@@ -3309,7 +3389,7 @@ export function KnowledgePage({
                             <Button
                               type="text"
                               size="large"
-                              disabled={!client && !isDraftDocument}
+                              disabled={activeDoc.archived || (!client && !isDraftDocument)}
                               style={{
                                 fontSize: 30,
                                 width: 52,
@@ -3486,19 +3566,21 @@ export function KnowledgePage({
                                 >
                                   Relocate
                                 </Button>
-                                <ArchiveActionButton
-                                  tooltip=""
-                                  size="middle"
-                                  disabled={!client}
-                                  onClick={archiveActiveDocument}
-                                >
-                                  Archive
-                                </ArchiveActionButton>
+                                {!activeDoc.archived && canArchiveActiveDocument && (
+                                  <ArchiveActionButton
+                                    tooltip=""
+                                    size="middle"
+                                    disabled={!client || archiveSaving}
+                                    onClick={() => void archiveActiveDocument()}
+                                  >
+                                    Archive
+                                  </ArchiveActionButton>
+                                )}
                               </>
                             )}
                             <Button
                               icon={<EditOutlined />}
-                              disabled={!client}
+                              disabled={!client || activeDoc.archived}
                               onClick={() => setKnowledgeEditMode(true)}
                             >
                               Edit
@@ -3630,20 +3712,24 @@ export function KnowledgePage({
                   </Flex>
                 ) : (
                   <div style={{ flex: 1, minHeight: 0, width: '100%' }}>
-                    <KnowledgeGraph
-                      nodes={graphData?.nodes ?? []}
-                      edges={graphData?.edges ?? []}
-                      activeDocId={activeDocId}
-                      hoverDocId={hoverDocId}
-                      onSelectDoc={openGraphDoc}
-                      onHoverDoc={setHoverDocId}
-                      loading={graphLoading}
-                      emptyText={
-                        activeSpace === 'all'
-                          ? 'Pick a Space to see its document graph.'
-                          : 'No linked documents in this Space yet.'
-                      }
-                    />
+                    {archiveFilter === 'archived' ? (
+                      <Empty description="Select an archived page from the list to view or restore it." />
+                    ) : (
+                      <KnowledgeGraph
+                        nodes={graphData?.nodes ?? []}
+                        edges={graphData?.edges ?? []}
+                        activeDocId={activeDocId}
+                        hoverDocId={hoverDocId}
+                        onSelectDoc={openGraphDoc}
+                        onHoverDoc={setHoverDocId}
+                        loading={graphLoading}
+                        emptyText={
+                          activeSpace === 'all'
+                            ? 'Pick a Space to see its document graph.'
+                            : 'No linked documents in this Space yet.'
+                        }
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -3706,6 +3792,20 @@ export function KnowledgePage({
               New folder
             </Button>
           </Flex>
+          <Select
+            aria-label="Knowledge archive filter"
+            value={archiveFilter}
+            onChange={(value) => {
+              documentsRequestSeqRef.current += 1;
+              setArchiveFilter(value);
+            }}
+            options={[
+              { value: 'active', label: 'Active pages' },
+              { value: 'archived', label: 'Archived pages' },
+              { value: 'all', label: 'All pages' },
+            ]}
+            style={{ width: '100%' }}
+          />
           <Segmented
             block
             size="small"
