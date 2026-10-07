@@ -160,12 +160,12 @@ describe('SessionFooter', () => {
   it('preserves the themed desktop bottom inset on the owning footer', () => {
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(1280);
     try {
-      render(
+      const { container } = render(
         <ConfigProvider theme={{ token: { sizeUnit: 6 } }}>
           <SessionFooter {...baseProps} />
         </ConfigProvider>
       );
-      const footer = screen.getByTestId('prompt-input').parentElement!.parentElement!;
+      const footer = container.firstElementChild!;
       expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
     } finally {
       vi.restoreAllMocks();

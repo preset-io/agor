@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 interface SessionComposerDropZoneProps {
   children: React.ReactNode;
+  ariaLabel?: string;
   disabled?: boolean;
   onDragActiveChange?: (active: boolean) => void;
   onFilesDrop: (files: File[]) => void;
@@ -15,6 +16,7 @@ function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
 
 export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = ({
   children,
+  ariaLabel = 'Composer attachments and input drop zone',
   disabled = false,
   onDragActiveChange,
   onFilesDrop,
@@ -93,7 +95,7 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
 
   return (
     <section
-      aria-label="Composer attachments and input drop zone"
+      aria-label={ariaLabel}
       aria-disabled={disabled}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}

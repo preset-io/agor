@@ -1,11 +1,13 @@
-import type { AgorClient, Session, Task } from '@agor-live/client';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import type { AgorClient, MCPServer, Session, Task } from '@agor-live/client';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type {} from '@vitest/browser-playwright';
 import { App } from 'antd';
 import { useEffect, useState } from 'react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import { checkBrowserSanity } from '../../test/browserSanity';
 import SessionPanel from './SessionPanel';
 import { SessionPanelContent } from './SessionPanelContent';
@@ -50,6 +52,7 @@ vi.mock('../../utils/clipboard', () => ({
 
 import { copyToClipboard } from '../../utils/clipboard';
 
+const originalMcpServers = agorStore.getState().mcpServerById;
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 beforeEach(async () => {
   localStorage.clear();
@@ -195,6 +198,7 @@ async function expectBounded() {
 
 afterEach(async () => {
   cleanup();
+  agorStore.setState({ mcpServerById: originalMcpServers });
   await page.viewport(originalViewport.width, originalViewport.height);
   queueFeed.tasks = [];
   vi.clearAllMocks();
@@ -480,3 +484,164 @@ it.each([0, 30])(
     });
   }
 );
+
+it('keeps ten attachments and notices independently scrollable beside a multiline draft', async () => {
+  const mcpServer = {
+    mcp_server_id: 'disconnected-server',
+    name: 'example-mcp',
+    display_name: 'Example MCP',
+    auth: { type: 'oauth' },
+    transport: 'http',
+    enabled: true,
+    scope: 'session',
+  } as MCPServer;
+  agorStore.setState({ mcpServerById: new Map([[mcpServer.mcp_server_id, mcpServer]]) });
+  const mcpIds = [mcpServer.mcp_server_id];
+  const attachmentClient = {
+    io: { on: noop, off: noop },
+    service: () => ({
+      find: async () => ({ data: [] }),
+      get: async () => session,
+      on: noop,
+      off: noop,
+    }),
+  } as unknown as AgorClient;
+  const panel = (status: Session['status']) => (
+    <App>
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AppActionsProvider value={{}}>
+          <div
+            data-testid="attachment-panel"
+            style={{ position: 'fixed', inset: 0, maxWidth: 600 }}
+          >
+            <SessionPanel
+              client={attachmentClient}
+              session={{ ...session, status }}
+              sessionMcpServerIds={mcpIds}
+              open
+              onClose={noop}
+            />
+          </div>
+        </AppActionsProvider>
+      </ConnectionProvider>
+    </App>
+  );
+  const view = render(panel('running'));
+  const root = screen.getByTestId('attachment-panel').firstElementChild as HTMLElement;
+  const body = root.children[1] as HTMLElement;
+  await screen.findByTestId('mcp-disconnected-notice');
+  const composer = screen.getByPlaceholderText('Queue here… @ for mentions, : for emoji');
+  const input = root.querySelector('input[type="file"]')!;
+  const files = Array.from(
+    { length: 10 },
+    (_, i) => new File(['attachment'], `attachment-${i}.txt`, { type: 'text/plain' })
+  );
+  fireEvent.change(input, { target: { files } });
+  await screen.findByRole('button', { name: 'Remove attachment-9.txt' });
+  // The supported limit rejects an eleventh file, leaving ten pending tiles
+  // and the real validation notice in place. No daemon upload is needed.
+  fireEvent.change(input, { target: { files: [new File(['extra'], 'extra.txt')] } });
+  await screen.findAllByText(/Composer supports up to 10 pending files/);
+  const draft = Array.from({ length: 20 }, (_, i) => `Draft line ${i + 1}`).join('\n');
+  await userEvent.fill(composer, draft);
+  const assertControls = () => {
+    const bounds = root.getBoundingClientRect();
+    for (const control of [
+      composer,
+      screen.getByRole('button', {
+        name: screen.queryByRole('button', { name: 'Stop' }) ? 'Queue' : 'Send',
+      }),
+      ...(screen.queryByRole('button', { name: 'Stop' })
+        ? [screen.getByRole('button', { name: 'Stop' })]
+        : []),
+    ]) {
+      const rect = control.getBoundingClientRect();
+      expect(
+        rect.bottom,
+        `${control.getAttribute('aria-label') ?? 'textarea'} bottom`
+      ).toBeLessThanOrEqual(bounds.bottom);
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.left);
+      expect(rect.right).toBeLessThanOrEqual(bounds.right);
+      expect(control).not.toBeDisabled();
+      expect(rect.top).toBeGreaterThanOrEqual(
+        (root.firstElementChild as HTMLElement).getBoundingClientRect().bottom
+      );
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      expect(hit && control.contains(hit), 'control can be hit without outer scrolling').toBe(true);
+    }
+    expect(conversation().clientHeight).toBeGreaterThan(0);
+    for (const container of [root, body]) {
+      expect(container.scrollHeight - container.clientHeight).toBeLessThanOrEqual(1);
+      container.scrollTop = 10000;
+      expect(container.scrollTop).toBe(0);
+    }
+  };
+  await page.screenshot({
+    path: `.vitest/attachments/oversized-composer-${window.innerWidth}x${window.innerHeight}.png`,
+  });
+  await waitFor(assertControls);
+  expect(composer.scrollHeight).toBeGreaterThan(composer.clientHeight);
+  const extras = screen.getByRole('region', { name: 'Composer attachments and notices' });
+  if (window.innerWidth <= 320) expect(extras.scrollHeight).toBeGreaterThan(extras.clientHeight);
+  const transcript = conversation();
+  const headerTop = root.firstElementChild!.getBoundingClientRect().top;
+  const pinnedBottom = composer.getBoundingClientRect().bottom;
+  await userEvent.wheel(extras, { delta: { y: 10000 } });
+  if (extras.scrollHeight > extras.clientHeight) {
+    await waitFor(() => expect(extras.scrollTop).toBeGreaterThan(0));
+  }
+  const removeLast = screen.getByRole('button', { name: 'Remove attachment-9.txt' });
+  removeLast.focus();
+  await waitFor(() => {
+    const rect = removeLast.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    expect(hit && removeLast.contains(hit)).toBe(true);
+  });
+  expect(composer.getBoundingClientRect().bottom).toBe(pinnedBottom);
+  expect(root.firstElementChild!.getBoundingClientRect().top).toBe(headerTop);
+  await waitFor(assertControls);
+  await userEvent.wheel(extras, { delta: { y: -10000 } });
+  await waitFor(() => expect(extras.scrollTop).toBe(0));
+  expect(
+    screen.getByTestId('mcp-disconnected-notice').getBoundingClientRect().top
+  ).toBeGreaterThanOrEqual(extras.getBoundingClientRect().top);
+  await page.viewport(window.innerWidth, 390);
+  await waitFor(assertControls);
+  // Resize the panel independently of the viewport (desktop action rows wrap).
+  screen.getByTestId('attachment-panel').style.maxWidth = '280px';
+  await waitFor(assertControls);
+  await userEvent.click(removeLast);
+  expect(screen.queryByRole('button', { name: 'Remove attachment-9.txt' })).toBeNull();
+  expect(screen.getAllByRole('button', { name: /^Remove attachment-/ })).toHaveLength(9);
+  await waitFor(assertControls);
+  // Both the pinned input and the independently scrolled tray remain drop
+  // targets after splitting their layout ownership.
+  const replacementDrop = new DataTransfer();
+  replacementDrop.items.add(new File(['replacement'], 'replacement.txt'));
+  fireEvent(
+    screen.getByLabelText('Composer attachment drop zone'),
+    new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: replacementDrop })
+  );
+  await screen.findByRole('button', { name: 'Remove replacement.txt' });
+  expect(screen.getAllByRole('button', { name: /^Remove (attachment-|replacement)/ })).toHaveLength(
+    10
+  );
+  expect(screen.getByLabelText('Composer attachments and input drop zone')).toContainElement(
+    composer
+  );
+  view.rerender(panel('completed'));
+  await waitFor(assertControls);
+  expect(conversation()).toBe(transcript);
+  expect(screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji')).toBe(composer);
+  expect(composer).toHaveValue(draft);
+  expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+});

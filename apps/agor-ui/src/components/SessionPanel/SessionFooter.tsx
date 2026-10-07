@@ -108,6 +108,9 @@ export interface SessionFooterProps {
   onCodexPermissionChange: (sandbox: CodexSandboxMode, approval: CodexApprovalPolicy) => void;
   // Prompt textarea rendered between the two bars
   promptInputSlot: React.ReactNode;
+  composerExtrasSlot?: React.ReactNode;
+  maxHeight?: number;
+  onChromeHeightChange?: (height: number) => void;
 }
 
 // Height of the mobile info-bar chips (MCP / effort / model) so they line up.
@@ -157,10 +160,36 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   onPermissionModeChange,
   onCodexPermissionChange,
   promptInputSlot,
+  composerExtrasSlot,
+  maxHeight,
+  onChromeHeightChange,
 }) => {
   const managedByPreset = Boolean(session.agentic_tool_preset_id);
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
+  const footerRef = React.useRef<HTMLDivElement>(null);
+  const pinnedRef = React.useRef<HTMLDivElement>(null);
+  const inputRef = React.useRef<HTMLDivElement>(null);
+  React.useLayoutEffect(() => {
+    const footer = footerRef.current;
+    const pinned = pinnedRef.current;
+    const input = inputRef.current;
+    if (!footer || !pinned || !input || !onChromeHeightChange) return;
+    const measure = () => {
+      const style = getComputedStyle(footer);
+      const inset =
+        Number.parseFloat(style.paddingTop) +
+        Number.parseFloat(style.paddingBottom) +
+        Number.parseFloat(style.borderTopWidth) +
+        Number.parseFloat(style.borderBottomWidth);
+      // Exclude the input itself so autosizing cannot change its own budget.
+      onChromeHeightChange(pinned.offsetHeight - input.offsetHeight + inset);
+    };
+    const observer = new ResizeObserver(measure);
+    for (const element of [footer, pinned, input]) observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, [onChromeHeightChange]);
   // Below the shell breakpoint the chip row collapses to a compact model+effort
   // bar and "More" opens a bottom sheet instead of a popover, so the full
   // controls stay reachable on a phone without a separate lossy composer.
@@ -1346,9 +1375,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   return (
     <div
+      ref={footerRef}
       style={{
         position: 'relative',
         flexShrink: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        minHeight: 0,
+        maxHeight,
+        boxSizing: 'border-box',
         background: token.colorBgContainer,
         borderTop: `1px solid ${token.colorBorder}`,
         // Keep all padding longhand: an undefined desktop paddingBottom clears
@@ -1378,399 +1413,418 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         />
       )}
 
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
-        {(isMobile ||
-          showMcpControl ||
-          (footerTimerTask && pinnedChips.includes('timer')) ||
-          (modelName && pinnedChips.includes('model')) ||
-          pinnedChips.includes('tokens') ||
-          (latestContextWindow &&
-            latestContextWindow.limit > 0 &&
-            pinnedChips.includes('context')) ||
-          pinnedChips.includes('session-ids')) && (
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: 0,
+        }}
+      >
+        {/* Only optional content shrinks/scrolls; input and actions stay pinned. */}
+        <section
+          aria-label="Composer attachments and notices"
+          style={{ minHeight: 0, overflowY: 'auto', overscrollBehaviorY: 'contain', flexShrink: 1 }}
+        >
+          {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
+          {(isMobile ||
+            showMcpControl ||
+            (footerTimerTask && pinnedChips.includes('timer')) ||
+            (modelName && pinnedChips.includes('model')) ||
+            pinnedChips.includes('tokens') ||
+            (latestContextWindow &&
+              latestContextWindow.limit > 0 &&
+              pinnedChips.includes('context')) ||
+            pinnedChips.includes('session-ids')) && (
+            <div
+              style={{
+                display: 'flex',
+                gap: token.sizeUnit,
+                alignItems: 'center',
+                marginBottom: token.sizeUnit * 2,
+                flexWrap: 'wrap',
+              }}
+            >
+              {footerTimerTask && pinnedChips.includes('timer') && (
+                <div
+                  style={{ display: 'inline-flex', alignItems: 'center', height: 22 }}
+                  data-testid="timer-chip"
+                >
+                  <TimerPill
+                    status={footerTimerTask.status}
+                    startedAt={
+                      footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
+                    }
+                    endedAt={
+                      footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
+                    }
+                    durationMs={footerTimerTask.duration_ms}
+                    lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
+                    latestExecutorPulse={footerTimerTask.latest_executor_pulse}
+                  />
+                </div>
+              )}
+
+              {showMcpControl && (
+                <SessionMcpFooterControl
+                  client={client}
+                  currentUserId={currentUserId}
+                  sessionId={session.session_id}
+                  sessionMcpServerIds={sessionMcpServerIds}
+                  mcpServerById={mcpServerById}
+                  userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
+                />
+              )}
+
+              {/* Compact effort control (mobile chip bar only) */}
+              {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    height: MOBILE_CHIP_HEIGHT,
+                    pointerEvents: managedByPreset ? 'none' : undefined,
+                    opacity: managedByPreset ? 0.65 : undefined,
+                  }}
+                >
+                  {effortSelector}
+                </div>
+              )}
+
+              {/* Model chip. On mobile it just opens the controls sheet, so there
+                is no popover to render; desktop keeps the click-to-change popover. */}
+              {modelName &&
+                (isMobile ? (
+                  <Button
+                    size="small"
+                    icon={<RobotOutlined />}
+                    onClick={() => setMoreOpen(true)}
+                    aria-label={`Model and session controls: ${modelName}`}
+                    title={modelName}
+                    style={{
+                      height: MOBILE_CHIP_HEIGHT,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      maxWidth: '100%',
+                    }}
+                    data-testid="model-chip"
+                  >
+                    <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                      {modelName}
+                    </Typography.Text>
+                  </Button>
+                ) : (
+                  pinnedChips.includes('model') && (
+                    <Popover
+                      trigger={managedByPreset ? [] : 'click'}
+                      placement="topLeft"
+                      title="Model"
+                      overlayStyle={{ maxWidth: 'none' }}
+                      overlayInnerStyle={{ padding: 8 }}
+                      content={
+                        <div style={{ width: 420 }}>
+                          {managedByPreset ? (
+                            <Typography.Text>
+                              Managed by preset. Switch presets in Session Settings.
+                            </Typography.Text>
+                          ) : (
+                            <ModelSelector
+                              key={session.session_id}
+                              value={modelConfig}
+                              onCommit={onModelConfigCommit}
+                              agentic_tool={session.agentic_tool}
+                              client={client}
+                              branchId={session.branch_id}
+                              catalogEnabled={session.created_by === currentUserId}
+                            />
+                          )}
+                        </div>
+                      }
+                    >
+                      <Tag
+                        icon={<RobotOutlined />}
+                        color="default"
+                        truncate
+                        title={modelName}
+                        style={{
+                          cursor: managedByPreset ? 'default' : 'pointer',
+                          height: 22,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                        }}
+                        data-testid="model-chip"
+                      >
+                        {modelName}
+                      </Tag>
+                    </Popover>
+                  )
+                ))}
+
+              {pinnedChips.includes('tokens') && (
+                <SessionUsagePopover
+                  key={`${session.session_id}:${currentUserId}`}
+                  client={client ?? null}
+                  sessionId={session.session_id}
+                  userId={currentUserId}
+                />
+              )}
+
+              {/* Context % chip */}
+              {latestContextWindow &&
+                latestContextWindow.limit > 0 &&
+                pinnedChips.includes('context') && (
+                  <ContextWindowPill
+                    used={latestContextWindow.used}
+                    limit={latestContextWindow.limit}
+                    taskMetadata={
+                      latestContextWindow.taskMetadata as React.ComponentProps<
+                        typeof ContextWindowPill
+                      >['taskMetadata']
+                    }
+                  />
+                )}
+
+              {/* Session IDs chip */}
+              {pinnedChips.includes('session-ids') && (
+                <Popover
+                  trigger="click"
+                  placement="topLeft"
+                  title={
+                    <span>
+                      <IdcardOutlined style={{ marginRight: 8 }} />
+                      Session IDs
+                    </span>
+                  }
+                  content={
+                    <div style={{ width: 400, maxWidth: '90vw' }}>
+                      <SessionIdsList session={session} />
+                    </div>
+                  }
+                >
+                  <Tag
+                    icon={<IdcardOutlined />}
+                    color="default"
+                    style={{
+                      cursor: 'pointer',
+                      height: 22,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                    }}
+                    data-testid="session-ids-chip"
+                  >
+                    IDs
+                  </Tag>
+                </Popover>
+              )}
+            </div>
+          )}
+
+          {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
+          {showMcpNotice && (
+            <CompactNotice
+              type="warning"
+              message={mcpNoticeMessage}
+              onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
+              dismissLabel="Dismiss MCP connection notice"
+              data-testid="mcp-disconnected-notice"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+              style={{ marginBottom: token.marginXS }}
+            />
+          )}
+
+          {composerExtrasSlot && (
+            <div style={{ padding: token.paddingXS }}>{composerExtrasSlot}</div>
+          )}
+        </section>
+        <div ref={pinnedRef} style={{ flexShrink: 0 }}>
+          {/* Row 2 — Prompt textarea */}
+          <div ref={inputRef}>{promptInputSlot}</div>
+
+          {/* Row 3 — Action bar */}
           <div
             style={{
               display: 'flex',
-              gap: token.sizeUnit,
-              alignItems: 'center',
-              marginBottom: token.sizeUnit * 2,
               flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: token.sizeUnit,
+              marginTop: token.sizeUnit * 2,
             }}
           >
-            {footerTimerTask && pinnedChips.includes('timer') && (
-              <div
-                style={{ display: 'inline-flex', alignItems: 'center', height: 22 }}
-                data-testid="timer-chip"
-              >
-                <TimerPill
-                  status={footerTimerTask.status}
-                  startedAt={
-                    footerTimerTask.message_range?.start_timestamp || footerTimerTask.created_at
+            {/* Left group */}
+            <Space size={4}>
+              {barPinnedItems.includes('upload') && (
+                <Tooltip
+                  title={
+                    composerAttachmentUploading
+                      ? composerUploadTooltip
+                      : connectionDisabled
+                        ? 'Disconnected from daemon'
+                        : 'Attach Files'
                   }
-                  endedAt={
-                    footerTimerTask.message_range?.end_timestamp || footerTimerTask.completed_at
-                  }
-                  durationMs={footerTimerTask.duration_ms}
-                  lastExecutorHeartbeatAt={footerTimerTask.last_executor_heartbeat_at}
-                  latestExecutorPulse={footerTimerTask.latest_executor_pulse}
-                />
-              </div>
-            )}
-
-            {showMcpControl && (
-              <SessionMcpFooterControl
-                client={client}
-                currentUserId={currentUserId}
-                sessionId={session.session_id}
-                sessionMcpServerIds={sessionMcpServerIds}
-                mcpServerById={mcpServerById}
-                userAuthenticatedMcpServerIds={userAuthenticatedMcpServerIds}
-              />
-            )}
-
-            {/* Compact effort control (mobile chip bar only) */}
-            {isMobile && supportsLiveEffort && toolCaps?.reasoningEffortLevels && (
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  height: MOBILE_CHIP_HEIGHT,
-                  pointerEvents: managedByPreset ? 'none' : undefined,
-                  opacity: managedByPreset ? 0.65 : undefined,
-                }}
-              >
-                {effortSelector}
-              </div>
-            )}
-
-            {/* Model chip. On mobile it just opens the controls sheet, so there
-                is no popover to render; desktop keeps the click-to-change popover. */}
-            {modelName &&
-              (isMobile ? (
-                <Button
-                  size="small"
-                  icon={<RobotOutlined />}
-                  onClick={() => setMoreOpen(true)}
-                  aria-label={`Model and session controls: ${modelName}`}
-                  title={modelName}
-                  style={{
-                    height: MOBILE_CHIP_HEIGHT,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    maxWidth: '100%',
-                  }}
-                  data-testid="model-chip"
                 >
-                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
-                    {modelName}
-                  </Typography.Text>
-                </Button>
-              ) : (
-                pinnedChips.includes('model') && (
-                  <Popover
-                    trigger={managedByPreset ? [] : 'click'}
-                    placement="topLeft"
-                    title="Model"
-                    overlayStyle={{ maxWidth: 'none' }}
-                    overlayInnerStyle={{ padding: 8 }}
-                    content={
-                      <div style={{ width: 420 }}>
-                        {managedByPreset ? (
-                          <Typography.Text>
-                            Managed by preset. Switch presets in Session Settings.
-                          </Typography.Text>
-                        ) : (
-                          <ModelSelector
-                            key={session.session_id}
-                            value={modelConfig}
-                            onCommit={onModelConfigCommit}
-                            agentic_tool={session.agentic_tool}
-                            client={client}
-                            branchId={session.branch_id}
-                            catalogEnabled={session.created_by === currentUserId}
-                          />
-                        )}
-                      </div>
-                    }
-                  >
-                    <Tag
-                      icon={<RobotOutlined />}
-                      color="default"
-                      truncate
-                      title={modelName}
-                      style={{
-                        cursor: managedByPreset ? 'default' : 'pointer',
-                        height: 22,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                      }}
-                      data-testid="model-chip"
-                    >
-                      {modelName}
-                    </Tag>
-                  </Popover>
-                )
-              ))}
-
-            {pinnedChips.includes('tokens') && (
-              <SessionUsagePopover
-                key={`${session.session_id}:${currentUserId}`}
-                client={client ?? null}
-                sessionId={session.session_id}
-                userId={currentUserId}
-              />
-            )}
-
-            {/* Context % chip */}
-            {latestContextWindow &&
-              latestContextWindow.limit > 0 &&
-              pinnedChips.includes('context') && (
-                <ContextWindowPill
-                  used={latestContextWindow.used}
-                  limit={latestContextWindow.limit}
-                  taskMetadata={
-                    latestContextWindow.taskMetadata as React.ComponentProps<
-                      typeof ContextWindowPill
-                    >['taskMetadata']
-                  }
-                />
-              )}
-
-            {/* Session IDs chip */}
-            {pinnedChips.includes('session-ids') && (
-              <Popover
-                trigger="click"
-                placement="topLeft"
-                title={
-                  <span>
-                    <IdcardOutlined style={{ marginRight: 8 }} />
-                    Session IDs
-                  </span>
-                }
-                content={
-                  <div style={{ width: 400, maxWidth: '90vw' }}>
-                    <SessionIdsList session={session} />
-                  </div>
-                }
-              >
-                <Tag
-                  icon={<IdcardOutlined />}
-                  color="default"
-                  style={{
-                    cursor: 'pointer',
-                    height: 22,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                  }}
-                  data-testid="session-ids-chip"
-                >
-                  IDs
-                </Tag>
-              </Popover>
-            )}
-          </div>
-        )}
-
-        {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
-        {showMcpNotice && (
-          <CompactNotice
-            type="warning"
-            message={mcpNoticeMessage}
-            onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
-            dismissLabel="Dismiss MCP connection notice"
-            data-testid="mcp-disconnected-notice"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-            style={{ marginBottom: token.marginXS }}
-          />
-        )}
-
-        {/* Row 2 — Prompt textarea */}
-        {promptInputSlot}
-
-        {/* Row 3 — Action bar */}
-        <div
-          style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            gap: token.sizeUnit,
-            marginTop: token.sizeUnit * 2,
-          }}
-        >
-          {/* Left group */}
-          <Space size={4}>
-            {barPinnedItems.includes('upload') && (
-              <Tooltip
-                title={
-                  composerAttachmentUploading
-                    ? composerUploadTooltip
-                    : connectionDisabled
-                      ? 'Disconnected from daemon'
-                      : 'Attach Files'
-                }
-              >
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Attach files"
-                  title="Attach files"
-                  icon={<PaperClipOutlined />}
-                  onClick={onAttachFiles}
-                  disabled={uploadDisabled}
-                  data-testid="upload-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('advanced-upload') && (
-              <Tooltip
-                title={
-                  composerAttachmentUploading
-                    ? composerUploadTooltip
-                    : connectionDisabled
-                      ? 'Disconnected from daemon'
-                      : 'Advanced upload'
-                }
-              >
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Advanced upload"
-                  title="Advanced upload"
-                  icon={<UploadOutlined />}
-                  onClick={onUploadOpen}
-                  disabled={advancedUploadDisabled}
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Fork session"
-                  icon={<ForkOutlined />}
-                  onClick={onFork}
-                  disabled={forkDisabled}
-                  data-testid="fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {/* Dynamically pinned items */}
-            {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title="BTW fork">
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Ask side question via BTW fork"
-                  icon={<QuestionCircleOutlined />}
-                  onClick={onBtwSend}
-                  disabled={btwForkDisabled}
-                  data-testid="btw-fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-              <Tooltip title="Spawn subsession">
-                <Button
-                  size={actionSize}
-                  style={touchActionStyle}
-                  type="text"
-                  aria-label="Spawn subsession"
-                  icon={<BranchesOutlined />}
-                  onClick={onSpawnOpen}
-                  disabled={spawnDisabled}
-                />
-              </Tooltip>
-            )}
-            {isMobile ? (
-              moreButton
-            ) : (
-              <Popover
-                open={moreOpen}
-                onOpenChange={setMoreOpen}
-                trigger="click"
-                placement="topLeft"
-                content={moreContent}
-                title={null}
-              >
-                {moreButton}
-              </Popover>
-            )}
-          </Space>
-
-          {/* Right group */}
-          <Flex
-            align="center"
-            gap={token.marginXS}
-            style={{ marginInlineStart: 'auto', flexShrink: 0 }}
-          >
-            {/* Reserve the compact slot so activity changes never move controls.
-                Spin inherits the shared reduced-motion rule in index.css. */}
-            <Flex
-              align="center"
-              justify="center"
-              style={{ width: token.controlHeightXS, flexShrink: 0 }}
-            >
-              {showActivity && (
-                <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
-                  <Spin size="small" aria-hidden="true" />
-                </span>
-              )}
-            </Flex>
-            {/* Flex avoids inline baseline/descender space around the controls. */}
-            <Flex align="center" gap={token.sizeUnit}>
-              {showStop && (
-                <Tooltip title={stopTooltip}>
                   <Button
-                    danger
-                    aria-label="Stop"
-                    aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
-                    icon={
-                      stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
-                    }
-                    onClick={onStop}
-                    disabled={connectionDisabled || !isRunning || stopRequestInFlight}
-                  >
-                    Stop
-                  </Button>
+                    type="text"
+                    aria-label="Attach files"
+                    title="Attach files"
+                    icon={<PaperClipOutlined />}
+                    onClick={onAttachFiles}
+                    disabled={uploadDisabled}
+                    data-testid="upload-bar-btn"
+                  />
                 </Tooltip>
               )}
-              <Tooltip title={sendTooltip}>
-                <Badge
-                  count={queuedTasks.length > 0 ? queuedTasks.length : 0}
-                  size="small"
-                  offset={[-2, 2]}
-                  styles={{ root: { display: 'inline-flex' } }}
-                  style={{
-                    boxShadow: 'none',
-                    backgroundColor: token.colorTextTertiary,
-                    fontSize: 10,
-                  }}
+              {barPinnedItems.includes('advanced-upload') && (
+                <Tooltip
+                  title={
+                    composerAttachmentUploading
+                      ? composerUploadTooltip
+                      : connectionDisabled
+                        ? 'Disconnected from daemon'
+                        : 'Advanced upload'
+                  }
                 >
                   <Button
-                    type="primary"
-                    aria-label={sendLabel}
                     size={actionSize}
                     style={touchActionStyle}
-                    icon={<SendOutlined />}
-                    onClick={onSendPrompt}
-                    disabled={sendDisabled}
+                    type="text"
+                    aria-label="Advanced upload"
+                    title="Advanced upload"
+                    icon={<UploadOutlined />}
+                    onClick={onUploadOpen}
+                    disabled={advancedUploadDisabled}
+                  />
+                </Tooltip>
+              )}
+              {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Fork session"
+                    icon={<ForkOutlined />}
+                    onClick={onFork}
+                    disabled={forkDisabled}
+                    data-testid="fork-bar-btn"
+                  />
+                </Tooltip>
+              )}
+              {/* Dynamically pinned items */}
+              {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title="BTW fork">
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Ask side question via BTW fork"
+                    icon={<QuestionCircleOutlined />}
+                    onClick={onBtwSend}
+                    disabled={btwForkDisabled}
+                    data-testid="btw-fork-bar-btn"
+                  />
+                </Tooltip>
+              )}
+              {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+                <Tooltip title="Spawn subsession">
+                  <Button
+                    size={actionSize}
+                    style={touchActionStyle}
+                    type="text"
+                    aria-label="Spawn subsession"
+                    icon={<BranchesOutlined />}
+                    onClick={onSpawnOpen}
+                    disabled={spawnDisabled}
+                  />
+                </Tooltip>
+              )}
+              {isMobile ? (
+                moreButton
+              ) : (
+                <Popover
+                  open={moreOpen}
+                  onOpenChange={setMoreOpen}
+                  trigger="click"
+                  placement="topLeft"
+                  content={moreContent}
+                  title={null}
+                >
+                  {moreButton}
+                </Popover>
+              )}
+            </Space>
+
+            {/* Right group */}
+            <Flex
+              align="center"
+              gap={token.marginXS}
+              style={{ marginInlineStart: 'auto', flexShrink: 0 }}
+            >
+              {/* Reserve the compact slot so activity changes never move controls.
+                Spin inherits the shared reduced-motion rule in index.css. */}
+              <Flex
+                align="center"
+                justify="center"
+                style={{ width: token.controlHeightXS, flexShrink: 0 }}
+              >
+                {showActivity && (
+                  <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
+                    <Spin size="small" aria-hidden="true" />
+                  </span>
+                )}
+              </Flex>
+              {/* Flex avoids inline baseline/descender space around the controls. */}
+              <Flex align="center" gap={token.sizeUnit}>
+                {showStop && (
+                  <Tooltip title={stopTooltip}>
+                    <Button
+                      danger
+                      aria-label="Stop"
+                      aria-busy={stopRequestInFlight || isStopping}
+                      size={actionSize}
+                      style={touchActionStyle}
+                      icon={
+                        stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
+                      }
+                      onClick={onStop}
+                      disabled={connectionDisabled || !isRunning || stopRequestInFlight}
+                    >
+                      Stop
+                    </Button>
+                  </Tooltip>
+                )}
+                <Tooltip title={sendTooltip}>
+                  <Badge
+                    count={queuedTasks.length > 0 ? queuedTasks.length : 0}
+                    size="small"
+                    offset={[-2, 2]}
+                    styles={{ root: { display: 'inline-flex' } }}
+                    style={{
+                      boxShadow: 'none',
+                      backgroundColor: token.colorTextTertiary,
+                      fontSize: 10,
+                    }}
                   >
-                    {sendLabel}
-                  </Button>
-                </Badge>
-              </Tooltip>
+                    <Button
+                      type="primary"
+                      aria-label={sendLabel}
+                      size={actionSize}
+                      style={touchActionStyle}
+                      icon={<SendOutlined />}
+                      onClick={onSendPrompt}
+                      disabled={sendDisabled}
+                    >
+                      {sendLabel}
+                    </Button>
+                  </Badge>
+                </Tooltip>
+              </Flex>
             </Flex>
-          </Flex>
+          </div>
         </div>
       </div>
 

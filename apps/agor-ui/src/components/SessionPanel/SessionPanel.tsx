@@ -575,20 +575,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     measure();
     return () => observer.disconnect();
   }, [open, session?.session_id]);
-  // The input can grow, but must leave room for footer controls and the
-  // conversation on short panels. Observe the fixed body, not the input, so
-  // draft growth cannot feed back into its own available-height calculation.
-  const composerMaxRows = Math.max(
-    1,
-    Math.min(
-      isMobileShell ? 4 : 10,
-      bodyHeight
-        ? Math.floor(
-            (bodyHeight * 0.4) / ((isMobileShell ? 16 : token.fontSize) * token.lineHeight)
-          )
-        : 10
-    )
-  );
+  const [footerChromeHeight, setFooterChromeHeight] = React.useState(0);
   // Search observes only the conversation region, not the whole body: the
   // no-results overlay, footer, and modals are `bodyRef` children, so observing
   // `bodyRef` would let the overlay's own mount/unmount retrigger the scan.
@@ -652,6 +639,41 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     showError,
     uploadPolicy,
   });
+  // Bound the entire footer, not just the textarea: tiles and notices share a
+  // separate scroller. Reserve conversation space and subtract measured action
+  // chrome (including wrapping and safe-area padding) from the input budget.
+  const composerLineHeight = (isMobileShell ? 16 : token.fontSize) * token.lineHeight;
+  const composerInsets = token.paddingXS * 2 + token.lineWidth * 2;
+  // Prefer leaving a quarter of the body for conversation. On especially short
+  // panels, prioritize one input row and the actual action chrome over that
+  // preference, but never let the footer grow outside the body.
+  const footerMaxHeight = bodyHeight
+    ? Math.min(
+        bodyHeight,
+        Math.max(
+          bodyHeight * 0.75,
+          footerChromeHeight + composerLineHeight + composerInsets + token.controlHeight
+        )
+      )
+    : undefined;
+  const extrasReserve =
+    hasComposerAttachments || composerAttachmentValidationError
+      ? Math.min(token.controlHeightLG * 2, (footerMaxHeight ?? 0) * 0.25)
+      : token.controlHeight;
+  const composerMaxRows = Math.max(
+    1,
+    Math.min(
+      isMobileShell ? 4 : 10,
+      bodyHeight
+        ? Math.floor(
+            Math.min(
+              bodyHeight * 0.4,
+              (footerMaxHeight ?? 0) - footerChromeHeight - extrasReserve - composerInsets
+            ) / composerLineHeight
+          )
+        : 10
+    )
+  );
   const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
     null
   );
@@ -843,12 +865,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         ? session
         : null;
   const sessionCustomContext = fullSession?.custom_context as Record<string, unknown> | undefined;
-  const promptInputSlot = React.useMemo(() => {
-    if (!session) return null;
+  const composerExtrasSlot = React.useMemo(() => {
+    if (!hasComposerAttachments && !composerAttachmentValidationError) return null;
     return (
       <SessionComposerDropZone
+        ariaLabel="Composer attachment drop zone"
         disabled={composerAttachmentUploading}
-        onDragActiveChange={setComposerDropActive}
         onFilesDrop={addComposerAttachments}
       >
         {composerAttachmentValidationError && (
@@ -864,6 +886,25 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           disabled={composerAttachmentUploading}
           onRemove={removeComposerAttachment}
         />
+      </SessionComposerDropZone>
+    );
+  }, [
+    hasComposerAttachments,
+    composerAttachmentValidationError,
+    composerAttachments,
+    composerAttachmentUploading,
+    addComposerAttachments,
+    removeComposerAttachment,
+    token.borderRadius,
+  ]);
+  const promptInputSlot = React.useMemo(() => {
+    if (!session) return null;
+    return (
+      <SessionComposerDropZone
+        disabled={composerAttachmentUploading}
+        onDragActiveChange={setComposerDropActive}
+        onFilesDrop={addComposerAttachments}
+      >
         <PromptInput
           key={composerIdentityKey}
           ref={promptRef}
@@ -915,8 +956,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     session,
     sessionCustomContext,
     composerAttachmentUploading,
-    composerAttachmentValidationError,
-    composerAttachments,
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
@@ -925,7 +964,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     client,
     userById,
     addComposerAttachments,
-    removeComposerAttachment,
     getDraft,
     getDraftSeed,
     discardDraftSeed,
@@ -933,7 +971,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     deleteDraft,
     handleHasInputChange,
     stableFooterHandlers,
-    token.borderRadius,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).
@@ -1453,6 +1490,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       onPermissionModeChange={stableFooterHandlers.onPermissionModeChange}
       onCodexPermissionChange={stableFooterHandlers.onCodexPermissionChange}
       promptInputSlot={promptInputSlot}
+      composerExtrasSlot={composerExtrasSlot}
+      maxHeight={footerMaxHeight}
+      onChromeHeightChange={setFooterChromeHeight}
     />
   ) : null;
 
