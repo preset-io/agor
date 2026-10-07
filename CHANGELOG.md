@@ -35,11 +35,11 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Fixes
 
-- **Resumable partial Knowledge transfers** — transfers retain successful per-document work and continue after independent document failures, with bounded sanitized summaries and receipt-backed resume; systemic and safety failures still stop the run.
+- **Resumable partial Knowledge transfers** — transfers retain successful per-document work and continue after independent document failures, with bounded sanitized summaries and receipt-backed resume; systemic and safety failures still stop the run. ([#3018](https://github.com/preset-io/agor/pull/3018))
 
 ### Breaking
 
-- **Git-friendly Knowledge repositories (format v2)** — exports now use readable folders, per-document YAML headers, a sorted `manifest.yaml` and relative internal links; `agor kb validate` checks repositories offline. V1 bundles are not imported or converted in place: keep them intact and export to a fresh directory; edited v2 repositories still require a new destination namespace rather than overwriting existing Knowledge.
+- **Git-friendly Knowledge repositories (format v2)** — exports now use readable folders, per-document YAML headers, a sorted `manifest.yaml` and relative internal links; `agor kb validate` checks repositories offline. V1 bundles are not imported or converted in place: keep them intact and export to a fresh directory; edited v2 repositories still require a new destination namespace rather than overwriting existing Knowledge. ([#3018](https://github.com/preset-io/agor/pull/3018))
 
 ## 0.26.10 (2026-10-06)
 
