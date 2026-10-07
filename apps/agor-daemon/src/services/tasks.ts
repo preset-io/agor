@@ -1511,17 +1511,18 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       // re-stamps `is_agor_callback` and `source` onto the synthesized
       // user-message row so the UI's callback styling (MessageBlock.tsx) holds.
       //
-      // IMPORTANT: queued_by_user_id = the person who set up the callback
-      // (task attribution), NOT the target session owner. Execution still runs
-      // in the target session's immutable execution context. Falls back to its creator
-      // for backward compat (legacy sessions without callback_created_by).
+      // IMPORTANT: created_by is the executor principal (identity, env, and
+      // credentials), so it is the server-stamped callback setter — never the
+      // target session owner, who did not ask for this work. Callbacks without a
+      // stored setter (legacy rows, internal writes) run as the user whose task
+      // completed; queue admission rechecks that principal's authority on the target.
       const taskCallback = task.metadata?.completion_callback;
       const callbackCreator =
         (taskCallback?.target_session_id === targetSessionId
           ? taskCallback.requested_by_user_id
           : undefined) ??
         childSession.callback_config?.callback_created_by ??
-        targetSession.created_by;
+        task.created_by;
       const callbackTaskId = completionCallbackTaskId(task.task_id, targetSessionId);
       const createCallbackTask = () =>
         this.taskRepo.createPending({
