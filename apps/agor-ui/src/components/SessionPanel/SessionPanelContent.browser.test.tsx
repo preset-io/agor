@@ -9,12 +9,13 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
 import { checkBrowserSanity } from '../../test/browserSanity';
+import { CompactNotice } from '../CompactNotice';
 import SessionPanel from './SessionPanel';
 import { SessionPanelContent } from './SessionPanelContent';
 
 // Keep the actual ConversationView scroll owner and split/queue UI. Only its
 // data feed and expensive transcript rows are replaced with deterministic data.
-const queueFeed = vi.hoisted(() => ({ tasks: [] as Task[] }));
+const queueFeed = vi.hoisted(() => ({ tasks: [] as Task[], deepNotice: false }));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({
     handle: null,
@@ -36,6 +37,18 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
 vi.mock('../TaskBlock', () => ({
   TaskBlock: ({ task }: { task: Task }) => (
     <div style={{ minHeight: 60 }}>
+      {queueFeed.deepNotice && task.task_id === 'history-0' && (
+        <>
+          <div style={{ height: 4400 }} />
+          <CompactNotice
+            data-testid="deep-notice"
+            type="neutral"
+            message="Retained tool notice"
+            details={[{ label: 'Output', value: 'Expanded output\n'.repeat(90) }]}
+          />
+          <div style={{ height: 2257 }} />
+        </>
+      )}
       Transcript {task.task_id}
       <details>
         <summary>Expand {task.task_id}</summary>
@@ -201,6 +214,7 @@ afterEach(async () => {
   agorStore.setState({ mcpServerById: originalMcpServers });
   await page.viewport(originalViewport.width, originalViewport.height);
   queueFeed.tasks = [];
+  queueFeed.deepNotice = false;
   vi.clearAllMocks();
 });
 
@@ -645,3 +659,101 @@ it('keeps ten attachments and notices independently scrollable beside a multilin
   expect(composer).toHaveValue(draft);
   expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
 });
+
+// Exercise the real CompactNotice inside an already-scrolled ConversationView.
+// The auto variant restores the old outer-scroll boundary in this isolated
+// fixture, proving local containment fixes geometry rather than masking wheel.
+it.each(['hidden', 'auto'] as const)(
+  'contains a deep aria-live notice with outer overflow %s through scrolling and lifecycle',
+  async (overflow) => {
+    queueFeed.deepNotice = true;
+    const noticeClient = {
+      io: { on: noop, off: noop },
+      service: () => ({
+        find: async () => ({ data: [] }),
+        get: async () => session,
+        on: noop,
+        off: noop,
+      }),
+    } as unknown as AgorClient;
+    const panel = (open = true, status: Session['status'] = 'running') => (
+      <App>
+        <AppActionsProvider value={{}}>
+          <div data-testid="notice-panel" style={{ position: 'fixed', inset: 0, maxWidth: 600 }}>
+            <SessionPanel
+              client={noticeClient}
+              session={{ ...session, status }}
+              open={open}
+              onClose={noop}
+            />
+          </div>
+        </AppActionsProvider>
+      </App>
+    );
+    const view = render(panel());
+    const root = screen.getByTestId('notice-panel').firstElementChild as HTMLElement;
+    const body = root.children[1] as HTMLElement;
+    body.style.overflowY = overflow;
+    const transcript = await screen.findByTestId('conversation-scroll-container');
+    const notice = screen.getByTestId('deep-notice');
+    const live = notice.querySelector<HTMLElement>('span[aria-live="polite"]')!;
+    const composer = screen.getByPlaceholderText('Queue here… @ for mentions, : for emoji');
+    const assertLayout = () => {
+      expect(body.scrollHeight, 'outer geometry, not merely hidden wheel').toBe(body.clientHeight);
+      expect(root.scrollHeight).toBe(root.clientHeight);
+      expect(body.scrollTop).toBe(0);
+      expect(live.offsetParent).toBe(notice);
+      expect(live).toHaveAttribute('aria-live', 'polite');
+      expect(live).not.toHaveAttribute('aria-hidden');
+      expect(getComputedStyle(live).display).not.toBe('none');
+      expect(getComputedStyle(live).clipPath).toBe('inset(50%)');
+      const bounds = root.getBoundingClientRect();
+      expect(composer.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(
+        screen.getByRole('button', { name: 'Send' }).getBoundingClientRect().bottom
+      ).toBeLessThanOrEqual(bounds.bottom);
+    };
+    await expectBottom();
+    expect(transcript.scrollTop).toBeGreaterThan(5000);
+    expect(notice.getBoundingClientRect().bottom).toBeLessThan(
+      transcript.getBoundingClientRect().top
+    );
+    await waitFor(assertLayout);
+    const assertComposerWheel = async () => {
+      const inputTop = composer.getBoundingClientRect().top;
+      const transcriptTop = transcript.scrollTop;
+      await userEvent.wheel(composer, { delta: { y: 600 } });
+      // Wait for native wheel delivery, rather than asserting before paint.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
+      assertLayout();
+      expect(composer.getBoundingClientRect().top).toBe(inputTop);
+      expect(transcript.scrollTop).toBe(transcriptTop);
+    };
+    await assertComposerWheel();
+    await userEvent.wheel(transcript, { delta: { y: -1200 } });
+    await waitFor(() =>
+      expect(transcript.scrollTop).toBeLessThan(
+        transcript.scrollHeight - transcript.clientHeight - 100
+      )
+    );
+    await waitFor(assertLayout);
+    // Expand actual notice content without scrolling its toggle into view.
+    fireEvent.click(notice.querySelector('button')!);
+    await screen.findByRole('region', { name: 'Technical details' });
+    await waitFor(assertLayout);
+    await page.viewport(window.innerWidth, 390);
+    await waitFor(assertLayout);
+    await assertComposerWheel();
+    await userEvent.fill(composer, 'Retained draft');
+    view.rerender(panel(false));
+    view.rerender(panel(true, 'completed'));
+    await waitFor(assertLayout);
+    expect(conversation()).toBe(transcript);
+    expect(screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji')).toBe(composer);
+    expect(composer).toHaveValue('Retained draft');
+    expect(notice.querySelector('span[aria-live="polite"]')).toBe(live);
+    await assertComposerWheel();
+  }
+);

@@ -170,6 +170,10 @@ export function CompactNotice({
         data-notice-type={type}
         {...rest}
         style={{
+          // Keep the absolute copy-announcement span inside this notice. Without
+          // a local containing block its static position can escape a scrolled
+          // transcript and enlarge an outer drawer's scrollable overflow.
+          position: 'relative',
           paddingBlock: token.sizeXXS,
           paddingInline: token.sizeSM,
           background: colors.background,
