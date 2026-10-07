@@ -170,11 +170,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const footerRef = React.useRef<HTMLDivElement>(null);
   const pinnedRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLDivElement>(null);
+  const [pinnedHeight, setPinnedHeight] = React.useState(0);
+  const scrollPinnedChrome = maxHeight !== undefined && pinnedHeight > maxHeight;
   React.useLayoutEffect(() => {
     const footer = footerRef.current;
     const pinned = pinnedRef.current;
     const input = inputRef.current;
-    if (!footer || !pinned || !input || !onChromeHeightChange) return;
+    if (!footer || !pinned || !input) return;
     const measure = () => {
       const style = getComputedStyle(footer);
       const inset =
@@ -183,7 +185,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         Number.parseFloat(style.borderTopWidth) +
         Number.parseFloat(style.borderBottomWidth);
       // Exclude the input itself so autosizing cannot change its own budget.
-      onChromeHeightChange(pinned.offsetHeight - input.offsetHeight + inset);
+      setPinnedHeight(pinned.offsetHeight + inset);
+      onChromeHeightChange?.(pinned.offsetHeight - input.offsetHeight + inset);
     };
     const observer = new ResizeObserver(measure);
     for (const element of [footer, pinned, input]) observer.observe(element);
@@ -1420,12 +1423,25 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           display: 'flex',
           flexDirection: 'column',
           minHeight: 0,
+          // At very short heights, a one-row input plus wrapped touch targets
+          // can exceed the entire budget. Scroll this footer only, so keyboard
+          // focus/native scrolling can still reach actions without moving the drawer.
+          overflowY: scrollPinnedChrome ? 'auto' : undefined,
+          overscrollBehaviorY: 'contain',
         }}
       >
-        {/* Only optional content shrinks/scrolls; input and actions stay pinned. */}
+        {/* Normally only optional content scrolls; input and actions stay pinned. */}
         <section
           aria-label="Composer attachments and notices"
-          style={{ minHeight: 0, overflowY: 'auto', overscrollBehaviorY: 'contain', flexShrink: 1 }}
+          style={{
+            minHeight: 0,
+            overflowY: 'auto',
+            overscrollBehaviorY: 'contain',
+            // Preserve a small, independently scrollable tray in the fallback
+            // rather than collapsing attachments/notices to an unreachable zero.
+            flexShrink: scrollPinnedChrome ? 0 : 1,
+            maxHeight: scrollPinnedChrome ? (maxHeight ?? 0) * 0.25 : undefined,
+          }}
         >
           {/* Row 1: Info bar (always shown on mobile as the compact chip bar) */}
           {(isMobile ||

@@ -660,6 +660,121 @@ it('keeps ten attachments and notices independently scrollable beside a multilin
   expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
 });
 
+// Independently short embedded panels must not clip the non-shrinking mobile
+// touch targets, even after the textarea has reached its one-row minimum.
+it.each([
+  [280, 220],
+  [420, 390],
+  [600, 700],
+])('keeps composer actions reachable in a %ix%i panel', async (width, height) => {
+  await page.viewport(window.innerWidth, Math.max(height, originalViewport.height));
+  const attachmentClient = {
+    io: { on: noop, off: noop },
+    service: () => ({
+      find: async () => ({ data: [] }),
+      get: async () => session,
+      on: noop,
+      off: noop,
+    }),
+  } as unknown as AgorClient;
+  render(
+    <App>
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <AppActionsProvider value={{}}>
+          <div data-testid="short-panel" style={{ width, maxWidth: '100vw', height }}>
+            <SessionPanel client={attachmentClient} session={session} open onClose={noop} />
+          </div>
+        </AppActionsProvider>
+      </ConnectionProvider>
+    </App>
+  );
+  const frame = screen.getByTestId('short-panel');
+  const root = frame.firstElementChild as HTMLElement;
+  const body = root.children[1] as HTMLElement;
+  const files = Array.from(
+    { length: 10 },
+    (_, i) => new File(['attachment'], `attachment-${i}.txt`, { type: 'text/plain' })
+  );
+  fireEvent.change(root.querySelector('input[type="file"]')!, { target: { files } });
+  await screen.findByRole('button', { name: 'Remove attachment-9.txt' });
+  const composer = screen.getByPlaceholderText('Queue here… @ for mentions, : for emoji');
+  const draft = Array.from({ length: 20 }, (_, i) => `Draft line ${i + 1}`).join('\n');
+  await userEvent.fill(composer, draft);
+  const stop = screen.getByRole('button', { name: 'Stop' });
+  const queue = screen.getByRole('button', { name: 'Queue' });
+  const extras = screen.getByRole('region', { name: 'Composer attachments and notices' });
+  const footer = extras.parentElement!.parentElement!;
+  const assertOuterBounds = () => {
+    const bounds = frame.getBoundingClientRect();
+    expect(footer.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
+    for (const container of [root, body]) {
+      expect(container.scrollHeight - container.clientHeight).toBeLessThanOrEqual(1);
+      expect(container.scrollTop).toBe(0);
+    }
+  };
+  await waitFor(assertOuterBounds);
+  const assertHit = (control: HTMLElement) => {
+    const bounds = frame.getBoundingClientRect();
+    const rect = control.getBoundingClientRect();
+    expect(rect.top).toBeGreaterThanOrEqual(root.firstElementChild!.getBoundingClientRect().bottom);
+    expect(rect.bottom).toBeLessThanOrEqual(bounds.bottom);
+    expect(rect.left).toBeGreaterThanOrEqual(bounds.left);
+    expect(rect.right).toBeLessThanOrEqual(bounds.right);
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    expect(hit && control.contains(hit)).toBe(true);
+    expect(control).not.toBeDisabled();
+  };
+  // Native keyboard focus must scroll only the bounded composer fallback, not
+  // the body/drawer. The normal-height cases still keep everything pinned.
+  await waitFor(() => {
+    const scroller = extras.parentElement!;
+    if (height > 220) expect(getComputedStyle(scroller).overflowY).not.toBe('auto');
+    if (getComputedStyle(scroller).overflowY === 'auto') {
+      expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
+    } else {
+      for (const control of [composer, stop, queue]) assertHit(control);
+    }
+  });
+  const scroller = extras.parentElement!;
+  if (getComputedStyle(scroller).overflowY === 'auto') {
+    // Wheel over action chrome (not the independently scrolling tray/input).
+    await userEvent.wheel(screen.getByRole('button', { name: 'Attach files' }), {
+      delta: { y: 10000 },
+    });
+    await waitFor(() => assertHit(queue));
+    await waitFor(assertOuterBounds);
+    await userEvent.wheel(queue, { delta: { y: -10000 } });
+    await waitFor(() => expect(scroller.scrollTop).toBe(0));
+  }
+  composer.focus();
+  await waitFor(() => assertHit(composer));
+  expect(composer).toHaveFocus();
+  stop.focus();
+  await waitFor(() => assertHit(stop));
+  await userEvent.keyboard('{Tab}');
+  expect(queue).toHaveFocus();
+  await waitFor(() => assertHit(queue));
+  await waitFor(assertOuterBounds);
+  const removeLast = screen.getByRole('button', { name: 'Remove attachment-9.txt' });
+  removeLast.focus();
+  await waitFor(() => assertHit(removeLast));
+  await userEvent.keyboard('{Enter}');
+  expect(screen.queryByRole('button', { name: 'Remove attachment-9.txt' })).toBeNull();
+  composer.focus();
+  await waitFor(() => assertHit(composer));
+  expect(composer).toHaveValue(draft);
+  await waitFor(assertOuterBounds);
+});
+
 // Exercise the real CompactNotice inside an already-scrolled ConversationView.
 // The auto variant restores the old outer-scroll boundary in this isolated
 // fixture, proving local containment fixes geometry rather than masking wheel.

@@ -569,8 +569,19 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   React.useLayoutEffect(() => {
     const body = bodyRef.current;
     if (!body || !open || !session?.session_id) return;
-    const measure = () => setBodyHeight(body.clientHeight);
-    const observer = new ResizeObserver(measure);
+    // Footer and conversation share the content box, not the padded client box.
+    const measure = () => {
+      const style = getComputedStyle(body);
+      setBodyHeight(
+        Math.max(
+          0,
+          body.clientHeight -
+            Number.parseFloat(style.paddingTop) -
+            Number.parseFloat(style.paddingBottom)
+        )
+      );
+    };
+    const observer = new ResizeObserver(([entry]) => setBodyHeight(entry.contentRect.height));
     observer.observe(body);
     measure();
     return () => observer.disconnect();
@@ -646,7 +657,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const composerInsets = token.paddingXS * 2 + token.lineWidth * 2;
   // Prefer leaving a quarter of the body for conversation. On especially short
   // panels, prioritize one input row and the actual action chrome over that
-  // preference, but never let the footer grow outside the body.
+  // preference, but never let the footer grow outside the content box. If even
+  // that minimum cannot fit, the footer owns a bounded scrolling fallback.
   const footerMaxHeight = bodyHeight
     ? Math.min(
         bodyHeight,
