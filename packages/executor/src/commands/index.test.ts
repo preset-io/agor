@@ -2,6 +2,7 @@
  * Tests for command router
  */
 
+import { EXECUTOR_COMMAND_ADMISSION } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/agentic-tool-opencode/runtime', () => ({
@@ -36,6 +37,12 @@ import {
 } from './index.js';
 
 describe('Command Registry', () => {
+  it('registers exactly the commands that have an admission class', () => {
+    expect(new Set(getRegisteredCommands())).toEqual(
+      new Set(Object.keys(EXECUTOR_COMMAND_ADMISSION))
+    );
+  });
+
   it('should have all expected commands registered', () => {
     const commands = getRegisteredCommands();
     expect(commands).toContain('prompt');
