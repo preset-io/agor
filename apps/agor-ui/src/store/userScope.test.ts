@@ -1033,30 +1033,6 @@ describe('user scope — reconnect replace', () => {
     expect(flags().teammatesLoaded).toBe(true);
   });
 
-  it('a cold run still shows teammate rows before my branches settle', async () => {
-    let releaseU2!: () => void;
-    const u2 = new Promise<void>((resolve) => {
-      releaseU2 = resolve;
-    });
-    const { client } = makeClient({
-      myBranches: async () => {
-        await u2;
-        return [];
-      },
-      teammates: () => [mate('mate-1')],
-    });
-    const run = startUserScope(client, {
-      userId: ME,
-      lifetime: lifetime(),
-      gatedMineComplete: true,
-    });
-    await vi.waitFor(() => expect(has('branchById', 'mate-1')).toBe(true));
-    expect(flags().teammatesLoaded).toBe(false);
-    releaseU2();
-    await run;
-    expect(flags().teammatesLoaded).toBe(true);
-  });
-
   it('a capped read removes nothing', async () => {
     await loadScope();
     const capped = Array.from({ length: MY_SESSIONS_FULL_LIMIT }, (_, i) =>

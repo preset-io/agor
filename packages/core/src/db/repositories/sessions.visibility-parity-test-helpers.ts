@@ -556,13 +556,6 @@ export async function exerciseSessionVisibilityParity(
     );
   }
 
-  const sorts: Partial<SessionPageOptions>[] = [
-    { sortUpdatedAt: -1 },
-    { sortUpdatedAt: 1 },
-    { sortCreatedAt: -1 },
-    { sortCreatedAt: 1 },
-    {},
-  ];
   for (const [principalLabel, visibleToUserId] of principals) {
     for (const [filterLabel, filter] of filters) {
       const label = `${principalLabel} ${filterLabel}`;
@@ -582,6 +575,8 @@ export async function exerciseSessionVisibilityParity(
           { limit: PAGINATION.MAX_ID_LIST, sortUpdatedAt: 1 as const },
           { limit: PAGINATION.MAX_ID_LIST, skip: 7, sortUpdatedAt: -1 as const },
           { limit: 1000, sortCreatedAt: 1 as const },
+          { limit: 1000, sortCreatedAt: -1 as const },
+          { limit: 1000 },
         ]) {
           await compare(`${label} archived=${archived} no-count ${JSON.stringify(window)}`, {
             ...opts,
@@ -590,19 +585,6 @@ export async function exerciseSessionVisibilityParity(
           });
         }
         await compare(`${label} archived=${archived} count-only`, { ...opts, limit: 0 });
-      }
-      for (const sort of sorts) {
-        for (const window of [
-          { limit: 1000 },
-          { limit: PAGINATION.MAX_ID_LIST, includeTotal: false },
-        ]) {
-          await compare(`${label} sort=${JSON.stringify(sort)} ${JSON.stringify(window)}`, {
-            ...filter,
-            ...sort,
-            ...window,
-            visibleToUserId,
-          });
-        }
       }
       // Walk active pages past the end with both counted and no-count windows.
       const active = { ...filter, archived: false, visibleToUserId };

@@ -170,11 +170,42 @@ describe('replaceScope', () => {
     const next = replaceScope(
       EMPTY_MAPS,
       scopeA,
-      { boardObjects: [boardObject('o-orphan', { branch_id: 'br-gone' })] },
+      {
+        sessions: [session('s-orphan', 'br-gone')],
+        boardObjects: [boardObject('o-orphan', { branch_id: 'br-gone' })],
+      },
       touchedSet('branches:br-gone'),
       []
     );
+    expect(next.sessionById.size).toBe(0);
     expect(next.boardObjectById.size).toBe(0);
+  });
+
+  it('projects remote-create surrogates regardless of snapshot order', () => {
+    const target = session('s-target', 'br-2');
+    const source = session('s-source', 'br-1', {
+      remote_relationships: {
+        as_source: [
+          {
+            relationship_type: 'remote_create',
+            source_session_id: 's-source',
+            target_session_id: 's-target',
+          },
+        ],
+      },
+    } as Partial<Session>);
+    const next = replaceScope(
+      EMPTY_MAPS,
+      scopeA,
+      { branches: [branch('br-1'), branch('br-2')], sessions: [source, target] },
+      never,
+      []
+    );
+    expect(next.sessionsByBranch.get('br-1')?.map((s) => s.session_id)).toEqual([
+      's-source',
+      's-target',
+    ]);
+    expect(next.sessionsByBranch.get('br-1')?.[1].remote_surrogate).toBeDefined();
   });
 
   it('removes no board object when the caller could not read them (viewer)', () => {

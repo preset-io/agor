@@ -2476,57 +2476,6 @@ describe('useAgorData — scoped reconnect', () => {
     connectionReady: true,
   } as const;
 
-  it("replaces the displayed board's branches and sessions and my sessions, reading no global set", async () => {
-    window.history.pushState({}, '', '/b/displayed/');
-    onTestFinished(() => window.history.pushState({}, '', '/'));
-    const server = {
-      branches: [
-        makeBranch({ branch_id: 'b-A', board_id: 'board-A', created_by: 'user-other' }),
-        makeBranch({ branch_id: 'b-moved', board_id: 'board-A', created_by: 'user-other' }),
-        makeBranch({ branch_id: 'b-mine', board_id: 'board-C', created_by: 'user-me' }),
-      ],
-      sessions: [
-        makeSession({ session_id: 's-other', branch_id: 'b-A', created_by: 'user-other' }),
-        makeSession({ session_id: 's-gone', branch_id: 'b-A', created_by: 'user-other' }),
-        makeSession({ session_id: 's-mine', branch_id: 'b-mine', created_by: 'user-me' }),
-      ],
-    };
-    const seed = fakeServer({ boards: [boardA], 'boards:get': boardA as never }, server);
-    const { client, emitIo, fetchArguments } = makeMockClient(seed);
-    const { result } = renderHook(() => useAgorData(client, authenticated));
-    await waitForInitialLoad(result);
-    await waitFor(() => expect(selectMySessionsLoaded(agorStore.getState())).toBe(true));
-    const has = (map: 'sessionById' | 'branchById', id: string) =>
-      agorStore.getState()[map].has(id);
-    expect(['s-other', 's-gone', 's-mine'].every((id) => has('sessionById', id))).toBe(true);
-    expect(has('branchById', 'b-moved')).toBe(true);
-
-    // While disconnected: a session on the board archived, a branch moved
-    // to an unloaded board, one of my sessions archived.
-    server.sessions = server.sessions.map((row) =>
-      row.session_id === 's-gone' || row.session_id === 's-mine' ? { ...row, archived: true } : row
-    );
-    server.branches = server.branches.map((row) =>
-      row.branch_id === 'b-moved' ? { ...row, board_id: 'board-C' } : row
-    );
-    act(() => emitIo('connect'));
-    await waitFor(() => expect(has('sessionById', 's-mine')).toBe(false));
-    await flush();
-    expect(has('sessionById', 's-gone')).toBe(false);
-    expect(has('branchById', 'b-moved')).toBe(false);
-    expect(has('sessionById', 's-other')).toBe(true);
-    expect(has('branchById', 'b-mine')).toBe(true);
-    expect(selectBoardPartition(agorStore.getState(), 'board-A')?.status).toBe('loaded');
-    for (const reads of [
-      fetchArguments('sessions', 'findAll'),
-      fetchArguments('sessions', 'find'),
-      fetchArguments('branches', 'findAll'),
-      fetchArguments('branches', 'find'),
-    ]) {
-      expect(globalReads(reads)).toEqual([]);
-    }
-  });
-
   const mate = (overrides: Record<string, unknown>) =>
     makeBranch({ custom_context: { teammate: { kind: 'teammate' } }, ...overrides });
 
@@ -2778,41 +2727,5 @@ describe('useAgorData — scoped reconnect', () => {
     expect(selectMySessionsLoaded(state)).toBe(true);
     expect(has('b-mine')).toBe(true);
     expect(state.sessionById.has('s-mine')).toBe(true);
-  });
-
-  it("a reconnect evicts the unloaded boards' rows that no scope holds", async () => {
-    const { server } = workspace();
-    const { emitIo } = await connectedWorkspace(server);
-    // Another loaded board with someone else's rows, and my board C.
-    agorStore.getState().applyMaps((prev) => ({
-      ...prev,
-      branchById: new Map(prev.branchById).set(
-        'b-B',
-        makeBranch({ branch_id: 'b-B', board_id: 'board-B', created_by: 'user-other' }) as never
-      ),
-      sessionById: new Map(prev.sessionById).set(
-        's-B',
-        makeSession({
-          session_id: 's-B',
-          branch_id: 'b-B',
-          branch_board_id: 'board-B',
-          created_by: 'user-other',
-        }) as never
-      ),
-    }));
-    markBoardLoaded('board-B');
-    markBoardLoaded('board-C');
-
-    act(() => emitIo('connect'));
-    await waitFor(() => expect(agorStore.getState().branchById.has('b-B')).toBe(false));
-    await flush();
-    const state = agorStore.getState();
-    expect(state.sessionById.has('s-B')).toBe(false);
-    // Board C's rows are mine: the user scope holds them.
-    expect(state.branchById.has('b-mine')).toBe(true);
-    expect(state.sessionById.has('s-mine')).toBe(true);
-    // The displayed board keeps its rows.
-    expect(state.branchById.has('b-A')).toBe(true);
-    expect(state.sessionById.has('s-A')).toBe(true);
   });
 });

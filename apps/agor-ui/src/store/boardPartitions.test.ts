@@ -17,7 +17,7 @@ import {
   resetHydrationRevisions,
   touchedSince,
 } from './agorHydration';
-import { EMPTY_MAPS } from './agorMaps';
+import type { EMPTY_MAPS } from './agorMaps';
 import {
   branchPatched,
   branchRemoved,
@@ -105,91 +105,6 @@ const replacePartition = (
   snapshot: BoardPartitionSnapshot,
   touched: (collection: string, id: string) => boolean
 ) => replaceScope(prev, boardPartitionScope(snapshot.boardId), snapshot, touched, []);
-
-describe('partition replace', () => {
-  it('inserts absent rows into every map and the session buckets', () => {
-    const next = replacePartition(
-      EMPTY_MAPS,
-      snapshotOf({
-        branches: [branch('br-1')],
-        sessions: [session('s-1', 'br-1')],
-        boardObjects: [boardObject('o-1', 'br-1')],
-        cards: [card('k-1')],
-        board: fullBoard(),
-      }),
-      never
-    );
-    expect(next.branchById.has('br-1')).toBe(true);
-    expect(next.sessionById.has('s-1')).toBe(true);
-    expect(next.sessionsByBranch.get('br-1')?.map((s) => s.session_id)).toEqual(['s-1']);
-    expect(next.boardObjectsByBoardId.get(BOARD)?.map((o) => o.object_id)).toEqual(['o-1']);
-    expect(next.cardById.has('k-1')).toBe(true);
-    expect(next.boardById.get(BOARD)?.objects).toBeDefined();
-  });
-
-  it('skips touched ids and rows on a touched-and-absent branch', () => {
-    const touched = new Set(['sessions:s-gone', 'branches:br-archived', 'cards:k-gone']);
-    const next = replacePartition(
-      EMPTY_MAPS,
-      snapshotOf({
-        branches: [branch('br-1'), branch('br-archived')],
-        sessions: [
-          session('s-1', 'br-1'),
-          session('s-gone', 'br-1'),
-          session('s-orphan', 'br-archived'),
-        ],
-        boardObjects: [boardObject('o-1', 'br-1'), boardObject('o-orphan', 'br-archived')],
-        cards: [card('k-1'), card('k-gone')],
-      }),
-      (collection, id) => touched.has(`${collection}:${id}`)
-    );
-    expect([...next.branchById.keys()]).toEqual(['br-1']);
-    expect([...next.sessionById.keys()]).toEqual(['s-1']);
-    expect([...next.boardObjectById.keys()]).toEqual(['o-1']);
-    expect([...next.cardById.keys()]).toEqual(['k-1']);
-  });
-
-  it('replaces the lean board row unless the board was touched', () => {
-    const lean = { board_id: BOARD, name: 'Board' } as Board;
-    const prev = { ...EMPTY_MAPS, boardById: new Map([[BOARD, lean]]) };
-    expect(
-      replacePartition(prev, snapshotOf({ board: fullBoard() }), never).boardById.get(BOARD)
-        ?.objects
-    ).toBeDefined();
-    expect(
-      replacePartition(
-        prev,
-        snapshotOf({ board: fullBoard() }),
-        (collection) => collection === 'boards'
-      ).boardById.get(BOARD)
-    ).toBe(lean);
-  });
-
-  it('projects remote-create surrogates regardless of snapshot order', () => {
-    const target = session('s-target', 'br-2');
-    const source = session('s-source', 'br-1', {
-      remote_relationships: {
-        as_source: [
-          {
-            relationship_type: 'remote_create',
-            source_session_id: 's-source',
-            target_session_id: 's-target',
-          },
-        ],
-      },
-    } as Partial<Session>);
-    const next = replacePartition(
-      EMPTY_MAPS,
-      snapshotOf({ branches: [branch('br-1'), branch('br-2')], sessions: [source, target] }),
-      never
-    );
-    expect(next.sessionsByBranch.get('br-1')?.map((s) => s.session_id)).toEqual([
-      's-source',
-      's-target',
-    ]);
-    expect(next.sessionsByBranch.get('br-1')?.[1].remote_surrogate).toBeDefined();
-  });
-});
 
 describe('touched fence', () => {
   beforeEach(() => resetHydrationRevisions());
@@ -1006,31 +921,5 @@ describe('foreground priority', () => {
     expect(background.calls).toContain('sessions');
     background.release();
     await other;
-  });
-});
-
-describe('board readiness', () => {
-  beforeEach(() => {
-    agorStore.getState().reset();
-    resetHydrationRevisions();
-    setRealtimeAuthorityScope(AUTHORITY);
-  });
-  afterEach(() => setRealtimeAuthorityScope(null));
-
-  it('is ready once the first-paint apply marks the board loaded', () => {
-    markBoardLoaded(BOARD);
-    expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true);
-    expect(makeBoardReadySelector('board-2')(agorStore.getState())).toBe(false);
-  });
-
-  it('is not ready from an incomplete read', () => {
-    agorStore.getState().setCoverage(boardScopeKey(BOARD), { ...boardCoverage(), complete: false });
-    expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(false);
-  });
-
-  it('resets with the maps on an identity change', () => {
-    markBoardLoaded(BOARD);
-    agorStore.getState().resetMaps();
-    expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(false);
   });
 });

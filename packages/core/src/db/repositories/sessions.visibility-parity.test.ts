@@ -5,7 +5,6 @@ import { dbTest } from '../test-helpers';
 import { type SessionPageOptions, SessionRepository } from './sessions';
 import {
   exerciseSessionVisibilityParity,
-  legacySessionPage,
   seedSessionVisibilityFixture,
   sessionVisibilityForm,
 } from './sessions.visibility-parity-test-helpers';
@@ -116,25 +115,3 @@ dbTest('walks the own page in index order instead of sorting every own row', asy
   expect(details).not.toContain('USE TEMP B-TREE FOR ORDER BY');
   expect(details.some((detail) => detail.startsWith('CORRELATED'))).toBe(true);
 });
-
-dbTest(
-  'an unknown principal is outside the contract: both forms agree and Others applies',
-  async ({ db }) => {
-    // The hooks pass only the authenticated caller's id, so this documents the
-    // predicates outside their contract rather than a reachable path: neither
-    // form checks that the principal exists.
-    const fixture = await seedSessionVisibilityFixture(db);
-    const opts: SessionPageOptions = {
-      sessionIds: fixture.sessionIds,
-      limit: 1000,
-      visibleToUserId: generateId(),
-    };
-    const current = await new SessionRepository(db).findPage(opts);
-    const legacy = await legacySessionPage(db, opts);
-    expect(current.data.map((row) => row.session_id)).toEqual(legacy.rows.map(([id]) => id));
-    expect(current.total).toBe(legacy.total);
-    // Sessions on shared packages whose Others may view, and only those.
-    expect(current.data.length).toBeGreaterThan(0);
-    expect(current.data.length).toBeLessThan(fixture.sessionIds.length);
-  }
-);

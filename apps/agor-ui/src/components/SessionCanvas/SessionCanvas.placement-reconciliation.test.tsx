@@ -320,114 +320,88 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     expect(patch).not.toHaveBeenCalled();
   });
 
-  it('drops a queued zone resize when the board unloads before it is saved', async () => {
-    vi.useFakeTimers();
-    const patch = vi.fn(async () => ({}));
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
-    render(
-      <App>
-        <ConnectionProvider value={connected}>
-          <SessionCanvas
-            currentUserId={adminUser.user_id}
-            board={board}
-            client={client}
-            branches={[branch]}
-          />
-        </ConnectionProvider>
-      </App>
-    );
-    await act(async () => {});
-    act(() => {
-      flowProps?.onNodesChange?.([
-        { type: 'dimensions', id: IMPLEMENTING_ZONE_ID, dimensions: { width: 2000, height: 900 } },
-      ]);
-    });
-    act(() => agorStore.getState().resetBoardPartitions());
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(patch).not.toHaveBeenCalled();
-  });
+  it.each(['unload', 'unload-reload'])(
+    'drops a zone resize queued before an %s (the reload no longer has the zone)',
+    async (change) => {
+      vi.useFakeTimers();
+      const patch = vi.fn(async () => ({}));
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      const canvas = (record: Board) => (
+        <App>
+          <ConnectionProvider value={connected}>
+            <SessionCanvas
+              currentUserId={adminUser.user_id}
+              board={record}
+              client={client}
+              branches={[branch]}
+            />
+          </ConnectionProvider>
+        </App>
+      );
+      const view = render(canvas(board));
+      await act(async () => {});
+      act(() => {
+        flowProps?.onNodesChange?.([
+          {
+            type: 'dimensions',
+            id: IMPLEMENTING_ZONE_ID,
+            dimensions: { width: 2000, height: 900 },
+          },
+        ]);
+      });
+      // Inside the 500 ms debounce. The zone was deleted while the board was
+      // unloaded, so a reloaded record no longer has it.
+      act(() => agorStore.getState().resetBoardPartitions());
+      if (change === 'unload-reload') {
+        const { [IMPLEMENTING_ZONE_ID]: _deleted, ...remaining } = board.objects ?? {};
+        const reloaded = { ...board, objects: remaining } as Board;
+        act(() => {
+          agorStore.setState({ boardById: new Map([[BOARD_ID, reloaded]]) });
+          markFixtureLoaded();
+        });
+        view.rerender(canvas(reloaded));
+      }
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(patch).not.toHaveBeenCalled();
+    }
+  );
 
-  it('drops a pending move when the board unloads before it is saved', async () => {
-    vi.useFakeTimers();
-    const patch = vi.fn(async () => implementingPlacement);
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
-    render(
-      <App>
-        <ConnectionProvider value={connected}>
-          <SessionCanvas
-            currentUserId={adminUser.user_id}
-            board={board}
-            client={client}
-            branches={[branch]}
-          />
-        </ConnectionProvider>
-      </App>
-    );
-    await act(async () => {});
-    act(() => {
-      const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1800, y: 200 } };
-      flowProps?.onNodeDragStart?.({}, node);
-      flowProps?.onNodeDrag?.({}, node);
-      flowProps?.onNodeDragStop?.({}, node);
-    });
-    // A reconnect unloads the board inside the 500 ms save debounce.
-    act(() => agorStore.getState().resetBoardPartitions());
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(patch).not.toHaveBeenCalled();
-  });
-
-  it('never applies a resize queued before an unload, even after the board reloads without the zone', async () => {
-    vi.useFakeTimers();
-    const patch = vi.fn(async () => ({}));
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
-    const view = render(
-      <App>
-        <ConnectionProvider value={connected}>
-          <SessionCanvas
-            currentUserId={adminUser.user_id}
-            board={board}
-            client={client}
-            branches={[branch]}
-          />
-        </ConnectionProvider>
-      </App>
-    );
-    await act(async () => {});
-    act(() => {
-      flowProps?.onNodesChange?.([
-        { type: 'dimensions', id: IMPLEMENTING_ZONE_ID, dimensions: { width: 2000, height: 900 } },
-      ]);
-    });
-    // Unload and reload inside the 500 ms debounce; the zone was deleted while
-    // the board was unloaded, so the reloaded record no longer has it.
-    act(() => agorStore.getState().resetBoardPartitions());
-    const { [IMPLEMENTING_ZONE_ID]: _deleted, ...remaining } = board.objects ?? {};
-    const reloaded = { ...board, objects: remaining } as Board;
-    act(() => {
-      agorStore.setState({ boardById: new Map([[BOARD_ID, reloaded]]) });
-      markFixtureLoaded();
-    });
-    view.rerender(
-      <App>
-        <ConnectionProvider value={connected}>
-          <SessionCanvas
-            currentUserId={adminUser.user_id}
-            board={reloaded}
-            client={client}
-            branches={[branch]}
-          />
-        </ConnectionProvider>
-      </App>
-    );
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(patch).not.toHaveBeenCalled();
-  });
+  it.each(['unload', 'unload-reload'])(
+    'drops a pending move queued before an %s',
+    async (change) => {
+      vi.useFakeTimers();
+      const patch = vi.fn(async () => implementingPlacement);
+      const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+      render(
+        <App>
+          <ConnectionProvider value={connected}>
+            <SessionCanvas
+              currentUserId={adminUser.user_id}
+              board={board}
+              client={client}
+              branches={[branch]}
+            />
+          </ConnectionProvider>
+        </App>
+      );
+      await act(async () => {});
+      act(() => {
+        const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1800, y: 200 } };
+        flowProps?.onNodeDragStart?.({}, node);
+        flowProps?.onNodeDrag?.({}, node);
+        flowProps?.onNodeDragStop?.({}, node);
+      });
+      // A reconnect unloads the board inside the 500 ms save debounce.
+      act(() => agorStore.getState().resetBoardPartitions());
+      if (change === 'unload-reload') act(() => markFixtureLoaded());
+      await act(async () => {
+        vi.advanceTimersByTime(600);
+      });
+      expect(patch).not.toHaveBeenCalled();
+    }
+  );
 
   it('stops a resize batch at the next zone when the board unloads during a PATCH', async () => {
     vi.useFakeTimers();
@@ -469,37 +443,6 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
       release();
     });
     expect(patch).toHaveBeenCalledTimes(1);
-  });
-
-  it('never applies a move queued before an unload, even after the board reloads', async () => {
-    vi.useFakeTimers();
-    const patch = vi.fn(async () => implementingPlacement);
-    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
-    render(
-      <App>
-        <ConnectionProvider value={connected}>
-          <SessionCanvas
-            currentUserId={adminUser.user_id}
-            board={board}
-            client={client}
-            branches={[branch]}
-          />
-        </ConnectionProvider>
-      </App>
-    );
-    await act(async () => {});
-    act(() => {
-      const node = { ...currentNode(BRANCH_ID), positionAbsolute: { x: 1800, y: 200 } };
-      flowProps?.onNodeDragStart?.({}, node);
-      flowProps?.onNodeDrag?.({}, node);
-      flowProps?.onNodeDragStop?.({}, node);
-    });
-    act(() => agorStore.getState().resetBoardPartitions());
-    act(() => markFixtureLoaded());
-    await act(async () => {
-      vi.advanceTimersByTime(600);
-    });
-    expect(patch).not.toHaveBeenCalled();
   });
 
   it.each(['unload', 'unload-reload'])(
