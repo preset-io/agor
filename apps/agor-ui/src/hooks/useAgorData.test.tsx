@@ -41,6 +41,7 @@ import {
   selectTeammatesLoaded,
   selectTeammatesTruncated,
 } from '../store/userScope';
+import { deferred } from '../test/harness';
 import { markBoardLoaded } from '../test/userScopeCoverage';
 import { useAgorData } from './useAgorData';
 import { useBoardPartition } from './useBoardPartition';
@@ -317,17 +318,6 @@ async function flush() {
   await act(async () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
   });
-}
-
-// A promise a test can resolve on demand — returned from an `onFetch` hook to
-// hold a fetch in-flight (so a reconnect / logout can land while a hydration is
-// still pending).
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
 }
 
 it('does not resurrect deletion from an in-flight OAuth realtime refetch', async () => {
