@@ -181,6 +181,14 @@ async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promi
       throw new Error('interactive commands require request mode');
     }
     publisher = new ExecutorResponsePublisher(payload.executorResponse);
+    // Before any dispatch, as in stdin mode.
+    const mismatch = checkAdmittedClass(payload.command, process.env[EXECUTOR_ADMISSION_CLASS_ENV]);
+    if (mismatch) {
+      console.error(
+        `[executor] admission class mismatch: admitted=${mismatch.admitted} command_class=agent`
+      );
+      await finishExecutorCommand(mismatch.result, publisher);
+    }
     const result = await executeInteractiveCommand(
       payload,
       { dryRun: options.dryRun },

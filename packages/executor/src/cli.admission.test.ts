@@ -1,6 +1,6 @@
 /**
- * The stdin entry point refuses an agent command admitted as a utility before
- * dispatching anything or applying payload env.
+ * The stdin and interactive entry points refuse an agent command admitted as a
+ * utility before dispatching anything or applying payload env.
  */
 
 import { Readable } from 'node:stream';
@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn(async () => ({ success: true, data: {} })),
+  executeInteractiveCommand: vi.fn(async () => ({ success: true, data: {} })),
   executorStart: vi.fn(async () => undefined),
   publisherFinal: vi.fn(async () => undefined),
 }));
@@ -26,7 +27,7 @@ vi.mock('./index.js', () => ({
 }));
 vi.mock('./commands/index.js', () => ({
   executeCommand: mocks.executeCommand,
-  executeInteractiveCommand: vi.fn(),
+  executeInteractiveCommand: mocks.executeInteractiveCommand,
   getRegisteredCommands: () => [],
 }));
 vi.mock('./executor-response.js', () => ({
@@ -81,6 +82,19 @@ async function runStdin(payload: unknown): Promise<void> {
   await import('./cli.js');
   await vi.waitFor(() => {
     expect(exits.length + mocks.executorStart.mock.calls.length).toBeGreaterThan(0);
+  });
+}
+
+async function runInteractive(payload: unknown): Promise<void> {
+  process.argv = ['node', 'cli.js', '--interactive-command'];
+  Object.defineProperty(process, 'stdin', {
+    configurable: true,
+    value: Readable.from([Buffer.from(`${JSON.stringify(payload)}\n`)]),
+  });
+  vi.resetModules();
+  await import('./cli.js');
+  await vi.waitFor(() => {
+    expect(exits.length).toBeGreaterThan(0);
   });
 }
 
@@ -160,6 +174,45 @@ describe('handleStdinMode admission check', () => {
 
       expect(mocks.executorStart).toHaveBeenCalledOnce();
       expect(exits).toEqual([]);
+    }
+  );
+});
+
+describe('handleInteractiveCommandMode admission check', () => {
+  const invokePayload = {
+    ...browsePayload,
+    command: 'agentic-tool.invoke',
+    params: { tool: 'opencode', request: {} },
+  };
+
+  it('refuses an agent command admitted as a utility through its response channel', async () => {
+    process.env.AGOR_EXECUTOR_ADMISSION_CLASS = 'utility';
+    await runInteractive({ ...invokePayload, env: { AGOR_EXECUTOR_ADMISSION_CLASS: 'agent' } });
+
+    expect(exits[0]).toBe(1);
+    expect(mocks.executeInteractiveCommand).not.toHaveBeenCalled();
+    expect(process.env.AGOR_EXECUTOR_ADMISSION_CLASS).toBe('utility');
+    expect(mocks.publisherFinal).toHaveBeenNthCalledWith(1, {
+      success: false,
+      error: {
+        code: 'EXECUTOR_ADMISSION_CLASS_MISMATCH',
+        message: 'This command was admitted as a utility and cannot run as an agent.',
+      },
+    });
+    expect(stderr).toContain(
+      '[executor] admission class mismatch: admitted=utility command_class=agent'
+    );
+  });
+
+  it.each([undefined, 'agent'])(
+    'dispatches an agent command when the admitted class is %s',
+    async (admitted) => {
+      if (admitted === undefined) delete process.env.AGOR_EXECUTOR_ADMISSION_CLASS;
+      else process.env.AGOR_EXECUTOR_ADMISSION_CLASS = admitted;
+      await runInteractive(invokePayload);
+
+      expect(exits[0]).toBe(0);
+      expect(mocks.executeInteractiveCommand).toHaveBeenCalledOnce();
     }
   );
 });
