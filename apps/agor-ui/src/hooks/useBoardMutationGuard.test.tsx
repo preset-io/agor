@@ -20,7 +20,9 @@ import { useBoardMutationGuard } from './useBoardMutationGuard';
 const BOARD = 'board-guard';
 const OTHER = 'board-other';
 
-const connection = (overrides: Partial<{ connected: boolean; authGeneration: number }> = {}) => ({
+const connection = (
+  overrides: Partial<{ connected: boolean; connecting: boolean; authGeneration: number }> = {}
+) => ({
   ...CONNECTED,
   ...overrides,
 });
@@ -107,14 +109,28 @@ describe('board write tickets', () => {
 
 describe('useBoardMutationGuard', () => {
   function renderGuard(
-    initial: { boardId?: string; allowed?: boolean; connected?: boolean; authGeneration?: number },
+    initial: {
+      boardId?: string;
+      allowed?: boolean;
+      connected?: boolean;
+      connecting?: boolean;
+      authGeneration?: number;
+    },
     options: { requirePartition?: boolean } = {}
   ) {
-    let props = { boardId: BOARD, allowed: true, connected: true, authGeneration: 1, ...initial };
+    let props = {
+      boardId: BOARD,
+      allowed: true,
+      connected: true,
+      connecting: false,
+      authGeneration: 1,
+      ...initial,
+    };
     const wrapper = ({ children }: { children: ReactNode }) => (
       <Providers
         connection={connection({
           connected: props.connected,
+          connecting: props.connecting,
           authGeneration: props.authGeneration,
         })}
       >
@@ -212,6 +228,28 @@ describe('useBoardMutationGuard', () => {
     view.update({ connected: true, authGeneration: 2 });
     expect(isCurrent(ticket)).toBe(false);
     expect(isCurrent(capture())).toBe(true);
+  });
+
+  it('a write delayed into connected=true, connecting=true is not sent, nor after the reconnect', async () => {
+    act(() => load());
+    const view = renderGuard({});
+    const ticket = view.result.current.capture();
+    expect(view.result.current.isCurrent(ticket)).toBe(true);
+    // The socket dropped: `connected` holds through the grace window, `connecting` is set.
+    view.update({ connecting: true });
+    expect(view.result.current.canMutate).toBe(false);
+    expect(view.result.current.capture()).toBe(null);
+    const dispatch = vi.fn(async () => {});
+    await act(async () => {
+      expect(await view.result.current.write(ticket, dispatch)).toBe(false);
+    });
+    // Reconnected under a new authentication: the held ticket stays dead.
+    view.update({ connecting: false, authGeneration: 2 });
+    await act(async () => {
+      expect(await view.result.current.write(ticket, dispatch)).toBe(false);
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(view.result.current.isCurrent(view.result.current.capture())).toBe(true);
   });
 });
 
