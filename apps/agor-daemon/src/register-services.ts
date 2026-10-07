@@ -1311,7 +1311,7 @@ function createDeferredSignal() {
   return { promise, resolve, reject };
 }
 
-function createExecuteHandler(
+export function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
