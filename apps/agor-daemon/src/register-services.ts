@@ -1771,6 +1771,9 @@ function createExecuteHandler(
           | 'opencode'
           | 'copilot'
           | 'cursor',
+        // Informational only (an external launcher may record it); the
+        // executor reads the model from the session.
+        ...(session.model_config?.model ? { model: session.model_config.model } : {}),
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,

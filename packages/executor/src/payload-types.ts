@@ -179,6 +179,13 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     taskId: z.string().uuid(),
     prompt: z.string(),
     tool: ToolTypeSchema,
+    /**
+     * Informational copy of the session's configured model
+     * (`session.model_config.model`), so an external launcher may record it.
+     * The executor never reads it: handlers keep reading the model from the
+     * session. Older executors drop it because this schema is non-strict.
+     */
+    model: z.string().optional(),
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
