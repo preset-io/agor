@@ -40,15 +40,18 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { isSafeExternalUrl } from '@/utils/safeExternalUrl';
 import { sortSessions } from '@/utils/sessionSearch';
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
+import { useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { getBoardEmoji } from '../BoardTile';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
+import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
@@ -133,6 +136,10 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   useEffect(() => {
     if (visitedBoardId) trackBoardVisit(visitedBoardId);
   }, [visitedBoardId, trackBoardVisit]);
+  // A failed partition load offers Retry, as on the desktop canvas, instead of a skeleton forever.
+  const partitionFailed =
+    useAgorStore(useMemo(() => makeBoardPartitionSelector(visitedBoardId), [visitedBoardId]))
+      ?.status === 'error';
 
   const boardSwitcher = {
     boards: Array.from(boardById.values())
@@ -349,7 +356,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             </Card>
           )}
 
-          {!boardReady && <Skeleton active paragraph={{ rows: 3 }} title={false} />}
+          {!boardReady &&
+            (partitionFailed ? (
+              <BoardPartitionError
+                boardId={board.board_id}
+                style={{ display: 'flex', alignItems: 'center', gap: token.marginXS }}
+              />
+            ) : (
+              <Skeleton active paragraph={{ rows: 3 }} title={false} />
+            ))}
 
           {boardReady && !primaryTeammate && !isEmpty && !boardHasSessions && (
             <Card size="small">

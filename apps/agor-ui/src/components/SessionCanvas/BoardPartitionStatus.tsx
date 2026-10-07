@@ -7,6 +7,27 @@ import {
   retryBoardPartition,
 } from '../../store/boardPartitions';
 
+/** A failed partition load, with a Retry that loads it again (`retryBoardPartition`). */
+export function BoardPartitionError({
+  boardId,
+  style,
+}: {
+  boardId: string;
+  style?: React.CSSProperties;
+}) {
+  const { token } = theme.useToken();
+  return (
+    <div role="alert" style={style} data-testid="board-partition-error">
+      <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
+        Couldn't load this board.
+      </Typography.Text>
+      <Button size="small" type="link" onClick={() => retryBoardPartition(boardId)}>
+        Retry
+      </Button>
+    </div>
+  );
+}
+
 /**
  * Canvas overlay for a board whose partition is not complete yet (invariant
  * I1): a centered spinner while the board has no placements at all, otherwise
@@ -43,18 +64,8 @@ export const BoardPartitionStatus = memo(function BoardPartitionStatus({
     boxShadow: token.boxShadowTertiary,
   };
 
-  if (partition?.status === 'error') {
-    return (
-      <div role="alert" style={pillStyle} data-testid="board-partition-error">
-        <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
-          Couldn't load this board.
-        </Typography.Text>
-        <Button size="small" type="link" onClick={() => retryBoardPartition(boardId)}>
-          Retry
-        </Button>
-      </div>
-    );
-  }
+  if (partition?.status === 'error')
+    return <BoardPartitionError boardId={boardId} style={pillStyle} />;
 
   if (!hasPlacements) {
     return (
