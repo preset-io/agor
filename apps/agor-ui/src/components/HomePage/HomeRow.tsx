@@ -1,3 +1,4 @@
+import { PROVIDER_DETAIL_SEPARATOR, parsePermissionTimeoutMs } from '@agor/core/types';
 import type { AgorClient, Session, Task } from '@agor-live/client';
 import { getGatewaySource, getTeammateConfig } from '@agor-live/client';
 import {
@@ -27,6 +28,7 @@ import { formatRelativeTime } from '../../utils/time';
 import { getBoardEmoji } from '../BoardTile';
 import { BoardPill, BranchPill, getChannelIcon, TeammatePill } from '../Pill';
 import { SessionRowLogo, SessionStatusMark } from '../SessionRow';
+import { APPROVAL_TIMEOUT_MESSAGE } from '../TaskBlock/describeTurnOutcome';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { HomeLink, useHomeCompact } from './HomeSection';
 import {
@@ -260,7 +262,9 @@ function describeTask(task: Task, reason: HomeSessionNeed['reason']) {
     if (typeof command === 'string') return `Wants to run ${command}`;
     return request ? `Wants to use ${request.tool_name}` : undefined;
   }
-  return task.error_message?.split('\n')[0] || task.sdk_failure?.reason;
+  const error = task.error_message?.split('\n')[0];
+  if (error && parsePermissionTimeoutMs(error)) return APPROVAL_TIMEOUT_MESSAGE;
+  return error?.split(PROVIDER_DETAIL_SEPARATOR)[0] || task.sdk_failure?.reason;
 }
 
 /** What a permission request asks for, or why the latest task failed. */

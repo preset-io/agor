@@ -3,7 +3,13 @@
 import { theme } from 'antd';
 import { AggregationColor } from 'antd/es/color-picker/color';
 import { describe, expect, it } from 'vitest';
-import { ensureColorVisible, getContrastingTextColor, isDarkTheme } from './theme';
+import {
+  contrastRatio,
+  ensureColorVisible,
+  getContrastingTextColor,
+  isDarkTheme,
+  pickAccessibleColor,
+} from './theme';
 
 const contrastTokens = {
   colorText: '#777777',
@@ -212,5 +218,30 @@ describe('ensureColorVisible', () => {
       const result = ensureColorVisible(mediumBlue, true, 50);
       expect(result).toMatch(/^#[0-9a-f]{6}$/i);
     });
+  });
+});
+
+describe('contrastRatio', () => {
+  it('matches the WCAG endpoints and composites translucent colours', () => {
+    expect(contrastRatio('#000000', '#ffffff', '#ffffff')).toBeCloseTo(21, 1);
+    expect(contrastRatio('#ffffff', '#ffffff', '#ffffff')).toBeCloseTo(1, 5);
+    expect(contrastRatio('rgba(0,0,0,0)', '#ffffff', '#000000')).toBeCloseTo(1, 5);
+  });
+});
+
+describe('pickAccessibleColor', () => {
+  it('returns the first candidate that already passes', () => {
+    expect(pickAccessibleColor(['#777777', '#000000'], '#ffffff', '#ffffff')).toBe('#000000');
+  });
+
+  it('keeps the hue and darkens on a light surface until it passes', () => {
+    const picked = pickAccessibleColor(['#faad14'], '#fffbe6', '#ffffff');
+    expect(contrastRatio(picked, '#fffbe6', '#ffffff')).toBeGreaterThanOrEqual(4.5);
+    expect(Math.abs(new AggregationColor(picked).toHsb().h - 38)).toBeLessThan(2);
+  });
+
+  it('lightens on a dark surface until it passes', () => {
+    const picked = pickAccessibleColor(['#8b1a1a'], '#2c1618', '#141414');
+    expect(contrastRatio(picked, '#2c1618', '#141414')).toBeGreaterThanOrEqual(4.5);
   });
 });

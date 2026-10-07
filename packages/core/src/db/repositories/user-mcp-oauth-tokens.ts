@@ -122,8 +122,7 @@ export interface SaveTokenInput {
    *
    * The `null` vs `undefined` distinction matters: the previous code used a
    * truthy check that conflated the two, which produced asymmetric defaulting
-   * between the initial-auth and refresh persist sites. See
-   * `context/explorations/mcp-oauth-token-lifecycle.md` (Phase 3.5).
+   * between the initial-auth and refresh persist sites.
    *
    * The repository takes an absolute `Date` rather than a relative TTL so
    * OAuth-spec semantics (cascade, JWT decode, etc.) stay in the resolver and

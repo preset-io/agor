@@ -115,8 +115,7 @@ paths that no longer exist. Opening a terminal or running a session will
 fail when the executor tries to `chdir` into a directory that's gone.
 
 The daemon will surface a clear error in this state (`cwd does not exist
-on disk: ...`, see [issue
-\#1109](https://github.com/preset-io/agor/issues/1109)), but the only
+on disk: ...`), but the only
 real fix is to restore the volume or, if the volume is unrecoverable,
 clean up the orphan database rows using
 `agor branch remove` / `agor repo remove` before re-cloning.
@@ -368,6 +367,29 @@ stderr from templated launchers are discarded because the helper holds launcher
 credentials; Agor logs only closed spawn/exit metadata. Helpers should report
 operational state through authenticated structured protocols rather than raw
 process streams.
+
+### Concurrency-gating launchers
+
+A launcher that limits how much work runs at once can refuse a launch before
+it creates anything:
+
+- **Refusal exit code.** The launcher exits `75` only when it refused admission
+  and created nothing (no pod, Job or Secret). It must remap a workload's own
+  exit `75` to another code. Agor reads `75` as a refusal only when the daemon
+  environment sets `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`; any other value is
+  ignored with one startup warning. With the opt-in, a refused prompt fails at
+  once with a "limit of work running at once" message and no retry action, and
+  file, git and environment requests fail immediately with the same message
+  instead of waiting for their timeout. Without it, `75` is an ordinary
+  non-zero exit, including for `executor_command_nonzero_may_have_dispatched`.
+- **Admission class.** Every templated payload carries a top-level
+  `admissionClass` of `agent` (prompts, auxiliary agent calls, terminals, and
+  any unknown command) or `utility` (git, files, artifacts, knowledge, uploads,
+  environments, credentials and branch maintenance), so the launcher can count
+  agent runs separately. When the launcher sets `AGOR_EXECUTOR_ADMISSION_CLASS`
+  on the executor process to anything but `agent`, the executor refuses an
+  agent command with `EXECUTOR_ADMISSION_CLASS_MISMATCH` before running
+  anything. It checks its own command map, never the payload's claim.
 
 ### Autonomous Fire-and-Forget Design
 

@@ -43,12 +43,11 @@
  *
  * `live` and `refreshable` stay separate fields because the rules that produce
  * them are separate and `reason` has to tell them apart for copy. No caller
- * should gate on `live` alone. See
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` (D4, D4.1).
+ * should gate on `live` alone.
  *
  * The lookup key is the *credential* user, never the Session owner: shared-mode
  * servers key on `null`, per-user servers on whoever is actually prompting. See
- * `context/explorations/session-sharing.md`.
+ * `context/concepts/session-sharing.md`.
  */
 
 import {

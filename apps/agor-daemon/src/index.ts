@@ -106,6 +106,7 @@ import { startOpenSourceTelemetryUsageSummaryInterval } from './utils/open-sourc
 import { assertRealtimePublishPolicyCoverage } from './utils/realtime-publish-policy.js';
 import { resolveSandboxProtectedDataRoots } from './utils/sandbox-context.js';
 import { configureDaemonUrl, configureExecutor } from './utils/spawn-executor.js';
+import { configureLaunchRefusedExit } from './utils/task-launch-state.js';
 import { assertTenantServiceClassification } from './utils/tenant-service-classification.js';
 import { configureUploadStagingStoreFromConfig } from './utils/upload-staging.js';
 import { registerAllWidgets } from './widgets/index.js';
@@ -372,6 +373,7 @@ async function startDaemonWithOwnedMetrics(
   // their own config-threading code. Local-subprocess remains the default
   // when execution.executor_command_template is unset (no behavior change
   // for existing deployments).
+  configureLaunchRefusedExit(process.env);
   configureExecutor(effectiveConfig.execution, {
     requireTenantContext: multiTenancy.mode === 'required_from_auth',
     localResponseOriginUrl: deriveLoopbackReachableOrigin(DAEMON_HOST, DAEMON_PORT),
@@ -702,7 +704,6 @@ async function startDaemonWithOwnedMetrics(
   app.configure(rest());
 
   // JWT secret: env > existing config value > fail-fast with operator-actionable remediation.
-  // and context/explorations/daemon-fs-decoupling.md §1.5 (H3).
   //
   // Failing-fast is critical: a fresh JWT secret on every restart invalidates
   // every issued token, which silently breaks every active session.

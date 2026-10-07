@@ -25,7 +25,12 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
+import {
+  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+  EXECUTOR_UNCAUGHT_EXCEPTION_PREFIX,
+  EXECUTOR_UNHANDLED_REJECTION_PREFIX,
+  TaskStatus,
+} from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
@@ -597,7 +602,7 @@ export class AgorExecutor {
       console.error('[executor] Uncaught exception:', error);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
-        `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
+        `${EXECUTOR_UNCAUGHT_EXCEPTION_PREFIX}${error instanceof Error ? error.message : String(error)}`
       );
       process.exit(1);
     });
@@ -606,7 +611,7 @@ export class AgorExecutor {
       console.error('[executor] Unhandled rejection:', reason);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
-        `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`
+        `${EXECUTOR_UNHANDLED_REJECTION_PREFIX}${reason instanceof Error ? reason.message : String(reason)}`
       );
       process.exit(1);
     });

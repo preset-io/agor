@@ -3377,6 +3377,14 @@ describe('GatewayService Discord beta routing', () => {
     };
 
     await expect(harness.service.create(inbound)).resolves.toMatchObject({ success: true });
+    // The first in-thread read includes the starter: a forum post's opener lives in the post.
+    expect(connector.fetchProviderHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: '723456789012345678',
+        afterProviderCursor: '723456789012345677',
+        throughProviderCursor: '923456789012345678',
+      })
+    );
     const prompt = harness.promptCreate.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('ambient context');
     expect(prompt).toContain('hello');
@@ -3390,6 +3398,66 @@ describe('GatewayService Discord beta routing', () => {
     );
     expect(harness.promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
       harness.threadMapRepo.advanceDiscordLastAdmittedMessageId.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('admits a forum post whose opening message is the summon without duplicating it', async () => {
+    const postId = '723456789012345678';
+    const connector = {
+      sendMessage: vi.fn(async () => undefined),
+      fetchProviderHistory: vi.fn(async () => ({
+        threadId: postId,
+        complete: true,
+        messages: [
+          {
+            providerMessageId: postId,
+            timestamp: '2026-08-20T12:00:00.000Z',
+            actorLabel: 'summoner',
+            text: 'opening summon',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: true,
+            isMention: true,
+          },
+        ],
+      })),
+    };
+    const harness = makeGatewayHarness({ channel: discordChannel, connector });
+    const inbound = validDiscordInbound();
+    inbound.thread_id = postId;
+    inbound.text = 'opening summon';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_message_id: postId,
+      discord_channel_id: postId,
+      discord_parent_channel_id: '323456789012345678',
+      discord_is_thread: true,
+      discord_thread_id: postId,
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: postId,
+        starter_message_id: postId,
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(harness.service.create(inbound)).resolves.toMatchObject({ success: true });
+    expect(connector.fetchProviderHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: postId,
+        afterProviderCursor: '723456789012345677',
+        throughProviderCursor: postId,
+      })
+    );
+    const prompt = harness.promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt.split('opening summon')).toHaveLength(2);
+    expect(harness.threadMapRepo.advanceDiscordLastAdmittedMessageId).toHaveBeenCalledWith(
+      'map-new',
+      postId
     );
   });
 
@@ -3669,6 +3737,26 @@ describe('GatewayService Discord beta routing', () => {
     });
     expect(threadMapRepo.findByChannelAndThread).not.toHaveBeenCalled();
     expect(sessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('admits a roleless unlisted author only when the guild ID (@everyone) is an allowed role', async () => {
+    for (const [allowedRoles, success] of [
+      [['523456789012345678'], false],
+      [['223456789012345678'], true],
+    ] as const) {
+      const channel = {
+        ...discordChannel,
+        config: {
+          ...(discordChannel.config as Record<string, unknown>),
+          allowed_user_ids: [],
+          allowed_role_ids: [...allowedRoles],
+        },
+      } as unknown as GatewayChannel;
+      const { service, sessionsCreate } = makeGatewayHarness({ channel });
+
+      await expect(service.create(validDiscordInbound())).resolves.toMatchObject({ success });
+      expect(sessionsCreate).toHaveBeenCalledTimes(success ? 1 : 0);
+    }
   });
 
   it('keeps one provider thread independent for two Discord rows in one shared store', async () => {

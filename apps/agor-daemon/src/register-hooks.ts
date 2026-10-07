@@ -3514,7 +3514,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // Schedules hooks
   // ============================================================================
   // Schedules inherit RBAC from the parent branch (same model as
-  // sessions). See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+  // sessions).
 
   const scheduleRepository = new ScheduleRepository(db);
 

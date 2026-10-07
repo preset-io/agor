@@ -10,8 +10,6 @@
  * Reads normalize both into the object shape; writes always produce the object
  * shape. Scope values are validated in this layer (no SQL CHECK constraint)
  * so future scope values can ship without a schema migration.
- *
- * See `context/explorations/env-var-access.md`.
  */
 
 import type { EnvVarScope } from '../types/user';

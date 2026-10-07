@@ -1,5 +1,5 @@
 import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
-import type { BranchID } from '@agor/core/types';
+import { type BranchID, EXECUTOR_LAUNCH_REFUSED_MESSAGE } from '@agor/core/types';
 import { expect, it } from 'vitest';
 import { verifyBranchWorkspacePreflight } from './branch-workspace-preflight';
 
@@ -33,6 +33,7 @@ it.each([
 
 it.each([
   ['EXECUTOR_TIMEOUT', 'did not respond in time'],
+  ['EXECUTOR_LAUNCH_REFUSED', EXECUTOR_LAUNCH_REFUSED_MESSAGE],
   ['EXECUTOR_SPAWN_ERROR', 'could not start'],
   ['EXECUTOR_RESPONSE_UNSUPPORTED', 'does not support filesystem status responses'],
   ['UNKNOWN_COMMAND', 'does not support filesystem status'],

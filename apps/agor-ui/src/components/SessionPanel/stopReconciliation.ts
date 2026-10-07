@@ -100,7 +100,7 @@ export function requestSessionStop(
   });
 }
 
-async function waitForConnectedClient(
+export async function waitForConnectedClient(
   getClient: () => AgorClient | null,
   timeoutMs: number
 ): Promise<AgorClient | null> {

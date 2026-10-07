@@ -16,9 +16,6 @@
  * Admin password bootstrap is deliberately NOT routed through this helper —
  * it uses a factory-with-rollback inside `bootstrapFirstRunAdmin` so the
  * shape doesn't match. See `setup/first-run-admin.ts`.
- *
- * See context/explorations/daemon-fs-decoupling.md §1.5 (H3) for the
- * rationale.
  */
 
 export interface PersistedSecretSpec {

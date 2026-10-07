@@ -83,13 +83,25 @@ const COCKPIT: [number, number] = [1010, 330];
 // + offset (560,300) → abs (690,1470).
 const REPLY_COMMENT_ID = '019ee88d-demo-comment-0000-000000000302';
 const REPLY_TEXT = '@mina capped at five with a +7 chip — done ✅';
-const REPLY_PIN: [number, number] = [652, 1502];
+// On the pin's avatar circle (measured at the 1.8s click: the old point sat
+// ~90 flow px below it, so the click missed the pin).
+const REPLY_PIN: [number, number] = [678, 1411];
 
-// AgorClaw's pickup beat on the card at its Review drop spot: header point
-// and a session row (same offsets that read well on the Teammates card).
+// AgorClaw tidies the Teammates zone: it drags the "Usage cockpit" artifact
+// card (card-202) home in the opening wide shot, and back out to the open
+// right side in the closing Teammates shot, so state(0) === state(8s).
 const CLAW_REST: [number, number] = [2380, 1480];
-const CLAW_CARD: [number, number] = [heroDropX + 10, heroDropY + 130];
-const CLAW_SESSION_ROW: [number, number] = [heroDropX - 10, heroDropY + 250];
+const TEAMMATES_ZONE = { x: 1580, y: 650 };
+const COCKPIT_CARD_ID = 'board-object-card-202';
+const COCKPIT_HOME_REL = { x: 80, y: 750 };
+const COCKPIT_OUT_REL = { x: 700, y: 420 };
+const CARD_GRAB = { x: 120, y: 22 };
+const cardGrab = (rel: { x: number; y: number }): [number, number] => [
+  TEAMMATES_ZONE.x + rel.x + CARD_GRAB.x,
+  TEAMMATES_ZONE.y + rel.y + CARD_GRAB.y,
+];
+const COCKPIT_OUT_GRAB = cardGrab(COCKPIT_OUT_REL);
+const COCKPIT_HOME_GRAB = cardGrab(COCKPIT_HOME_REL);
 
 /** Toggle a specific comment pin's hover bubble (same helper as multiplayer). */
 const hoverCommentPin = (commentId: string, hovered: boolean) => {
@@ -190,25 +202,37 @@ export const boardsScene: SceneDefinition = {
       ripple: clickPulses([1_800]),
     },
     {
-      // AgorClaw, with purpose: once Ari drops the card in Review, sweep to
-      // it and click-pulse a session row (the agent picks up the work), then
-      // head home to the Teammates zone as the camera arrives there.
+      // AgorClaw: drags the cockpit card home (wide shot, 0.25–1.25s), rests,
+      // then drags it back out once the camera reaches Teammates (6.0–7.3s).
       userIndex: 0,
       user: demoAgentUser,
       color: '#34d399',
       pos: path([
-        [0, ...CLAW_REST],
-        [4_600, CLAW_REST[0], CLAW_REST[1], 'hold'],
-        [5_200, ...CLAW_CARD],
-        [5_450, ...CLAW_SESSION_ROW],
-        [6_100, CLAW_SESSION_ROW[0] + 60, CLAW_SESSION_ROW[1] + 16],
-        [7_000, ...CLAW_REST],
-        [8_000, CLAW_REST[0], CLAW_REST[1], 'hold'],
+        [0, ...COCKPIT_OUT_GRAB],
+        [250, COCKPIT_OUT_GRAB[0], COCKPIT_OUT_GRAB[1], 'hold'],
+        [1_200, ...COCKPIT_HOME_GRAB],
+        [1_900, ...CLAW_REST],
+        [5_600, CLAW_REST[0], CLAW_REST[1], 'hold'],
+        [6_000, ...COCKPIT_HOME_GRAB],
+        [6_100, COCKPIT_HOME_GRAB[0], COCKPIT_HOME_GRAB[1], 'hold'],
+        [7_300, ...COCKPIT_OUT_GRAB],
+        [8_000, COCKPIT_OUT_GRAB[0], COCKPIT_OUT_GRAB[1], 'hold'],
       ]),
-      ripple: clickPulses([5_300, 5_750]),
+      ripple: clickPulses([250, 1_250, 6_050, 7_350]),
     },
   ],
   nodePlacements: [
+    {
+      objectId: COCKPIT_CARD_ID,
+      pos: new Track([
+        { t: 0, v: COCKPIT_OUT_REL },
+        { t: 300, v: COCKPIT_OUT_REL, easing: 'hold' },
+        { t: 1_200, v: COCKPIT_HOME_REL },
+        { t: 6_100, v: COCKPIT_HOME_REL, easing: 'hold' },
+        { t: 7_300, v: COCKPIT_OUT_REL },
+      ]),
+      zoneId: new Track<string | null>([{ t: 0, v: 'zone-teammates' }]),
+    },
     {
       objectId: HERO_OBJECT_ID,
       // rel↔abs flips at the exact grab/drop instants (product pin math).

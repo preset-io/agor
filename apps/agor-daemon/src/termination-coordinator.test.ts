@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, EXECUTOR_LAUNCH_REFUSED_MESSAGE, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
@@ -557,6 +557,101 @@ describe('termination coordinator', () => {
     expect(untrackExecutorProcess).not.toHaveBeenCalled();
   });
 
+  // A templated launch refused by an opted-in launcher, as the prompt onExit requests it.
+  const refusedDispatch = () =>
+    task(TaskStatus.STOPPING, {
+      executor_mode: 'templated',
+      started_at: '2026-01-01T00:00:00.500Z',
+      termination_request: {
+        cause: 'launch_refused',
+        requested_at: '2026-01-01T00:00:01.000Z',
+        error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+      },
+      sdk_failure: { reason: 'launch_refused', termination: 'requested' },
+    });
+
+  it.each(AGENTIC_TOOL_NAMES)(
+    'settles a refused templated launch of %s as verified and failed',
+    async (tool) => {
+      const state = appDouble(tool);
+      state.claim(refusedDispatch());
+      state.settle(
+        task(TaskStatus.FAILED, {
+          termination_request: refusedDispatch().termination_request,
+          sdk_failure: { reason: 'launch_refused', termination: 'verified' },
+          error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+        })
+      );
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'launch_refused',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+          absenceVerified: true,
+          sdkFailure: {
+            reason: 'launch_refused',
+            detected_at: '2026-01-01T00:00:01.000Z',
+            tool,
+            termination: 'requested',
+          },
+          expectedStatus: TaskStatus.DISPATCHING,
+          requireExecutorDisconnected: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.FAILED } });
+      expect(state.settleTermination).toHaveBeenCalledOnce();
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId,
+          outcome: 'verified_absent',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+        }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps the OpenCode safeguard for verified absence with any other cause', async () => {
+    const state = appDouble('opencode');
+    const lostDispatch = {
+      ...refusedDispatch(),
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '2026-01-01T00:00:01.000Z',
+      },
+      sdk_failure: { reason: 'heartbeat_lost', termination: 'requested' },
+    };
+    state.claim(lostDispatch);
+    state.settle(
+      task(TaskStatus.STOPPING, {
+        termination_request: lostDispatch.termination_request,
+        sdk_failure: { reason: 'heartbeat_lost', termination: 'unverified' },
+      }),
+      'unverified'
+    );
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Executor exited unexpectedly with code 1.',
+        absenceVerified: true,
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({
+      status: 'unverified',
+      reason: 'OpenCode server-side execution termination is not verified.',
+    });
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.anything()
+    );
+  });
+
   it('generically contains historical Claude CLI work during recovery', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
     const state = appDouble('claude-code-cli');
@@ -824,6 +919,76 @@ describe('termination coordinator: remote executor not yet connected', () => {
     ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.STOPPED } });
     expect(state.claimTerminationCoordination).toHaveBeenCalledOnce();
   });
+
+  // A Stop that lands before the launcher's refusal keeps its `user_stop`
+  // request; the refusal still proves nothing was created.
+  it.each(['codex', 'opencode'])(
+    'settles a %s Stop that preceded a refused launch as verified and stopped',
+    async (tool) => {
+      const state = appDouble(tool);
+      state.claim(remoteDispatching(), 'unchanged');
+      state.settle(
+        task(TaskStatus.STOPPED, { termination_request: remoteDispatching().termination_request })
+      );
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'launch_refused',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+          absenceVerified: true,
+          requireExecutorDisconnected: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.STOPPED } });
+      expect(state.claimTermination).toHaveBeenCalledWith(
+        expect.not.objectContaining({ expectedStatus: expect.anything() }),
+        expect.anything()
+      );
+      expect(state.settleTermination).toHaveBeenCalledOnce();
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'verified_absent' }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
+
+  // The reconciler resumes a committed refusal after a daemon restart with the
+  // persisted cause and the absence proof that cause carries.
+  it.each(['codex', 'opencode'])(
+    'settles a recovered %s refused launch as verified',
+    async (tool) => {
+      const state = appDouble(tool);
+      const refused = {
+        ...remoteDispatching(),
+        termination_request: {
+          cause: 'launch_refused',
+          requested_at: '2026-01-01T00:00:01.000Z',
+          error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+        },
+      };
+      state.claim(refused, 'unchanged');
+      state.settle(task(TaskStatus.FAILED, { termination_request: refused.termination_request }));
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'launch_refused',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+          absenceVerified: true,
+          remoteConnectDeadlineExpired: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.FAILED } });
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'verified_absent' }),
+        expect.anything()
+      );
+    }
+  );
 
   it('keeps a repeated beginExecutorTermination pending without claiming coordination', async () => {
     const state = appDouble();

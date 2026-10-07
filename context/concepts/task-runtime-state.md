@@ -171,6 +171,17 @@ an explicit mapping-review point.
   launcher exit or delay may not prove that remote work was not created. A
   durable observation marker removes that ambiguous dispatch from subsequent
   deadline scans so it cannot hot-loop or starve other candidates.
+- With the daemon opt-in `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`, a templated
+  launcher exit `75` means admission was refused and nothing was created. The
+  prompt `onExit` requests termination with cause `launch_refused` and verified
+  absence instead of `heartbeat_lost`. The coordinator skips the OpenCode
+  integration's unverified-termination reason only for that requested cause, so
+  the task settles `failed` with `termination: 'verified'` for every agent.
+- A refusal claims only while no executor is connected (no `dispatching`
+  status fence), so a Stop that arrived first keeps its `user_stop` request and
+  the refusal settles it `stopped` with verified absence. Only that verified
+  path persists `launch_refused`, so the reconciler resumes a stranded
+  `launch_refused` request after a daemon restart with the same absence proof.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.
@@ -291,6 +302,12 @@ one final exhaustion event rather than every retry. Provider cleanup that is
 still running after 15 seconds emits one warning but is not falsely reported as
 quiescent.
 
+The termination request also records who asked when the winning cause carries
+it: `requested_by_user_id` and `requested_via` (`ui` for the app's socket,
+`api` for REST callers such as the CLI, `mcp` for an agent acting for that
+user, `agor` for internal stops). It is attribution only and never
+changes containment or settlement.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
 `stopping`, the session stays non-promptable, and an authorized owner/admin must
@@ -344,8 +361,29 @@ second busy-state test.
 
 ## Diagnosing a runtime interruption
 
-The UI's "Task interrupted" notice covers every verified non-user,
-non-authorization termination. `heartbeat_lost` has two producers: a stale
+The turn outcome banner (`describeTurnOutcome`) classifies from structured
+fields first (`sdk_failure.termination`, `termination_request.cause` and its
+recorded requester, `executor_connected_at`, the turn's restart notice,
+message `error_kind`, `rate_limit` blocks), then from the failure texts shared
+in `@agor/core/types` (`turn-failure-messages.ts`); its Details disclosure
+shows the raw `error_message` and the stored `sdk_failure.reason` code. A
+restart notice names the restart only on a failed turn that lost its connection
+(or carries the restart-release text): startup attaches the notice to the latest
+turn of every orphaned session, including one that had already timed out. The
+banner names a stall only when the termination cause is `sdk_health_failure`,
+because the watchdog observes by default. Resume / Try again appear only on the latest
+FAILED or TIMED_OUT turn whose termination is neither `requested` nor
+`unverified` and that was not a user stop or an access change, and only while a new prompt would be
+dispatched rather than left queued (`canSessionStartTurn`): the queue is empty
+and the drainer's `sessionCanStartTask` holds, or the session is `failed`, which
+the prompt route repairs even after opening it cleared `ready_for_prompt`. An
+opened `timed_out` session gets no action, because nothing repairs it. Try again (replay the
+prompt) is offered only when the run never started and the viewer typed that
+non-empty prompt themselves (`created_by`, `metadata.source === 'agor'`, not a
+callback or system-authored prompt); otherwise a run that never started offers
+Resume, as does every other outcome, including an unconfirmed provider result.
+
+`heartbeat_lost` has two producers: a stale
 heartbeat found by the reconciler, and any local/authoritative executor
 process exit while its Task is active (including the SIGTERM a standalone
 daemon sends on graceful shutdown). Correlate by `task_id`:
@@ -396,7 +434,6 @@ Preserve these invariants:
 | Runtime discovery and recovery                         | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                     |
 | Termination claims and containment settlement          | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts` |
 | Startup orphan reconciliation                          | `apps/agor-daemon/src/startup.ts`                                                              |
-| Full HA kill-point audit                               | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                   |
 
 ## Why the architecture has this shape
 

@@ -1,6 +1,7 @@
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { isTransientConnectionError } from '../utils/authErrors';
+import { isInFlightConnectionLossError } from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 
 const ACKNOWLEDGEMENT_WAIT_MS = 30_000;
@@ -67,10 +68,7 @@ export function useUnarchiveBranch(client: AgorClient | null | undefined) {
           resolve();
         } catch (error) {
           if (disposed) return;
-          if (
-            isTransientConnectionError(error) ||
-            (error instanceof Error && error.message === 'socket has been disconnected')
-          ) {
+          if (isTransientConnectionError(error) || isInFlightConnectionLossError(error)) {
             showWarning(UNKNOWN_OUTCOME, { key, duration: 10 });
           } else {
             showError(

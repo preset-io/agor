@@ -1,7 +1,7 @@
 // src/types/branch.ts
 import type { BranchDeletionStatus } from './branch-deletion';
 import type { BoardID, BranchID, UUID } from './id';
-import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
+import type { KnowledgeEditPolicy, KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName, Repo } from './repo';
 
 export const BRANCH_METADATA_ACTIONS = ['archive', 'delete'] as const;
@@ -425,6 +425,8 @@ export interface Branch {
 
   /** Set only by permanent deletion; remains fenced after partial failure. */
   deletion_status?: BranchDeletionStatus;
+  /** Read-only runtime support, projected by branches.get; never a grant or readiness proof. */
+  maintenance_capabilities?: import('./branch-cleanup').BranchMaintenanceCapabilities;
   /** Bounded, sanitized latest error; never used to decide recovery. */
   deletion_error?: string;
   deletion_updated_at?: string;
@@ -498,7 +500,6 @@ export interface Branch {
   others_fs_access?: 'none' | 'read' | 'write';
 
   // ===== Branch Storage Mode =====
-  // See context/explorations/clone-redesign.md.
 
   /**
    * How this branch's filesystem is materialised.
@@ -948,7 +949,24 @@ export interface TeammateKnowledgeConfig {
   primary_namespace_id: KnowledgeNamespaceID;
   primary_namespace_slug: string;
   memory_path_template: 'memory/{{YYYY-MM-DD}}.md';
+  /**
+   * Governance default for ordinary teammate documents.
+   *
+   * This is a machine-maintained mirror of the home namespace's
+   * `visibility_default` (see `teammateKbPatch`), not a statement of intent —
+   * so it must not be read as an opt-in to publish anything.
+   */
   default_visibility: KnowledgeVisibility;
+  /**
+   * Explicit opt-in overrides for daily memory documents only.
+   *
+   * Daily memory is personal operational context, so it is created
+   * private/owner. Nothing auto-populates these two fields, which is what
+   * makes a value here an actual owner decision rather than an inherited
+   * namespace default.
+   */
+  memory_visibility?: KnowledgeVisibility;
+  memory_edit_policy?: KnowledgeEditPolicy;
   /**
    * Teammate-tool policy for namespaces not listed in `grants`.
    *

@@ -33,6 +33,28 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.10 (2026-10-06)
+
+Release preparation covers merged changes from `v0.26.9` (`a59bc310`) through `ba19f73b`, plus the API-key authentication and Knowledge transfer fixes in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.9...ba19f73bdf182e420dacfdaf46de71c21679686e). This entry does not imply publication or deployment.
+
+### Features
+
+- **Shared hosted OpenCode sessions** — eligible branch-home sessions now follow branch sharing permissions, with sealed checkpoints shared through the branch SDK home and each turn using the prompting user's own provider key. Execution-home sessions remain owner-only. ([#2969](https://github.com/preset-io/agor/pull/2969))
+- **Opt-in native Codex plugins** — sessions can explicitly enable native plugin support rather than inheriting it implicitly. ([#2966](https://github.com/preset-io/agor/pull/2966))
+
+### Fixes
+
+- **API-key Knowledge imports** — isolates the authentication user lookup so its validator no longer removes `namespace`, `bundle` or pagination fields from the caller's request. Fixes `Invalid Knowledge transfer request` during destination inventory, including resume and dry-run; transfer validation, tenant checks and conflict no-overwrite behavior remain intact. ([#3014](https://github.com/preset-io/agor/pull/3014))
+- **Actionable Knowledge transfer errors** — reports sanitized stage, HTTP method/route, status and invalid-field reasons without exposing credentials or document content. Failed planning no longer unconditionally recommends `--resume --apply`; resolve the error and review a `--resume --dry-run` plan first. ([#3014](https://github.com/preset-io/agor/pull/3014))
+- **Repository setup can recover in place** — retries interrupted bootstrap without deleting existing work and keeps onboarding readiness and progress aligned with repository state. ([#2979](https://github.com/preset-io/agor/pull/2979))
+- **Bounded conversation memory** — adds a byte budget for retained transcript detail, bounds Codex rollout usage reads and drops duplicate tool payloads. ([#2963](https://github.com/preset-io/agor/pull/2963), [#2962](https://github.com/preset-io/agor/pull/2962))
+- **Reliable environment and board updates** — clarifies environment log sources, makes Railway cleanup resumable, and emits board creation events only after the transaction commits. ([#2971](https://github.com/preset-io/agor/pull/2971), [#2972](https://github.com/preset-io/agor/pull/2972))
+- **Gemini task scratch stays ephemeral** — delegated launchers can keep per-task temporary files on launcher-owned scratch rather than a persistent SDK home; invalid scratch configuration fails closed. ([#2960](https://github.com/preset-io/agor/pull/2960))
+
+### Upgrade
+
+SDK pins and model defaults are unchanged. After publication and verification of all eight npm packages, packaged installations should drain active tasks, install `agor-live@0.26.10`, run `agor install --sync` and `agor doctor`, then restart according to [PUBLISH.md](PUBLISH.md). The API-key import fix requires the **destination daemon** to be updated; upgrading only the CLI adds diagnostics but cannot fix the old server. Agor Cloud rollout is a separate operator action, not a consequence of npm publication.
+
 ## 0.26.9 (2026-10-02)
 
 Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d7a676f8`, plus the SDK updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.8...d7a676f8cee62cd4418a561de71965723f9b19fd). This entry does not imply publication or deployment.

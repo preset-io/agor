@@ -44,6 +44,18 @@ function clientFor(
   };
 }
 describe.skipIf(process.platform === 'win32')('Knowledge CLI workflow', () => {
+  it('parses the reported resume/apply invocation and its read-only diagnostic equivalent', async () => {
+    for (const mode of ['--apply', '--dry-run']) {
+      const { args, flags } = await Parser.parse(
+        ['--namespace', 'agor-cloud-team', 'agor-cloud-team/', mode, '--resume'],
+        { args: KnowledgeImport.args, flags: KnowledgeImport.flags }
+      );
+      expect(args.directory).toBe('agor-cloud-team/');
+      expect(flags.namespace).toBe('agor-cloud-team');
+      expect(flags.resume).toBe(true);
+      expect(Boolean(flags.apply)).toBe(mode === '--apply');
+    }
+  });
   dbTest(
     'plans without writes, exports hashes, resumes without body fetch, imports privately and detects edits',
     async ({ db }) => {
@@ -237,7 +249,7 @@ describe.skipIf(process.platform === 'win32')('Knowledge interrupted transfer', 
         };
         await expect(
           importKnowledge(client, { ...options, namespace: 'destination' }, log.reporter)
-        ).rejects.toThrow('acknowledgement');
+        ).rejects.toThrow('Importing document — POST /kb/transfers');
         client.create = normalCreate;
         expect(
           await importKnowledge(

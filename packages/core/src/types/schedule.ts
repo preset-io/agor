@@ -145,8 +145,6 @@ export function isActiveScheduleAgenticToolConfig(
  * Replaces the four `branches.schedule_*` columns and the
  * `branches.data.schedule` jsonb blob that existed pre-#1253.
  * Runs are sessions, linked back via `sessions.schedule_id`.
- *
- * See `docs/internal/schedules-first-class-design-2026-05-24.md`.
  */
 export interface Schedule {
   // ===== Identity =====

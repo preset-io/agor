@@ -46,7 +46,7 @@ export function loadConfigSync(): AgorConfig {
       throw new Error(
         `${configPath} is masked by Agor's executor sandbox and is intentionally out of reach. ` +
           'Inside the sandbox the daemon address comes from DAEMON_URL; if that is unset, ' +
-          `that is the bug. See context/explorations/executor-sandboxing.md. (underlying error: ${detail})`
+          `that is the bug. See https://agor.live/guide/multiplayer-unix-isolation. (underlying error: ${detail})`
       );
     }
     throw new Error(`Failed to load config: ${detail}`);

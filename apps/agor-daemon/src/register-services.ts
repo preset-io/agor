@@ -1,4 +1,7 @@
-import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
+import {
+  CODEX_SUBSCRIPTION_CREDENTIALS_UNAVAILABLE_MESSAGE,
+  KNOWLEDGE_TRANSFER,
+} from '@agor/core/types';
 import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 /**
  * Service Registration
@@ -407,7 +410,7 @@ import {
   readSocketAuthorityId,
 } from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
-import { classifyExecutorExit } from './utils/task-launch-state.js';
+import { classifyExecutorExit, executorExitTermination } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
@@ -787,7 +790,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
-  // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
     methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
@@ -1043,7 +1045,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
-  // See context/explorations/claude-code-oauth-signin.md.
   if (claudeOAuthAuthority) {
     const maintenance = setInterval(() => {
       void claudeOAuthAuthority.maintain().catch((error) => {
@@ -1797,9 +1798,7 @@ function createExecuteHandler(
       try {
         branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
       } catch {
-        throw new BadRequest(
-          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
-        );
+        throw new BadRequest(CODEX_SUBSCRIPTION_CREDENTIALS_UNAVAILABLE_MESSAGE);
       }
     }
 
@@ -1896,6 +1895,7 @@ function createExecuteHandler(
         }
 
         let templatedLauncherAbsenceVerified = false;
+        let launchRefused = false;
         if (spawnContext.mode === 'templated') {
           const disposition = classifyExecutorExit({
             mode: spawnContext.mode,
@@ -1903,7 +1903,8 @@ function createExecuteHandler(
             nonzeroMayHaveDispatched:
               config.execution?.executor_command_nonzero_may_have_dispatched === true,
           });
-          if (disposition !== 'authoritative') {
+          launchRefused = disposition === 'refused';
+          if (disposition !== 'authoritative' && !launchRefused) {
             if (disposition === 'ambiguous') {
               try {
                 await runInFreshTerminationTenantWriteDatabase(() =>
@@ -1929,28 +1930,32 @@ function createExecuteHandler(
         }
 
         try {
+          const { cause, errorMessage } = executorExitTermination(code, launchRefused);
           const termination = await requestExecutorTermination({
             app,
             taskId,
-            cause: 'heartbeat_lost',
-            errorMessage: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+            cause,
+            errorMessage,
             params,
             // Missing a local process handle is never absence proof. A
             // configured authoritative templated-launcher failure is the one
             // launch path that can prove no remote executor was created.
             absenceVerified: templatedLauncherAbsenceVerified,
             sdkFailure: {
-              reason: 'heartbeat_lost',
+              reason: cause,
               detected_at: new Date().toISOString(),
               tool: session.agentic_tool,
               termination: 'requested',
             },
             runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             // A remote executor may connect while its launcher is exiting.
-            // Resolve that race only at the row-locked claim.
+            // Resolve that race only at the row-locked claim. A refused launch
+            // created nothing, so it also settles a Stop that arrived first
+            // (status `stopping`, cause kept as `user_stop`); the disconnected
+            // fence alone still lets a connected executor win.
             ...(spawnContext.mode === 'templated'
               ? {
-                  expectedStatus: TaskStatus.DISPATCHING,
+                  ...(launchRefused ? {} : { expectedStatus: TaskStatus.DISPATCHING }),
                   requireExecutorDisconnected: true,
                 }
               : {}),

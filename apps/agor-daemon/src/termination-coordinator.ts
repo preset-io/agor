@@ -10,6 +10,7 @@ import type {
   TaskID,
   TerminationCause,
   TerminationCoordinationPendingCode,
+  TerminationRequest,
 } from '@agor/core/types';
 import {
   isAgenticToolName,
@@ -41,6 +42,8 @@ export interface TerminationInput {
   taskId: TaskID | string;
   cause: TerminationCause;
   errorMessage: string;
+  /** Who asked, recorded on the request so the UI can name them. */
+  requestedBy?: Pick<TerminationRequest, 'requested_by_user_id' | 'requested_via'>;
   params?: Params;
   signalDelayMs?: number;
   /** Test/configuration seam for the cooperative socket-stop grace window. */
@@ -173,6 +176,7 @@ async function claimRequest(input: TerminationInput) {
         taskId: String(input.taskId),
         cause: input.cause,
         errorMessage: input.errorMessage,
+        requestedBy: input.requestedBy,
         sdkFailure: input.sdkFailure,
         expectedStatus: input.expectedStatus,
         expectedHeartbeatAt: input.expectedHeartbeatAt,
@@ -300,8 +304,13 @@ async function runContainment(
     executorQuiesced &&
     tool === 'opencode' &&
     resolveOpenCodeCapabilities(input.app.get('config') ?? {}).mode === 'managed-projection';
+  // An opted-in launcher refused admission before creating anything, so there
+  // is no provider work to quiesce. Every other cause keeps the safeguard.
+  // Key on the caller's cause: a Stop that arrived first keeps the persisted
+  // `user_stop` cause even though the refusal proved absence.
+  const launchRefused = input.absenceVerified === true && input.cause === 'launch_refused';
   const descriptorUnverifiedReason =
-    isAgenticToolName(tool) && !hostedOpenCodeQuiesced
+    isAgenticToolName(tool) && !hostedOpenCodeQuiesced && !launchRefused
       ? getAgenticToolIntegration(tool).unverifiedTerminationReason
       : undefined;
   const unverifiedReason =

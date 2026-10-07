@@ -489,7 +489,7 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
   // In-conversation interactive widgets. WidgetBlock looks up the registered
   // component by `metadata.widget.widget_type` and falls back to an
   // "Unknown widget type" placeholder for forward-compat with newer
-  // daemons. See `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
+  // daemons.
   if (message.type === 'widget_request') {
     return (
       <div style={{ margin: blockMargin }}>

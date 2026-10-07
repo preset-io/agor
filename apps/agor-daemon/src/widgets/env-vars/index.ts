@@ -7,8 +7,6 @@
  * land in the submitting prompt actor's `users.data.env_vars` via the existing
  * users service — encryption and structural validation are reused. A shared
  * Session never lends or mutates its owner's credential environment.
- *
- * See §4 + §7 Part 2 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import {

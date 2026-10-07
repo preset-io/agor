@@ -1,17 +1,6 @@
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the underlying refresh call so tests are hermetic — we want to
-// exercise the single-flight and event-dispatch behaviour of this module,
-// not the HTTP call inside `refreshAndStoreTokens`.
-vi.mock('./tokenRefresh', async () => {
-  const actual = await vi.importActual<typeof import('./tokenRefresh')>('./tokenRefresh');
-  return {
-    ...actual,
-    refreshAndStoreTokens: vi.fn(),
-  };
-});
-
 import {
   isRefreshUnrecoverable,
   markAuthenticationUnrecoverable,
@@ -21,9 +10,14 @@ import {
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
   TOKENS_REFRESHED_EVENT,
 } from './singleFlightRefresh';
-import { refreshAndStoreTokens } from './tokenRefresh';
+import {
+  invalidateTokenAuthority,
+  REFRESH_TOKEN_KEY,
+  SupersededAuthenticationError,
+  storeTokens,
+} from './tokenRefresh';
 
-const mockRefresh = refreshAndStoreTokens as unknown as ReturnType<typeof vi.fn>;
+const mockRefresh = vi.fn();
 
 function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
   return {
@@ -34,10 +28,12 @@ function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
 }
 
 function makeClient(): AuthenticatedAgorClient {
-  return { authenticate: vi.fn() } as unknown as AuthenticatedAgorClient;
+  return { service: () => ({ create: mockRefresh }) } as unknown as AuthenticatedAgorClient;
 }
 
 beforeEach(() => {
+  localStorage.clear();
+  localStorage.setItem(REFRESH_TOKEN_KEY, 'rt');
   mockRefresh.mockReset();
   // The unrecoverable latch is a module-level singleton — reset between
   // tests so order-dependent state doesn't leak.
@@ -85,6 +81,34 @@ describe('refreshTokensSingleFlight', () => {
     const second = await refreshTokensSingleFlight(client, 'rt');
     expect(second.accessToken).toBe('second');
     expect(mockRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not share an in-flight refresh with a different refresh token', async () => {
+    let finishOld!: (value: ReturnType<typeof makeResult>) => void;
+    let finishNew!: (value: ReturnType<typeof makeResult>) => void;
+    mockRefresh.mockReturnValueOnce(new Promise((resolve) => (finishOld = resolve)));
+    mockRefresh.mockReturnValueOnce(new Promise((resolve) => (finishNew = resolve)));
+    const client = makeClient();
+    const oldRefresh = refreshTokensSingleFlight(client, 'rt');
+    invalidateTokenAuthority();
+    storeTokens('b-access-0', 'b-rt');
+    const newRefresh = refreshTokensSingleFlight(client, 'b-rt');
+    finishOld(makeResult('late-a', 'late-a-refresh'));
+    await expect(oldRefresh).rejects.toBeInstanceOf(SupersededAuthenticationError);
+    // The old refresh settling must not free the new account's in-flight slot.
+    expect(refreshTokensSingleFlight(client, 'b-rt')).toBe(newRefresh);
+    finishNew(makeResult('b-access', 'b-refresh'));
+    await expect(newRefresh).resolves.toMatchObject({ accessToken: 'b-access' });
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('b-refresh');
+  });
+
+  it('rejects without a request once the session was logged out', async () => {
+    localStorage.clear();
+    await expect(refreshTokensSingleFlight(makeClient(), 'rt')).rejects.toBeInstanceOf(
+      SupersededAuthenticationError
+    );
+    expect(mockRefresh).not.toHaveBeenCalled();
   });
 
   it('clears the in-flight slot on failure so the next caller can retry', async () => {

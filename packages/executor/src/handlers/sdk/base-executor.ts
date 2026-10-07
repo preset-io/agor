@@ -24,7 +24,12 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { MessageRole, PROVIDER_CREDENTIAL_FIELDS } from '@agor/core/types';
+import {
+  GEMINI_API_KEY_REQUIRED_MESSAGE,
+  MessageRole,
+  missingScopedCredentialMessage,
+  PROVIDER_CREDENTIAL_FIELDS,
+} from '@agor/core/types';
 import { createFeathersBackedRepositories } from '../../db/feathers-repositories.js';
 import { getCurrentBranch, getGitState } from '../../git/index.js';
 import { formatExecutorFailure } from '../../safe-executor-error.js';
@@ -549,8 +554,8 @@ export async function executeToolTask(params: {
     if (!hasProviderCredential(toolName, connection) && !resolution.useNativeAuth) {
       throw new MissingCredentialError(
         toolName === 'gemini'
-          ? 'Gemini needs an API key. Add one in Settings → Gemini (Google-account sign-in is not supported).'
-          : `No scoped ${toolName} credential is configured for this workspace or user.`
+          ? GEMINI_API_KEY_REQUIRED_MESSAGE
+          : missingScopedCredentialMessage(toolName)
       );
     }
 

@@ -26,10 +26,13 @@ import {
   TOKENS_REFRESHED_EVENT,
 } from '../utils/singleFlightRefresh';
 import {
+  captureTokenAuthority,
   clearTokens,
   getStoredAccessToken,
   getStoredRefreshToken,
+  invalidateTokenAuthority,
   type RefreshResult,
+  SupersededAuthenticationError,
   storeTokens,
 } from '../utils/tokenRefresh';
 import type { AuthorityOperation } from './useAuthorityOperationGuard';
@@ -142,6 +145,7 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const invalidateAuthentication = useCallback(() => {
+    invalidateTokenAuthority();
     activeAuthorityRef.current = null;
     advanceAuthenticationGeneration();
   }, [advanceAuthenticationGeneration]);
@@ -192,6 +196,8 @@ export function useAuth(): UseAuthReturn {
   // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
+    // Logout or replacement login while this attempt awaits makes its late results stale.
+    const isCurrent = captureTokenAuthority();
     localLoginAttemptRef.current = null;
     setState((prev) => ({ ...prev, loading: true, error: null }));
 
@@ -217,6 +223,7 @@ export function useAuth(): UseAuthReturn {
             accessToken: storedAccessToken,
           });
 
+          if (!isCurrent()) return true;
           noteAuthenticatedUser(result.user);
           setState({
             user: result.user,
@@ -234,6 +241,7 @@ export function useAuth(): UseAuthReturn {
       }
 
       // Access token expired or missing, try refresh token
+      if (!isCurrent()) return true;
       if (storedRefreshToken) {
         try {
           const refreshResult = await refreshTokensSingleFlight(client, storedRefreshToken);
@@ -291,6 +299,7 @@ export function useAuth(): UseAuthReturn {
           if (isConnectionError && retryCount < MAX_RETRIES) {
             const delay = Math.min(2000 * 1.5 ** retryCount, 10000);
             await new Promise((resolve) => setTimeout(resolve, delay));
+            if (!isCurrent()) return;
             return reAuthenticate(retryCount + 1, activeLaunchCode);
           }
 
@@ -332,12 +341,14 @@ export function useAuth(): UseAuthReturn {
           : null,
       });
     } catch (error) {
+      if (!isCurrent()) return;
       // Connection or authentication error - retry if daemon just restarted
       const isConnectionError = isTransientConnectionError(error);
 
       if (isConnectionError && retryCount < MAX_RETRIES) {
         const delay = Math.min(2000 * 1.5 ** retryCount, 10000); // Exponential backoff: 2s, 3s, 4.5s, 6.75s, 10s (capped)
         await new Promise((resolve) => setTimeout(resolve, delay));
+        if (!isCurrent()) return;
         return reAuthenticate(
           retryCount + 1,
           attemptedLaunch ? activeLaunchCode || undefined : undefined
@@ -368,6 +379,7 @@ export function useAuth(): UseAuthReturn {
         }
       }
 
+      if (!isCurrent()) return;
       noteUnauthenticated();
       setState({
         user: null,
@@ -425,6 +437,7 @@ export function useAuth(): UseAuthReturn {
         // State sync happens via TOKENS_REFRESHED_EVENT listener below —
         // no need to setState here.
       } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
         // Unrecoverable failures are handled by the unrecoverable-event
         // listener (clearTokens + unauthenticated). Bail out so we don't
         // kick off a reAuthenticate that will immediately fail again.
@@ -487,6 +500,7 @@ export function useAuth(): UseAuthReturn {
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
+        if (error instanceof SupersededAuthenticationError) return;
         // Unrecoverable: the unrecoverable-event listener already cleared
         // tokens and flipped to unauthenticated. Avoid double-handling.
         if (error instanceof RefreshUnrecoverableError) return;

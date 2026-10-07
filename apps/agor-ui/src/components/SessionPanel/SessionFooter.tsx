@@ -14,9 +14,7 @@ import { getDefaultModelForTool, SessionStatus } from '@agor-live/client';
 import {
   BranchesOutlined,
   ClockCircleOutlined,
-  CloseOutlined,
   EllipsisOutlined,
-  ExclamationCircleOutlined,
   ForkOutlined,
   IdcardOutlined,
   LockOutlined,
@@ -52,6 +50,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { CompactNotice } from '../CompactNotice';
 import { EffortSelector } from '../EffortSelector';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import type { ModelConfig } from '../ModelSelector';
@@ -1573,51 +1572,19 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           </div>
         )}
 
-        {/* Unauthorized MCP servers block their tools silently. Surface it as a
-            gentle, dismissable warning banner above the composer: a compact,
-            contained AntD Alert-style box (warning bg + border + radius) with the
-            close × sitting inside it, not a full-size alarm. Longhand border
-            props keep it token-driven without the CSS-var `border` shorthand that
-            trips jsdom's parser in tests. */}
+        {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
         {showMcpNotice && (
-          <Flex
-            align="center"
-            gap={token.sizeXS}
+          <CompactNotice
+            type="warning"
+            message={mcpNoticeMessage}
+            onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
+            dismissLabel="Dismiss MCP connection notice"
             data-testid="mcp-disconnected-notice"
             role="status"
             aria-live="polite"
             aria-atomic="true"
-            style={{
-              marginBottom: token.sizeUnit * 2,
-              padding: `${token.sizeXXS}px ${token.sizeSM}px`,
-              background: token.colorWarningBg,
-              borderWidth: token.lineWidth,
-              borderStyle: 'solid',
-              borderColor: token.colorWarningBorder,
-              borderRadius: token.borderRadiusSM,
-            }}
-          >
-            <ExclamationCircleOutlined
-              style={{ fontSize: 12, color: token.colorWarning, flexShrink: 0 }}
-            />
-            <Typography.Text type="warning" style={{ fontSize: 12, flex: 1, minWidth: 0 }}>
-              {mcpNoticeMessage}
-            </Typography.Text>
-            <Button
-              type="text"
-              size="small"
-              icon={<CloseOutlined style={{ fontSize: 11 }} />}
-              aria-label="Dismiss MCP connection notice"
-              onClick={() => setDismissedMcpSignature(unauthedSignature)}
-              style={{
-                flexShrink: 0,
-                width: 20,
-                minWidth: 20,
-                height: 20,
-                color: token.colorWarning,
-              }}
-            />
-          </Flex>
+            style={{ marginBottom: token.marginXS }}
+          />
         )}
 
         {/* Row 2 — Prompt textarea */}

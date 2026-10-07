@@ -113,7 +113,6 @@ function useSearchPopover(
 /**
  * Navbar global-search input + dropdown.
  *
- * Implementation per docs/internal/global-search-design-2026-05-23.md.
  * V1 scaffolding: client-side filtering over in-memory entity maps, sectioned
  * dropdown, type + scope chips, Cmd+K to focus.
  */

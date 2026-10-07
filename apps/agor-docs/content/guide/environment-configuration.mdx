@@ -892,14 +892,15 @@ Agor does not retain an old forwarded hostname.
 
 ### Railway reference implementation
 
-Agor's repository wires its `railway-sqlite` variant in
+Agor's repository wires its `railway-sqlite` and `railway-docs` variants in
 [`.agor.yml`](https://github.com/preset-io/agor/blob/main/.agor.yml) to
 [`launcher.mjs`](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/launcher.mjs),
 a dependency-free, branch-local Node script with adjacent mocked API tests. The
 [Railway launcher instructions](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/README.md)
 describe the image, service, domain, and persistent volume.
 
-**The preview application in this example is Agor itself.** Hosting Agor on
+**The SQLite preview application in this example is Agor itself; `railway-docs`
+serves only this docs website.** Hosting Agor on
 Railway and using Agor to manage your app on Railway are different tasks; for
 your own app, replace the bootstrap and runtime details, not the lifecycle
 interface.
@@ -1053,9 +1054,38 @@ dedicated-project rules; conflicting project settings fail closed. Do not remove
 legacy configuration to migrate retained resources without an explicit migration
 or cleanup: version-2 resource names differ.
 
+#### Docs website preview
+
+Choose **`railway-docs`** for a public Next/Nextra development instance of
+`apps/agor-docs`, with no Agor daemon, database or agent runtimes. It reuses the
+Railway lifecycle and ownership checks above, but requires only
+`RAILWAY_AGOR_PROJECT_ID` and `RAILWAY_API_TOKEN` in secure variables, **not**
+`RAILWAY_AGOR_ADMIN_PASSWORD`.
+
+Push the branch first. A repo administrator imports the updated `.agor.yml`,
+then renders `railway-docs` on the branch; Start is the explicit paid-resource
+opt-in. The launcher reports the website root as both App and Health. The
+container runs in `--watch` mode, polling the pushed branch every 10 seconds;
+content/component/style changes hot-reload without rebuilding the deployment.
+Unpushed local edits are not included.
+
+Dependency, lockfile, patch, runtime, Next/TypeScript configuration and docs
+build-script changes need **push, then Stop/Start**. Failed fetches or incompatible
+updates leave the last applied source running. Start on an already-running
+preview does not redeploy it. The production Pagefind index is not generated
+by this dev server, so full-text docs search is not a production-parity check.
+
+Docs and SQLite previews have separate resource identities even on the same
+branch. Stop a running variant before switching to avoid leaving billable
+compute behind. Stop retains the docs checkout/cache volume and storage charges;
+Nuke removes only the owned docs preview, never the SQLite preview or project.
+Both count toward the retained-preview limit. These are unauthenticated public
+dev servers: use trusted branches and preview-only credentials, not private data.
+See the [docs runtime details](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/railway/README.md#docs-only-preview).
+
 #### Migration from earlier Railway variants
 
-`railway-sqlite` is now the sole automatic variant; `railway-auto-sqlite` was
+`railway-sqlite` is the automatic application variant; `railway-auto-sqlite` was
 renamed. Import the updated `.agor.yml`, then select `railway-sqlite` to re-render
 saved branch commands (stop a running preview before switching). Existing automatic
 preview ownership and resource names do not change, so they remain reusable.

@@ -8,7 +8,7 @@ mode (`unix_user_mode: sandbox`).
 > rollback mechanism. There is no published 0.24 bridge release: perform the
 > conversion as an offline 0.24.7 → 0.25.1 cutover using the scripts from the
 > 0.25.1 source tree. Design + threat model:
-> [`context/explorations/executor-sandboxing.md`](../explorations/executor-sandboxing.md).
+> [`rbac-and-unix-isolation.md`](rbac-and-unix-isolation.md).
 > User-facing setup: `apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx` → "Sandbox mode".
 
 ---

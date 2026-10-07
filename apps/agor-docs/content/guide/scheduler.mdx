@@ -102,7 +102,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
 - **Stay idempotent.** Assume runs might retry; avoid prompts that double-post or delete blindly.
 - **Log visibly.** Have agents append notes to the branch or board so humans can see what happened.
 - **Permit headless automation.** If you expect the agent to operate unattended, set permission mode to `auto` (or a custom mode that doesn’t prompt) before saving the schedule.
-- **Attach the right MCP servers.** Make sure Slack, GitHub, HubSpot, etc. are registered and selected so scheduled agents have the tools they need.
+- **Attach the right MCP servers.** Make sure Slack, GitHub, HubSpot, etc. are registered and selected so scheduled agents have the tools they need. Schedules run as the user who created them, so only shared servers or servers that user owns can be attached; saving a schedule with another user's private server is rejected.
 - **Keep prompts contextual.** Leverage `branch.custom_context` and board data instead of hard-coded values.
 - **Pilot before scaling.** Run the first few executions manually to confirm output before letting it run unattended.
 

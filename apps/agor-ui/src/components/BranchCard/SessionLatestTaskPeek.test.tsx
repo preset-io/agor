@@ -1,16 +1,24 @@
 import type { ReactiveSessionState, Session, Task } from '@agor-live/client';
-import { TaskStatus } from '@agor-live/client';
+import { SessionStatus, TaskStatus } from '@agor-live/client';
 import { act, fireEvent, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionLatestTaskPeek } from './SessionLatestTaskPeek';
 
-const mock = vi.hoisted(() => ({ state: null as ReactiveSessionState | null }));
+const mock = vi.hoisted(() => ({
+  state: null as ReactiveSessionState | null,
+  taskBlockProps: null as Record<string, unknown> | null,
+}));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
   useSharedReactiveSession: () => ({ handle: null, state: mock.state }),
 }));
 vi.mock('../../contexts/AppActionsContext', () => ({ useAppActions: () => ({}) }));
 vi.mock('../../contexts/ConnectionContext', () => ({ useConnectionDisabled: () => false }));
-vi.mock('../TaskBlock', () => ({ TaskBlock: () => <div>Task output</div> }));
+vi.mock('../TaskBlock', () => ({
+  TaskBlock: (props: Record<string, unknown>) => {
+    mock.taskBlockProps = props;
+    return <div>Task output</div>;
+  },
+}));
 
 const session = { session_id: 'session-1', status: 'idle' } as Session;
 let frames: Map<number, FrameRequestCallback>;
@@ -38,6 +46,7 @@ function streamUpdate() {
 }
 
 beforeEach(() => {
+  mock.taskBlockProps = null;
   frames = new Map();
   nextFrame = 0;
   hidden = false;
@@ -143,5 +152,36 @@ describe('preview scroll scheduling', () => {
     view.rerender(peek());
     expect(frames.size).toBe(1);
     view.unmount();
+  });
+});
+
+describe('preview recovery actions', () => {
+  // Opening a failed session clears ready_for_prompt; the peek must still offer Resume.
+  const opened = { ...session, status: SessionStatus.FAILED, ready_for_prompt: false } as Session;
+  const failed = { task_id: 'task-1', status: TaskStatus.FAILED } as Task;
+
+  it('lets the latest turn offer recovery when a new prompt would start right away', () => {
+    if (!mock.state) throw new Error('missing state');
+    mock.state = { ...mock.state, session: opened, tasks: [failed] };
+    render(peek());
+    expect(mock.taskBlockProps).toMatchObject({ isLatestTask: true, canStartTurn: true });
+  });
+
+  it('withholds recovery while the session runs or a prompt is queued', () => {
+    if (!mock.state) throw new Error('missing state');
+    mock.state = {
+      ...mock.state,
+      session: { ...opened, status: SessionStatus.RUNNING },
+      tasks: [failed],
+    };
+    const view = render(peek());
+    expect(mock.taskBlockProps).toMatchObject({ canStartTurn: false });
+    mock.state = {
+      ...mock.state,
+      session: opened,
+      queuedTasks: [{ task_id: 'task-0', status: TaskStatus.QUEUED, created_at: '' } as Task],
+    };
+    view.rerender(peek());
+    expect(mock.taskBlockProps).toMatchObject({ task: failed, canStartTurn: false });
   });
 });

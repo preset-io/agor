@@ -152,6 +152,9 @@ export interface ConversationViewProps {
 
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
+  /** A prompt sent now would run, not wait in the queue (`canSessionStartTurn`). */
+  canStartTurn?: boolean;
+
   /** Use the denser, full-width task treatment for phone-sized session routes. */
   compact?: boolean;
 }
@@ -174,6 +177,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     genealogy,
     teammateEmoji,
     onOpenAgenticToolSettings,
+    canStartTurn = false,
     compact = false,
   }) => {
     const { token } = theme.useToken();
@@ -654,6 +658,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A loop rather than a render-scoped .map() callback, for the reason above.
     const taskBlocks: React.ReactNode[] = [];
     for (const [taskIndex, task] of tasks.entries()) {
+      // Only the latest turn offers recovery, so older memoized turns ignore promptability changes.
+      const isLatestTask = taskIndex === tasks.length - 1;
       taskBlocks.push(
         <TaskBlock
           key={task.task_id}
@@ -674,7 +680,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           onLoadTaskMessages={handleLoadTaskMessages}
           onRetainTaskDetails={handleRetainTaskDetails}
           teammateEmoji={teammateEmoji}
-          isLatestTask={taskIndex === tasks.length - 1}
+          isLatestTask={isLatestTask}
+          canStartTurn={canStartTurn && isLatestTask}
           client={client}
           onOpenAgenticToolSettings={onOpenAgenticToolSettings}
           compact={compact}

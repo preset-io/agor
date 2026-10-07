@@ -1705,7 +1705,7 @@ export function determineSpawnIdentity(
 // Schedule-tier RBAC helpers
 // ============================================================================
 // Schedules inherit their RBAC from the parent branch (same model as
-// sessions). See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
+// sessions).
 
 /**
  * Scope schedules.find() to schedules whose parent branch the user can view.

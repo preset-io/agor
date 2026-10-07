@@ -47,6 +47,8 @@ export interface InstanceConfig {
 }
 
 export interface FeaturesConfig {
+  /** Deployment support only; branch reads and request admission check the remaining requirements. */
+  permanentBranchDeletion?: import('@agor/core/types').BranchMaintenanceCapability;
   /** Instance-owned informational copy; never a capability or repository override. */
   environmentDisclaimerMarkdown?: string;
   environmentCommands?: ReturnType<

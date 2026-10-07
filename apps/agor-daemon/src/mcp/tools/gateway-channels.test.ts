@@ -3595,3 +3595,139 @@ describe('Discord channel history agent tool (MCP)', () => {
     expect(JSON.stringify(payload)).toContain('"agent_tools":{"channel_history":true}');
   });
 });
+
+describe('Discord forum posts agent tool (MCP)', () => {
+  const discordChannel = {
+    ...slackChannel,
+    name: 'Eng Discord',
+    channel_type: 'discord',
+    config: {
+      bot_token: 'discord-bot-secret',
+      application_id: '111111111111111111',
+      guild_id: '222222222222222222',
+      allowed_channel_ids: ['333333333333333333'],
+      agent_tools: { channel_history: true },
+    },
+  };
+  const discordSource = {
+    channel_id: 'chan-1',
+    channel_name: 'Eng Discord',
+    channel_type: 'discord',
+    thread_id: '444444444444444444',
+  };
+  const postsResult = {
+    channelId: '333333333333333333',
+    archived: false,
+    has_more: true,
+    next_cursor: { before: '444444444444444444' },
+    posts: [
+      {
+        id: '444444444444444444',
+        title: 'Cannot change session model',
+        tags: [{ id: '555555555555555555', name: 'bug' }],
+        author_id: '666666666666666666',
+        created_at: '2026-10-03T12:00:00.000Z',
+        reply_count: 6,
+        last_message_id: '777777777777777777',
+        archived: false,
+        locked: false,
+      },
+    ],
+  };
+
+  function spyDiscordSession(source: Record<string, unknown> | null) {
+    return vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue({
+      session_id: 'sess-1',
+      branch_id: 'branch-1',
+      custom_context: source ? { gateway_source: source } : {},
+    } as any);
+  }
+
+  function mockTargets(config: Record<string, unknown> = discordChannel.config) {
+    vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue({
+      ...discordChannel,
+      config,
+    } as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+  }
+
+  it("defaults to the session post's forum and returns untrusted, token-free output", async () => {
+    const connector = { listForumPosts: vi.fn(async () => postsResult) };
+    vi.mocked(getConnector).mockReturnValue(connector as any);
+    spyDiscordSession(discordSource);
+    mockTargets();
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_discord_forum_posts_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(connector.listForumPosts).toHaveBeenCalledWith({
+      sessionThreadKey: '444444444444444444',
+      limit: 25,
+    });
+    expect(payload.warning).toContain('untrusted external content');
+    expect(payload.forum).toEqual({ discord_channel_id: '333333333333333333', archived: false });
+    expect(payload.pagination).toEqual({
+      requested_limit: 25,
+      returned: 1,
+      has_more: true,
+      next_cursor: { before: '444444444444444444' },
+    });
+    expect(payload.posts[0]).toMatchObject({ title: 'Cannot change session model' });
+    expect(JSON.stringify(payload)).not.toContain('discord-bot-secret');
+  });
+
+  it('lists an explicit forum archive page with a cursor', async () => {
+    const connector = { listForumPosts: vi.fn(async () => ({ ...postsResult, archived: true })) };
+    vi.mocked(getConnector).mockReturnValue(connector as any);
+    spyDiscordSession(null);
+    mockTargets();
+
+    const tools = await captureTools('member');
+    await tools.agor_gateway_discord_forum_posts_list.handler({
+      gatewayChannelId: 'chan-1',
+      discordChannelId: '333333333333333333',
+      archived: true,
+      before: '2026-10-01T00:00:00.000Z',
+      limit: 10,
+    });
+
+    expect(connector.listForumPosts).toHaveBeenCalledWith({
+      channelId: '333333333333333333',
+      archived: true,
+      before: '2026-10-01T00:00:00.000Z',
+      limit: 10,
+    });
+  });
+
+  it('requires discordChannelId for sessions not created by this Discord channel', async () => {
+    vi.mocked(getConnector).mockReturnValue({ listForumPosts: vi.fn() } as any);
+    spyDiscordSession(null);
+    mockTargets();
+
+    const tools = await captureTools('member');
+    await expect(
+      tools.agor_gateway_discord_forum_posts_list.handler({ gatewayChannelId: 'chan-1' })
+    ).rejects.toThrow('discordChannelId is required');
+  });
+
+  it('is gated by the channel_history capability before any Discord call', async () => {
+    spyDiscordSession(discordSource);
+    mockTargets({ ...discordChannel.config, agent_tools: { channel_history: false } });
+
+    const tools = await captureTools('admin');
+    await expect(tools.agor_gateway_discord_forum_posts_list.handler({})).rejects.toThrow(
+      "capability 'channel_history' is disabled"
+    );
+    expect(getConnector).not.toHaveBeenCalled();
+  });
+
+  it('validates the forum, cursor, and limit in the input schema', async () => {
+    const tools = await captureTools('member');
+    const schema = tools.agor_gateway_discord_forum_posts_list.cfg.inputSchema;
+    expect(schema.safeParse({ limit: 100, archived: true }).success).toBe(true);
+    expect(schema.safeParse({ limit: 101 }).success).toBe(false);
+    expect(schema.safeParse({ discordChannelId: '12' }).success).toBe(false);
+    expect(schema.safeParse({ before: '' }).success).toBe(false);
+  });
+});

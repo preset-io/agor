@@ -22,8 +22,7 @@ interface SearchResultProps {
  * Single result row in the global-search dropdown.
  *
  * Discriminated union by entity type → renders entity-specific icon, title,
- * tag, secondary line, and relative time. Anatomy spec lives in
- * docs/internal/global-search-design-2026-05-23.md §3.6.
+ * tag, secondary line, and relative time.
  */
 export const SearchResult: React.FC<SearchResultProps> = ({
   result,

@@ -158,6 +158,36 @@ describe('HomePage', () => {
     await waitFor(() => expect(within(needs).queryByText(/failed on/)).not.toBeInTheDocument());
   });
 
+  it.each([
+    [
+      'timed_out',
+      'Permission request timed out after 600000ms.',
+      'Timed out · The agent stopped waiting for approval.',
+    ],
+    [
+      'failed',
+      'Agor could not confirm a successful response. Provider detail: error_max_turns',
+      'Failed · Agor could not confirm a successful response.',
+    ],
+  ] as const)('shows a readable cause for a %s run', async (status, errorMessage, label) => {
+    const run = session('r1', {
+      status,
+      created_at: recent(60),
+      last_updated: recent(1),
+      tasks: ['t1'],
+    });
+    const client = {
+      service: (name: string) =>
+        name === 'tasks'
+          ? { get: async () => ({ error_message: errorMessage }) }
+          : { find: async () => [], getPrimaryTeammate: async () => null },
+    } as unknown as AgorClient;
+    seed({ sessions: [run] });
+    renderHome({ client });
+    const needs = screen.getByRole('region', { name: 'Needs you' });
+    expect(await within(needs).findByText(label)).toBeInTheDocument();
+  });
+
   it('expands a failure group to each failure, and opening an older one records only it', async () => {
     asDesktop();
     const at = { status: 'failed', created_at: recent(60) } as const;

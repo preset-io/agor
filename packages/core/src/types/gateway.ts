@@ -305,6 +305,20 @@ export function discordSnowflakeTimestampMs(id: string): number {
   return Number((BigInt(id) >> 22n) + 1420070400000n);
 }
 
+/** The Snowflake just before an already-validated one, so an exclusive after-cursor includes `id`. */
+export function previousDiscordSnowflake(id: string): string {
+  if (!isDiscordSnowflake(id)) {
+    throw new Error('Discord Snowflake decrement requires a canonical Snowflake');
+  }
+  return (BigInt(id) - 1n).toString();
+}
+
+/** The channel snowflake of a `channel:<snowflake>` proactive target, if well formed. */
+export function discordOutboundChannelTarget(target: string): string | undefined {
+  const channelId = /^channel:(\d{17,20})$/.exec(target.trim())?.[1];
+  return channelId && isDiscordSnowflake(channelId) ? channelId : undefined;
+}
+
 /** Compare two already-validated Discord Snowflakes without losing precision. */
 export function compareDiscordSnowflakes(a: string, b: string): number {
   if (!isDiscordSnowflake(a) || !isDiscordSnowflake(b)) {
@@ -346,7 +360,10 @@ function validateCatchUpConfig(raw: unknown, errors: string[]): void {
  * unless an admin enables it; the legacy `[]` value means all off.
  */
 export interface DiscordAgentToolsConfig {
-  /** Read allowlisted channel history (agor_gateway_discord_channel_history_get). */
+  /**
+   * Read allowlisted channel history (agor_gateway_discord_channel_history_get)
+   * and list forum posts (agor_gateway_discord_forum_posts_list).
+   */
   channel_history?: boolean;
 }
 
@@ -445,6 +462,53 @@ export interface DiscordChannelHistoryResult {
   has_more: boolean;
   /** Cursor for the next call in the same direction; null when complete. */
   next_cursor: { before: string } | { after: string } | null;
+}
+
+/** Agent read of the posts (public threads) in an allowlisted forum channel. */
+export interface DiscordForumPostsRequest {
+  channelId: string;
+  /** List archived posts instead of active ones. Defaults to false. */
+  archived?: boolean;
+  /**
+   * Exclusive cursor from a previous result: a post ID for active posts, an
+   * archive ISO timestamp for archived posts.
+   */
+  before?: string;
+  /** Posts to return, newest first (1–100, default 25). */
+  limit?: number;
+}
+
+/**
+ * Connector-level forum read: an explicit forum, or the allowlisted forum
+ * behind a Discord gateway session's post.
+ */
+export interface DiscordAgentForumPostsRequest extends Omit<DiscordForumPostsRequest, 'channelId'> {
+  channelId?: string;
+  /** Gateway session thread key whose allowlisted parent forum is listed. */
+  sessionThreadKey?: string;
+}
+
+export interface DiscordForumPost {
+  id: string;
+  title: string;
+  tags: Array<{ id: string; name: string }>;
+  author_id?: string;
+  created_at: string;
+  /** Replies, excluding the opening message. */
+  reply_count?: number;
+  last_message_id?: string;
+  archived: boolean;
+  locked: boolean;
+  archived_at?: string;
+}
+
+export interface DiscordForumPostsResult {
+  channelId: string;
+  archived: boolean;
+  /** Newest first: by creation for active posts, by archive time for archived posts. */
+  posts: DiscordForumPost[];
+  has_more: boolean;
+  next_cursor: { before: string } | null;
 }
 
 /** Fill only non-authority defaults; Message Content and identity stay explicit. */
@@ -578,8 +642,8 @@ export function validateDiscordConfig(
     if (typeof raw.default_outbound_target !== 'string') {
       errors.push('default_outbound_target must be channel:<snowflake>');
     } else {
-      const match = /^channel:(\d{17,20})$/.exec(raw.default_outbound_target.trim());
-      if (!match || !isDiscordSnowflake(match[1]) || !allowedChannelIds.includes(match[1])) {
+      const targetChannelId = discordOutboundChannelTarget(raw.default_outbound_target);
+      if (!targetChannelId || !allowedChannelIds.includes(targetChannelId)) {
         errors.push('default_outbound_target must target an allowed channel');
       }
     }
@@ -687,9 +751,14 @@ export interface GatewayConnectionTestPermissionDetails {
   sendInThreads: boolean;
 }
 
+/** Kinds of Discord channel an allowlist may name: text, or forum (whose posts are threads). */
+export type DiscordParentChannelKind = 'text' | 'forum';
+
 /** Access result for one configured provider channel. */
 export interface GatewayConnectionTestChannelAccess {
   channelId: string;
+  /** Discord only, when the channel is a supported kind. */
+  kind?: DiscordParentChannelKind;
   ok: boolean;
   permissions?: GatewayConnectionTestPermissionDetails;
 }

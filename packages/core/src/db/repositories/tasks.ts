@@ -23,6 +23,7 @@ import type {
   TaskPendingDispatchStatus,
   TerminationCause,
   TerminationCoordinationClaim,
+  TerminationRequest,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -182,6 +183,7 @@ export interface TerminationClaimInput {
   taskId: string;
   cause: TerminationCause;
   errorMessage: string;
+  requestedBy?: Pick<TerminationRequest, 'requested_by_user_id' | 'requested_via'>;
   sdkFailure?: SdkFailure;
   expectedStatus?: Task['status'];
   expectedHeartbeatAt?: string;
@@ -1628,9 +1630,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         !existing || input.cause === 'user_stop' || existing.cause === input.cause;
       const mutationAt = await this.mutationNow(txDb, fullId, input.now);
       const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
+      const requestedBy =
+        cause === input.cause
+          ? input.requestedBy
+          : {
+              requested_by_user_id: existing?.requested_by_user_id,
+              requested_via: existing?.requested_via,
+            };
       const request = {
         cause,
         requested_at: requestedAt,
+        ...(requestedBy?.requested_by_user_id
+          ? { requested_by_user_id: requestedBy.requested_by_user_id }
+          : {}),
+        ...(requestedBy?.requested_via ? { requested_via: requestedBy.requested_via } : {}),
         error_message:
           cause === input.cause
             ? input.errorMessage

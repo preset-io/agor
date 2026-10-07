@@ -216,6 +216,7 @@ describe('createCanUseToolCallback', () => {
       deps.permissionService.waitForDecision.mockResolvedValue({
         allow: false,
         timedOut: true,
+        timeoutMs: 600_000,
         remember: false,
         decidedBy: 'system',
       });
@@ -227,7 +228,10 @@ describe('createCanUseToolCallback', () => {
       expect(result.message).toMatch(/timed out/i);
       expect(deps.tasksService.patch).toHaveBeenCalledWith(
         taskId,
-        expect.objectContaining({ status: 'timed_out' })
+        expect.objectContaining({
+          status: 'timed_out',
+          error_message: 'Permission request timed out after 600000ms.',
+        })
       );
       expect(deps.sessionsService.patch).toHaveBeenCalledWith(
         sessionId,

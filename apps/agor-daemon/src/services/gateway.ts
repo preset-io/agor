@@ -121,6 +121,7 @@ import {
   isDiscordDirectMessagesEnabled,
   isDiscordSnowflake,
   isTerminalTaskStatus,
+  previousDiscordSnowflake,
   ROLES,
   SessionStatus,
   TaskStatus,
@@ -542,7 +543,12 @@ function discordInboundMetadataIsAuthoritative(
   ) {
     return false;
   }
-  if (!userAllowlist.includes(authorId) && !roles.some((role) => roleAllowlist.includes(role))) {
+  // The guild ID is Discord's @everyone role, which never appears in member roles.
+  if (
+    !userAllowlist.includes(authorId) &&
+    !roleAllowlist.includes(guildId) &&
+    !roles.some((role) => roleAllowlist.includes(role))
+  ) {
     return false;
   }
   if (metadata[DISCORD_METADATA_KEY.directMessage] === true) {
@@ -2495,7 +2501,6 @@ export class GatewayService {
   // would be a second thing to keep in step. The card's presentation lives in
   // `services/mcp-slack-connect-card.ts`.
   //
-  // See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
   // ==========================================================================
 
   /**
@@ -5611,9 +5616,13 @@ export class GatewayService {
           });
           discordCursorToWrite = liveCursor;
         } else if (connector?.fetchProviderHistory) {
+          const starterMessageId = extractDiscordStarterMessageId(mappingMetadata);
+          // A first in-thread read includes the starter: a forum post's opener lives in the post.
           const afterCursor =
             mappingForCursor?.discord_last_admitted_message_id ??
-            extractDiscordStarterMessageId(mappingMetadata);
+            (starterMessageId && discordMetadata?.[DISCORD_METADATA_KEY.isThread] === true
+              ? previousDiscordSnowflake(starterMessageId)
+              : starterMessageId);
           if (!afterCursor) {
             throw new GatewayCatchUpError(
               'incomplete',

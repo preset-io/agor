@@ -10,9 +10,44 @@ on:
       - 'packages/agor-live/README.md'
       - 'apps/agor-cli/src/commands/daemon/restart.ts'
       - 'pnpm-lock.yaml'
+      - 'package.json'
+      - 'pnpm-workspace.yaml'
+      - 'patches/**'
+      - 'packages/git/package.json'
+      - 'docker/Dockerfile.docs-preview'
+      - 'docker/docker-entrypoint-docs.sh'
+      - 'docker/runtime-*.mjs'
+      - 'scripts/managed-environments/railway/**'
+      - '.agor.yml'
       - '.github/workflows/docs-pr-check.yml'
 
 jobs:
+  docs-preview-image:
+    name: Docs preview image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.docs-preview
+          tags: agor-docs-preview:check
+          load: true
+          push: false
+      - name: Check frozen dependencies and docs source reload (no Railway resources)
+        run: |
+          docker run --rm --entrypoint sh agor-docs-preview:check -ec '
+            test "$(node /usr/local/lib/agor/runtime-docs.mjs fingerprint)" = "$(cat /opt/agor-docs-fingerprint)"
+            test -x /app/apps/agor-docs/node_modules/.bin/next
+            node -e "require(require.resolve(\"simple-git\", {paths:[\"/app/packages/git\"]}))"
+          '
+          docker run --rm --user agor --entrypoint node \
+            -v "$PWD:/source:ro" agor-docs-preview:check /source/docker/runtime-docs-smoke.mjs
+
   check-docs:
     name: Build Docs
     runs-on: ubuntu-latest
