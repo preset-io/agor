@@ -7,8 +7,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { fakeFeathersClient, withTestAuthority } from '../test/harness';
+import { SERVER_READ_DEBOUNCE_MS } from '../utils/debounceWithMaxWait';
 import { useBranchCounts } from './useBranchCounts';
-import { SERVER_READ_DEBOUNCE_MS } from './useServerRead';
 
 function makeClient() {
   let count = 2;

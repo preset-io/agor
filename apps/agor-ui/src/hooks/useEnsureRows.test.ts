@@ -4,8 +4,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { cancelAllHydrations } from '../store/agorHydration';
 import { agorStore } from '../store/agorStore';
+import { MAX_ID_READ_ATTEMPTS } from '../store/idReads';
 import { pinnedMembers } from '../store/rowPins';
-import { MAX_REFERENCE_READ_ATTEMPTS } from '../store/userScope';
 import { makeBranch as branch, deferred, withTestAuthority } from '../test/harness';
 import { useEnsureBranches } from './useEnsureRows';
 
@@ -94,14 +94,14 @@ describe('useEnsureBranches', () => {
       throw new Error('down');
     });
     renderHook(() => useEnsureBranches(client, ['b-2']));
-    for (let i = 0; i < 2 * MAX_REFERENCE_READ_ATTEMPTS; i++) {
+    for (let i = 0; i < 2 * MAX_ID_READ_ATTEMPTS; i++) {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
     }
     expect(
       find.mock.calls.filter(([{ query }]) => query.branch_id.$in.includes('b-2'))
-    ).toHaveLength(MAX_REFERENCE_READ_ATTEMPTS);
+    ).toHaveLength(MAX_ID_READ_ATTEMPTS);
     find.mockImplementation(real as never);
   });
 

@@ -12,9 +12,10 @@ import {
 } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEnsureBranches } from '../../hooks/useEnsureRows';
+import { rowsOf } from '../../store/idReads';
 import { holdRows, type RowHold } from '../../store/retention';
 import { sessionListQuery } from '../../store/sessionListQuery';
-import { fillOnDemand, rowsOf } from '../../store/userScope';
+import { fillOnDemand } from '../../store/userScope';
 import {
   type ChipFilter,
   EMPTY_COUNTS,

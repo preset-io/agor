@@ -27,7 +27,7 @@
  */
 import type { AgorClient, Board, Branch, CardWithType, Session } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
-import { debounceWithMaxWait } from '../hooks/useServerRead';
+import { debounceWithMaxWait } from '../utils/debounceWithMaxWait';
 import { fencedRead, type HydratedCollection, touchedIdsSince } from './agorHydration';
 import { type AgorState, agorStore } from './agorStore';
 import { backgroundReadsClear, holdBackgroundReads } from './backgroundReads';

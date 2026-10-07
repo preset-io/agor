@@ -1,7 +1,6 @@
 import type { AgorClient, Board, CardType, CardWithType } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, type Mock, vi } from 'vitest';
-import { SERVER_READ_MAX_WAIT_MS } from '../../hooks/useServerRead';
 import {
   boardObjectCreated,
   boardObjectPatched,
@@ -9,6 +8,7 @@ import {
 } from '../../store/agorRealtimeActions';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { fakeFeathersClient, withTestAuthority } from '../../test/harness';
+import { SERVER_READ_MAX_WAIT_MS } from '../../utils/debounceWithMaxWait';
 import { CardsTable } from './CardsTable';
 
 vi.mock('@/utils/message', () => ({

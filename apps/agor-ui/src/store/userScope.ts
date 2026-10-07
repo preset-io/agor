@@ -41,9 +41,9 @@
  * Realtime keeps the scope complete for rows; a store subscription, installed
  * before the first read, keeps it complete for new REFERENCES (a new session of
  * mine, a new comment thread on a branch that isn't loaded) by ensuring their
- * branches: debounced, in chunks, at most `MAX_CONCURRENT_ID_READS` at once,
- * with a run-owned retry queue (capped backoff) for failed reads. Absent marks
- * are revalidated at the start of every run.
+ * branches: debounced, through the run's id reader (`idReads.ts`: chunks,
+ * bounded concurrency, capped-backoff retries). Absent marks are revalidated
+ * at the start of every run.
  */
 import type { AgorClient, BoardComment, Branch, Session } from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
@@ -51,6 +51,7 @@ import { getTimeMs } from '../utils/entityTime';
 import { fencedRead, RESTART_READ } from './agorHydration';
 import { applyEntityFill, type DataMaps } from './agorMaps';
 import { type AgorState, agorStore, type LoadMetaUpdate } from './agorStore';
+import { createIdReader, type IdReader, rowsOf } from './idReads';
 import {
   authorityIdentity,
   captureLoadLifetime,
@@ -84,15 +85,6 @@ export const MY_SESSIONS_GATED_LIMIT = 200;
 export const MY_SESSIONS_FULL_LIMIT = PAGINATION.MAX_LIMIT;
 /** Debounce for ensuring branches of newly referenced ids. */
 const REFERENCE_DEBOUNCE_MS = 100;
-/** Referenced-branch id reads in flight at once, per run. */
-export const MAX_CONCURRENT_ID_READS = 3;
-/** Backoff of a failed referenced-branch read: base, cap and attempts. */
-const RETRY_BASE_MS = 500;
-const RETRY_MAX_MS = 30_000;
-export const MAX_REFERENCE_READ_ATTEMPTS = 6;
-/** Delay before retry `attempt` (1-based) of a failed read: capped exponential backoff. */
-export const referenceRetryDelayMs = (attempt: number) =>
-  Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_MAX_MS);
 
 /** The newest-first query for my active sessions. */
 export function mySessionsQuery(userId: string, limit: number) {
@@ -125,9 +117,6 @@ export const selectTeammatesLoaded = (s: Pick<AgorState, 'coverage'>) =>
 /** More teammates are visible than the capped read returned: lists are partial. */
 export const selectTeammatesTruncated = (s: Pick<AgorState, 'coverage'>) =>
   cappedPiece(s, USER_SCOPE_KEYS.teammates);
-
-export const rowsOf = <T>(result: unknown): T[] =>
-  Array.isArray(result) ? (result as T[]) : ((result as { data?: T[] })?.data ?? []);
 
 /**
  * Branch ids the user scope must resolve: the branch of every active session I
@@ -252,24 +241,13 @@ interface ScopeRun {
   lifetime: LoadLifetime;
   /** The coverage generation of every piece this run commits. */
   generation: number;
-  /** Ids waiting to be sent in an id-list read. */
-  queue: string[];
-  /** Ids queued, in flight or waiting for a retry; never requested twice meanwhile. */
-  pending: Set<string>;
-  /** Ids whose reads failed every attempt; retried by the next run. */
-  failed: Set<string>;
-  /** Failed attempts per id, for the retry backoff. */
-  attempts: Map<string, number>;
-  /** Id-list reads in flight (at most `MAX_CONCURRENT_ID_READS`). */
-  inflight: number;
+  /** The referenced-branch reads; ids that failed every attempt wait for the next run. */
+  ids: IdReader;
   /** Every reference is known: my sessions (U1 or a complete gated page) and my branches (U2) loaded. */
   referencesKnown: boolean;
   /** A reconnect run: every read reconciles its scope instead of filling it. */
   replace: boolean;
   referenceTimer: ReturnType<typeof setTimeout> | null;
-  retryTimers: Set<ReturnType<typeof setTimeout>>;
-  /** Resolved once no id read is queued or in flight (or the run stops). */
-  drainWaiters: Array<() => void>;
   unsubscribe: (() => void) | null;
 }
 
@@ -463,8 +441,8 @@ function missingReferences(s: AgorState, run: ScopeRun): string[] {
     if (
       !s.branchById.has(id) &&
       !s.absentBranchIds.has(id) &&
-      !run.pending.has(id) &&
-      !run.failed.has(id)
+      !run.ids.pending.has(id) &&
+      !run.ids.failed.has(id)
     ) {
       missing.push(id);
     }
@@ -475,124 +453,47 @@ function missingReferences(s: AgorState, run: ScopeRun): string[] {
 /** The referenced-branch piece is loaded once every reference is known and none is unresolved. */
 function settleHomeBranches(run: ScopeRun): void {
   if (!isCurrent(run) || !run.referencesKnown) return;
-  if (run.pending.size > 0 || run.failed.size > 0) return;
+  if (run.ids.pending.size > 0 || run.ids.failed.size > 0) return;
   if (missingReferences(agorStore.getState(), run).length > 0) return;
   settleReferencePiece(run);
-}
-
-/** Queue branch ids for id-list reads (deduplicated by `pending`). */
-function queueBranches(run: ScopeRun, ids: Iterable<string>): void {
-  for (const id of ids) {
-    if (run.pending.has(id)) continue;
-    run.pending.add(id);
-    run.failed.delete(id);
-    run.queue.push(id);
-  }
-  pumpBranchReads(run);
-}
-
-/** Send queued ids in chunks of `PAGINATION.MAX_ID_LIST`, at most `MAX_CONCURRENT_ID_READS` at once. */
-function pumpBranchReads(run: ScopeRun): void {
-  while (isCurrent(run) && run.inflight < MAX_CONCURRENT_ID_READS && run.queue.length > 0) {
-    const chunk = run.queue.splice(0, PAGINATION.MAX_ID_LIST);
-    run.inflight += 1;
-    void readBranchChunk(run, chunk).finally(() => {
-      run.inflight -= 1;
-      pumpBranchReads(run);
-      settleHomeBranches(run);
-      if (run.inflight === 0 && run.queue.length === 0) releaseDrainWaiters(run);
-    });
-  }
-}
-
-function releaseDrainWaiters(run: ScopeRun): void {
-  for (const resolve of run.drainWaiters.splice(0)) resolve();
-}
-
-/**
- * Resolves once no id read is queued or in flight (a scheduled retry doesn't
- * count), or once the run is no longer current.
- */
-function idReadsDrained(run: ScopeRun): Promise<void> {
-  if (!isCurrent(run) || (run.inflight === 0 && run.queue.length === 0)) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => run.drainWaiters.push(resolve));
 }
 
 /**
  * Read one chunk of branch ids and record the ones the server doesn't return —
  * and that didn't arrive meanwhile — as absent, in the update that applies the
- * chunk's rows. In a replace run the chunk
- * reconciles its ids: returned rows overwrite, omitted ones leave unless
- * another scope's committed membership holds them. A failed read is retried
- * with backoff; the ids stay pending until it settles.
+ * chunk's rows. In a replace run the chunk reconciles its ids: returned rows
+ * overwrite, omitted ones leave unless another scope's committed membership
+ * holds them. A failed read is retried by the run's reader (`idReads.ts`).
  */
-async function readBranchChunk(run: ScopeRun, chunk: string[]): Promise<void> {
-  try {
-    const requested = new Set(chunk);
-    const replace: LoadScope | undefined = run.replace
-      ? {
-          key: USER_SCOPE_KEYS.references,
-          claims: { branches: (branch) => requested.has(branch.branch_id) },
-        }
-      : undefined;
-    const rows = await fillRead(
-      () => isCurrent(run),
-      async () => ({
-        branches: rowsOf<Branch>(
-          await run.client.service('branches').find({
-            query: { branch_id: { $in: chunk }, archived: false, $limit: chunk.length },
-          })
-        ),
-      }),
-      {
-        replace,
-        meta: ({ branches }) => {
-          const returned = new Set((branches ?? []).map((branch) => branch.branch_id as string));
-          const omitted = chunk.filter((id) => !returned.has(id));
-          return (maps, state) => ({
-            absentBranchIds: withAbsent(state.absentBranchIds, omitted, maps.branchById),
-          });
-        },
+async function readBranchChunk(run: ScopeRun, chunk: string[]): Promise<Set<string> | null> {
+  const requested = new Set(chunk);
+  const replace: LoadScope | undefined = run.replace
+    ? {
+        key: USER_SCOPE_KEYS.references,
+        claims: { branches: (branch) => requested.has(branch.branch_id) },
       }
-    );
-    // Recheck after the await: `fillRead` applied while current, but this
-    // continuation runs later, possibly after a cancellation or a new run.
-    if (!rows || !isCurrent(run)) return;
-    for (const id of chunk) {
-      run.pending.delete(id);
-      run.attempts.delete(id);
+    : undefined;
+  const rows = await fillRead(
+    () => isCurrent(run),
+    async () => ({
+      branches: rowsOf<Branch>(
+        await run.client.service('branches').find({
+          query: { branch_id: { $in: chunk }, archived: false, $limit: chunk.length },
+        })
+      ),
+    }),
+    {
+      replace,
+      meta: ({ branches }) => {
+        const returned = new Set((branches ?? []).map((branch) => branch.branch_id as string));
+        const omitted = chunk.filter((id) => !returned.has(id));
+        return (maps, state) => ({
+          absentBranchIds: withAbsent(state.absentBranchIds, omitted, maps.branchById),
+        });
+      },
     }
-  } catch (err) {
-    if (!isCurrent(run)) return;
-    console.warn('[userScope] referenced branches failed:', err);
-    scheduleRetry(run, chunk);
-  }
-}
-
-/** Retry failed ids with capped exponential backoff; give up after `MAX_REFERENCE_READ_ATTEMPTS`. */
-function scheduleRetry(run: ScopeRun, ids: string[]): void {
-  const attempt = Math.max(...ids.map((id) => (run.attempts.get(id) ?? 0) + 1));
-  for (const id of ids) run.attempts.set(id, attempt);
-  if (attempt >= MAX_REFERENCE_READ_ATTEMPTS) {
-    for (const id of ids) {
-      run.pending.delete(id);
-      run.failed.add(id);
-    }
-    return;
-  }
-  const timer = setTimeout(() => {
-    run.retryTimers.delete(timer);
-    if (!isCurrent(run)) return;
-    for (const id of ids) run.pending.delete(id);
-    queueBranches(
-      run,
-      ids.filter((id) => run.replace || !agorStore.getState().branchById.has(id))
-    );
-    settleHomeBranches(run);
-  }, referenceRetryDelayMs(attempt));
-  run.retryTimers.add(timer);
+  );
+  return rows && new Set((rows.branches ?? []).map((branch) => branch.branch_id as string));
 }
 
 /** Clear marks of branches that arrived, queue new references, and settle. */
@@ -600,7 +501,7 @@ function checkReferences(run: ScopeRun): void {
   if (!isCurrent(run)) return;
   // A branch arriving by any path (event, partition, ensure) clears its mark.
   updateAbsent(run, []);
-  queueBranches(run, missingReferences(agorStore.getState(), run));
+  run.ids.queue(missingReferences(agorStore.getState(), run));
   settleHomeBranches(run);
 }
 
@@ -639,10 +540,7 @@ export function stopUserScope(): void {
   run.unsubscribe = null;
   if (run.referenceTimer) clearTimeout(run.referenceTimer);
   run.referenceTimer = null;
-  for (const timer of run.retryTimers) clearTimeout(timer);
-  run.retryTimers.clear();
-  run.queue = [];
-  releaseDrainWaiters(run);
+  run.ids.dispose();
 }
 
 /**
@@ -680,16 +578,16 @@ export async function startUserScope(
     userId: options.userId,
     lifetime: options.lifetime,
     generation: ++runSequence,
-    queue: [],
-    pending: new Set(),
-    failed: new Set(),
-    attempts: new Map(),
-    inflight: 0,
+    ids: createIdReader({
+      read: (chunk) => readBranchChunk(run, chunk),
+      isCurrent: () => isCurrent(run),
+      onChange: () => settleHomeBranches(run),
+      // A fill run reads again only what is still missing.
+      retry: (ids) => ids.filter((id) => run.replace || !agorStore.getState().branchById.has(id)),
+    }),
     referencesKnown: false,
     replace: options.replace ?? false,
     referenceTimer: null,
-    retryTimers: new Set(),
-    drainWaiters: [],
     unsubscribe: null,
   };
   currentRun = run;
@@ -714,7 +612,7 @@ export async function startUserScope(
   subscribeToReferences(run);
   // Absent marks are negatives of the authority that produced them (a grant,
   // reconnect or role change can make a branch visible): revalidate them.
-  queueBranches(run, store().absentBranchIds);
+  run.ids.queue(store().absentBranchIds);
   // Early pass: resolve what the gated page already references now — full
   // page or not — so these small reads go out before U1 instead of queuing
   // behind it on a slow socket.
@@ -806,15 +704,12 @@ export async function startUserScope(
     // row through a reference that is gone. Missing ids are already queued.
     const state = store();
     const present = [...startReferences, ...referencedBranchIds(state, run.userId)];
-    queueBranches(
-      run,
-      present.filter((id) => state.branchById.has(id))
-    );
+    run.ids.queue(present.filter((id) => state.branchById.has(id)));
   }
   // Immediate catch-up scan (not debounced), even when U1 or U2 failed: the
   // references a read that did land added are queued now. Resolve only once
   // those follow-up id reads settle. Completeness (the referenced-branch
   // piece) still needs referencesKnown.
   checkReferences(run);
-  await idReadsDrained(run);
+  await run.ids.drained();
 }

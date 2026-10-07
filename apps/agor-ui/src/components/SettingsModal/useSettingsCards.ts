@@ -3,7 +3,7 @@ import { PAGINATION } from '@agor-live/client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '@/store/agorStore';
 import { authorityIdentity } from '@/store/loadLifetime';
-import { debounceWithMaxWait } from '../../hooks/useServerRead';
+import { debounceWithMaxWait } from '../../utils/debounceWithMaxWait';
 
 export interface SettingsCards {
   cards: CardWithType[];

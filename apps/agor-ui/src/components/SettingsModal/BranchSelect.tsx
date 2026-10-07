@@ -1,7 +1,7 @@
 import { type AgorClient, type Branch, serverSearchText } from '@agor-live/client';
 import { Select } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
-import { rowsOf } from '@/store/userScope';
+import { rowsOf } from '@/store/idReads';
 import { useDebouncedSearchQuery } from '../GlobalSearch/useGlobalSearch';
 
 /** Options per read; typing narrows them on the server. */

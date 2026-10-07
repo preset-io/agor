@@ -1,44 +1,13 @@
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAgorStore } from '../store/agorStore';
+import { idReadRetryDelayMs, MAX_ID_READ_ATTEMPTS } from '../store/idReads';
 import {
   authorityIdentity,
   captureLoadLifetime,
   isLoadLifetimeCurrent,
 } from '../store/loadLifetime';
-import { MAX_REFERENCE_READ_ATTEMPTS, referenceRetryDelayMs } from '../store/userScope';
-
-/** Trailing delay that coalesces a burst of invalidations. */
-export const SERVER_READ_DEBOUNCE_MS = 300;
-/** A sustained burst still re-reads within this bound. */
-export const SERVER_READ_MAX_WAIT_MS = 2000;
-
-/** A trailing debounce that still fires within `maxWaitMs` of a burst's first request. */
-export function debounceWithMaxWait(
-  fn: () => void,
-  debounceMs = SERVER_READ_DEBOUNCE_MS,
-  maxWaitMs = SERVER_READ_MAX_WAIT_MS
-): { request: () => void; cancel: () => void } {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let firstRequestAt = 0;
-  const cancel = () => {
-    if (timer !== null) clearTimeout(timer);
-    timer = null;
-  };
-  const request = () => {
-    const now = Date.now();
-    if (timer === null) firstRequestAt = now;
-    else clearTimeout(timer);
-    timer = setTimeout(
-      () => {
-        timer = null;
-        fn();
-      },
-      Math.max(0, Math.min(debounceMs, firstRequestAt + maxWaitMs - now))
-    );
-  };
-  return { request, cancel };
-}
+import { debounceWithMaxWait } from '../utils/debounceWithMaxWait';
 
 export interface ServerReader<T> {
   /** Read again, debounced with a bounded wait (realtime events). */
@@ -138,8 +107,8 @@ export function useServerRead<T>(
         if (disposed) return;
         console.warn('[server-read] read failed:', err);
         attempts += 1;
-        if (attempts < MAX_REFERENCE_READ_ATTEMPTS) {
-          retryTimer = setTimeout(() => void run(), referenceRetryDelayMs(attempts));
+        if (attempts < MAX_ID_READ_ATTEMPTS) {
+          retryTimer = setTimeout(() => void run(), idReadRetryDelayMs(attempts));
         }
       } finally {
         inflight = false;

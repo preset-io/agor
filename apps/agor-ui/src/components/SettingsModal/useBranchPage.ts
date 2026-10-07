@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, Session } from '@agor-live/client';
 import { useRef } from 'react';
-import { rowsOf } from '@/store/userScope';
+import { rowsOf } from '@/store/idReads';
 import { useServerRead } from '../../hooks/useServerRead';
 
 type Listener = (row: Branch) => void;
