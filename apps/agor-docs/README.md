@@ -30,7 +30,9 @@ App Router navigation. Its automatic page view is disabled to prevent duplicates
 Every tracker runs behind the cookie banner (`components/CookieConsent.tsx`, logic in
 `lib/consent.ts`, policy at `/privacy`). Visitors choose Reject, Analytics only, or Accept
 all. Optional cookies default off in the EEA, UK, and Switzerland (judged by time zone)
-and for browsers sending Global Privacy Control; elsewhere they default on.
+and for browsers sending Global Privacy Control; elsewhere they default on. The banner
+appears on its own only where opt-in applies; everyone can open it from Cookie settings
+in the footer.
 
 | Tracker                                                           | Category  | Loads                                                            |
 | ----------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |

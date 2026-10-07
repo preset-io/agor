@@ -87,8 +87,11 @@ export function CookieConsent() {
   useEffect(() => {
     const initial = consentState();
     setState(initial);
-    // GPC visitors have already said no; they can still opt in from settings.
-    setOpen(!initial.decided && !initial.gpc);
+    // Ask up front only where opt-in is required (EEA, UK, Switzerland).
+    // Elsewhere optional cookies start on and the footer's Cookie settings
+    // turns them off; GPC visitors have already said no. Either way the
+    // banner reopens from Cookie settings.
+    setOpen(!initial.decided && initial.optIn && !initial.gpc);
     const reopen = () => setOpen(true);
     window.addEventListener(CONSENT_SETTINGS_EVENT, reopen);
     return () => window.removeEventListener(CONSENT_SETTINGS_EVENT, reopen);
