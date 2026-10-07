@@ -103,6 +103,51 @@ const needBefore = (a: HomeNeed, b: HomeNeed) => compareHomeNeeds(a, b) < 0;
 const updatedAt = (session: Session) => getTimeMs(session, 'last_updated');
 const updatedBefore = (a: Session, b: Session) => updatedAt(a) > updatedAt(b);
 
+/** Home's recent-boards row lists at most this many boards of my sessions. */
+export const HOME_RECENT_BOARDS = 5;
+
+type BoardMaps = Pick<AgorState, 'boardById' | 'branchById'>;
+const isLiveBoard = (s: BoardMaps, boardId: string) => {
+  const board = s.boardById.get(boardId);
+  return !!board && !board.archived;
+};
+
+/** The ids of `boardIds` that name known, unarchived boards, in order. */
+export const liveBoardIds = (s: BoardMaps, boardIds: readonly string[]) =>
+  boardIds.filter((boardId) => isLiveBoard(s, boardId));
+
+/** Keep the latest update of `session`'s board, if known and unarchived. */
+function noteSessionBoard(boardAt: Map<string, number>, session: Session, s: BoardMaps) {
+  const boardId = boardIdForSession(session, s.branchById);
+  if (boardId && isLiveBoard(s, boardId) && updatedAt(session) > (boardAt.get(boardId) ?? 0))
+    boardAt.set(boardId, updatedAt(session));
+}
+
+/** The `limit` boards of `boardAt`, most recently updated first. */
+const latestBoards = (boardAt: Map<string, number>, limit: number) =>
+  [...boardAt]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([id]) => id);
+
+/**
+ * The boards Home's recent row lists: the visit history's live boards or,
+ * with none, the boards of my latest sessions (as `boardIds` of the buckets).
+ */
+export function homeRecentBoardIds(
+  s: Pick<AgorState, 'boardById' | 'branchById' | 'sessionById'>,
+  visitedIds: readonly string[],
+  userId: string | undefined
+): string[] {
+  const visited = liveBoardIds(s, visitedIds);
+  if (visited.length || !userId) return visited;
+  const boardAt = new Map<string, number>();
+  for (const session of s.sessionById.values()) {
+    if (!session.archived && session.created_by === userId) noteSessionBoard(boardAt, session, s);
+  }
+  return latestBoards(boardAt, HOME_RECENT_BOARDS);
+}
+
 /** Epoch ms of a UUIDv7 id's creation timestamp (its first 48 bits); NaN for any other id. */
 const uuidV7Ms = (id: string) =>
   // shortid-guard:ignore reads the 48-bit timestamp, not a display short id
@@ -303,10 +348,7 @@ export function makeHomeBucketsSelector(
     const finishedByBranch = new Map<string, Session[]>();
     for (const session of ownSessions) {
       hasSessions = true;
-      const boardId = boardIdForSession(session, s.branchById);
-      const board = boardsLimit && boardId ? s.boardById.get(boardId) : undefined;
-      if (board && !board.archived && updatedAt(session) > (boardAt.get(board.board_id) ?? 0))
-        boardAt.set(board.board_id, updatedAt(session));
+      if (boardsLimit) noteSessionBoard(boardAt, session, s);
       if (session.status === SessionStatus.RUNNING) {
         runningCount++;
         if (passes(session)) {
@@ -369,10 +411,7 @@ export function makeHomeBucketsSelector(
     addGroups(failedByBranch, 'failed');
     addGroups(finishedByBranch, 'finished');
     itemCache = nextItemCache;
-    const boardIds = [...boardAt]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, boardsLimit)
-      .map(([id]) => id);
+    const boardIds = latestBoards(boardAt, boardsLimit);
 
     const next: HomeBuckets = {
       needs: prev && sameItems(prev.needs, needs) ? prev.needs : needs,

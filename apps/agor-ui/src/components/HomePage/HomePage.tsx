@@ -21,10 +21,12 @@ import {
 } from '../../store/agorStore';
 import {
   compareHomeNeeds,
+  HOME_RECENT_BOARDS,
   type HomeCommentNeed,
   type HomeSessionNeed,
   isUnreadResult,
   lastRunStartedAt,
+  liveBoardIds,
   makeHomeBucketsSelector,
 } from '../../store/selectors';
 import {
@@ -55,7 +57,6 @@ import {
 } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
 
-const RECENT_BOARDS = 5;
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 // Longer than the 7-day failure window, since a later patch can keep an old failure in view.
 const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
@@ -286,14 +287,7 @@ export const HomePage = memo(function HomePage({
   // Visit history that still names live boards; when none do, recent sessions stand in.
   const visitedBoardIds = useStoreWithEqualityFn(
     agorStore,
-    useMemo(
-      () => (s: AgorState) =>
-        recentBoardIds.filter((id) => {
-          const board = s.boardById.get(id);
-          return !!board && !board.archived;
-        }),
-      [recentBoardIds]
-    ),
+    useMemo(() => (s: AgorState) => liveBoardIds(s, recentBoardIds), [recentBoardIds]),
     shallow
   );
   const buckets = useStoreWithEqualityFn(
@@ -305,7 +299,7 @@ export const HomePage = memo(function HomePage({
           now,
           needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
-          boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
+          boardsLimit: visitedBoardIds.length ? 0 : HOME_RECENT_BOARDS,
           query: deferredQuery,
           onlyStartedByMe,
           openedFailures: openedRuns,

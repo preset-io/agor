@@ -20,13 +20,16 @@ import type { AgorState } from './agorStore';
 // Home selectors live in homeSelectors.ts; re-exported so store selectors have one import surface.
 export {
   compareHomeNeeds,
+  HOME_RECENT_BOARDS,
   type HomeBucketsOptions,
   type HomeCommentNeed,
   type HomeNeed,
   type HomeSessionNeed,
+  homeRecentBoardIds,
   isSessionStartedByUser,
   isUnreadResult,
   lastRunStartedAt,
+  liveBoardIds,
   makeCommentsForYouSelector,
   makeHomeBucketsSelector,
   makeLatestOwnSessionSelector,

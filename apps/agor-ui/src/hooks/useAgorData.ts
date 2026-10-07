@@ -78,6 +78,7 @@ import {
 } from '../store/realtimeBatch';
 import { holdRows, releaseStaleScopes } from '../store/retention';
 import { BOARD_SCOPE_PREFIX } from '../store/scopeMerge';
+import { homeRecentBoardIds } from '../store/selectors';
 import { resetSessionMcpLinks } from '../store/sessionMcpLinks';
 import {
   fillOnDemand,
@@ -1081,9 +1082,14 @@ export function useAgorData(
               selectHomeBranchesLoaded(state)
             ) {
               preloadedForRef.current = identityRole;
+              // Exactly the boards Home's recent row lists, fallback included.
+              const visited = readLocalStorageJson<string[]>(
+                recentBoardsStorageKey(authenticatedUserId),
+                []
+              );
               void preloadBoardPartitions(
                 client,
-                readLocalStorageJson<string[]>(recentBoardsStorageKey(authenticatedUserId), []),
+                homeRecentBoardIds(state, visited, authenticatedUserId),
                 { canUseMemberWorkspaceServices }
               );
             }

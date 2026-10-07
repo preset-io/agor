@@ -2764,10 +2764,12 @@ describe('useAgorData — recent-board preload', () => {
   const ids = boards.map((board) => board.board_id);
   type Props = { generation: number; role: string };
 
-  /** On board-1's route (displayed), with boards 1–5 visited, most recent first. */
-  function workspace() {
+  /** On board-1's route (displayed), with `visited` boards in the history, most recent first. */
+  function workspace(visited: string[] = ids, seed: Record<string, unknown[]> = {}) {
     window.history.pushState({}, '', '/b/board-1/');
-    localStorage.setItem(recentBoardsStorageKey('user-me'), JSON.stringify(ids));
+    if (visited.length) {
+      localStorage.setItem(recentBoardsStorageKey('user-me'), JSON.stringify(visited));
+    }
     onTestFinished(() => {
       window.history.pushState({}, '', '/');
       localStorage.removeItem(recentBoardsStorageKey('user-me'));
@@ -2775,6 +2777,7 @@ describe('useAgorData — recent-board preload', () => {
     const mock = makeMockClient({
       boards,
       'boards:get': ((id: string) => boards.find((board) => board.board_id === id)) as never,
+      ...seed,
     });
     const query = (call: number) =>
       (mock.fetchArguments('branches', 'findAll')[call - 1] as { query: Record<string, unknown> })
@@ -2875,6 +2878,33 @@ describe('useAgorData — recent-board preload', () => {
 
     await act(async () => myBranches.resolve());
     await waitFor(() => expect(status('board-4')).toBe('loaded'));
+  });
+
+  it('without visit history, preloads the boards of my latest sessions, as Home lists them', async () => {
+    // A fresh browser: no visit history. Home falls back to my sessions' boards.
+    const mine = (id: string, boardId: string, at: string) =>
+      makeSession({
+        session_id: id,
+        branch_id: `br-${boardId}`,
+        branch_board_id: boardId,
+        created_by: 'user-me',
+        last_updated: at,
+      });
+    const { result, boardReads } = workspace([], {
+      'sessions:find': [
+        mine('s-1', 'board-1', '2026-01-06T00:00:00Z'),
+        mine('s-3', 'board-3', '2026-01-02T00:00:00Z'),
+        mine('s-5', 'board-5', '2026-01-03T00:00:00Z'),
+        mine('s-2', 'board-2', '2026-01-04T00:00:00Z'),
+        mine('s-4', 'board-4', '2026-01-05T00:00:00Z'),
+      ],
+    });
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(status('board-5')).toBe('loaded'));
+    await flush();
+    // Most recent first (board-1 is displayed): board-4, board-2, board-5.
+    expect(ids.map(boardReads)).toEqual([1, 1, 0, 1, 1]);
+    expect(ids.map(status)).toEqual(['loaded', 'loaded', undefined, 'loaded', 'loaded']);
   });
 
   it('does not preload again on a reconnect, only after an authority change', async () => {
