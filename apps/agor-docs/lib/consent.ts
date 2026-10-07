@@ -27,6 +27,9 @@ export const GTM_ID = 'GTM-WL3Q29NW';
  * the Ads page hit and these conversions instead: cookieless under Consent
  * Mode, so Google can still count and model them. Only while Tag Manager is
  * absent, so a consenting visitor is never counted twice.
+ *
+ * Keep these in step with the Google Ads conversion actions and their Tag
+ * Manager tags: see "Google Ads conversions" in apps/agor-docs/README.md.
  */
 export const ADS_ID = 'AW-18371499745';
 export const ADS_CONVERSIONS = {
