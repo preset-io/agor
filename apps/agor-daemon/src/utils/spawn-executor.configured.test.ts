@@ -499,6 +499,40 @@ describe('configured executor spawning', () => {
     }
   });
 
+  it('stamps the admission class from the command map on templated payloads', async () => {
+    const { requestExecutor, spawnExecutor } = await import('./spawn-executor');
+    const templated = { executorCommandTemplate: 'launch {command}' };
+    const launched = (command: string, claimed?: string) => {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValueOnce(proc);
+      spawnExecutor({ command, ...(claimed ? { admissionClass: claimed } : {}) }, templated);
+      return (JSON.parse(proc.written) as { admissionClass?: string }).admissionClass;
+    };
+
+    expect(launched('prompt')).toBe('agent');
+    expect(launched('environment.lifecycle')).toBe('utility');
+    expect(launched('unknown.command')).toBe('agent');
+    expect(launched('prompt', 'utility')).toBe('agent');
+
+    const proc = createMockProcess();
+    spawnMock.mockReturnValueOnce(proc);
+    const browse = requestExecutor({ command: 'branch.files.browse' }, templated);
+    expect(JSON.parse(proc.written)).toMatchObject({
+      command: 'branch.files.browse',
+      admissionClass: 'utility',
+      executorMode: 'request',
+    });
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(browse).resolves.toEqual({ success: true, data: { files: [] } });
+
+    const unknown = createMockProcess();
+    spawnMock.mockReturnValueOnce(unknown);
+    const unknownRequest = requestExecutor({ command: 'unknown.command' }, templated);
+    expect(JSON.parse(unknown.written)).toMatchObject({ admissionClass: 'agent' });
+    await deliverExecutorResponse(unknown, { success: true });
+    await unknownRequest;
+  });
+
   it('calls onExit for templated spawns', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

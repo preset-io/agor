@@ -42,6 +42,7 @@ import {
   EXECUTOR_RESPONSE_PROTOCOL,
   type ExecutorCommandResult,
 } from '@agor/core/executor-protocol';
+import { executorAdmissionClassFor } from '@agor/core/types';
 import { isValidExecutionHomeKey } from '@agor/core/unix';
 import { getCurrentLogLevel } from '@agor/core/utils/logger';
 import type { SignOptions } from 'jsonwebtoken';
@@ -446,6 +447,7 @@ export function spawnExecutor(
       : configuredExecutorDefaults.executorCommandTemplate;
   const payloadWithConfig = {
     ...withResolvedConfig(payload),
+    admissionClass: executorAdmissionClassFor(payload.command),
     executorMode: 'autonomous' as const,
   };
 
@@ -1283,6 +1285,7 @@ export async function requestExecutor(
   }
   const payloadWithConfig = {
     ...withResolvedConfig(payload),
+    admissionClass: executorAdmissionClassFor(payload.command),
     executorMode: 'request' as const,
     executorResponse: response.descriptor,
   };
