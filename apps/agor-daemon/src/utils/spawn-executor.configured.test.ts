@@ -1182,6 +1182,54 @@ describe('configured executor spawning', () => {
     await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
   });
 
+  it('fails a templated request immediately when an opted-in launcher refuses it', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT: '75' });
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { requestExecutor } = await import('./spawn-executor');
+      const promise = requestExecutor(
+        { command: 'branch.files.browse' },
+        { executorCommandTemplate: 'launch {command}' }
+      );
+      proc.emit('exit', 75);
+
+      await expect(promise).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'EXECUTOR_LAUNCH_REFUSED',
+          message:
+            'Your team has reached its limit of work running at once. Wait for something to finish, then try again.',
+        },
+      });
+    } finally {
+      configureLaunchRefusedExit({});
+    }
+  });
+
+  it('keeps waiting on a templated exit 75 without the launcher opt-in', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({});
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { requestExecutor } = await import('./spawn-executor');
+    const promise = requestExecutor(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch {command}' }
+    );
+    proc.emit('exit', 75);
+
+    let settled = false;
+    void promise.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+  });
+
   it('fails closed before launch when a templated request lacks a protocol declaration', async () => {
     const { configureExecutor, requestExecutor } = await import('./spawn-executor');
     configureExecutor(

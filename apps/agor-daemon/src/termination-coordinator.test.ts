@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor/core/types';
+import { AGENTIC_TOOL_NAMES, EXECUTOR_LAUNCH_REFUSED_MESSAGE, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const containExecutorProcess = vi.hoisted(() => vi.fn());
@@ -555,6 +555,101 @@ describe('termination coordinator', () => {
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
     expect(untrackExecutorProcess).not.toHaveBeenCalled();
+  });
+
+  // A templated launch refused by an opted-in launcher, as the prompt onExit requests it.
+  const refusedDispatch = () =>
+    task(TaskStatus.STOPPING, {
+      executor_mode: 'templated',
+      started_at: '2026-01-01T00:00:00.500Z',
+      termination_request: {
+        cause: 'launch_refused',
+        requested_at: '2026-01-01T00:00:01.000Z',
+        error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+      },
+      sdk_failure: { reason: 'launch_refused', termination: 'requested' },
+    });
+
+  it.each(AGENTIC_TOOL_NAMES)(
+    'settles a refused templated launch of %s as verified and failed',
+    async (tool) => {
+      const state = appDouble(tool);
+      state.claim(refusedDispatch());
+      state.settle(
+        task(TaskStatus.FAILED, {
+          termination_request: refusedDispatch().termination_request,
+          sdk_failure: { reason: 'launch_refused', termination: 'verified' },
+          error_message: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+        })
+      );
+
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'launch_refused',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+          absenceVerified: true,
+          sdkFailure: {
+            reason: 'launch_refused',
+            detected_at: '2026-01-01T00:00:01.000Z',
+            tool,
+            termination: 'requested',
+          },
+          expectedStatus: TaskStatus.DISPATCHING,
+          requireExecutorDisconnected: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({ status: 'terminal', task: { status: TaskStatus.FAILED } });
+      expect(state.settleTermination).toHaveBeenCalledOnce();
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskId,
+          outcome: 'verified_absent',
+          errorMessage: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+        }),
+        expect.anything()
+      );
+      expect(containExecutorProcess).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps the OpenCode safeguard for verified absence with any other cause', async () => {
+    const state = appDouble('opencode');
+    const lostDispatch = {
+      ...refusedDispatch(),
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '2026-01-01T00:00:01.000Z',
+      },
+      sdk_failure: { reason: 'heartbeat_lost', termination: 'requested' },
+    };
+    state.claim(lostDispatch);
+    state.settle(
+      task(TaskStatus.STOPPING, {
+        termination_request: lostDispatch.termination_request,
+        sdk_failure: { reason: 'heartbeat_lost', termination: 'unverified' },
+      }),
+      'unverified'
+    );
+
+    await expect(
+      requestExecutorTermination({
+        app: state.app,
+        taskId,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Executor exited unexpectedly with code 1.',
+        absenceVerified: true,
+        runInFreshTenantWriteDatabase,
+      })
+    ).resolves.toMatchObject({
+      status: 'unverified',
+      reason: 'OpenCode server-side execution termination is not verified.',
+    });
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'unverified' }),
+      expect.anything()
+    );
   });
 
   it('generically contains historical Claude CLI work during recovery', async () => {

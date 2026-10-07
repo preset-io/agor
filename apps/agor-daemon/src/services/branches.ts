@@ -136,7 +136,10 @@ import {
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { verifyBranchWorkspacePreflight } from '../utils/branch-workspace-preflight.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
+import {
+  dispatchEnvironmentCommand,
+  ExecutorLaunchRefusedError,
+} from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
@@ -525,9 +528,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           spawnExecutor(payload, executorOptions);
         }
       }
-    } catch {
+    } catch (error) {
+      const refused = error instanceof ExecutorLaunchRefusedError;
       await this.withTenantDatabase(params, () =>
-        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+        new EnvironmentCommandRepository(this.db).dispatchFailed(
+          branch.branch_id,
+          attemptId,
+          refused ? 'launch_refused' : 'unknown'
+        )
       );
     }
     return publish();
