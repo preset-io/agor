@@ -1,73 +1,118 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { Outfit } from 'next/font/google';
+import { Fragment } from 'react';
 import { trackEvent } from '../../lib/analytics';
 import styles from './SocialProofBand.module.css';
 
-/**
- * Home-page quote band, right under the hero: what people building with Agor
- * have written about it. Quotes are verbatim; a supporting line is a separate
- * quote from the same source (never spliced into the main one), and words we
- * supply go in [brackets]. Attribute to the publication and link the source;
- * no company logos without permission.
+/*
+ * Home-page quote section (design handoff "testimonial quote section", 4f):
+ * one or two pull quotes from a single source, side by side with a gradient
+ * divider, under a "Takeaways from <source>" label. Quotes are verbatim; two
+ * quotes from one source stay separate (never spliced with an ellipsis), and
+ * words we supply go in [brackets]. Bold/accented words are our emphasis.
+ * Attribute to the publication and link it; no company logos without
+ * permission.
  */
-/** A highlighted word in a quote (emphasis is ours; the words are theirs). */
-function Hi({ children }: { children: ReactNode }) {
-  return <span className={styles.hi}>{children}</span>;
-}
 
-interface ProofQuote {
+// Only this section uses Outfit, so it loads here (home page only).
+const outfit = Outfit({ subsets: ['latin'], weight: ['200', '700'], display: 'swap' });
+
+/** The decorative opening mark on each quote. */
+const QUOTE_MARK = '“';
+
+type Segment = string | { bold: string } | { accent: string; tone: 'gradient' | 'blue' };
+
+interface ProofSource {
   id: string;
-  quote: ReactNode;
-  /** A second, separate verbatim line from the same source, e.g. an outcome. */
-  support?: ReactNode;
-  source: string;
+  /** Shown in the label: "Takeaways from the <name>". */
+  name: string;
   href: string;
+  /** One or two quotes, each a list of text segments. */
+  quotes: Segment[][];
 }
 
-const QUOTES: ProofQuote[] = [
-  {
-    id: 'redhat-taming-agent-beast',
-    quote: (
-      <>
-        The agent doesn’t need to remember what it did last time; the board tells it what to do{' '}
-        <Hi>now</Hi>.
-      </>
-    ),
-    support: (
-      <>
-        [The pipeline] reduces triage time from <Hi>hours</Hi> to <Hi>minutes</Hi>.
-      </>
-    ),
-    source: 'Red Hat Blog',
-    href: 'https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow',
-  },
-];
+const SOURCE: ProofSource = {
+  id: 'redhat-taming-agent-beast',
+  name: 'Red Hat Blog',
+  href: 'https://www.redhat.com/en/blog/taming-agent-beast-monolithic-prompt-modular-agentic-workflow',
+  quotes: [
+    [
+      'The agent doesn’t need to remember what it did last time; the ',
+      { bold: 'board' },
+      ' tells it what to do ',
+      { accent: 'now.', tone: 'gradient' },
+    ],
+    [
+      '[The pipeline] reduces triage time from ',
+      { bold: 'hours' },
+      ' to ',
+      { accent: 'minutes.', tone: 'blue' },
+    ],
+  ],
+};
+
+function renderSegment(segment: Segment, key: number) {
+  if (typeof segment === 'string') return segment;
+  if ('bold' in segment) {
+    return (
+      <strong key={key} className={styles.em}>
+        {segment.bold}
+      </strong>
+    );
+  }
+  return (
+    <strong
+      key={key}
+      className={`${styles.em} ${segment.tone === 'gradient' ? styles.emGradient : styles.emBlue}`}
+    >
+      {segment.accent}
+    </strong>
+  );
+}
 
 export function SocialProofBand() {
+  const { quotes } = SOURCE;
   return (
-    <section className={styles.band} aria-label="What people say about Agor" data-reveal>
-      {QUOTES.map((item) => (
-        <figure key={item.id} className={styles.figure}>
-          <blockquote cite={item.href} className={styles.quote}>
-            <p>“{item.quote}”</p>
-            {item.support ? <p className={styles.support}>“{item.support}”</p> : null}
-          </blockquote>
-          <figcaption className={styles.caption}>
-            <a
-              href={item.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={styles.source}
-              onClick={() =>
-                trackEvent('social_proof_click', { quote: item.id, source: item.source })
-              }
-            >
-              {item.source} <span aria-hidden="true">→</span>
-            </a>
-          </figcaption>
-        </figure>
-      ))}
+    <section
+      className={`${styles.section} ${outfit.className}`}
+      aria-label="What people say about Agor"
+      data-reveal
+    >
+      <p className={styles.label}>
+        <span className={styles.labelRule} aria-hidden="true" />
+        <span>
+          Takeaways from the{' '}
+          <a
+            href={SOURCE.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackEvent('social_proof_click', { source: SOURCE.id })}
+          >
+            {SOURCE.name}
+          </a>
+        </span>
+      </p>
+      <div className={styles.row}>
+        {/* Cells sit directly in the table row: quote, divider, quote. */}
+        {quotes.map((segments, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: fixed list; quotes never reorder.
+          <Fragment key={index}>
+            {index > 0 ? <div className={styles.divider} aria-hidden="true" /> : null}
+            <div className={styles.cell}>
+              <blockquote
+                cite={SOURCE.href}
+                className={`${styles.quote} ${index === 0 ? styles.toneTeal : styles.toneBlue}`}
+              >
+                <span className={styles.mark} aria-hidden="true">
+                  {QUOTE_MARK}
+                </span>
+                <p className={styles.text}>{segments.map(renderSegment)}</p>
+              </blockquote>
+            </div>
+          </Fragment>
+        ))}
+      </div>
     </section>
   );
 }

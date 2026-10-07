@@ -30,9 +30,9 @@ export function LandingPage() {
           early; the problem cards as the bridge into Multiplayer AI; then
           teammates with the roster as their proof, the builder's command
           center, and the trust story. */}
+      <BoardSection sampler />
       {/* What people building with Agor have written about it. */}
       <SocialProofBand />
-      <BoardSection sampler />
       <ProblemSection />
       <MultiplayerSection sampler />
       <TeammatesSection sampler />
