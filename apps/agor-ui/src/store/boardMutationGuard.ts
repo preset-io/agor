@@ -15,13 +15,13 @@
  *
  * A ticket also belongs to the guard that captured it (`owner`), which ends
  * all of its tickets when it unmounts: a confirmation, dialog or running
- * batch that outlives its component never dispatches. The connection and auth
- * generation are read from the published snapshot when checked, never from
- * values an owner rendered.
+ * batch that outlives its component never dispatches. While the owner is
+ * mounted it re-renders on every connection change, so the guard judges the
+ * connection and auth generation from what it rendered last
+ * (`useBoardMutationGuard`).
  */
 import { agorStore } from './agorStore';
 import { selectBoardPartition } from './boardPartitions';
-import { connectionAllowsWrites, getConnectionSnapshot } from './connectionSnapshot';
 
 /** The mounted lifetime of one guard; `alive` turns false when it unmounts. */
 export interface BoardWriteOwner {
@@ -39,18 +39,16 @@ export interface BoardWriteTicket {
 }
 
 /**
- * A ticket for `boardId`, or `null` when the board can't be written now: the
- * owner unmounted, the connection is unusable, or its partition isn't loaded
- * (and one is required).
+ * A ticket for `boardId` under the owner's `authGeneration`, or `null` when
+ * the board can't be written now: the owner unmounted, or its partition isn't
+ * loaded (and one is required).
  */
 export function captureBoardWriteTicket(
   boardId: string | null | undefined,
-  options: { requirePartition: boolean; owner: BoardWriteOwner }
+  options: { requirePartition: boolean; owner: BoardWriteOwner; authGeneration: number }
 ): BoardWriteTicket | null {
-  const { requirePartition, owner } = options;
-  const connection = getConnectionSnapshot();
-  if (!boardId || !owner.alive || !connectionAllowsWrites(connection)) return null;
-  const { authGeneration } = connection;
+  const { requirePartition, owner, authGeneration } = options;
+  if (!boardId || !owner.alive) return null;
   if (!requirePartition) return { boardId, generation: null, authGeneration, owner };
   const partition = selectBoardPartition(agorStore.getState(), boardId);
   if (partition?.status !== 'loaded') return null;
@@ -64,28 +62,28 @@ function samePartition(ticket: BoardWriteTicket): boolean {
 }
 
 /**
- * Whether everything `ticket` was captured under still holds now: its owner
- * is mounted, the connection is usable under the same auth generation, and
- * the partition lifetime is unchanged.
+ * Whether the store side of `ticket` still holds: its owner is mounted and
+ * the partition lifetime is unchanged. The guard checks the connection.
  */
 export function isBoardWriteTicketCurrent(
   ticket: BoardWriteTicket | null | undefined
 ): ticket is BoardWriteTicket {
   if (!ticket?.owner?.alive) return false;
-  const connection = getConnectionSnapshot();
-  if (!connectionAllowsWrites(connection)) return false;
-  if (ticket.authGeneration !== connection.authGeneration) return false;
   return ticket.generation === null || samePartition(ticket);
 }
 
 /**
  * Whether `ticket` can never be current again: there is none, its owner
- * unmounted, a re-authentication replaced its auth generation (generations
- * only advance), or its partition lifetime ended (the board unloaded). A
- * ticket held only by a passing condition (a disconnect, withheld edit) has not.
+ * unmounted, a re-authentication replaced its auth generation (`authGeneration`
+ * is the caller's current one; generations only advance), or its partition
+ * lifetime ended (the board unloaded). A ticket held only by a passing
+ * condition (a disconnect, withheld edit) has not.
  */
-export function hasBoardWriteTicketEnded(ticket: BoardWriteTicket | null | undefined): boolean {
+export function hasBoardWriteTicketEnded(
+  ticket: BoardWriteTicket | null | undefined,
+  authGeneration: number
+): boolean {
   if (!ticket?.owner?.alive) return true;
-  if (ticket.authGeneration !== getConnectionSnapshot().authGeneration) return true;
+  if (ticket.authGeneration !== authGeneration) return true;
   return ticket.generation !== null && !samePartition(ticket);
 }

@@ -1,9 +1,8 @@
 import type { CardWithType } from '@agor-live/client';
-import { act, render, renderHook, screen } from '@testing-library/react';
+import { act, renderHook, screen } from '@testing-library/react';
 import { type ReactNode, useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ConnectionProvider } from '../contexts/ConnectionContext';
 import { cardCreated } from '../store/agorRealtimeActions';
 import { agorStore } from '../store/agorStore';
 import {
@@ -11,7 +10,6 @@ import {
   hasBoardWriteTicketEnded,
   isBoardWriteTicketCurrent,
 } from '../store/boardMutationGuard';
-import { publishConnectionSnapshot, withdrawConnectionSnapshot } from '../store/connectionSnapshot';
 import { captureLoadLifetime } from '../store/loadLifetime';
 import { setRealtimeAuthorityScope } from '../store/realtimeBatch';
 import { boardScopeKey } from '../store/scopeMerge';
@@ -38,16 +36,13 @@ function unload() {
 }
 
 describe('board write tickets', () => {
-  const publisher = {};
   const owner = { alive: true };
   const capture = (requirePartition: boolean) =>
-    captureBoardWriteTicket(BOARD, { requirePartition, owner });
+    captureBoardWriteTicket(BOARD, { requirePartition, owner, authGeneration: 1 });
 
   beforeEach(() => {
     owner.alive = true;
-    publishConnectionSnapshot(publisher, connection());
   });
-  afterEach(() => withdrawConnectionSnapshot(publisher));
 
   it('captures nothing for an unloaded board unless the write needs no partition', () => {
     expect(capture(true)).toBe(null);
@@ -80,22 +75,11 @@ describe('board write tickets', () => {
     expect(after).not.toBe(before);
     expect(after?.members?.cards?.has('k-live')).toBe(true);
     expect(isBoardWriteTicketCurrent(ticket)).toBe(true);
-    expect(hasBoardWriteTicketEnded(ticket)).toBe(false);
+    expect(hasBoardWriteTicketEnded(ticket, 1)).toBe(false);
     // A reload is a new generation.
     load();
     expect(isBoardWriteTicketCurrent(ticket)).toBe(false);
-    expect(hasBoardWriteTicketEnded(ticket)).toBe(true);
-  });
-
-  it('a re-authentication or an unusable connection ends a ticket', () => {
-    load();
-    const ticket = capture(false);
-    publishConnectionSnapshot(publisher, connection({ connected: false }));
-    expect(isBoardWriteTicketCurrent(ticket)).toBe(false);
-    expect(capture(false)).toBe(null);
-    publishConnectionSnapshot(publisher, connection({ authGeneration: 2 }));
-    expect(isBoardWriteTicketCurrent(ticket)).toBe(false);
-    expect(isBoardWriteTicketCurrent(capture(false))).toBe(true);
+    expect(hasBoardWriteTicketEnded(ticket, 1)).toBe(true);
   });
 
   it("an owner's end ends its tickets", () => {
@@ -106,42 +90,36 @@ describe('board write tickets', () => {
     expect(capture(true)).toBe(null);
   });
 
-  it("a ticket ends for good on an unload or its owner's end, not on a disconnect", () => {
+  it("a ticket ends for good on an unload, its owner's end or a re-authentication", () => {
     load();
     const ticket = capture(true);
     const unpartitioned = capture(false);
-    publishConnectionSnapshot(publisher, connection({ connected: false }));
-    expect(hasBoardWriteTicketEnded(ticket)).toBe(false);
-    expect(hasBoardWriteTicketEnded(unpartitioned)).toBe(false);
+    expect(hasBoardWriteTicketEnded(ticket, 1)).toBe(false);
     unload();
-    expect(hasBoardWriteTicketEnded(ticket)).toBe(true);
-    expect(hasBoardWriteTicketEnded(unpartitioned)).toBe(false);
+    expect(hasBoardWriteTicketEnded(ticket, 1)).toBe(true);
+    expect(hasBoardWriteTicketEnded(unpartitioned, 1)).toBe(false);
+    expect(hasBoardWriteTicketEnded(unpartitioned, 2)).toBe(true);
     owner.alive = false;
-    expect(hasBoardWriteTicketEnded(unpartitioned)).toBe(true);
-    expect(hasBoardWriteTicketEnded(null)).toBe(true);
-  });
-
-  it('a re-authentication ends a ticket for good, partitioned or not', () => {
-    load();
-    const ticket = capture(true);
-    const unpartitioned = capture(false);
-    publishConnectionSnapshot(publisher, connection({ authGeneration: 2 }));
-    expect(hasBoardWriteTicketEnded(ticket)).toBe(true);
-    expect(hasBoardWriteTicketEnded(unpartitioned)).toBe(true);
-    // Disconnected under the new generation: still ended.
-    publishConnectionSnapshot(publisher, connection({ connected: false, authGeneration: 2 }));
-    expect(hasBoardWriteTicketEnded(unpartitioned)).toBe(true);
+    expect(hasBoardWriteTicketEnded(unpartitioned, 1)).toBe(true);
+    expect(hasBoardWriteTicketEnded(null, 1)).toBe(true);
   });
 });
 
 describe('useBoardMutationGuard', () => {
   function renderGuard(
-    initial: { boardId?: string; allowed?: boolean; connected?: boolean },
+    initial: { boardId?: string; allowed?: boolean; connected?: boolean; authGeneration?: number },
     options: { requirePartition?: boolean } = {}
   ) {
-    let props = { boardId: BOARD, allowed: true, connected: true, ...initial };
+    let props = { boardId: BOARD, allowed: true, connected: true, authGeneration: 1, ...initial };
     const wrapper = ({ children }: { children: ReactNode }) => (
-      <Providers connection={connection({ connected: props.connected })}>{children}</Providers>
+      <Providers
+        connection={connection({
+          connected: props.connected,
+          authGeneration: props.authGeneration,
+        })}
+      >
+        {children}
+      </Providers>
     );
     const view = renderHook(() => useBoardMutationGuard(props.boardId, props.allowed, options), {
       wrapper,
@@ -223,20 +201,17 @@ describe('useBoardMutationGuard', () => {
     }
   );
 
-  it('judges a held ticket against the connection published now, not the last render', () => {
+  it('a held ticket ends on a disconnect or a re-authentication, judged by the stable callbacks', () => {
     act(() => load());
     const view = renderGuard({}, { requirePartition: false });
     const ticket = view.result.current.capture();
     const { isCurrent, capture } = view.result.current;
-    // Another provider (the app after a re-authentication) publishes generation 2.
-    render(
-      <ConnectionProvider value={connection({ authGeneration: 2 })}>
-        <div />
-      </ConnectionProvider>
-    );
+    view.update({ connected: false });
     expect(isCurrent(ticket)).toBe(false);
-    // Its owner still renders generation 1: nothing is captured until both agree.
     expect(capture()).toBe(null);
+    view.update({ connected: true, authGeneration: 2 });
+    expect(isCurrent(ticket)).toBe(false);
+    expect(isCurrent(capture())).toBe(true);
   });
 });
 

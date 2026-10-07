@@ -66,11 +66,9 @@ export function useBoardMutationGuard(
   const { showWarning } = useThemedMessage();
   const partition = useAgorStore(useMemo(() => makeBoardPartitionSelector(boardId), [boardId]));
 
-  // What the owner rendered last. A check needs both this and the published
-  // connection snapshot (`isBoardWriteTicketCurrent`) to hold: the render
-  // view reacts in the very render a connection change arrives (the snapshot
-  // publishes on commit), and the snapshot keeps judging a ticket whose
-  // owner no longer renders. After unmount neither matters: `owner` is dead.
+  // What the owner rendered last. It consumes the connection, so it renders
+  // again in the very render a connection change arrives; a ticket whose
+  // owner no longer renders is dead (`owner`).
   const live = useRef({ boardId, allowed, canMutate: gate.canMutate, authGeneration });
   live.current = { boardId, allowed, canMutate: gate.canMutate, authGeneration };
 
@@ -109,6 +107,7 @@ export function useBoardMutationGuard(
     const ticket = captureBoardWriteTicket(live.current.boardId, {
       requirePartition,
       owner: ownerRef.current,
+      authGeneration: live.current.authGeneration,
     });
     return isCurrent(ticket) ? ticket : null;
   }, [requirePartition, isCurrent]);

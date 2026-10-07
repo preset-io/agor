@@ -31,7 +31,7 @@ import {
 import type { Color } from 'antd/es/color-picker';
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
-import { useMutationGate } from '../../../contexts/ConnectionContext';
+import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
 import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
 import { getContrastingTextColor } from '../../../utils/theme';
@@ -182,6 +182,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // mutation. Production callers always provide canEdit; omission keeps old
   // isolated fixtures backwards compatible.
   const mutationGate = useMutationGate();
+  const { authGeneration } = useConnectionState();
   const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
 
   // Inverse scale to keep toolbar at constant size regardless of zoom
@@ -256,7 +257,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     if (mutationDisabled && label !== data.label) {
       // A read-only board keeps the draft in the editor. If its ticket ended
       // (the board unloaded), it is refused now, as a save would be.
-      if (hasBoardWriteTicketEnded(editTicket)) setLabelStale(true);
+      if (hasBoardWriteTicketEnded(editTicket, authGeneration)) setLabelStale(true);
       return;
     }
     setIsEditingLabel(false);
