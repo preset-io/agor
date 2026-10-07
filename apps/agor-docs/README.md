@@ -32,6 +32,18 @@ The GitHub Pages deployment does not currently send a Content Security Policy. I
 added, it must allow the GA loader from `https://www.googletagmanager.com` and collection
 to `https://www.google-analytics.com` (plus the existing Clarity and HubSpot origins).
 
+### Google Ads conversions for console sign-ups
+
+Most Cloud CTAs send visitors to `console.agor.cloud`, a different domain, so neither a
+`gclid`/`gbraid`/`wbraid` URL parameter nor GTM's HubSpot-form-submit trigger (which fires
+the conversion for the few sign-ups still completed through this site's own HubSpot form)
+ever reaches it. `CloudCtaLink` and `CloudInviteCTA` forward any Google Ads click id present
+on the page a CTA is clicked from (`lib/cloudCta.ts#adClickIds`,
+`lib/cloudCtaAttribution.ts#onCloudCtaClick`) as a query parameter on the outgoing console
+link, alongside the existing HubSpot visitor token. The console records it first-touch in
+its `agor_attribution` cookie and reports an Enhanced Conversion (hashed email + click id)
+once the account reaches `/welcome` — see `agor-cloud`'s `apps/console/src/analytics.ts`.
+
 ## Brand assets
 
 `public/logo-mark.svg` is the transparent Agor mark for normal web and

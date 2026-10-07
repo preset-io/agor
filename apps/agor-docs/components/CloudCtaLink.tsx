@@ -4,6 +4,7 @@ import { type MouseEvent, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { trackEvent } from '../lib/analytics';
 import {
+  adClickIds,
   type CloudCta,
   type CloudCtaVariant,
   COMPACT_CTA_LABELS,
@@ -110,11 +111,15 @@ export function CloudCtaLink({ placement, className, compact, labels }: CloudCta
       return;
     }
     // Console links carry the HubSpot visitor token (the console prefers
-    // ?hutk= over its own cookie); utm_content still names the placement.
+    // ?hutk= over its own cookie) and any Google Ads click id from this page,
+    // which the console can't otherwise see once it's on its own domain;
+    // utm_content still names the placement.
     const token = hubspotVisitorToken();
-    if (token) {
+    const ids = adClickIds();
+    if (token || Object.keys(ids).length) {
       const url = new URL(event.currentTarget.href);
-      url.searchParams.set('hutk', token);
+      if (token) url.searchParams.set('hutk', token);
+      for (const [key, value] of Object.entries(ids)) url.searchParams.set(key, value);
       event.currentTarget.href = url.toString();
     }
   };
