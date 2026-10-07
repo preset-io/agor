@@ -149,6 +149,15 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
 
   const boards = useMemo(() => mapToArray(boardById), [boardById]);
   const branchCountByBoard = useBranchCounts(client);
+  const boardPanel = (boardId: string, body: React.ReactNode) => (
+    <BoardPanel
+      client={client}
+      boardId={boardId}
+      canUseMemberWorkspaceServices={canUseMemberWorkspaceServices}
+    >
+      {body}
+    </BoardPanel>
+  );
   const openSettings = (section: string) => {
     onOpenWorkspaceSettings(section);
     onNavigate?.();
@@ -224,104 +233,95 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                 </Badge>
               </Space>
             ),
-            children: (
-              <BoardPanel
-                client={client}
-                boardId={board.board_id}
-                canUseMemberWorkspaceServices={canUseMemberWorkspaceServices}
-              >
-                {boardBranches.length === 0 ? (
-                  <Text type="secondary">No branches on this board</Text>
-                ) : (
-                  <Collapse
-                    defaultActiveKey={[]}
-                    destroyOnHidden
-                    ghost
-                    expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                    items={boardBranches.map((branch) => {
-                      const branchSessions = sortedSessionsByBranch.get(branch.branch_id) || [];
+            children: boardPanel(
+              board.board_id,
+              boardBranches.length === 0 ? (
+                <Text type="secondary">No branches on this board</Text>
+              ) : (
+                <Collapse
+                  defaultActiveKey={[]}
+                  destroyOnHidden
+                  ghost
+                  expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                  items={boardBranches.map((branch) => {
+                    const branchSessions = sortedSessionsByBranch.get(branch.branch_id) || [];
 
-                      return {
-                        key: branch.branch_id,
-                        label: (
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 2,
-                              padding: '2px 0',
-                            }}
-                          >
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                              <span>🌳</span>
-                              <Text strong>{branch.name}</Text>
-                            </div>
-                            <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
-                              {branchSessions.length} sessions
-                            </Text>
+                    return {
+                      key: branch.branch_id,
+                      label: (
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: 2,
+                            padding: '2px 0',
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>🌳</span>
+                            <Text strong>{branch.name}</Text>
                           </div>
-                        ),
-                        children:
-                          branchSessions.length === 0 ? (
-                            <Text
-                              type="secondary"
-                              style={{ padding: '8px 0 8px 28px', display: 'block' }}
-                            >
-                              No sessions yet
-                            </Text>
-                          ) : (
-                            <div>
-                              {branchSessions.map((session) => (
-                                <Button
-                                  type="text"
-                                  block
-                                  key={session.session_id}
-                                  onClick={() => handleSessionClick(session.session_id)}
+                          <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
+                            {branchSessions.length} sessions
+                          </Text>
+                        </div>
+                      ),
+                      children:
+                        branchSessions.length === 0 ? (
+                          <Text
+                            type="secondary"
+                            style={{ padding: '8px 0 8px 28px', display: 'block' }}
+                          >
+                            No sessions yet
+                          </Text>
+                        ) : (
+                          <div>
+                            {branchSessions.map((session) => (
+                              <Button
+                                type="text"
+                                block
+                                key={session.session_id}
+                                onClick={() => handleSessionClick(session.session_id)}
+                                style={{
+                                  height: 'auto',
+                                  textAlign: 'left',
+                                  padding: '6px 8px 6px 28px',
+                                  borderRadius: 4,
+                                }}
+                                onMouseEnter={(e) => {
+                                  (e.currentTarget as HTMLElement).style.background =
+                                    token.colorFillTertiary;
+                                }}
+                                onMouseLeave={(e) => {
+                                  (e.currentTarget as HTMLElement).style.background = 'transparent';
+                                }}
+                              >
+                                <div
                                   style={{
-                                    height: 'auto',
-                                    textAlign: 'left',
-                                    padding: '6px 8px 6px 28px',
-                                    borderRadius: 4,
-                                  }}
-                                  onMouseEnter={(e) => {
-                                    (e.currentTarget as HTMLElement).style.background =
-                                      token.colorFillTertiary;
-                                  }}
-                                  onMouseLeave={(e) => {
-                                    (e.currentTarget as HTMLElement).style.background =
-                                      'transparent';
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 2,
+                                    width: '100%',
                                   }}
                                 >
-                                  <div
-                                    style={{
-                                      display: 'flex',
-                                      flexDirection: 'column',
-                                      gap: 2,
-                                      width: '100%',
-                                    }}
-                                  >
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                      <span>{getSessionStatusIcon(session)}</span>
-                                      <Text>{getSessionTitle(session)}</Text>
-                                    </div>
-                                    <Text
-                                      type="secondary"
-                                      style={{ fontSize: 11, paddingLeft: 28 }}
-                                    >
-                                      {session.agentic_tool}
-                                      {session.model_config?.model &&
-                                        ` • ${session.model_config.model}`}
-                                    </Text>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span>{getSessionStatusIcon(session)}</span>
+                                    <Text>{getSessionTitle(session)}</Text>
                                   </div>
-                                </Button>
-                              ))}
-                            </div>
-                          ),
-                      };
-                    })}
-                  />
-                )}
-              </BoardPanel>
+                                  <Text type="secondary" style={{ fontSize: 11, paddingLeft: 28 }}>
+                                    {session.agentic_tool}
+                                    {session.model_config?.model &&
+                                      ` • ${session.model_config.model}`}
+                                  </Text>
+                                </div>
+                              </Button>
+                            ))}
+                          </div>
+                        ),
+                    };
+                  })}
+                />
+              )
             ),
           };
         })}
