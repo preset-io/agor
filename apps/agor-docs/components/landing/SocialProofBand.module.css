@@ -95,10 +95,11 @@
 
 .mark {
   flex: none;
+  /* A classic serif curly quote. */
   font:
-    300 104px / 0.8 var(--font-display),
-    "Space Grotesk",
-    sans-serif;
+    400 104px / 0.8 Georgia,
+    "Times New Roman",
+    serif;
   opacity: 0.2;
 }
 
@@ -142,9 +143,9 @@
     padding: 64px 24px;
   }
 
+  /* Stacked: no divider, just space between the quotes. */
   .row,
-  .cell,
-  .divider {
+  .cell {
     display: block;
   }
 
@@ -154,16 +155,11 @@
   }
 
   .divider {
-    width: 100%;
-    height: 1px;
-    margin: 28px 0;
-    background: linear-gradient(
-      90deg,
-      transparent,
-      rgba(52, 226, 196, 0.45) 30%,
-      rgba(95, 211, 243, 0.45) 70%,
-      transparent
-    );
+    display: none;
+  }
+
+  .divider + .cell {
+    margin-top: 40px;
   }
 
   .text {
