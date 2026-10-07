@@ -206,7 +206,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         if (!element) return;
         resetScrollBaseline(state);
         // Registered after the hook's own listener, so it settles after the hook.
-        const onScroll = () => afterScrollSettles(state, () => trimIfParked.current?.());
+        // Only the latest scroll's check is kept: it runs last and measures afresh.
+        let cancelCheck: (() => void) | undefined;
+        const onScroll = () => {
+          cancelCheck?.();
+          cancelCheck = afterScrollSettles(state, () => trimIfParked.current?.());
+        };
         element.addEventListener('scroll', onScroll, { passive: true });
         let height = element.clientHeight;
         let resizeGeneration = 0;
@@ -238,6 +243,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         observer.observe(element);
         viewportCleanupRef.current = () => {
           element.removeEventListener('scroll', onScroll);
+          cancelCheck?.();
           ++resizeGeneration;
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
@@ -477,17 +483,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // merely in the hook's near-bottom zone, where the reader may still be
     // reading and the trim's follow-up would pull them down. Measured at each
     // check, never carried across scroll events. A new turn extends the content
-    // before the hook follows it, so this render also reads the viewport as it
-    // was before the commit: a parked reader is trimmed in the turn's own
-    // commit, as before, rather than racing the hook's follow-scroll.
-    const parkedBeforeCommit =
-      tasks.length > LEAN_TRANSCRIPT_TASK_WINDOW &&
-      !!scrollRef.current &&
-      isParked(state, scrollRef.current);
+    // before the hook follows it; the check after that follow-scroll trims it.
     // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn only re-runs the trim (protection released).
     useLayoutEffect(() => {
       const viewport = scrollRef.current;
-      trimIfParked.current = null;
       if (
         !reactiveSession ||
         !viewport ||
@@ -495,7 +494,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW
       )
         return;
-      const trim = () => {
+      trimIfParked.current = () => {
+        if (!isParked(state, viewport)) return;
         const anchor = firstVisibleTurn(viewport);
         if (!anchor) return;
         trimAnchor.current = {
@@ -505,16 +505,14 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         };
         if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
       };
-      trimIfParked.current = () => {
-        if (isParked(state, viewport)) trim();
+      trimIfParked.current();
+      return () => {
+        trimIfParked.current = null;
       };
-      if (parkedBeforeCommit) trim();
-      else trimIfParked.current();
     }, [
       reactiveSession,
       reactiveTasks,
       firstProtectedTurn,
-      parkedBeforeCommit,
       tasks.length,
       loadingOlder,
       scrollRef,

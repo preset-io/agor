@@ -14,7 +14,7 @@ import {
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { useState } from 'react';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { ConversationView } from './ConversationView';
 
 // The real lean ReactiveSessionHandle and shared-session hook over a fake
@@ -174,8 +174,17 @@ const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, i) => from + i);
 const distanceFromBottom = (viewport: HTMLElement) =>
   viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
-/** A programmatic scroll is a native scroll event, as the stick-to-bottom hook sees a reader. */
+/**
+ * A programmatic scroll is a native scroll event, as the stick-to-bottom hook
+ * sees a reader. Upward, it comes with the reader's wheel, which the hook
+ * handles synchronously; it ignores a bare scroll under a trim's layout guard.
+ */
 async function scrollTo(viewport: HTMLElement, top: number) {
+  if (top < viewport.scrollTop) {
+    viewport.dispatchEvent(
+      new WheelEvent('wheel', { deltaY: top - viewport.scrollTop, bubbles: true })
+    );
+  }
   viewport.scrollTop = top;
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
@@ -237,7 +246,6 @@ it('trims as soon as a reader wheels back to the latest turns, before another tu
   const viewport = await mount(client);
   for (let i = 0; i < 25; i++) await addTurn();
   await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)));
-  viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: -100, bubbles: true }));
   await scrollTo(viewport, Math.floor((viewport.scrollHeight - viewport.clientHeight) / 2));
   for (let i = 0; i < 15; i++) await addTurn();
   await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
@@ -307,6 +315,28 @@ it('trims a parked reader once the last pin that held the window open is release
     act(() => unpin());
     await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(20, 49)), { timeout: 5_000 });
     await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
+  } finally {
+    shared.release();
+  }
+});
+
+it('drops a pending parked check when the conversation unmounts', async () => {
+  const { client, addTurn } = transport(10);
+  const viewport = await mount(client);
+  const shared = sharedHandle(client);
+  try {
+    // A pin holds the window open, so the parked check stays armed.
+    const unpin = shared.handle.retainTaskDetails(taskId(2));
+    for (let i = 0; i < 25; i++) await addTurn();
+    await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(2, 34)), { timeout: 5_000 });
+    await park(viewport);
+    const trim = vi.spyOn(shared.handle, 'trimOlderTasks');
+    // A scroll queues a check for once the hook settles; unmount before it runs.
+    viewport.dispatchEvent(new Event('scroll'));
+    cleanup();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(trim).not.toHaveBeenCalled();
+    unpin();
   } finally {
     shared.release();
   }

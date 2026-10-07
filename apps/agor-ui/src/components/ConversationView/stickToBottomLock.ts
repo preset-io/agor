@@ -20,15 +20,16 @@ export function isBottomLockEngaged(state: StickToBottomState): boolean {
 }
 
 /**
- * Calls back if the lock is engaged once the hook has settled a scroll. The
- * hook engages its lock in a 1ms timeout after the scroll event, so call this
- * from a scroll listener registered after the hook's: its timeout of the same
- * delay then runs after the hook's.
+ * Calls back if the lock is engaged once the hook has settled a scroll;
+ * returns a cancel. The hook engages its lock in a 1ms timeout after the
+ * scroll event, so call this from a scroll listener registered after the
+ * hook's: its timeout of the same delay then runs after the hook's.
  */
-export function afterScrollSettles(state: StickToBottomState, callback: () => void): void {
-  setTimeout(() => {
+export function afterScrollSettles(state: StickToBottomState, callback: () => void): () => void {
+  const timer = setTimeout(() => {
     if (isBottomLockEngaged(state)) callback();
   }, 1);
+  return () => clearTimeout(timer);
 }
 
 /**
