@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CODEX_LIFECYCLE_MESSAGES,
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
   failureMessageBase,
   GEMINI_API_KEY_REQUIRED_MESSAGE,
   isConnectionLossMessage,
@@ -72,5 +73,22 @@ describe('provider detail', () => {
       CODEX_LIFECYCLE_MESSAGES.turn_failed
     );
     expect(withProviderDetail('Fixed.', '  ')).toBe('Fixed.');
+  });
+});
+
+describe('launch refused message', () => {
+  it('is product-neutral, free of internal vocabulary, and a recognized fixed sentence', () => {
+    expect(EXECUTOR_LAUNCH_REFUSED_MESSAGE).toBe(
+      'Your team has reached its limit of work running at once. Wait for something to finish, then try again.'
+    );
+    // The turn outcome banner's banned vocabulary (describeTurnOutcome.test.ts).
+    expect(EXECUTOR_LAUNCH_REFUSED_MESSAGE).not.toMatch(
+      /executor|daemon|heartbeat|socket|SDK|containment|force-fail|\btasks?\b|\bturns?\b/i
+    );
+    expect(failureMessageBase(EXECUTOR_LAUNCH_REFUSED_MESSAGE)).toBe(
+      EXECUTOR_LAUNCH_REFUSED_MESSAGE
+    );
+    expect(isMissingCredentialMessage(EXECUTOR_LAUNCH_REFUSED_MESSAGE)).toBe(false);
+    expect(isConnectionLossMessage(EXECUTOR_LAUNCH_REFUSED_MESSAGE)).toBe(false);
   });
 });

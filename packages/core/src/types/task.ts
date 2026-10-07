@@ -66,7 +66,15 @@ export type SdkFailureReason =
   | 'startup_timeout'
   | SdkWatchdogFailureReason
   | 'heartbeat_lost'
-  | 'termination_unverified';
+  | 'termination_unverified'
+  | 'launch_refused';
+
+/**
+ * Reserved exit code (sysexits `EX_TEMPFAIL`) of a templated launcher that
+ * refused admission before creating anything. Read as a refusal only when the
+ * daemon env opts in with `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`.
+ */
+export const EXECUTOR_LAUNCH_REFUSED_EXIT_CODE = 75;
 
 export interface SdkFailure {
   reason: SdkFailureReason;
@@ -90,7 +98,8 @@ export type TerminationCause =
   | 'startup_timeout'
   | 'heartbeat_lost'
   | 'sdk_health_failure'
-  | 'authorization_revoked';
+  | 'authorization_revoked'
+  | 'launch_refused';
 
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =

@@ -4,6 +4,14 @@
  * a rewording cannot silently desynchronize the two.
  */
 
+/**
+ * A templated launcher refused the run before creating anything (exit
+ * `EXECUTOR_LAUNCH_REFUSED_EXIT_CODE`). Product-neutral, and shown as is by
+ * file, git and environment requests, so it avoids "task" and "executor".
+ */
+export const EXECUTOR_LAUNCH_REFUSED_MESSAGE =
+  'Your team has reached its limit of work running at once. Wait for something to finish, then try again.';
+
 export const DAEMON_RESTART_RELEASED_MESSAGE =
   'Daemon restart released this Task without verifying executor termination.';
 
