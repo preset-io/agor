@@ -93,12 +93,11 @@ export function makeBoardPartitionSelector(
  * update that applies it: loaded under the read's lifetime and generation,
  * complete as the read says, with its membership (`settledMembers`: rows
  * realtime wrote since `startRevisions` are judged by their current value).
- * The board-scoped first paint runs the same queries as a partition load, so
- * it settles the board the same way. A branch that arrived from an unloaded
- * board marks the entry incomplete (`markArrivalIncomplete`): the load's own
- * `loading` entry, whose read may predate the arrival, or a `loaded` one a
- * resync settles in place. Either settles incomplete, so the board is read
- * again; a new partition load starts from a fresh entry.
+ * A branch that arrived from an unloaded board marks the entry incomplete
+ * (`markArrivalIncomplete`): the load's own `loading` entry, whose read may
+ * predate the arrival, or the `loaded` one an in-place load settles. Either
+ * settles incomplete, so the board is read again; a new partition load starts
+ * from a fresh entry.
  */
 export function settleBoardPartition(
   boardId: string,
@@ -127,7 +126,7 @@ export function settleBoardPartition(
 
 let loadSequence = 0;
 
-/** A new partition generation; generations only increase (see `partitionLoadMark`). */
+/** A new partition generation; generations only increase. */
 export function nextPartitionGeneration(): number {
   return ++loadSequence;
 }
@@ -220,34 +219,25 @@ export function evictUnloadedBoards(boardIds: readonly string[]): void {
 }
 
 /**
- * A reconnect resync claims the displayed board's partition while it has no
- * entry (an authority transition just unloaded every board), so
- * `useBoardPartition` doesn't read the board a second time alongside the
- * resync. The resync settles the entry; `releaseResyncClaim` frees it if the
- * resync ends without doing so.
+ * A reconnect resync begins: every board but `displayed`, when it is loaded,
+ * is unloaded at once (loads in flight are orphaned), so a board loaded from
+ * here on postdates the resync and is kept. Returns the kept board, which the
+ * resync reads again in place, and the boards it unloaded.
  */
-export function claimDisplayedBoardForResync(
-  lifetime: LoadLifetime
-): { boardId: string; generation: number } | null {
-  const boardId = getDisplayedBoardId();
-  return boardId ? claimBoardPartition(boardId, lifetime) : null;
-}
-
-/**
- * Mark `boardId` loading under `lifetime` while it has no entry, for a load
- * outside `loadBoardPartition` (first paint, a resync): from then on a live
- * row on the board is admitted (`admitHeld`), so the load's settle — fenced
- * from the claim — keeps it. Free it with `releaseResyncClaim` if the load
- * ends without settling.
- */
-export function claimBoardPartition(
-  boardId: string,
-  lifetime: LoadLifetime
-): { boardId: string; generation: number } | null {
-  if (agorStore.getState().coverage.has(boardScopeKey(boardId))) return null;
-  const generation = nextPartitionGeneration();
-  setBoardPartition(boardId, { status: 'loading', ...lifetime, generation });
-  return { boardId, generation };
+export function unloadBoardsForResync(displayed: string | null | undefined): {
+  kept: string | undefined;
+  unloaded: string[];
+} {
+  const { coverage } = agorStore.getState();
+  const entry = displayed ? coverage.get(boardScopeKey(displayed)) : undefined;
+  const kept =
+    displayed && entry?.status === 'loaded' && isLoadLifetimeCurrent(entry) ? displayed : undefined;
+  const unloaded = [...coverage.keys()]
+    .filter((key) => key.startsWith(BOARD_SCOPE_PREFIX))
+    .map((key) => key.slice(BOARD_SCOPE_PREFIX.length))
+    .filter((boardId) => boardId !== kept);
+  agorStore.getState().resetBoardPartitions(kept ? [kept] : []);
+  return { kept, unloaded };
 }
 
 /** Whether `boardId`'s entry is still loading and owned by `generation`. */
@@ -256,64 +246,11 @@ function ownsLoading(boardId: string, generation: number): boolean {
   return entry?.status === 'loading' && entry.generation === generation;
 }
 
-export function releaseResyncClaim(claim: { boardId: string; generation: number } | null): void {
-  if (claim && ownsLoading(claim.boardId, claim.generation)) setBoardPartition(claim.boardId, null);
-}
-
-const inflight = new Map<string, Promise<void>>();
+const inflight = new Map<string, Promise<boolean>>();
 
 // Loads dedupe per (authority, lifetime, partition epoch, board).
 function inflightKey(lifetime: LoadLifetime, partitionEpoch: number, boardId: string): string {
   return `${lifetime.authorityScope}\u0000${lifetime.loadEpoch}\u0000${partitionEpoch}\u0000${boardId}`;
-}
-
-/** The sequence mark of partition loads started so far (see `partitionLoadSince`). */
-export function partitionLoadMark(): number {
-  return loadSequence;
-}
-
-/** A loading or loaded entry of a load that started under `lifetime` after `sinceMark`. */
-function startedSince(entry: ScopeCoverage, lifetime: LoadLifetime, sinceMark: number): boolean {
-  return (
-    entry.status !== 'error' &&
-    entry.authorityScope === lifetime.authorityScope &&
-    entry.loadEpoch === lifetime.loadEpoch &&
-    entry.generation > sinceMark
-  );
-}
-
-/**
- * A load of `boardId` that started after `sinceMark` under `lifetime`: its
- * promise while in flight, a resolved one once it has loaded the board, else
- * `undefined`. A reconnect resync reuses it instead of reading the board a
- * second time: the load started after the resync did, so its snapshot
- * already reflects everything the resync must reconcile.
- */
-export function partitionLoadSince(
-  boardId: string,
-  lifetime: LoadLifetime,
-  sinceMark: number
-): Promise<void> | undefined {
-  const entry = selectBoardPartition(agorStore.getState(), boardId);
-  if (!entry || !startedSince(entry, lifetime, sinceMark)) return undefined;
-  if (entry.status === 'loaded') return Promise.resolve();
-  return inflight.get(inflightKey(lifetime, agorStore.getState().partitionEpoch, boardId));
-}
-
-/**
- * The boards whose partition load started after `sinceMark` under `lifetime`:
- * still loading, or loaded by such a load. Their reads postdate a resync that
- * took the mark, so its reset keeps them rather than read them again.
- */
-export function partitionsLoadedSince(lifetime: LoadLifetime, sinceMark: number): string[] {
-  const boardIds: string[] = [];
-  for (const [key, entry] of agorStore.getState().coverage) {
-    if (!key.startsWith(BOARD_SCOPE_PREFIX)) continue;
-    if (startedSince(entry, lifetime, sinceMark)) {
-      boardIds.push(key.slice(BOARD_SCOPE_PREFIX.length));
-    }
-  }
-  return boardIds;
 }
 
 /** Forget a failed partition so `useBoardPartition` loads it again. */
@@ -323,7 +260,16 @@ export function retryBoardPartition(boardId: string): void {
   }
 }
 
-type LoadOptions = { canUseMemberWorkspaceServices: boolean; background?: boolean };
+type LoadOptions = {
+  canUseMemberWorkspaceServices: boolean;
+  background?: boolean;
+  /**
+   * Read a loaded board again without unloading it (a reconnect resync): it
+   * stays ready and writable until the read settles it under a new generation,
+   * and a failed read leaves it as it was.
+   */
+  inPlace?: boolean;
+};
 
 // The pending dirty reload of each board, with the latest load arguments.
 const dirtyReloads = new Map<
@@ -412,7 +358,8 @@ async function fetchBoardPartition(
 /**
  * Load one board's partition and replace it in the store (`replaceScope`,
  * respecting the other scopes' committed members). Deduplicated per
- * (authority, lifetime, board); resolves once applied, dropped, or failed.
+ * (authority, lifetime, board); resolves once applied (`true`), dropped or
+ * failed (`false`).
  *
  * The `loading` entry is owned by this load (its `generation`). A load that
  * is cancelled (lifetime ended) or superseded releases its entry instead of
@@ -429,10 +376,10 @@ export function loadBoardPartition(
   client: AgorClient,
   boardId: string,
   options: LoadOptions
-): Promise<void> {
+): Promise<boolean> {
   // Captured before the first await, like every load (see `loadLifetime`).
   const lifetime = captureLoadLifetime();
-  if (!lifetime) return Promise.resolve();
+  if (!lifetime) return Promise.resolve(false);
   const { authorityScope, loadEpoch } = lifetime;
   // Per partition epoch too: a load orphaned by a reset (its entry is gone,
   // so it can never settle the board) must not absorb the board's next request.
@@ -441,16 +388,28 @@ export function loadBoardPartition(
   const existing = inflight.get(key);
   if (existing) return existing;
 
-  const generation = nextPartitionGeneration();
   const store = () => agorStore.getState();
-  const isCurrent = () => isLoadLifetimeCurrent(lifetime) && ownsLoading(boardId, generation);
-  const run = async () => {
-    setBoardPartition(boardId, { status: 'loading', authorityScope, loadEpoch, generation });
+  const loaded = selectBoardPartition(store(), boardId);
+  const inPlaceFrom =
+    options.inPlace && loaded?.status === 'loaded' && isLoadLifetimeCurrent(loaded)
+      ? loaded.generation
+      : null;
+  const generation = nextPartitionGeneration();
+  const owns = () => {
+    if (inPlaceFrom === null) return ownsLoading(boardId, generation);
+    const entry = selectBoardPartition(store(), boardId);
+    return entry?.status === 'loaded' && entry.generation === inPlaceFrom;
+  };
+  const isCurrent = () => isLoadLifetimeCurrent(lifetime) && owns();
+  const run = async (): Promise<boolean> => {
+    if (inPlaceFrom === null) {
+      setBoardPartition(boardId, { status: 'loading', authorityScope, loadEpoch, generation });
+    }
     // A background board's reads queue behind the foreground ones on the one
     // socket: send none until the open transcript and displayed board settle.
     if (options.background) {
       await backgroundReadsClear();
-      if (!isCurrent()) return;
+      if (!isCurrent()) return false;
     }
     for (let attempt = 0; ; attempt++) {
       const fence = beginPartitionLoad();
@@ -460,7 +419,7 @@ export function loadBoardPartition(
           boardId,
           options.canUseMemberWorkspaceServices
         );
-        if (!isCurrent()) return;
+        if (!isCurrent()) return false;
         if (wholesaleReplacedSince(fence)) {
           // Never apply across a replacement: the snapshot could resurrect
           // rows it removed. Restart, then surface a retryable error.
@@ -480,10 +439,11 @@ export function loadBoardPartition(
             ),
           settleBoardPartition(boardId, lifetime, generation, snapshot, fence.startRevisions)
         );
-        return;
+        return true;
       } catch (err) {
-        if (!isCurrent()) return;
+        if (!isCurrent()) return false;
         console.warn(`[boardPartitions] load failed for board ${boardId}:`, err);
+        if (inPlaceFrom !== null) return false;
         setBoardPartition(boardId, {
           status: 'error',
           authorityScope,
@@ -491,7 +451,7 @@ export function loadBoardPartition(
           generation,
           error: err instanceof Error ? err.message : String(err),
         });
-        return;
+        return false;
       } finally {
         endPartitionLoad();
       }

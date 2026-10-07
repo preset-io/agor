@@ -12,7 +12,7 @@ import { Tag } from './Tag';
 
 const PRIMARY_INITIAL_LOAD_ITEMS = new Set<InitialLoadItemKey>([
   'sessions',
-  'branches',
+  'board',
   'boards',
   'repos',
   'users',

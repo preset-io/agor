@@ -43,31 +43,19 @@ import {
   cancelAllHydrations,
   cancelAndFailAllHydrations,
   endPartitionLoad,
-  type PartitionLoadFence,
   resetHydrationRevisions,
   runHydration,
   touchedIdsSince,
-  touchedSince,
 } from '../store/agorHydration';
-import {
-  buildById,
-  buildSessionMaps,
-  keepLiveWrites,
-  type PartitionCollection,
-} from '../store/agorMaps';
+import { buildById, buildSessionMaps, keepLiveWrites } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
 import {
-  claimBoardPartition,
-  claimDisplayedBoardForResync,
   evictUnloadedBoards,
   getDisplayedBoardId,
-  nextPartitionGeneration,
-  partitionLoadMark,
-  partitionLoadSince,
-  partitionsLoadedSince,
-  releaseResyncClaim,
-  settleBoardPartition,
+  loadBoardPartition,
+  selectBoardPartition,
+  unloadBoardsForResync,
 } from '../store/boardPartitions';
 import {
   captureLoadLifetime,
@@ -87,25 +75,16 @@ import {
   untombstoneSession,
 } from '../store/realtimeBatch';
 import { holdRows, releaseStaleScopes } from '../store/retention';
-import {
-  BOARD_SCOPE_PREFIX,
-  boardPartitionScope,
-  boardScopeKey,
-  type Coverage,
-  replaceScope,
-  withoutBoardPartitions,
-} from '../store/scopeMerge';
+import { BOARD_SCOPE_PREFIX } from '../store/scopeMerge';
 import { resetSessionMcpLinks } from '../store/sessionMcpLinks';
 import {
   fillOnDemand,
   MY_SESSIONS_GATED_LIMIT,
   mySessionsQuery,
-  otherCommittedMembers,
   startUserScope,
   stopUserScope,
   userScopeRunGeneration,
 } from '../store/userScope';
-import { boardIdForSession } from '../utils/boardIdForSession';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { runLatestMCPOAuthStatusRequest } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
@@ -130,12 +109,10 @@ import {
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
-  { key: 'board-objects', label: 'Board objects' },
+  { key: 'board', label: 'Board' },
   { key: 'board-comments', label: 'Board comments' },
-  { key: 'branches', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
-  { key: 'cards', label: 'Cards' },
   { key: 'card-types', label: 'Card types' },
 ] as const;
 
@@ -148,11 +125,10 @@ export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 // session reads them from its full `sessions.get` (the reactive session /
 // settings modal / zone trigger).
 
-// Items the Home first paint gates on. Board objects and cards are only needed
-// to paint a canvas, so Home does not read them at all; a board loads its own
-// with its partition. Comments stay gated on every route: Home's "comments for
+// Items the Home first paint gates on. Home displays no board, so it reads no
+// board partition. Comments stay gated on every route: Home's "comments for
 // you" rule scans them all.
-const HOME_DEFERRED_ITEMS: ReadonlySet<InitialLoadItemKey> = new Set(['board-objects', 'cards']);
+const HOME_DEFERRED_ITEMS: ReadonlySet<InitialLoadItemKey> = new Set(['board']);
 const ALL_INITIAL_LOAD_KEYS: readonly InitialLoadItemKey[] = INITIAL_LOAD_ITEMS.map(
   ({ key }) => key
 );
@@ -576,24 +552,30 @@ export function useAgorData(
           : null;
       let debugFinishStatus: 'success' | 'error' | null = null;
       let debugFinishError: unknown;
-      // Per-id touched fence for the wholesale first-paint/resync apply below:
+      // Per-id touched fence for the first-paint/resync applies below:
       // realtime events keep landing while this load is in flight, and the
       // apply must keep them (a created row, a patch, a removal) rather than
       // replace them with the older snapshot. Released in `finally`.
       const firstPaintFence = beginPartitionLoad();
-      // A resync after an authority transition (every board unloaded) claims
-      // the displayed board so its partition hook doesn't read it a second
-      // time; the apply below settles it, `finally` releases it otherwise.
-      // Partition loads started after this mark postdate the resync, so it
-      // can reuse one for its board (see `inflightBoardPartitionLoad`).
-      const partitionMark = partitionLoadMark();
-      const resyncClaim = silent ? claimDisplayedBoardForResync(loadLifetime) : null;
-      // The generation this load settles the displayed board's partition
-      // under (the claim's, when it holds one).
-      const boardGeneration = resyncClaim?.generation ?? nextPartitionGeneration();
-      // The displayed board, once resolved: claimed and fenced from there.
-      let boardClaim: { boardId: string; generation: number } | null = null;
-      let boardFence: PartitionLoadFence | null = null;
+      // A resync unloads every board but the displayed one before it reads
+      // anything; the kept board is read again in place below. The UI
+      // registers the board it displays; before it mounts, the URL names it.
+      const resyncBoards = silent
+        ? unloadBoardsForResync(
+            getDisplayedBoardId() ??
+              (() => {
+                const { boardById, branchById, sessionById } = agorStore.getState();
+                return resolveDisplayedBoardId(
+                  typeof window !== 'undefined' ? window.location.pathname : '',
+                  boardById,
+                  branchById,
+                  sessionById
+                );
+              })()
+          )
+        : undefined;
+      const keptBoardId = resyncBoards?.kept;
+      let resyncFailed = false;
 
       try {
         if (!silent) {
@@ -865,9 +847,8 @@ export function useAgorData(
 
         // A reconnect resync reconciles the board the UI actually displays
         // (`useBoardPartition` registers it: artifact routes and the mobile
-        // shell's fallbacks resolve boards the URL alone can't) in place, and
-        // unloads every other board (below). First paint runs before the UI
-        // mounts, so it resolves from the URL.
+        // shell's fallbacks resolve boards the URL alone can't). First paint
+        // runs before the UI mounts, so it resolves from the URL.
         const displayedBoardId = silent ? getDisplayedBoardId() : undefined;
         const boardScope =
           (displayedBoardId && boardsMap.has(displayedBoardId) ? displayedBoardId : null) ??
@@ -878,111 +859,131 @@ export function useAgorData(
             interimSessionById
           ) ??
           undefined;
-        // No displayed board (Home): board objects and cards are not read.
-        const deferAnnotations = !boardScope;
-        if (deferAnnotations && !silent) setInitialLoadPlan(HOME_INITIAL_LOAD_KEYS);
-        // The UI navigated to this board while the resync ran (its light
-        // batch): the board's own partition load, started after the resync,
-        // reconciles it. Await (or reuse) that load rather than read the board
-        // twice.
-        const reusedPartitionLoad =
-          silent && boardScope
-            ? partitionLoadSince(boardScope, loadLifetime, partitionMark)
-            : undefined;
-        const readBoardAnnotations = !!boardScope && !reusedPartitionLoad;
-        // Claim the board before reading it, and fence its rows from here: a
-        // live row on it is admitted from now on (`admitHeld`) and keeps its
-        // live value, while one rejected before the claim (the board wasn't
-        // known yet) is not touched for this fence, so the snapshot restores it.
-        if (boardScope && !reusedPartitionLoad) {
-          boardClaim = claimBoardPartition(boardScope, loadLifetime);
-          boardFence = beginPartitionLoad();
-        }
+        // No displayed board (Home): no board partition is read.
+        if (!boardScope && !silent) setInitialLoadPlan(HOME_INITIAL_LOAD_KEYS);
 
-        // ── Essential gated fetches — HEAVY + board-scoped batch ────────
-        // Scoped to the displayed board when resolved (board_id pushes to SQL
-        // for sessions / board-objects; cards filter it server-side). On a real
-        // workspace this trims thousands of rows to one board's. A reconnect
-        // resync reads the board's rows like first paint does.
-        const [
-          branchesList,
-          boardSessionsList,
-          boardObjectsList,
-          commentsList,
-          cardsList,
-          displayedBoardFull,
-        ] = await Promise.all([
-          track(
-            'branches',
-            boardScope
-              ? client.service('branches').findAll({
-                  query: {
-                    archived: false,
-                    board_id: boardScope,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                  },
-                })
-              : Promise.resolve([] as Branch[])
-          ),
-          // Board-scoped sessions: only when a board is displayed. Merged with
-          // my sessions below. Not tracked — not part of the loading checklist.
-          boardScope
-            ? client.service('sessions').findAll({
-                query: {
-                  archived: false,
-                  board_id: boardScope,
-                  lean: true,
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                  $sort: { updated_at: -1 },
-                },
-              })
-            : Promise.resolve([] as Session[]),
-          !readBoardAnnotations
-            ? Promise.resolve(null)
-            : track(
-                'board-objects',
-                // The daemon intentionally keeps the whole board-objects service at
-                // the MEMBER floor (the rows carry editable canvas layout). A global
-                // viewer can still read the workspace shell and Marketplace, so an
-                // expected authorization failure here is not an essential bootstrap
-                // failure. Keep the collection empty and don't subscribe below.
-                canUseMemberWorkspaceServices
-                  ? client.service('board-objects').findAll({
-                      query: { $limit: PAGINATION.DEFAULT_LIMIT, board_id: boardScope },
-                    })
-                  : Promise.resolve([])
-              ),
-          // Comments are GLOBAL and gated on every route: Home's comment rule
-          // and the mobile bell scan them all, so they are never board-scoped.
+        // Queued streaming patches are live writes too: apply them now so the
+        // touched overlay below sees them in the store, not only in the queue.
+        flushRealtimeNow(fetchAuthorityScope);
+        const live = agorStore.getState();
+        const touchedSinceLoad = (collection: Parameters<typeof touchedIdsSince>[0]) =>
+          touchedIdsSince(collection, firstPaintFence.startRevisions[collection]);
+        // A branch touched during the load and absent now was archived or
+        // removed meanwhile: rows on it are dropped with it.
+        const removedBranchIds = new Set(
+          touchedSinceLoad('branches').filter((id) => !live.branchById.has(id))
+        );
+        // A board with a current partition keeps its full record over the
+        // lean row: the displayed board until it is read again, and boards
+        // loaded since this resync began (their reads postdate it).
+        for (const [key, entry] of live.coverage) {
+          const boardId = key.slice(BOARD_SCOPE_PREFIX.length);
+          const record = live.boardById.get(boardId);
+          if (key.startsWith(BOARD_SCOPE_PREFIX) && record && boardsMap.has(boardId)) {
+            if (isLoadLifetimeCurrent(entry)) boardsMap.set(boardId, record);
+          }
+        }
+        keepLiveWrites(boardsMap, live.boardById, touchedSinceLoad('boards'));
+
+        // First paint holds my sessions (the gated page) and the branches a
+        // deep link healed; the displayed board's rows come with its
+        // partition below. A resync keeps the session and branch sets: the
+        // board's replace and the user scope's reconcile the rows they claim.
+        const firstPaintSessions = new Map<string, Session>();
+        for (const session of sessionsList) {
+          firstPaintSessions.set(session.session_id, session);
+        }
+        const touchedSessionIds = touchedSinceLoad('sessions');
+        keepLiveWrites(firstPaintSessions, live.sessionById, touchedSessionIds);
+        for (const [id, session] of firstPaintSessions) {
+          if (removedBranchIds.has(session.branch_id)) firstPaintSessions.delete(id);
+        }
+        // The gated page proves "all of mine" only if no session of mine was
+        // created or removed while it was in flight; otherwise U1 runs.
+        if (gatedMineComplete) {
+          const gatedPage = new Set(sessionsList.map((session) => session.session_id));
+          gatedMineComplete = !touchedSessionIds.some((id) => {
+            const row = live.sessionById.get(id);
+            return row
+              ? row.created_by === authenticatedUserId && !gatedPage.has(id)
+              : gatedPage.has(id);
+          });
+        }
+        const { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId } =
+          buildSessionMaps([...firstPaintSessions.values()]);
+        const branchesMap = new Map<string, Branch>();
+        for (const branch of healedBranches) branchesMap.set(branch.branch_id, branch);
+        keepLiveWrites(branchesMap, live.branchById, touchedSinceLoad('branches'));
+
+        // Merge the light slices in one atomic update. We spread `prev` so the
+        // BACKGROUND-managed slices (mcpServerById / gatewayChannelById /
+        // artifactById / userAuthenticatedMcpServerIds, the per-session
+        // `sessionMcpServerIds`) and the board rows survive: those are owned by
+        // their own loaders and the realtime handlers.
+        agorStore.getState().applyMaps((prev) => ({
+          ...prev,
+          ...(silent
+            ? {}
+            : {
+                sessionById: sessionsById,
+                sessionsByBranch: sessionsByBranchId,
+                branchById: branchesMap,
+              }),
+          boardById: boardsMap,
+          cardTypeById: cardTypesMap,
+          repoById: reposMap,
+          userById: usersMap,
+        }));
+        // Not a `runHydration` apply: bump the revisions it overwrote, as the
+        // realtime handlers do, so an in-flight hydration whose snapshot
+        // predates it discards. A resync replaces only the board list, so
+        // partition loads started since it began keep their reads.
+        if (silent) bumpRevision('boards');
+        else bumpFirstPaintMergeRevisions();
+
+        // ── Essential gated fetches — comments and the displayed board ──
+        // Comments are GLOBAL and gated on every route: Home's comment rule
+        // and the mobile bell scan them all, so they are never board-scoped.
+        // The displayed board loads as a partition (its branches, sessions,
+        // board objects, cards and full record), like any other board. The
+        // board a resync kept is read again in place, so it never shows as
+        // unloaded; one loaded or loading since the resync began postdates it.
+        const loadDisplayedBoard = async (boardId: string): Promise<boolean> => {
+          const entry = selectBoardPartition(agorStore.getState(), boardId);
+          if (
+            boardId !== keptBoardId &&
+            entry?.status === 'loaded' &&
+            isLoadLifetimeCurrent(entry)
+          ) {
+            return true;
+          }
+          return loadBoardPartition(client, boardId, {
+            canUseMemberWorkspaceServices,
+            inPlace: boardId === keptBoardId,
+          });
+        };
+        const [commentsList, boardLoaded] = await Promise.all([
           track(
             'board-comments',
             client
               .service('board-comments')
               .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          !readBoardAnnotations
-            ? Promise.resolve(null)
-            : track(
-                'cards',
-                client.service('cards').findAll({
-                  query: { $limit: PAGINATION.DEFAULT_LIMIT, board_id: boardScope },
-                })
-              ),
-          // Displayed board's FULL record (with objects/custom_css) so its
-          // zones/text/markdown paint at first load — the boards list above is
-          // lean. Only when a board is actually displayed (also on a reconnect).
-          // Not tracked — not a loading-checklist item.
-          readBoardAnnotations && boardScope
-            ? // A failed get degrades gracefully rather than blocking first paint:
-              // the board is then not marked loaded, and its partition load
-              // fetches the record again.
-              (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
-            : Promise.resolve(null),
-          // Settles (applied, dropped or failed); never rejects.
-          reusedPartitionLoad,
+          boardScope
+            ? loadDisplayedBoard(boardScope).then((loaded) => {
+                // Settled (loaded, or failed with a retryable partition error).
+                if (!silent && authorityIsCurrent()) {
+                  agorStore.getState().setItemCounts((prev) => ({ ...prev, board: 1 }));
+                }
+                return loaded;
+              })
+            : Promise.resolve(true),
         ]);
         if (!authorityIsCurrent()) return false;
         debugTimer?.endFetchPhase();
+        // A resync whose board read failed leaves it as it was, and retries
+        // with the next token replacement (`lastSilentFetchFailedRef`).
+        resyncFailed = silent && !boardLoaded;
 
         if (!silent) {
           agorStore.getState().setLoadingStage('indexing');
@@ -1004,200 +1005,14 @@ export function useAgorData(
         }
         if (!authorityIsCurrent()) return false;
 
-        // Queued streaming patches are live writes too: apply them now so the
-        // touched overlay below sees them in the store, not only in the queue.
-        flushRealtimeNow(fetchAuthorityScope);
-        const live = agorStore.getState();
-        const touchedSinceLoad = (collection: Parameters<typeof touchedIdsSince>[0]) =>
-          touchedIdsSince(collection, firstPaintFence.startRevisions[collection]);
-        // A branch touched during the load and absent now was archived or
-        // removed meanwhile: rows on it are dropped with it.
-        const removedBranchIds = new Set(
-          touchedSinceLoad('branches').filter((id) => !live.branchById.has(id))
-        );
-        // Build comment Map for efficient lookups (always the global set)
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
           commentsMap.set(comment.comment_id, comment);
         }
-        keepLiveWrites(commentsMap, live.commentById, touchedSinceLoad('comments'));
-
-        // Replace the displayed board's LEAN row with its FULL record so the
-        // visible canvas paints zones/text/markdown at first paint (no flash).
-        // Other boards stay lean until their partition loads.
-        if (displayedBoardFull) {
-          boardsMap.set(displayedBoardFull.board_id, displayedBoardFull);
-        } else if (boardScope && live.boardById.has(boardScope)) {
-          // The get failed: keep the board's current record rather than its
-          // lean row (no zone flash); its partition load fetches it again.
-          boardsMap.set(boardScope, live.boardById.get(boardScope)!);
-        }
-        // Boards whose partition load started after this resync (opened while
-        // it ran) stay loaded across its reset below: their reads already
-        // postdate it. Keep their full records over the lean rows.
-        const sparedBoardIds = silent ? partitionsLoadedSince(loadLifetime, partitionMark) : [];
-        for (const boardId of sparedBoardIds) {
-          const record = live.boardById.get(boardId);
-          if (record && boardsMap.has(boardId) && boardId !== displayedBoardFull?.board_id) {
-            boardsMap.set(boardId, record);
-          }
-        }
-        keepLiveWrites(boardsMap, live.boardById, touchedSinceLoad('boards'));
-
-        // Merge my sessions with the board-scoped sessions (dedup by id) for
-        // first paint, then build both session lookups (incl. remote
-        // surrogates).
-        const firstPaintSessions = new Map<string, Session>();
-        for (const session of sessionsList) {
-          firstPaintSessions.set(session.session_id, session);
-        }
-        for (const session of boardSessionsList) {
-          if (!firstPaintSessions.has(session.session_id)) {
-            firstPaintSessions.set(session.session_id, session);
-          }
-        }
-        const touchedSessionIds = touchedSinceLoad('sessions');
-        keepLiveWrites(firstPaintSessions, live.sessionById, touchedSessionIds);
-        for (const [id, session] of firstPaintSessions) {
-          if (removedBranchIds.has(session.branch_id)) firstPaintSessions.delete(id);
-        }
-        // The gated page proves "all of mine" only if no session of mine was
-        // created or removed while it was in flight; otherwise U1 runs.
-        if (gatedMineComplete) {
-          const gatedPage = new Set(sessionsList.map((session) => session.session_id));
-          gatedMineComplete = !touchedSessionIds.some((id) => {
-            const row = live.sessionById.get(id);
-            return row
-              ? row.created_by === authenticatedUserId && !gatedPage.has(id)
-              : gatedPage.has(id);
-          });
-        }
-        const { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId } =
-          buildSessionMaps([...firstPaintSessions.values()]);
-
-        // Branch map for first paint: the board-scoped set, plus any
-        // deep-link-healed branches.
-        const branchesMap = new Map<string, Branch>();
-        for (const branch of branchesList) {
-          branchesMap.set(branch.branch_id, branch);
-        }
-        for (const branch of healedBranches) {
-          if (!branchesMap.has(branch.branch_id)) {
-            branchesMap.set(branch.branch_id, branch);
-          }
-        }
-        keepLiveWrites(branchesMap, live.branchById, touchedSinceLoad('branches'));
-
-        // Merge the essential slices in one atomic update. We spread `prev`
-        // (rather than replacing the whole object) so the BACKGROUND-managed
-        // slices — mcpServerById / gatewayChannelById / artifactById /
-        // userAuthenticatedMcpServerIds — survive even if their fire-and-forget
-        // fetches resolved before this gate did, and so do the per-session
-        // `sessionMcpServerIds`. Those slices are owned by their own loaders
-        // and the realtime handlers.
-        // A reconnect unloads every board: their rows may have missed
-        // deletions while disconnected, and their next partition load
-        // reconciles them. The displayed board is reconciled right here.
-        // Boards loaded after this resync started (a reused partition load
-        // among them) are already reconciled: they stay loaded. The reset
-        // publishes with the rows and the displayed board's settle below, so
-        // no update shows the board unloaded or its rows without coverage.
-        // The boards the reset unloads lose their rows once the user scope
-        // is replaced (below).
-        let unloadedBoardIds: string[] = [];
-        const resetCoverage = (coverage: Coverage) => {
-          if (!silent) return coverage;
-          const next = withoutBoardPartitions(coverage, sparedBoardIds);
-          unloadedBoardIds = [...coverage.keys()]
-            .filter((key) => key.startsWith(BOARD_SCOPE_PREFIX) && !next.has(key))
-            .map((key) => key.slice(BOARD_SCOPE_PREFIX.length));
-          return next;
-        };
-        // The displayed board reconciles (`replaceScope`, fenced like
-        // everything above): rows written live during this load keep their
-        // live value, and rows the board no longer has (deleted, moved or
-        // hidden while disconnected) leave unless another scope's committed
-        // membership holds them. Other boards' rows are untouched (Home reads
-        // none).
-        const boardStart = (boardFence ?? firstPaintFence).startRevisions;
-        const touchedInLoad = (collection: PartitionCollection, id: string) =>
-          touchedSince(collection, id, boardStart[collection]);
-        // The displayed board's read (every query an unbounded `findAll`). It
-        // reconciles the board and, when the full record arrived, settles its
-        // partition in the same update, with this membership.
-        const boardRows =
-          boardScope && !reusedPartitionLoad
-            ? {
-                branches: branchesList.filter((branch) => branch.board_id === boardScope),
-                sessions: boardSessionsList.filter(
-                  (session) => boardIdForSession(session, branchesMap) === boardScope
-                ),
-                boardObjects: canUseMemberWorkspaceServices ? (boardObjectsList ?? []) : null,
-                cards: cardsList ?? [],
-                complete: true,
-              }
-            : null;
-        const settleDisplayed =
-          boardScope && boardRows && displayedBoardFull && isLoadLifetimeCurrent(loadLifetime)
-            ? settleBoardPartition(
-                boardScope,
-                loadLifetime,
-                boardClaim?.generation ?? boardGeneration,
-                boardRows,
-                boardStart
-              )
-            : undefined;
-        agorStore.getState().applyMaps(
-          (prev) => {
-            const maps = {
-              ...prev,
-              // A resync keeps the session and branch sets: the displayed
-              // board's replace below and the user scope's reconcile the rows
-              // they claim.
-              ...(silent
-                ? {}
-                : {
-                    sessionById: sessionsById,
-                    sessionsByBranch: sessionsByBranchId,
-                    branchById: branchesMap,
-                  }),
-              boardById: boardsMap,
-              commentById: commentsMap,
-              cardTypeById: cardTypesMap,
-              repoById: reposMap,
-              userById: usersMap,
-            };
-            if (!boardScope || !boardRows) return maps;
-            const state = agorStore.getState();
-            return replaceScope(
-              maps,
-              boardPartitionScope(boardScope),
-              boardRows,
-              touchedInLoad,
-              otherCommittedMembers(
-                { ...state, ...maps, coverage: resetCoverage(state.coverage) },
-                boardScopeKey(boardScope)
-              )
-            );
-          },
-          (maps, coverage) =>
-            settleDisplayed
-              ? settleDisplayed(maps, resetCoverage(coverage))
-              : resetCoverage(coverage),
-          silent
-            ? (_maps, state) => ({
-                // The reset orphans partition loads in flight (`partitionEpoch`).
-                partitionEpoch: state.partitionEpoch + 1,
-              })
-            : undefined
-        );
-        // This wholesale replace is NOT a `runHydration` apply, so it must bump
-        // the revisions of every collection it overwrites — exactly like the
-        // per-mutation realtime handlers do. Critical on the SILENT reconnect
-        // resync: an in-flight hydration whose snapshot predates the disconnect
-        // would otherwise pass its quiet check and clobber this newer reconnect
-        // snapshot (resurrecting data that changed while we were disconnected).
-        bumpFirstPaintMergeRevisions();
+        flushRealtimeNow(fetchAuthorityScope);
+        keepLiveWrites(commentsMap, agorStore.getState().commentById, touchedSinceLoad('comments'));
+        agorStore.getState().applyMaps((prev) => ({ ...prev, commentById: commentsMap }));
+        bumpRevision('comments');
         // User scope: the rest of my sessions, my branches, every
         // teammate I can view, and the branches my sessions and comment
         // threads reference. On a session route only its bulk U1 read is held
@@ -1226,11 +1041,11 @@ export function useAgorData(
         // The run just started (`startUserScope` sets it synchronously).
         const userScopeRun = userScopeRunGeneration();
         // Retention, once the user scope is replaced under this lifetime (so
-        // my rows stay): the rows of the boards this resync unloaded leave
-        // unless a scope holds them — a board displayed or loaded again
-        // meanwhile keeps its rows — and so do the scopes this load didn't
-        // replace (a failed read: an earlier lifetime's, or an earlier run's
-        // after a plain reconnect), with the rows only they held.
+        // my rows stay): the rows of the boards this resync or an authority
+        // change unloaded leave unless a scope holds them — a board displayed
+        // or loaded again meanwhile keeps its rows — and so do the scopes this
+        // load didn't replace (a failed read: an earlier lifetime's, or an
+        // earlier run's after a plain reconnect), with the rows only they held.
         void (userScopeSettled ?? Promise.resolve())
           .catch(() => undefined)
           .then(() => {
@@ -1239,7 +1054,7 @@ export function useAgorData(
             const transitionUnloaded = [...transitionUnloadedBoardsRef.current];
             transitionUnloadedBoardsRef.current.clear();
             evictUnloadedBoards(
-              [...unloadedBoardIds, ...transitionUnloaded].filter(
+              [...(resyncBoards?.unloaded ?? []), ...transitionUnloaded].filter(
                 (id) => id !== boardScope && id !== displayed
               )
             );
@@ -1252,7 +1067,7 @@ export function useAgorData(
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
         if (silent) {
-          lastSilentFetchFailedRef.current = false;
+          lastSilentFetchFailedRef.current = resyncFailed;
         }
         return true;
       } catch (err) {
@@ -1274,9 +1089,6 @@ export function useAgorData(
         return true;
       } finally {
         endPartitionLoad();
-        if (boardFence) endPartitionLoad();
-        releaseResyncClaim(resyncClaim);
-        releaseResyncClaim(boardClaim);
         if (!silent && authorityIsCurrent()) {
           agorStore.getState().setLoading(false);
           agorStore.getState().setLoadingStage('idle');

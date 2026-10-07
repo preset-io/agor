@@ -36,9 +36,6 @@ import {
   loadBoardPartition,
   makeBoardReadySelector,
   nextPartitionGeneration,
-  partitionLoadMark,
-  partitionLoadSince,
-  partitionsLoadedSince,
   RETAINED_BACKGROUND_PARTITIONS,
   registerBoardUse,
   retryBoardPartition,
@@ -236,42 +233,37 @@ describe('loadBoardPartition', () => {
     expect(ready()).toBe(false);
   });
 
-  it('offers a resync only the loads that started after its mark, in flight or loaded', async () => {
-    const lifetime = captureLoadLifetime()!;
+  it('reads a loaded board again in place: ready throughout, a new generation, kept on failure', async () => {
     const { client, release } = makePartitionClient({});
-    // Started before the resync's mark: never reused.
-    const before = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
-    const mark = partitionLoadMark();
-    expect(partitionLoadSince(BOARD, lifetime, mark)).toBe(undefined);
+    const first = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
     release();
-    await before;
-    expect(partitionLoadSince(BOARD, lifetime, mark)).toBe(undefined);
-
-    // Started after it: the in-flight promise, then reused once loaded.
-    agorStore.getState().resetBoardPartitions();
-    const second = makePartitionClient({});
-    const after = loadBoardPartition(second.client, BOARD, { canUseMemberWorkspaceServices: true });
-    expect(partitionLoadSince(BOARD, lifetime, mark)).toBe(after);
-    second.release();
-    await after;
-    await expect(partitionLoadSince(BOARD, lifetime, mark)).resolves.toBe(undefined);
-    // Another lifetime never matches.
-    expect(
-      partitionLoadSince(BOARD, { ...lifetime, loadEpoch: lifetime.loadEpoch + 1 }, mark)
-    ).toBe(undefined);
-    // A resync keeps the boards loaded since its mark across its reset, and
-    // only those: board-2's load started before the mark.
-    agorStore.getState().setCoverage(boardScopeKey('board-2'), {
-      ...boardCoverage('loaded', lifetime),
-      generation: mark,
+    await first;
+    const loaded = selectBoardPartition(agorStore.getState(), BOARD)!;
+    const statuses: Array<string | undefined> = [];
+    const off = agorStore.subscribe((s) => statuses.push(selectBoardPartition(s, BOARD)?.status));
+    const again = makePartitionClient({});
+    const inPlace = loadBoardPartition(again.client, BOARD, {
+      canUseMemberWorkspaceServices: true,
+      inPlace: true,
     });
-    expect(partitionsLoadedSince(lifetime, mark)).toEqual([BOARD]);
-    expect(partitionsLoadedSince({ ...lifetime, loadEpoch: lifetime.loadEpoch + 1 }, mark)).toEqual(
-      []
+    expect(ready()).toBe(true);
+    again.release();
+    await expect(inPlace).resolves.toBe(true);
+    expect(statuses.every((status) => status === 'loaded')).toBe(true);
+    expect(selectBoardPartition(agorStore.getState(), BOARD)?.generation).toBeGreaterThan(
+      loaded.generation
     );
-    agorStore.getState().resetBoardPartitions(partitionsLoadedSince(lifetime, mark));
-    expect(selectBoardPartition(agorStore.getState(), BOARD)?.status).toBe('loaded');
-    expect(agorStore.getState().coverage.has(boardScopeKey('board-2'))).toBe(false);
+    // A failed in-place read leaves the board as it was.
+    const settled = selectBoardPartition(agorStore.getState(), BOARD);
+    const failing = fakeFeathersClient({}, { fallback: () => Promise.reject(new Error('down')) });
+    await expect(
+      loadBoardPartition(failing.client, BOARD, {
+        canUseMemberWorkspaceServices: true,
+        inPlace: true,
+      })
+    ).resolves.toBe(false);
+    off();
+    expect(selectBoardPartition(agorStore.getState(), BOARD)).toBe(settled);
   });
 
   it('dedupes in-flight loads of the same board', async () => {

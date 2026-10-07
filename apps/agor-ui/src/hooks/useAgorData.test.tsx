@@ -1567,10 +1567,13 @@ describe('useAgorData — opened session transcript priority', () => {
   it('abandons a load unmounted during the heavy batch (prefetch released, nothing applied)', async () => {
     transcriptPrefetch.prefetchOpenedTranscript.mockClear();
     const session = makeSession({ session_id: OPEN_ID });
-    const { client, fetchCount, onFetch } = makeMockClient({ 'sessions:get': session as never });
+    const { client, fetchCount, onFetch } = makeMockClient({
+      'sessions:get': session as never,
+      'board-comments': [{ comment_id: 'c-1', board_id: 'board-1' }],
+    });
     const heavy = deferred();
-    // Comments are gated on every route (Home defers cards to the background),
-    // so holding them holds the heavy batch.
+    // Comments are gated on every route and read after the light batch
+    // applied, so holding them holds the load after its first apply.
     onFetch('board-comments', 'findAll', () => heavy.promise);
     const release = vi.fn();
     transcriptPrefetch.prefetchOpenedTranscript.mockReturnValueOnce({
@@ -1591,7 +1594,7 @@ describe('useAgorData — opened session transcript priority', () => {
     });
 
     expect(transcriptPrefetch.prefetchOpenedTranscript).toHaveBeenCalledTimes(1);
-    expect(agorStore.getState().sessionById.size).toBe(0);
+    expect(agorStore.getState().commentById.size).toBe(0);
   });
 
   it('does not prefetch without a session route', async () => {
@@ -1777,18 +1780,17 @@ describe('useAgorData — user-scoped first paint', () => {
     const { client, emit, onFetch, fetchArguments } = makeMockClient({
       'sessions:find': [gated],
     });
-    const comments = deferred();
-    onFetch('board-comments', 'findAll', (call) => (call === 1 ? comments.promise : undefined));
+    const page = deferred();
+    onFetch('sessions', 'find', (call) => (call === 1 ? page.promise : undefined));
     const { result } = renderHook(() => useAgorData(client, authority));
-    await waitFor(() => expect(fetchArguments('board-comments', 'findAll')).toHaveLength(1));
+    await waitFor(() => expect(fetchArguments('sessions', 'find')).toHaveLength(1));
 
-    // My new session arrives live while the gated comments are still pending,
-    // and someone removes a session the gated page still holds.
+    // My new session arrives live while the gated page is still pending.
     const created = makeSession({ session_id: 's-new', created_by: 'user-me' });
     act(() => emit('sessions', 'created', created));
     await act(async () => {
-      comments.resolve();
-      await comments.promise;
+      page.resolve();
+      await page.promise;
     });
     await waitFor(() => expect(result.current.loading).toBe(false));
     const state = agorStore.getState();
@@ -1883,7 +1885,7 @@ describe('useAgorData — user-scoped first paint', () => {
     }
   });
 
-  it('still gates a board route on its board objects and cards', async () => {
+  it('still gates a board route on its board partition', async () => {
     window.history.pushState({}, '', '/b/displayed/');
     const gate = deferred();
     const { client, onFetch } = makeMockClient({
@@ -1896,7 +1898,7 @@ describe('useAgorData — user-scoped first paint', () => {
         expect(result.current.initialLoadItems.find((i) => i.key === 'boards')?.done).toBe(true)
       );
       expect(result.current.initialLoadComplete).toBe(false);
-      expect(result.current.initialLoadItems.map((item) => item.key)).toContain('cards');
+      expect(result.current.initialLoadItems.map((item) => item.key)).toContain('board');
       gate.resolve();
       await waitFor(() => expect(result.current.initialLoadComplete).toBe(true));
     } finally {
@@ -2237,7 +2239,7 @@ describe('useAgorData — a branch moved back onto a loaded board', () => {
 });
 
 describe('useAgorData — navigating while a reconnect resync runs', () => {
-  it('the destination board still loads after the resync resets every partition', async () => {
+  it('the destination board still loads while the resync runs', async () => {
     window.history.pushState({}, '', '/b/board-a/');
     onTestFinished(() => window.history.pushState({}, '', '/'));
     const boardA = { board_id: 'board-a', slug: 'board-a', name: 'A' };
@@ -2277,7 +2279,7 @@ describe('useAgorData — navigating while a reconnect resync runs', () => {
     rerender({ boardId: 'board-b' });
     await waitFor(() => expect(bReads).toBe(1));
 
-    // The resync finishes (resetting every entry), then B's first read lands.
+    // The resync finishes, then B's first read lands.
     await act(async () => {
       resync.resolve();
       await resync.promise;
@@ -2290,7 +2292,8 @@ describe('useAgorData — navigating while a reconnect resync runs', () => {
     await waitFor(() =>
       expect(selectBoardPartition(agorStore.getState(), 'board-b')?.status).toBe('loaded')
     );
-    expect(bReads).toBe(2);
+    // B's read started after the resync began, so the resync kept it: one read.
+    expect(bReads).toBe(1);
   });
 
   it('keeps every board loaded during the resync loaded, each read once', async () => {
