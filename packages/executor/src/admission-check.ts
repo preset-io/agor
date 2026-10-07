@@ -1,7 +1,7 @@
 import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
 import { executorAdmissionClassFor } from '@agor/core/types';
 
-/** Set by a gating launcher (Agor Cloud) from the run it admitted; never by the daemon. */
+/** Set by a gating launcher from the run it admitted; never by the daemon. */
 export const EXECUTOR_ADMISSION_CLASS_ENV = 'AGOR_EXECUTOR_ADMISSION_CLASS';
 
 export const EXECUTOR_ADMISSION_CLASS_MISMATCH = 'EXECUTOR_ADMISSION_CLASS_MISMATCH';

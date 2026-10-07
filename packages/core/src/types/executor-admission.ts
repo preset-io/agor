@@ -2,9 +2,8 @@ import { BRANCH_ARCHIVE_COMMAND, BRANCH_CLEANUP_COMMAND } from './branch-cleanup
 import { BRANCH_DELETION_COMMAND } from './branch-deletion';
 
 /**
- * Admission class of an executor run. A launcher that gates concurrency (Agor
- * Cloud) counts `agent` runs against the agent limit; `utility` runs count only
- * against the executor ceiling. Cross-repo contract: preset-io/agor-cloud#814.
+ * Admission class of an executor run. A launcher that gates admissions may
+ * count `agent` runs differently from `utility` runs.
  */
 export const EXECUTOR_ADMISSION_CLASSES = ['agent', 'utility'] as const;
 export type ExecutorAdmissionClass = (typeof EXECUTOR_ADMISSION_CLASSES)[number];

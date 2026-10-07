@@ -9,9 +9,8 @@ export type ExecutorExitDisposition = 'authoritative' | 'passive' | 'ambiguous' 
 
 /**
  * Daemon env set by a launcher deployment that reserves exit
- * `EXECUTOR_LAUNCH_REFUSED_EXIT_CODE` for "admission refused, nothing created"
- * (the Agor Cloud runtime chart). An env var, not a config key, so older
- * daemons and unknown-key checks ignore it.
+ * `EXECUTOR_LAUNCH_REFUSED_EXIT_CODE` for "admission refused, nothing created".
+ * An env var, not a config key, so older daemons and unknown-key checks ignore it.
  */
 export const EXECUTOR_LAUNCH_REFUSED_EXIT_ENV = 'AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT';
 
