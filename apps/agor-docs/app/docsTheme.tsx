@@ -1,4 +1,5 @@
 import { Footer } from 'nextra-theme-docs';
+import { FinePrint } from '../components/FinePrint';
 import { IslandNav } from '../components/nav/IslandNav';
 
 // The floating-island global nav replaces Nextra's navbar site-wide; it owns
@@ -10,10 +11,7 @@ export const navbar = <IslandNav key="island-nav" />;
 export const footer = (
   <Footer>
     <span>
-      Agor Community Edition is source-available under BSL 1.1 · © 2025 Preset, Inc.
-      <br />
-      Agor is not affiliated with or endorsed by the companies mentioned on this site. All product
-      names, logos, and brands are property of their respective owners.
+      <FinePrint />
     </span>
   </Footer>
 );
