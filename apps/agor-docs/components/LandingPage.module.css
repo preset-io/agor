@@ -2781,6 +2781,16 @@ a.radarBlip .blipName {
   );
 }
 
+/* Browsers that can't animate --hero-tilt (see HomeHero): no tilt, no
+ * depth blur, just the video. */
+.homeHeroVideoStill {
+  animation: none;
+}
+
+.homeHeroVideoStill .homeHeroDepth {
+  display: none;
+}
+
 /* The opt-in full blur already softens everything. */
 .homeHeroVideoBlur .homeHeroDepth {
   display: none;

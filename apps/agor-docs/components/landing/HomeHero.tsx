@@ -45,6 +45,13 @@ export function HomeHero() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [paused, setPaused] = useState(false);
   const blur = useHeroBlur();
+  // The tilt and its depth blur animate a registered CSS property
+  // (@property --hero-tilt). Browsers without it (Safari < 16.4, Firefox <
+  // 128) would snap between angles, so they get the video held still instead.
+  const [still, setStill] = useState(false);
+  useEffect(() => {
+    if (!('registerProperty' in CSS)) setStill(true);
+  }, []);
 
   // Reduced motion or data saver: stay on the poster frame.
   useEffect(() => {
@@ -76,7 +83,13 @@ export function HomeHero() {
       {/* Decorative loop; the poster is the layer's background image so it shows
           while loading, when paused, and under reduced motion. */}
       <div
-        className={`${styles.homeHeroVideo}${blur ? ` ${styles.homeHeroVideoBlur}` : ''}`}
+        className={[
+          styles.homeHeroVideo,
+          blur && styles.homeHeroVideoBlur,
+          still && styles.homeHeroVideoStill,
+        ]
+          .filter(Boolean)
+          .join(' ')}
         aria-hidden="true"
       >
         <video
