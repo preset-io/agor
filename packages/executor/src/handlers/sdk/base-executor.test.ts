@@ -1,7 +1,10 @@
 import type { MessageID } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { isTaskFailurePersisted } from '../../terminal-task.js';
-import { markCoordinatorTerminationAbort } from '../../termination-state.js';
+import {
+  isExecutorCleanupUnverified,
+  markCoordinatorTerminationAbort,
+} from '../../termination-state.js';
 import {
   createStreamingCallbacks,
   executeToolTask,
@@ -283,6 +286,54 @@ describe('executeToolTask credential preflight', () => {
     );
     expect(order).toEqual(['message', 'task']);
   });
+
+  it.each(['success', 'failure', 'throw', 'missing'])(
+    'preserves stop-hook cleanup evidence after provider settlement (%s)',
+    async (outcome) => {
+      const abortController = new AbortController();
+      const taskPatch = vi.fn();
+      const client = {
+        service(name: string) {
+          if (name === 'config/resolve-api-key')
+            return {
+              create: vi
+                .fn()
+                .mockResolvedValue({ apiKey: 'key', source: 'user', useNativeAuth: false }),
+            };
+          if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+          if (name === 'tasks') return { patch: taskPatch };
+          return {};
+        },
+      } as never;
+      const stopTask =
+        outcome === 'missing'
+          ? undefined
+          : vi.fn(async () => {
+              if (outcome === 'throw') throw new Error('cleanup failed');
+              return { success: outcome === 'success' };
+            });
+      await executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'GEMINI_API_KEY',
+        toolName: 'gemini',
+        createTool: () =>
+          ({
+            stopTask,
+            executePromptWithStreaming: vi.fn(async () => {
+              markCoordinatorTerminationAbort(abortController);
+              abortController.abort();
+              return { userMessageId: 'user-1' as MessageID, assistantMessageIds: [] };
+            }),
+          }) as never,
+      });
+      expect(isExecutorCleanupUnverified(abortController)).toBe(outcome !== 'success');
+      expect(taskPatch).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not launch provider work when cancellation arrives before tool execution', async () => {
     const abortController = new AbortController();

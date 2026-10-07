@@ -313,7 +313,10 @@ Out-of-band `SIGTERM`/`SIGINT` is not user cancellation. The executor marks
 daemon-owned terminality before aborting its provider, then uses the exact
 task-token-scoped `reportExecutorInterruption` method to claim the existing
 containment workflow. Only after provider execution and stop hooks return does
-it report the winning request's quiescence. Duplicate signals share one shutdown
+it report the winning request's quiescence. Promise settlement alone is not
+teardown evidence: provider close timeouts, close failures, and failed stop hooks
+mark cleanup unverified for that execution and suppress all quiescence reports,
+including error/reconnect recovery. Duplicate signals share one shutdown
 and a **10 second total deadline**, including daemon I/O. Deadline expiry exits
 without inventing quiescence; local process-group containment or remote substrate
 evidence is still required. The first signal determines exit 143/130, not OOM
@@ -502,7 +505,12 @@ and preserves the original cause. A retry does not turn unexpected death into
 user cancellation. Normal Stop retains user-stop precedence.
 
 Unverified settlement remains nonpromptable with no automatic rediscovery;
-fresh scoped quiescence evidence can still resolve it. Force-release is also
+fresh scoped quiescence evidence can still resolve it. Unverified settlement
+atomically compares the executor acknowledgement observed before containment;
+a new acknowledgement arriving during a failed helper cannot be buried under
+a guard. The coordinator re-evaluates that evidence without repeating the helper.
+Duplicate acknowledgements cannot reopen a later guard that already considered
+that same evidence. Force-release is also
 fenced to the observed recovery revision. UI projects this as recovery in
 progress, Cleanup needs attention, or reopened without confirmed cleanup—not
 new branch lifecycle states. Failures use durable Task errors/realtime plus

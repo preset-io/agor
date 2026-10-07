@@ -127,6 +127,7 @@ function appDouble(tool = 'codex', options: { getDelayMs?: number; config?: unkn
     settle,
     setCurrent,
     markExecutorQuiesced,
+    getCurrent,
     beginCleanupAttempt,
     claimTermination,
     claimTerminationCoordination,
@@ -1146,6 +1147,31 @@ describe('remote cleanup integration', () => {
     expect((await execute(state)).status).toBe('unverified');
     expect(state.settleTermination).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: 'unverified' }),
+      expect.anything()
+    );
+  });
+  it('settles a quiescence report arriving during the helper without repeating cleanup', async () => {
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    runCleanup.mockImplementationOnce(async () => {
+      state.markExecutorQuiesced();
+      return { confirmed: false, diagnostic: 'Cleanup timed out.' };
+    });
+    state.settleTermination.mockImplementationOnce(async (input) => {
+      expect(input).toMatchObject({ outcome: 'unverified', expectedExecutorQuiescedAt: null });
+      // Model the repository's row-locked evidence fence.
+      return { outcome: 'condition_changed', task: await state.getCurrent() };
+    });
+    state.settle(task(TaskStatus.FAILED));
+    expect((await execute(state)).status).toBe('terminal');
+    expect(runCleanup).toHaveBeenCalledOnce();
+    expect(state.settleTermination).toHaveBeenCalledTimes(2);
+    expect(state.settleTermination).toHaveBeenLastCalledWith(
+      expect.objectContaining({ outcome: 'verified_absent' }),
       expect.anything()
     );
   });

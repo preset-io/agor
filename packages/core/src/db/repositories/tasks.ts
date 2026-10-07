@@ -242,6 +242,8 @@ interface TerminationSettlementInputBase {
 export type TerminationSettlementInput =
   | (TerminationSettlementInputBase & {
       outcome: 'verified_absent' | 'unverified';
+      /** Observed acknowledgement; unverified settlement must not bury newly committed evidence. */
+      expectedExecutorQuiescedAt?: string | null;
       /** Exact, currently persisted containment-coordination fence. */
       coordinationToken: string;
     })
@@ -1859,6 +1861,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
 
       if (input.outcome === 'unverified') {
+        if (
+          (current.termination_request?.executor_quiesced_at ?? null) !==
+          (input.expectedExecutorQuiescedAt ?? null)
+        ) {
+          return { outcome: 'condition_changed', task: current };
+        }
         const failure = input.sdkFailure ?? current.sdk_failure;
         if (!failure || !input.errorMessage) {
           throw new RepositoryError('unverified settlement requires failure evidence');

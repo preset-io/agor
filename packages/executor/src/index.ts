@@ -43,7 +43,11 @@ import { type AgorClient, createExecutorClient } from './services/feathers-clien
 import { createExecutorSignalShutdown } from './signal-shutdown.js';
 import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
 import { reportExecutorQuiescence } from './termination-report.js';
-import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
+import {
+  isDaemonOwnedAbort,
+  isExecutorCleanupUnverified,
+  markCoordinatorTerminationAbort,
+} from './termination-state.js';
 
 patchConsole();
 
@@ -394,6 +398,9 @@ export class AgorExecutor {
 
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
+    if (this.isRunning || isExecutorCleanupUnverified(this.abortController)) {
+      throw new Error('Executor cleanup remains unverified');
+    }
     if (!this.terminationReport) {
       const client = this.client;
       const requestedAt = this.terminationRequest.requested_at;
@@ -604,8 +611,8 @@ export class AgorExecutor {
       .catch(() => null);
     if (deadline.aborted) return;
     if (task) this.handleTaskLifecycleUpdate(task);
-    // A rejected provider promise still runs its finally/stop hooks. Never
-    // report quiescence while that promise remains outstanding.
+    // Wait for finally/stop hooks, but settlement alone is not containment:
+    // reportTerminationComplete also checks the adapter's sticky cleanup outcome.
     await this.execution?.catch(() => undefined);
     if (deadline.aborted) return;
     if (!task && !this.terminationRequest) {

@@ -2567,6 +2567,71 @@ describe('TaskRepository.update', () => {
   });
 
   dbTest(
+    'does not bury quiescence committed during an external containment check',
+    async ({ db }) => {
+      const tasks = new TaskRepository(db);
+      const sessions = new SessionRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await tasks.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      const requested = await tasks.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+      });
+      await tasks.claimTerminationCoordination({
+        taskId: task.task_id,
+        claimToken: 'in-flight-cleanup',
+        leaseDurationMs: 30_000,
+        instanceId: 'daemon-a',
+        bootId: 'boot-a',
+      });
+      const report = {
+        task_id: task.task_id,
+        requested_at: requested.task.termination_request!.requested_at,
+      };
+      await tasks.recordExecutorQuiescence(report);
+      const stale = await tasks.settleTermination({
+        taskId: task.task_id,
+        outcome: 'unverified',
+        coordinationToken: 'in-flight-cleanup',
+        expectedExecutorQuiescedAt: null,
+        errorMessage: 'Helper timed out',
+        sdkFailure: {
+          reason: 'termination_unverified',
+          tool: 'codex',
+          detected_at: new Date().toISOString(),
+          termination: 'unverified',
+        },
+      });
+      expect(stale.outcome).toBe('condition_changed');
+      expect(stale.task.termination_request?.executor_quiesced_at).toBeTruthy();
+      expect(stale.task.sdk_failure?.termination).not.toBe('unverified');
+      // Duplicate report stays idempotent, but no stale guard can strand this owner.
+      await tasks.recordExecutorQuiescence(report);
+      const settled = await tasks.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+        coordinationToken: 'in-flight-cleanup',
+      });
+      expect(settled).toMatchObject({
+        outcome: 'transitioned',
+        task: { status: TaskStatus.FAILED },
+      });
+      await expect(sessions.findById(sessionId)).resolves.toMatchObject({ ready_for_prompt: true });
+      expect(
+        (
+          await tasks.settleTermination({
+            taskId: task.task_id,
+            outcome: 'verified_absent',
+            coordinationToken: 'in-flight-cleanup',
+          })
+        ).outcome
+      ).toBe('terminal');
+    }
+  );
+
+  dbTest(
     'reconciles a late fenced quiescence report after containment was unverified',
     async ({ db }) => {
       const tasks = new TaskRepository(db);
@@ -2690,6 +2755,8 @@ describe('TaskRepository.update', () => {
           taskId: task.task_id,
           outcome: 'unverified',
           coordinationToken: claimToken,
+          expectedExecutorQuiescedAt:
+            (await tasks.findById(task.task_id))?.termination_request?.executor_quiesced_at ?? null,
           errorMessage: 'Executor containment remains unverified.',
           sdkFailure: {
             reason: 'termination_unverified',

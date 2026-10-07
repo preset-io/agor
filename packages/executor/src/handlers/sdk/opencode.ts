@@ -41,6 +41,7 @@ import {
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
 import {
   completeManagedOpenCodeTurn,
@@ -231,6 +232,7 @@ export async function executeOpenCodeTask(params: {
     console.error('[opencode] execution failed category=task_execution');
 
     if (isOpenCodeCleanupUnverifiedError(failure)) {
+      markExecutorCleanupUnverified(params.abortController);
       // Keep the task active. Executor exit hands containment to the daemon;
       // making it terminal here would release the session before absence is proven.
       return;

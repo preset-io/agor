@@ -386,6 +386,7 @@ async function runContainment(
         {
           taskId: current.task_id,
           outcome: 'unverified',
+          expectedExecutorQuiescedAt: current.termination_request?.executor_quiesced_at ?? null,
           cleanupDiagnostic: reason,
           sdkFailure: diagnosis,
           errorMessage: unverifiedMessage(),
@@ -398,6 +399,18 @@ async function runContainment(
       return { status: 'unverified', task: settlement.task, reason };
     }
     if (settlement.outcome === 'condition_changed') {
+      // A first acknowledgement can arrive while the helper or local process
+      // check is outstanding. The repository atomically refuses to bury that
+      // new evidence under an unverified guard. Re-evaluate it with the same
+      // owner; quiescence is monotonic, so this cannot spin or re-run the helper.
+      if (
+        !executorQuiesced &&
+        settlement.task.status === TaskStatus.STOPPING &&
+        settlement.task.termination_request?.coordination?.claim_token === coordinationToken &&
+        settlement.task.termination_request.executor_quiesced_at
+      ) {
+        return runContainment(input, settlement.task, tool);
+      }
       return { status: 'condition_changed', task: settlement.task };
     }
     return { status: 'unverified', task: settlement.task, reason };

@@ -24,6 +24,7 @@ vi.mock('./mcp-runtime-refresh.js', () => ({
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import { AgorExecutor } from './index.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
+import { markExecutorCleanupUnverified } from './termination-state.js';
 
 const evidence = {
   reason: 'no_first_progress' as const,
@@ -515,6 +516,7 @@ describe('AgorExecutor signal containment handoff', () => {
       execution: Promise<void> | null;
       abortController: AbortController;
       shutdownForSignal(signal: 'SIGTERM' | 'SIGINT', deadline: AbortSignal): Promise<void>;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
     executor.client = {
       service: () => ({ reportExecutorInterruption, reportTerminationComplete, get, patch }),
@@ -553,6 +555,24 @@ describe('AgorExecutor signal containment handoff', () => {
     expect(h.reportTerminationComplete).toHaveBeenCalledOnce();
     expect(h.patch).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    'never reports unverified provider cleanup (rejected=%s)',
+    async (reject) => {
+      const h = signalHarness();
+      h.executor.execution = Promise.resolve().then(() => {
+        markExecutorCleanupUnverified(h.executor.abortController);
+        if (reject) throw new Error('provider cleanup failed');
+      });
+      await expect(
+        h.executor.shutdownForSignal('SIGTERM', new AbortController().signal)
+      ).rejects.toThrow('Executor cleanup remains unverified');
+      // Reconnect/error recovery must not reinterpret the settled execution either.
+      expect(await h.executor.recoverTerminationAfterExecutionError()).toBe(false);
+      expect(h.reportTerminationComplete).not.toHaveBeenCalled();
+      expect(h.patch).not.toHaveBeenCalled();
+    }
+  );
 
   it('does not invent quiescence after the shutdown deadline', async () => {
     const h = signalHarness();

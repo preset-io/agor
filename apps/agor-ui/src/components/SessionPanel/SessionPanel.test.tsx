@@ -516,6 +516,41 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     ).not.toBeInTheDocument();
   });
 
+  it.each([
+    [
+      Object.assign(new Error('Forbidden'), { code: 403 }),
+      'You do not have permission to retry cleanup. Ask the session owner or a branch manager for help.',
+    ],
+    [
+      Object.assign(new Error('Not authenticated'), { code: 401 }),
+      'Sign in again before retrying cleanup.',
+    ],
+    [
+      new Error('socket disconnected'),
+      'We could not confirm the cleanup request. Reconnect and check the status before retrying.',
+    ],
+  ])('distinguishes cleanup rejection from transport ambiguity (%s)', async (error, message) => {
+    reactive.tasks = [
+      {
+        task_id: '018f0000-0000-7000-8000-000000000001',
+        status: 'stopping',
+        sdk_failure: { termination: 'unverified' },
+        termination_request: { cause: 'heartbeat_lost', requested_at: '2026-06-24T00:00:01.000Z' },
+      } as Task,
+    ];
+    const create = vi.fn().mockRejectedValue(error);
+    renderPanel({
+      client: {
+        io: stopIo(),
+        service: () => ({ create, on: vi.fn(), off: vi.fn() }),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'stopping', agentic_tool: 'codex' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    expect(await screen.findByText(message as string)).toBeVisible();
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it('surfaces errors when the branch owner reopens without confirmed cleanup', async () => {
     reactive.tasks = [
       {

@@ -76,6 +76,7 @@ vi.mock('./base-executor.js', async (importOriginal) => ({
   createStreamingCallbacks: () => ({}),
 }));
 
+import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { executeOpenCodeTask } from './opencode.js';
 
 const sessionId = '00000000-0000-7000-8000-000000000001';
@@ -274,7 +275,9 @@ describe('OpenCode executor adapter', () => {
     failure.name = 'OpenCodeCleanupUnverifiedError';
     mocks.runTurn.mockRejectedValue(failure);
 
-    await expect(execute(state.value)).resolves.toBeUndefined();
+    const abortController = new AbortController();
+    await expect(execute(state.value, abortController)).resolves.toBeUndefined();
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();

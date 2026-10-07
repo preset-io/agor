@@ -1152,9 +1152,17 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         setRecoveryError(
           'Recovery has already changed. Check the latest status before trying again.'
         );
-    } catch {
+    } catch (error) {
+      const code =
+        typeof error === 'object' && error !== null && 'code' in error ? error.code : undefined;
       setRecoveryError(
-        'We could not confirm the cleanup request. Reconnect and check the status before retrying.'
+        isStopTransportAmbiguous(error)
+          ? 'We could not confirm the cleanup request. Reconnect and check the status before retrying.'
+          : code === 401
+            ? 'Sign in again before retrying cleanup.'
+            : code === 403
+              ? 'You do not have permission to retry cleanup. Ask the session owner or a branch manager for help.'
+              : 'The cleanup request was not accepted. Check the latest status before trying again.'
       );
     } finally {
       setStopRequestInFlight(false);

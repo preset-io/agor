@@ -37,7 +37,7 @@ import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { markTaskFailurePersisted } from '../../terminal-task.js';
-import { isDaemonOwnedAbort } from '../../termination-state.js';
+import { isDaemonOwnedAbort, markExecutorCleanupUnverified } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -519,6 +519,7 @@ export async function executeToolTask(params: {
 
   let abortHandler: (() => Promise<void>) | undefined;
   let abortCompletion: Promise<void> | undefined;
+  let providerStarted = false;
   let credentialExpiresAt: string | undefined;
 
   try {
@@ -584,12 +585,15 @@ export async function executeToolTask(params: {
             if (stopResult.success) {
               console.log(`[${toolName}] Tool stopped successfully`);
             } else {
+              if (providerStarted) markExecutorCleanupUnverified(params.abortController);
               console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
             }
           } catch (error) {
+            if (providerStarted) markExecutorCleanupUnverified(params.abortController);
             console.error(`[${toolName}] Error calling stopTask:`, error);
           }
         } else {
+          if (providerStarted) markExecutorCleanupUnverified(params.abortController);
           console.warn(`[${toolName}] Tool does not implement stopTask method`);
         }
       })();
@@ -610,6 +614,7 @@ export async function executeToolTask(params: {
 
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
+    providerStarted = true;
     const result = await tool.executePromptWithStreaming(
       sessionId,
       prompt,
