@@ -452,12 +452,15 @@ export function loadBoardPartition(
   return promise;
 }
 
+let preloadSequence = 0;
+
 /**
  * Preload the caller's recent boards (`boardIds`, most recent first) as
  * background partitions, one at a time, so opening one is ready at once. At
  * most `RETAINED_BACKGROUND_PARTITIONS` besides the displayed board, so the
  * LRU keeps them all; each enters it as just used. A board loaded or loading
- * already is left as it is. Stops when the lifetime ends.
+ * already is left as it is. Stops when the lifetime ends or a later preload
+ * starts, so one preload runs at a time.
  */
 export async function preloadBoardPartitions(
   client: AgorClient,
@@ -466,6 +469,7 @@ export async function preloadBoardPartitions(
 ): Promise<void> {
   const lifetime = captureLoadLifetime();
   if (!lifetime) return;
+  const run = ++preloadSequence;
   const { boardById } = agorStore.getState();
   const displayed = getDisplayedBoardId();
   const recent = boardIds
@@ -473,7 +477,7 @@ export async function preloadBoardPartitions(
     .filter((boardId) => !boardById.get(boardId)?.archived)
     .slice(0, RETAINED_BACKGROUND_PARTITIONS);
   for (const boardId of recent) {
-    if (!isLoadLifetimeCurrent(lifetime)) return;
+    if (run !== preloadSequence || !isLoadLifetimeCurrent(lifetime)) return;
     if (boardId === getDisplayedBoardId() || selectBoardPartition(agorStore.getState(), boardId))
       continue;
     const load = loadBoardPartition(client, boardId, { ...options, background: true });

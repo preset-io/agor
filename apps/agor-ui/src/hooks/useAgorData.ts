@@ -461,8 +461,6 @@ export function useAgorData(
   // partition). Their rows may have missed deletions, archives or revoked
   // access meanwhile: the next resync evicts them unless loaded again.
   const transitionUnloadedBoardsRef = useRef(new Set<string>());
-  // The `user:role` whose recent boards were preloaded (`preloadBoardPartitions`).
-  const preloadedForRef = useRef<string | null>(null);
   const oauthStatusRequestGenerationRef = useRef(0);
 
   // The opened session's transcript prefetch (see `openedTranscriptPrefetch`).
@@ -1071,17 +1069,14 @@ export function useAgorData(
               )
             );
             releaseStaleScopes(userScopeRun);
-            // Once per user and role (not on every reconnect), once my
-            // sessions and branches are in: preload my recent boards.
+            // Once my sessions and branches are in, preload my recent boards:
+            // after first paint, and after each resync (which unloaded them).
             const state = agorStore.getState();
-            const identityRole = fetchAuthorityScope.slice(0, fetchAuthorityScope.lastIndexOf(':'));
             if (
               authenticatedUserId &&
-              preloadedForRef.current !== identityRole &&
               selectMySessionsLoaded(state) &&
               selectHomeBranchesLoaded(state)
             ) {
-              preloadedForRef.current = identityRole;
               // Exactly the boards Home's recent row lists, fallback included.
               const visited = readLocalStorageJson<string[]>(
                 recentBoardsStorageKey(authenticatedUserId),
@@ -1190,7 +1185,6 @@ export function useAgorData(
       // OAuth state, credential presence), so an in-place identity replacement
       // gets the same map boundary as logout before the new authority resyncs.
       agorStore.getState().resetMaps();
-      preloadedForRef.current = null;
     } else if (!canUseMemberWorkspaceServices) {
       bumpRevision('boardObjects');
       agorStore.getState().applyMaps((previousMaps) => ({

@@ -2907,26 +2907,26 @@ describe('useAgorData — recent-board preload', () => {
     expect(ids.map(status)).toEqual(['loaded', 'loaded', undefined, 'loaded', 'loaded']);
   });
 
-  it('does not preload again on a reconnect, only after an authority change', async () => {
+  it('preloads again once after each reconnect resync settles, never more', async () => {
     const { result, emitIo, rerender, boardReads } = workspace();
     await waitForInitialLoad(result);
     await waitFor(() => expect(status('board-4')).toBe('loaded'));
     await flush();
     expect(ids.map(boardReads)).toEqual([1, 1, 1, 1, 0]);
 
-    // A socket reconnect: a resync, then a new auth generation for the same user and role.
+    // A socket reconnect resync unloads the preloaded boards; they load again once.
     act(() => emitIo('connect'));
-    await flush();
-    rerender({ generation: 2, role: 'member' });
-    await waitFor(() => expect(status('board-1')).toBe('loaded'));
-    await waitFor(() => expect(scopeSettled()).toBe(true));
-    await flush();
-    expect(ids.slice(1).map(boardReads)).toEqual([1, 1, 1, 0]);
-
-    // A role change preloads once more.
-    rerender({ generation: 3, role: 'admin' });
+    await waitFor(() => expect(boardReads('board-4')).toBe(2));
     await waitFor(() => expect(status('board-4')).toBe('loaded'));
     await flush();
     expect(ids.slice(1).map(boardReads)).toEqual([2, 2, 2, 0]);
+
+    // A new auth generation (the app's reconnect) unloads every partition: once more.
+    rerender({ generation: 2, role: 'member' });
+    await waitFor(() => expect(boardReads('board-4')).toBe(3));
+    await waitFor(() => expect(status('board-4')).toBe('loaded'));
+    await flush();
+    expect(ids.slice(1).map(boardReads)).toEqual([3, 3, 3, 0]);
+    expect(ids.map(status)).toEqual(['loaded', 'loaded', 'loaded', 'loaded', undefined]);
   });
 });
