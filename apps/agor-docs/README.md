@@ -142,7 +142,14 @@ pnpm docs:build
 ```
 
 The build compiles MDX, exports the site to `apps/agor-docs/out/`, and generates
-sitemap and Pagefind search assets. It does not regenerate API or CLI documentation.
+sitemap and Pagefind search assets.
+
+Builds use Turbopack (`next build --turbopack`): about 40s to compile from cold,
+versus about 110s cold (55s warm) with webpack, with identical output. If a build
+ever misbehaves under Turbopack (it's still beta in Next 15), `pnpm --filter
+@agor/docs build:webpack` runs the same build on webpack. Locally, `pnpm serve` builds
+and then serves `out/`; `pnpm preview` serves the last build without rebuilding,
+and `pnpm dev` is the fast loop while editing. It does not regenerate API or CLI documentation.
 The legacy root `docs:generate` alias has no matching docs-package script.
 
 For an analytics export check, set a test `NEXT_PUBLIC_GA_ID` during both the build
