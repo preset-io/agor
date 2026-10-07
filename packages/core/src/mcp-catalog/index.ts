@@ -10,6 +10,7 @@ export {
   probeRemoteAuth,
   probeRemoteAuthType,
   probeRemoteBearerToken,
+  probeRemoteCredentialHeaders,
   type RemoteAuthProbeResult,
 } from './auth-probe';
 export { findCatalogEntry, loadCatalog } from './catalog';

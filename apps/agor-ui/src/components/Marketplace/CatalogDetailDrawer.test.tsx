@@ -843,3 +843,70 @@ describe('explicit ownership and no-write reuse', () => {
     expect(screen.queryByRole('radio', { name: 'Shared' })).toBeNull();
   });
 });
+
+describe('CatalogDetailDrawer vendor credential recipe', () => {
+  const DBT = {
+    ...GITHUB,
+    name: 'com.getdbt/mcp',
+    title: 'dbt',
+    permission_disclosure: 'Uses the dbt token you provide.',
+    credentials: {
+      scheme: 'bearer',
+      label: 'Service token',
+      acquisition_url: 'https://docs.getdbt.com/docs/dbt-cloud-apis/service-tokens',
+      prefix: 'Token ',
+      fields: [
+        {
+          key: 'prod_environment_id',
+          label: 'Production environment ID',
+          header: 'x-dbt-prod-environment-id',
+          secret: false,
+        },
+        { key: 'workspace_secret', label: 'Workspace secret', header: 'x-ws', secret: true },
+      ],
+    },
+  } as unknown as MCPCatalogEntry;
+  const tokenField = () => screen.getByPlaceholderText('Paste your dbt Service token');
+  const envField = () => screen.getByPlaceholderText('Enter your dbt Production environment ID');
+  const secretField = () => screen.getByPlaceholderText('Enter your dbt Workspace secret');
+
+  it('names the token by its label and renders every declared field', () => {
+    renderWithConnect(DBT);
+
+    expect(tokenField()).toHaveAttribute('type', 'password');
+    expect(envField()).toHaveAttribute('type', 'text');
+    expect(secretField()).toHaveAttribute('type', 'password');
+    expect(keyField()).not.toBeInTheDocument();
+  });
+
+  it('gates connect on every field and sends them with the token', () => {
+    const { onConnect } = renderWithConnect(DBT);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(tokenField(), { target: { value: 'fake-dbt-token' } });
+    fireEvent.change(envField(), { target: { value: ' 4242 ' } });
+
+    expect(connectButton()).toBeDisabled();
+    fireEvent.change(secretField(), { target: { value: 'fake-ws-secret' } });
+    expect(connectButton()).toBeEnabled();
+
+    fireEvent.click(connectButton());
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bearerToken: 'fake-dbt-token',
+        credentialFields: { prod_environment_id: '4242', workspace_secret: 'fake-ws-secret' },
+      })
+    );
+  });
+
+  it('discards the fields with the token when the drawer closes', () => {
+    const { setOpen } = renderWithConnect(DBT);
+    fireEvent.change(tokenField(), { target: { value: 'fake-dbt-token' } });
+    fireEvent.change(envField(), { target: { value: '4242' } });
+
+    setOpen(false);
+    setOpen(true);
+
+    expect(tokenField()).toHaveValue('');
+    expect(envField()).toHaveValue('');
+  });
+});

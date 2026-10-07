@@ -298,7 +298,7 @@ describe('catalog visibility', () => {
     expect(findCatalogEntry([hidden], hidden.name)).toBe(hidden);
   });
 
-  it('retains exactly the seven blocked definitions internally, with no extra providers hidden', async () => {
+  it('retains exactly the blocked definitions internally, with no extra providers hidden', async () => {
     const full = await loadCatalog();
     const hiddenNames = [
       'com.figma.mcp/mcp',
@@ -308,6 +308,14 @@ describe('catalog visibility', () => {
       'com.canva/mcp',
       'com.dropbox/mcp',
       'com.newrelic/mcp-server',
+      // 2026-10-07 additions held back; reasons are dated in curated.yaml.
+      'com.shortcut/mcp',
+      'com.hubspot/mcp',
+      'com.googleapis.gmailmcp/mcp',
+      'com.googleapis.calendarmcp/mcp',
+      'com.googleapis.drivemcp/mcp',
+      'com.googleapis.docsmcp/mcp',
+      'com.getdbt/mcp',
     ].sort();
     expect(
       full
@@ -316,7 +324,7 @@ describe('catalog visibility', () => {
         .sort()
     ).toEqual(hiddenNames);
     const visible = filterCatalog(full);
-    expect(visible).toHaveLength(full.length - 7);
+    expect(visible).toHaveLength(full.length - hiddenNames.length);
     for (const name of hiddenNames) {
       expect(findCatalogEntry(full, name)).toBeDefined();
       expect(filterCatalog(full, { search: name })).toEqual([]);

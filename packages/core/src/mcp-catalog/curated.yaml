@@ -472,6 +472,36 @@ entries:
     transport: streamable-http
     auth_type: none
 
+  # 2026-10-07 additions (registry-published names). Probed initialize and
+  # OAuth metadata; one test DCR registration with an Agor callback was accepted.
+  - name: ai.fireflies/fireflies
+    title: Fireflies.ai
+    category: productivity
+    capabilities: [notes, tasks]
+    benefit: Pull meeting transcripts, summaries, and action items into the session so follow-ups start from what was actually said.
+    starter_prompt: Summarise my meetings from this week and list the action items assigned to me. Do not change anything.
+    permission_disclosure: Acts as your Fireflies user and can read the meetings, transcripts, summaries, and action items your account can access. Data returned by Fireflies is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=fireflies.ai&sz=64
+    website_url: https://docs.fireflies.ai/getting-started/mcp-configuration
+    popularity_rank: 64
+    remote_url: https://api.fireflies.ai/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.railway/mcp
+    title: Railway
+    category: dev-tools
+    capabilities: [deployments, logs, projects]
+    benefit: Inspect Railway projects, services, deployments, and logs so an agent can diagnose a failed deploy without a dashboard tab.
+    starter_prompt: List my Railway projects and summarise the most recent deployment of each service, including any that failed. Do not deploy or change anything.
+    permission_disclosure: Acts as your Railway user within the workspaces you authorise. It can read projects, services, deployments, variables, and logs, and its tools can create, redeploy, change, or delete services and other resources, including destructive operations. Project tokens are not accepted; a user sign-in is required.
+    icon_url: https://www.google.com/s2/favicons?domain=railway.com&sz=64
+    website_url: https://docs.railway.com/ai/remote-mcp-server
+    popularity_rank: 65
+    remote_url: https://mcp.railway.com
+    transport: streamable-http
+    auth_type: oauth
+
 # Servers whose vendor runs a public MCP endpoint but has not published to the
 # registry. Their `name` is the reverse-DNS form of a domain the vendor owns —
 # the name the registry's own rules would require them to use — but nothing has
@@ -887,10 +917,492 @@ unpublished:
     transport: streamable-http
     auth_type: oauth
 
+  # 2026-10-07 additions: Dynamic Client Registration. Each endpoint was probed
+  # (initialize, protected-resource and authorization-server metadata) and
+  # accepted one test registration with an Agor callback URI.
+  - name: ai.granola/mcp
+    title: Granola
+    category: productivity
+    capabilities: [notes]
+    benefit: Bring your Granola meeting notes into the session so decisions and context come from the meeting, not from memory.
+    starter_prompt: Summarise my Granola meeting notes from this week and list the decisions and my follow-ups. Do not change anything.
+    permission_disclosure: Acts as your Granola user and reads the meeting notes your account can access. Folder and transcript tools need a paid Granola plan; enterprise admins can disable MCP access. Data returned by Granola is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=granola.ai&sz=64
+    website_url: https://docs.granola.ai/help-center/sharing/integrations/mcp
+    popularity_rank: 66
+    remote_url: https://mcp.granola.ai/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: ai.read/mcp
+    title: Read AI
+    category: productivity
+    capabilities: [notes, tasks]
+    benefit: Search Read AI meeting reports and transcripts from the session to recover decisions, owners, and open questions.
+    starter_prompt: Find my meetings from the last two weeks about the topic I name and summarise the decisions and open action items. Do not change anything.
+    permission_disclosure: Acts as your Read AI user (open beta). It can read meetings, transcripts, and reports your account can access, and its tools can share reports and send a recording assistant to meetings. Data returned by Read AI is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=read.ai&sz=64
+    website_url: https://support.read.ai/hc/en-us/articles/49381158409491-MCP-Server
+    popularity_rank: 67
+    remote_url: https://api.read.ai/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.calendly/mcp
+    title: Calendly
+    category: productivity
+    capabilities: [tasks, automations]
+    benefit: Check availability, event types, and upcoming bookings from the session, and schedule or cancel when you ask.
+    starter_prompt: List my Calendly events for the next week and my event types. Do not book or cancel anything.
+    permission_disclosure: Acts as your Calendly user and can read and change scheduling data your account can reach, including event types, availability, and scheduled events; its tools can create and cancel bookings.
+    icon_url: https://www.google.com/s2/favicons?domain=calendly.com&sz=64
+    website_url: https://developer.calendly.com/calendly-mcp-server
+    popularity_rank: 68
+    # The MCP endpoint is the host root; /mcp answers 404.
+    remote_url: https://mcp.calendly.com
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.mixpanel/mcp
+    title: Mixpanel
+    category: observability
+    capabilities: [analytics, metrics, feature-flags]
+    benefit: Ask product-analytics questions in plain language and get answers from your Mixpanel events, reports, and dashboards.
+    starter_prompt: Show weekly active users for my main Mixpanel project over the last eight weeks and point out any unusual change. Do not change anything.
+    permission_disclosure: Acts as your Mixpanel user for US-region projects. It can run queries and read reports, and its tools can create or change dashboards, cohorts, and data definitions where your role allows. An organisation admin may need to enable MCP first. EU and India data-residency projects use separate endpoints that this entry does not connect to.
+    icon_url: https://www.google.com/s2/favicons?domain=mixpanel.com&sz=64
+    website_url: https://docs.mixpanel.com/docs/mcp
+    popularity_rank: 69
+    # US region. EU (https://mcp-eu.mixpanel.com/mcp) and India
+    # (https://mcp-in.mixpanel.com/mcp) answer the same way and could be added
+    # as separate entries if residency customers ask.
+    remote_url: https://mcp.mixpanel.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: tech.hex/mcp
+    title: Hex
+    category: data-storage
+    capabilities: [sql, analytics, datasets, notes]
+    benefit: Search Hex projects and Threads, and let an agent work in notebooks you already trust instead of rebuilding analysis.
+    starter_prompt: Find the Hex projects about the metric I name and summarise what each one concludes. Do not edit or run anything.
+    permission_disclosure: Acts as your Hex user (beta; Team and Enterprise plans). It can search and read projects and Threads, and with an Editor role its tools can create, edit, delete, and run notebook cells. Data returned by Hex is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=hex.tech&sz=64
+    website_url: https://learn.hex.tech/docs/administration/mcp-server
+    popularity_rank: 70
+    remote_url: https://app.hex.tech/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.todoist/mcp
+    title: Todoist
+    category: productivity
+    capabilities: [tasks, projects]
+    benefit: Turn what the session decided into Todoist tasks, and check what is due without leaving the conversation.
+    starter_prompt: List my Todoist tasks due this week grouped by project. Do not add, complete, or change anything.
+    permission_disclosure: Acts as your Todoist user with read and write access to tasks, projects, sections, comments, and labels; its tools can create, complete, update, and delete them.
+    icon_url: https://www.google.com/s2/favicons?domain=todoist.com&sz=64
+    website_url: https://github.com/Doist/todoist-ai
+    popularity_rank: 71
+    remote_url: https://ai.todoist.net/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.productboard/mcp
+    title: Productboard
+    category: productivity
+    capabilities: [projects, notes, tasks]
+    benefit: Read features, initiatives, and customer feedback so an agent can tie engineering work back to what customers asked for.
+    starter_prompt: Summarise the customer feedback linked to the feature I name and list related initiatives. Do not change anything.
+    permission_disclosure: Acts as your Productboard user. It can read and change features, initiatives, releases, objectives, notes, and feedback where your role allows. A Productboard admin must enable the MCP server first.
+    icon_url: https://www.google.com/s2/favicons?domain=productboard.com&sz=64
+    website_url: https://productboard.com/integrations/mcp-server
+    popularity_rank: 72
+    # The protected resource is the host root; /mcp also answers.
+    remote_url: https://mcp.productboard.com
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: ai.otter/mcp
+    # 2026-10-07: the protected resource is https://mcp.otter.ai/ (not /mcp)
+    # and its authorization server's issuer drops the trailing slash; both are
+    # within the Marketplace OAuth profile, which the live audit confirmed.
+    title: Otter.ai
+    category: productivity
+    capabilities: [notes]
+    benefit: Search Otter meeting transcripts from the session to recover what was said and who said it.
+    starter_prompt: Find my Otter conversations from this week and summarise the key points. Do not change anything.
+    permission_disclosure: Acts as your Otter user with read-only access to your conversations, transcripts, and profile. Data returned by Otter is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=otter.ai&sz=64
+    website_url: https://otter.ai
+    popularity_rank: 73
+    remote_url: https://mcp.otter.ai/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.shortcut/mcp
+    # 2026-10-07: DCR refused a test registration with an Agor callback (400
+    # invalid_client_metadata: "redirect_uris must be an approved redirect
+    # URI"). Hidden until Shortcut approves Agor callbacks.
+    hidden: true
+    title: Shortcut
+    category: dev-tools
+    capabilities: [issues, projects, docs]
+    benefit: Read and update Shortcut stories, epics, and docs from the session that is doing the work.
+    starter_prompt: List the Shortcut stories assigned to me in the current iteration. Do not change anything.
+    permission_disclosure: Acts as your Shortcut user and can read workspace data and create or change stories and docs where your role allows.
+    icon_url: https://www.google.com/s2/favicons?domain=shortcut.com&sz=64
+    website_url: https://www.shortcut.com/help/integrations/mcp-server
+    popularity_rank: 74
+    remote_url: https://mcp.shortcut.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  # 2026-10-07 additions: customer-owned OAuth apps. No DCR; whoever installs
+  # creates the app in the vendor console and enters its client credentials in
+  # the Catalog drawer. Issuers are copied from authorization-server metadata.
+  # Agor authenticates confidential clients to the token endpoint with HTTP Basic.
+  - name: com.slack/mcp
+    title: Slack (official MCP)
+    category: messaging
+    capabilities: [messages, channels, files]
+    benefit: Search and read Slack conversations, canvases, and files from an agent session, and post when you ask. Complements Agor's Slack gateway rather than replacing it.
+    starter_prompt: Search Slack for this week's discussion of the topic I name and summarise the decisions with links. Do not post anything.
+    permission_disclosure: Requires your own internal or Slack Marketplace app (unlisted apps cannot use MCP) with the user scopes this entry requests, approved by a workspace admin. Acts as your Slack user and can search and read channels, DMs, canvases, lists, and files you can access, and can post messages, react, and edit canvases and lists. Data returned by Slack is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=slack.com&sz=64
+    website_url: https://docs.slack.dev/ai/slack-mcp-server
+    popularity_rank: 75
+    remote_url: https://mcp.slack.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      # Slack requires explicit user scopes; a configured client gets no
+      # metadata-derived default. This is the resource's scopes_supported.
+      scope: canvases:read canvases:write channels:history channels:read channels:write chat:write emoji:read files:read files:write groups:history groups:read groups:write im:history im:read im:write lists:read lists:write mpim:history mpim:read mpim:write reactions:read reactions:write search:read.files search:read.im search:read.mpim search:read.private search:read.public search:read.users users:read users:read.email
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://docs.slack.dev/ai/slack-mcp-server
+        issuer: https://mcp.slack.com
+        secret_required: true
+
+  - name: com.box/mcp
+    title: Box
+    category: data-storage
+    capabilities: [files, docs]
+    benefit: Search and read Box files and folders from the session, and use Box AI over the content you already store there.
+    starter_prompt: Find the most recent documents in the Box folder I name and summarise each one. Do not change anything.
+    permission_disclosure: Requires a Box admin to add a Box MCP server integration and issue its client credentials. Acts as your Box user and can read, create, and change files and folders you can access, and use Box AI on them. Data returned by Box is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=box.com&sz=64
+    website_url: https://developer.box.com/guides/box-mcp/remote/
+    popularity_rank: 76
+    remote_url: https://mcp.box.com
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developer.box.com/guides/box-mcp/remote/
+        issuer: https://api.box.com/
+        secret_required: true
+
+  - name: com.frontapp/mcp
+    title: Front
+    category: messaging
+    capabilities: [email, messages, crm]
+    benefit: Read customer conversations in Front and draft replies, tags, and follow-ups from the session.
+    starter_prompt: Summarise the open Front conversations assigned to me and draft a reply for the oldest one. Do not send anything.
+    permission_disclosure: Open beta. Requires a Front admin to create a developer app with MCP Server feature access. Acts as your Front user and can read conversations and contacts, create drafts, tag, assign, and create tasks, and its send_message tool can send messages to customers. Data returned by Front is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=front.com&sz=64
+    website_url: https://dev.frontapp.com/docs/mcp-server
+    popularity_rank: 77
+    remote_url: https://mcp.frontapp.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://dev.frontapp.com/docs/mcp-server
+        issuer: https://app.frontapp.com
+        secret_required: true
+
+  - name: us.zoom/mcp
+    title: Zoom
+    category: productivity
+    capabilities: [notes, docs, tasks]
+    benefit: Read Zoom meetings, recordings, and Docs from the session, and schedule or update meetings when you ask.
+    starter_prompt: List my Zoom meetings for the next week and summarise the recordings from last week. Do not create or change any meetings.
+    permission_disclosure: Requires your own Zoom Marketplace general app with the scopes Zoom documents for its MCP server; product licences apply. Acts as your Zoom user and can read meetings, recordings, notes, and Docs, and create, update, or delete meetings and Docs. Data returned by Zoom is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=zoom.us&sz=64
+    website_url: https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers.md
+    popularity_rank: 78
+    # Zoom's server card names this host; mcp-us.zoom.us binds to it too.
+    remote_url: https://mcp.zoom.us/mcp/zoom/streamable
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers.md
+        issuer: https://zoom.us
+        secret_required: true
+
+  - name: com.hubspot/mcp
+    # 2026-10-07: customer-owned app (MCP connector). Hidden because HubSpot's
+    # authorization server advertises only form-body client authentication and
+    # Agor sends HTTP Basic for confidential clients; unverified end to end.
+    hidden: true
+    title: HubSpot
+    category: productivity
+    capabilities: [crm]
+    benefit: Read and update HubSpot CRM records from the session so follow-ups land on the right contact or deal.
+    starter_prompt: List the HubSpot deals I own that have no activity in the last two weeks. Do not change anything.
+    permission_disclosure: Requires your own HubSpot MCP connector app. Acts as your HubSpot user and can read and write CRM records your account can access; some tools need paid Hubs.
+    icon_url: https://www.google.com/s2/favicons?domain=hubspot.com&sz=64
+    website_url: https://developers.hubspot.com/mcp
+    popularity_rank: 79
+    remote_url: https://mcp.hubspot.com
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
+        issuer: https://mcp.hubspot.com
+        secret_required: true
+
+  - name: com.salesforce/mcp
+    # 2026-10-07: beta, Enterprise+. The 401 carries no WWW-Authenticate
+    # challenge and the authorization server publishes only OIDC metadata; the
+    # live audit still discovers and validates both. Production orgs only:
+    # sandbox orgs use /platform/mcp/v1/sandbox/<server>. The External Client
+    # App's secret is optional, so it may be a public PKCE client.
+    title: Salesforce
+    category: productivity
+    capabilities: [crm]
+    benefit: Query and update Salesforce records from the session with your own org permissions.
+    starter_prompt: List the opportunities I own that close this quarter and summarise their stage. Do not change anything.
+    permission_disclosure: Beta, for production orgs on Enterprise edition or above. Requires a Salesforce admin to activate hosted MCP servers and create an External Client App. Acts as your Salesforce user and can read, create, update, and delete records your profile allows. Data returned by Salesforce is sent to the agent and AI provider running this Agor session.
+    icon_url: https://www.google.com/s2/favicons?domain=salesforce.com&sz=64
+    website_url: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/create-external-client-app.md
+    popularity_rank: 80
+    remote_url: https://api.salesforce.com/platform/mcp/v1/platform/sobject-all
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      scope: mcp_api refresh_token
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/create-external-client-app.md
+        issuer: https://login.salesforce.com
+        secret_required: false
+
+  # Google Workspace (2026-10-07): one customer-owned Web-application OAuth
+  # client per tenant, with the product's API and MCP API enabled. Hidden: the
+  # servers are Developer Preview (enrollment required), and an unauthenticated
+  # initialize currently succeeds with no OAuth challenge, so Connect would not
+  # reach sign-in. Scopes are Google's documented recommended set.
+  - name: com.googleapis.gmailmcp/mcp
+    hidden: true
+    title: Gmail
+    category: messaging
+    capabilities: [email]
+    benefit: Search and read Gmail threads from the session and draft replies for you to review.
+    starter_prompt: Summarise unread Gmail threads from this week that mention the project I name. Do not send anything.
+    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Gmail and Gmail MCP APIs enabled. Reads your mail and labels and can create drafts.
+    icon_url: https://www.google.com/s2/favicons?domain=mail.google.com&sz=64
+    website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+    popularity_rank: 81
+    remote_url: https://gmailmcp.googleapis.com/mcp/v1
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      scope: https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+        issuer: https://accounts.google.com
+        secret_required: true
+
+  - name: com.googleapis.calendarmcp/mcp
+    hidden: true
+    title: Google Calendar
+    category: productivity
+    capabilities: [tasks]
+    benefit: Check your Google Calendar availability and upcoming events from the session.
+    starter_prompt: List my Google Calendar events for the next three days and find a free hour. Do not change anything.
+    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Calendar and Calendar MCP APIs enabled. Reads your calendars, free/busy, and events.
+    icon_url: https://www.google.com/s2/favicons?domain=calendar.google.com&sz=64
+    website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+    popularity_rank: 82
+    remote_url: https://calendarmcp.googleapis.com/mcp/v1
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      scope: https://www.googleapis.com/auth/calendar.calendarlist.readonly https://www.googleapis.com/auth/calendar.events.freebusy https://www.googleapis.com/auth/calendar.events.readonly
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+        issuer: https://accounts.google.com
+        secret_required: true
+
+  - name: com.googleapis.drivemcp/mcp
+    hidden: true
+    title: Google Drive
+    category: data-storage
+    capabilities: [files, docs]
+    benefit: Search and read Google Drive files from the session without exporting them first.
+    starter_prompt: Find the most recently edited Google Drive documents about the topic I name and summarise them. Do not change anything.
+    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Drive and Drive MCP APIs enabled. Reads your Drive files and can create files.
+    icon_url: https://www.google.com/s2/favicons?domain=drive.google.com&sz=64
+    website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+    popularity_rank: 83
+    remote_url: https://drivemcp.googleapis.com/mcp/v1
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      scope: https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+        issuer: https://accounts.google.com
+        secret_required: true
+
+  - name: com.googleapis.docsmcp/mcp
+    hidden: true
+    title: Google Docs
+    category: productivity
+    capabilities: [docs, notes]
+    benefit: Read and update Google Docs from the session so specs and notes stay in the document people already use.
+    starter_prompt: Summarise the Google Doc I link and list its open questions. Do not change it.
+    permission_disclosure: Developer Preview. Requires your own Google Cloud OAuth client with the Docs and Docs MCP APIs enabled. Reads and edits your Google Docs.
+    icon_url: https://www.google.com/s2/favicons?domain=docs.google.com&sz=64
+    website_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+    popularity_rank: 84
+    remote_url: https://docsmcp.googleapis.com/mcp/v1
+    transport: streamable-http
+    auth_type: oauth
+    oauth:
+      scope: https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/documents.readonly https://www.googleapis.com/auth/documents
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://developers.google.com/workspace/guides/configure-mcp-servers
+        issuer: https://accounts.google.com
+        secret_required: true
+
+  # 2026-10-07 additions: API keys and open endpoints. A key is pasted in the
+  # drawer, verified with one initialize, and stored like any bearer token.
+  - name: com.pagerduty/mcp
+    title: PagerDuty
+    category: observability
+    capabilities: [incidents, alerts]
+    benefit: Ask what is paging, who is on call, and what changed, then act on incidents from the session.
+    starter_prompt: List open PagerDuty incidents on my services and who is on call for each. Do not acknowledge or change anything.
+    permission_disclosure: Uses the PagerDuty user API token you provide and can do anything that token allows, including reading and changing incidents, schedules, escalation policies, and services. US accounts only; EU accounts use https://mcp.eu.pagerduty.com/mcp, which this entry does not connect to.
+    icon_url: https://www.google.com/s2/favicons?domain=pagerduty.com&sz=64
+    website_url: https://support.pagerduty.com/main/docs/pagerduty-mcp-server-integration-guide
+    popularity_rank: 85
+    remote_url: https://mcp.pagerduty.com/mcp
+    transport: streamable-http
+    auth_type: credentials
+    credentials:
+      scheme: bearer
+      label: User API token
+      acquisition_url: https://support.pagerduty.com/main/docs/api-access-keys
+      # PagerDuty's documented header is `Authorization: Token token=<key>`.
+      prefix: 'Token token='
+      # The endpoint also advertises OAuth, without a registration endpoint.
+      oauth_challenge_compatible: true
+
+  - name: com.similarweb/mcp
+    title: Similarweb
+    category: search
+    capabilities: [analytics, web-search]
+    benefit: Ask Similarweb for traffic, keyword, and app-market data while researching competitors or a market.
+    starter_prompt: Compare monthly web traffic and top traffic sources for the two domains I name over the last six months.
+    permission_disclosure: Uses the Similarweb API key you provide; requests count against that account's API credits. Read-only access to Similarweb traffic, keyword, and app data. Requires an API-enabled Similarweb plan.
+    icon_url: https://www.google.com/s2/favicons?domain=similarweb.com&sz=64
+    website_url: https://docs.similarweb.com/api-v5/similarweb-mcp
+    popularity_rank: 86
+    remote_url: https://mcp.similarweb.com
+    transport: streamable-http
+    auth_type: credentials
+    credentials:
+      scheme: bearer
+      label: API key
+      acquisition_url: https://docs.similarweb.com/api-v5/similarweb-mcp
+      # Similarweb also documents a vendor key header; its 401 accepts Bearer.
+      oauth_challenge_compatible: true
+
+  - name: com.render/mcp
+    title: Render
+    category: dev-tools
+    capabilities: [deployments, logs, metrics, databases]
+    benefit: Inspect Render services, deploys, logs, and metrics so an agent can explain a failing service with evidence.
+    starter_prompt: List my Render services and summarise recent errors in the logs of any that failed to deploy. Do not change anything.
+    permission_disclosure: Uses the Render API key you provide and can do anything it allows across your workspaces, including reading services, logs, metrics, and databases (read-only SQL), creating services, changing environment variables, and triggering deploys.
+    icon_url: https://www.google.com/s2/favicons?domain=render.com&sz=64
+    website_url: https://render.com/docs/mcp-server
+    popularity_rank: 87
+    remote_url: https://mcp.render.com/mcp
+    transport: streamable-http
+    auth_type: credentials
+    credentials:
+      scheme: bearer
+      label: API key
+      acquisition_url: https://dashboard.render.com/u/settings
+      # The endpoint advertises OAuth, but only for Render's pre-registered clients.
+      oauth_challenge_compatible: true
+
+  - name: com.getdbt/mcp
+    # 2026-10-07: beta. Accounts outside the default US multi-tenant host use
+    # their own access URL (e.g. ACCOUNT_PREFIX.us1.dbt.com), which a single
+    # entry cannot express, and execute_sql needs further dev-environment and
+    # user-ID headers. Hidden until per-account hosts are supported.
+    hidden: true
+    title: dbt
+    category: data-storage
+    capabilities: [sql, schema, datasets]
+    benefit: Query the dbt Semantic Layer and explore models, lineage, and job runs from the session.
+    starter_prompt: List the metrics in my dbt Semantic Layer and show the lineage of the model I name. Do not run any jobs.
+    permission_disclosure: Uses the dbt personal access or service token you provide and the production environment ID you enter. It can query the Semantic Layer, read project metadata and lineage, and trigger job runs where the token allows.
+    icon_url: https://www.google.com/s2/favicons?domain=getdbt.com&sz=64
+    website_url: https://docs.getdbt.com/docs/dbt-ai/setup-remote-mcp
+    popularity_rank: 88
+    remote_url: https://cloud.getdbt.com/api/ai/v1/mcp/
+    transport: streamable-http
+    auth_type: credentials
+    credentials:
+      scheme: bearer
+      label: Personal access or service token
+      acquisition_url: https://docs.getdbt.com/docs/dbt-cloud-apis/service-tokens
+      prefix: 'Token '
+      oauth_challenge_compatible: true
+      fields:
+        - key: prod_environment_id
+          label: Production environment ID
+          header: x-dbt-prod-environment-id
+          secret: false
+
+  - name: ai.jina/mcp
+    title: Jina AI
+    category: search
+    capabilities: [web-search, web-scrape]
+    benefit: Read web pages as clean text and take screenshots through Jina's reader, with no account needed.
+    starter_prompt: Read the public page I link and summarise its main points with quotes.
+    permission_disclosure: Sends the public URLs and queries you ask about to Jina AI. Connected without a key, so it uses Jina's anonymous rate limits; search, rerank, and PDF tools need a Jina API key, which this entry does not configure. No account data is accessed.
+    icon_url: https://www.google.com/s2/favicons?domain=jina.ai&sz=64
+    website_url: https://github.com/jina-ai/MCP
+    popularity_rank: 89
+    remote_url: https://mcp.jina.ai/v1
+    transport: streamable-http
+    auth_type: none
+
 # OAuth endpoints intentionally not offered after the 2026-09-01 read-only audit:
-# - MongoDB, Box, HubSpot, and Slack publish no DCR endpoint or reviewed public client for Agor.
-# - Google Workspace requires each customer to supply a Cloud OAuth client; Power BI is tenant-admin gated and has no DCR.
+# - MongoDB publishes no DCR endpoint or reviewed public client for Agor. (Box,
+#   Slack, HubSpot, and Google Workspace are now customer-owned app entries above.)
+# - Power BI is tenant-admin gated and has no DCR.
 # - GitHub's OAuth route publishes no DCR; the entry above uses its documented PAT route instead.
-# - Prisma and PagerDuty publish authorization-server issuer chains that do not bind safely.
+# - Prisma publishes an authorization-server issuer chain that does not bind safely; PagerDuty's
+#   OAuth route has no DCR, so its entry above uses the documented user API token instead.
 # - Kagi challenges with Bearer but publishes neither protected-resource nor authorization-server metadata.
 # - Typeform requires callback review/allowlisting; Contentful requires per-space configuration.

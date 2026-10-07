@@ -18,6 +18,11 @@ import {
   MCP_OAUTH_DCR_MODES,
 } from '@agor/core/types';
 import { z } from 'zod';
+import {
+  isReservedMCPCustomHeaderName,
+  isValidMCPHeaderName,
+  MCP_TOKEN_PREFIX_RE,
+} from '../tools/mcp/http-headers';
 import { load as loadYaml } from '../yaml';
 
 /** Thrown when `curated.yaml` cannot be parsed or fails validation. */
@@ -97,14 +102,67 @@ const catalogEntryOAuthSchema = z
     }
   );
 
+/**
+ * A header an entry may aim a user's value at. Transport-controlled names are
+ * refused; `Authorization` only where the caller says it is allowed, because
+ * custom headers can never carry it (it belongs to `auth`).
+ */
+const credentialHeaderName = (allowAuthorization: boolean) =>
+  nonEmpty.refine(
+    (name) =>
+      isValidMCPHeaderName(name) &&
+      (!isReservedMCPCustomHeaderName(name) ||
+        (allowAuthorization && name.toLowerCase() === 'authorization')),
+    { message: 'must be a valid header name that is not transport- or auth-controlled' }
+  );
+
+const catalogCredentialFieldSchema = z
+  .object({
+    key: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'must be a lower_snake_case key'),
+    label: nonEmpty,
+    header: credentialHeaderName(false),
+    secret: z.boolean(),
+  })
+  .strict();
+
 const catalogEntryCredentialsSchema = z
   .object({
     scheme: z.literal('bearer'),
     acquisition_url: httpUrl,
     label: nonEmpty.optional(),
     oauth_challenge_compatible: z.literal(true).optional(),
+    header: credentialHeaderName(true).optional(),
+    prefix: z
+      .string()
+      .regex(MCP_TOKEN_PREFIX_RE, 'must be short printable text not starting with a space')
+      .optional(),
+    fields: z.array(catalogCredentialFieldSchema).min(1).max(4).optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((credentials, context) => {
+    // One request header per value: a field sharing a name with the secret's
+    // header (or another field) would be silently dropped or comma-joined.
+    const headers = new Set([(credentials.header ?? 'Authorization').toLowerCase()]);
+    const keys = new Set<string>();
+    for (const [index, field] of (credentials.fields ?? []).entries()) {
+      if (headers.has(field.header.toLowerCase())) {
+        context.addIssue({
+          code: 'custom',
+          path: ['fields', index, 'header'],
+          message: 'duplicates another credential header',
+        });
+      }
+      if (keys.has(field.key)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['fields', index, 'key'],
+          message: 'duplicates another field key',
+        });
+      }
+      headers.add(field.header.toLowerCase());
+      keys.add(field.key);
+    }
+  });
 
 const catalogEntrySchema = z
   .object({

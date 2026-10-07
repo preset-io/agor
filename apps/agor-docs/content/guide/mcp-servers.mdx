@@ -122,7 +122,7 @@ Catalog's pre-connect readiness is advisory from catalog and saved-connection da
 
 - **Open:** Agor adds the server to **My Servers**. From the inline next step, choose **Start new session** to select a teammate and agent tool, or keep browsing.
 - **OAuth:** Agor adds the server and pre-opens the provider sign-in window. The Catalog drawer remains at **Sign-in pending** until the durable per-user grant is confirmed; **My Servers** remains the recovery path if sign-in is not completed.
-- **Bearer token:** Catalog accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work. A provider may advertise OAuth and separately document bearer tokens; that route is allowed only through the entry's explicit `oauth_challenge_compatible: true` review flag (GitHub is the current example), never inferred from the challenge.
+- **Bearer token:** Catalog accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work. A provider may advertise OAuth and separately document bearer tokens; that route is allowed only through the entry's explicit `oauth_challenge_compatible: true` review flag (GitHub is the current example), never inferred from the challenge. Some entries send the token the way the vendor documents it, such as PagerDuty's `Authorization: Token token=…`, and some ask for extra values next to it, such as an environment ID. The drawer shows those fields; they are stored with the token and hidden on every read.
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Catalog's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
@@ -343,6 +343,21 @@ pending attempts and stored grants, so affected users must reconnect.
 
 Catalog uses `https://mcp.asana.com/v2/mcp` with configured-client OAuth and no
 DCR. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+
+### Other customer-owned app entries
+
+The same form serves these entries; each card links the provider's setup guide.
+Set the app's redirect URL to the callback the Catalog form shows.
+
+- **Slack (official MCP):** an internal or Slack Marketplace app (unlisted apps
+  cannot use MCP) with the user scopes the entry requests. This complements, and
+  does not replace, Agor's Slack gateway.
+- **Box:** a Box admin adds a **Box MCP server** integration and issues its
+  client ID and secret.
+- **Front** (open beta): a Front developer app with **MCP Server** feature access.
+- **Zoom:** a Zoom Marketplace general app with the scopes Zoom documents for MCP.
+- **Salesforce** (beta, production orgs): an admin activates hosted MCP servers and
+  creates an External Client App; its client secret is optional.
 
 ### Stable hosted callback
 

@@ -194,6 +194,36 @@ export interface MCPCatalogEntryCredentials {
    * deliberately opt-in: an OAuth challenge never implies API-key support.
    */
   oauth_challenge_compatible?: true;
+  /**
+   * Header that carries the pasted secret; `Authorization` when omitted. The
+   * secret is stored as `auth.token` either way, with this as
+   * `auth.token_header`.
+   */
+  header?: string;
+  /**
+   * Literal text sent before the secret, spacing included (`"Token "` for
+   * `Authorization: Token <key>`). Defaults to `"Bearer "` only when `header`
+   * is omitted; with an explicit header, omission sends the bare secret.
+   */
+  prefix?: string;
+  /**
+   * Further values the vendor needs as request headers alongside the secret,
+   * e.g. a workspace or environment ID. Stored in the install's custom headers,
+   * which are redacted on every read like any other custom header.
+   */
+  fields?: MCPCatalogCredentialField[];
+}
+
+/** One extra user-supplied value an entry's credential recipe sends as a header. */
+export interface MCPCatalogCredentialField {
+  /** Stable form key, sent back as a `credential_fields` key on connect. */
+  key: string;
+  /** Form label, e.g. "Production environment ID". */
+  label: string;
+  /** Request header the value is sent in. */
+  header: string;
+  /** Render as a password input. Every value is redacted on read regardless. */
+  secret: boolean;
 }
 
 /**
@@ -406,6 +436,11 @@ export interface MCPCatalogConnectData {
    * to a row with no reason to carry it.
    */
   bearer_token?: string;
+  /**
+   * Values for the entry's `credentials.fields`, keyed by field `key`. Sent
+   * only alongside `bearer_token`, and every declared field is required.
+   */
+  credential_fields?: Record<string, string>;
   /** Browser-only configured app material. Never submit through model-visible tools. */
   oauth_client?: { client_id: string; client_secret?: string };
   /**

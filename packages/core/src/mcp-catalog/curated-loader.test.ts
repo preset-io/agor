@@ -164,6 +164,64 @@ describe('auth_type', () => {
     ).toThrow(CuratedCatalogError);
   });
 
+  describe('credential recipes', () => {
+    const recipe = (lines: string) =>
+      parseCuratedCatalog(
+        `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n${lines}`
+      )[0];
+
+    it('carries a vendor header, literal prefix, and extra fields', () => {
+      const entry = recipe(
+        `      prefix: "Token token="\n      fields:\n        - key: environment_id\n          label: Environment ID\n          header: x-environment-id\n          secret: false\n`
+      );
+      expect(entry.credentials).toMatchObject({
+        prefix: 'Token token=',
+        fields: [
+          {
+            key: 'environment_id',
+            label: 'Environment ID',
+            header: 'x-environment-id',
+            secret: false,
+          },
+        ],
+      });
+      expect(recipe('      header: api-key\n').credentials?.header).toBe('api-key');
+    });
+
+    it.each([
+      ['a transport-controlled secret header', '      header: Host\n'],
+      ['an invalid header name', '      header: "api key"\n'],
+      ['a prefix starting with a space', '      prefix: " Token"\n'],
+      ['a prefix with a control character', '      prefix: "Token\\t"\n'],
+      [
+        'a field aimed at Authorization',
+        '      fields:\n        - { key: a, label: A, header: Authorization, secret: true }\n',
+      ],
+      [
+        'a field sharing the secret header',
+        '      header: api-key\n      fields:\n        - { key: a, label: A, header: API-Key, secret: true }\n',
+      ],
+      [
+        'two fields on one header',
+        '      fields:\n        - { key: a, label: A, header: x-id, secret: false }\n        - { key: b, label: B, header: X-ID, secret: false }\n',
+      ],
+      [
+        'a duplicated field key',
+        '      fields:\n        - { key: a, label: A, header: x-a, secret: false }\n        - { key: a, label: B, header: x-b, secret: false }\n',
+      ],
+      [
+        'a field without a secret flag',
+        '      fields:\n        - { key: a, label: A, header: x-a }\n',
+      ],
+      [
+        'an undeclared field property',
+        '      fields:\n        - { key: a, label: A, header: x-a, secret: false, value: x }\n',
+      ],
+    ])('refuses %s', (_label, lines) => {
+      expect(() => recipe(lines)).toThrow(CuratedCatalogError);
+    });
+  });
+
   it('refuses a verdict only a live check could produce', () => {
     // `unreachable` describes one moment, so a checked-in file cannot claim it.
     expect(() => withAuth('auth_type: unreachable')).toThrow(CuratedCatalogError);
@@ -667,20 +725,11 @@ describe('the shipped catalog', () => {
     const unsupported = [
       'io.prisma/mcp',
       'com.mongodb/mcp',
-      'com.box/mcp',
-      'com.hubspot/mcp',
-      'com.slack/mcp',
-      'com.pagerduty/mcp',
       'com.kagi/mcp',
-      'com.render/mcp',
-      // Explicit 2026-09-01 exclusions: customer OAuth clients, tenant/admin
-      // gates, callback allowlisting, preview constraints, or unusable live
-      // metadata keep these off the one-click shelf.
-      'com.google.gmail/mcp',
-      'com.google.drive/mcp',
-      'com.google.calendar/mcp',
+      // Explicit 2026-09-01 exclusions: tenant/admin gates, callback
+      // allowlisting, preview constraints, or unusable live metadata keep
+      // these off the one-click shelf.
       'com.google.chat/mcp',
-      'com.google.docs/mcp',
       'com.google.sheets/mcp',
       'com.google.slides/mcp',
       'com.google.tasks/mcp',
@@ -697,6 +746,46 @@ describe('the shipped catalog', () => {
       auth_type: 'credentials',
       credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
     });
+  });
+
+  it('offers no-DCR OAuth providers only through a customer-owned app or a reviewed token route', async () => {
+    const entries = await loadCuratedCatalog();
+    // 2026-10-07: these publish no registration endpoint for Agor. Each is
+    // offered only where the customer brings the client or the credential.
+    for (const name of [
+      'com.slack/mcp',
+      'com.box/mcp',
+      'com.frontapp/mcp',
+      'us.zoom/mcp',
+      'com.hubspot/mcp',
+      'com.salesforce/mcp',
+      'com.googleapis.gmailmcp/mcp',
+      'com.googleapis.calendarmcp/mcp',
+      'com.googleapis.drivemcp/mcp',
+      'com.googleapis.docsmcp/mcp',
+    ]) {
+      expect(entries.find((entry) => entry.name === name)?.oauth).toMatchObject({
+        dcr_mode: 'disabled',
+        configured_client: expect.any(Object),
+      });
+    }
+    for (const name of ['com.pagerduty/mcp', 'com.render/mcp', 'com.getdbt/mcp']) {
+      expect(entries.find((entry) => entry.name === name)).toMatchObject({
+        auth_type: 'credentials',
+        credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
+      });
+    }
+    expect(entries.find((entry) => entry.name === 'com.pagerduty/mcp')?.credentials?.prefix).toBe(
+      'Token token='
+    );
+    expect(entries.find((entry) => entry.name === 'com.getdbt/mcp')?.credentials?.fields).toEqual([
+      {
+        key: 'prod_environment_id',
+        label: 'Production environment ID',
+        header: 'x-dbt-prod-environment-id',
+        secret: false,
+      },
+    ]);
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {

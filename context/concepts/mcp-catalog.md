@@ -53,6 +53,17 @@ to whatever a redirect names.
   claims the caller's generation for that install so an older concurrent
   request can't overwrite a newer key. The row is written only after the key
   is accepted.
+- A reviewed entry may change how the key is sent: `credentials.header`
+  (default `Authorization`) and a literal `credentials.prefix` (default
+  `Bearer ` only when `header` is omitted; e.g. PagerDuty's `Token token=`).
+  These persist as non-secret `auth.token_header` / `auth.token_prefix` and are
+  rendered by `renderMCPTokenHeader` for the probe and every runtime.
+- `credentials.fields` declares extra user values sent as headers alongside the
+  key (e.g. dbt's `x-dbt-prod-environment-id`). They arrive as
+  `credential_fields`, only with `bearer_token`, all required, and are stored
+  in the row's custom `headers` (redacted on every read). The request fills
+  values; only the entry names headers. A current install of such an entry
+  carries headers; every other catalog install carries none.
 - Rows holding a secret in their own columns are reusable only by their owner:
   two users get two rows; reconnecting with a new key rotates the existing row.
 

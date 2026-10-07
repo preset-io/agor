@@ -182,3 +182,21 @@ describe('MCP auth secret helpers', () => {
     expect(restored).not.toHaveProperty('oauth_access_token');
   });
 });
+
+describe('bearer recipe redaction', () => {
+  it('redacts the token but keeps its non-secret header and prefix', () => {
+    expect(
+      redactMCPAuthSecrets({
+        type: 'bearer',
+        token: 'raw-key',
+        token_header: 'Authorization',
+        token_prefix: 'Token token=',
+      })
+    ).toEqual({
+      type: 'bearer',
+      token: MCP_HEADER_REDACTED_SENTINEL,
+      token_header: 'Authorization',
+      token_prefix: 'Token token=',
+    });
+  });
+});

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import type { MCPAuth } from '../../types/mcp';
 import { type OutboundDnsLookup, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error';
+import { renderMCPTokenHeader } from './http-headers';
 import { fetchOAuthToken, inferOAuthTokenUrl } from './oauth-auth';
 
 interface JWTConfig {
@@ -222,9 +223,7 @@ export async function resolveMCPAuthHeaders(
       console.warn('MCP bearer authentication configured without a token');
       return undefined;
     }
-    return {
-      Authorization: `Bearer ${auth.token}`,
-    };
+    return renderMCPTokenHeader({ ...auth, token: auth.token });
   }
 
   if (auth.type === 'jwt') {

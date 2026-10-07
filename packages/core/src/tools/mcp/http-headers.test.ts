@@ -8,6 +8,7 @@ import {
   mergeMCPRemoteHeaders,
   normalizeMCPCustomHeaders,
   redactMCPCustomHeaders,
+  renderMCPTokenHeader,
   restoreRedactedMCPCustomHeaders,
 } from './http-headers';
 
@@ -124,5 +125,32 @@ describe('MCP HTTP header helpers', () => {
         },
       })
     ).toEqual({ 'X-Other': 'kept' });
+  });
+});
+
+describe('renderMCPTokenHeader', () => {
+  it('keeps the default Authorization: Bearer recipe', () => {
+    expect(renderMCPTokenHeader({ token: 'k' })).toEqual({ Authorization: 'Bearer k' });
+  });
+
+  it('sends a vendor prefix or header exactly as stated', () => {
+    expect(renderMCPTokenHeader({ token: 'k', token_prefix: 'Token token=' })).toEqual({
+      Authorization: 'Token token=k',
+    });
+    expect(renderMCPTokenHeader({ token: 'k', token_header: 'api-key' })).toEqual({
+      'api-key': 'k',
+    });
+    expect(
+      renderMCPTokenHeader({ token: 'k', token_header: 'Authorization', token_prefix: 'Token ' })
+    ).toEqual({ Authorization: 'Token k' });
+  });
+
+  it('lets the auth header win over a custom header of the same name in any casing', () => {
+    expect(
+      mergeMCPRemoteHeaders({
+        custom: { 'API-Key': 'stale', 'x-environment-id': '42' },
+        auth: renderMCPTokenHeader({ token: 'k', token_header: 'api-key' }),
+      })
+    ).toEqual({ 'x-environment-id': '42', 'api-key': 'k' });
   });
 });

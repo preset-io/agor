@@ -473,6 +473,18 @@ export interface MCPAuth {
   type: 'none' | 'bearer' | 'jwt' | 'oauth';
   // Bearer token
   token?: string;
+  /**
+   * Header that carries `token`; defaults to `Authorization`. Non-secret.
+   * Some vendors take an API key as e.g. `api-key: <key>`.
+   */
+  token_header?: string;
+  /**
+   * Literal text sent before `token`, spacing included: `Token ` for
+   * `Authorization: Token <key>`. Defaults to `Bearer ` only when
+   * `token_header` is omitted; with an explicit header, omission sends the
+   * bare token. Non-secret.
+   */
+  token_prefix?: string;
   // JWT config
   api_url?: string;
   api_token?: string;

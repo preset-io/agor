@@ -203,6 +203,22 @@ export const ONBOARDING_INTEGRATION_RECOMMENDATIONS: Record<
     setup: { surface: 'marketplace', catalogEntryName: 'ai.exa/exa' },
     connectMode: 'none',
   },
+  granola: {
+    id: 'granola',
+    name: 'Granola',
+    emoji: '🗒️',
+    description: 'Turn meeting notes into decisions and follow-ups without rewatching the call.',
+    setup: { surface: 'marketplace', catalogEntryName: 'ai.granola/mcp' },
+    connectMode: 'oauth',
+  },
+  fireflies: {
+    id: 'fireflies',
+    name: 'Fireflies.ai',
+    emoji: '🎙️',
+    description: 'Pull meeting transcripts and action items into your recaps.',
+    setup: { surface: 'marketplace', catalogEntryName: 'ai.fireflies/fireflies' },
+    connectMode: 'oauth',
+  },
   tavily: {
     id: 'tavily',
     name: 'Tavily',
@@ -244,7 +260,7 @@ export const ONBOARDING_GOALS = [
     title: 'Never chase an update',
     description: 'Meeting notes and status, drafted for you.',
     icon: FileTextOutlined,
-    integrationRecs: ['linear', 'notion', 'atlassian', 'asana', 'slack'],
+    integrationRecs: ['linear', 'notion', 'granola', 'atlassian', 'asana', 'fireflies', 'slack'],
     bootstrapLine:
       'Desired outcome: fewer status chases. A first win is a draft recap and action list for their current project or latest meeting.',
   },
