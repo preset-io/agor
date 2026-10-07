@@ -3,9 +3,10 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type {} from '@vitest/browser-playwright';
 import { App } from 'antd';
 import { useEffect, useState } from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
-import { cdp, page, userEvent } from 'vitest/browser';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
+import { checkBrowserSanity } from '../../test/browserSanity';
 import SessionPanel from './SessionPanel';
 import { SessionPanelContent } from './SessionPanelContent';
 
@@ -31,7 +32,15 @@ vi.mock('../../hooks/useSharedReactiveSession', () => ({
   }),
 }));
 vi.mock('../TaskBlock', () => ({
-  TaskBlock: ({ task }: { task: Task }) => <p style={{ height: 60 }}>Transcript {task.task_id}</p>,
+  TaskBlock: ({ task }: { task: Task }) => (
+    <div style={{ minHeight: 60 }}>
+      Transcript {task.task_id}
+      <details>
+        <summary>Expand {task.task_id}</summary>
+        <div style={{ height: 1200 }}>Expanded tool output</div>
+      </details>
+    </div>
+  ),
 }));
 vi.mock('../ForkSpawnModal', () => ({ ForkSpawnModal: () => null }));
 vi.mock('../../utils/clipboard', () => ({
@@ -40,6 +49,12 @@ vi.mock('../../utils/clipboard', () => ({
 }));
 
 import { copyToClipboard } from '../../utils/clipboard';
+
+const originalViewport = { width: window.innerWidth, height: window.innerHeight };
+beforeEach(async () => {
+  localStorage.clear();
+  if (originalViewport.width === 1000) await page.viewport(1280, 900);
+});
 
 const session = {
   session_id: 'session-1',
@@ -98,12 +113,18 @@ function Harness({
           <header style={{ height: 48, flexShrink: 0 }}>Session header</header>
           <div
             data-testid="session-body"
-            style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}
+            style={{
+              flex: 1,
+              minHeight: 0,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
+            }}
           >
             <div
               style={{
                 flex: 1,
-                minHeight: queue.length ? 360 : 0,
+                minHeight: 0,
                 display: 'flex',
                 flexDirection: 'column',
                 overflow: 'hidden',
@@ -172,8 +193,9 @@ async function expectBounded() {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   cleanup();
+  await page.viewport(originalViewport.width, originalViewport.height);
   queueFeed.tasks = [];
   vi.clearAllMocks();
 });
@@ -361,14 +383,18 @@ it.each(['Resume queue', 'Run next'])(
   }
 );
 
-it.each([390, 220])(
-  'keeps the real multiline composer reachable by wheel and keyboard in a %ipx panel',
-  async (height) => {
-    queueFeed.tasks = tasks(30);
+// Exercise the real panel, conversation scroll owner, queue split, and autosizing
+// composer. The old body scrollbar / 360px conversation floor failed this
+// contract even when the composer itself fit in the viewport.
+checkBrowserSanity();
+it.each([0, 30])(
+  'pins chrome with %i queued tasks through growth and completion',
+  async (count) => {
+    queueFeed.tasks = tasks(count);
     const queueClient = {
       io: { on: noop, off: noop },
       service: (path: string) => ({
-        find: async () => ({ data: path.endsWith('/tasks/queue') ? tasks(30) : [] }),
+        find: async () => ({ data: path.endsWith('/tasks/queue') ? tasks(count) : [] }),
         get: async () => session,
         on: noop,
         off: noop,
@@ -376,13 +402,13 @@ it.each([390, 220])(
         patch,
       }),
     } as unknown as AgorClient;
-    render(
+    const panel = (status: Session['status']) => (
       <App>
         <AppActionsProvider value={{}}>
-          <div style={{ position: 'fixed', top: 0, left: 0, height, width: '100%', maxWidth: 600 }}>
+          <div data-testid="real-panel" style={{ position: 'fixed', inset: 0, maxWidth: 600 }}>
             <SessionPanel
               client={queueClient}
-              session={{ ...session, status: 'failed' }}
+              session={{ ...session, status }}
               open
               onClose={noop}
             />
@@ -390,71 +416,67 @@ it.each([390, 220])(
         </AppActionsProvider>
       </App>
     );
-    await screen.findByText('Queued tasks (30)');
-    await waitFor(() => {
-      expect(conversation().clientHeight).toBeGreaterThan(100);
-      expect(queueList().clientHeight).toBeGreaterThan(25);
-    });
-    const composer = screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji');
-    // Position the pointer once. userEvent.wheel() re-hovers before every input,
-    // scrolling the queue back into view and potentially undoing outer scrolling.
-    // Keep native wheel input at that point while observing asynchronous scrolling;
-    // never focus or scrollIntoView the composer to satisfy reachability.
-    const wheelToComposer = async () => {
-      await userEvent.hover(queueList());
-      const rect = queueList().getBoundingClientRect();
-      const frame = window.frameElement?.getBoundingClientRect();
-      const x = (frame?.left ?? 0) + rect.left + rect.width / 2;
-      const y = (frame?.top ?? 0) + rect.top + rect.height / 2;
-      await waitFor(
-        async () => {
-          await act(() =>
-            cdp().send('Input.dispatchMouseEvent', {
-              type: 'mouseWheel',
-              x,
-              y,
-              deltaX: 0,
-              deltaY: 5000,
-            })
-          );
-          await waitFor(
-            () => {
-              const rect = composer.getBoundingClientRect();
-              expect(rect.top).toBeGreaterThan(0);
-              expect(rect.bottom).toBeLessThanOrEqual(height);
-            },
-            { timeout: 200 }
-          );
-        },
-        { interval: 200, timeout: 3000 }
-      );
+    const view = render(panel('running'));
+    const transcript = await screen.findByTestId('conversation-scroll-container');
+    const composer = screen.getByPlaceholderText('Queue here… @ for mentions, : for emoji');
+    const root = screen.getByTestId('real-panel').firstElementChild as HTMLElement;
+    const header = root.firstElementChild as HTMLElement;
+    const body = header.nextElementSibling as HTMLElement;
+    const send = screen.getByRole('button', { name: 'Send' });
+    const assertLayout = () => {
+      const bounds = root.getBoundingClientRect();
+      const input = composer.getBoundingClientRect();
+      const button = send.getBoundingClientRect();
+      expect(header.getBoundingClientRect().top).toBe(bounds.top);
+      expect(input.top).toBeGreaterThanOrEqual(header.getBoundingClientRect().bottom);
+      expect(button.bottom).toBeLessThanOrEqual(bounds.bottom);
+      expect(bounds.bottom - button.bottom).toBeLessThan(24);
+      expect(transcript.clientHeight).toBeGreaterThan(0);
+      expect(transcript.getBoundingClientRect().bottom).toBeLessThanOrEqual(input.top);
+      for (const container of [body, root, document.documentElement]) {
+        expect(container.scrollHeight - container.clientHeight).toBeLessThanOrEqual(1);
+        container.scrollTop = 10000;
+        expect(container.scrollTop).toBe(0);
+      }
     };
-    await act(() => userEvent.wheel(queueList(), { delta: { y: 5000 } }));
-    await waitFor(() =>
-      expect(
-        queueList().scrollHeight - queueList().clientHeight - queueList().scrollTop
-      ).toBeLessThanOrEqual(1)
-    );
-    await wheelToComposer();
+    await waitFor(assertLayout);
+    await expectBottom();
+    const headerTop = header.getBoundingClientRect().top;
+    const sendBottom = send.getBoundingClientRect().bottom;
+    await userEvent.wheel(transcript, { delta: { y: -10000 } });
+    await waitFor(() => expect(transcript.scrollTop).toBe(0));
+    await userEvent.click(screen.getByText('Expand history-0'));
+    await waitFor(assertLayout);
+    await userEvent.wheel(transcript, { delta: { y: 10000 } });
+    await waitFor(() => expect(transcript.scrollTop).toBeGreaterThan(0));
+    expect(header.getBoundingClientRect().top).toBe(headerTop);
+    expect(send.getBoundingClientRect().bottom).toBe(sendBottom);
+    if (count) {
+      await userEvent.wheel(queueList(), { delta: { y: 10000 } });
+      await waitFor(() => expect(queueList().scrollTop).toBeGreaterThan(0));
+      await waitFor(assertLayout);
+    }
+    const inputHeight = composer.clientHeight;
     await userEvent.fill(composer, 'First line\nSecond line\nThird line');
-    await waitFor(() => expect(composer.clientHeight).toBeGreaterThan(60));
+    await waitFor(() => expect(composer.clientHeight).toBeGreaterThan(inputHeight));
+    await waitFor(assertLayout);
+    // Hit the existing textarea row cap, then resize a desktop panel short.
+    const longDraft = Array.from({ length: 20 }, (_, i) => `Draft line ${i + 1}`).join('\n');
+    await userEvent.fill(composer, longDraft);
+    await waitFor(assertLayout);
+    if (window.innerWidth >= 1024) {
+      await page.viewport(window.innerWidth, 390);
+      await waitFor(assertLayout);
+    }
     await userEvent.keyboard('{Shift>}{Tab}{/Shift}{Tab}');
     expect(composer).toHaveFocus();
-    expect(composer).toHaveValue('First line\nSecond line\nThird line');
-    await waitFor(() => {
-      const rect = composer.getBoundingClientRect();
-      expect(rect.top).toBeGreaterThan(0);
-      expect(rect.bottom).toBeLessThanOrEqual(height);
-    });
-    // Repeat outer wheel reachability with the expanded draft, without focus
-    // helping the browser bring the textarea back into view.
-    act(() => composer.blur());
-    await wheelToComposer();
-    expect(composer).toHaveValue('First line\nSecond line\nThird line');
-    expect(conversation().clientHeight).toBeGreaterThan(100);
-    expect(queueList().clientHeight).toBeGreaterThan(60);
+    view.rerender(panel('completed'));
+    await waitFor(assertLayout);
+    expect(conversation()).toBe(transcript);
+    expect(composer).toHaveValue(longDraft);
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     await page.screenshot({
-      path: `.vitest/attachments/session-composer-${window.innerWidth}x${window.innerHeight}-${height}.png`,
+      path: `.vitest/attachments/session-contained-${window.innerWidth}x${window.innerHeight}-${count}.png`,
     });
   }
 );

@@ -157,7 +157,7 @@ export function SessionConversationLayout({
                   aria-label="Queued task list"
                   // biome-ignore lint/a11y/noNoninteractiveTabindex: the bounded scroll region must be keyboard-scrollable
                   tabIndex={0}
-                  // At the end, allow wheel/touch scrolling to reach the outer composer.
+                  // The composer stays pinned outside this independently scrolling list.
                   style={{ minHeight: 0, overflowY: 'auto' }}
                 >
                   <div ref={rowsRef}>{queue}</div>

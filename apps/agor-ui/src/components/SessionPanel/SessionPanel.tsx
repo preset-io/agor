@@ -565,6 +565,30 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   }, [forceFailTarget, tasks]);
   const attachmentInputRef = React.useRef<HTMLInputElement>(null);
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
+  const [bodyHeight, setBodyHeight] = React.useState(0);
+  React.useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body || !open || !session?.session_id) return;
+    const measure = () => setBodyHeight(body.clientHeight);
+    const observer = new ResizeObserver(measure);
+    observer.observe(body);
+    measure();
+    return () => observer.disconnect();
+  }, [open, session?.session_id]);
+  // The input can grow, but must leave room for footer controls and the
+  // conversation on short panels. Observe the fixed body, not the input, so
+  // draft growth cannot feed back into its own available-height calculation.
+  const composerMaxRows = Math.max(
+    1,
+    Math.min(
+      isMobileShell ? 4 : 10,
+      bodyHeight
+        ? Math.floor(
+            (bodyHeight * 0.4) / ((isMobileShell ? 16 : token.fontSize) * token.lineHeight)
+          )
+        : 10
+    )
+  );
   // Search observes only the conversation region, not the whole body: the
   // no-results overlay, footer, and modals are `bodyRef` children, so observing
   // `bodyRef` would let the overlay's own mount/unmount retrigger the scan.
@@ -858,7 +882,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
               ? 'Queue here… @ for mentions, : for emoji'
               : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
+          autoSize={{ minRows: 1, maxRows: composerMaxRows }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}
@@ -896,7 +920,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerDropActive,
     composerIdentityKey,
     hasComposerAttachments,
-    isMobileShell,
+    composerMaxRows,
     isRunning,
     client,
     userById,
@@ -1437,6 +1461,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       style={{
         width: '100%',
         height: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
         display: open ? 'flex' : 'none',
         flexDirection: 'column',
         background: token.colorBgElevated,
@@ -1675,13 +1701,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         </div>
       </div>
 
-      {/* Body - Scrollable content */}
+      {/* Bounded body: the conversation (and queued rows) own scrolling, not the composer. */}
       <div
         ref={bodyRef}
         style={{
           flex: 1,
-          overflowX: 'hidden',
-          overflowY: 'auto',
+          minHeight: 0,
+          overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
           padding: `${token.sizeUnit * 3}px ${token.sizeUnit * 6}px 0`,
@@ -1738,9 +1764,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           ref={conversationRef}
           style={{
             flex: 1,
-            // If chrome + composer cannot fit on a short viewport, scroll the
-            // body rather than crushing the transcript and queue to slivers.
-            minHeight: queuedTasks.length > 0 ? 360 : 0,
+            // Allow the transcript/queue split to shrink as the composer grows.
+            minHeight: 0,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
