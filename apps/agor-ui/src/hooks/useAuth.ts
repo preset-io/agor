@@ -73,6 +73,24 @@ export interface EstablishedAuthAuthorityReceipt {
   isCurrent: () => boolean;
 }
 
+/**
+ * Outcome of reconciling this tab's identity with the shared stored
+ * credentials (another tab may have rotated, replaced or cleared them).
+ *
+ * - `authenticated`: React auth state now matches the stored access token.
+ *   `authenticationGeneration` identifies the authority it belongs to.
+ * - `signed-out`: no usable credentials remain; auth state settled signed-out.
+ * - `superseded`: this tab's own login/logout replaced the authority first and
+ *   owns the resulting state.
+ * - `unresolved`: the stored credentials could not be confirmed (for example
+ *   the daemon is unreachable); callers retry on their own bounded cadence.
+ */
+export type CredentialReconciliation =
+  | { status: 'authenticated'; accessToken: string; authenticationGeneration: number }
+  | { status: 'signed-out' }
+  | { status: 'superseded' }
+  | { status: 'unresolved' };
+
 export type AuthorityCycleLoginResult =
   | { status: 'signed-in'; authority: EstablishedAuthAuthorityReceipt }
   | { status: 'failed' }
@@ -95,6 +113,11 @@ interface UseAuthReturn extends AuthState {
   logout: () => Promise<void>;
   logoutForAuthorityCycle: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
   reAuthenticate: () => Promise<void>;
+  /**
+   * Single-flight reconciliation of this tab's identity with the stored
+   * credentials. The only path that adopts credentials another tab wrote.
+   */
+  reconcileStoredCredentials: () => Promise<CredentialReconciliation>;
   refreshCurrentUserForAuthorityCycle: (shouldApply: () => boolean) => Promise<boolean>;
 }
 
@@ -146,6 +169,17 @@ export function useAuth(): UseAuthReturn {
   const revalidationEpochRef = useRef(0);
   const [authenticationGeneration, setAuthenticationGeneration] = useState(0);
   const activeAuthorityRef = useRef<{ userId: UserID; role: User['role'] } | null>(null);
+  const reconciliationRef = useRef<Promise<CredentialReconciliation> | null>(null);
+  // Bumped to re-arm proactive refresh when reconciliation keeps the same token.
+  const [refreshScheduleNonce, setRefreshScheduleNonce] = useState(0);
+
+  // Publish auth state synchronously to the ref as well as to React, so a
+  // continuation (e.g. credential reconciliation) observes what was committed.
+  const commitAuthState = useCallback((next: AuthState | ((previous: AuthState) => AuthState)) => {
+    const resolved = typeof next === 'function' ? next(authStateRef.current) : next;
+    authStateRef.current = resolved;
+    setState(resolved);
+  }, []);
 
   const advanceAuthenticationGeneration = useCallback(() => {
     authenticationGenerationRef.current += 1;
@@ -215,7 +249,7 @@ export function useAuth(): UseAuthReturn {
       // Revalidation is not a new login. Keep the authenticated surface mounted
       // while checking the same credentials; login/authority replacement still
       // uses its own blocking lifecycle below.
-      setState((prev) => ({ ...prev, loading: !prev.authenticated, error: null }));
+      commitAuthState((prev) => ({ ...prev, loading: !prev.authenticated, error: null }));
 
       const hasStoredTokens = !!getStoredAccessToken() || !!getStoredRefreshToken();
       const activeLaunchCode =
@@ -244,7 +278,7 @@ export function useAuth(): UseAuthReturn {
             if (isStale()) return true;
 
             noteAuthenticatedUser(result.user);
-            setState({
+            commitAuthState({
               user: result.user,
               accessToken: result.accessToken,
               authenticated: true,
@@ -267,7 +301,7 @@ export function useAuth(): UseAuthReturn {
             if (isStale()) return true;
 
             noteAuthenticatedUser(refreshResult.user);
-            setState({
+            commitAuthState({
               user: refreshResult.user,
               accessToken: refreshResult.accessToken,
               authenticated: true,
@@ -318,7 +352,7 @@ export function useAuth(): UseAuthReturn {
             resetRefreshFailureState();
             noteAuthenticatedUser(result.user);
 
-            setState({
+            commitAuthState({
               user: result.user,
               accessToken: result.accessToken,
               authenticated: true,
@@ -349,7 +383,7 @@ export function useAuth(): UseAuthReturn {
 
         if (!hasStoredTokens) {
           noteUnauthenticated();
-          setState({
+          commitAuthState({
             user: null,
             accessToken: null,
             authenticated: false,
@@ -367,7 +401,7 @@ export function useAuth(): UseAuthReturn {
         // Both tokens invalid or expired — expected when refresh token hits its TTL.
         clearTokens();
         noteUnauthenticated();
-        setState({
+        commitAuthState({
           user: null,
           accessToken: null,
           authenticated: false,
@@ -423,7 +457,7 @@ export function useAuth(): UseAuthReturn {
         // A failed network probe is not proof that the current identity expired.
         // Preserve usable state; a definitive credential rejection still clears it.
         if (isConnectionError && authStateRef.current.authenticated && !attemptedLaunch) {
-          setState((prev) => ({
+          commitAuthState((prev) => ({
             ...prev,
             loading: false,
             error: 'Connection lost - waiting for daemon...',
@@ -432,7 +466,7 @@ export function useAuth(): UseAuthReturn {
         }
 
         noteUnauthenticated();
-        setState({
+        commitAuthState({
           user: null,
           accessToken: null,
           authenticated: false,
@@ -452,6 +486,66 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     reAuthenticate();
   }, [reAuthenticate]);
+
+  // Another tab can rotate, replace or clear the shared stored credentials
+  // without this tab receiving any event. Every recovery path that discovers
+  // that (handshake recovery, proactive refresh, visibility wake) reconciles
+  // through this one operation, so identity, token and authentication
+  // generation change together through the normal auth lifecycle; nothing
+  // copies a stored token around useAuth. Revalidation is fenced by the
+  // revalidation epoch and tab token authority, so a local logout/login that
+  // lands while it is pending wins.
+  const reconcileStoredCredentials = useCallback((): Promise<CredentialReconciliation> => {
+    if (reconciliationRef.current) return reconciliationRef.current;
+    const isTabAuthorityCurrent = captureTokenAuthority();
+    const run = reAuthenticate()
+      .then((): CredentialReconciliation => {
+        const current = authStateRef.current;
+        const storedAccessToken = getStoredAccessToken();
+        if (
+          !current.authenticated &&
+          !current.loading &&
+          !storedAccessToken &&
+          !getStoredRefreshToken()
+        ) {
+          return { status: 'signed-out' };
+        }
+        if (!isTabAuthorityCurrent()) return { status: 'superseded' };
+        if (
+          current.authenticated &&
+          current.accessToken &&
+          current.accessToken === storedAccessToken
+        ) {
+          return {
+            status: 'authenticated',
+            accessToken: current.accessToken,
+            authenticationGeneration: authenticationGenerationRef.current,
+          };
+        }
+        return { status: 'unresolved' };
+      })
+      .finally(() => {
+        if (reconciliationRef.current === run) reconciliationRef.current = null;
+      });
+    reconciliationRef.current = run;
+    return run;
+  }, [reAuthenticate]);
+
+  /**
+   * A refresh this tab started was superseded. If this tab's own login/logout
+   * did that, it already owns state; otherwise another tab changed the stored
+   * credentials, so reconcile and re-arm proactive refresh for the result.
+   */
+  const reconcileAfterSupersededRefresh = useCallback(
+    async (isTabAuthorityCurrent: () => boolean) => {
+      if (!isTabAuthorityCurrent()) return;
+      const outcome = await reconcileStoredCredentials();
+      if (outcome.status === 'authenticated' || outcome.status === 'unresolved') {
+        setRefreshScheduleNonce((nonce) => nonce + 1);
+      }
+    },
+    [reconcileStoredCredentials]
+  );
 
   // Visibility handler: recover from tab wake.
   //
@@ -481,8 +575,13 @@ export function useAuth(): UseAuthReturn {
       const storedAccess = getStoredAccessToken();
       if (!storedAccess || !isExpiringSoon(storedAccess, REFRESH_BUFFER_MS)) return;
 
+      const isTabAuthorityCurrent = captureTokenAuthority();
       const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) return;
+      if (!refreshToken) {
+        // Another tab signed out: settle this tab instead of idling on a token.
+        await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+        return;
+      }
 
       try {
         const client = await createRestClient(getDaemonUrl());
@@ -490,12 +589,15 @@ export function useAuth(): UseAuthReturn {
         // State sync happens via TOKENS_REFRESHED_EVENT listener below —
         // no need to setState here.
       } catch (error) {
-        if (error instanceof SupersededAuthenticationError) return;
+        // Covers RefreshSupersededError (another tab won the rotation).
+        if (error instanceof SupersededAuthenticationError) {
+          await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+          return;
+        }
         // Unrecoverable failures are handled by the unrecoverable-event
         // listener (clearTokens + unauthenticated). Bail out so we don't
         // kick off a reAuthenticate that will immediately fail again.
-        if (error instanceof RefreshUnrecoverableError || error instanceof RefreshSupersededError)
-          return;
+        if (error instanceof RefreshUnrecoverableError) return;
         // Transient/connection errors: let the poll effect pick us up.
         // Other non-connection errors: force a full reAuthenticate, which
         // has its own retry + token-clear policy.
@@ -507,7 +609,7 @@ export function useAuth(): UseAuthReturn {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [state.authenticated, reAuthenticate]);
+  }, [state.authenticated, reAuthenticate, reconcileAfterSupersededRefresh]);
 
   // A socket client that stood down because its credentials disappeared
   // (e.g. another tab signed out) asks us to revalidate; with no stored
@@ -516,11 +618,11 @@ export function useAuth(): UseAuthReturn {
   useEffect(() => {
     if (!state.authenticated) return;
     const handleRevalidate = () => {
-      reAuthenticate();
+      void reconcileStoredCredentials();
     };
     window.addEventListener(AUTH_REVALIDATE_REQUESTED_EVENT, handleRevalidate);
     return () => window.removeEventListener(AUTH_REVALIDATE_REQUESTED_EVENT, handleRevalidate);
-  }, [state.authenticated, reAuthenticate]);
+  }, [state.authenticated, reconcileStoredCredentials]);
 
   // Poll for daemon availability when we have tokens but aren't authenticated.
   // This handles the case where the daemon restarts and we need to reconnect
@@ -547,6 +649,7 @@ export function useAuth(): UseAuthReturn {
   // the state update then re-runs this effect with the new token, which
   // schedules the next tick. This removes the historic drift bug where the
   // refresh interval was hardcoded independently of the server's TTL.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshScheduleNonce re-arms this one-shot timer when reconciliation keeps the same token
   useEffect(() => {
     if (!state.authenticated || !state.accessToken) return;
 
@@ -559,19 +662,29 @@ export function useAuth(): UseAuthReturn {
       untilExp === null ? FALLBACK_DELAY_MS : Math.max(MIN_DELAY_MS, untilExp - REFRESH_BUFFER_MS);
 
     const timer = setTimeout(async () => {
+      const isTabAuthorityCurrent = captureTokenAuthority();
       const refreshToken = getStoredRefreshToken();
-      if (!refreshToken) return;
+      if (!refreshToken) {
+        // Another tab signed out: settle this tab instead of idling on a token.
+        await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+        return;
+      }
 
       try {
         const client = await createRestClient(getDaemonUrl());
         await refreshTokensSingleFlight(client, refreshToken);
         // State sync happens via TOKENS_REFRESHED_EVENT listener below.
       } catch (error) {
-        if (error instanceof SupersededAuthenticationError) return;
+        // A superseded refresh is a no-op only when this tab's own
+        // login/logout caused it. A cross-tab rotation (RefreshSupersededError)
+        // must adopt the stored credentials and keep this timer chain alive.
+        if (error instanceof SupersededAuthenticationError) {
+          await reconcileAfterSupersededRefresh(isTabAuthorityCurrent);
+          return;
+        }
         // Unrecoverable: the unrecoverable-event listener already cleared
         // tokens and flipped to unauthenticated. Avoid double-handling.
-        if (error instanceof RefreshUnrecoverableError || error instanceof RefreshSupersededError)
-          return;
+        if (error instanceof RefreshUnrecoverableError) return;
 
         console.error('Failed to auto-refresh token:', error);
         if (isTransientConnectionError(error)) {
@@ -595,7 +708,13 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
+  }, [
+    state.authenticated,
+    state.accessToken,
+    refreshScheduleNonce,
+    noteUnauthenticated,
+    reconcileAfterSupersededRefresh,
+  ]);
 
   // When the single-flight refresh helper completes from a non-React path
   // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
@@ -958,6 +1077,7 @@ export function useAuth(): UseAuthReturn {
     logout,
     logoutForAuthorityCycle,
     reAuthenticate,
+    reconcileStoredCredentials,
     refreshCurrentUserForAuthorityCycle,
   };
 }

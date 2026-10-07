@@ -8,6 +8,15 @@ import {
 } from '../utils/singleFlightRefresh';
 import { RefreshSupersededError } from '../utils/tokenRefresh';
 import { useAgorClient } from './useAgorClient';
+import type { CredentialReconciliation } from './useAuth';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 // Keep every real export; only stub the client factory so the hook wires a
 // controllable mock instead of opening a real socket.
@@ -394,7 +403,12 @@ describe('weak-network recovery', () => {
     localStorage.clear();
   });
 
-  async function connectedSeam() {
+  async function connectedSeam(
+    auth: Pick<
+      Parameters<typeof useAgorClient>[0],
+      'reconcileCredentials' | 'isAuthorityGenerationCurrent'
+    > = {}
+  ) {
     const seam = makeSeamClient();
     vi.mocked(createClient).mockReturnValue(seam.client as never);
     const hook = renderHook(() =>
@@ -402,6 +416,7 @@ describe('weak-network recovery', () => {
         url: 'http://daemon.test',
         accessToken: 'token',
         authorityGeneration: 1,
+        ...auth,
       })
     );
     await act(async () => {});
@@ -559,9 +574,11 @@ describe('weak-network recovery', () => {
     refreshTokensMock.mockReset();
   });
 
-  it('retries the handshake with the stored credentials, with no error, when its refresh is superseded', async () => {
+  it('resumes the handshake with the useAuth-reconciled token when a same-authority refresh is superseded', async () => {
     vi.useFakeTimers();
-    const { io, fireIo, result } = await connectedSeam();
+    const reconcile = deferred<CredentialReconciliation>();
+    const reconcileCredentials = vi.fn(() => reconcile.promise);
+    const { io, fireIo, result } = await connectedSeam({ reconcileCredentials });
     localStorage.setItem('agor-refresh-token', 'refresh-old');
     vi.mocked(createRestClient).mockResolvedValue({} as never);
     refreshTokensMock.mockRejectedValueOnce(new RefreshSupersededError());
@@ -573,13 +590,81 @@ describe('weak-network recovery', () => {
       fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
     });
     await act(async () => {});
+    expect(reconcileCredentials).toHaveBeenCalledTimes(1);
+    // The stored token is never adopted directly; recovery waits for useAuth.
+    await act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(io.connect).toHaveBeenCalledTimes(1);
     expect(result.current.error).toBeNull();
+    expect(result.current.connecting).toBe(true);
+
+    await act(async () => {
+      reconcile.resolve({
+        status: 'authenticated',
+        accessToken: 'access-from-other-tab',
+        authenticationGeneration: 1,
+      });
+    });
     await act(() => vi.advanceTimersByTimeAsync(500));
     expect(io.connect).toHaveBeenCalledTimes(2);
     expect(result.current.connected).toBe(true);
     const tokenSource = vi.mocked(createClient).mock.calls.at(-1)?.[2]
       ?.socketAuthentication?.accessToken;
     expect((tokenSource as () => string | null | undefined)()).toBe('access-from-other-tab');
+    localStorage.clear();
+    refreshTokensMock.mockReset();
+  });
+
+  it('never reconnects a binding whose authority reconciliation replaced', async () => {
+    vi.useFakeTimers();
+    const reconcileCredentials = vi.fn(
+      async (): Promise<CredentialReconciliation> => ({
+        status: 'authenticated',
+        accessToken: 'access-user-b',
+        authenticationGeneration: 2,
+      })
+    );
+    const { io, fireIo, result } = await connectedSeam({ reconcileCredentials });
+    localStorage.setItem('agor-refresh-token', 'refresh-old');
+    vi.mocked(createRestClient).mockResolvedValue({} as never);
+    refreshTokensMock.mockRejectedValueOnce(new RefreshSupersededError());
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(31_000));
+    expect(io.connect).toHaveBeenCalledTimes(1);
+    const tokenSource = vi.mocked(createClient).mock.calls.at(-1)?.[2]
+      ?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('token');
+    expect(result.current.error).toBeNull();
+    localStorage.clear();
+    refreshTokensMock.mockReset();
+  });
+
+  it('does not reconnect with a refresh result once useAuth replaced the authority', async () => {
+    vi.useFakeTimers();
+    let currentGeneration = 1;
+    const { io, fireIo } = await connectedSeam({
+      isAuthorityGenerationCurrent: (generation) => generation === currentGeneration,
+    });
+    localStorage.setItem('agor-refresh-token', 'refresh-of-other-identity');
+    vi.mocked(createRestClient).mockResolvedValue({} as never);
+    refreshTokensMock.mockImplementationOnce(async () => {
+      // The refreshed identity differs, so useAuth adopts it as a new authority.
+      currentGeneration = 2;
+      return { accessToken: 'access-other', refreshToken: 'refresh-next', user: { user_id: 'u2' } };
+    });
+    act(() => {
+      io.connected = false;
+      fireIo('disconnect', 'transport close');
+      fireIo('connect_error', Object.assign(new Error('expired'), { code: 401 }));
+    });
+    await act(() => vi.advanceTimersByTimeAsync(31_000));
+    expect(io.connect).toHaveBeenCalledTimes(1);
+    const tokenSource = vi.mocked(createClient).mock.calls.at(-1)?.[2]
+      ?.socketAuthentication?.accessToken;
+    expect((tokenSource as () => string | null | undefined)()).toBe('token');
     localStorage.clear();
     refreshTokensMock.mockReset();
   });

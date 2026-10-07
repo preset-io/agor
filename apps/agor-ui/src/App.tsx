@@ -328,6 +328,7 @@ function AppContent() {
     loginForAuthorityCycle,
     logout,
     logoutForAuthorityCycle,
+    reconcileStoredCredentials,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
 
@@ -345,6 +346,8 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
+    reconcileCredentials: reconcileStoredCredentials,
+    isAuthorityGenerationCurrent: isAuthenticationGenerationCurrent,
   });
   const startEnvironmentWithConfirmation = useEnvironmentStart(client);
   const handleUnarchiveBranch = useUnarchiveBranch(client);
