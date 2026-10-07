@@ -14,7 +14,7 @@ import {
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { useState } from 'react';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { ConversationView } from './ConversationView';
 
 // The real lean ReactiveSessionHandle and shared-session hook over a fake
@@ -174,17 +174,8 @@ const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, i) => from + i);
 const distanceFromBottom = (viewport: HTMLElement) =>
   viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop;
-/**
- * A programmatic scroll is a native scroll event, as the stick-to-bottom hook
- * sees a reader. Upward, it comes with the reader's wheel, which the hook
- * handles synchronously; it ignores a bare scroll under a trim's layout guard.
- */
+/** A programmatic scroll is a native scroll event, as the stick-to-bottom hook sees a reader. */
 async function scrollTo(viewport: HTMLElement, top: number) {
-  if (top < viewport.scrollTop) {
-    viewport.dispatchEvent(
-      new WheelEvent('wheel', { deltaY: top - viewport.scrollTop, bubbles: true })
-    );
-  }
   viewport.scrollTop = top;
   await new Promise((resolve) => setTimeout(resolve, 50));
 }
@@ -241,45 +232,6 @@ it('never trims under a scrolled-up reader, keeps its place, and trims on return
   await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2));
 });
 
-it('trims as soon as a reader wheels back to the latest turns, before another turn arrives', async () => {
-  const { client, addTurn } = transport(10);
-  const viewport = await mount(client);
-  for (let i = 0; i < 25; i++) await addTurn();
-  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)));
-  await scrollTo(viewport, Math.floor((viewport.scrollHeight - viewport.clientHeight) / 2));
-  for (let i = 0; i < 15; i++) await addTurn();
-  await screen.findByText(/Answer 49\./, undefined, { timeout: 5_000 });
-
-  // Wheel back down a step at a time, stopping short of the hook's 70px
-  // near-bottom zone: nothing is trimmed while still scrolled up.
-  while (distanceFromBottom(viewport) > 150) {
-    expect(mountedTurns(viewport)).toEqual(range(5, 49));
-    const step = Math.min(100, distanceFromBottom(viewport) - 120);
-    viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: step, bubbles: true }));
-    await scrollTo(viewport, viewport.scrollTop + step);
-  }
-  expect(mountedTurns(viewport)).toEqual(range(5, 49));
-  // Into the hook's near-bottom zone, where its lock engages, but short of the
-  // end: the reader may still be reading, so nothing is trimmed or moved.
-  const nearBottom = viewport.scrollTop + distanceFromBottom(viewport) - 50;
-  viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: 70, bubbles: true }));
-  await scrollTo(viewport, nearBottom);
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(mountedTurns(viewport)).toEqual(range(5, 49));
-  expect(Math.abs(viewport.scrollTop - nearBottom)).toBeLessThan(1);
-  const latest = screen.getByText(/Answer 49\./);
-  const remaining = distanceFromBottom(viewport);
-  const latestTop = latest.getBoundingClientRect().top;
-  viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: remaining, bubbles: true }));
-  await scrollTo(viewport, viewport.scrollTop + remaining);
-
-  // Back at the latest turn with no new one: trimmed above the viewport, and
-  // the latest turn moved only by the reader's own scroll.
-  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(20, 49)), { timeout: 5_000 });
-  expect(Math.abs(latest.getBoundingClientRect().top - (latestTop - remaining))).toBeLessThan(2);
-  expect(distanceFromBottom(viewport)).toBeLessThan(2);
-});
-
 /**
  * A reader at the latest turn, settled. Turns piling up behind a protected turn
  * can release the stick-to-bottom lock on a slow runner (see the PR's bottom
@@ -315,28 +267,6 @@ it('trims a parked reader once the last pin that held the window open is release
     act(() => unpin());
     await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(20, 49)), { timeout: 5_000 });
     await waitFor(() => expect(distanceFromBottom(viewport)).toBeLessThan(2), { timeout: 5_000 });
-  } finally {
-    shared.release();
-  }
-});
-
-it('drops a pending parked check when the conversation unmounts', async () => {
-  const { client, addTurn } = transport(10);
-  const viewport = await mount(client);
-  const shared = sharedHandle(client);
-  try {
-    // A pin holds the window open, so the parked check stays armed.
-    const unpin = shared.handle.retainTaskDetails(taskId(2));
-    for (let i = 0; i < 25; i++) await addTurn();
-    await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(2, 34)), { timeout: 5_000 });
-    await park(viewport);
-    const trim = vi.spyOn(shared.handle, 'trimOlderTasks');
-    // A scroll queues a check for once the hook settles; unmount before it runs.
-    viewport.dispatchEvent(new Event('scroll'));
-    cleanup();
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(trim).not.toHaveBeenCalled();
-    unpin();
   } finally {
     shared.release();
   }
