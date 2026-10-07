@@ -497,6 +497,11 @@ export function useAuth(): UseAuthReturn {
   // lands while it is pending wins.
   const reconcileStoredCredentials = useCallback((): Promise<CredentialReconciliation> => {
     if (reconciliationRef.current) return reconciliationRef.current;
+    // A local login (password change) is replacing the credentials and has not
+    // yet invalidated tab authority. Revalidating now would null its attempt
+    // fence and cancel it, so report "not confirmed yet": callers retry on
+    // their bounded cadence once the login has installed or released authority.
+    if (localLoginAttemptRef.current) return Promise.resolve({ status: 'unresolved' });
     const isTabAuthorityCurrent = captureTokenAuthority();
     const run = reAuthenticate()
       .then((): CredentialReconciliation => {

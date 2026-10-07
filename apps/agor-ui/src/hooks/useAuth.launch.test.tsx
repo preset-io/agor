@@ -489,6 +489,71 @@ describe('useAuth launch-code fallback', () => {
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-access');
   });
 
+  it('keeps a password-change login alive when credential reconciliation runs mid-login', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const userA = { user_id: 'admin-a', email: 'admin-a@example.test', role: 'admin' };
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-a-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'admin-a-refresh');
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'admin-a-access',
+            refreshToken: 'admin-a-refresh',
+            user: userA,
+          },
+        })
+      );
+    });
+    const operation = authorityOperation(() => true);
+    const authorityCycle = result.current.captureAuthorityCycle(operation);
+    expect(authorityCycle).not.toBeNull();
+    const pendingAuth = deferred<{
+      accessToken: string;
+      refreshToken: string;
+      user: typeof userA;
+    }>();
+    authenticate.mockImplementationOnce(() => pendingAuth.promise);
+
+    let login!: ReturnType<typeof result.current.loginForAuthorityCycle>;
+    act(() => {
+      login = result.current.loginForAuthorityCycle(
+        'admin-a@example.test',
+        'new-password',
+        authorityCycle!
+      );
+    });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+
+    // The socket / proactive-refresh / visibility path reconciles stored
+    // credentials while the login is out and tab authority is still current.
+    authenticate.mockResolvedValue({ accessToken: 'admin-a-access', user: userA });
+    let reconciliation!: Awaited<ReturnType<typeof result.current.reconcileStoredCredentials>>;
+    await act(async () => {
+      reconciliation = await result.current.reconcileStoredCredentials();
+    });
+    // The in-flight local login owns the next authority: reconciliation must
+    // neither cancel the login nor report the tab settled.
+    expect(reconciliation.status).toBe('unresolved');
+    expect(result.current.loading).toBe(true);
+
+    pendingAuth.resolve({
+      accessToken: 'admin-a-new-access',
+      refreshToken: 'admin-a-new-refresh',
+      user: userA,
+    });
+    await act(async () => {
+      await expect(login).resolves.toMatchObject({ status: 'signed-in' });
+    });
+    expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-a-new-access');
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('admin-a-new-refresh');
+    expect(result.current.accessToken).toBe('admin-a-new-access');
+    expect(result.current.loading).toBe(false);
+  });
+
   it('does not let a delayed guarded current-user refresh install an obsolete row', async () => {
     window.history.replaceState({}, '', '/ui/');
     localStorage.setItem(ACCESS_TOKEN_KEY, 'admin-a-access');
