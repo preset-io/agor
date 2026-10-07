@@ -9,7 +9,10 @@ export default class KnowledgeImport extends BaseCommand {
   static override description =
     'Plan a current-markdown import into a new private, caller-owned namespace. Add --apply to execute. No overwrite, ACL transfer or deletion.';
   static override args = {
-    directory: Args.string({ required: true, description: 'Completed export directory' }),
+    directory: Args.string({
+      required: true,
+      description: 'Version 2 Knowledge repository (manifest.yaml and docs/)',
+    }),
   };
   static override flags = {
     namespace: Flags.string({ required: true, description: 'New destination namespace slug' }),

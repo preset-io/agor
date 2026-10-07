@@ -218,21 +218,85 @@ timestamps are kept as inert provenance; destination attribution records the act
 import. Source ACLs, owners, admin roles and repo/branch bindings are never applied.
 Review the result before sharing the destination namespace.
 
-The bundle contains `manifest.json`, `checkpoint.json` and immutable UTF-8 files
-named `d000001-<sha256>.md`. The manifest maps these files to their original Knowledge
-paths, including paths without a markdown extension. Physical filenames do not
-depend on source paths, so filesystem case collisions and file/folder conflicts do
-not change Knowledge paths. Refreshing an export appends changed content and
-updates the manifest; **old files are retained, not pruned**. A refreshed directory
-can still contain older or removed content; use a fresh directory for a minimal
-migration handoff. Import reads only manifest-listed files. Treat the directory as
-sensitive data and do not commit it to a shared repository by accident.
+### Git-friendly repository format (version 2)
 
-Supported in-namespace Markdown link destinations and reference definitions are
-rewritten to destination namespace paths. Unresolved KB links are counted; unusual
-escaped destinations, absolute source-site URLs and external references may need
-manual review. Code and ordinary prose are not rewritten. After all documents
-exist, the CLI reconciles reference edges without creating extra content revisions.
+Exports use readable folders and YAML metadata:
+
+```text
+team-docs/
+  manifest.yaml
+  docs/
+    guides/getting-started.md
+    incidents/parent-session-not-notified.md
+  .agor/                 # local checkpoint, snapshot and refresh state; Git-ignored
+  .gitignore
+  .gitattributes
+```
+
+`manifest.yaml` contains the format/version, namespace information, omissions and a
+sorted list of expected Markdown files. Each document has a generated YAML header
+with `format`, `version`, `agor` (stable UUID, logical path, title, icon, kind and
+status), separate user `frontmatter`, and inert `provenance`. Fields are indented
+and sorted consistently. The Markdown body follows the header. Existing body
+frontmatter, prose metadata such as “Date · Reporter”, and line endings are not
+reformatted. Only supported Markdown link destinations are transformed.
+
+Physical paths mirror Knowledge paths where possible. Extensionless documents get
+`.md` filenames; case/Unicode collisions, file/folder conflicts, hidden components
+and long names receive deterministic suffixes. Existing mappings are retained on
+refresh. The header's `agor.path` is the authoritative logical Knowledge path;
+renaming a file alone does not rename the document. Document identity lives in the
+full `agor.id`, not in a short-ID filename suffix.
+
+You can edit bodies and supported metadata in Git without updating checksums.
+Import computes a canonical plan from current content, independent of YAML key
+order, comments or indentation. An edit changes that plan: it can be imported into
+a **new** namespace, but it cannot resume a different plan into an existing one.
+Repeated publishing into an existing namespace is not a synchronization feature of
+this format. Source ACLs, tenant IDs and author identities never confer authority.
+
+For deliberate additions/removals, update the `documents` list in `manifest.yaml`.
+New documents require a unique UUID and a valid version 2 header. Missing listed
+files fail validation. Unlisted Markdown under `docs/` is reported and never
+imported; deleting a local file never deletes a destination document.
+
+Validate locally without logging in, contacting a daemon or writing files:
+
+```bash
+agor kb validate ./team-docs-export
+```
+
+The JSON result reports document/body totals, the semantic bundle fingerprint,
+unresolved links and unlisted files. YAML accepts bounded JSON-compatible values;
+duplicate keys, aliases, tags, merge keys and excessive nesting are rejected with
+sanitized errors. Keep dates/IDs as strings. Import also checks encoded HTTP request
+limits using the selected destination namespace before any import writes.
+
+Known internal Agor links become relative Markdown links for repository browsing.
+Import translates indexed local targets back into destination Knowledge references,
+including fragments and reference definitions. Code and ordinary prose are not
+rewritten. External links and unsupported escaped destinations may need manual
+review; uploaded images/assets are not downloaded or made portable.
+
+A Git clone needs only the tracked manifest and documents for import. Do **not**
+commit `.agor/` or `.agor-lock/`: the former holds source identity, immutable source
+snapshots, previous content and refresh checkpoints. Generated `.gitattributes`
+keeps Markdown bytes unchanged during Git checkout. Existing Git control files are
+retained rather than overwritten; the CLI reminds you to configure their ignore
+and line-ending rules yourself.
+
+Export refresh requires the original local baseline and refuses to overwrite local
+edits or untracked files. A clone without `.agor/` is importable, but refreshing it
+requires a fresh export directory. Removed/renamed source documents may leave old
+unlisted files behind; refresh **does not prune** them. Review `retained`/`unlisted`
+results and use a fresh directory for a minimal handoff. Full-fidelity exports can
+include private documents, drafts and author/provenance details: readable filenames
+and Git ignore rules do not make them safe to publish to a public repository.
+
+Version 1 `manifest.json` bundles are not accepted by this repository reader and
+are never converted in place. Use a fresh export with a CLI supporting repository format v2; preserve
+old bundles until the new export is verified. The on-disk version changed; the
+bounded transfer HTTP protocol and daemon authorization rules did not.
 
 This is **not a full backup or bidirectional sync**. It excludes historical versions,
 archived documents, manually authored graph edges, asset bytes, grants and semantic
@@ -255,6 +319,36 @@ An unrelated existing namespace is never merged or overwritten. A modified bundl
 is a new import and needs a new destination namespace. Keep the destination private
 and unchanged until import and reference reconciliation finish.
 
+Each namespace creation, document write and reference reconciliation is its own
+short database transaction. A document and its resume receipt commit together;
+a failed document transaction does not roll back earlier documents.
+
+Export/import continue to other documents after classified document-level failures
+(such as a missing source version, checksum mismatch, document conflict or HTTP 500).
+Import reference-check failures likewise do not block the remaining reference checks.
+The command still exits unsuccessfully and reports acknowledged/cached progress,
+failed or unconfirmed counts, and up to 20 sanitized error details. Details identify
+the plan key and source document UUID, rather than printing private content or titles.
+A failed POST may already have committed: resume consults server receipts rather than
+blindly creating it again.
+
+Errors are not silently skipped out of the bundle. An incomplete export retains
+verified source files/checkpoints but publishes **no new completed repository**;
+a failed refresh leaves the prior readable snapshot unchanged. Import defers its
+final reference-reconciliation pass until every planned document is available.
+Resume retries missing documents and outstanding reference checks, without duplicating
+completed revisions. Resolve permanent errors first; if fixing local files changes
+the bundle, use a new destination namespace. An incomplete first export still requires
+a fresh output directory if the source inventory changes.
+
+Authentication/permission failures, rate limits, unavailable services, transport
+failures, unrecognized request-schema errors, namespace-wide limits, unreliable
+inventory, cancellation and unsafe local files stop further work. There is no blind
+automatic network retry loop. Import validates the entire local repository before
+writes: malformed headers or a missing indexed file do not authorize importing an
+implicit subset. Successful prior work remains retained even when a fatal error
+stops the run.
+
 If planning stops with **Invalid Knowledge transfer request**, do not repeatedly
 retry with `--apply`. Transfer errors identify the stage, HTTP method/route and
 sanitized invalid fields when the daemon supplies them. Compare `agor --version`
@@ -275,25 +369,33 @@ is empty or that an earlier attempt committed nothing. Keep the bundle and
 checkpoints intact. When reporting a failure, share CLI/daemon versions and the
 sanitized stage/field diagnostic, not credentials, request bodies or private docs.
 
-An export interrupted before its first completed manifest can resume only against
-the same source inventory; if that source changed, use a fresh output directory.
-Completed exports can be refreshed. Independently altered content-addressed files
-are rejected, not overwritten. The export lock renews while the process runs; after
-a hard process exit, allow 30 seconds for a stale lock to become reclaimable.
-Import refuses a directory whose export lock is still present.
+An interrupted source snapshot can resume against the same source inventory.
+Completed source snapshots can be refreshed. Independently altered cache files are
+rejected, not overwritten. The export lock renews while the CLI runs; after a hard
+exit allow 30 seconds for a stale lock to become reclaimable.
 
-Each body is checked against its recorded version/hash. Export compares inventory
-again before publishing its completed manifest, but this is **not a point-in-time
-namespace snapshot**. Keep the source quiet during a migration cutover. A failed
-export never publishes a new completed manifest; an older completed export may
-still be present and represents the older state.
+Readable-file publication is staged and journaled. An interruption after publication
+begins blocks local import/validation until `agor kb export ... --resume` completes it.
+Resume verifies staged hashes and refuses intervening local edits. Before this
+publication phase, a failed refresh leaves the prior readable snapshot unchanged.
+A successful no-change refresh does not rewrite tracked documents or the manifest. Do not
+commit or copy the tree while an export is running or publication is incomplete:
+a clone without ignored recovery state cannot detect a partially committed refresh.
+This editable format is not a sealed backup archive.
+
+Export verifies source body hashes and compares source inventory before accepting
+its local source snapshot. This is **not a point-in-time namespace snapshot**; keep
+the source quiet during migration. Deliberately edited repository files are editable
+source, not a claim that their bytes still match the original export. Import checks
+for local changes between planning and applying; existing destination receipts and
+no-overwrite conflicts remain authoritative.
 
 Limits are 10,000 documents, 10 MiB per body, 100 MiB total body bytes, a 10 MiB
-manifest, a 9 MiB encoded import request (below the daemon's HTTP JSON ceiling),
+manifest and 10 MiB aggregate serialized document headers, a 9 MiB encoded import request (below the daemon's HTTP JSON ceiling),
 and 110 MiB across all encoded document requests. Import planning checks the full
 rewritten plan, including JSON escaping and metadata, before creating the namespace.
 Excessive nesting, unsafe filenames, symlinks, hardlinks, invalid
-UTF-8 and mismatched hashes fail closed. Archive extraction is not part of this v1.
+UTF-8 and mismatched source/staging hashes fail closed. Archive extraction is not supported.
 
 ---
 

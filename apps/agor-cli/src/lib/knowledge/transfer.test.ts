@@ -7,9 +7,10 @@ import {
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeNamespaceRepository,
+  KnowledgeTransferRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { User } from '@agor/core/types';
+import type { KnowledgeDocument, User } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { Parser } from '@oclif/core';
 import { describe, expect, it, vi } from 'vitest';
@@ -163,11 +164,7 @@ describe.skipIf(process.platform === 'win32')('Knowledge CLI workflow', () => {
         expect(
           await exportKnowledge(client, { ...options, dryRun: false, resume: true }, log.reporter)
         ).toMatchObject({ copied: 1 });
-        const latest = JSON.parse(await readFile(join(options.directory, 'manifest.json'), 'utf8'));
-        await writeFile(
-          join(options.directory, `d000001-${latest.documents[0].sha256}.md`),
-          'independent local edit'
-        );
+        await writeFile(join(options.directory, 'docs/guide.md'), 'independent local edit');
         await expect(
           exportKnowledge(client, { ...options, dryRun: false, resume: true }, log.reporter)
         ).rejects.toThrow('Local content differs');
@@ -258,17 +255,11 @@ describe.skipIf(process.platform === 'win32')('Knowledge interrupted transfer', 
             log.reporter
           )
         ).toMatchObject({ created: 0, unchanged: 1 });
-        const manifest = JSON.parse(
-          await readFile(join(options.directory, 'manifest.json'), 'utf8')
-        );
-        await writeFile(
-          join(options.directory, `d000001-${manifest.documents[0].sha256}.md`),
-          'tampered'
-        );
+        await writeFile(join(options.directory, 'docs/a.md'), 'tampered without a header');
         const create = vi.spyOn(client, 'create');
         await expect(
           importKnowledge(client, { ...options, namespace: 'not-created' }, log.reporter)
-        ).rejects.toThrow('Checksum');
+        ).rejects.toThrow('YAML header');
         expect(create).not.toHaveBeenCalled();
       } finally {
         log.reporter.close();
@@ -326,7 +317,7 @@ describe.skipIf(process.platform === 'win32')('Knowledge interrupted transfer', 
           signal: controller.signal,
         };
         await expect(exportKnowledge(client, options, log.reporter)).rejects.toThrow('Cancelled');
-        await expect(readFile(join(options.directory, 'manifest.json'))).rejects.toMatchObject({
+        await expect(readFile(join(options.directory, 'manifest.yaml'))).rejects.toMatchObject({
           code: 'ENOENT',
         });
         client.get = normalGet;
@@ -338,6 +329,144 @@ describe.skipIf(process.platform === 'win32')('Knowledge interrupted transfer', 
         expect(result).toMatchObject({ documents: 1, copied: 1 });
         expect(log.lines.join('')).toContain('1 unknown hashes');
       } finally {
+        log.reporter.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
+});
+
+describe.skipIf(process.platform === 'win32')('Knowledge best-effort document transfers', () => {
+  dbTest(
+    'retains later successes, rolls back a failed document+receipt, and resumes uncertain writes and references',
+    async ({ db }) => {
+      const root = await mkdtemp(join(tmpdir(), 'kb-partial-test-'));
+      const log = progress();
+      try {
+        const admin = (await new UsersRepository(db).create({
+          email: `${generateId()}@test.invalid`,
+          role: ROLES.ADMIN,
+        })) as User;
+        const namespaces = new KnowledgeNamespaceRepository(db);
+        const source = await namespaces.create({
+          slug: 'partial-source',
+          display_name: 'Synthetic',
+          owner_user_id: admin.user_id,
+        });
+        const docs = new KnowledgeDocumentRepository(db);
+        const originals: KnowledgeDocument[] = [];
+        for (const path of ['a.md', 'b.md', 'c.md', 'd.md'])
+          originals.push(
+            await docs.create({
+              namespace_id: source.namespace_id,
+              path,
+              content_text: 'private synthetic body',
+              created_by: admin.user_id,
+            })
+          );
+        const service = new KnowledgeTransfersService(
+          createTenantScopedDatabaseProxy(db, { requireScope: false })
+        );
+        const client = clientFor(service, admin);
+        const options = {
+          namespace: 'partial-source',
+          directory: join(root, 'repo'),
+          dryRun: false,
+          resume: false,
+          sourceIdentity: 'synthetic',
+          signal: new AbortController().signal,
+        };
+        const normalGet = client.get.bind(client);
+        const failedGet = vi.spyOn(client, 'get').mockImplementation(async (id, params) => {
+          if (id === originals[1].document_id)
+            throw Object.assign(new Error('private remote content'), { code: 500 });
+          return normalGet(id, params);
+        });
+        await expect(exportKnowledge(client, options, log.reporter)).rejects.toThrow(
+          '3 bodies cached; 0 unchanged; 1 failed or unconfirmed'
+        );
+        expect(failedGet).toHaveBeenCalledTimes(4);
+        await expect(readFile(join(options.directory, 'manifest.yaml'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+        failedGet.mockImplementation(normalGet).mockClear();
+        await expect(
+          exportKnowledge(client, { ...options, resume: true }, log.reporter)
+        ).resolves.toMatchObject({ copied: 1, unchanged: 3 });
+        expect(failedGet).toHaveBeenCalledTimes(1);
+        expect(failedGet.mock.calls[0][0]).toBe(originals[1].document_id);
+
+        const originalRecord = KnowledgeTransferRepository.prototype.record;
+        const record = vi
+          .spyOn(KnowledgeTransferRepository.prototype, 'record')
+          .mockImplementation(async function (this: KnowledgeTransferRepository, ...args) {
+            if (args[3] === 'd000002')
+              throw Object.assign(new Error('private transaction failure'), { code: 500 });
+            return originalRecord.apply(this, args);
+          });
+        const normalCreate = client.create.bind(client);
+        const attemptedPaths = new Map<string, string>();
+        const create = vi.spyOn(client, 'create').mockImplementation(async (data) => {
+          if (data.action === 'document') attemptedPaths.set(data.entry.key, data.entry.path);
+          const result = await normalCreate(data);
+          if (data.action === 'document' && data.entry.key === 'd000003')
+            throw Object.assign(new Error('private lost acknowledgement'), { code: 500 });
+          return result;
+        });
+        const incoming = { ...options, namespace: 'partial-destination' };
+        await expect(importKnowledge(client, incoming, log.reporter)).rejects.toThrow(
+          '2 creates acknowledged; 0 unchanged; 2 failed or unconfirmed'
+        );
+        expect(attemptedPaths.size).toBe(4);
+        expect(create.mock.calls.some(([data]) => data.action === 'reconcile')).toBe(false);
+        const target = (await namespaces.findBySlug(incoming.namespace))!;
+        // Failure after document creation but before receipt insertion rolls back only that request.
+        expect(
+          await docs.findByNamespaceAndPath(target.namespace_id, attemptedPaths.get('d000002')!)
+        ).toBeNull();
+        for (const key of ['d000001', 'd000003', 'd000004'])
+          expect(
+            await docs.findByNamespaceAndPath(target.namespace_id, attemptedPaths.get(key)!)
+          ).not.toBeNull();
+        record.mockRestore();
+        create.mockImplementation(normalCreate).mockClear();
+        await expect(
+          importKnowledge(client, { ...incoming, resume: true, dryRun: true }, log.reporter)
+        ).resolves.toMatchObject({ pending: 1, unchanged: 3 });
+        expect(create).not.toHaveBeenCalled();
+
+        // A reconciliation error does not block the remaining reference checks.
+        create.mockImplementation(async (data) => {
+          if (data.action === 'reconcile' && data.key === 'd000002')
+            throw Object.assign(new Error('private reference error'), { code: 500 });
+          return normalCreate(data);
+        });
+        await expect(
+          importKnowledge(client, { ...incoming, resume: true }, log.reporter)
+        ).rejects.toThrow('3 / 4 reference checks acknowledged; 1 failed or unconfirmed');
+        expect(create.mock.calls.filter(([data]) => data.action === 'document')).toHaveLength(1);
+        expect(create.mock.calls.filter(([data]) => data.action === 'reconcile')).toHaveLength(4);
+        create.mockImplementation(normalCreate).mockClear();
+        await expect(
+          importKnowledge(client, { ...incoming, resume: true }, log.reporter)
+        ).resolves.toMatchObject({ created: 0, unchanged: 4 });
+        expect(create.mock.calls.filter(([data]) => data.action === 'document')).toHaveLength(0);
+        expect(
+          create.mock.calls
+            .filter(([data]) => data.action === 'reconcile')
+            .map(([data]) => data.action === 'reconcile' && data.key)
+        ).toEqual(['d000002']);
+        for (const path of attemptedPaths.values()) {
+          const doc = (await docs.findByNamespaceAndPath(target.namespace_id, path))!;
+          expect(
+            await new KnowledgeDocumentVersionRepository(db).findAll({
+              document_id: doc.document_id,
+            })
+          ).toHaveLength(1);
+        }
+        expect(log.lines.join('')).not.toContain('private ');
+      } finally {
+        vi.restoreAllMocks();
         log.reporter.close();
         await rm(root, { recursive: true, force: true });
       }

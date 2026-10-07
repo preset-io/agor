@@ -11,11 +11,19 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import { type AuthenticationService, authenticate } from '@agor/core/feathers';
-import { serializeTransferManifest, transferDigest, transferSha256 } from '@agor/core/knowledge';
-import { KNOWLEDGE_TRANSFER, type KnowledgeTransferManifest, ROLES } from '@agor/core/types';
+import { transferDigest, transferSha256 } from '@agor/core/knowledge';
+import {
+  KNOWLEDGE_TRANSFER,
+  type KnowledgeDocumentID,
+  type KnowledgeTransferManifest,
+  ROLES,
+} from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { KnowledgeProgress } from '../../../agor-cli/src/lib/knowledge/progress';
+import { loadKnowledgeRepository } from '../../../agor-cli/src/lib/knowledge/repository';
+import { writeRepositoryFixture } from '../../../agor-cli/src/lib/knowledge/repository.test-helpers';
+import { RepositoryDirectory } from '../../../agor-cli/src/lib/knowledge/repository-directory';
 import {
   importKnowledge,
   knowledgeTransferClient,
@@ -53,7 +61,10 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         async (app) => {
           const strategy = new ApiKeyStrategy();
           strategy.setDependencies(new UserApiKeysRepository(guarded), app.service('users'));
-          (app.service('authentication') as AuthenticationService).register('api-key', strategy);
+          (app.service('authentication') as unknown as AuthenticationService).register(
+            'api-key',
+            strategy
+          );
           app.set('authentication', {
             ...app.get('authentication'),
             authStrategies: ['api-key', 'jwt'],
@@ -78,7 +89,7 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         },
       });
       const content = '# Synthetic only\n';
-      const manifest: KnowledgeTransferManifest = {
+      let manifest: KnowledgeTransferManifest = {
         format: KNOWLEDGE_TRANSFER.format,
         version: 1,
         completed: true,
@@ -113,9 +124,13 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         signal: new AbortController().signal,
       };
       try {
-        await writeFile(join(directory, 'manifest.json'), serializeTransferManifest(manifest));
-        for (const entry of manifest.documents)
-          await writeFile(join(directory, `${entry.key}-${entry.sha256}.md`), content);
+        await writeRepositoryFixture(directory, manifest, content);
+        const fixture = await RepositoryDirectory.open(directory);
+        try {
+          manifest = (await loadKnowledgeRepository(fixture, options.namespace)).manifest;
+        } finally {
+          await fixture.close();
+        }
         // Import checkpoints live on the destination, not in checkpoint.json. A valid
         // export checkpoint is retained byte-for-byte and is not destination authority.
         const checkpoint = JSON.stringify({
@@ -147,12 +162,7 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         const smallDirectory = join(directory, 'small');
         await mkdir(smallDirectory, { mode: 0o700 });
         const smallManifest = { ...manifest, documents: manifest.documents.slice(0, 2) };
-        await writeFile(
-          join(smallDirectory, 'manifest.json'),
-          serializeTransferManifest(smallManifest)
-        );
-        for (const entry of smallManifest.documents)
-          await writeFile(join(smallDirectory, `${entry.key}-${entry.sha256}.md`), content);
+        await writeRepositoryFixture(smallDirectory, smallManifest, content);
         const smallOptions = { ...options, directory: smallDirectory, namespace: 'api-key-target' };
         for (const resume of [false, true]) {
           expect(
@@ -249,7 +259,9 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
           await importKnowledge(client, { ...options, dryRun: false, resume: true }, progress)
         ).toMatchObject({ created: 0, unchanged: 101 });
         expect(
-          await new KnowledgeDocumentVersionRepository(db).findAll({ document_id: first.target_id })
+          await new KnowledgeDocumentVersionRepository(db).findAll({
+            document_id: first.target_id as KnowledgeDocumentID,
+          })
         ).toHaveLength(1);
         expect(await readFile(join(directory, 'checkpoint.json'), 'utf8')).toBe(checkpoint);
         expect(
@@ -310,8 +322,12 @@ describe.skipIf(process.platform === 'win32')('Knowledge transfer REST boundary'
         });
         expect(rejected.status).toBe(400);
         const diagnostic = await rejected.json();
-        expect(diagnostic.message).toContain('POST /kb/transfers');
-        expect(diagnostic.message).toContain('resume: Missing field or wrong type');
+        expect(diagnostic).toMatchObject({
+          message: expect.stringContaining('POST /kb/transfers'),
+        });
+        expect(diagnostic).toMatchObject({
+          message: expect.stringContaining('resume: Missing field or wrong type'),
+        });
         expect(JSON.stringify(diagnostic)).not.toMatch(
           /Private fixture title|private-key-do-not-log|private-value-do-not-log/
         );

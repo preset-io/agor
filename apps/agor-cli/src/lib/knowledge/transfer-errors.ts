@@ -2,6 +2,46 @@ import { knowledgeTransferValidationSummary } from '@agor/core/knowledge';
 import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
 import type { KnowledgeProgress } from './progress';
 
+/** Only explicitly classified document failures permit scheduling more work. */
+export class TransferRequestError extends Error {
+  constructor(
+    message: string,
+    readonly continueDocuments: boolean
+  ) {
+    super(message);
+  }
+}
+
+/** Bounded, sanitized diagnostics. An unsuccessful POST may already have committed. */
+export class TransferFailures {
+  count = 0;
+  private details: string[] = [];
+
+  capture(error: unknown, key: string, progress: KnowledgeProgress, sourceId?: unknown): void {
+    if (!(error instanceof TransferRequestError) || !error.continueDocuments) throw error;
+    this.count++;
+    // Use canonical plan keys, never titles, content, URLs or remote error bodies.
+    let label = /^d[0-9]{6}$/.test(key) ? key : 'document';
+    if (
+      typeof sourceId === 'string' &&
+      /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sourceId)
+    )
+      label += ` (source document ${sourceId})`;
+    if (this.details.length < 20) {
+      const detail = `${label}: ${error.message}`;
+      this.details.push(detail);
+      progress.summary(`Continuing after document failure — ${detail}`);
+    }
+  }
+
+  finish(summary: string, guidance: string): void {
+    if (!this.count) return;
+    throw new Error(
+      `${summary}; ${this.count} failed or unconfirmed. ${guidance}\n${this.details.join('\n')}${this.count > this.details.length ? `\n${this.count - this.details.length} additional failures omitted.` : ''}`
+    );
+  }
+}
+
 /** Do not print response bodies, URLs, headers, query values or raw Zod errors. */
 export async function transferRequest<T>(
   progress: KnowledgeProgress,
@@ -46,6 +86,9 @@ export async function transferRequest<T>(
     else if (code === 403)
       detail =
         'Permission denied. Import requires member access; complete export requires workspace admin access.';
+    else if (code === 404 && stage === 'Exporting document')
+      detail =
+        'Source document/version unavailable. Check the source; no incomplete export is published.';
     else if (code === 404 || code === 405)
       detail = `Transfer endpoint or source namespace unavailable. Check the destination URL and namespace slug. ${compatibility}`;
     else if (
@@ -60,10 +103,34 @@ export async function transferRequest<T>(
     else if (code === 413)
       detail =
         'Request exceeds the server or proxy size limit. Check transfer limits before retrying.';
-    else
-      detail = `Transfer request failed.${method === 'POST' ? ' An in-flight write may have committed.' : ''} Check connectivity and daemon availability; preserve the bundle and verify with --resume --dry-run before applying again.`;
-    throw new Error(
-      `${stage} — ${method} /${KNOWLEDGE_TRANSFER.path}${route === 'document' ? '/:id' : ''}${code ? ` (HTTP ${code})` : ''}: ${detail}`
+    else if (code === 429)
+      detail =
+        'Rate limited. Stopping requests; wait for the server limit to reset before resuming.';
+    else {
+      const guidance =
+        stage === 'Exporting document' || stage === 'Planning: source inventory'
+          ? 'Preserve the output directory; after resolving the error, resume the export with --resume.'
+          : 'Preserve the bundle and verify with --resume --dry-run before applying again.';
+      detail = `Transfer request failed.${method === 'POST' ? ' An in-flight write may have committed.' : ''} Check connectivity and daemon availability. ${guidance}`;
+    }
+    const documentStage =
+      stage === 'Exporting document' ||
+      stage === 'Importing document' ||
+      stage === 'Reconciling references';
+    const continueDocuments =
+      documentStage &&
+      (code === 409 ||
+        code === 413 ||
+        code === 500 ||
+        (code === 404 && stage === 'Exporting document') ||
+        (code === 400 &&
+          Boolean(safeRejection) &&
+          safeRejection !== 'Import exceeds namespace transfer limits'));
+    // Unknown validation, auth, quota, rate limits, transport failures and service
+    // unavailability are systemic: do not hammer the remaining plan or bypass it.
+    throw new TransferRequestError(
+      `${stage} — ${method} /${KNOWLEDGE_TRANSFER.path}${route === 'document' ? '/:id' : ''}${code ? ` (HTTP ${code})` : ''}: ${detail}`,
+      continueDocuments
     );
   }
 }
