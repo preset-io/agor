@@ -33,8 +33,10 @@ describe('executor exit termination tenant scope', () => {
     expect(onExit).toMatch(/cause,\s+errorMessage,/);
     expect(onExit).toContain('absenceVerified: templatedLauncherAbsenceVerified');
     expect(onExit).toContain('reason: cause');
+    // A refusal drops only the status fence, so it settles a Stop that came
+    // first; a connected executor still wins the race.
     expect(onExit).toMatch(
-      /expectedStatus: TaskStatus\.DISPATCHING,\s+requireExecutorDisconnected: true/
+      /\.\.\.\(launchRefused \? \{\} : \{ expectedStatus: TaskStatus\.DISPATCHING \}\),\s+requireExecutorDisconnected: true/
     );
   });
 });

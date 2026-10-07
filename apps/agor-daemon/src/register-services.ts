@@ -1949,10 +1949,13 @@ function createExecuteHandler(
             },
             runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             // A remote executor may connect while its launcher is exiting.
-            // Resolve that race only at the row-locked claim.
+            // Resolve that race only at the row-locked claim. A refused launch
+            // created nothing, so it also settles a Stop that arrived first
+            // (status `stopping`, cause kept as `user_stop`); the disconnected
+            // fence alone still lets a connected executor win.
             ...(spawnContext.mode === 'templated'
               ? {
-                  expectedStatus: TaskStatus.DISPATCHING,
+                  ...(launchRefused ? {} : { expectedStatus: TaskStatus.DISPATCHING }),
                   requireExecutorDisconnected: true,
                 }
               : {}),

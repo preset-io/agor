@@ -306,8 +306,9 @@ async function runContainment(
     resolveOpenCodeCapabilities(input.app.get('config') ?? {}).mode === 'managed-projection';
   // An opted-in launcher refused admission before creating anything, so there
   // is no provider work to quiesce. Every other cause keeps the safeguard.
-  const launchRefused =
-    input.absenceVerified === true && current.termination_request?.cause === 'launch_refused';
+  // Key on the caller's cause: a Stop that arrived first keeps the persisted
+  // `user_stop` cause even though the refusal proved absence.
+  const launchRefused = input.absenceVerified === true && input.cause === 'launch_refused';
   const descriptorUnverifiedReason =
     isAgenticToolName(tool) && !hostedOpenCodeQuiesced && !launchRefused
       ? getAgenticToolIntegration(tool).unverifiedTerminationReason
