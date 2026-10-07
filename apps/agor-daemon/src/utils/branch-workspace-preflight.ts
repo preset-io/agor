@@ -1,11 +1,12 @@
 import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
 import { Conflict } from '@agor/core/feathers';
-import type { BranchID } from '@agor/core/types';
+import { type BranchID, EXECUTOR_LAUNCH_REFUSED_MESSAGE } from '@agor/core/types';
 
 // Only reviewed categories reach the caller: launcher/OS error text can contain
 // credentials, commands or paths. A failed probe is never proof of absent files.
 const failureReasons: Readonly<Record<string, string>> = {
   EXECUTOR_TIMEOUT: 'The filesystem executor did not respond in time. Check executor connectivity.',
+  EXECUTOR_LAUNCH_REFUSED: EXECUTOR_LAUNCH_REFUSED_MESSAGE,
   EXECUTOR_SPAWN_ERROR:
     'The filesystem executor could not start. Check launcher configuration and execution identity.',
   EXECUTOR_RESPONSE_UNSUPPORTED:
