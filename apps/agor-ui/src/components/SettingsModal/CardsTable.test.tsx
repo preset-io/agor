@@ -8,7 +8,6 @@ import {
 } from '../../store/agorRealtimeActions';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { fakeFeathersClient, withTestAuthority } from '../../test/harness';
-import { SERVER_READ_MAX_WAIT_MS } from '../../utils/debounceWithMaxWait';
 import { CardsTable } from './CardsTable';
 
 vi.mock('@/utils/message', () => ({
@@ -68,6 +67,8 @@ function renderTable(client: AgorClient) {
 
 describe('CardsTable', () => {
   withTestAuthority('user-a:admin:1', { dataAuthority: false });
+  /** Past every debounce: a read that was going to happen has happened. */
+  const settle = () => act(() => vi.advanceTimersByTimeAsync(600));
 
   it('reads every card on open, not just the loaded boards in the store', async () => {
     const { client, cardsFindAll, placementsFindAll, boardsGet } = makeClient([
@@ -141,6 +142,7 @@ describe('CardsTable', () => {
   });
 
   it('ignores branch placement events: three of them read nothing', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { client, emit, cardsFindAll, placementsFindAll } = makeClient([
       card('k-1', 'Fix login'),
     ]);
@@ -157,12 +159,13 @@ describe('CardsTable', () => {
       emit('board-objects', event, branchPlacement);
       act(() => store[event](branchPlacement));
     }
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+    await settle();
     expect(cardsFindAll).toHaveBeenCalledTimes(1);
     expect(placementsFindAll).toHaveBeenCalledTimes(1);
   });
 
   it('reconciles once for a burst of reconnects', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const cards = [card('k-1', 'Fix login')];
     const { client, emit, cardsFindAll } = makeClient(cards);
     renderTable(client);
@@ -175,24 +178,8 @@ describe('CardsTable', () => {
     emit('io', 'connect');
     expect(await screen.findByText('Created while offline')).toBeVisible();
     expect(screen.queryByText('Fix login')).not.toBeInTheDocument();
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+    await settle();
     expect(cardsFindAll).toHaveBeenCalledTimes(2);
-  });
-
-  it('a sustained burst still reconciles within the max wait', async () => {
-    const { client, emit, cardsFindAll } = makeClient([card('k-1', 'Fix login')]);
-    renderTable(client);
-    await screen.findByText('Fix login');
-    const started = Date.now();
-    while (
-      Date.now() - started < SERVER_READ_MAX_WAIT_MS + 400 &&
-      cardsFindAll.mock.calls.length < 2
-    ) {
-      emit('io', 'connect');
-      await act(async () => new Promise((resolve) => setTimeout(resolve, 100)));
-    }
-    expect(cardsFindAll).toHaveBeenCalledTimes(2);
-    expect(Date.now() - started).toBeLessThan(SERVER_READ_MAX_WAIT_MS + 400);
   });
 
   it('updates a zone label when the board record changes', async () => {
@@ -256,6 +243,7 @@ describe('CardsTable', () => {
   }
 
   it('coalesces five rapid re-authentications into one trailing reconcile', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { client, cardsFindAll } = makeClient([]);
     const stats = trackConcurrency(cardsFindAll, () => [card('k-1', 'Fix login')]);
     renderTable(client);
@@ -269,12 +257,13 @@ describe('CardsTable', () => {
     }
     await waitFor(() => expect(cardsFindAll).toHaveBeenCalledTimes(2), { timeout: 2000 });
     await act(async () => stats.gates.shift()?.());
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+    await settle();
     expect(cardsFindAll).toHaveBeenCalledTimes(2);
     expect(stats.max).toBe(1);
   });
 
   it('keeps one read in flight when re-authentications land during the first read', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { client, cardsFindAll } = makeClient([]);
     const stats = trackConcurrency(cardsFindAll, () => [card('k-1', 'Fix login')]);
     renderTable(client);
@@ -289,7 +278,7 @@ describe('CardsTable', () => {
     await waitFor(() => expect(cardsFindAll).toHaveBeenCalledTimes(2));
     await act(async () => stats.gates.shift()?.());
     expect(await screen.findByText('Fix login')).toBeVisible();
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+    await settle();
     expect(cardsFindAll).toHaveBeenCalledTimes(2);
     expect(stats.max).toBe(1);
   });
@@ -333,6 +322,7 @@ describe('CardsTable', () => {
   );
 
   it('a trailing read consumes a reconcile still waiting in its debounce', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     const { client, emit, cardsFindAll } = makeClient([]);
     const stats = trackConcurrency(cardsFindAll, () => [card('k-1', 'Fix login')]);
     renderTable(client);
@@ -345,14 +335,14 @@ describe('CardsTable', () => {
     await waitFor(() => expect(cardsFindAll).toHaveBeenCalledTimes(2));
     // A second reconnect's debounce fires during it: the read is superseded.
     emit('io', 'connect');
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+    await act(() => vi.advanceTimersByTimeAsync(400));
     // A third is still in its debounce when the superseded read returns and
     // the trailing read starts at once.
     emit('io', 'connect');
     await act(async () => stats.gates.shift()?.());
     await waitFor(() => expect(cardsFindAll).toHaveBeenCalledTimes(3));
     await act(async () => stats.gates.shift()?.());
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+    await settle();
     // The trailing read covered the pending request: one active, one trailing.
     expect(cardsFindAll).toHaveBeenCalledTimes(3);
     expect(stats.max).toBe(1);

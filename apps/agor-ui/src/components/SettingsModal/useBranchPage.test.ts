@@ -6,7 +6,7 @@
  */
 import type { Branch } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { expect, it, type Mock } from 'vitest';
+import { expect, it, type Mock, vi } from 'vitest';
 import { agorStore } from '@/store/agorStore';
 import { setRealtimeAuthorityScope } from '@/store/realtimeBatch';
 import { fakeFeathersClient, withTestAuthority } from '@/test/harness';
@@ -28,6 +28,9 @@ function makeClient(total = 25) {
 }
 
 withTestAuthority('me:member:1', { dataAuthority: false });
+
+/** Past every debounce: a read that was going to happen has happened. */
+const settle = () => act(() => vi.advanceTimersByTimeAsync(600));
 
 it('keeps a rename that lands while an older re-read is in flight', async () => {
   const { client, find, emit, page } = makeClient();
@@ -68,12 +71,13 @@ it('reads the total again when an off-page row is archived or removed', async ()
 });
 
 it('patches an on-page row in place without reading again', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const { client, find, emit } = makeClient();
   const { result } = renderHook(() => useBranchPage(client, { archived: false }, 1, 10));
   await waitFor(() => expect(result.current.rows).toHaveLength(10));
   emit('patched', branch(2, { name: 'renamed-2' }));
   expect(result.current.rows[1].name).toBe('renamed-2');
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   expect(find).toHaveBeenCalledTimes(1);
 });
 
@@ -126,6 +130,7 @@ it('counts a board again after a branch moves, and after a reconnect', async () 
 });
 
 it('does not count again on a value-only session or branch patch once their membership is known', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const session = { session_id: 's-1', branch_id: 'branch-1', branch_board_id: 'board-1' };
   const { client, find, emitSession, emitBranch } = makeCountsClient();
   const { result } = renderHook(() => useSessionCounts(client, 'board_id'));
@@ -134,11 +139,11 @@ it('does not count again on a value-only session or branch patch once their memb
   emitSession('patched', { ...session, archived: false, status: 'idle' });
   emitBranch('patched', branch(1, { board_id: 'board-1' } as Partial<Branch>));
   await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   emitSession('patched', { ...session, archived: false, status: 'running' });
   emitSession('patched', { ...session, archived: false, title: 'renamed' });
   emitBranch('patched', branch(1, { name: 'renamed', board_id: 'board-1' } as Partial<Branch>));
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   expect(find).toHaveBeenCalledTimes(2);
   // An archive flip, then a branch move, each count again.
   emitSession('patched', { ...session, archived: true });
@@ -146,11 +151,12 @@ it('does not count again on a value-only session or branch patch once their memb
   emitSession('patched', { ...session, archived: true, title: 'archived' });
   emitBranch('patched', branch(1, { board_id: 'board-2' } as Partial<Branch>));
   await waitFor(() => expect(find).toHaveBeenCalledTimes(4));
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   expect(find).toHaveBeenCalledTimes(4);
 });
 
 it('a partial value-only patch never hides a later partial archive', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   agorStore.setState({
     sessionById: new Map([
       ['s-1', { session_id: 's-1', branch_id: 'branch-1', archived: false } as never],
@@ -160,7 +166,7 @@ it('a partial value-only patch never hides a later partial archive', async () =>
   const { result } = renderHook(() => useSessionCounts(client, 'branch_id'));
   await waitFor(() => expect(result.current.get('branch-1')).toBe(3));
   emitSession('patched', { session_id: 's-1', status: 'running' });
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   const reads = find.mock.calls.length;
   setCount(2);
   emitSession('patched', { session_id: 's-1', archived: true });
@@ -169,6 +175,7 @@ it('a partial value-only patch never hides a later partial archive', async () =>
 });
 
 it('merges partial patches into what it knows of a session', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   const { client, find, emitSession } = makeCountsClient();
   const { result } = renderHook(() => useSessionCounts(client, 'branch_id'));
   await waitFor(() => expect(result.current.get('branch-1')).toBe(3));
@@ -177,7 +184,7 @@ it('merges partial patches into what it knows of a session', async () => {
   // Value-only and unchanged count fields: no read.
   emitSession('patched', { session_id: 's-5', status: 'running' });
   emitSession('patched', { session_id: 's-5', archived: false });
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  await settle();
   expect(find).toHaveBeenCalledTimes(2);
   // A partial archive still knows the session's branch.
   emitSession('patched', { session_id: 's-5', archived: true });

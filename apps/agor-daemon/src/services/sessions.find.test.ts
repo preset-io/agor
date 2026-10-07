@@ -649,6 +649,9 @@ describe('SessionsService.find — lean list projection', () => {
     }
   });
 
+  // The repository matrix (`sessions.visibility-parity`) compares every shape
+  // with the oracle; this layer checks what transport adds: each principal's
+  // hook scoping (superadmin and service-account bypass) and lean rows.
   dbTest(
     'created_by and session_id $in reads match the branch-set form for every principal, lean or full',
     async ({ db }) => {
@@ -701,16 +704,8 @@ describe('SessionsService.find — lean list projection', () => {
             },
           ],
           [
-            { created_by: fixture.users.owner, $sort: { created_at: 1 }, $limit: 5, $skip: 2 },
-            { createdBy: fixture.users.owner, sortCreatedAt: 1, limit: 5, skip: 2 },
-          ],
-          [
             { session_id: { $in: mixed }, $limit: 100 },
             { sessionIds: mixed, limit: 100 },
-          ],
-          [
-            { session_id: { $in: mixed }, archived: true, $count: false, $limit: 3, $skip: 1 },
-            { sessionIds: mixed, archived: true, includeTotal: false, limit: 3, skip: 1 },
           ],
         ];
         for (const [query, opts] of cases) {

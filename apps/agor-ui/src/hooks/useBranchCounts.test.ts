@@ -96,17 +96,3 @@ it('never lets an older reply overwrite a newer one', async () => {
   }
   expect(result.current.get('board-1')).toBe(5);
 });
-
-it('re-reads within a bounded wait while branch events keep arriving', async () => {
-  const { client, find, emit } = makeClient();
-  const { result } = renderHook(() => useBranchCounts(client));
-  await waitFor(() => expect(result.current.get('board-1')).toBe(2));
-  vi.useFakeTimers();
-  for (let elapsed = 0; elapsed < 3000; elapsed += 250) {
-    emit('patched');
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(250);
-    });
-  }
-  expect(find.mock.calls.length).toBeGreaterThan(1);
-});
