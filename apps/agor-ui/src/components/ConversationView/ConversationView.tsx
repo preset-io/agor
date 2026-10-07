@@ -23,7 +23,7 @@ import { LEAN_TRANSCRIPT_TASK_WINDOW, shortId, TaskStatus } from '@agor-live/cli
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useStickToBottom } from 'use-stick-to-bottom';
+import { type StickToBottomState, useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
 import { useRetainEngagedTurns } from '../../hooks/useTaskDetailRetention';
@@ -36,7 +36,6 @@ import {
   isBottomLockEngaged,
   jumpToBottom,
   resetScrollBaseline,
-  watchReaderScroll,
 } from './stickToBottomLock';
 
 const { Text } = Typography;
@@ -56,6 +55,11 @@ function firstVisibleTurn(viewport: HTMLElement): HTMLElement | undefined {
     (element) => element.getBoundingClientRect().bottom >= top
   );
 }
+
+/** Lock engaged and at the physical end, not merely in the hook's 70px near-bottom zone. */
+const isParked = (state: StickToBottomState, viewport: HTMLElement) =>
+  isBottomLockEngaged(state) &&
+  viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 2;
 
 export interface ConversationViewProps {
   /**
@@ -182,15 +186,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // user scrolls up. `scrollRef` goes on the scroll container, `contentRef`
     // on the inner content wrapper. `initial`/`resize: 'instant'` avoids
     // smooth-scroll animation jank on first paint and on layout growth.
-    const {
-      scrollRef,
-      contentRef,
-      scrollToBottom,
-      stopScroll,
-      state,
-      isAtBottom,
-      escapedFromLock,
-    } = useStickToBottom({
+    const { scrollRef, contentRef, scrollToBottom, stopScroll, state } = useStickToBottom({
       initial: 'instant',
       resize: 'instant',
     });
@@ -199,9 +195,9 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A queue/composer resize changes only the latter. Reconcile through the
     // same bottom lock so a scrolled-up reader is never pulled away.
     const viewportCleanupRef = useRef<(() => void) | null>(null);
-    // Whether the reader's last scroll left them at the end, not only near it:
-    // the parked trim waits for the end (see watchReaderScroll).
-    const [readerAtEnd, setReaderAtEnd] = useState(true);
+    // The parked trim (below), also run once the hook settles each scroll: the
+    // reader returning to the end, or the hook following a new turn there.
+    const trimIfParked = useRef<(() => void) | null>(null);
     const setScrollViewport = useCallback(
       (element: HTMLDivElement | null) => {
         viewportCleanupRef.current?.();
@@ -209,7 +205,9 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         scrollRef(element);
         if (!element) return;
         resetScrollBaseline(state);
-        const stopWatching = watchReaderScroll(element, state, stopScroll, setReaderAtEnd);
+        // Registered after the hook's own listener, so it settles after the hook.
+        const onScroll = () => afterScrollSettles(state, () => trimIfParked.current?.());
+        element.addEventListener('scroll', onScroll, { passive: true });
         let height = element.clientHeight;
         let resizeGeneration = 0;
         let guardedDifference = 0;
@@ -239,13 +237,13 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         });
         observer.observe(element);
         viewportCleanupRef.current = () => {
-          stopWatching();
+          element.removeEventListener('scroll', onScroll);
           ++resizeGeneration;
           observer.disconnect();
           if (state.resizeDifference === guardedDifference) state.resizeDifference = 0;
         };
       },
-      [scrollRef, scrollToBottom, stopScroll, state]
+      [scrollRef, scrollToBottom, state]
     );
 
     // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
@@ -475,17 +473,26 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // request, a settled turn) moves the first protected turn: trim again then,
     // without waiting for another turn to arrive.
     const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
+    // Parked: the lock is engaged and the viewport is at its physical end, not
+    // merely in the hook's near-bottom zone, where the reader may still be
+    // reading and the trim's follow-up would pull them down. Measured at each
+    // check, never carried across scroll events. A new turn extends the content
+    // before the hook follows it, so this render also reads the viewport as it
+    // was before the commit: a parked reader is trimmed in the turn's own
+    // commit, as before, rather than racing the hook's follow-scroll.
+    const parkedBeforeCommit =
+      tasks.length > LEAN_TRANSCRIPT_TASK_WINDOW &&
+      !!scrollRef.current &&
+      isParked(state, scrollRef.current);
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn only re-runs the trim (protection released).
     useLayoutEffect(() => {
       const viewport = scrollRef.current;
+      trimIfParked.current = null;
       if (
         !reactiveSession ||
         !viewport ||
         loadingOlder ||
-        tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW ||
-        // The rendered flags re-run this when the reader returns to the bottom.
-        !isAtBottom ||
-        !readerAtEnd
+        tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW
       )
         return;
       const trim = () => {
@@ -498,18 +505,17 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         };
         if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
       };
-      // The hook's live state decides whether the lock is engaged: now, or once
-      // the scroll that brought the reader near the bottom settles.
-      if (isBottomLockEngaged(state)) trim();
-      else return afterScrollSettles(state, trim);
+      trimIfParked.current = () => {
+        if (isParked(state, viewport)) trim();
+      };
+      if (parkedBeforeCommit) trim();
+      else trimIfParked.current();
     }, [
       reactiveSession,
       reactiveTasks,
       firstProtectedTurn,
+      parkedBeforeCommit,
       tasks.length,
-      isAtBottom,
-      escapedFromLock,
-      readerAtEnd,
       loadingOlder,
       scrollRef,
       state,
