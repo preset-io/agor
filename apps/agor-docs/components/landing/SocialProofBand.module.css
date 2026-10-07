@@ -1,0 +1,79 @@
+/* Home-page quote band (SocialProofBand.tsx): a quiet, centered pull quote
+ * between the hero and the board section, framed by hairlines. */
+.band {
+  position: relative;
+  z-index: 1;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(48px, 7vw, 88px) 28px;
+}
+
+.figure {
+  max-width: 880px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.quote {
+  margin: 0;
+}
+
+.quote p {
+  margin: 0;
+  color: #eafff9;
+  font:
+    300 clamp(1.45rem, 2.6vw, 2.15rem) / 1.3 var(--font-display),
+    "Space Grotesk",
+    system-ui,
+    sans-serif;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.quote p.support {
+  margin-top: 18px;
+  color: #9fc4bd;
+  font:
+    400 clamp(1rem, 1.4vw, 1.15rem) / 1.5 var(--font-body),
+    "Hanken Grotesk",
+    system-ui,
+    sans-serif;
+  letter-spacing: 0;
+}
+
+.caption {
+  margin-top: 22px;
+}
+
+/* Beats the site-wide link color. */
+.caption a.source {
+  color: #34e6c4;
+  font:
+    600 0.82rem / 1 var(--font-mono-label),
+    "JetBrains Mono",
+    ui-monospace,
+    monospace;
+  letter-spacing: 0.14em;
+  text-decoration: none;
+  text-transform: uppercase;
+}
+
+.caption a.source:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.caption a.source:focus-visible {
+  outline: 2px solid #34e6c4;
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+/* Highlighted words: the site's teal accent gradient. */
+.hi {
+  background: linear-gradient(90deg, #2e9a92 0%, #34e6c4 55%, #a8f5ed 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  font-weight: 500;
+}
