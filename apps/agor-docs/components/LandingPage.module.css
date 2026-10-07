@@ -3210,7 +3210,50 @@ a.radarBlip .blipName {
 
 /* Privacy Policy · Terms of Use · Cookie settings (FooterLegal). */
 .footerLegal {
-  grid-column: 1 / -1;
-  margin: 0;
   color: #6f928c;
+}
+
+/* Footer layout: brand, then credit and legal links, down the left; the
+ * link columns down the right; the trademark note across the bottom. On
+ * phones (one column) it's brand, links, credit and legal, note. */
+.landingFooter {
+  row-gap: 28px;
+}
+
+.footerBrand {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.footerLinks {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.footerMeta {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* Lines up with the brand text, past the logo. */
+  padding-left: 58px;
+}
+
+.footerMeta .footerCredit {
+  margin: 0;
+}
+
+/* Matches the footer's one-column breakpoint. */
+@media (max-width: 980px) {
+  .footerBrand,
+  .footerLinks,
+  .footerMeta {
+    grid-column: auto;
+    grid-row: auto;
+  }
+
+  .footerMeta {
+    padding-left: 0;
+  }
 }

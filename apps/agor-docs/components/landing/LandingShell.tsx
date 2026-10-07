@@ -143,27 +143,30 @@ export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
             <CloudCtaLink placement={`${ctaPrefix}-footer`} />
           </div>
         </div>
-        <p className={styles.footerCredit}>
-          <Link
-            href={`${PRESET_URL}${presetUtm('footer-logo')}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Preset website"
-          >
-            {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
-            <img src="/preset-logo.svg" alt="Preset logo" className={styles.footerCreditLogo} />
-          </Link>
-          Built by{' '}
-          <Link
-            href={`${PRESET_URL}${presetUtm('footer-credit')}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.footerCreditLink}
-          >
-            Preset, Inc.
-          </Link>
-        </p>
-        <FooterLegal className={styles.footerLegal} />
+        {/* Under the brand on wide screens, after the link columns on phones. */}
+        <div className={styles.footerMeta}>
+          <p className={styles.footerCredit}>
+            <Link
+              href={`${PRESET_URL}${presetUtm('footer-logo')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Preset website"
+            >
+              {/* biome-ignore lint/performance/noImgElement: Static docs asset */}
+              <img src="/preset-logo.svg" alt="Preset logo" className={styles.footerCreditLogo} />
+            </Link>
+            Built by{' '}
+            <Link
+              href={`${PRESET_URL}${presetUtm('footer-credit')}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={styles.footerCreditLink}
+            >
+              Preset, Inc.
+            </Link>
+          </p>
+          <FooterLegal className={styles.footerLegal} />
+        </div>
         <p className={styles.footerTrademarks}>
           Agor is not affiliated with or endorsed by the companies mentioned on this site. All
           product names, logos, and brands are property of their respective owners.

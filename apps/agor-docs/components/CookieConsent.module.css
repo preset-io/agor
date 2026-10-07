@@ -110,23 +110,23 @@
   }
 }
 
-/* Footer legal row (FooterLegal.tsx): quiet links separated by dots. Colors
- * inherit from the footer it sits in. */
+/* Footer legal row (FooterLegal.tsx): quiet links with plain dots between
+ * them. Everything takes the footer's text color; `nav.legal a` outranks the
+ * site-wide link color. */
 .legal {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 0;
+  gap: 4px 10px;
   font-size: 0.8rem;
 }
 
-.legal > * + *::before {
-  content: "·";
-  margin: 0 10px;
+.legalDot {
   opacity: 0.6;
+  user-select: none;
 }
 
-.legal a,
+nav.legal a,
 .legalButton {
   padding: 0;
   border: 0;
@@ -135,10 +135,17 @@
   font: inherit;
   text-decoration: none;
   cursor: pointer;
+  transition: color 140ms ease;
 }
 
-.legal a:hover,
+nav.legal a:hover,
 .legalButton:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  color: #45c4bb;
+}
+
+.legalButton:focus-visible,
+nav.legal a:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 2px;
+  border-radius: 2px;
 }
