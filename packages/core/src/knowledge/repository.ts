@@ -11,7 +11,7 @@ import {
   knowledgeRepositoryManifestSchema,
 } from '../types/knowledge-transfer.js';
 import { transferCanonical, transferSha256 } from './transfer.js';
-import { rewriteKnowledgeLinks } from './transfer-links.js';
+import { encodeMarkdownUrlSegment, rewriteKnowledgeLinks } from './transfer-links.js';
 
 /** Parse bounded, non-executable YAML. Never expose parser snippets/private values. */
 export function parseKnowledgeYaml(text: string): unknown {
@@ -255,7 +255,7 @@ export function repositoryTransferManifest(
 }
 
 export function relativeKnowledgeFile(from: string, to: string): string {
-  return posix.relative(posix.dirname(from), to).split('/').map(encodeURIComponent).join('/');
+  return posix.relative(posix.dirname(from), to).split('/').map(encodeMarkdownUrlSegment).join('/');
 }
 
 /** Only destinations of parsed Markdown links are transformed; prose/code stay byte-identical. */
@@ -304,7 +304,7 @@ export function importRepositoryLinks(
       const path = paths.get(target);
       return path
         ? {
-            value: `agor://kb/${targetSlug}/${path.split('/').map(encodeURIComponent).join('/')}${match[2] ?? ''}`,
+            value: `agor://kb/${targetSlug}/${path.split('/').map(encodeMarkdownUrlSegment).join('/')}${match[2] ?? ''}`,
           }
         : { unresolved: true };
     } catch {

@@ -2,7 +2,8 @@ import { knowledgeTransferSlug } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../base-command';
 import { assertKnowledgeDirectorySupported } from '../../lib/knowledge/directory';
-import { exportKnowledge, knowledgeTransferClient } from '../../lib/knowledge/transfer';
+import { exportKnowledge } from '../../lib/knowledge/repository-export';
+import { knowledgeTransferClient } from '../../lib/knowledge/transfer';
 import { withKnowledgeTransfer } from '../../lib/knowledge/transfer-lifecycle';
 
 export default class KnowledgeExport extends BaseCommand {

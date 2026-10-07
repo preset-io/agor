@@ -19,7 +19,8 @@ import { KnowledgeTransfersService } from '../../../../agor-daemon/src/services/
 import KnowledgeImport from '../../commands/kb/import';
 import { KnowledgeDirectory } from './directory';
 import { KnowledgeProgress } from './progress';
-import { exportKnowledge, importKnowledge, type knowledgeTransferClient } from './transfer';
+import { exportKnowledge } from './repository-export';
+import { importKnowledge, type knowledgeTransferClient } from './transfer';
 
 function progress() {
   const lines: string[] = [];

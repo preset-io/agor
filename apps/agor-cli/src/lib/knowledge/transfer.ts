@@ -20,8 +20,6 @@ import { loadKnowledgeRepository } from './repository';
 import { RepositoryDirectory } from './repository-directory';
 import { TransferFailures, TransferRequestError, transferRequest } from './transfer-errors';
 
-export { exportKnowledge } from './repository-export';
-
 // Canonical SDK overload, kept separate from the generic service fallback.
 export function knowledgeTransferClient(client: AuthenticatedAgorClient) {
   return client.service(KNOWLEDGE_TRANSFER.path);

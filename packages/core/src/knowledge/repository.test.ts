@@ -12,6 +12,7 @@ import {
   validateRepositoryManifest,
 } from './repository';
 import { transferDigest } from './transfer';
+import { rewriteTransferLinks } from './transfer-links';
 
 const header: KnowledgeRepositoryHeader = {
   format: KNOWLEDGE_REPOSITORY.documentFormat,
@@ -139,5 +140,39 @@ describe('Knowledge repository v2', () => {
     expect(
       importRepositoryLinks('[x](../../../secret.md)', 'docs/a.md', new Map(), 'target').unresolved
     ).toBe(1);
+  });
+  it.each([
+    ['a)', 'a%29'],
+    ['a(', 'a%28'],
+  ])('round-trips Markdown destinations for %s', (path, encoded) => {
+    const doc = { ...header, agor: { ...header.agor, path } };
+    const manifest = repositoryTransferManifest(validateRepositoryManifest(index), [
+      { header: doc, body: '' },
+    ]);
+    const files = knowledgeRepositoryFiles([path]);
+    const source = `[link](agor://kb/source/${encoded})\n\n[ref]: agor://kb/source/${encoded}#intro\n`;
+    const expected = `[link](${encoded}.md)\n\n[ref]: ${encoded}.md#intro\n`;
+    const exported = exportRepositoryLinks(source, manifest, files, 'docs/readme.md');
+    expect(exported).toEqual({ content: expected, unresolved: 0 });
+    const imported = importRepositoryLinks(
+      exported.content,
+      'docs/readme.md',
+      new Map([[files.get(path)!, path]]),
+      'target'
+    );
+    expect(imported).toEqual({
+      content: source.replaceAll('agor://kb/source/', 'agor://kb/target/'),
+      unresolved: 0,
+    });
+    // The source-URL path must use the same encoding, not only relative imports.
+    expect(rewriteTransferLinks(source, manifest, 'target')).toEqual(imported);
+    expect(
+      exportRepositoryLinks(
+        imported.content,
+        { ...manifest, namespace: { ...manifest.namespace, slug: 'target' } },
+        files,
+        'docs/readme.md'
+      )
+    ).toEqual(exported);
   });
 });

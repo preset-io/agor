@@ -73,21 +73,19 @@ export async function loadKnowledgeRepository(
   let unresolved = 0;
   for (const entry of source.documents) {
     const doc = byId.get(String(entry.provenance.source_uuid))!;
+    // Rewrite original source URLs first; otherwise generated destination URLs
+    // are mistaken for unresolved source links when importing to a new namespace.
+    const linked = rewriteTransferLinks(doc.body, source, targetSlug ?? index.namespace.slug);
     const relative = importRepositoryLinks(
-      doc.body,
+      linked.content,
       doc.file,
       paths,
       targetSlug ?? index.namespace.slug
     );
-    const linked = rewriteTransferLinks(
-      relative.content,
-      source,
-      targetSlug ?? index.namespace.slug
-    );
-    unresolved += relative.unresolved + linked.unresolved;
-    entry.sha256 = transferSha256(linked.content);
-    entry.bytes = Buffer.byteLength(linked.content);
-    contentByKey.set(entry.key, linked.content);
+    unresolved += linked.unresolved + relative.unresolved;
+    entry.sha256 = transferSha256(relative.content);
+    entry.bytes = Buffer.byteLength(relative.content);
+    contentByKey.set(entry.key, relative.content);
     fileByKey.set(entry.key, doc.file);
   }
   const manifest = validateTransferManifest(source);

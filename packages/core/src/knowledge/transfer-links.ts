@@ -5,6 +5,11 @@ type RootContent = Root['children'][number];
 
 import type { KnowledgeTransferManifest } from '../types/knowledge-transfer';
 
+/** URI encoding alone leaves parentheses unescaped, which can break Markdown destinations. */
+export function encodeMarkdownUrlSegment(segment: string): string {
+  return encodeURIComponent(segment).replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
 /** Rewrite only parsed link/image destinations and definitions; never code/prose. */
 export function rewriteKnowledgeLinks(
   content: string,
@@ -79,7 +84,7 @@ export function rewriteTransferLinks(
             : undefined;
       return doc
         ? {
-            value: `agor://kb/${targetSlug}/${doc.path.split('/').map(encodeURIComponent).join('/')}${match[3] ?? ''}`,
+            value: `agor://kb/${targetSlug}/${doc.path.split('/').map(encodeMarkdownUrlSegment).join('/')}${match[3] ?? ''}`,
           }
         : { unresolved: true };
     } catch {

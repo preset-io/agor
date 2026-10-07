@@ -25,7 +25,8 @@ import KnowledgeValidate from '../../commands/kb/validate';
 import { KnowledgeProgress } from './progress';
 import { loadKnowledgeRepository, validateKnowledgeRepository } from './repository';
 import { RepositoryDirectory } from './repository-directory';
-import { exportKnowledge, importKnowledge, type knowledgeTransferClient } from './transfer';
+import { exportKnowledge } from './repository-export';
+import { importKnowledge, type knowledgeTransferClient } from './transfer';
 
 describe.skipIf(process.platform === 'win32')('editable Knowledge repository', () => {
   let root: string;
@@ -126,6 +127,7 @@ describe.skipIf(process.platform === 'win32')('editable Knowledge repository', (
     const directory = await RepositoryDirectory.open(clone);
     try {
       const loaded = await loadKnowledgeRepository(directory, 'destination');
+      expect(loaded.unresolved).toBe(0);
       expect([...loaded.contentByKey.values()].join('')).toContain(
         '[other](agor://kb/destination/b)'
       );
@@ -476,5 +478,26 @@ describe.skipIf(process.platform === 'win32')('editable Knowledge repository', (
     );
     expect(client.find).toHaveBeenCalledTimes(1);
     expect(client.get).not.toHaveBeenCalled();
+  });
+  it('counts only original unresolved links when importing into a different namespace', async () => {
+    const { client, options } = fixture();
+    await exportKnowledge(client, options, progress);
+    const file = join(options.directory, 'docs/nested/a.md');
+    await writeFile(
+      file,
+      `${await readFile(file, 'utf8')}\n[source](agor://kb/source/b)\n[missing](missing.md)\n[foreign](agor://kb/another/b)\n`
+    );
+    const directory = await RepositoryDirectory.open(options.directory);
+    try {
+      const loaded = await loadKnowledgeRepository(directory, 'destination');
+      expect(loaded.unresolved).toBe(2);
+      const content = [...loaded.contentByKey.values()].join('\n');
+      expect(content).toContain('[other](agor://kb/destination/b)');
+      expect(content).toContain('[source](agor://kb/destination/b)');
+      expect(content).toContain('[missing](missing.md)');
+      expect(content).toContain('[foreign](agor://kb/another/b)');
+    } finally {
+      await directory.close();
+    }
   });
 });
