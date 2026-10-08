@@ -76,7 +76,7 @@ export const CreateModalShell: React.FC<CreateModalShellProps> = ({
       centered={!fullScreen}
       styles={shellStyles(token, fullScreen)}
       closable={!isSubmitting}
-      maskClosable={false}
+      mask={{ closable: false }}
       keyboard={!isSubmitting}
       footer={[
         <Button key="cancel" onClick={onCancel} disabled={isSubmitting}>

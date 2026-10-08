@@ -19,8 +19,8 @@ interface MobileMoreSheetProps {
   onLogout?: () => void;
   externalAppLink?: string;
   externalAppLabel?: string;
-  /** Opens the shared create flow for the picked kind (sheet closes first). */
-  onCreate: (kind: CreateModalKind) => void;
+  /** Opens the shared create flow for the picked kind (sheet closes first). Omit to hide the row. */
+  onCreate?: (kind: CreateModalKind) => void;
   isAdmin: boolean;
 }
 

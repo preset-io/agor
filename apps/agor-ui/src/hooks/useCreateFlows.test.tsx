@@ -4,7 +4,7 @@
  */
 
 import type { Board, User } from '@agor-live/client';
-import { renderHook } from '@testing-library/react';
+import { act, renderHook } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../store/agorMaps';
@@ -63,5 +63,21 @@ describe('useCreateFlows — branch default board', () => {
       { wrapper }
     );
     expect(result.current.createModalsProps.branchDefaultBoardId).toBeUndefined();
+  });
+});
+
+describe('useCreateFlows — teammate target board', () => {
+  it('names the current board when adding a teammate to it, and clears it for a fresh create', () => {
+    agorStore.setState({ ...EMPTY_MAPS, boardById: new Map([['board-1', board('board-1')]]) });
+    const { result } = renderHook(
+      () => useCreateFlows(baseOptions({ currentBoardId: 'board-1' })),
+      { wrapper }
+    );
+
+    act(() => result.current.openCreateBoardTeammate());
+    expect(result.current.createModalsProps.teammateTargetBoardName).toBe('board-1');
+
+    act(() => result.current.openCreate('teammate'));
+    expect(result.current.createModalsProps.teammateTargetBoardName).toBeUndefined();
   });
 });

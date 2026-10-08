@@ -72,6 +72,11 @@ describe('AppHeader navbar create button', () => {
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith('repository'));
   });
 
+  it('hides the create button from viewers', () => {
+    renderHeader(<AppHeader user={asRole('viewer')} onCreate={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Create new' })).toBeNull();
+  });
+
   it('renders no create button when onCreate is absent', () => {
     renderHeader(<AppHeader />);
     expect(screen.queryByRole('button', { name: 'Create new' })).toBeNull();

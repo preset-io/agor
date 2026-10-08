@@ -485,7 +485,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onBranchClick={openHomeBranch}
                 onSessionClick={openHomeSession}
                 onCreateSession={canCreateSessions ? createSession : undefined}
-                onOpenCreateDialog={createFlows.openCreate}
+                onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
                 onOpenSettings={onOpenWorkspaceSettings}
                 onAllBoards={openBoardList}
                 onSeeAllSessions={openSessionList}
@@ -703,7 +703,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
-        onCreate={createFlows.openCreate}
+        onCreate={canCreateSessions ? createFlows.openCreate : undefined}
         isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
       />
 

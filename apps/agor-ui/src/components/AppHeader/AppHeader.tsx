@@ -356,7 +356,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           boardById={boardById}
           onSettingsClick={onSettingsClick}
         />
-        {onCreate && (
+        {onCreate && hasMinimumRole(user?.role, ROLES.MEMBER) && (
           <Tooltip title="Create new">
             <CreateMenu
               onSelect={onCreate}

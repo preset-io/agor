@@ -12,7 +12,9 @@ vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({ themeMode: 'dark', setThemeMode: vi.fn() }),
 }));
 
-function renderSheet(isAdmin: boolean, onCreate = vi.fn(), onClose = vi.fn()) {
+function renderSheet(isAdmin: boolean, { canCreate = true } = {}) {
+  const onCreate = vi.fn();
+  const onClose = vi.fn();
   render(
     <MemoryRouter>
       <MobileMoreSheet
@@ -24,7 +26,7 @@ function renderSheet(isAdmin: boolean, onCreate = vi.fn(), onClose = vi.fn()) {
         commentById={new Map()}
         onOpenWorkspaceSettings={vi.fn()}
         onOpenUserSettings={vi.fn()}
-        onCreate={onCreate}
+        onCreate={canCreate ? onCreate : undefined}
         isAdmin={isAdmin}
       />
     </MemoryRouter>
@@ -55,5 +57,10 @@ describe('MobileMoreSheet — Create new', () => {
     fireEvent.click(screen.getByText('Create new'));
     fireEvent.click(screen.getByText('Repository'));
     expect(onCreate).toHaveBeenCalledWith('repository');
+  });
+
+  it('hides the row when the user cannot create (viewers)', () => {
+    renderSheet(false, { canCreate: false });
+    expect(screen.queryByText('Create new')).not.toBeInTheDocument();
   });
 });

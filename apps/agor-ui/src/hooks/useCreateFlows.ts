@@ -15,7 +15,8 @@ import type { TeammateTabResult } from '../components/CreateDialog/tabs/Teammate
 import type { CreateModalKind } from '../components/CreateMenu';
 import type { CreateModalsProps, TeammateProgress } from '../components/CreateModals';
 import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
-import { agorStore } from '../store/agorStore';
+import { agorStore, useAgorStore } from '../store/agorStore';
+import { makeBoardSelector } from '../store/selectors';
 import type { AgenticToolOption } from '../types';
 import { useThemedMessage } from '../utils/message';
 import { startTeammateBootstrapSession } from '../utils/startTeammateBootstrapSession';
@@ -112,6 +113,9 @@ export function useCreateFlows(options: UseCreateFlowsOptions): UseCreateFlowsRe
   const [defaultPosition, setDefaultPosition] = useState<Position | null>(null);
   // Board a new teammate joins as primary; null = create a fresh board.
   const [teammateTargetBoardId, setTeammateTargetBoardId] = useState<string | null>(null);
+  const teammateTargetBoard = useAgorStore(
+    useMemo(() => makeBoardSelector(teammateTargetBoardId), [teammateTargetBoardId])
+  );
 
   const openCreate = useCallback(
     (kind: CreateModalKind) => {
@@ -280,6 +284,9 @@ export function useCreateFlows(options: UseCreateFlowsOptions): UseCreateFlowsRe
       onCreateRepo,
       onCreateLocalRepo,
       onCreateTeammate: handleCreateTeammate,
+      teammateTargetBoardName: teammateTargetBoardId
+        ? (teammateTargetBoard?.name ?? 'this board')
+        : undefined,
       branchStorageConfig,
     },
   };

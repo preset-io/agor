@@ -27,6 +27,8 @@ export interface CreateTeammateModalProps {
     result: TeammateTabResult,
     progress?: TeammateProgress
   ) => void | Promise<void>;
+  /** Name of the board the teammate joins as primary; undefined creates a fresh board. */
+  targetBoardName?: string;
 }
 
 /** Standalone "New AI teammate" modal — template-first, single screen. */
@@ -39,6 +41,7 @@ export const CreateTeammateModal: React.FC<CreateTeammateModalProps> = ({
   client,
   onCreateRepo,
   onCreateTeammate,
+  targetBoardName,
 }) => {
   const repoById = useAgorStore(selectRepoById);
   const mcpServerById = useAgorStore(selectMcpServerById);
@@ -101,6 +104,7 @@ export const CreateTeammateModal: React.FC<CreateTeammateModalProps> = ({
         mcpServerById={mcpServerById}
         currentUser={currentUser}
         client={client}
+        targetBoardName={targetBoardName}
       />
     </CreateModalShell>
   );

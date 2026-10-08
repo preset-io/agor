@@ -34,6 +34,8 @@ export interface CreateModalsProps {
     result: TeammateTabResult,
     progress?: TeammateProgress
   ) => void | Promise<void>;
+  /** Name of the board a new teammate joins as primary; undefined creates a fresh board. */
+  teammateTargetBoardName?: string;
   branchStorageConfig?: BranchStorageConfig;
   /** Render the modals edge-to-edge (mobile). */
   fullScreen?: boolean;
@@ -58,6 +60,7 @@ export const CreateModals: React.FC<CreateModalsProps> = ({
   onCreateRepo,
   onCreateLocalRepo,
   onCreateTeammate,
+  teammateTargetBoardName,
   branchStorageConfig,
   fullScreen,
 }) => (
@@ -70,6 +73,7 @@ export const CreateModals: React.FC<CreateModalsProps> = ({
       client={client}
       onCreateRepo={onCreateRepo}
       onCreateTeammate={onCreateTeammate}
+      targetBoardName={teammateTargetBoardName}
       fullScreen={fullScreen}
     />
     <CreateBranchModal
