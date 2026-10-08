@@ -3,6 +3,7 @@
 import { usePathname, useSearchParams } from 'next/navigation';
 import Script from 'next/script';
 import { useEffect, useState } from 'react';
+import { ADS_ID } from '../lib/consent';
 
 declare global {
   interface Window {
@@ -51,7 +52,7 @@ export function GoogleAnalytics({ measurementId }: GoogleAnalyticsProps) {
         onLoad={() => setReady(true)}
       />
       <Script id="google-analytics-config" strategy="afterInteractive">
-        {`window.dataLayer=window.dataLayer||[];window.gtag=function(){window.dataLayer.push(arguments)};window.gtag('js',new Date());window.gtag('config','${measurementId}',{send_page_view:false});`}
+        {`window.dataLayer=window.dataLayer||[];window.gtag=function(){window.dataLayer.push(arguments)};window.gtag('js',new Date());window.gtag('config','${measurementId}',{send_page_view:false});if(!window.__agorGtmLoaded)window.gtag('config','${ADS_ID}');`}
       </Script>
     </>
   );

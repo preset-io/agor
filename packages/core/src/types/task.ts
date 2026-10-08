@@ -227,6 +227,23 @@ export interface TaskMetadata {
     gateway_channel_id: string;
     channel_type: import('./gateway').ChannelType;
     thread_id: string;
+    /**
+     * The `thread_session_map` row this prompt was admitted through — the
+     * Task's reply address.
+     *
+     * Outbound routing used to ask which thread a *Session* belongs to, which
+     * is only answerable while a session has exactly one mapping. This is the
+     * per-Task answer, resolved once at admission and never re-derived.
+     *
+     * It is stamped rather than recomputed from `thread_id` because the
+     * mapping is keyed on the outbound seed's platform thread when there is
+     * one, plus reply aliases — so a seed-originated thread does not find its
+     * own mapping by the inbound thread id. Absent on Tasks admitted before
+     * this was persisted; readers resolve those older Tasks by their recorded
+     * channel/thread coordinates (including reply aliases). An invalid stamp
+     * must not fall back to a different thread of the Session.
+     */
+    thread_session_map_id?: import('./gateway').ThreadSessionMapID;
     provider_user_id: string;
     provider_message_id?: string;
     slack_team_id?: string;

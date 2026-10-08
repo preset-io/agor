@@ -180,6 +180,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     findByChannelAndThread: vi.fn(async () => mapping),
     findByThread: vi.fn(async () => null),
     findBySession: vi.fn(async () => mapping),
+    findBySessionAmbiguityAware: vi.fn(async () => ({ mapping, ambiguous: false })),
     findById: vi.fn(async () => mapping),
     updateLastMessage: vi.fn(async () => undefined),
     updateMetadata: vi.fn(async (_id: string, metadata: Record<string, unknown>) => {
@@ -867,7 +868,7 @@ describe('GatewayService GitHub integration', () => {
       })
     );
 
-    expect(harness.threadMapRepo.findBySession).toHaveBeenCalledOnce();
+    expect(harness.threadMapRepo.findBySessionAmbiguityAware).toHaveBeenCalledOnce();
     expect(harness.messagesRepo.findByTaskId).not.toHaveBeenCalled();
     expect(harness.channelRepo.findById).not.toHaveBeenCalled();
   });

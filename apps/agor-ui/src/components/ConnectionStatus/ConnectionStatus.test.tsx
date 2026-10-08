@@ -4,7 +4,7 @@
  * The state machine is non-trivial: it has to discriminate transient
  * reconnects (silent), stuck-too-long reconnects (escalate to red
  * "Can't reconnect"), short-gap reconnects (green flash), and long-gap
- * reconnects (yellow "Reconnected — refresh?" cue). Pinning the behavior
+ * reconnects (yellow "Reconnected — sync again?" cue). Pinning the behavior
  * here prevents two specific regressions we already burned on:
  *
  *   1. Timer started on `connecting && !connected` — missed the 1.5s
@@ -77,8 +77,9 @@ describe('ConnectionStatus', () => {
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it('escalates to "Can\'t reconnect — reload" after STUCK_RECONNECT_MS (20s)', () => {
-    render(<ConnectionStatus connected={false} connecting={true} />);
+  it('escalates to "Can\'t reconnect — retry" after STUCK_RECONNECT_MS (20s)', () => {
+    const retry = vi.fn();
+    render(<ConnectionStatus connected={false} connecting={true} onRetry={retry} />);
     expect(screen.getByText('Reconnecting')).toBeInTheDocument();
 
     // Sub-threshold: still Reconnecting.
@@ -91,10 +92,11 @@ describe('ConnectionStatus', () => {
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
-    const tag = screen.getByText("Can't reconnect — reload");
+    const tag = screen.getByText("Can't reconnect — retry");
     expect(tag).toBeInTheDocument();
     fireEvent.click(tag);
-    expect(reloadSpy).toHaveBeenCalledOnce();
+    expect(retry).toHaveBeenCalledOnce();
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 
   it('shows brief green "Connected" flash after a short reconnect (< stale threshold)', () => {
@@ -117,22 +119,26 @@ describe('ConnectionStatus', () => {
     expect(screen.queryByText('Connected')).not.toBeInTheDocument();
   });
 
-  it('shows "Reconnected — refresh?" cue after a long reconnect (≥ stale threshold)', () => {
-    const { rerender } = render(<ConnectionStatus connected={false} connecting={true} />);
+  it('shows "Reconnected — sync again?" cue after a long reconnect (≥ stale threshold)', () => {
+    const retry = vi.fn();
+    const { rerender } = render(
+      <ConnectionStatus connected={false} connecting={true} onRetry={retry} />
+    );
 
     // 15s of downtime — crosses STALE_THRESHOLD_MS (10s).
     act(() => {
       vi.advanceTimersByTime(15_000);
     });
 
-    rerender(<ConnectionStatus connected={true} connecting={false} />);
-    expect(screen.getByText('Reconnected — refresh?')).toBeInTheDocument();
+    rerender(<ConnectionStatus connected={true} connecting={false} onRetry={retry} />);
+    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
     // Green flash should NOT show — the two cues never compete.
     expect(screen.queryByText('Connected')).not.toBeInTheDocument();
 
-    // Clicking the tag (anywhere except the × dismiss) reloads.
-    fireEvent.click(screen.getByText('Reconnected — refresh?'));
-    expect(reloadSpy).toHaveBeenCalledOnce();
+    // Retry synchronization without a page reload or lost drafts.
+    fireEvent.click(screen.getByText('Reconnected — sync again?'));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(reloadSpy).not.toHaveBeenCalled();
   });
 
   it('dismissing the stale cue with × clears it without reloading', () => {
@@ -141,12 +147,12 @@ describe('ConnectionStatus', () => {
       vi.advanceTimersByTime(15_000);
     });
     rerender(<ConnectionStatus connected={true} connecting={false} />);
-    expect(screen.getByText('Reconnected — refresh?')).toBeInTheDocument();
+    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
 
     const dismiss = screen.getByLabelText('Dismiss');
     fireEvent.click(dismiss);
 
-    expect(screen.queryByText('Reconnected — refresh?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reconnected — sync again?')).not.toBeInTheDocument();
     expect(reloadSpy).not.toHaveBeenCalled();
   });
 
@@ -156,12 +162,12 @@ describe('ConnectionStatus', () => {
       vi.advanceTimersByTime(15_000);
     });
     rerender(<ConnectionStatus connected={true} connecting={false} />);
-    expect(screen.getByText('Reconnected — refresh?')).toBeInTheDocument();
+    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(61_000);
     });
-    expect(screen.queryByText('Reconnected — refresh?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reconnected — sync again?')).not.toBeInTheDocument();
   });
 
   /**

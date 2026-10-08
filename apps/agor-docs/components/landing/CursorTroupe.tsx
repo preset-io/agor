@@ -39,12 +39,12 @@ const CAST = [
 const SECTIONS = [
   'hero',
   'board',
-  'problem',
   'work-together',
   'teammates',
   'roster',
   'command-center',
   'governance',
+  'problem',
   'final',
 ] as const;
 type SectionId = (typeof SECTIONS)[number];

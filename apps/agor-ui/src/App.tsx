@@ -330,6 +330,7 @@ function AppContent() {
     loginForAuthorityCycle,
     logout,
     logoutForAuthorityCycle,
+    reconcileStoredCredentials,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
 
@@ -347,6 +348,8 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
+    reconcileCredentials: reconcileStoredCredentials,
+    isAuthorityGenerationCurrent: isAuthenticationGenerationCurrent,
   });
   const clientRef = useRef(client);
   clientRef.current = client;
@@ -1016,7 +1019,7 @@ function AppContent() {
   }
 
   // Show connection error
-  if (connectionError) {
+  if (connectionError && !hasLoadedOnce) {
     return (
       <div
         style={{

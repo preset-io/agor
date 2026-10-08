@@ -88,7 +88,7 @@ export interface SlackMCPOAuthAuthorityRepositories {
   users: Pick<UsersRepository, 'findById'>;
   channels: Pick<GatewayChannelRepository, 'findById'>;
   servers: Pick<MCPServerRepository, 'findById'>;
-  threadMap: Pick<ThreadSessionMapRepository, 'findBySession'>;
+  threadMap: Pick<ThreadSessionMapRepository, 'findByChannelAndThread'>;
 }
 
 /**
@@ -133,7 +133,11 @@ export async function readSlackMCPOAuthAuthority(
     repositories.users.findById(binding.credentialUserId),
     repositories.channels.findById(binding.gatewayChannelId),
     repositories.servers.findById(binding.mcpServerId),
-    repositories.threadMap.findBySession(binding.sessionId),
+    // Thread-first. The binding names one thread, and `(channel_id,
+    // thread_id)` identifies it exactly; asking which thread the session is
+    // mapped to could only confirm this one while sessions held exactly one
+    // mapping apiece. The session check below is unchanged either way.
+    repositories.threadMap.findByChannelAndThread(binding.gatewayChannelId, binding.slackThreadId),
   ]);
 
   const credentialFloor =
@@ -151,7 +155,8 @@ export async function readSlackMCPOAuthAuthority(
     channel.channel_type !== 'slack' ||
     !versionMatches(channel.provider_config_generation, binding.gatewayConfigGeneration) ||
     !slackThreadWriteTargetAllowed(binding.slackThreadId, binding.slackChannelId, channel.config) ||
-    mapping?.channel_id !== channel.id ||
+    mapping?.session_id !== binding.sessionId ||
+    mapping.channel_id !== channel.id ||
     mapping.thread_id !== binding.slackThreadId ||
     !server?.enabled ||
     server.auth?.type !== 'oauth' ||

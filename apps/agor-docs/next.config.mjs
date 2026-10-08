@@ -26,4 +26,9 @@ export default withNextra({
   // Lets a throwaway preview server (e.g. an agent's `next dev` on a scratch
   // port) build into its own folder, so it can't collide with `pnpm serve`.
   distDir: process.env.AGOR_DOCS_DIST_DIR || '.next',
+  // The footer's copyright year (components/FinePrint.tsx), fixed at build
+  // time so server and browser render the same text. Every deploy rebuilds.
+  env: {
+    AGOR_BUILD_YEAR: String(new Date().getFullYear()),
+  },
 });

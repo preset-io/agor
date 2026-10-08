@@ -39,6 +39,7 @@ import type {
   Group,
   GroupMembership,
   KnowledgeDocument,
+  KnowledgeDocumentArchivePatch,
   KnowledgeDocumentVersion,
   KnowledgeEmbeddingStatus,
   KnowledgeIndexingStatus,
@@ -875,6 +876,15 @@ export interface AgorClient
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
+  service(
+    path: 'kb/documents'
+  ): AgorService<
+    KnowledgeDocument,
+    CreatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    UpdatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    | PatchPayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>
+    | KnowledgeDocumentArchivePatch
+  >;
   service(path: 'kb/settings'): KnowledgeSettingsService;
   service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
