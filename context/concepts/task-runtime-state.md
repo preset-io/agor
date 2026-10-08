@@ -331,7 +331,7 @@ Template-launcher exit is not a remote terminal-status channel: zero can mean
 detached submission, and a signal (`code === null` or shell-style exit >=128) is
 always ambiguous even when ordinary nonzero returns promise no dispatch. The
 optional cleanup command supplies a narrow, trusted containment assertion, not
-a general remote Job-status ingestion API. A Cloud integration must bind
+a general remote Job-status ingestion API. An external execution substrate must bind
 terminal evidence to tenant, Task and immutable launch/workload identity, prove
 no running/retry workload remains, and settle through the same coordination
 fences. Missing Jobs, network failures and accounting `lost` states alone are
@@ -516,7 +516,8 @@ that same evidence. Force-release is also
 fenced to the observed recovery revision. UI projects this as recovery in
 progress, Cleanup needs attention, or reopened without confirmed cleanup—not
 new branch lifecycle states. Failures use durable Task errors/realtime plus
-`executor.cleanup_failures`; Cloud owns paging and its trusted cleanup helper.
+`executor.cleanup_failures`; the deployment's operator owns paging and any
+trusted external cleanup helper.
 
 The UI's recovery copy is owned by `TaskBlock/describeTurnOutcome.ts`; do not add
 a second recovery presentation classifier. Templated exit 75 is a launch refusal

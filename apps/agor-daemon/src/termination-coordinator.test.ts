@@ -217,7 +217,7 @@ describe('termination coordinator', () => {
         executor_connected_at: '2026-01-01T00:00:00.000Z',
       });
       state.settle(task(TaskStatus.FAILED));
-      // Internal seam only. Core does not yet ingest Cloud Job evidence. The
+      // Internal seam only. Core does not yet ingest external Job evidence. The
       // future adapter must prove whole-workload absence before setting this;
       // this fixture simulates that proof, never a launcher 137 inference.
       const errorMessage = `Execution substrate confirmed container termination: ${reason}.`;

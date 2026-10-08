@@ -348,8 +348,9 @@ termination logs, including `mode`, `helper_configured`, and
 proof the process started (a daemon can crash between those steps). Scope
 helper-specific alerts to configured/attempted helpers; other containment
 failures still need operational visibility. Operators must configure alert delivery; enabling this setting
-does not automatically create paging rules. Cloud needs a companion helper using
-its existing manager's workload tracking/cancellation and retained terminal evidence.
+does not automatically create paging rules. A gating launcher needs a companion
+cleanup helper that uses its own workload tracking/cancellation and retained
+terminal evidence.
 
 #### Recovery limits
 
