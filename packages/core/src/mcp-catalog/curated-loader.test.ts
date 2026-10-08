@@ -420,6 +420,26 @@ ${block}
     expect(() => parseCuratedCatalog(withOAuth(block))).toThrow(CuratedCatalogError);
   });
 
+  it.each([
+    'http://issuer.example.com',
+    'https://user:pass@issuer.example.com',
+    'https://issuer.example.com/?tenant=a',
+    'https://issuer.example.com/#frag',
+  ])('refuses issuer %s, which the relay would reject later', (issuer) => {
+    expect(() =>
+      parseCuratedCatalog(withOAuth(`      stable_callback:\n        issuer: "${issuer}"`))
+    ).toThrow(/https URL without userinfo, query, or fragment/);
+    expect(() =>
+      parseCuratedCatalog(
+        withOAuth(`      dcr_mode: disabled
+      configured_client:
+        setup_url: https://issuer.example.com/apps
+        issuer: "${issuer}"
+        secret_required: true`)
+      )
+    ).toThrow(/https URL without userinfo, query, or fragment/);
+  });
+
   it('leaves the block absent when an entry states nothing', () => {
     const [entry] = parseCuratedCatalog(VALID_ENTRY);
     expect(entry.oauth).toBeUndefined();

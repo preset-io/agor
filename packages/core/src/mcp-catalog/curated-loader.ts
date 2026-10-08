@@ -45,6 +45,20 @@ const httpUrl = z.url().refine((value) => /^https?:\/\//i.test(value), {
 });
 
 /**
+ * An OAuth issuer, which the relay hashes into its callback and rejects unless
+ * it is a bare HTTPS URL. Refuse the same shapes here, at review time.
+ */
+const issuerUrl = httpUrl.refine(
+  (value) => {
+    // Refinements still run after `z.url()` fails; that failure is reported.
+    if (!URL.canParse(value)) return true;
+    const url = new URL(value);
+    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash;
+  },
+  { message: 'must be an https URL without userinfo, query, or fragment' }
+);
+
+/**
  * The per-server OAuth settings an entry may state.
  *
  * `.strict()` is what keeps a secret out. The obvious mistake this file invites
@@ -60,10 +74,10 @@ const catalogEntryOAuthSchema = z
   .object({
     scope: nonEmpty.optional(),
     configured_client: z
-      .object({ setup_url: httpUrl, issuer: httpUrl, secret_required: z.boolean() })
+      .object({ setup_url: httpUrl, issuer: issuerUrl, secret_required: z.boolean() })
       .strict()
       .optional(),
-    stable_callback: z.object({ issuer: httpUrl }).strict().optional(),
+    stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),
     client_id: nonEmpty.optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
     compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
