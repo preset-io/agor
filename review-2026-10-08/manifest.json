@@ -1,0 +1,330 @@
+[
+  {
+    "file": "iphone-light-home-top.png",
+    "kind": "image",
+    "title": "Home top, iPhone light",
+    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-home-scrolled.png",
+    "kind": "image",
+    "title": "Home scrolled, iPhone light",
+    "caption": "Scrolled Home keeps the full height for content, with no header and the tab bar flush.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-more-sheet.png",
+    "kind": "image",
+    "title": "More sheet, iPhone light",
+    "caption": "One flat list, with Documentation directly above Sign out.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-board-canvas.png",
+    "kind": "image",
+    "title": "Board tab canvas, iPhone light",
+    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-board-teammate.png",
+    "kind": "image",
+    "title": "Teammate tab, iPhone light",
+    "caption": "The board primary teammate and its sessions, under the board switcher.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-board-sessions.png",
+    "kind": "image",
+    "title": "Sessions tab, iPhone light",
+    "caption": "All sessions on the board in one list.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-board-comments.png",
+    "kind": "image",
+    "title": "Comments tab, iPhone light",
+    "caption": "Board comments grouped by branch, with the composer above the tab bar.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-session.png",
+    "kind": "image",
+    "title": "Session view, iPhone light",
+    "caption": "The composer sits directly above the tab bar with no extra bottom padding.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-light-subpage-header.png",
+    "kind": "image",
+    "title": "Sub-page header, iPhone light",
+    "caption": "A sub-page with a Back header; the tab bar stays docked.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
+  },
+  {
+    "file": "iphone-dark-home-top.png",
+    "kind": "image",
+    "title": "Home top, iPhone dark",
+    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-home-scrolled.png",
+    "kind": "image",
+    "title": "Home scrolled, iPhone dark",
+    "caption": "Scrolled Home keeps the full height for content, with no header and the tab bar flush.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-more-sheet.png",
+    "kind": "image",
+    "title": "More sheet, iPhone dark",
+    "caption": "One flat list, with Documentation directly above Sign out.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-board-canvas.png",
+    "kind": "image",
+    "title": "Board tab canvas, iPhone dark",
+    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-board-teammate.png",
+    "kind": "image",
+    "title": "Teammate tab, iPhone dark",
+    "caption": "The board primary teammate and its sessions, under the board switcher.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-board-sessions.png",
+    "kind": "image",
+    "title": "Sessions tab, iPhone dark",
+    "caption": "All sessions on the board in one list.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-board-comments.png",
+    "kind": "image",
+    "title": "Comments tab, iPhone dark",
+    "caption": "Board comments grouped by branch, with the composer above the tab bar.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-session.png",
+    "kind": "image",
+    "title": "Session view, iPhone dark",
+    "caption": "The composer sits directly above the tab bar with no extra bottom padding.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-subpage-header.png",
+    "kind": "image",
+    "title": "Sub-page header, iPhone dark",
+    "caption": "A sub-page with a Back header; the tab bar stays docked.",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "android-light-home-top.png",
+    "kind": "image",
+    "title": "Home top, Android light",
+    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-home-scrolled.png",
+    "kind": "image",
+    "title": "Home scrolled, Android light",
+    "caption": "Scrolled Home keeps the full height for content, with no header and the tab bar flush.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-more-sheet.png",
+    "kind": "image",
+    "title": "More sheet, Android light",
+    "caption": "One flat list, with Documentation directly above Sign out.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-board-canvas.png",
+    "kind": "image",
+    "title": "Board tab canvas, Android light",
+    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-board-teammate.png",
+    "kind": "image",
+    "title": "Teammate tab, Android light",
+    "caption": "The board primary teammate and its sessions, under the board switcher.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-board-sessions.png",
+    "kind": "image",
+    "title": "Sessions tab, Android light",
+    "caption": "All sessions on the board in one list.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-board-comments.png",
+    "kind": "image",
+    "title": "Comments tab, Android light",
+    "caption": "Board comments grouped by branch, with the composer above the tab bar.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-session.png",
+    "kind": "image",
+    "title": "Session view, Android light",
+    "caption": "The composer sits directly above the tab bar with no extra bottom padding.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-light-subpage-header.png",
+    "kind": "image",
+    "title": "Sub-page header, Android light",
+    "caption": "A sub-page with a Back header; the tab bar stays docked.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android-dark-home-top.png",
+    "kind": "image",
+    "title": "Home top, Android dark",
+    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-home-scrolled.png",
+    "kind": "image",
+    "title": "Home scrolled, Android dark",
+    "caption": "Scrolled Home keeps the full height for content, with no header and the tab bar flush.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-more-sheet.png",
+    "kind": "image",
+    "title": "More sheet, Android dark",
+    "caption": "One flat list, with Documentation directly above Sign out.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-board-canvas.png",
+    "kind": "image",
+    "title": "Board tab canvas, Android dark",
+    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-board-teammate.png",
+    "kind": "image",
+    "title": "Teammate tab, Android dark",
+    "caption": "The board primary teammate and its sessions, under the board switcher.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-board-sessions.png",
+    "kind": "image",
+    "title": "Sessions tab, Android dark",
+    "caption": "All sessions on the board in one list.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-board-comments.png",
+    "kind": "image",
+    "title": "Comments tab, Android dark",
+    "caption": "Board comments grouped by branch, with the composer above the tab bar.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-session.png",
+    "kind": "image",
+    "title": "Session view, Android dark",
+    "caption": "The composer sits directly above the tab bar with no extra bottom padding.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android-dark-subpage-header.png",
+    "kind": "image",
+    "title": "Sub-page header, Android dark",
+    "caption": "A sub-page with a Back header; the tab bar stays docked.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "video-a-home-scroll.webm",
+    "kind": "video",
+    "title": "Home scroll",
+    "caption": "Scroll to the bottom and back: no header appears and the tab bar stays flush.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-b-more-comments.webm",
+    "kind": "video",
+    "title": "More to comments and back",
+    "caption": "Open More, open Comments and mentions (Home filtered to comments), then Back returns to the board.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-c-board-tabs.webm",
+    "kind": "video",
+    "title": "Board switcher and tabs",
+    "caption": "Switch boards with the switcher, switch back, then go through Teammate, Sessions, Comments and Board.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-d-canvas.webm",
+    "kind": "video",
+    "title": "View-only canvas",
+    "caption": "Pinch to zoom and pan the canvas, tap a session to open it, then Back; the canvas refits the whole board on return.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-e-safe-area-iphone.webm",
+    "kind": "video",
+    "title": "Safe areas on iPhone",
+    "caption": "Hatched bands mark simulated 59px top and 34px bottom insets: only the tab bar pads the bottom, and headers start below the top inset.",
+    "viewport": "iPhone 15 WebKit 390x844",
+    "theme": "dark"
+  }
+]
