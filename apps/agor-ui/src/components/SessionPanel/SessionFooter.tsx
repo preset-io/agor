@@ -378,9 +378,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         plain
       />
     ) : null;
+  // Phones skip action bar tooltips: a tap leaves them over the sheet and buttons.
+  const barTooltip = (title: React.ReactNode) => (isMobile ? undefined : title);
   const moreButton = (
-    // A tap would leave the tooltip on top of the phone sheet.
-    <Tooltip title={isMobile ? undefined : 'More options'}>
+    <Tooltip title={barTooltip('More options')}>
       <Button
         size={actionSize}
         style={touchActionStyle}
@@ -1126,13 +1127,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Space size={4}>
             {barPinnedItems.includes('upload') && (
               <Tooltip
-                title={
+                title={barTooltip(
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
                       ? 'Disconnected from daemon'
                       : 'Attach Files'
-                }
+                )}
               >
                 <Button
                   size={actionSize}
@@ -1254,7 +1255,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {/* Flex avoids inline baseline/descender space around the controls. */}
             <Flex align="center" gap={token.sizeUnit}>
               {showStop && (
-                <Tooltip title={stopTooltip}>
+                <Tooltip title={barTooltip(stopTooltip)}>
                   <Button
                     danger
                     aria-label={isStopping ? 'Recovering' : 'Stop'}
@@ -1269,7 +1270,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   />
                 </Tooltip>
               )}
-              <Tooltip title={sendTooltip}>
+              <Tooltip title={barTooltip(sendTooltip)}>
                 <Badge
                   count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                   size="small"
