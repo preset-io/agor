@@ -19,7 +19,7 @@ const RecentBoardPill: React.FC<{ board: Board; onClick: (boardId: string) => vo
     useMemo(() => makeBoardSessionActivitySelector(board.board_id), [board.board_id]),
     shallow
   );
-  const status = activity.hasReady ? 'needs you' : activity.hasRunning ? 'running' : null;
+  const status = activity.hasReady ? 'waiting on you' : activity.hasRunning ? 'running' : null;
   return (
     <Button
       shape="round"

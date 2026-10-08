@@ -166,7 +166,7 @@ describe('MobileApp Home wiring', () => {
       comments: [mention('c1')],
     });
     renderPhoneHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).getByRole('button', { name: /Session perm/ })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
@@ -182,7 +182,7 @@ describe('MobileApp Home wiring', () => {
     renderPhoneHome(['/m/search', '/m']);
     fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
     expect(
-      await within(screen.getByRole('region', { name: 'Needs you' })).findByRole('radio', {
+      await within(screen.getByRole('region', { name: 'Waiting on you' })).findByRole('radio', {
         name: 'Comments 1',
       })
     ).toBeChecked();
@@ -223,7 +223,7 @@ describe('MobileApp Home wiring', () => {
   it('clears a finished result’s flag when it is opened', async () => {
     seed({ sessions: [session('done', { ready_for_prompt: true })] });
     renderPhoneHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     await act(async () => {
       fireEvent.click(within(needs).getByRole('button', { name: /^Session done/ }));
     });

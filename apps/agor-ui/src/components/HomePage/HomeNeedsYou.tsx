@@ -86,7 +86,7 @@ export const HomeNeedsYou = memo(function HomeNeedsYou({
   return (
     <HomeSection
       id="needs"
-      title="Needs you"
+      title="Waiting on you"
       info={NEEDS_INFO}
       extra={
         <>

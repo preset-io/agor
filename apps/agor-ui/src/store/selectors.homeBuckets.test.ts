@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
+import type { Board, BoardComment, Branch, Session, UserID } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
 import * as entityTime from '../utils/entityTime';
 import { buildSessionMaps, EMPTY_MAPS } from './agorMaps';
@@ -682,6 +682,97 @@ describe('makeHomeBucketsSelector', () => {
     ]);
     const mine = select(s, { recentLimit: 2, query: 'home', onlyStartedByMe: true });
     expect([mine.runningCount, mine.runningMatchCount]).toEqual([5, 3]);
+  });
+
+  describe('owner', () => {
+    const VITOR = 'user-vitor' as UserID;
+    const s = state({
+      sessions: [
+        session('my-perm', { status: 'awaiting_permission', last_updated: hoursAgo(1) }),
+        session('my-idle', { last_updated: hoursAgo(4) }),
+        session('v-run', { created_by: VITOR, status: 'running', last_updated: hoursAgo(2) }),
+        session('v-perm', {
+          created_by: VITOR,
+          status: 'awaiting_permission',
+          last_updated: hoursAgo(3),
+        }),
+        session('v-sched', { created_by: VITOR, scheduled_from_branch: true }),
+        session('v-old', { created_by: VITOR, archived: true }),
+        session('o-idle', { created_by: 'user-other', last_updated: hoursAgo(5) }),
+      ],
+    });
+    const ids = (sessions: Session[]) => sessions.map((x) => x.session_id);
+
+    it('lists only the caller’s sessions for me', () => {
+      const me = select(s);
+      expect(ids(me.recent)).toEqual(['my-idle']);
+      expect([ids(me.running), me.runningCount]).toEqual([[], 0]);
+    });
+
+    it('lists one person’s or everyone’s unarchived sessions in recent and running, newest first', () => {
+      const vitor = select(s, { owner: VITOR });
+      expect(ids(vitor.recent)).toEqual(['v-sched', 'v-run', 'v-perm']);
+      expect([ids(vitor.running), vitor.runningCount, vitor.recentCount]).toEqual([
+        ['v-run'],
+        1,
+        3,
+      ]);
+      expect(ids(select(s, { owner: VITOR, onlyStartedByMe: true }).recent)).toEqual([
+        'v-run',
+        'v-perm',
+      ]);
+      expect(ids(select(s, { owner: 'everyone' }).recent)).toEqual([
+        'my-perm',
+        'v-sched',
+        'v-run',
+        'v-perm',
+        'my-idle',
+        'o-idle',
+      ]);
+    });
+
+    it('keeps Waiting on you, unread and boards on the caller’s own sessions', () => {
+      const me = select(s);
+      for (const owner of [VITOR, 'everyone'] as const) {
+        const other = select(s, { owner });
+        expect(ids(other.needs.map((n) => n.session))).toEqual(['my-perm']);
+        expect([other.needsCount, other.unreadCount, other.hasSessions]).toEqual([
+          me.needsCount,
+          me.unreadCount,
+          me.hasSessions,
+        ]);
+      }
+    });
+
+    it('recomputes for another person’s session patch only when their work is shown', () => {
+      const patched = {
+        ...s,
+        ...buildSessionMaps(
+          [...s.sessionById.values()].map((x) =>
+            x.session_id === 'o-idle' ? { ...x, title: 'Renamed' } : x
+          )
+        ),
+      } as AgorState;
+      const mine = makeHomeBucketsSelector({
+        userId: ME,
+        now: NOW,
+        needsLimit: 50,
+        recentLimit: 8,
+      });
+      expect(mine(patched)).toBe(mine(s));
+      const everyone = makeHomeBucketsSelector({
+        userId: ME,
+        now: NOW,
+        needsLimit: 50,
+        recentLimit: 8,
+        owner: 'everyone',
+      });
+      const before = everyone(s);
+      expect(everyone(patched).recent.find((x) => x.session_id === 'o-idle')?.title).toBe(
+        'Renamed'
+      );
+      expect(everyone(patched)).not.toBe(before);
+    });
   });
 });
 

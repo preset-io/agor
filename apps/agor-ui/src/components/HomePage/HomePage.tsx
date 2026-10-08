@@ -1,6 +1,6 @@
 import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
 import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
+import { Alert, Flex, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
@@ -23,6 +23,7 @@ import {
   compareHomeNeeds,
   type HomeCommentNeed,
   type HomeSessionNeed,
+  type HomeWorkOwner,
   isUnreadResult,
   lastRunStartedAt,
   makeHomeBucketsSelector,
@@ -263,6 +264,11 @@ export const HomePage = memo(function HomePage({
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);
+  const [owner, setOwner] = useState<HomeWorkOwner>('me');
+  const changeOwner = useCallback((next: HomeWorkOwner) => {
+    setOwner(next);
+    setWorkLimit(MY_WORK_PAGE);
+  }, []);
   // Frozen at mount: Home unmounts on navigation, so the 7-day failure window stays fresh enough.
   const [now] = useState(Date.now);
   const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
@@ -290,6 +296,7 @@ export const HomePage = memo(function HomePage({
           now,
           needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
+          owner,
           boardsLimit: visitedBoardIds.length ? 0 : RECENT_BOARDS,
           query: deferredQuery,
           onlyStartedByMe,
@@ -300,6 +307,7 @@ export const HomePage = memo(function HomePage({
         now,
         needsExpanded,
         workLimit,
+        owner,
         visitedBoardIds.length,
         deferredQuery,
         onlyStartedByMe,
@@ -394,11 +402,6 @@ export const HomePage = memo(function HomePage({
   }, [client, userId, showError]);
   const showMoreWork = useCallback(() => setWorkLimit((limit) => limit + MY_WORK_PAGE), []);
   const archive = useCallback((sessionId: string) => confirmArchive(sessionId), [confirmArchive]);
-  const showRunning = useCallback(() => {
-    setTab('running');
-    scrollToSection('mywork');
-  }, []);
-  const jumpToNeeds = useCallback(() => scrollToSection('needs'), []);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const allBoards = useCallback(
     () => (onAllBoards ?? (() => requestShellPicker(OPEN_BOARD_SWITCHER_EVENT)))(),
@@ -420,7 +423,6 @@ export const HomePage = memo(function HomePage({
       onDismiss={() => setOnboardingHidden(true)}
     />
   );
-  const textButton = { paddingInline: 0 };
 
   return (
     <HomeFrame>
@@ -435,40 +437,9 @@ export const HomePage = memo(function HomePage({
           }
         />
       )}
-      <div style={{ minWidth: 0 }}>
-        <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
-          Good {greeting()}, {firstName}
-        </Typography.Title>
-        {!hydrated ? (
-          <Skeleton.Input active size="small" style={{ width: 220 }} />
-        ) : (
-          !newUser && (
-            <Flex align="center" gap={token.marginXS} wrap>
-              <Button type="text" size="small" style={textButton} onClick={jumpToNeeds}>
-                {needsCount ? (
-                  <span>
-                    <Typography.Text strong>{needsCount}</Typography.Text> need you
-                  </span>
-                ) : (
-                  'All caught up'
-                )}
-              </Button>
-              {buckets.runningCount > 0 && (
-                <>
-                  <Typography.Text type="secondary" aria-hidden>
-                    ·
-                  </Typography.Text>
-                  <Button type="text" size="small" style={textButton} onClick={showRunning}>
-                    <span>
-                      <Typography.Text strong>{buckets.runningCount}</Typography.Text> running
-                    </span>
-                  </Button>
-                </>
-              )}
-            </Flex>
-          )
-        )}
-      </div>
+      <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
+        Good {greeting()}, {firstName}
+      </Typography.Title>
       <HomeRecentBoards
         recentBoardIds={visitedBoardIds.length ? visitedBoardIds : buckets.boardIds}
         onBoardClick={onBoardClick}
@@ -528,6 +499,9 @@ export const HomePage = memo(function HomePage({
             onViewChange={changeWorkView}
             query={query}
             onQueryChange={setQuery}
+            owner={owner}
+            onOwnerChange={changeOwner}
+            currentUser={currentUser}
             onlyStartedByMe={onlyStartedByMe}
             onOnlyStartedByMeChange={setOnlyStartedByMe}
             onOpenSession={onSessionClick}
