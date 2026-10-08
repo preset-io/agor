@@ -1,4 +1,4 @@
-import type { KnowledgeDocumentStatus } from '@agor/core/types';
+import type { KnowledgeArchiveFilter, KnowledgeDocumentStatus } from '@agor/core/types';
 import { Flags } from '@oclif/core';
 import { BaseCommand } from '../../../base-command';
 import {
@@ -10,12 +10,17 @@ import {
 
 export default class KnowledgeDocumentList extends BaseCommand {
   static override description =
-    'List accessible active documents. Pagination limits displayed rows; existing APIs fetch the authorized inventory.';
+    'List accessible documents (active by default). Pagination limits displayed rows; existing APIs fetch the authorized inventory.';
   static override flags = {
     namespace: Flags.string({ required: true, description: 'Namespace slug' }),
     status: Flags.string({
       options: ['published', 'draft'],
       description: 'Filter by status (default: both)',
+    }),
+    archive: Flags.string({
+      options: ['active', 'archived', 'all'],
+      default: 'active',
+      description: 'Archive filter',
     }),
     ...knowledgeListFlags(),
   };
@@ -27,7 +32,9 @@ export default class KnowledgeDocumentList extends BaseCommand {
         await listDocuments(
           client,
           flags.namespace,
-          flags.status as KnowledgeDocumentStatus | undefined
+          flags.status as KnowledgeDocumentStatus | undefined,
+          undefined,
+          flags.archive as KnowledgeArchiveFilter
         ),
         flags.limit,
         flags.offset
@@ -36,8 +43,8 @@ export default class KnowledgeDocumentList extends BaseCommand {
         renderKnowledgePage(
           result,
           flags.json,
-          ['Path', 'Title', 'Kind', 'Status', 'Modified'],
-          (row) => [row.path, row.title, row.kind, row.status, row.updated_at]
+          ['Path', 'Title', 'Kind', 'Status', 'Archived', 'Modified'],
+          (row) => [row.path, row.title, row.kind, row.status, row.archived, row.updated_at]
         )
       );
     } finally {

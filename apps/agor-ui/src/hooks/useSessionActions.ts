@@ -20,6 +20,7 @@ import {
 import { useState } from 'react';
 import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
+import { CLIENT_NOT_CONNECTED_ERROR } from '../utils/connectionErrors';
 
 export const ARCHIVE_REFRESH_WARNING =
   'Session and same-branch children archived; refresh required to update the session list.';
@@ -58,7 +59,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const createSession = async (config: NewSessionConfig): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -126,7 +127,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const forkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -160,7 +161,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   const btwForkSession = async (sessionId: SessionID, prompt: string): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -199,7 +200,7 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
   ): Promise<Session> => {
     if (!client) {
       setError('Client not connected');
-      throw new Error('Client not connected');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {

@@ -375,6 +375,8 @@ export class TaskRuntimeReconciler {
       cause: request.cause,
       errorMessage: request.error_message ?? 'Resuming durable executor termination.',
       params,
+      // Only a verified templated-launcher refusal persists `launch_refused`.
+      absenceVerified: request.cause === 'launch_refused',
       ...(awaitingRemoteExecutor ? { remoteConnectDeadlineExpired: true } : {}),
       allowUnownedLocalContainment: localMode && !ownsLocalHandle,
       ...(localMode && !ownsLocalHandle

@@ -1282,7 +1282,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const callbackConfig = {
       ...(data.enableCallback !== undefined ? { enabled: data.enableCallback } : {}),
       ...(isCallbackEnabled
-        ? { callback_session_id: parent.session_id, callback_created_by: parent.created_by }
+        ? { callback_session_id: parent.session_id, callback_created_by: created_by }
         : {}),
       ...(data.includeLastMessage !== undefined
         ? { include_last_message: data.includeLastMessage }

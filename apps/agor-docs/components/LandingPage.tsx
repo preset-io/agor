@@ -25,17 +25,19 @@ export function LandingPage() {
       <HomeHero />
       {/* On by default; ?cursors=off turns it off. See CursorTroupe.tsx. */}
       <CursorTroupe />
-      {/* Positioning order: Multiplayer AI, the board, teammates (with the
-          roster as their proof), then the builder and trust stories. Matches
-          the hero's hub links. */}
-      <ProblemSection />
-      <MultiplayerSection sampler />
+      {/* Positioning order (M&P v4): the board first, so the product shows
+          early; then Multiplayer AI, teammates with the roster as their proof,
+          the builder's command center, and the trust story; the problem cards
+          close it out. */}
       <BoardSection sampler />
+      <MultiplayerSection sampler />
       <TeammatesSection sampler />
-      {/* Command center between the two circular sections (ring, radar). */}
-      <CommandCenterSection sampler />
       <RosterSection sampler />
+      <CommandCenterSection sampler />
       <GovernanceSection sampler />
+      {/* The problem last, as the lead-in to the closing "Bring your team and
+          agents together" call to action (LandingShell). */}
+      <ProblemSection />
     </LandingShell>
   );
 }

@@ -35,15 +35,16 @@ const CAST = [
   { name: 'Rho', color: '#ff9f7a', hz: 2.0, extra: true },
 ] as const;
 
+// Page order: when two sections both qualify, the later one wins.
 const SECTIONS = [
   'hero',
-  'problem',
-  'work-together',
   'board',
+  'work-together',
   'teammates',
-  'command-center',
   'roster',
+  'command-center',
   'governance',
+  'problem',
   'final',
 ] as const;
 type SectionId = (typeof SECTIONS)[number];

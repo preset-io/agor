@@ -22,6 +22,7 @@ import {
   BRANCH_CLEANUP_COMMAND_MAX_LENGTH,
   BRANCH_DELETION_COMMAND,
   ENVIRONMENT_COMMAND_BUDGET as ENV_BUDGET,
+  EXECUTOR_ADMISSION_CLASSES,
 } from '@agor/core/types';
 import { z } from 'zod';
 
@@ -129,6 +130,13 @@ export type PermissionMode = z.infer<typeof PermissionModeSchema>;
 export const BasePayloadSchema = z.object({
   /** Executor command identifier */
   command: z.string(),
+
+  /**
+   * Admission class the daemon stamps on templated launches so a gating
+   * launcher can count the run. Never trusted by the executor itself: the
+   * admission check uses the executor's own command map.
+   */
+  admissionClass: z.enum(EXECUTOR_ADMISSION_CLASSES).optional(),
 
   /** Invocation lifecycle selected by the daemon host. */
   executorMode: z.enum(['autonomous', 'request']).optional(),

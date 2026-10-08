@@ -34,6 +34,8 @@ export type {
 export {
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
+  DISCORD_FORUM_POSTS_DEFAULT_LIMIT,
+  DISCORD_FORUM_POSTS_MAX_LIMIT,
   DiscordHistoryError,
   fetchDiscordProviderHistory,
 } from './connectors/discord-history';

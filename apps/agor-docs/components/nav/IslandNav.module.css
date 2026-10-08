@@ -48,9 +48,11 @@
 }
 
 .island[data-scrolled="true"] {
-  --open-w: 780px;
+  /* Hug the bar's measured content (--bar-w, set by IslandNav) so nothing
+   * overlaps; open menus get at least 780px for the panels. */
+  --open-w: min(calc(100vw - 48px), max(780px, var(--bar-w, 0px)));
   top: 14px;
-  width: 660px;
+  width: min(calc(100vw - 48px), var(--bar-w, 100vw));
   border-radius: 30px;
 }
 
@@ -83,7 +85,7 @@
 
 .barLeft {
   gap: 14px;
-  min-width: 0;
+  flex: none;
 }
 
 .barRight {
@@ -195,7 +197,8 @@
   color: #062321;
 }
 
-/* Outlined pill beside the Cloud CTA; opens the meeting scheduler. */
+/* Outlined pills beside the Cloud CTA: Talk to Us (meeting scheduler) and
+ * Login (the Cloud console). */
 .ctaSecondary {
   display: inline-flex;
   align-items: center;
@@ -206,6 +209,7 @@
   background: transparent;
   color: #dfe6e6;
   font: 600 14px var(--body);
+  text-decoration: none;
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -462,6 +466,18 @@
   border-radius: 12px;
   color: #dfe6e6;
   font: 500 15px var(--body);
+  text-decoration: none;
+}
+
+.sheetLogin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  color: #dfe6e6;
+  font: 600 15px var(--body);
   text-decoration: none;
 }
 
@@ -737,6 +753,12 @@
   color: #062321;
 }
 
+.island a.ctaSecondary,
+.sheet a.sheetLogin,
 .sheet .sheetFooterPair a {
   color: #dfe6e6;
+}
+
+.island a.ctaSecondary:hover {
+  color: #fff;
 }

@@ -261,7 +261,8 @@ Notes:
 Discord is intentionally narrow and explicit:
 
 - Each enabled row names one bot application, one guild, and one or more
-  allowlisted public parent channels. A privileged **Message Content** intent
+  allowlisted public parent channels: text channels, or forum channels, where
+  the bot answers mentions inside posts. A privileged **Message Content** intent
   must be enabled in Discord and acknowledged in the Agor configuration. A
   structured mention outside inline or fenced code is the wake-up trigger;
   mention text is not a substitute for the intent.
@@ -382,7 +383,8 @@ Discord delivery or end-to-end provider guarantees: the connection test is an
 advisory probe, and provider outages or permissions can still prevent delivery.
 
 Proactive sends are the one deliberate seed exception. An authorized agent may
-target only `channel:<allowlisted-parent-snowflake>`. The send is recorded as a
+target only `channel:<allowlisted-text-channel-snowflake>`; forum channels
+cannot receive proactive messages. The send is recorded as a
 durable seed; the first eligible human reply consumes that seed and starts the
 mapped session without creating a summon thread. Replies to later response
 chunks continue through the compatibility aliases.
@@ -397,15 +399,22 @@ in `agor_gateway_discord_setup`. The capability is off by default
 Agents use `agor_gateway_discord_channel_history_get`:
 
 - Reads are limited to allowlisted public parent channels and public threads
-  under them. The bot needs View Channel and Read Message History permissions.
+  under them, including forum posts (a forum itself has no messages). The bot
+  needs View Channel and Read Message History permissions.
 - In a session created by this gateway channel, the default target is the parent
-  channel of the session's thread. Other sessions on its target branch pass
+  channel of the session's thread, or the post itself in a forum. Other sessions on its target branch pass
   `gatewayChannelId` and `discordChannelId`. Callers without session context
   need admin role or `all` branch permission.
 - Results are chronological, with 50 messages by default and at most 200. Page
   with either a `before` or an `after` message-ID cursor. Bot and system messages
   are omitted unless `includeBotMessages` is true. Reads are bounded by the
   gateway channel's catch-up limits; use `next_cursor` when `has_more` is true.
+
+The same capability enables `agor_gateway_discord_forum_posts_list`, which lists
+an allowlisted forum's posts with title, tags, author, reply count, and
+archived/locked state. It returns active posts by default, or archived posts
+with `archived: true`, newest first; page with `next_cursor`. In a forum post's
+session it defaults to that post's forum.
 
 Enabling this gives eligible sessions access through the bot, regardless of the
 Agor user's own Discord access. The bot token stays private, and message text
@@ -422,7 +431,8 @@ creates a Discord application or calls Discord. Before enabling a row:
    intent, and copy the Application ID and target Guild ID.
 2. Invite the bot to each allowlisted public parent channel with only the View
    Channel, Read Message History, Send Messages, Create Public Threads, and
-   Send Messages in Threads permissions needed by the contract.
+   Send Messages in Threads permissions needed by the contract. A forum channel
+   needs only View Channel, Read Message History, and Send Messages in Threads.
 3. Configure the explicit channel and user/role allowlists, thread mode,
    auto-archive setting, bounded catch-up values, identity mode, `files:false`
    (or opt in to bounded PNG/JPEG inbound images with `files:true`),
@@ -759,12 +769,12 @@ authoritative mutation transaction.
 
 ### Discord
 
-- **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text channel with permission to view, read history, and send messages.
+- **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text or forum channel with permission to view, read history, and send messages (in threads, for a forum).
 - **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured public parent channel.
 - **Content is narrow and explicit.** DMs, private threads, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the contract. `files:false` keeps the channel text-only; opt-in `files:true` admits only PNG/JPEG attachments on a mentioned text message, staged through the existing owner-bound upload/materialization path.
 - **Catch-up did not run.** REST catch-up is bounded and only runs after a live structured mention. A human reply without a mention does not create a Task; a failed history read or Task admission leaves the admitted cursor unchanged.
 - **Reconnects.** Discord Gateway sequence/session state is process-local. Agor does not expose durable Discord resume/checkpoint configuration; the next live mention uses bounded REST catch-up after the last admitted cursor.
-- **Proactive replies.** Use `channel:<snowflake>` for the configured parent channel. Replies to any response chunk use its durable alias and continue the same session; the first human reply to a proactive seed consumes that seed without creating a summon thread.
+- **Proactive replies.** Use `channel:<snowflake>` for a configured text channel; forums cannot be proactive targets. Replies to any response chunk use its durable alias and continue the same session; the first human reply to a proactive seed consumes that seed without creating a summon thread.
 - **Token safety.** Enter bot tokens through the secure credential UI or token widget. Do not put them in chat or MCP arguments.
 
 ### GitHub

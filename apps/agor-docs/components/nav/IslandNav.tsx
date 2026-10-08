@@ -15,7 +15,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { trackEvent } from '../../lib/analytics';
-import { DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../../lib/links';
+import { AGOR_CLOUD_LOGIN_URL, DISCORD_INVITE_URL, GITHUB_REPO_URL } from '../../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
 import { DiscordIcon, GitHubIcon } from '../BrandIcons';
 import { CloudCtaLink } from '../CloudCtaLink';
@@ -89,6 +89,8 @@ export function IslandNav() {
   const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const panelRefs = useRef<Partial<Record<MenuId, HTMLDivElement | null>>>({});
   const triggerRefs = useRef<Partial<Record<MenuId, HTMLButtonElement | null>>>({});
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barWidth, setBarWidth] = useState<number | null>(null);
   const isMarketing = MARKETING_PATHS.has(pathname ?? '');
   // Nextra's own docs sidebar (opened from "Browse this section"); the menu
   // button closes it too.
@@ -161,6 +163,29 @@ export function IslandNav() {
     observer.observe(panel);
     return () => observer.disconnect();
   }, [openMenu]);
+
+  // The condensed pill is sized to the bar's content rather than a fixed
+  // width, so the links and the actions never overlap (labels, fonts, and the
+  // Cloud CTA's variant all change that width).
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const measure = () => {
+      const style = getComputedStyle(bar);
+      const island = bar.parentElement;
+      let width =
+        parseFloat(style.paddingLeft) +
+        parseFloat(style.paddingRight) +
+        parseFloat(style.columnGap) * (bar.children.length - 1) +
+        (island ? island.offsetWidth - island.clientWidth : 0);
+      for (const child of bar.children) width += (child as HTMLElement).offsetWidth;
+      setBarWidth(Math.ceil(width));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (const child of bar.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     document.body.style.overflow = sheetOpen ? 'hidden' : '';
@@ -271,7 +296,12 @@ export function IslandNav() {
       <header
         className={styles.island}
         {...islandState}
-        style={{ '--panel-h': `${panelHeight}px` } as CSSProperties}
+        style={
+          {
+            '--panel-h': `${panelHeight}px`,
+            ...(barWidth ? { '--bar-w': `${barWidth}px` } : {}),
+          } as CSSProperties
+        }
         // Menus close when the pointer leaves the whole island (or on click,
         // Esc, or navigation), not when it crosses Docs/Blog/the logo: the
         // pill widens on open and the row slides under a still cursor.
@@ -279,7 +309,7 @@ export function IslandNav() {
         onMouseEnter={() => clearTimeout(closeTimer.current)}
         onBlur={onIslandBlur}
       >
-        <div className={styles.bar}>
+        <div ref={barRef} className={styles.bar}>
           <div className={styles.barLeft}>
             <Link href="/" className={styles.logo} aria-label="Agor home">
               {/* biome-ignore lint/performance/noImgElement: Static logo asset */}
@@ -342,6 +372,13 @@ export function IslandNav() {
               >
                 Talk to Us
               </button>
+              <a
+                href={AGOR_CLOUD_LOGIN_URL}
+                className={styles.ctaSecondary}
+                onClick={() => trackNav({ href: AGOR_CLOUD_LOGIN_URL }, 'navbar')}
+              >
+                Log in
+              </a>
               <CloudCtaLink placement="navbar" compact className={styles.cta} />
             </span>
             <button
@@ -504,6 +541,13 @@ export function IslandNav() {
               <DiscordIcon size={17} aria-hidden /> Discord
             </a>
           </div>
+          <a
+            href={AGOR_CLOUD_LOGIN_URL}
+            className={styles.sheetLogin}
+            onClick={() => trackNav({ href: AGOR_CLOUD_LOGIN_URL }, 'mobile-nav')}
+          >
+            Log in
+          </a>
           <CloudCtaLink placement="mobile-nav" className={styles.sheetCta} />
         </div>
       </div>

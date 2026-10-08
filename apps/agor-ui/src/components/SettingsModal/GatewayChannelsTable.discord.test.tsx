@@ -232,13 +232,13 @@ async function fillDiscordWizard({
   clickButton(/^Continue$/);
   await waitForStep('Access');
 
-  expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
+  expect(screen.getByLabelText('Allowed public channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
   if (directMessages) fireEvent.click(screen.getByLabelText('Direct messages'));
   if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
   if (channelHistory)
     fireEvent.click(screen.getByLabelText(/Let session agents read channel history/));
-  addTag('Allowed public text channel IDs', CHANNEL_ID);
+  addTag('Allowed public channel IDs', CHANNEL_ID);
   if (allowedUserId) addTag('Allowed user IDs', allowedUserId);
   if (allowedRoleId) addTag('Allowed role IDs', allowedRoleId);
   fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });

@@ -12,6 +12,7 @@ import {
 import { generateId } from '@agor/core/db';
 import {
   isTerminalTaskStatus,
+  missingOpenCodeApiKeyMessage,
   type OpenCodeCheckpointAdmission,
   type OpenCodeCheckpointManifest,
   type SessionID,
@@ -74,9 +75,7 @@ export async function prepareManagedOpenCodeTurn(input: {
 
   const key = admission.providerKey?.key;
   if (!key || admission.providerKey?.providerId !== input.provider.trim()) {
-    throw new MissingCredentialError(
-      `No usable API key for ${input.provider}. Save one in Settings > OpenCode; hosted workspaces offer API-key providers only.`
-    );
+    throw new MissingCredentialError(missingOpenCodeApiKeyMessage(input.provider));
   }
   const authContent = JSON.stringify({ [input.provider.trim()]: { type: 'api', key } });
 

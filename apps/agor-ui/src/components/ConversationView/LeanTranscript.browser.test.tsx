@@ -592,14 +592,14 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
   state = { ...state, tasks: [{ ...tasks[19], status: TaskStatus.STOPPED }], hasOlderTasks: false };
   const { container } = render(<ConversationView client={null} sessionId={sessionId} />);
   const root = container.querySelector('[data-task-block]')!;
-  const stopped = screen.getByText('Turn stopped');
+  const stopped = screen.getByText('The agent was stopped. Any edits are kept.');
   expect(stopped).toBeVisible();
   const outcome = root.querySelector<HTMLElement>('[data-turn-outcome]')!;
-  expect(outcome).toHaveClass('ant-alert-warning');
+  expect(outcome).toHaveAttribute('data-notice-type', 'neutral');
   expect(
     Math.abs(outcome.getBoundingClientRect().left - root.getBoundingClientRect().left)
   ).toBeLessThan(1);
-  expect(getComputedStyle(outcome).fontSize).toBe('14px');
+  expect(getComputedStyle(stopped).fontSize).toBe('12px');
   expect(root.querySelector(':scope > .anticon')).toBeNull();
   expect(stopped.getBoundingClientRect().top).toBeGreaterThan(
     screen.getByText(/Answer 19\./).getBoundingClientRect().bottom
@@ -611,13 +611,16 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
         {
           ...state.tasks[0],
           status: TaskStatus.FAILED,
+          executor_connected_at: state.tasks[0].created_at,
           error_message: 'Synthetic failure: ' + 'long-diagnostic-'.repeat(50),
         },
       ],
     })
   );
-  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
-  expect(screen.getByRole('alert')).toHaveClass('ant-alert-error');
+  expect(outcome).toHaveTextContent('The agent hit a problem.');
+  expect(outcome).toHaveAttribute('data-notice-type', 'error');
+  await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByText(/^Synthetic failure: long-diagnostic-/)).toBeVisible();
   expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
 });

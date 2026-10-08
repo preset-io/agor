@@ -16,6 +16,7 @@ describe('executionPolicyFor', () => {
     ['repo:list', 'connection'],
     ['kb:export', 'connection'],
     ['kb:import', 'connection'],
+    ['kb:validate', 'bootstrap'],
     ['session:list', 'connection'],
     ['user:list', 'connection'],
     ['version', 'connection'],

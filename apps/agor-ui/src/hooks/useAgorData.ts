@@ -531,16 +531,21 @@ export function useAgorData(
           agorStore.getState().setItemCounts({});
         }
 
+        // A reconnect can be the first successful bootstrap after an error.
+        // Finish its checklist too, otherwise App's first-load gate stays closed.
+        const updateInitialProgress =
+          !silent ||
+          INITIAL_LOAD_ITEMS.some(({ key }) => agorStore.getState().itemCounts[key] === undefined);
         // Marks a tracked item complete (and captures its count from the
-        // resolved list length) when its promise resolves. No-ops on
-        // silent (reconnect) refetches so initial-load progress isn't mutated.
+        // resolved list length) when its promise resolves. Routine reconnects
+        // leave the completed checklist alone.
         const track = <T extends ReadonlyArray<unknown>>(
           key: InitialLoadItemKey,
           p: Promise<T>
         ): Promise<T> => {
           const timedPromise = debugTimer?.track(key, p) ?? p;
           return timedPromise.then((r) => {
-            if (!silent && authorityIsCurrent())
+            if (updateInitialProgress && authorityIsCurrent())
               agorStore.getState().setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
@@ -1199,6 +1204,8 @@ export function useAgorData(
         } else {
           hydrateGlobalSets();
         }
+
+        agorStore.getState().setError(null);
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.

@@ -662,9 +662,12 @@ const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }
                 {result.channelAccess.map((c, i) => (
                   <span key={c.channelId}>
                     {i > 0 ? ', ' : ''}
-                    <code>{c.channelId}</code>:{' '}
+                    <code>{c.channelId}</code>
+                    {c.kind ? ` (${c.kind})` : ''}:{' '}
                     {c.permissions
-                      ? `view ${c.permissions.view ? 'ok' : 'no'}, send ${c.permissions.send ? 'ok' : 'no'}, history ${c.permissions.readHistory ? 'ok' : 'no'}, public threads ${c.permissions.createPublicThreads ? 'ok' : 'no'}, thread replies ${c.permissions.sendInThreads ? 'ok' : 'no'}`
+                      ? c.kind === 'forum'
+                        ? `view ${c.permissions.view ? 'ok' : 'no'}, history ${c.permissions.readHistory ? 'ok' : 'no'}, post replies ${c.permissions.sendInThreads ? 'ok' : 'no'}`
+                        : `view ${c.permissions.view ? 'ok' : 'no'}, send ${c.permissions.send ? 'ok' : 'no'}, history ${c.permissions.readHistory ? 'ok' : 'no'}, public threads ${c.permissions.createPublicThreads ? 'ok' : 'no'}, thread replies ${c.permissions.sendInThreads ? 'ok' : 'no'}`
                       : c.ok
                         ? 'ok'
                         : 'no access'}
@@ -1701,14 +1704,14 @@ const DiscordSetupFields: React.FC<{
           <CompactAlert
             type="info"
             heading="Grant minimum access"
-            description="Invite the bot to the guild and each allowed public text channel with View Channel, Read Message History, Send Messages, Create Public Threads, and Send Messages in Threads. The probe can inspect these bits, but cannot prove future event delivery, role matchability, or an end-to-end Agor session."
+            description="Invite the bot to the guild and each allowed channel with View Channel, Read Message History, and Send Messages in Threads, plus Send Messages and Create Public Threads in text channels. Forum channels need only the first three; the bot answers mentions inside their posts. The probe can inspect these bits, but cannot prove future event delivery, role matchability, or an end-to-end Agor session."
             style={{ marginBottom: 16 }}
           />
           <Form.Item
-            label="Allowed public text channel IDs"
+            label="Allowed public channel IDs"
             name="discord_allowed_channel_ids"
             rules={[{ validator: validateNonEmptySnowflakes }]}
-            tooltip="One or more public text channels. Inbound and outbound traffic is restricted to this list."
+            tooltip="One or more public text or forum channels. Inbound and outbound traffic is restricted to this list; proactive messages can target text channels only."
           >
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
           </Form.Item>
@@ -1790,8 +1793,9 @@ const DiscordSetupFields: React.FC<{
           </Form.Item>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
             Agents on this channel's branch can read recent messages from the allowed channels and
-            public threads under them through a tool that never exposes the bot token. Messages are
-            untrusted content and are kept only in the reading session's transcript.
+            public threads under them, and list the posts (titles, tags, authors) of allowed forums,
+            through tools that never expose the bot token. This content is untrusted and is kept
+            only in the reading session's transcript.
           </Typography.Text>
           <Typography.Text strong style={{ display: 'block', margin: '16px 0 8px' }}>
             Bounded Discord REST catch-up
@@ -1905,8 +1909,8 @@ const DiscordSetupFields: React.FC<{
             />
           </Form.Item>
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            Proactive sends target an allowlisted parent channel and create a durable seed. The
-            first human reply consumes that seed; it does not create a summon thread.
+            Proactive sends target an allowlisted text channel and create a durable seed. The first
+            human reply consumes that seed; it does not create a summon thread.
           </Typography.Text>
           <Form.Item
             label="Enable proactive outbound"
@@ -1919,7 +1923,7 @@ const DiscordSetupFields: React.FC<{
           <Form.Item
             label="Default outbound target"
             name="discord_default_outbound_target"
-            tooltip="Optional. Must be channel:<snowflake> and match one allowed channel. Discord thread targets are rejected."
+            tooltip="Optional. Must be channel:<snowflake> and match one allowed text channel. Forum channels and Discord thread targets are rejected."
           >
             <Input placeholder="channel:123456789012345678" />
           </Form.Item>

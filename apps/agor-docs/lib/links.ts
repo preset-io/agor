@@ -27,6 +27,9 @@ export const PRESET_URL = 'https://preset.io';
 // target for CloudInviteCTA; pass `placement` to tag it for attribution.
 export const AGOR_CLOUD_INVITE_URL = 'https://console.agor.cloud/request-invite';
 
+// Agor Cloud console sign-in (the nav's Login button).
+export const AGOR_CLOUD_LOGIN_URL = 'https://console.agor.cloud/';
+
 // Agor Cloud demo / contact link (HubSpot meetings scheduler).
 export const AGOR_CLOUD_DEMO_URL = 'https://meetings-na2.hubspot.com/zane-aitken/agor-demo';
 

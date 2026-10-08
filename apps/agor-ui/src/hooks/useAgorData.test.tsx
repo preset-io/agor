@@ -60,7 +60,7 @@ type Listener = (payload: unknown) => void;
  * so a method-specific key (`sessions:findAll`, `sessions:find`) takes
  * precedence over the bare name when present. `name:get` seeds `get`.
  */
-function makeMockClient(seed: Record<string, unknown[]> = {}) {
+function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>> = {}) {
   const serviceListeners = new Map<string, Map<string, Listener[]>>();
   const ioListeners = new Map<string, Listener[]>();
   // Side effects fired at call time of `service(name)[method]()` — used by the
@@ -295,6 +295,28 @@ it('does not rescan OAuth grants on an idle 60-second timer', async () => {
     unmount();
     vi.useRealTimers();
   }
+});
+
+describe('useAgorData — network recovery', () => {
+  it('lets the first successful reconnect finish a failed bootstrap and clear its error', async () => {
+    const { client, emitIo, onFetch } = makeMockClient();
+    onFetch('boards', 'findAll', (call) =>
+      call === 1 ? Promise.reject(new Error('Network unavailable')) : undefined
+    );
+    const { result, unmount } = renderHook(() => useAgorData(client));
+    try {
+      await waitFor(() => expect(result.current.error).toBe('Network unavailable'));
+      expect(result.current.initialLoadComplete).toBe(false);
+
+      act(() => emitIo('connect'));
+      await waitFor(() => {
+        expect(result.current.error).toBeNull();
+        expect(result.current.initialLoadComplete).toBe(true);
+      });
+    } finally {
+      unmount();
+    }
+  });
 });
 
 describe('useAgorData — socket-event bailouts', () => {

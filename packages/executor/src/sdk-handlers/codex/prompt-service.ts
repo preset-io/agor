@@ -44,12 +44,17 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer, Session } from '@agor/core/types';
 import {
+  CODEX_LIFECYCLE_MESSAGES,
+  type CodexLifecycleFailureCode,
+  type CodexSandboxMode,
+  type ContextUsageSnapshot,
   getDefaultPermissionMode,
   isGatewaySession,
   MCP_CLIENT_HINT_HEADER,
   MCP_CLIENT_HINTS,
+  type MCPServer,
+  type Session,
 } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
@@ -133,27 +138,6 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
   );
 }
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
-
-type CodexLifecycleFailureCode =
-  | 'authentication_required'
-  | 'completed_without_response'
-  | 'turn_failed'
-  | 'stream_start_failed'
-  | 'stream_interrupted'
-  | 'stream_ended_without_completion';
-
-const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
-  authentication_required:
-    'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
-  completed_without_response:
-    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
-  turn_failed:
-    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
-  stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
-  stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
-  stream_ended_without_completion:
-    'Codex ended the turn without a completion event. Retry the prompt; restart the session if it continues.',
-};
 
 function projectCodexCompletedEvent(
   event: TurnCompletedEvent

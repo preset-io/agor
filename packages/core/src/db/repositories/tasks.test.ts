@@ -498,6 +498,39 @@ describe('TaskRepository runtime reconciliation', () => {
     }
   );
 
+  dbTest('records who requested a stop and keeps it when a later cause loses', async ({ db }) => {
+    const tasks = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await tasks.create(
+      createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+    );
+    const claimed = await tasks.claimTermination({
+      taskId: task.task_id,
+      cause: 'user_stop',
+      errorMessage: 'Stopped by user.',
+      requestedBy: { requested_by_user_id: 'user-a', requested_via: 'ui' },
+    });
+    expect(claimed.task.termination_request).toMatchObject({
+      cause: 'user_stop',
+      requested_by_user_id: 'user-a',
+      requested_via: 'ui',
+    });
+    const later = await tasks.claimTermination({
+      taskId: task.task_id,
+      cause: 'heartbeat_lost',
+      errorMessage: 'heartbeat stale',
+      requestedBy: { requested_via: 'agor' },
+    });
+    expect(later.task.termination_request).toMatchObject({
+      cause: 'user_stop',
+      requested_by_user_id: 'user-a',
+      requested_via: 'ui',
+    });
+    expect((await tasks.findById(task.task_id))?.termination_request).toMatchObject({
+      requested_by_user_id: 'user-a',
+    });
+  });
+
   dbTest(
     'reclaims an expired coordinator and does not rediscover guarded unverified work',
     async ({ db }) => {

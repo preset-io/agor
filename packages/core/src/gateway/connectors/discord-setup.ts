@@ -40,7 +40,20 @@ export function evaluateDiscordConnectionVerification(
   }
 
   const candidate = result as Record<string, unknown>;
-  if (candidate.ok !== true) return failure('Discord verification did not succeed');
+  if (candidate.ok !== true) {
+    const reasons = Array.isArray(candidate.failures)
+      ? candidate.failures.flatMap((entry) =>
+          entry && typeof entry === 'object' && typeof entry.reason === 'string'
+            ? [entry.reason]
+            : []
+        )
+      : [];
+    return failure(
+      reasons.length > 0
+        ? `Discord verification did not succeed: ${reasons.join('; ')}`
+        : 'Discord verification did not succeed'
+    );
+  }
   if (!Array.isArray(candidate.failures)) {
     return failure('Discord verification returned malformed failures');
   }

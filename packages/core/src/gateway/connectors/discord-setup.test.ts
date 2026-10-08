@@ -153,6 +153,21 @@ describe('Discord connection verification', () => {
     expect(evaluateDiscordConnectionVerification(result, applicationId).verified).toBe(false);
   });
 
+  it('names the probe failures when verification did not succeed', () => {
+    const result = evaluateDiscordConnectionVerification(
+      {
+        ...verified,
+        ok: false,
+        failures: [{ capability: 'outbound_target', reason: 'The default target is a forum.' }],
+      },
+      applicationId
+    );
+    expect(result).toMatchObject({
+      verified: false,
+      failure: { reason: 'Discord verification did not succeed: The default target is a forum.' },
+    });
+  });
+
   it('accepts only the exact verified application identity', () => {
     expect(evaluateDiscordConnectionVerification(verified, applicationId)).toEqual({
       verified: true,

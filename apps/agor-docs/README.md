@@ -77,6 +77,18 @@ added, it must allow the GA loader from `https://www.googletagmanager.com` and c
 to `https://www.google-analytics.com` (plus the Tag Manager, Google Ads, LinkedIn, Clarity, and
 HubSpot origins).
 
+### Google Ads conversions for console sign-ups
+
+Most Cloud CTAs send visitors to `console.agor.cloud`, a different domain, so neither a
+`gclid`/`gbraid`/`wbraid` URL parameter nor GTM's HubSpot-form-submit trigger (which fires
+the conversion for the few sign-ups still completed through this site's own HubSpot form)
+ever reaches it. `CloudCtaLink` and `CloudInviteCTA` forward any Google Ads click id present
+on the page a CTA is clicked from (`lib/cloudCta.ts#adClickIds`,
+`lib/cloudCtaAttribution.ts#onCloudCtaClick`) as a query parameter on the outgoing console
+link, alongside the existing HubSpot visitor token. The console records it first-touch in
+its `agor_attribution` cookie and reports an Enhanced Conversion (hashed email + click id)
+once the account reaches `/welcome` — see `agor-cloud`'s `apps/console/src/analytics.ts`.
+
 ## Brand assets
 
 `public/logo-mark.svg` is the transparent Agor mark for normal web and
@@ -187,7 +199,14 @@ pnpm docs:build
 ```
 
 The build compiles MDX, exports the site to `apps/agor-docs/out/`, and generates
-sitemap and Pagefind search assets. It does not regenerate API or CLI documentation.
+sitemap and Pagefind search assets.
+
+Builds use Turbopack (`next build --turbopack`): about 40s to compile from cold,
+versus about 110s cold (55s warm) with webpack, with identical output. If a build
+ever misbehaves under Turbopack (it's still beta in Next 15), `pnpm --filter
+@agor/docs build:webpack` runs the same build on webpack. Locally, `pnpm serve` builds
+and then serves `out/`; `pnpm preview` serves the last build without rebuilding,
+and `pnpm dev` is the fast loop while editing. It does not regenerate API or CLI documentation.
 The legacy root `docs:generate` alias has no matching docs-package script.
 
 For an analytics export check, set a test `NEXT_PUBLIC_GA_ID` during both the build

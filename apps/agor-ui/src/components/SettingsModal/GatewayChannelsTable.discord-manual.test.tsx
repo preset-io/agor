@@ -48,6 +48,7 @@ vi.mock('../AgenticToolConfigurationPicker', async () => {
 
 const CHANNEL_ID = '323456789012345678';
 const USER_ID = '423456789012345678';
+const FORUM_ID = '523456789012345678';
 
 function makeDiscordChannel(): GatewayChannel {
   return {
@@ -83,13 +84,14 @@ function makeDiscordChannel(): GatewayChannel {
 }
 
 describe('GatewayChannelsTable Discord manual connection test', () => {
-  it('invokes the probe and renders channel permissions', async () => {
+  it('invokes the probe and renders text and forum channel permissions', async () => {
     const channelPatch = vi.fn().mockResolvedValue({ id: 'channel-discord' });
     const testCreate = vi.fn().mockResolvedValue({
       ok: true,
       channelAccess: [
         {
           channelId: CHANNEL_ID,
+          kind: 'text',
           ok: true,
           permissions: {
             view: true,
@@ -97,6 +99,18 @@ describe('GatewayChannelsTable Discord manual connection test', () => {
             readHistory: true,
             createPublicThreads: true,
             sendInThreads: false,
+          },
+        },
+        {
+          channelId: FORUM_ID,
+          kind: 'forum',
+          ok: true,
+          permissions: {
+            view: true,
+            send: false,
+            readHistory: true,
+            createPublicThreads: false,
+            sendInThreads: true,
           },
         },
       ],
@@ -139,9 +153,15 @@ describe('GatewayChannelsTable Discord manual connection test', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/view ok, send ok, history ok, public threads ok, thread replies no/)
+        screen.getByText(
+          /\(text\): view ok, send ok, history ok, public threads ok, thread replies no/
+        )
       ).toBeInTheDocument();
     });
+    // A forum shows only the permissions it needs.
+    expect(
+      screen.getByText(/\(forum\): view ok, history ok, post replies ok$/)
+    ).toBeInTheDocument();
     expect(channelPatch).not.toHaveBeenCalled();
     expect(testCreate).toHaveBeenCalledTimes(1);
     expect(testCreate).toHaveBeenCalledWith({

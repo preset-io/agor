@@ -21,9 +21,37 @@ import { LANDING_PAGES } from './pages';
  * Community Edition smaller below), and the landing pages as a quiet row along
  * the bottom edge, so visitors who never scroll still see a way in.
  */
+/** `?heroBlur=true` soft-focuses the hero video for this browser; `?heroBlur=false` clears it. */
+const HERO_BLUR_KEY = 'agor-hero-blur';
+
+function useHeroBlur(): boolean {
+  const [blur, setBlur] = useState(false);
+  useEffect(() => {
+    const param = new URLSearchParams(window.location.search).get('heroBlur');
+    let on = param === 'true';
+    try {
+      if (param === 'true') localStorage.setItem(HERO_BLUR_KEY, '1');
+      else if (param === 'false') localStorage.removeItem(HERO_BLUR_KEY);
+      else on = localStorage.getItem(HERO_BLUR_KEY) === '1';
+    } catch {
+      // Storage blocked: only the query param counts.
+    }
+    setBlur(on);
+  }, []);
+  return blur;
+}
+
 export function HomeHero() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [paused, setPaused] = useState(false);
+  const blur = useHeroBlur();
+  // The tilt and its depth blur animate a registered CSS property
+  // (@property --hero-tilt). Browsers without it (Safari < 16.4, Firefox <
+  // 128) would snap between angles, so they get the video held still instead.
+  const [still, setStill] = useState(false);
+  useEffect(() => {
+    if (!('registerProperty' in CSS)) setStill(true);
+  }, []);
 
   // Reduced motion or data saver: stay on the poster frame.
   useEffect(() => {
@@ -54,7 +82,16 @@ export function HomeHero() {
     <div className={styles.homeHero} data-troupe-section="hero">
       {/* Decorative loop; the poster is the layer's background image so it shows
           while loading, when paused, and under reduced motion. */}
-      <div className={styles.homeHeroVideo} aria-hidden="true">
+      <div
+        className={[
+          styles.homeHeroVideo,
+          blur && styles.homeHeroVideoBlur,
+          still && styles.homeHeroVideoStill,
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        aria-hidden="true"
+      >
         <video
           ref={videoRef}
           muted
@@ -67,6 +104,7 @@ export function HomeHero() {
           <source src="/videos/agor-hero-720.mp4" type="video/mp4" media="(max-width: 1280px)" />
           <source src="/videos/agor-hero.mp4" type="video/mp4" />
         </video>
+        <div className={styles.homeHeroDepth} />
       </div>
       <div className={styles.homeHeroScrim} aria-hidden="true" />
 

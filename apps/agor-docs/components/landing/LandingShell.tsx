@@ -5,6 +5,7 @@ import { type ReactNode, useEffect, useRef } from 'react';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL, PRESET_URL, presetUtm } from '../../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../../lib/siteMetadata';
 import { CloudCtaLink } from '../CloudCtaLink';
+import { FinePrint } from '../FinePrint';
 import { FooterLegal } from '../FooterLegal';
 import styles from '../LandingPage.module.css';
 import { SocialLinks } from '../SocialLinks';
@@ -92,7 +93,7 @@ export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
             <CloudCtaLink placement={`${ctaPrefix}-final-cta`} className={styles.primaryButton} />
             <DemoButton className={styles.secondaryButton}>Book a demo</DemoButton>
             <Link href="/guide/getting-started" className={styles.secondaryButton}>
-              Get started
+              Install Community Edition
             </Link>
           </div>
         </div>
@@ -168,8 +169,7 @@ export function LandingShell({ ctaPrefix, children }: LandingShellProps) {
           <FooterLegal className={styles.footerLegal} />
         </div>
         <p className={styles.footerTrademarks}>
-          Agor is not affiliated with or endorsed by the companies mentioned on this site. All
-          product names, logos, and brands are property of their respective owners.
+          <FinePrint />
         </p>
       </footer>
     </main>
