@@ -76,6 +76,7 @@ entries:
     auth_type: oauth
 
   - name: com.gitlab/mcp
+    title: GitLab
     category: dev-tools
     capabilities: [code-repos, issues, pull-requests, ci-cd]
     benefit: Read GitLab projects, drive merge requests, and inspect failing pipelines from the session.
@@ -178,6 +179,7 @@ entries:
     auth_type: oauth
 
   - name: co.huggingface/hf-mcp-server
+    title: Hugging Face
     category: data-storage
     capabilities: [datasets, web-search]
     benefit: Search models and datasets and read their cards without leaving the session.
@@ -227,6 +229,7 @@ entries:
     auth_type: oauth
 
   - name: com.monday/monday.com
+    title: monday.com
     category: productivity
     capabilities: [projects, tasks]
     benefit: Read and update monday.com boards so project state reflects the work that actually happened.
@@ -265,6 +268,7 @@ entries:
     auth_type: oauth
 
   - name: com.paypal.mcp/mcp
+    title: PayPal
     category: productivity
     capabilities: [payments]
     benefit: Look up transactions and manage invoices from the session instead of the merchant dashboard.
@@ -342,6 +346,7 @@ entries:
     auth_type: oauth
 
   - name: io.github.PostHog/mcp
+    title: PostHog
     category: observability
     capabilities: [analytics, feature-flags]
     benefit: Answer product-analytics questions and check feature-flag state without building a dashboard first.
@@ -533,6 +538,7 @@ unpublished:
     auth_type: none
 
   - name: com.deepwiki/mcp
+    title: DeepWiki
     category: dev-tools
     capabilities: [docs, code-search, code-repos]
     benefit: Ask questions about any public GitHub repository and get answers grounded in its actual source.
@@ -669,6 +675,7 @@ unpublished:
     auth_type: oauth
 
   - name: com.clickup/mcp
+    title: ClickUp
     category: productivity
     capabilities: [tasks, docs, notes]
     benefit: Create and update ClickUp tasks from the session rather than transcribing them afterwards.
