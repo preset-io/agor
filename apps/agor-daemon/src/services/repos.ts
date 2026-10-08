@@ -696,8 +696,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       zoneId?: string;
       environment_variant?: string;
       /**
-       * Branch storage model — see context/explorations/clone-redesign.md.
-       * The deployment configuration selects the default. 'worktree' uses
+       * Branch storage model. The deployment configuration selects the default. 'worktree' uses
        * native `git worktree add`; 'clone' uses a self-standing `git clone`.
        */
       storage_mode?: 'worktree' | 'clone';

@@ -9,7 +9,7 @@
  * The split exists because the card's *meaning* is the part worth pinning in
  * tests: the recovery lane's presentation functions are the only part of that
  * lane a test can assert without a connector, and this lane has more states
- * than that one. See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
+ * than that one.
  */
 
 import type { SlackAgorMessageMetadataEventType } from '@agor/core/gateway';

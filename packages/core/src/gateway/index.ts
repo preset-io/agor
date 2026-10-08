@@ -23,6 +23,7 @@ export {
   chunkDiscordMessage,
   DiscordConnector,
   DiscordDirectMessageError,
+  DiscordThreadUnavailableError,
   extractDiscordInboundFiles,
   isAllowedDiscordAttachmentUrl,
   stripDiscordBotMention,
@@ -34,6 +35,8 @@ export type {
 export {
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
+  DISCORD_FORUM_POSTS_DEFAULT_LIMIT,
+  DISCORD_FORUM_POSTS_MAX_LIMIT,
   DiscordHistoryError,
   fetchDiscordProviderHistory,
 } from './connectors/discord-history';
@@ -128,7 +131,11 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
-export { gatewayFailureCode, sanitizeGatewayProviderError } from './provider-error';
+export {
+  gatewayFailureCode,
+  isPermanentProviderRefusal,
+  sanitizeGatewayProviderError,
+} from './provider-error';
 export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,

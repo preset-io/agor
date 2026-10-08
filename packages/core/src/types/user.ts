@@ -640,8 +640,6 @@ export function resolveUserPrimaryAgenticTool(user: User | null | undefined): Ag
  * v0.5 only validates 'global' and 'session'. Other values (repo, mcp_server,
  * artifact_feature, executor) are *reserved* — present in the type for forward
  * compatibility but not yet selectable in the UI or resolved by the daemon.
- *
- * See `context/explorations/env-var-access.md`.
  */
 export type EnvVarScope =
   | 'global'
@@ -770,7 +768,7 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
  * Session-scope env var selection (many-to-many row).
  *
  * v0.5: env vars are still keyed by name inside `users.data.env_vars` (no `env_vars.id`
- * yet — see `context/explorations/env-var-access.md`), so selections reference vars by
+ * yet), so selections reference vars by
  * `env_var_name` scoped implicitly via `session.created_by`. When v1 promotes env vars
  * to their own table this becomes `env_var_id`.
  */

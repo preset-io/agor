@@ -61,7 +61,8 @@ overrides:
   qs: '>=6.14.2 <7'
   # Match the reviewed direct pin; retain the workspace-wide security override.
   rollup: 4.63.4
-  shell-quote: '>=1.8.5 <2'
+  # GHSA-pqg4-j6r4-53mv: reject line terminators after comment tokens.
+  shell-quote: '>=1.11.0 <2'
   # Next 15.5.24 supports this fixed AVIF decoder release.
   next>sharp: '>=0.35.4 <0.36'
   shiki: 3.23.0
@@ -108,6 +109,9 @@ allowBuilds:
   # Agor's exporter deliberately uses UDP to the local Agent.
   'unix-dgram@2.0.7': false
 patchedDependencies:
+  # Vitest 5.0.1 leaves CDP event listeners attached after tester RPC close.
+  # Remove once upstream disposes them; regression runs before test:browser.
+  '@vitest/browser@5.0.1': patches/@vitest__browser@5.0.1.patch
   # AntD Form's delayed-state hook must cancel timers/frames on unmount.
   # Remove once upstream useDelayState includes effect cleanup; regression:
   # apps/agor-ui/src/test/antdDelayState.test.tsx.

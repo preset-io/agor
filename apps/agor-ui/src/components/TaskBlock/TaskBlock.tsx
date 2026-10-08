@@ -1,13 +1,11 @@
 /** TaskBlock renders one continuous turn, with lazy supporting activity and visible metadata. */
 
-import {
-  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
-  isTaskExecuting,
-  isTerminalTaskStatus,
-} from '@agor/core/types';
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { failureMessageBase, isTaskExecuting, isTerminalTaskStatus } from '@agor/core/types';
 import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   hasMinimumRole,
+  isAgenticToolName,
   type MCPRuntimeRecovery,
   type Message,
   MessageRole,
@@ -32,6 +30,7 @@ import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
 import { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from '../MessageBlock';
+import { historyTextKey } from '../MessageBlock/HistoryMarkdown';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
@@ -47,7 +46,9 @@ import { Tag } from '../Tag';
 import { ToolDisclosureHeader } from '../ToolBlock/ToolBlock';
 import { ToolIcon } from '../ToolIcon';
 import { ContextUsageRule } from './ContextUsageRule';
+import { describeTurnOutcome, type TurnOutcomeContext } from './describeTurnOutcome';
 import { TurnOutcome } from './TurnOutcome';
+import { turnOutcomeDetails } from './turnOutcomeDetails';
 
 const { Paragraph } = Typography;
 
@@ -114,6 +115,8 @@ interface TaskBlockProps {
   client?: AgorClient | null;
   /** Whether this is the most recent task in the session */
   isLatestTask?: boolean;
+  /** A prompt sent now would run, not wait in the queue (`canSessionStartTurn`). */
+  canStartTurn?: boolean;
   /** Phone-sized transcript presentation without desktop-only indents or gradients. */
   compact?: boolean;
   latestActivity?: ToolExecutionState;
@@ -131,108 +134,86 @@ function isSdkStatusMessage(message: Message): boolean {
   );
 }
 
-/** Durable outcome projection; re-renders are inherently idempotent. */
-export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false): boolean {
+/** The turn outcome banner already carries this text verbatim in its details. */
+export function isOutcomeEcho(message: Message, errorMessage?: string): boolean {
   return (
-    isLatestTask &&
-    task.status === TaskStatus.FAILED &&
-    task.sdk_failure?.termination === 'verified' &&
-    task.termination_request?.cause !== 'user_stop' &&
-    task.termination_request?.cause !== 'authorization_revoked'
+    !!errorMessage?.trim() &&
+    message.role === MessageRole.SYSTEM &&
+    !message.metadata?.error_kind &&
+    typeof message.content === 'string' &&
+    (message.content.trim() === errorMessage.trim() ||
+      message.content.trim() === failureMessageBase(errorMessage))
   );
 }
 
-/** Authorization withdrawal is already durable on the Task; no transcript row is needed. */
-export function isAuthorizationRevokedFailure(task: Task): boolean {
+/** The provider's usage-limit rejection that ended this turn: no tool use came after it. */
+export function rejectedRateLimit(messages: Message[]): { resetsAt?: number } | undefined {
+  for (const message of [...messages].sort((a, b) => b.index - a.index)) {
+    const block = Array.isArray(message.content)
+      ? message.content.find(
+          (content) => content.type === 'rate_limit' && content.status === 'rejected'
+        )
+      : undefined;
+    if (block) return { resetsAt: typeof block.resetsAt === 'number' ? block.resetsAt : undefined };
+    // Only tool activity proves the run went on; Claude ends a limited run with its own text notice.
+    if (messagesHaveTools([message])) return undefined;
+  }
+  return undefined;
+}
+
+/** A new turn may follow: the latest settled turn, not ended by a user stop or an access change. */
+export function canOfferRecoveryTurn(task: Task, isLatestTask = false): boolean {
+  const termination = task.sdk_failure?.termination;
+  const cause = task.termination_request?.cause;
   return (
-    task.status === TaskStatus.FAILED && task.termination_request?.cause === 'authorization_revoked'
+    isLatestTask &&
+    (task.status === TaskStatus.FAILED || task.status === TaskStatus.TIMED_OUT) &&
+    termination !== 'requested' &&
+    termination !== 'unverified' &&
+    cause !== 'user_stop' &&
+    cause !== 'authorization_revoked'
   );
+}
+
+function isRestartNotice(message: Message): boolean {
+  return message.type === 'daemon_restart' || message.type === 'daemon_crash';
+}
+
+function isRejectedRateLimit(message: Message): boolean {
+  return (
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === 'rate_limit' && block.status === 'rejected')
+  );
+}
+
+function messagesHaveTools(messages: Message[]): boolean {
+  return messages.some(
+    (message) =>
+      message.tool_uses?.length ||
+      (Array.isArray(message.content) &&
+        message.content.some((block) => block.type === 'tool_use' || block.type === 'tool_result'))
+  );
+}
+
+/** Who asked for a stop, named only when a person did it themselves (app, CLI or API), not their agent. */
+function stopRequester(
+  task: Task,
+  currentUserId: string | undefined,
+  userById: Map<string, User>
+): TurnOutcomeContext['stoppedBy'] {
+  const request = task.termination_request;
+  const byPerson = request?.requested_via === 'ui' || request?.requested_via === 'api';
+  if (!byPerson || !request?.requested_by_user_id) return undefined;
+  if (request.requested_by_user_id === currentUserId) return 'you';
+  const name = userById.get(request.requested_by_user_id)?.name?.trim().split(/\s+/)[0];
+  return name ? { name } : undefined;
 }
 
 /** Presentation policy: keep STOPPING output visible until a durable terminal projection arrives. */
 export function shouldRenderLiveTaskProgress(task: Task): boolean {
-  return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
-}
-
-/**
- * Cause-specific explanation for a verified interruption. `heartbeat_lost` also
- * covers an executor process that exited mid-turn (crash or daemon restart);
- * the Task's `error_message`, rendered beneath this copy, carries the detail.
- */
-export function runtimeInterruptionDescription(task: Task): string {
-  const cause = task.termination_request?.cause ?? task.sdk_failure?.reason;
-  const reason =
-    cause === 'startup_timeout'
-      ? 'The executor did not start in time.'
-      : cause === 'heartbeat_lost'
-        ? 'The executor stopped unexpectedly or stopped responding. This can happen when Agor restarts during a task.'
-        : cause === 'sdk_health_failure'
-          ? 'The agent stopped making progress, so Agor ended the task.'
-          : 'Agor interrupted this task.';
-  return `${reason} Agor verified containment before making this session promptable.`;
-}
-
-function RuntimeInterruptionNotice({
-  task,
-  sessionId,
-  client,
-}: {
-  task: Task;
-  sessionId?: SessionID | null;
-  client?: AgorClient | null;
-}) {
-  const [submitting, setSubmitting] = useState(false);
-  const [resumed, setResumed] = useState(false);
-  const handleResume = async () => {
-    if (!client || !sessionId) return;
-    setSubmitting(true);
-    try {
-      // This deliberately starts a new durable Task. It never attempts to
-      // revive the failed Task or reuse its executor ownership.
-      await client.sessions.prompt(
-        sessionId,
-        'Continue from the interrupted task. Inspect the previous task state first, then continue safely.'
-      );
-      setResumed(true);
-    } catch (error) {
-      console.error('Failed to resume after runtime interruption:', error);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
   return (
-    <Alert
-      type="warning"
-      showIcon
-      style={{ marginBottom: 12 }}
-      message="Task interrupted"
-      description={
-        <>
-          {runtimeInterruptionDescription(task)}
-          {task.error_message && <div>{task.error_message}</div>}
-        </>
-      }
-      action={
-        client && sessionId && !resumed ? (
-          <Button size="small" type="primary" loading={submitting} onClick={handleResume}>
-            Resume in new task
-          </Button>
-        ) : undefined
-      }
-    />
-  );
-}
-
-function AuthorizationRevokedNotice({ task }: { task: Task }) {
-  return (
-    <Alert
-      type="warning"
-      showIcon
-      style={{ marginBottom: 12 }}
-      title="Task access revoked"
-      description={task.error_message || AUTHORIZATION_REVOKED_TERMINATION_MESSAGE}
-    />
+    task.status === TaskStatus.RUNNING ||
+    (task.status === TaskStatus.STOPPING && task.sdk_failure?.termination !== 'unverified')
   );
 }
 
@@ -763,6 +744,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     teammateEmoji,
     onOpenAgenticToolSettings,
     isLatestTask = false,
+    canStartTurn = false,
     client = null,
     compact = false,
     latestActivity,
@@ -792,6 +774,26 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       );
     }, [taskMessages, streamingForTask, streamingMessages]);
 
+    const hasTools = messagesHaveTools(messages);
+    const agentName = agentic_tool
+      ? (AGENTIC_TOOL_DISPLAY_NAMES as Record<string, string>)[agentic_tool]
+      : undefined;
+    const outcome = describeTurnOutcome(task, {
+      sawTools: hasTools,
+      agentName,
+      missingCredential: messages.some(
+        (message) =>
+          message.role === MessageRole.SYSTEM &&
+          message.metadata?.error_kind === 'missing_credential' &&
+          isAgenticToolName(message.metadata?.tool)
+      ),
+      rateLimit: rejectedRateLimit(messages),
+      restarted: messages.some(isRestartNotice),
+      stoppedBy: stopRequester(task, currentUserId, userById),
+      currentUserId,
+    });
+    const outcomeCause = outcome?.cause;
+
     // Group messages into blocks, then reconcile against the previous render:
     // a streaming chunk rebuilds `messages` (new array identity) every frame,
     // but only the streamed message's block actually changed. Reusing the
@@ -802,7 +804,14 @@ export const TaskBlock = React.memo<TaskBlockProps>(
     const prevBlocksRef = useRef<Block[]>([]);
     const blocks = useMemo(() => {
       const next = groupMessagesIntoBlocks(
-        messages.filter((message) => !Array.isArray(message.content) || message.content.length > 0)
+        // The outcome banner is the one surface for echoes, restart notices and the usage limit.
+        messages.filter(
+          (message) =>
+            (!Array.isArray(message.content) || message.content.length > 0) &&
+            !isOutcomeEcho(message, task.error_message) &&
+            !(outcomeCause && isRestartNotice(message)) &&
+            !(outcomeCause === 'usage_limit' && isRejectedRateLimit(message))
+        )
       );
       const prevByKey = new Map(prevBlocksRef.current.map((b) => [getBlockKey(b), b]));
       const reconciled = next.map((block) => {
@@ -811,7 +820,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       });
       prevBlocksRef.current = reconciled;
       return reconciled;
-    }, [messages]);
+    }, [messages, task.error_message, outcomeCause]);
 
     // Index of the last agent-chain block — used for isLatest so that a streaming
     // text bubble appearing after the chain doesn't prematurely collapse it
@@ -1019,7 +1028,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           : Array.isArray(message.content) &&
             message.content.some((block) => block.type === 'text' || block.type === 'image'))
     )?.message_id;
-    const promptKey = `task:${task.task_id}:prompt`;
+    const promptKey = historyTextKey(task.task_id, 'prompt');
     // Presentation only, derived from an already-admitted Task. Never insert this
     // into reactive messages or persist it. Reuse MessageBlock so Markdown, copy,
     // avatars and attachments have the same layout before/after message delivery.
@@ -1041,14 +1050,6 @@ export const TaskBlock = React.memo<TaskBlockProps>(
       !firstPromptId && task.full_prompt
         ? [{ type: 'message', message: fallbackPrompt }, ...blocks]
         : blocks;
-    const hasTools = messages.some(
-      (message) =>
-        message.tool_uses?.length ||
-        (Array.isArray(message.content) &&
-          message.content.some(
-            (block) => block.type === 'tool_use' || block.type === 'tool_result'
-          ))
-    );
     const hasDeferredReasoning = messages.some((message) => message.has_deferred_reasoning);
     const hasReasoning = messages.some(
       (message) =>
@@ -1161,7 +1162,12 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                   key={block.message.message_id + keySuffix}
                   data-conversation-block={getBlockMarker(block)}
                 >
-                  <RateLimitBlock message={block.message} agentic_tool={agentic_tool} />
+                  <RateLimitBlock
+                    message={block.message}
+                    agentic_tool={agentic_tool}
+                    settled={isTerminalTaskStatus(task.status)}
+                    resetShownInOutcome={outcome?.showsResetTime}
+                  />
                 </div>
               );
             }
@@ -1284,11 +1290,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-        {/* Show typing indicator whenever the executor may still be live.
+        {/* Show typing only during active work, not recovery or a failed cleanup.
                       Marked as a conversation block so its unmount at stream
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
-        {runtimeLive && (
+        {task.status === TaskStatus.RUNNING && (
           <div data-conversation-block style={{ margin: `${token.marginSM}px 0` }}>
             <Bubble
               placement="start"
@@ -1377,13 +1383,20 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         >
           {taskContent}
         </ContextUsageRule>
-        {isAuthorizationRevokedFailure(task) ? (
-          <AuthorizationRevokedNotice task={task} />
-        ) : isVerifiedRuntimeInterruption(task, isLatestTask) ? (
-          <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
-        ) : (
-          <TurnOutcome task={task} />
-        )}
+        <TurnOutcome
+          task={task}
+          outcome={outcome}
+          details={turnOutcomeDetails(task, { agenticTool: agentic_tool, userById })}
+          isLatestTask={isLatestTask}
+          canResume={canStartTurn && canOfferRecoveryTurn(task, isLatestTask)}
+          onOpenSettings={
+            onOpenAgenticToolSettings && isAgenticToolName(agentic_tool)
+              ? () => onOpenAgenticToolSettings(agentic_tool)
+              : undefined
+          }
+          sessionId={sessionId}
+          client={client}
+        />
         {blocks.map((block) =>
           block.type === 'message' && block.message.type === 'widget_request' ? (
             <div key={block.message.message_id} data-conversation-block={getBlockMarker(block)}>

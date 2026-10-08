@@ -3,7 +3,7 @@
  * Reports whether the policy is enabled and whether the host has the runtime
  * dependencies the sandbox needs on this platform. Pure except for a PATH scan.
  *
- * See `context/explorations/executor-sandboxing.md`.
+ * See `context/guides/rbac-and-unix-isolation.md`.
  */
 
 import { accessSync, constants } from 'node:fs';

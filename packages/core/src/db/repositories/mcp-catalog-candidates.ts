@@ -140,6 +140,7 @@ export class MCPCatalogCandidateRepository {
           ${jsonExtract(this.db, mcpServers.data, 'auth.oauth_access_token')} is not null or
           ${jsonExtract(this.db, mcpServers.data, 'auth.oauth_refresh_token')} is not null
         else false end`;
+      const oauthMode = sql`coalesce(${jsonExtract(this.db, mcpServers.data, 'auth.oauth_mode')}, 'per_user')`;
       const rows = (await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
         name: mcpServers.name,
@@ -192,7 +193,13 @@ export class MCPCatalogCandidateRepository {
           userMcpOauthTokens,
           and(
             eq(userMcpOauthTokens.mcp_server_id, mcpServers.mcp_server_id),
-            eq(userMcpOauthTokens.user_id, userId)
+            // The grant subject follows the server's saved mode, as execution
+            // does: the shared grant for a Shared server, otherwise only the
+            // caller's own grant (never another user's per-user grant).
+            or(
+              and(sql`${oauthMode} = 'shared'`, isNull(userMcpOauthTokens.user_id)),
+              and(sql`${oauthMode} <> 'shared'`, eq(userMcpOauthTokens.user_id, userId))
+            )
           )
         )
         .where(or(eq(mcpServers.owner_user_id, userId), isNull(mcpServers.owner_user_id)))

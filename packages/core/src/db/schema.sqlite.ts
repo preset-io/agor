@@ -815,7 +815,7 @@ export const branches = sqliteTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see context/explorations/clone-redesign.md.
+    // Branch storage model.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //
@@ -1128,7 +1128,6 @@ export const users = sqliteTable(
         // layer (no SQL CHECK constraint) so adding future scope values ('repo',
         // 'mcp_server', ...) doesn't require a SQLite table rebuild.
         //
-        // See `context/explorations/env-var-access.md`.
         env_vars?: Record<
           string,
           | string // legacy
@@ -2632,8 +2631,6 @@ export const gatewayOutboundMessages = sqliteTable(
  *
  * v0.5: env vars are keyed by name inside `users.data.env_vars` (no env_vars.id yet).
  * Rows scope implicitly to `session.created_by`.
- *
- * See `context/explorations/env-var-access.md`.
  */
 export const sessionEnvSelections = sqliteTable(
   'session_env_selections',

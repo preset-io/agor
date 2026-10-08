@@ -143,6 +143,8 @@ export const MCP_OAUTH_FAILURE_REASONS = [
    * reach Agor. See {@link MCP_AUTH_RECOVERY_CATEGORIES}.
    */
   'redirect_uri_mismatch',
+  /** A customer-owned app's hosted callback needs the user's bound Agor Cloud account. */
+  'cloud_identity_required',
 ] as const;
 export type MCPOAuthFailureReason = (typeof MCP_OAUTH_FAILURE_REASONS)[number];
 
@@ -247,7 +249,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   /**
    * Envelope contract version.
    *
-   * New envelopes are always sealed at the current version. An older version
+   * New envelopes are sealed at the lowest version that can carry their
+   * bindings (v4 only for relay flows, otherwise v3). An older version
    * is accepted on read ONLY while every field it lacks is optional-and-absent
    * by construction, which is what lets a rolling upgrade finish the attempts
    * an older daemon already started. The reverse never holds: a daemon that
@@ -257,8 +260,10 @@ export interface MCPOAuthPendingFlowSealedMaterial {
    *
    * v2 → v3 added {@link slackConnect}. A v2 envelope therefore carries no
    * Slack connect binding, so reading one under v3 rules loses nothing.
+   * v4 adds the stable callback relay binding; v2/v3 cannot carry it.
    */
-  version: 2 | 3;
+  version: 2 | 3 | 4;
+  relay?: import('./mcp-oauth-relay').MCPOAuthRelayBinding;
   attemptId: MCPOAuthAttemptID;
   tenantId: string;
   userId: UserID;
@@ -1073,7 +1078,6 @@ export interface MCPSlackOAuthRecoveryContext {
 // machine — which is why this is a separate token type, audience, and durable
 // record rather than a reuse of the recovery one.
 //
-// See docs/internal/slack-mcp-oauth-connect-2026-09-16.md §7.
 // ---------------------------------------------------------------------------
 
 /**

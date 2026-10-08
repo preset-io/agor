@@ -1,7 +1,6 @@
 /**
  * Tests for the daemon-resolved config slice that ships in executor payloads.
  *
- * Pairs with H1 in context/explorations/daemon-fs-decoupling.md §1.5.
  * The contract: the daemon resolves only a small subset of AgorConfig and
  * embeds it in the payload; the executor never reads ~/.agor/config.yaml
  * itself. These tests pin the slice shape and the fields it covers.

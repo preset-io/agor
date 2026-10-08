@@ -1,6 +1,11 @@
 import type { SessionID, TaskID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  isExecutorCleanupUnverified,
+  markCoordinatorTerminationAbort,
+} from '../../termination-state.js';
+import { captureGitStateAtTaskEnd, settleTaskFailure } from './base-executor.js';
+import {
   buildCursorAssistantContent,
   executeCursorTask,
   normalizeCursorToolInput,
@@ -107,6 +112,174 @@ it('refreshes Cursor request identity without persisting the identity block as u
       expect.objectContaining({ content: 'Inherited ID: A' })
     );
   }
+});
+
+describe('Cursor Stop and teardown evidence', () => {
+  function cursorClient() {
+    const taskPatch = vi.fn();
+    const services = {
+      'config/resolve-api-key': { create: async () => ({ apiKey: 'test-key' }) },
+      sessions: {
+        get: async (id: string) => ({ session_id: id, branch_id: 'branch-1', mcp_token: 't' }),
+        patch: vi.fn(),
+      },
+      branches: { get: async () => ({ path: '/workspace' }) },
+      messages: { find: async () => [], create: vi.fn() },
+      tasks: { patch: taskPatch },
+    };
+    return {
+      taskPatch,
+      client: { service: (name: keyof typeof services) => services[name] } as never,
+    };
+  }
+
+  /** Streams one event, aborting the controller while it is being consumed. */
+  function runAbortedMidStream(args: {
+    controller: AbortController;
+    coordinator: boolean;
+    cancel: ReturnType<typeof vi.fn>;
+    wait: () => Promise<unknown>;
+  }) {
+    mocks.send.mockResolvedValueOnce({
+      id: 'run-1',
+      cancel: args.cancel,
+      wait: args.wait,
+      stream: async function* () {
+        if (args.coordinator) markCoordinatorTerminationAbort(args.controller);
+        args.controller.abort();
+        yield { type: 'status', status: 'RUNNING' };
+        yield { type: 'status', status: 'RUNNING' };
+      },
+    });
+  }
+
+  function execute(client: never, controller: AbortController) {
+    return executeCursorTask({
+      client,
+      sessionId: 'session-1' as SessionID,
+      taskId: 'task-1' as TaskID,
+      prompt: 'hello',
+      abortController: controller,
+    });
+  }
+
+  it.each(['settled', 'rejected'])(
+    'leaves terminality to the coordinator when wait() is %s',
+    async (outcome) => {
+      vi.mocked(settleTaskFailure).mockClear();
+      const controller = new AbortController();
+      const { client, taskPatch } = cursorClient();
+      runAbortedMidStream({
+        controller,
+        coordinator: true,
+        cancel: vi.fn().mockResolvedValue(undefined),
+        wait:
+          outcome === 'settled'
+            ? async () => ({ status: 'cancelled', result: '' })
+            : async () => {
+                throw new Error('run lost');
+              },
+      });
+
+      await expect(execute(client, controller)).resolves.toBeUndefined();
+
+      expect(taskPatch).not.toHaveBeenCalled();
+      expect(settleTaskFailure).not.toHaveBeenCalled();
+      // Only a settled wait() after Stop is accepted as teardown.
+      expect(isExecutorCleanupUnverified(controller)).toBe(outcome === 'rejected');
+    }
+  );
+
+  it('marks cleanup unverified when cancel() rejects', async () => {
+    const controller = new AbortController();
+    const { client } = cursorClient();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    runAbortedMidStream({
+      controller,
+      coordinator: false,
+      // The abort listener's cancel rejects; the loop's retry succeeds.
+      cancel: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('cancel failed'))
+        .mockResolvedValue(undefined),
+      wait: async () => ({ status: 'cancelled', result: '' }),
+    });
+
+    try {
+      await execute(client, controller);
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(isExecutorCleanupUnverified(controller)).toBe(true);
+  });
+
+  it('holds quiescence for a signal that lands after a stream failure', async () => {
+    vi.mocked(settleTaskFailure).mockClear();
+    const controller = new AbortController();
+    const { client, taskPatch } = cursorClient();
+    let releaseCancel!: () => void;
+    const cancelHeld = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    const cancel = vi.fn(() => cancelHeld);
+    mocks.send.mockResolvedValueOnce({
+      id: 'run-1',
+      cancel,
+      wait: async () => ({ status: 'completed', result: '' }),
+      // biome-ignore lint/correctness/useYield: the stream rejects before any event.
+      stream: async function* () {
+        throw new Error('stream lost');
+      },
+    });
+    // The signal arrives while the outer catch captures git state.
+    vi.mocked(captureGitStateAtTaskEnd).mockImplementationOnce(async () => {
+      markCoordinatorTerminationAbort(controller);
+      controller.abort();
+      return undefined;
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let settled = false;
+    const execution = execute(client, controller).finally(() => {
+      settled = true;
+    });
+    try {
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      releaseCancel();
+      await expect(execution).resolves.toBeUndefined();
+    } finally {
+      error.mockRestore();
+    }
+
+    expect(isExecutorCleanupUnverified(controller)).toBe(true);
+    expect(taskPatch).not.toHaveBeenCalled();
+    const shouldSkipTerminal = vi.mocked(settleTaskFailure).mock.calls[0]?.[5];
+    expect(shouldSkipTerminal?.()).toBe(true);
+  });
+
+  it('accepts a clean cancel with a settled run as teardown', async () => {
+    const controller = new AbortController();
+    const { client, taskPatch } = cursorClient();
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    runAbortedMidStream({
+      controller,
+      coordinator: false,
+      cancel,
+      wait: async () => ({ status: 'cancelled', result: '' }),
+    });
+
+    await execute(client, controller);
+
+    expect(cancel).toHaveBeenCalled();
+    expect(isExecutorCleanupUnverified(controller)).toBe(false);
+    expect(taskPatch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: 'stopped' })
+    );
+  });
 });
 
 describe('Cursor SDK handler helpers', () => {

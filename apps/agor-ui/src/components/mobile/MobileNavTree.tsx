@@ -7,6 +7,7 @@ import {
   ExportOutlined,
   InfoCircleOutlined,
   LogoutOutlined,
+  PlusOutlined,
   SearchOutlined,
   SettingOutlined,
   UserOutlined,
@@ -22,6 +23,10 @@ import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBranchCounts } from '../../hooks/useBranchCounts';
 import { BoardCollapse } from '../BoardCollapse';
 import { getBoardEmoji } from '../BoardTile';
+import { type CreateModalKind, createMenuItems } from '../CreateMenu';
+
+/** Prefix for the "Create new" submenu's leaf keys, e.g. `create:board`. */
+const CREATE_KEY_PREFIX = 'create:';
 
 const { Text } = Typography;
 
@@ -39,6 +44,10 @@ interface MobileNavTreeProps {
   /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
   externalAppLink?: string;
   externalAppLabel?: string;
+  /** Opens the shared create flow for the picked kind (drawer closes first). Omit to hide the row. */
+  onCreate?: (kind: CreateModalKind) => void;
+  /** Shows the admin-only Repository create item. */
+  isAdmin: boolean;
 }
 
 /**
@@ -72,6 +81,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   onLogout,
   externalAppLink,
   externalAppLabel,
+  onCreate,
+  isAdmin,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -168,6 +179,22 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   const utilityItems: MenuProps['items'] = [
     { key: 'search', label: 'Search', icon: <SearchOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
+    // Expandable "Create new" row — an inline submenu, so it expands like its
+    // siblings without introducing a separate accordion component.
+    ...(onCreate
+      ? [
+          {
+            key: 'create',
+            label: 'Create new',
+            icon: <PlusOutlined />,
+            children: createMenuItems(isAdmin).map((item) => ({
+              key: `${CREATE_KEY_PREFIX}${item.key}`,
+              label: item.label,
+              icon: item.icon,
+            })),
+          },
+        ]
+      : []),
     { key: 'workspace-settings', label: 'Workspace settings', icon: <SettingOutlined /> },
     { key: 'user-settings', label: 'User settings', icon: <UserOutlined /> },
     { key: 'documentation', label: 'Documentation', icon: <InfoCircleOutlined /> },
@@ -332,6 +359,13 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         selectable={false}
         items={utilityItems}
         onClick={({ key }) => {
+          if (onCreate && key.startsWith(CREATE_KEY_PREFIX)) {
+            // Close the drawer first, then open the create flow — same order the
+            // settings rows rely on so the drawer mask never covers the modal.
+            onNavigate?.();
+            onCreate(key.slice(CREATE_KEY_PREFIX.length) as CreateModalKind);
+            return;
+          }
           if (key === 'search') navigate('/m/search');
           else if (key === 'workspace-settings') openSettings('boards');
           else if (key === 'knowledge') navigate('/knowledge');

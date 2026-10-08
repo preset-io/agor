@@ -1,7 +1,9 @@
 import {
+  BoardRepository,
   BranchMaintenanceRepository,
   BranchRepository,
   BranchWorkspaceOperationRepository,
+  createTenantScopedDatabaseProxy,
   generateId,
   RepoRepository,
   runWithTenantDatabaseScope,
@@ -297,3 +299,143 @@ dbTest('archive cannot bypass active-work admission even when preserving files',
     await fixture.close();
   }
 });
+
+for (const filesystemAction of ['preserved', 'deleted'] as const) {
+  dbTest(
+    `MCP ${filesystemAction} archive publishes and returns the archived branch`,
+    async ({ db }) => {
+      const { branch, user } = await seedEnvironmentCommandBranch(db);
+      const { rawKey } = await new UserApiKeysRepository(db).create(
+        user.user_id,
+        'archive fixture'
+      );
+      const fixture = await archiveMcpFixture(db);
+      try {
+        Object.assign(fixture.app, {
+          sessionTokenService: {
+            generateCommandToken: vi.fn().mockResolvedValue('disposable-unused-token'),
+          },
+        });
+        vi.spyOn(
+          fixture.service as unknown as {
+            resolveEnvironmentExecutorContext: (typeof fixture.service)['resolveEnvironmentExecutorContext'];
+          },
+          'resolveEnvironmentExecutorContext'
+        ).mockResolvedValue({
+          env: {},
+          sandboxMounts: {},
+          executionUserId: user.user_id,
+          branchFsAccess: 'write',
+        });
+        const patched = vi.fn();
+        fixture.app.service('branches').on('patched', patched);
+        const response = await fixture.call(rawKey, 'agor_branches_archive', {
+          branchId: branch.branch_id,
+          filesystemAction,
+        });
+        expect(response.result?.isError, JSON.stringify(response)).not.toBe(true);
+        expect((await new BranchRepository(db).findById(branch.branch_id))?.archived).toBe(true);
+        // Clients evict a branch only when the realtime patch says it is archived.
+        expect(patched).toHaveBeenCalledOnce();
+        expect(patched).toHaveBeenCalledWith(
+          expect.objectContaining({ branch_id: branch.branch_id, archived: true }),
+          expect.anything()
+        );
+        expect(JSON.parse(response.result!.content[0]!.text).branch).toMatchObject({
+          archived: true,
+        });
+      } finally {
+        await fixture.close();
+      }
+    }
+  );
+}
+
+dbTest(
+  'MCP unarchive returns the restored branch, not the prefetched archived row',
+  async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const branches = new BranchRepository(db);
+    await branches.update(branch.branch_id, { archived: true, filesystem_status: 'preserved' });
+    const { rawKey } = await new UserApiKeysRepository(db).create(user.user_id, 'archive fixture');
+    const fixture = await archiveMcpFixture(db);
+    try {
+      // Restoration's executor owner is out of scope; commit only its archived flip.
+      fixture.app.use(
+        'repos',
+        {
+          async get() {
+            throw new Error('unused');
+          },
+          retryBranchProvisioning: (id: string) => branches.update(id, { archived: false }),
+        },
+        { methods: ['get', 'retryBranchProvisioning'] }
+      );
+      const response = await fixture.call(rawKey, 'agor_branches_unarchive', {
+        branchId: branch.branch_id,
+      });
+      expect(response.result?.isError, JSON.stringify(response)).not.toBe(true);
+      expect((await branches.findById(branch.branch_id))?.archived).toBe(false);
+      expect(JSON.parse(response.result!.content[0]!.text).branch).toMatchObject({
+        archived: false,
+      });
+    } finally {
+      await fixture.close();
+    }
+  }
+);
+
+dbTest(
+  'explicit-board unarchive compares the committed board, not the cached row',
+  async ({ db }) => {
+    const { branch, user } = await seedEnvironmentCommandBranch(db);
+    const branches = new BranchRepository(db);
+    const boards = new BoardRepository(db);
+    const requested = await boards.create({ name: 'Requested', created_by: user.user_id });
+    const other = await boards.create({ name: 'Other', created_by: user.user_id });
+    const archived = await branches.update(branch.branch_id, {
+      archived: true,
+      filesystem_status: 'preserved',
+      board_id: requested.board_id,
+    });
+    const fixture = await archiveMcpFixture(db);
+    try {
+      fixture.app.use(
+        'repos',
+        {
+          async get() {
+            throw new Error('unused');
+          },
+          // Joins the unarchive admission transaction, as the real admission does.
+          retryBranchProvisioning: (id: string) =>
+            new BranchRepository(createTenantScopedDatabaseProxy(db)).update(id, {
+              archived: false,
+            }),
+        },
+        { methods: ['get', 'retryBranchProvisioning'] }
+      );
+      // Placement is already present; board-object restoration is not under test.
+      Object.assign(fixture.service, {
+        boardObjectsService: { findByBranchId: async () => ({ object_id: 'existing' }) },
+      });
+      const service = fixture.app.service('branches') as unknown as typeof fixture.service;
+      const move = vi.spyOn(service, 'patch').mockResolvedValue(archived as never);
+      // The route's authorization hook cached the request-start row (on Requested);
+      // a concurrent move to Other commits before the unarchive admission lock.
+      await branches.update(branch.branch_id, { board_id: other.board_id });
+      await service.unarchive(branch.branch_id, { boardId: requested.board_id }, {
+        provider: 'rest',
+        user,
+        tenant: { tenant_id: 'default', source: 'explicit' },
+        branch: archived,
+      } as never);
+      expect(move).toHaveBeenCalledWith(
+        branch.branch_id,
+        { board_id: requested.board_id },
+        expect.anything()
+      );
+    } finally {
+      await fixture.close();
+    }
+  }
+);

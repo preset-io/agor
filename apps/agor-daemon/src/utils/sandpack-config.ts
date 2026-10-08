@@ -11,9 +11,6 @@
  * props don't grant new capability beyond what the file map already allows.
  * The block list is deliberately minimal: anything that affects the parent
  * UI, the daemon-controlled bundler, or per-user CodeSandbox accounts.
- *
- * See `docs/internal/artifacts-roadmap-2026-05-09.md` (sanitizeSandpackConfig
- * allow list) for the rationale for each prop.
  */
 
 import type {

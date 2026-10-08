@@ -40,6 +40,7 @@ import type {
   Group,
   GroupMembership,
   KnowledgeDocument,
+  KnowledgeDocumentArchivePatch,
   KnowledgeDocumentVersion,
   KnowledgeEmbeddingStatus,
   KnowledgeIndexingStatus,
@@ -561,6 +562,11 @@ export interface SessionsService
 export interface TasksService extends AgorService<Task> {
   /** Claim a daemon-dispatched task after executor authentication. */
   connectExecutor(data: { task_id: string }, params?: Params): Promise<Task>;
+  /** Request fenced containment after an unexpected executor signal. */
+  reportExecutorInterruption(
+    data: import('../types/task').ExecutorInterruptionInput,
+    params?: Params
+  ): Promise<Task>;
   /** Report that a requested cooperative stop has fully quiesced SDK work. */
   reportTerminationComplete(
     data: import('../types/task').ExecutorTerminationCompleteInput,
@@ -645,8 +651,7 @@ export interface ReposService extends AgorService<Repo> {
       zoneId?: string;
       environment_variant?: string;
       /**
-       * Branch storage model — see
-       * context/explorations/clone-redesign.md.
+       * Branch storage model.
        * 'worktree' (default) = native `git worktree add`.
        * 'clone' = self-standing `git clone` with its own `.git/`.
        */
@@ -892,6 +897,15 @@ export interface AgorClient
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
+  service(
+    path: 'kb/documents'
+  ): AgorService<
+    KnowledgeDocument,
+    CreatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    UpdatePayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>,
+    | PatchPayload<Omit<KnowledgeDocument, 'archived' | 'archived_at'>>
+    | KnowledgeDocumentArchivePatch
+  >;
   service(path: 'kb/settings'): KnowledgeSettingsService;
   service(path: 'kb/indexing/status'): KnowledgeIndexingStatusService;
   service(path: 'kb/indexing/reindex'): KnowledgeReindexService;
@@ -1407,6 +1421,7 @@ function extendTasksService(client: AgorClient): void {
     tasksService.methods(
       'connectExecutor',
       'reportTerminationComplete',
+      'reportExecutorInterruption',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
       'beginOpenCodeCheckpoint',

@@ -239,16 +239,14 @@ describe.each(['mcp', 'gateway', 'teammates', 'artifacts'] as const)(
       if (tab !== 'gateway') {
         screen.getByRole('button', { name: /^Description for/ }).focus();
         await userEvent.keyboard('{Enter}');
-        const description = await screen.findByText(
+        const description =
           tab === 'mcp'
             ? 'Review pull requests and issues.'
             : tab === 'artifacts'
               ? 'Explore the API with synthetic examples.'
-              : 'Coordinates engineering work across branches.'
-        );
-        // The popover mounts off-screen (-1000vw/-1000vh) and is aligned on a
-        // later frame: retry until it is placed rather than check the mount.
-        await waitFor(() => expect(description).toBeVisible());
+              : 'Coordinates engineering work across branches.';
+        // The popover mounts before it finishes opening; wait for it to become visible.
+        await waitFor(() => expect(screen.getByText(description)).toBeVisible());
       }
       if (tab === 'mcp') expect(screen.getByText('Not signed in')).toBeInTheDocument();
       if (tab === 'gateway')

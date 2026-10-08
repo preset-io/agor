@@ -171,7 +171,8 @@ describe('hosted OpenCode turn across executor and daemon', () => {
         task.task_id as TaskID,
         { status: TaskStatus.COMPLETED },
         turn,
-        manifest
+        manifest,
+        () => false
       );
       expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.COMPLETED);
       return { turn, turns, key: JSON.parse(turn.authContent).zai.key as string };

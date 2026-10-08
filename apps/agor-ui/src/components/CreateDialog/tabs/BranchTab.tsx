@@ -21,7 +21,6 @@ export interface BranchTabConfig {
   /**
    * Branch storage model. 'worktree' = legacy `git worktree add`. 'clone' =
    * self-standing `git clone`. Default 'branch' preserves existing flow.
-   * See context/explorations/clone-redesign.md.
    */
   storage_mode?: 'worktree' | 'clone';
   /** Shallow-clone depth — only meaningful when storage_mode='clone'. */
@@ -31,7 +30,10 @@ export interface BranchTabConfig {
 export interface BranchTabProps {
   repoById: Map<string, Repo>;
   boardById?: Map<string, Board>;
+  /** The board currently open; viewport-centre placement only applies to it. */
   currentBoardId?: string;
+  /** Board pre-selected on mount (current board, else accessible main board). */
+  defaultBoardId?: string;
   defaultPosition?: { x: number; y: number };
   onValidityChange: (valid: boolean) => void;
   formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null>;
@@ -42,6 +44,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
   repoById,
   boardById = new Map(),
   currentBoardId,
+  defaultBoardId,
   defaultPosition,
   onValidityChange,
   formRef,
@@ -76,7 +79,7 @@ export const BranchTab: React.FC<BranchTabProps> = ({
       form.setFieldsValue({
         repoId: lastRepoId,
         sourceBranch: repoById.get(lastRepoId)?.default_branch,
-        ...(currentBoardId ? { boardId: currentBoardId } : {}),
+        ...(defaultBoardId ? { boardId: defaultBoardId } : {}),
       });
       setSelectedRepoId(lastRepoId);
       handleValuesChange();
@@ -86,12 +89,12 @@ export const BranchTab: React.FC<BranchTabProps> = ({
       form.setFieldsValue({
         repoId: firstRepo.repo_id,
         sourceBranch: firstRepo.default_branch,
-        ...(currentBoardId ? { boardId: currentBoardId } : {}),
+        ...(defaultBoardId ? { boardId: defaultBoardId } : {}),
       });
       setSelectedRepoId(firstRepo.repo_id);
       handleValuesChange();
     }
-  }, [repoById, currentBoardId, form, handleValuesChange]);
+  }, [repoById, defaultBoardId, form, handleValuesChange]);
 
   const handleRepoChange = (repoId: string) => {
     setSelectedRepoId(repoId);
@@ -122,7 +125,9 @@ export const BranchTab: React.FC<BranchTabProps> = ({
         issue_url: values.issue_url,
         pull_request_url: values.pull_request_url,
         board_id: values.boardId,
-        position: defaultPosition,
+        // Viewport-centre placement is only meaningful on the board that's open;
+        // a different chosen board uses its own default placement.
+        position: values.boardId === currentBoardId ? defaultPosition : undefined,
         storage_mode: storageMode,
         ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
       };

@@ -1,11 +1,12 @@
-// Homepage hero A/B test variants (see components/heroVariants.tsx) — same
-// full-bleed, no-sidebar treatment as `index`, hidden from nav since these
-// are campaign landing pages, not docs to browse.
-const heroVariantMeta = {
+// Marketing landing pages (hub-and-spoke off the homepage; see
+// components/landing/pages.ts): full-bleed, hidden from the sidebar.
+const landingPageMeta = {
   type: 'page' as const,
   display: 'hidden' as const,
   theme: {
     layout: 'full' as const,
+    // The page renders its own footer (LandingShell); the docs footer would stack under it.
+    footer: false,
   },
 };
 
@@ -18,18 +19,8 @@ export default {
       layout: 'full', // Full page layout without sidebars/navbar
     },
   },
-  'not-alone': heroVariantMeta,
-  'not-alone-problem': heroVariantMeta,
-  'beyond-the-sandbox': heroVariantMeta,
-  'not-just-a-tool': heroVariantMeta,
-  'right-where-you-work': heroVariantMeta,
-  'team-sport': heroVariantMeta,
-  'selfware-is-dead': heroVariantMeta,
-  'dev-team': heroVariantMeta,
-  'costs-under-control': heroVariantMeta,
-  'costs-under-control-solution': heroVariantMeta,
-  // Agor Cloud marketing landing page. Reached via the navbar "Agor Cloud"
-  // link (see NavbarCloudCTA); hidden from the sidebar and rendered full-bleed
+  // Agor Cloud marketing landing page. Reached from the island nav's Product
+  // menu and palette (components/nav/navData.ts); hidden from the sidebar and rendered full-bleed
   // like the homepage via `theme.layout: 'full'`. The request-invite form
   // stays behind the on-page CTAs.
   cloud: {
@@ -38,6 +29,8 @@ export default {
     display: 'hidden',
     theme: {
       layout: 'full',
+      // AgorCloudLanding renders its own footer.
+      footer: false,
     },
   },
   // Contact / "Talk to us" landing page. A standalone destination that renders
@@ -51,13 +44,20 @@ export default {
       layout: 'full',
     },
   },
-  // Navbar links are separate from the content folders so Docs and Blog can
-  // also remain in the shared root sidebar on every content surface.
-  'docs-navbar': { title: 'Docs', type: 'page', href: '/guide' },
-  'blog-navbar': { title: 'Blog', type: 'page', href: '/blog' },
+  multiplayer: landingPageMeta,
+  board: landingPageMeta,
+  teammates: landingPageMeta,
+  'command-center': landingPageMeta,
+  governance: landingPageMeta,
+  // The Preset agent roster (linked from the home radar and the nav); not a
+  // spoke in LANDING_PAGES, but framed the same way.
+  'agent-roster': landingPageMeta,
   guide: 'Docs',
   blog: 'Blog',
   'api-reference': 'API Reference',
   security: 'Security',
   faq: 'FAQ',
+  // Linked from every footer; hidden from the sidebar.
+  privacy: { title: 'Privacy Policy', display: 'hidden' },
+  terms: { title: 'Terms of Use', display: 'hidden' },
 };

@@ -78,6 +78,24 @@ export function isCurrentCatalogInstall(
   prescribed: MCPAuth,
   options: { reconcileMissingCompatibilityMode?: boolean } = {}
 ): boolean {
+  // The catalog prescribes the endpoints/profile, not a customer app identity
+  // or its grant mode. Accept only that narrow configured-client shape (plus
+  // Shared OAuth, as for any other customer app); all other fields still
+  // participate in exact prescription comparison below.
+  if (
+    entry.oauth?.configured_client &&
+    server.auth?.oauth_client_id &&
+    (!entry.oauth.configured_client.secret_required || server.auth.oauth_client_secret)
+  ) {
+    prescribed = {
+      ...prescribed,
+      oauth_client_id: server.auth.oauth_client_id,
+      ...(server.auth.oauth_client_secret
+        ? { oauth_client_secret: server.auth.oauth_client_secret }
+        : {}),
+      ...(server.auth.oauth_mode === 'shared' ? { oauth_mode: 'shared' as const } : {}),
+    };
+  }
   return (
     server.source === 'catalog' &&
     server.catalog_entry_name === entry.name &&

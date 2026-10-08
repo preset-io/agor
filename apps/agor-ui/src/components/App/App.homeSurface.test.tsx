@@ -5,12 +5,13 @@
  */
 import type { Board, Branch, Session, SessionID, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { forwardRef, useLayoutEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CanvasNavigationProvider, useRecenterMap } from '../../contexts/CanvasNavigationContext';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
@@ -48,14 +49,12 @@ vi.mock('../BoardTeammatePanel', () => ({
   BoardTeammatePanel: () => null,
   TeammatePanelRail: () => null,
 }));
-vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({
   SettingsModal: (props: { open?: boolean }) =>
     props.open ? <div data-testid="settings-modal" /> : null,
   UserSettingsModal: () => null,
 }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
-vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
 vi.mock('../NewSessionModal', () => ({ NewSessionModal: () => null }));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({
@@ -237,6 +236,15 @@ function CrossBoardRecenter() {
   );
 }
 
+const CONNECTED = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 /** Route table mirrors `apps/agor-ui/src/App.tsx` — the bugs live in how
  *  these paths resolve, so an approximation would not reproduce them. */
 function renderApp(initialPath: string) {
@@ -244,24 +252,26 @@ function renderApp(initialPath: string) {
     <App client={null} user={user} connected={true} availableAgents={[]} initialBoardId="" />
   );
   return render(
-    <ThemeProvider>
-      <AntApp>
-        <MemoryRouter initialEntries={[initialPath]}>
-          <CanvasNavigationProvider>
-            <PathSpy />
-            <RouteControls />
-            <CrossBoardRecenter />
-            <Routes>
-              <Route path="/b/:boardParam/" element={el} />
-              <Route path="/s/:sessionShortId/" element={el} />
-              <Route path="/w/:branchShortId/" element={el} />
-              <Route path="/a/:artifactShortId/" element={el} />
-              <Route path="/*" element={el} />
-            </Routes>
-          </CanvasNavigationProvider>
-        </MemoryRouter>
-      </AntApp>
-    </ThemeProvider>
+    <ConnectionProvider value={CONNECTED}>
+      <ThemeProvider>
+        <AntApp>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <CanvasNavigationProvider>
+              <PathSpy />
+              <RouteControls />
+              <CrossBoardRecenter />
+              <Routes>
+                <Route path="/b/:boardParam/" element={el} />
+                <Route path="/s/:sessionShortId/" element={el} />
+                <Route path="/w/:branchShortId/" element={el} />
+                <Route path="/a/:artifactShortId/" element={el} />
+                <Route path="/*" element={el} />
+              </Routes>
+            </CanvasNavigationProvider>
+          </MemoryRouter>
+        </AntApp>
+      </ThemeProvider>
+    </ConnectionProvider>
   );
 }
 
@@ -544,5 +554,42 @@ describe('Home navigation with a session open', () => {
 
     expect(canvasBoardName()).toBe('Beta');
     expect(currentPath).toBe('/b/beta/');
+  });
+});
+
+describe('Create entry points open the focused modals', () => {
+  // Text queries: role queries trip jsdom's CSS parser on AntD's button styles here.
+  it('opens the board modal from the Home onboarding step', async () => {
+    agorStore.setState({
+      boardById: new Map(),
+      branchById: new Map(),
+      sessionById: new Map(),
+      sessionsByBranch: new Map(),
+    } as never);
+    renderApp('/');
+    await settle();
+
+    const step = screen.getByText('Create your first board').parentElement as HTMLElement;
+    fireEvent.click(within(step).getByText('Create'));
+    await settle();
+
+    expect(screen.getByText('New board')).toBeTruthy();
+  });
+
+  it('opens the board modal from the navbar create menu on Home', async () => {
+    renderApp('/');
+    await settle();
+    expect(homeIsShowing()).toBe(true);
+
+    fireEvent.click(document.querySelector('[aria-label="Create new"]') as HTMLElement);
+    await settle();
+    const item = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+      (el) => el.textContent === 'Board'
+    );
+    if (!item) throw new Error('Board not offered by the create menu');
+    fireEvent.click(item);
+    await settle();
+
+    expect(screen.getByText('New board')).toBeTruthy();
   });
 });

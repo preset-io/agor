@@ -145,9 +145,10 @@ describe('sessions.get authorization loading', () => {
       const usage = await after.app.service('sessions').get(shortSessionId, {
         provider: 'rest',
         user: { user_id: user.user_id, role: ROLES.MEMBER },
-        query: { include_usage: true },
+        query: { include_usage: true, include_tasks_complete: true },
       });
       expect(usage.usage_summary).toMatchObject({ total: 30, cost: 1 });
+      expect(usage.tasks_complete).toBe(true);
       expect(JSON.stringify(usage.usage_summary)).not.toContain('SECRET_PROMPT');
       expect(result.usage_summary).toBeUndefined();
       const stranger = await new UsersRepository(db).create({
@@ -158,7 +159,7 @@ describe('sessions.get authorization loading', () => {
         after.app.service('sessions').get(shortSessionId, {
           provider: 'rest',
           user: { user_id: stranger.user_id, role: ROLES.MEMBER },
-          query: { include_usage: true },
+          query: { include_usage: true, include_tasks_complete: true },
         })
       ).rejects.toThrow();
     }

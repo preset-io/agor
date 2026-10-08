@@ -1,0 +1,25 @@
+diff --git a/dist/index.js b/dist/index.js
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1060,6 +1060,13 @@
+ 			this.session.off(event, this.listeners[event]);
+ 			delete this.listeners[event];
+ 		}
++	}
++	dispose() {
++		for (const [event, listener] of Object.entries(this.listeners)) {
++			this.session.off(event, listener);
++		}
++		this.listeners = {};
++		this.listenerIds = {};
+ 	}
+ 	once(event, listener) {
+ 		this.on(event, listener, true);
+@@ -2461,6 +2468,7 @@
+ 		return handler;
+ 	}
+ 	removeCDPHandler(sessionId) {
++		this.cdps.get(sessionId)?.dispose();
+ 		this.cdps.delete(sessionId);
+ 	}
+ 	async formatScripts(scripts) {

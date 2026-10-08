@@ -997,13 +997,19 @@ export async function handleGitBranchAdd(
     const sourceRemoteUrl = localHome ? TEAMMATE_FRAMEWORK_REPO_URL : baseRemoteUrl;
     const resolutionPath =
       storageMode === 'clone' && (!repoPath || !existsSync(repoPath)) ? undefined : repoPath;
-    const resolveStartingRef = () => {
+    const resolveStartingRef = async () => {
       // Persisted source identity is a locator, not credential authority. Resolve
       // it without the mutable cache, and bound credentials independently just as
-      // we do for the eventual clone transport. A teammate retry retains the
-      // selected source instead of reinterpreting its now-persisted bare ref.
-      // Older rows without provenance retain the legacy path.
-      if ((restoreMode || getTeammateConfig(branchRecord)) && branchRecord.base_source) {
+      // we do for the eventual clone transport. A teammate retry, or a new-branch
+      // retry whose persisted ref is the bare source name, retains the selected
+      // source instead of reinterpreting that bare ref; qualified refs re-resolve
+      // as spelled. Older rows without provenance retain the legacy path.
+      if (
+        (restoreMode ||
+          getTeammateConfig(branchRecord) ||
+          (shouldCreateBranch && branchRecord.base_ref === branchRecord.base_source?.name)) &&
+        branchRecord.base_source
+      ) {
         const source = branchRecord.base_source;
         return resolveGitRef(undefined, source.name, {
           refType: refType || 'branch',
@@ -1012,18 +1018,12 @@ export async function handleGitBranchAdd(
           env: gitEnvironmentForRemote(source.remote_url, [remoteUrl, sourceRemoteUrl], env),
         });
       }
-      // Omission, not the spelling "main", identifies the teammate default.
+      // Omission, not the spelling "main", identifies the implicit default.
       // Registered metadata is the source authority; mutable cache remotes and
       // local branches are not. Resolve its live tip, then let the materializer
       // fetch from this exact URL and consume the pinned SHA. No local reset or
       // stale-cache fallback, and no assumption that its remote is named origin.
-      if (
-        shouldCreateBranch &&
-        getTeammateConfig(branchRecord) &&
-        !branchRecord.base_ref &&
-        !sourceRemoteUrl &&
-        remoteUrl
-      ) {
+      if (shouldCreateBranch && !branchRecord.base_ref && !sourceRemoteUrl && remoteUrl) {
         return resolveGitRef(undefined, sourceBranch, {
           refType: refType || 'branch',
           remote: { url: remoteUrl },
@@ -1031,15 +1031,32 @@ export async function handleGitBranchAdd(
           env,
         });
       }
-      return resolveGitRef(resolutionPath, requestedStartingRef, {
-        refType: refType || 'branch',
-        ...(sourceRemoteUrl
-          ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
-          : remoteUrl
-            ? { remote: { url: remoteUrl, name: 'origin' } }
-            : {}),
-        env,
-      });
+      try {
+        return await resolveGitRef(resolutionPath, requestedStartingRef, {
+          refType: refType || 'branch',
+          ...(sourceRemoteUrl
+            ? { remote: { url: sourceRemoteUrl }, remoteOnly: true }
+            : remoteUrl
+              ? { remote: { url: remoteUrl, name: 'origin' } }
+              : {}),
+          env,
+        });
+      } catch (error) {
+        // Clone storage treats the registered checkout as a cache, so the live remote settles a new branch's source the cache disagrees with.
+        if (
+          !shouldCreateBranch ||
+          storageMode !== 'clone' ||
+          !remoteUrl ||
+          !(error instanceof Error && error.message.includes('is ambiguous'))
+        )
+          throw error;
+        return resolveGitRef(undefined, requestedStartingRef, {
+          refType: 'branch',
+          remote: { url: remoteUrl, name: 'origin' },
+          remoteOnly: true,
+          env,
+        });
+      }
     };
     let resolvedStartingRef =
       restoreMode || alreadyMaterialized ? undefined : await resolveStartingRef();

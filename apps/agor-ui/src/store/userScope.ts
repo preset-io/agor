@@ -1,6 +1,6 @@
 /**
  * User scope: everything Home and the teammates surfaces read, loaded in full
- * for the caller (`context/explorations/user-first-scoped-hydration.md`).
+ * for the caller (`context/concepts/user-first-scoped-hydration.md`).
  *
  * - Gated (in `useAgorData`'s first paint): my newest `MY_SESSIONS_GATED_LIMIT`
  *   sessions. Fewer rows than the limit already means "all of mine".

@@ -12,6 +12,7 @@ import {
 import { generateId } from '@agor/core/db';
 import {
   isTerminalTaskStatus,
+  missingOpenCodeApiKeyMessage,
   type OpenCodeCheckpointAdmission,
   type OpenCodeCheckpointManifest,
   type SessionID,
@@ -74,9 +75,7 @@ export async function prepareManagedOpenCodeTurn(input: {
 
   const key = admission.providerKey?.key;
   if (!key || admission.providerKey?.providerId !== input.provider.trim()) {
-    throw new MissingCredentialError(
-      `No usable API key for ${input.provider}. Save one in Settings > OpenCode; hosted workspaces offer API-key providers only.`
-    );
+    throw new MissingCredentialError(missingOpenCodeApiKeyMessage(input.provider));
   }
   const authContent = JSON.stringify({ [input.provider.trim()]: { type: 'api', key } });
 
@@ -108,7 +107,8 @@ export async function completeManagedOpenCodeTurn(
   taskId: TaskID,
   patch: Partial<Task>,
   turn: ManagedOpenCodeTurn,
-  checkpoint: OpenCodeCheckpointManifest
+  checkpoint: OpenCodeCheckpointManifest,
+  shouldSkipCompletion: () => boolean
 ): Promise<void> {
   await withRetries(async () => {
     const current = (await client.service('tasks').get(taskId)) as Task;
@@ -120,6 +120,8 @@ export async function completeManagedOpenCodeTurn(
     if (isTerminalTaskStatus(current.status) || current.status === TaskStatus.STOPPING) {
       throw new FinalError(`OpenCode completion was not accepted (task is ${current.status})`);
     }
+    // Stop can win during the read or a retry delay; the daemon then owns terminality.
+    if (shouldSkipCompletion()) return;
     const updated = (await client.service('tasks').patch(taskId, {
       ...patch,
       opencode_checkpoint: { holder_instance_id: turn.holderId, manifest: checkpoint },

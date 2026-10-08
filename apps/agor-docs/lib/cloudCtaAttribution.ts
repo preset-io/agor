@@ -8,6 +8,7 @@ const CTA_UTM = {
   utm_campaign: 'agor-cloud-cta',
 } as const;
 const HUBSPOT_VISITOR_TOKEN = /^[a-f0-9]{32}$/;
+const AD_CLICK_PARAMS = ['gclid', 'gbraid', 'wbraid'] as const;
 
 export type CloudCtaVariant = 'console' | 'hubspot_modal';
 
@@ -35,9 +36,10 @@ export function withCtaAttribution(href: string, placement: string): string {
 
 /**
  * Click handler for a sign-up CTA: reports the click, and for a console link
- * hands over the HubSpot visitor token so the console ties the sign-up to the
- * visitor's agor.live history. Runs at click time because HubSpot sets the
- * cookie after hydration.
+ * hands over the HubSpot visitor token and any Google Ads click id so the
+ * console ties the sign-up to the visitor's agor.live history and ad click.
+ * Runs at click time because HubSpot sets the cookie after hydration, and the
+ * click id otherwise never reaches a different domain.
  */
 export function onCloudCtaClick(
   placement: string,
@@ -50,8 +52,18 @@ export function onCloudCtaClick(
   if (!isConsoleUrl(url)) return;
   const match = /(?:^|;\s*)hubspotutk=([^;]*)/.exec(document.cookie);
   const token = match ? decodeURIComponent(match[1]) : '';
+  const pageParams = new URLSearchParams(window.location.search);
+  let changed = false;
   if (HUBSPOT_VISITOR_TOKEN.test(token)) {
     url.searchParams.set('hutk', token);
-    anchor.href = url.toString();
+    changed = true;
   }
+  for (const key of AD_CLICK_PARAMS) {
+    const value = pageParams.get(key);
+    if (value) {
+      url.searchParams.set(key, value);
+      changed = true;
+    }
+  }
+  if (changed) anchor.href = url.toString();
 }

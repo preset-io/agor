@@ -13,6 +13,7 @@ import { MESSAGE_PAGINATION, PAGINATION, TASK_PAGINATION } from '../config/const
 import { MAX_SEARCH_TOKENS, uniqueSearchTokens } from '../search/searchable-fields';
 import { AGENTIC_TOOL_NAMES, PERSISTED_AGENTIC_TOOL_NAMES } from '../types/agentic-tool';
 import {
+  KNOWLEDGE_ARCHIVE_FILTERS,
   KNOWLEDGE_DOCUMENT_KINDS,
   KNOWLEDGE_DOCUMENT_SORT_FIELDS,
   KNOWLEDGE_DOCUMENT_STATUSES,
@@ -171,6 +172,8 @@ export const sessionQuerySchema = createQuerySchema(
     // Session-only opt-out of exact totals; coerces REST boolean strings.
     $count: Type.Optional(CommonSchemas.boolean),
     include_usage: Type.Optional(CommonSchemas.boolean),
+    // Get-only: reports `tasks_complete` (see Session.tasks_complete).
+    include_tasks_complete: Type.Optional(CommonSchemas.boolean),
     // List-only projection: omit bulky single-session custom_context keys
     // (see LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS). Not a column filter.
     lean: Type.Optional(CommonSchemas.boolean),
@@ -531,6 +534,9 @@ export const mcpServerQuerySchema = createQuerySchema(
  */
 export const knowledgeDocumentQuerySchema = createQuerySchema(
   Type.Object({
+    archive_filter: Type.Optional(
+      Type.Union(KNOWLEDGE_ARCHIVE_FILTERS.map((value) => Type.Literal(value)))
+    ),
     namespace_id: Type.Optional(CommonSchemas.uuid),
     namespace_slug: Type.Optional(Type.String({ maxLength: 255 })),
     path: Type.Optional(Type.String({ maxLength: 1024 })),

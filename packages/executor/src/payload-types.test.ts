@@ -103,6 +103,27 @@ describe('PromptPayloadSchema', () => {
     expect(result.params.promptOrigin).toEqual({ kind: 'channel', server: 'slack' });
   });
 
+  it('keeps the informational model verbatim and leaves it optional', () => {
+    const base = {
+      command: 'prompt',
+      sessionToken: 'jwt-token-here',
+      params: {
+        sessionId: '550e8400-e29b-41d4-a716-446655440000',
+        taskId: '550e8400-e29b-41d4-a716-446655440001',
+        prompt: 'Hello!',
+        tool: 'claude-code',
+        cwd: '/home/user/project',
+      },
+    };
+
+    const withModel = PromptPayloadSchema.parse({
+      ...base,
+      params: { ...base.params, model: 'claude-opus-4-7[1m]' },
+    });
+    expect(withModel.params.model).toBe('claude-opus-4-7[1m]');
+    expect(PromptPayloadSchema.parse(base).params.model).toBeUndefined();
+  });
+
   it('rejects malformed prompt provenance at the private executor boundary', () => {
     expect(() =>
       PromptPayloadSchema.parse({

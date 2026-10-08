@@ -1,6 +1,11 @@
 import type { AgorClient } from '@agor-live/client';
 import type { RefreshResult } from './tokenRefresh';
-import { storeTokens } from './tokenRefresh';
+import {
+  captureTokenAuthority,
+  invalidateTokenAuthority,
+  SupersededAuthenticationError,
+  storeTokens,
+} from './tokenRefresh';
 
 export const LAUNCH_CODE_PARAM = 'launch_code';
 
@@ -26,7 +31,10 @@ export async function exchangeLaunchCode(
   client: AgorClient,
   launchCode: string
 ): Promise<RefreshResult> {
+  const isCurrent = captureTokenAuthority();
   const result = (await client.service('auth/launch').create({ launchCode })) as RefreshResult;
+  if (!isCurrent()) throw new SupersededAuthenticationError();
   storeTokens(result.accessToken, result.refreshToken);
+  invalidateTokenAuthority();
   return result;
 }

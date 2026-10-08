@@ -5,7 +5,6 @@
  * render inline in a session's transcript to capture user input without that
  * input ever entering the LLM's context.
  *
- * Architecture lives in `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  * The MCP tool fires and returns; the widget message persists in the
  * transcript and is resolved when the user submits/dismisses via the
  * `widget-submissions` daemon service.

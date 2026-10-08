@@ -7,12 +7,16 @@ import {
   TaskStatus,
 } from '@agor-live/client';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { App } from 'antd';
 import { useLayoutEffect, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from './TaskBlock';
 
 afterEach(cleanup);
+const ENOENT_SYSTEM_PROMPT =
+  "ENOENT: no such file or directory, open '/usr/lib/node_modules/agor-live/dist/core/templates/agor-system-prompt.md'";
+const outcome = () => document.querySelector<HTMLElement>('[data-turn-outcome]');
 const task: Task = {
   task_id: generateId(),
   session_id: generateId(),
@@ -20,6 +24,7 @@ const task: Task = {
   full_prompt: 'Retained prompt',
   status: TaskStatus.COMPLETED,
   created_at: '2026-09-01T00:00:00.000Z',
+  executor_connected_at: '2026-09-01T00:00:01.000Z',
   model: 'synthetic-model',
   git_state: { ref_at_start: 'main', sha_at_start: 'synthetic' },
 };
@@ -108,11 +113,14 @@ describe('lean task presentation', () => {
     const { container, rerender } = render(view());
     expect(container.querySelector('[data-task-block] > .anticon-check-circle')).toBeNull();
     rerender(view({ task: { ...task, status: TaskStatus.FAILED } }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
+    expect(outcome()).toHaveTextContent('The agent hit a problem.');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeVisible();
     rerender(
-      view({ task: { ...task, status: TaskStatus.FAILED, error_message: 'Request failed' } })
+      view({ task: { ...task, status: TaskStatus.FAILED, error_message: ENOENT_SYSTEM_PROMPT } })
     );
-    expect(screen.getByRole('alert')).toHaveTextContent('Request failed');
+    expect(screen.queryByText(ENOENT_SYSTEM_PROMPT)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText(ENOENT_SYSTEM_PROMPT)).toBeVisible();
   });
 
   it('interleaves expanded activity between messages with tools initially collapsed', () => {
@@ -139,10 +147,10 @@ describe('lean task presentation', () => {
   });
 
   it('does not blank failed or assistant-only tasks, and leaves pending approvals visible', () => {
-    const failure = { ...task, status: TaskStatus.FAILED, error_message: 'Synthetic failure' };
+    const failure = { ...task, status: TaskStatus.FAILED, error_message: ENOENT_SYSTEM_PROMPT };
     const result = render(view({ task: failure, taskMessages: [] }));
     expect(screen.getByText('Retained prompt')).toBeVisible();
-    expect(screen.getByRole('alert')).toHaveTextContent('Turn failed: Synthetic failure');
+    expect(outcome()).toHaveTextContent('The agent hit a problem.');
     result.rerender(view({ task: { ...task, full_prompt: '' }, taskMessages: [messages[1]] }));
     expect(screen.getByText('Visible answer')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Tool calls', expanded: false })).toBeVisible();
@@ -236,8 +244,8 @@ it('removes the standalone live spinner while retaining startup, stopping and ap
   rerender(view({ task: { ...task, status: TaskStatus.DISPATCHING } }));
   expect(screen.queryByText('Starting turn…')).toBeNull();
   rerender(view({ task: { ...task, status: TaskStatus.STOPPING } }));
-  expect(screen.getByRole('status')).toHaveTextContent('Stopping');
-  expect(screen.getByRole('status')).toHaveClass('ant-alert-info');
+  expect(screen.getByRole('status')).toHaveTextContent('Stopping the agent…');
+  expect(screen.getByRole('status')).toHaveAttribute('data-notice-type', 'info');
   rerender(
     view({
       task: { ...task, status: TaskStatus.AWAITING_PERMISSION },
@@ -300,30 +308,37 @@ it.each(Object.values(TaskStatus))(
   }
 );
 
-it('keeps verified recovery and authorization notices visible at the bottom without duplicate failure banners', () => {
+it('alerts on a live failure, offers Resume only when the session can start a turn, and stays last', () => {
+  const client = {} as NonNullable<React.ComponentProps<typeof TaskBlock>['client']>;
   const interrupted = {
     ...task,
     status: TaskStatus.FAILED,
-    error_message: 'Durable failure reason',
+    error_message: 'Executor heartbeat lost; the executor may have crashed or disconnected.',
     sdk_failure: { termination: 'verified' },
     termination_request: { cause: 'heartbeat_lost' },
+    executor_connected_at: task.created_at,
   } as Task;
+  const live = { isLatestTask: true, sessionId: task.session_id, client };
   const { container, rerender } = render(
-    view({
-      task: interrupted,
-      isLatestTask: true,
-      sessionId: task.session_id,
-      client: {} as NonNullable<React.ComponentProps<typeof TaskBlock>['client']>,
-    })
+    view({ ...live, task: { ...task, status: TaskStatus.RUNNING } })
   );
-  expect(screen.getByRole('button', { name: 'Resume in new task' })).toBeVisible();
+  rerender(view({ ...live, task: interrupted }));
   expect(screen.getAllByRole('alert')).toHaveLength(1);
-  expect(screen.getByRole('alert')).toHaveTextContent('Durable failure reason');
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'Lost connection to the agent. Any edits are kept.'
+  );
+  expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+  rerender(view({ ...live, task: interrupted, canStartTurn: true }));
+  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByRole('alert')).toHaveTextContent('Executor heartbeat lost');
   expect(container.querySelector('[data-task-block]')!.lastElementChild).toBe(
     screen.getByRole('alert')
   );
   rerender(
     view({
+      ...live,
+      canStartTurn: true,
       task: {
         ...interrupted,
         termination_request: {
@@ -331,21 +346,166 @@ it('keeps verified recovery and authorization notices visible at the bottom with
           cause: 'authorization_revoked',
         },
       },
+    })
+  );
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'Agor stopped the agent after an access change.'
+  );
+  expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
+});
+
+it('uses a polite status for a failure that was already settled on load', () => {
+  render(
+    view({
+      task: { ...task, status: TaskStatus.FAILED, error_message: ENOENT_SYSTEM_PROMPT },
       isLatestTask: true,
     })
   );
-  expect(screen.getAllByRole('alert')).toHaveLength(1);
-  expect(screen.getByRole('alert')).toHaveTextContent('Task access revoked');
-  expect(screen.queryByRole('button', { name: 'Resume in new task' })).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByRole('status')).toHaveTextContent('The agent hit a problem.');
 });
 
-it('keeps stopped outcomes warning-level even with an explanatory reason', () => {
+it('retries the original prompt when startup proves nothing ran, as one new turn', async () => {
+  const prompt = vi.fn().mockResolvedValue(undefined);
+  render(
+    view({
+      task: {
+        ...task,
+        created_by: 'viewer',
+        metadata: { source: 'agor' },
+        status: TaskStatus.FAILED,
+        recorded_tool_count: 0,
+        error_message: 'Local executor did not connect before the startup deadline.',
+        sdk_failure: { termination: 'verified' },
+        termination_request: { cause: 'startup_timeout' },
+      } as Task,
+      currentUserId: 'viewer',
+      isLatestTask: true,
+      canStartTurn: true,
+      sessionId: task.session_id,
+      client: { sessions: { prompt } } as unknown as NonNullable<
+        React.ComponentProps<typeof TaskBlock>['client']
+      >,
+    })
+  );
+  expect(outcome()).toHaveTextContent("The agent couldn't start. No files changed.");
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  await waitFor(() => expect(prompt).toHaveBeenCalledWith(task.session_id, 'Retained prompt'));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull());
+});
+
+it('resumes instead of replaying a prompt the viewer did not type', async () => {
+  const prompt = vi.fn().mockResolvedValue(undefined);
+  render(
+    view({
+      task: {
+        ...task,
+        created_by: 'teammate',
+        metadata: { source: 'agor' },
+        status: TaskStatus.FAILED,
+        recorded_tool_count: 0,
+        sdk_failure: { termination: 'verified' },
+        termination_request: { cause: 'startup_timeout' },
+      } as Task,
+      currentUserId: 'viewer',
+      isLatestTask: true,
+      canStartTurn: true,
+      sessionId: task.session_id,
+      client: { sessions: { prompt } } as unknown as NonNullable<
+        React.ComponentProps<typeof TaskBlock>['client']
+      >,
+    })
+  );
+  expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  await waitFor(() => expect(prompt).toHaveBeenCalledTimes(1));
+  expect(prompt.mock.calls[0][1]).not.toBe('Retained prompt');
+});
+
+it('tells the user when Resume fails instead of failing silently', async () => {
+  const prompt = vi.fn().mockRejectedValue(new Error('busy'));
+  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+  render(
+    <App>
+      {view({
+        task: {
+          ...task,
+          status: TaskStatus.FAILED,
+          sdk_failure: { termination: 'verified' },
+          termination_request: { cause: 'heartbeat_lost' },
+          executor_connected_at: task.created_at,
+        } as Task,
+        isLatestTask: true,
+        canStartTurn: true,
+        sessionId: task.session_id,
+        client: { sessions: { prompt } } as unknown as NonNullable<
+          React.ComponentProps<typeof TaskBlock>['client']
+        >,
+      })}
+    </App>
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  expect(await screen.findByText("Couldn't resume. Try again.")).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
+  consoleError.mockRestore();
+});
+
+it('opens the agent settings from a not-connected outcome with the existing handler', () => {
+  const openSettings = vi.fn();
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.FAILED,
+        error_message: 'No scoped claude-code credential is configured for this workspace or user.',
+      },
+      agentic_tool: 'claude-code',
+      onOpenAgenticToolSettings: openSettings,
+    })
+  );
+  expect(screen.getByRole('status')).toHaveTextContent(
+    "Claude Code isn't connected, so nothing ran."
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+  expect(openSettings).toHaveBeenCalledWith('claude-code');
+});
+
+it('shows a failure once: the banner replaces a transcript row repeating its text', () => {
+  const failure = 'Executor exited unexpectedly with code 1.';
+  render(
+    view({
+      task: { ...task, status: TaskStatus.FAILED, error_message: failure },
+      taskMessages: [
+        ...messages,
+        { ...message(2, MessageRole.SYSTEM, failure), type: 'system' },
+        { ...message(3, MessageRole.SYSTEM, 'Unrelated system note'), type: 'system' },
+      ],
+    })
+  );
+  expect(screen.queryByText(failure)).toBeNull();
+  expect(screen.getByText('Unrelated system note')).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByText(failure)).toBeVisible();
+});
+
+it('keeps a user stop neutral, never failed, even with an explanatory reason', () => {
   render(
     view({ task: { ...task, status: TaskStatus.STOPPED, error_message: 'Stopped by request' } })
   );
-  expect(screen.getByRole('status')).toHaveClass('ant-alert-warning');
-  expect(screen.getByRole('status')).toHaveTextContent('Turn stopped: Stopped by request');
+  expect(screen.getByRole('status')).toHaveAttribute('data-notice-type', 'neutral');
+  expect(screen.getByRole('status')).toHaveTextContent('The agent was stopped.');
+  expect(screen.getByRole('button', { name: 'Details' })).toBeVisible();
 });
+
+it.each([undefined, 'Stopped by user.'])(
+  'omits Details for a plain user stop (%s)',
+  (error_message) => {
+    render(view({ task: { ...task, status: TaskStatus.STOPPED, error_message } }));
+    expect(screen.getByRole('status')).toHaveTextContent('The agent was stopped.');
+    expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+  }
+);
 
 it('keeps tool-result errors inside activity details without masking a failed turn', () => {
   const failedCall = message(1, MessageRole.ASSISTANT, [
@@ -392,12 +552,12 @@ it('keeps tool-result errors inside activity details without masking a failed tu
   rerender(
     view({
       ...props,
-      task: { ...task, status: TaskStatus.FAILED, error_message: 'Unable to finish turn' },
+      task: { ...task, status: TaskStatus.FAILED, error_message: ENOENT_SYSTEM_PROMPT },
     })
   );
   expect(screen.getByRole('button', { name: '1 tool call' })).toBe(header);
   expect(header).toHaveAttribute('aria-expanded', 'true');
-  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed: Unable to finish turn');
+  expect(outcome()).toHaveTextContent('The agent hit a problem.');
   expect(screen.getByText('File does not exist')).toBeVisible();
 });
 
@@ -603,4 +763,300 @@ it('keeps a load pin taken before the previous commit’s passive effect runs', 
   await new Promise((resolve) => setTimeout(resolve, 50));
   // The stale effect (from the render before the click) must not release it.
   expect(events).toEqual(['click', 'retain 1']);
+});
+
+it.each([
+  ['the viewer', 'viewer', 'ui', 'You stopped the agent. Any edits are kept.'],
+  ['a teammate', 'teammate', 'ui', 'Ada stopped the agent. Any edits are kept.'],
+  [
+    'a teammate over the CLI or API',
+    'teammate',
+    'api',
+    'Ada stopped the agent. Any edits are kept.',
+  ],
+  ['an agent over MCP', 'viewer', 'mcp', 'The agent was stopped. Any edits are kept.'],
+  ['Agor', undefined, 'agor', 'The agent was stopped. Any edits are kept.'],
+] as const)('names %s as the one who stopped the agent', (_, requester, via, copy) => {
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.STOPPED,
+        termination_request: {
+          cause: 'user_stop',
+          requested_at: task.created_at,
+          requested_by_user_id: requester,
+          requested_via: via,
+        },
+      },
+      currentUserId: 'viewer',
+      userById: new Map([['teammate', { user_id: 'teammate', name: 'Ada Lovelace' } as never]]),
+    })
+  );
+  expect(outcome()).toHaveTextContent(copy);
+  expect(outcome()).toHaveAttribute('data-notice-type', 'neutral');
+});
+
+it('shows one restart surface: the banner replaces the restart notice and its Resume', () => {
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.FAILED,
+        executor_connected_at: task.created_at,
+        sdk_failure: { termination: 'verified', reason: 'heartbeat_lost' },
+        termination_request: { cause: 'heartbeat_lost' },
+      } as Task,
+      taskMessages: [
+        ...messages,
+        {
+          ...message(
+            2,
+            MessageRole.SYSTEM,
+            'The Agor daemon was restarted while this session was running.'
+          ),
+          type: 'daemon_restart',
+        },
+      ],
+      taskMessagesLoaded: true,
+      isLatestTask: true,
+      canStartTurn: true,
+      sessionId: task.session_id,
+      client: {} as NonNullable<React.ComponentProps<typeof TaskBlock>['client']>,
+    })
+  );
+  expect(outcome()).toHaveTextContent('Agor restarted during this run. Any edits are kept.');
+  expect(screen.queryByText(/daemon was restarted/)).toBeNull();
+  expect(screen.getAllByRole('button', { name: /Resume/ })).toHaveLength(1);
+});
+
+it('keeps the real cause when a restart notice lands on a turn that had already ended', () => {
+  render(
+    view({
+      task: { ...task, status: TaskStatus.TIMED_OUT },
+      taskMessages: [
+        ...messages,
+        {
+          ...message(
+            2,
+            MessageRole.SYSTEM,
+            'The Agor daemon was restarted while this session was running.'
+          ),
+          type: 'daemon_restart',
+        },
+      ],
+      taskMessagesLoaded: true,
+      isLatestTask: true,
+      canStartTurn: true,
+      sessionId: task.session_id,
+      client: {} as NonNullable<React.ComponentProps<typeof TaskBlock>['client']>,
+    })
+  );
+  expect(outcome()).toHaveTextContent('The agent stopped waiting for approval.');
+  expect(screen.queryByText(/daemon was restarted/)).toBeNull();
+  expect(screen.getAllByRole('button', { name: /Resume/ })).toHaveLength(1);
+});
+
+const rejectedLimit = (index: number) =>
+  ({
+    ...message(index, MessageRole.SYSTEM, [
+      {
+        type: 'rate_limit',
+        status: 'rejected',
+        rateLimitType: 'five_hour',
+        resetsAt: Math.floor(Date.now() / 1000) + 3600,
+        text: 'Rate limited (five_hour). Waiting for limit to reset...',
+      },
+    ]),
+    type: 'system',
+  }) as Message;
+
+it("names the usage limit when the agent's own limit notice ended the run", () => {
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.FAILED,
+        error_message:
+          'Agor could not confirm a successful response. Review any output and tool activity before retrying.',
+      },
+      agentic_tool: 'claude-code',
+      taskMessages: [
+        messages[0],
+        rejectedLimit(1),
+        message(2, MessageRole.ASSISTANT, [
+          { type: 'text', text: "You've hit your session limit · resets 10:40am" },
+        ]),
+      ],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(outcome()).toHaveTextContent('Claude Code usage limit reached. Try again after');
+});
+
+it('names the real failure when the run went on using tools after a usage-limit wait', () => {
+  render(
+    view({
+      task: { ...task, status: TaskStatus.FAILED, error_message: ENOENT_SYSTEM_PROMPT },
+      agentic_tool: 'claude-code',
+      taskMessages: [
+        messages[0],
+        rejectedLimit(1),
+        message(2, MessageRole.ASSISTANT, [
+          { type: 'tool_use', id: 'read-call', name: 'Read', input: { file_path: 'a.txt' } },
+        ]),
+        message(3, MessageRole.USER, [
+          { type: 'tool_result', tool_use_id: 'read-call', content: 'contents' },
+        ]),
+      ],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(outcome()).toHaveTextContent('The agent hit a problem.');
+  expect(screen.getByText('Rate limited (five_hour).')).toBeVisible();
+});
+
+it('lets the usage-limit banner own the reset time on a finished run', () => {
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.FAILED,
+        executor_connected_at: task.created_at,
+        error_message:
+          'Agor could not confirm a successful response. Review any output and tool activity before retrying.',
+      },
+      agentic_tool: 'claude-code',
+      taskMessages: [
+        ...messages,
+        {
+          ...message(2, MessageRole.SYSTEM, [
+            {
+              type: 'rate_limit',
+              status: 'rejected',
+              rateLimitType: 'five_hour',
+              resetsAt,
+              text: 'Rate limited (five_hour). Resets at 10/5/2026. Waiting for limit to reset...',
+            },
+          ]),
+          type: 'system',
+        },
+      ],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(outcome()).toHaveTextContent('Claude Code usage limit reached. Try again after');
+  expect(screen.queryByText(/Waiting for limit to reset/)).toBeNull();
+  expect(screen.queryByText(/Resets:/)).toBeNull();
+});
+
+it('keeps the reset time on the rate-limit card when the banner does not show it', () => {
+  const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+  const limitMessage = {
+    ...message(2, MessageRole.SYSTEM, [
+      {
+        type: 'rate_limit',
+        status: 'rejected',
+        rateLimitType: 'five_hour',
+        resetsAt,
+        text: 'Rate limited (five_hour). Resets at 10/5/2026. Waiting for limit to reset...',
+      },
+    ]),
+    type: 'system',
+  } as Message;
+  const { rerender } = render(
+    view({
+      task: { ...task, status: TaskStatus.FAILED, error_message: 'socket has been disconnected' },
+      taskMessages: [...messages, limitMessage],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(outcome()).toHaveTextContent('Lost connection to the agent.');
+  expect(screen.getByText('Rate limited (five_hour).')).toBeVisible();
+  expect(screen.queryByText(/Waiting for limit to reset/)).toBeNull();
+  expect(screen.getByText(/Resets:/)).toBeVisible();
+  rerender(
+    view({
+      task: { ...task, status: TaskStatus.COMPLETED },
+      taskMessages: [...messages, limitMessage],
+      taskMessagesLoaded: true,
+    })
+  );
+  expect(outcome()).toBeNull();
+  expect(screen.getByText(/Resets:/)).toBeVisible();
+});
+
+it('opens technical details with the raw cause codes, agent, timing and task ID', () => {
+  render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.FAILED,
+        model: 'gpt-6-astra',
+        started_at: '2026-09-01T00:00:00.000Z',
+        completed_at: '2026-09-01T00:03:29.000Z',
+        executor_connected_at: '2026-09-01T00:00:01.000Z',
+        recorded_tool_count: 4,
+        error_message: 'Executor heartbeat lost; the executor may have crashed or disconnected.',
+        sdk_failure: { reason: 'heartbeat_lost', termination: 'verified' },
+        termination_request: { cause: 'heartbeat_lost', requested_at: '' },
+      } as Task,
+      agentic_tool: 'codex',
+    })
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  const region = screen.getByRole('region', { name: 'Technical details' });
+  for (const text of [
+    'Executor heartbeat lost; the executor may have crashed or disconnected.',
+    'heartbeat_lost',
+    'verified',
+    'codex · gpt-6-astra',
+    '4',
+    task.task_id,
+  ]) {
+    expect(region).toHaveTextContent(text);
+  }
+  expect(region).toHaveTextContent(/Timing.*3m 29s/);
+});
+
+it('gives a stop Details only when it has a cause code or a recorded requester', () => {
+  const { rerender } = render(view({ task: { ...task, status: TaskStatus.STOPPED } }));
+  expect(screen.queryByRole('button', { name: 'Details' })).toBeNull();
+  rerender(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.STOPPED,
+        termination_request: {
+          cause: 'user_stop',
+          requested_at: task.created_at,
+          requested_by_user_id: 'teammate',
+          requested_via: 'ui',
+        },
+      },
+      userById: new Map([['teammate', { user_id: 'teammate', name: 'Ada Lovelace' } as never]]),
+    })
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+  const region = screen.getByRole('region', { name: 'Technical details' });
+  expect(region).toHaveTextContent('user_stop');
+  expect(region).toHaveTextContent('Ada Lovelace · ui');
+});
+
+it('keeps received output visible without a typing indicator after cleanup fails', () => {
+  const { container } = render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.STOPPING,
+        sdk_failure: { termination: 'unverified' } as Task['sdk_failure'],
+        termination_request: { cause: 'heartbeat_lost', requested_at: 'now' },
+      },
+    })
+  );
+  expect(screen.getByText('Visible answer')).toBeVisible();
+  expect(screen.getByText('Retained prompt')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Cleanup needs attention');
+  expect(container.querySelector('.ant-bubble-loading')).toBeNull();
 });

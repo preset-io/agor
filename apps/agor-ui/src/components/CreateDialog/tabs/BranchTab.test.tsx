@@ -92,6 +92,7 @@ describe('BranchTab — branch storage policy', () => {
         repoById={new Map([[repo.repo_id, repo]])}
         boardById={new Map([[board.board_id, board]])}
         currentBoardId={board.board_id}
+        defaultBoardId={board.board_id}
         onValidityChange={vi.fn()}
         formRef={formRef}
         branchStorageConfig={branchStorageConfig}
@@ -146,5 +147,56 @@ describe('BranchTab — branch storage policy', () => {
     const result = await formRef.current?.();
     expect(result).toBeTruthy();
     expect(result!.storage_mode).toBe('worktree');
+  });
+});
+
+describe('BranchTab — board selection & placement', () => {
+  const board1 = makeBoard({ board_id: 'board-1', name: 'Board One' });
+  const board2 = makeBoard({ board_id: 'board-2', name: 'Board Two' });
+
+  async function renderWithBoards(defaultBoardId?: string) {
+    const formRef: React.MutableRefObject<(() => Promise<BranchTabConfig | null>) | null> = {
+      current: null,
+    };
+    const repo = makeRepo({ default_branch: 'main' });
+    render(
+      <BranchTab
+        repoById={new Map([[repo.repo_id, repo]])}
+        boardById={
+          new Map([
+            [board1.board_id, board1],
+            [board2.board_id, board2],
+          ])
+        }
+        currentBoardId="board-1"
+        defaultBoardId={defaultBoardId}
+        defaultPosition={{ x: 5, y: 6 }}
+        onValidityChange={vi.fn()}
+        formRef={formRef}
+      />
+    );
+    await waitFor(() => expect(screen.getByLabelText(/Source Branch/i)).toHaveValue('main'));
+    fireEvent.change(screen.getByLabelText(/Branch Name/i), { target: { value: 'feat-x' } });
+    return { formRef };
+  }
+
+  it('pre-selects the default board and keeps viewport placement on the current board', async () => {
+    const { formRef } = await renderWithBoards('board-1');
+    const result = await formRef.current?.();
+    expect(result!.board_id).toBe('board-1');
+    // Chosen board is the one that's open → viewport centre applies.
+    expect(result!.position).toEqual({ x: 5, y: 6 });
+  });
+
+  it('respects switching to another board and drops viewport placement for it', async () => {
+    const { formRef } = await renderWithBoards('board-1');
+
+    fireEvent.mouseDown(screen.getByLabelText('Board'));
+    fireEvent.click(await screen.findByText('Board Two'));
+
+    const result = await formRef.current?.();
+    expect(result!.board_id).toBe('board-2');
+    // A different board than the one open → use that board's default placement.
+    expect(result!.position).toBeUndefined();
   });
 });

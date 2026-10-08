@@ -1,4 +1,4 @@
-/** Hosted OpenCode checkpoint contracts; see context/explorations/opencode-cloud.md. */
+/** Hosted OpenCode checkpoint contracts; see context/concepts/opencode-hosted.md. */
 
 /** Immutable description of one sealed checkpoint file. */
 export interface OpenCodeCheckpointManifest {

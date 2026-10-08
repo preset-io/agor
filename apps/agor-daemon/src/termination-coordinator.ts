@@ -1,6 +1,6 @@
 import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
-import { generateId, shortId } from '@agor/core/db';
+import { generateId, getCurrentTenantId, shortId } from '@agor/core/db';
 import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import type {
   Params,
@@ -10,6 +10,7 @@ import type {
   TaskID,
   TerminationCause,
   TerminationCoordinationPendingCode,
+  TerminationRequest,
 } from '@agor/core/types';
 import {
   isAgenticToolName,
@@ -26,6 +27,11 @@ import {
   untrackExecutorProcess,
 } from './executor-tracking.js';
 
+import {
+  DEFAULT_CLEANUP_TIMEOUT_MS,
+  runExecutorCleanupCommand,
+} from './utils/executor-cleanup-command.js';
+
 export type TerminationResult =
   | { status: 'terminal' | 'condition_changed'; task: Task }
   | { status: 'unverified'; task: Task; reason: string }
@@ -41,6 +47,8 @@ export interface TerminationInput {
   taskId: TaskID | string;
   cause: TerminationCause;
   errorMessage: string;
+  /** Who asked, recorded on the request so the UI can name them. */
+  requestedBy?: Pick<TerminationRequest, 'requested_by_user_id' | 'requested_via'>;
   params?: Params;
   signalDelayMs?: number;
   /** Test/configuration seam for the cooperative socket-stop grace window. */
@@ -107,6 +115,11 @@ function coordinationLeaseMs(input: TerminationInput, task: Task): number {
       LOCAL_WRAPPER_EXIT_GRACE_MS +
       DEFAULT_EXECUTOR_TERM_GRACE_MS +
       DEFAULT_EXECUTOR_KILL_GRACE_MS +
+      (task.executor_mode === 'templated' &&
+      input.app.get?.('config')?.execution?.executor_cleanup_command_template
+        ? (input.app.get?.('config')?.execution?.executor_cleanup_timeout_ms ??
+          DEFAULT_CLEANUP_TIMEOUT_MS)
+        : 0) +
       COORDINATION_LEASE_MARGIN_MS
   );
 }
@@ -157,12 +170,57 @@ function remoteUnverifiedReason(task: Task, waitedMs: number): string {
   );
 }
 
-function unverifiedMessage(taskId: string, detail: string): string {
-  return (
-    `${detail} Agor could not verify that this executor stopped. It may still be running ` +
-    `and writing to the branch. A branch owner or administrator may force-fail Task ` +
-    `${shortId(taskId)}, but force-failing does not prove that the executor stopped.`
+function unverifiedMessage(): string {
+  return 'Agor could not confirm that the previous work stopped. Messages already received are saved. Retry cleanup before continuing; the previous work may still be changing files.';
+}
+
+/** Run at most once per durable recovery revision, even across daemon failover. */
+async function containRemoteExecution(input: TerminationInput, task: Task, waitedMs: number) {
+  const command = input.app.get?.('config')?.execution?.executor_cleanup_command_template;
+  if (!command || isTerminalTaskStatus(task.status)) {
+    return { status: 'unverified' as const, reason: remoteUnverifiedReason(task, waitedMs) };
+  }
+  const token = task.termination_request?.coordination?.claim_token;
+  if (!token) return { status: 'unverified' as const, reason: 'Cleanup ownership changed.' };
+  const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
+  const context = await runInFreshTenantWriteDatabase(input, async () => {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) return null; // Never ask a shared supervisor to resolve an unscoped Task.
+    const session = await input.app
+      .service('sessions')
+      .get(task.session_id, internalParams(input.params));
+    if (!session.branch_id) return null;
+    const started = await tasks.beginCleanupAttempt(
+      task.task_id,
+      token,
+      internalParams(input.params)
+    );
+    const request = started?.termination_request;
+    if (!request?.cleanup_attempt) return null;
+    return {
+      version: 1 as const,
+      tenant_id: tenantId,
+      task_id: task.task_id,
+      session_id: task.session_id,
+      branch_id: session.branch_id,
+      requested_at: request.requested_at,
+      attempt_id: request.cleanup_attempt.attempt_id,
+      cause: request.cause,
+    };
+  });
+  if (!context)
+    return {
+      status: 'unverified' as const,
+      reason: 'Cleanup was already attempted or its execution context could not be verified.',
+    };
+  const result = await runExecutorCleanupCommand(
+    command,
+    context,
+    input.app.get?.('config')?.execution?.executor_cleanup_timeout_ms ?? DEFAULT_CLEANUP_TIMEOUT_MS
   );
+  return result.confirmed
+    ? { status: 'verified_absent' as const, helperConfirmed: true as const }
+    : { status: 'unverified' as const, reason: result.diagnostic };
 }
 
 async function claimRequest(input: TerminationInput) {
@@ -173,6 +231,7 @@ async function claimRequest(input: TerminationInput) {
         taskId: String(input.taskId),
         cause: input.cause,
         errorMessage: input.errorMessage,
+        requestedBy: input.requestedBy,
         sdkFailure: input.sdkFailure,
         expectedStatus: input.expectedStatus,
         expectedHeartbeatAt: input.expectedHeartbeatAt,
@@ -266,18 +325,15 @@ async function runContainment(
     return { status: 'condition_changed', task: current };
   }
   const executorQuiesced = !!current.termination_request?.executor_quiesced_at;
-  // A scoped remote executor is the only component able to authoritatively
-  // quiesce its SDK runtime. Local mode additionally verifies PGID absence.
+  // Remote containment is proven by scoped cooperative quiescence or the
+  // trusted cleanup helper. Local mode additionally verifies PGID absence.
   const remoteMode = current.executor_mode === 'templated';
   const containment = input.absenceVerified
     ? ({ status: 'verified_absent' } as const)
     : remoteMode
       ? executorQuiesced
         ? ({ status: 'verified_absent' } as const)
-        : ({
-            status: 'unverified',
-            reason: remoteUnverifiedReason(current, waitedMs),
-          } as const)
+        : await containRemoteExecution(input, current, waitedMs)
       : executorQuiesced
         ? await containExecutorProcess(
             current.session_id,
@@ -295,19 +351,28 @@ async function runContainment(
   }
   if (!coordinationToken) return { status: 'condition_changed', task: current };
   // Hosted OpenCode runs inside the executor's own Job, so its acknowledged quiescence covers the server.
+  const helperConfirmed = 'helperConfirmed' in containment && containment.helperConfirmed;
   const hostedOpenCodeQuiesced =
     remoteMode &&
-    executorQuiesced &&
+    (executorQuiesced || helperConfirmed) &&
     tool === 'opencode' &&
     resolveOpenCodeCapabilities(input.app.get('config') ?? {}).mode === 'managed-projection';
+  // An opted-in launcher refused admission before creating anything, so there
+  // is no provider work to quiesce. Every other cause keeps the safeguard.
+  // Key on the caller's cause: a Stop that arrived first keeps the persisted
+  // `user_stop` cause even though the refusal proved absence.
+  const launchRefused = input.absenceVerified === true && input.cause === 'launch_refused';
   const descriptorUnverifiedReason =
-    isAgenticToolName(tool) && !hostedOpenCodeQuiesced
+    isAgenticToolName(tool) && !hostedOpenCodeQuiesced && !launchRefused
       ? getAgenticToolIntegration(tool).unverifiedTerminationReason
       : undefined;
   const unverifiedReason =
     containment.status === 'unverified' ? containment.reason : descriptorUnverifiedReason;
   if (unverifiedReason !== undefined) {
     const reason = unverifiedReason;
+    console.warn(
+      `[task.cleanup] event=unverified task_id=${shortId(current.task_id)} reason=${reason}`
+    );
     const diagnosis: SdkFailure = current.sdk_failure
       ? { ...current.sdk_failure, termination: 'unverified' }
       : {
@@ -322,8 +387,10 @@ async function runContainment(
         {
           taskId: current.task_id,
           outcome: 'unverified',
+          expectedExecutorQuiescedAt: current.termination_request?.executor_quiesced_at ?? null,
+          cleanupDiagnostic: reason,
           sdkFailure: diagnosis,
-          errorMessage: unverifiedMessage(current.task_id, reason),
+          errorMessage: unverifiedMessage(),
           coordinationToken,
         },
         { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
@@ -333,6 +400,18 @@ async function runContainment(
       return { status: 'unverified', task: settlement.task, reason };
     }
     if (settlement.outcome === 'condition_changed') {
+      // A first acknowledgement can arrive while the helper or local process
+      // check is outstanding. The repository atomically refuses to bury that
+      // new evidence under an unverified guard. Re-evaluate it with the same
+      // owner; quiescence is monotonic, so this cannot spin or re-run the helper.
+      if (
+        !executorQuiesced &&
+        settlement.task.status === TaskStatus.STOPPING &&
+        settlement.task.termination_request?.coordination?.claim_token === coordinationToken &&
+        settlement.task.termination_request.executor_quiesced_at
+      ) {
+        return runContainment(input, settlement.task, tool);
+      }
       return { status: 'condition_changed', task: settlement.task };
     }
     return { status: 'unverified', task: settlement.task, reason };
@@ -515,6 +594,7 @@ export async function forceFailUnverifiedTask(input: {
   app: Application;
   taskId: TaskID | string;
   terminationRequestedAt: string;
+  recoveryRevision?: string;
   confirmation: string;
   params?: Params;
 }): Promise<ForceFailUnverifiedResult> {
@@ -538,7 +618,9 @@ export async function forceFailUnverifiedTask(input: {
       taskId: current.task_id,
       outcome: 'forced_unverified',
       expectedTerminationRequestedAt: input.terminationRequestedAt,
-      errorMessage: 'Force-failed by an authorized user; executor termination remains unverified.',
+      expectedRecoveryRevision: input.recoveryRevision,
+      errorMessage:
+        'Session reopened by an authorized user without confirmation that the previous work stopped.',
     },
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
   );

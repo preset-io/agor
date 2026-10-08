@@ -7,14 +7,12 @@
 
 import type { ContextUsageSnapshot, Task } from './types/task.js';
 
-// Historical export name: this fallback also covers error results after real
-// output/tool work. Do not assert the provider returned nothing or imply replay
-// is safe; the closed result envelope does not establish either fact.
-export const SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE =
-  'Agor could not confirm a successful response. Review any output and tool activity before retrying.';
+import {
+  SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
+  SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+} from './types/turn-failure-messages.js';
 
-export const SAFE_MISSING_PROVIDER_RESULT_MESSAGE =
-  'The Claude Code stream closed without a final result. Completion could not be confirmed. Review any output and tool activity before retrying.';
+export { SAFE_MISSING_PROVIDER_RESULT_MESSAGE, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE };
 
 export type SafeNormalizedSdkResponse = NonNullable<Task['normalized_sdk_response']>;
 
@@ -124,6 +122,17 @@ export function projectClaudeResultResponse(value: unknown): SafeClaudeResultRes
     ...(totalCostUsd !== undefined ? { total_cost_usd: totalCostUsd } : {}),
     ...(usage ? { usage } : {}),
   };
+}
+
+/**
+ * The closed failure code of a non-success Claude result, safe to store as
+ * diagnostic detail. Provider prose (`errors[]`, `result`) is never read here.
+ */
+export function claudeResultFailureCode(value: unknown): string | undefined {
+  const result = projectClaudeResultResponse(value);
+  if (!result) return undefined;
+  if (result.subtype !== 'success' && result.subtype !== 'unknown') return result.subtype;
+  return result.is_error === true ? 'is_error' : undefined;
 }
 
 /**

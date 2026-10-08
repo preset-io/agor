@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import { normalizePages } from 'nextra/normalize-pages';
 import { getPageMap } from 'nextra/page-map';
 import { importPage } from 'nextra/pages';
+import { SharePost } from '../../../components/SharePost';
 import { FAQ_SCHEMA } from '../../../lib/faqSchema';
 import {
   DEFAULT_DESCRIPTION,
@@ -122,6 +123,8 @@ export default async function Page(props: PageProps) {
   }
 
   const isBlogPost = params.mdxPath?.[0] === 'blog' && params.mdxPath.length > 1;
+  const postTitle = String(frontMatter.title ?? metadata.title ?? '');
+  const postUrl = getCanonicalUrl(pathname, frontMatter.canonical);
   const blogPostingSchema =
     isBlogPost && frontMatter.date
       ? {
@@ -197,9 +200,11 @@ export default async function Page(props: PageProps) {
               By {frontMatter.author} · {formatPostDate(frontMatter.date)}
             </p>
           ) : null}
+          <SharePost title={postTitle} url={postUrl} placement="post-top" />
         </header>
       ) : null}
       <MDXContent {...props} params={params} />
+      {isBlogPost ? <SharePost title={postTitle} url={postUrl} placement="post-end" /> : null}
     </Wrapper>
   );
 }

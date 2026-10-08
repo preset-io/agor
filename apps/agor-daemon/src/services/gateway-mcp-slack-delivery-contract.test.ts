@@ -16,8 +16,7 @@
  *
  * This is deliberately a shared TEST, not a shared delivery engine. Extracting
  * the engine is a post-merge follow-up; pinning the contract first is what
- * makes that extraction checkable. See
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.1.6.
+ * makes that extraction checkable.
  */
 
 import { runWithTenantContext } from '@agor/core/db';
@@ -270,7 +269,12 @@ function connectLane(options: LaneOptions): LaneHarness {
         }) as MCPServer,
     },
     threadMapRepo: {
-      findBySession: async () => ({ id: 'map-1', channel_id: 'gateway-1', thread_id: THREAD }),
+      findByChannelAndThread: async () => ({
+        id: 'map-1',
+        session_id: 'session-1',
+        channel_id: 'gateway-1',
+        thread_id: THREAD,
+      }),
       claimMetadataFlag: async () => false,
     },
     activeListeners: new Map([

@@ -443,6 +443,8 @@ export function useAgorData(
   // items than a board route (see HOME_DEFERRED_ITEMS).
   const [initialLoadPlan, setInitialLoadPlan] =
     useState<readonly InitialLoadItemKey[]>(ALL_INITIAL_LOAD_KEYS);
+  // The plan as of the latest fetch, for a reconnect to tell whether it is unfinished.
+  const initialLoadPlanRef = useRef<readonly InitialLoadItemKey[]>(ALL_INITIAL_LOAD_KEYS);
 
   // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
   // when the socket flaps (e.g. waking from sleep on a flaky network). The
@@ -594,19 +596,27 @@ export function useAgorData(
           debugTimer?.markStage('fetching');
           agorStore.getState().setError(null);
           agorStore.getState().setItemCounts({});
+          initialLoadPlanRef.current = ALL_INITIAL_LOAD_KEYS;
           setInitialLoadPlan(ALL_INITIAL_LOAD_KEYS);
         }
 
+        // A reconnect can be the first successful bootstrap after an error.
+        // Finish its checklist too, otherwise App's first-load gate stays closed.
+        const updateInitialProgress =
+          !silent ||
+          initialLoadPlanRef.current.some(
+            (key) => agorStore.getState().itemCounts[key] === undefined
+          );
         // Marks a tracked item complete (and captures its count from the
-        // resolved list length) when its promise resolves. No-ops on
-        // silent (reconnect) refetches so initial-load progress isn't mutated.
+        // resolved list length) when its promise resolves. Routine reconnects
+        // leave the completed checklist alone.
         const track = <T extends ReadonlyArray<unknown>>(
           key: InitialLoadItemKey,
           p: Promise<T>
         ): Promise<T> => {
           const timedPromise = debugTimer?.track(key, p) ?? p;
           return timedPromise.then((r) => {
-            if (!silent && authorityIsCurrent())
+            if (updateInitialProgress && authorityIsCurrent())
               agorStore.getState().setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
@@ -869,8 +879,13 @@ export function useAgorData(
             interimSessionById
           ) ??
           undefined;
-        // No displayed board (Home): no board partition is read.
-        if (!boardScope && !silent) setInitialLoadPlan(HOME_INITIAL_LOAD_KEYS);
+        // No displayed board (Home): no board partition is read. A reconnect
+        // finishing a failed bootstrap re-plans for the route it lands on.
+        if (updateInitialProgress) {
+          const plan = boardScope ? ALL_INITIAL_LOAD_KEYS : HOME_INITIAL_LOAD_KEYS;
+          initialLoadPlanRef.current = plan;
+          setInitialLoadPlan(plan);
+        }
 
         // Queued streaming patches are live writes too: apply them now so the
         // touched overlay below sees them in the store, not only in the queue.
@@ -982,7 +997,7 @@ export function useAgorData(
           boardScope
             ? loadDisplayedBoard(boardScope).then((loaded) => {
                 // Settled (loaded, or failed with a retryable partition error).
-                if (!silent && authorityIsCurrent()) {
+                if (updateInitialProgress && authorityIsCurrent()) {
                   agorStore.getState().setItemCounts((prev) => ({ ...prev, board: 1 }));
                 }
                 return loaded;
@@ -1092,6 +1107,8 @@ export function useAgorData(
 
         debugTimer?.endIndexing();
         debugFinishStatus = 'success';
+
+        agorStore.getState().setError(null);
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.

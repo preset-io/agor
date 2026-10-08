@@ -3,13 +3,16 @@
 import {
   Activity,
   BookOpen,
+  Bot,
   Boxes,
   ChevronLeft,
   ChevronRight,
   Cloud,
+  Command,
   Eye,
   GitBranch,
   KeyRound,
+  LayoutDashboard,
   type LucideIcon,
   RefreshCw,
   ScrollText,
@@ -21,14 +24,17 @@ import {
 import Link from 'next/link';
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { onCloudCtaClick } from '../lib/cloudCtaAttribution';
 import { DISCORD_INVITE_URL, GITHUB_REPO_URL, PRESET_URL, presetUtm } from '../lib/links';
 import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import styles from './AgorCloudLanding.module.css';
 import Aurora from './Aurora/Aurora';
-import { HubSpotFormModal } from './HubSpotFormModal';
+import { CloudCtaLink } from './CloudCtaLink';
+import { FinePrint } from './FinePrint';
+import { FooterLegal } from './FooterLegal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import Lightfall from './Lightfall/Lightfall';
+import { LandingLink } from './landing/LandingLink';
+import { LANDING_PAGES, type LandingPageId } from './landing/pages';
 
 const basePath = getBasePath();
 
@@ -154,7 +160,7 @@ const deployments: Array<{
   featured?: boolean;
 }> = [
   {
-    badge: 'Available in beta',
+    badge: 'Available now',
     badgeClass: styles.badgeNow,
     title: 'Agor Cloud (hosted)',
     body: 'A managed, single-tenant Agor instance on our infrastructure. Up in minutes, always on the latest secured release, hardened to sit safely on the public internet.',
@@ -179,15 +185,15 @@ const deployments: Array<{
 const security: Array<{ title: string; body: string }> = [
   {
     title: 'Hardened by default',
-    body: 'The open-source flags that widen attack surface (shared dev boxes, broad bypass modes) are off in Cloud. We know which knobs belong in which position because we run it ourselves.',
+    body: 'The Community Edition flags that widen attack surface (shared dev boxes, broad bypass modes) are off in Cloud. We know which knobs belong in which position because we run it ourselves.',
   },
   {
     title: 'Substrate isolation',
     body: 'Sessions and workspaces are routed through tenant-scoped runtime and storage boundaries rather than host-user impersonation.',
   },
   {
-    title: 'Independently reviewed',
-    body: 'Built against a documented threat model, with independent security review and penetration testing as part of how the service is operated.',
+    title: 'Independent testing underway',
+    body: 'Built against a documented threat model, with an independent security review and penetration test underway ahead of general availability.',
   },
   {
     title: 'SOC 2 Type II in progress',
@@ -195,9 +201,16 @@ const security: Array<{ title: string; body: string }> = [
   },
 ];
 
+const PILLAR_ICONS: Record<LandingPageId, LucideIcon> = {
+  multiplayer: Users,
+  board: LayoutDashboard,
+  teammates: Bot,
+  'command-center': Command,
+  governance: ShieldCheck,
+};
+
 export function AgorCloudLanding() {
   const shellRef = useRef<HTMLElement>(null);
-  const [isFormOpen, setIsFormOpen] = useState(false);
   const [isDemoOpen, setIsDemoOpen] = useState(false);
   // Lightfall runs its own requestAnimationFrame/WebGL loop regardless of
   // CSS visibility, so respecting reduced-motion has to happen via its
@@ -210,15 +223,6 @@ export function AgorCloudLanding() {
     media.addEventListener('change', onChange);
     return () => media.removeEventListener('change', onChange);
   }, []);
-  // Which CTA opened the (single, shared) beta form, stamped into the form's
-  // hidden source_page field for attribution, matching the site convention.
-  const [formSource, setFormSource] = useState('cloud-page-hero');
-
-  const openForm = (source: string) => {
-    onCloudCtaClick(source, 'hubspot_modal');
-    setFormSource(source);
-    setIsFormOpen(true);
-  };
 
   const [activeCapability, setActiveCapability] = useState(0);
 
@@ -303,25 +307,18 @@ export function AgorCloudLanding() {
         <div className={styles.heroInner} data-reveal>
           <p className={styles.heroBadge}>
             <span className={styles.heroBadgeDot} aria-hidden="true" />
-            Agor Cloud · Private beta
+            Agor Cloud is here
           </p>
           <h1>
             Fully managed Agor for your <span className={styles.headingStrong}>whole team</span>
           </h1>
           <p className={styles.heroSub}>
-            Agor is open, and yours to run. Agor Cloud is for teams who’d rather not. We operate a
-            hardened, always-current Agor for you, with scaling, isolation, governance, and
-            observability handled, so your team can focus on the work, not the platform underneath
-            it.
+            Agor Community Edition is yours to run. Agor Cloud is for teams who’d rather spend that
+            time working together. We operate a hardened, always-current Agor for you, with scaling,
+            isolation, governance, and observability handled.
           </p>
           <div className={styles.heroActions}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              onClick={() => openForm('cloud-page-hero')}
-            >
-              Request an invite
-            </button>
+            <CloudCtaLink placement="cloud-page-hero" className={styles.primaryButton} />
             <button
               type="button"
               className={styles.secondaryButton}
@@ -335,6 +332,39 @@ export function AgorCloudLanding() {
             </Link>
           </div>
           <p className={styles.metaLine}>Built and operated by the team behind Preset Cloud.</p>
+        </div>
+      </section>
+
+      {/* --- What your team gets: the product pillars, each linking to its
+          landing page (hub-and-spoke, positioning order). --- */}
+      <section className={styles.section} data-reveal>
+        <div className={styles.sectionHead}>
+          <span className={styles.eyebrow}>What your team gets</span>
+          <h2>
+            All of Agor, <span className={styles.headingAccent}>run for you</span>
+          </h2>
+        </div>
+        <div className={`${styles.grid} ${styles.pillarGrid}`}>
+          {LANDING_PAGES.map((page) => {
+            const Icon = PILLAR_ICONS[page.id];
+            return (
+              <LandingLink
+                key={page.id}
+                page={page.id}
+                placement="cloud-page-pillars"
+                className={`${styles.card} ${styles.pillarCard}`}
+              >
+                <span className={styles.cardIcon}>
+                  <Icon size={20} aria-hidden="true" />
+                </span>
+                <h3>{page.navLabel}</h3>
+                <p>{page.tagline}</p>
+                <span className={styles.pillarMore}>
+                  Explore <span aria-hidden="true">→</span>
+                </span>
+              </LandingLink>
+            );
+          })}
         </div>
       </section>
 
@@ -352,7 +382,7 @@ export function AgorCloudLanding() {
           />
         </div>
         <div className={styles.sectionHead}>
-          <span className={styles.eyebrow}>Open source, minus the ops</span>
+          <span className={styles.eyebrow}>Self-hosting, minus the ops</span>
           <h2>
             You can run Agor yourself.
             <br />
@@ -389,8 +419,8 @@ export function AgorCloudLanding() {
             Everything running, <span className={styles.headingAccent}>nothing to babysit</span>
           </h2>
           <p className={styles.lead}>
-            The same platform you know from the open project, operated for you with the rigor Preset
-            brings to Preset Cloud.
+            The same platform you know from Agor Community Edition, operated for you with the rigor
+            Preset brings to Preset Cloud.
           </p>
         </div>
         {/* Screenshot carousel for the three capabilities with something
@@ -663,18 +693,9 @@ export function AgorCloudLanding() {
           <h2>
             Bring your team to <span className={styles.headingAccent}>Agor Cloud</span>
           </h2>
-          <p>
-            We’re onboarding teams into the private beta now. Tell us about your team and use case,
-            and we’ll take it from there: a quick fit call, then you’re set up in minutes.
-          </p>
+          <p>Agor Cloud is here. Start from the console, and we’ll help your team get set up.</p>
           <div className={styles.heroActions}>
-            <button
-              type="button"
-              className={styles.primaryButton}
-              onClick={() => openForm('cloud-page-final')}
-            >
-              Request an invite
-            </button>
+            <CloudCtaLink placement="cloud-page-final" className={styles.primaryButton} />
             <button
               type="button"
               className={styles.secondaryButton}
@@ -706,7 +727,7 @@ export function AgorCloudLanding() {
               Announcement
             </Link>
             <Link href="/guide/getting-started" className={styles.footerLink}>
-              Self-host
+              Community Edition
             </Link>
             <Link
               href={GITHUB_REPO_URL}
@@ -732,23 +753,15 @@ export function AgorCloudLanding() {
             >
               Preset
             </Link>
-            <button
-              type="button"
-              className={styles.footerLink}
-              onClick={() => openForm('cloud-page-footer')}
-            >
-              Request an invite
-            </button>
+            <CloudCtaLink placement="cloud-page-footer" className={styles.footerLink} />
           </div>
         </div>
+        <FooterLegal className={styles.footerLegal} />
+        <p className={styles.footerTrademarks}>
+          <FinePrint />
+        </p>
       </footer>
 
-      <HubSpotFormModal
-        isOpen={isFormOpen}
-        onClose={() => setIsFormOpen(false)}
-        title="Request an Agor Cloud invite"
-        sourceCta={formSource}
-      />
       <HubSpotMeetingModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
     </main>
   );

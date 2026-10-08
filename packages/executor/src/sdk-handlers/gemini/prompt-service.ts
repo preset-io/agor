@@ -30,6 +30,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -131,8 +132,9 @@ export class GeminiPromptService {
     taskId?: TaskID,
     permissionMode?: PermissionMode,
     onActivity?: SdkActivityCallback,
-    outerAbortSignal?: AbortSignal
+    abortController?: AbortController
   ): AsyncGenerator<GeminiStreamEvent> {
+    const outerAbortSignal = abortController?.signal;
     const controller = new AbortController();
     const abort = () => controller.abort();
     if (outerAbortSignal?.aborted) abort();
@@ -427,6 +429,10 @@ export class GeminiPromptService {
     } finally {
       try {
         await disposeGeminiRuntime(config, cleanup);
+      } catch (error) {
+        if (abortController) markExecutorCleanupUnverified(abortController);
+        // biome-ignore lint/correctness/noUnsafeFinally: Preserve the existing disposal rejection after recording cleanup uncertainty.
+        throw error;
       } finally {
         outerAbortSignal?.removeEventListener('abort', abort);
         this.activeControllers.delete(sessionId);

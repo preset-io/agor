@@ -7,12 +7,16 @@
   "scripts": {
     "test:blog": "vitest run lib/blogPublication.test.ts",
     "dev": "next dev -p 3001",
-    "build": "next build && next-sitemap --config next-sitemap.config.cjs && pnpm run build:search",
-    "start": "next start",
+    "build": "next build --turbopack && pnpm run build:post",
+    "build:webpack": "next build && pnpm run build:post",
+    "build:post": "next-sitemap --config next-sitemap.config.cjs && pnpm run build:search",
+    "start": "serve out --listen 3000",
+    "serve": "pnpm run build && node scripts/serve-and-open.mjs",
+    "preview": "node scripts/serve-and-open.mjs",
     "typecheck": "tsc --noEmit --incremental false",
     "validate:brand-assets": "tsx scripts/validate-brand-assets.ts",
     "validate:social-metadata": "tsx scripts/validate-social-metadata.ts",
-    "validate:analytics": "tsx scripts/validate-analytics.ts",
+    "validate:analytics": "tsx --test scripts/validate-analytics.test.ts && tsx scripts/validate-analytics.ts",
     "build:search": "pagefind --site out --output-path out/_pagefind && rm -rf public/_pagefind && cp -R out/_pagefind public/_pagefind"
   },
   "dependencies": {
@@ -31,8 +35,10 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/react": "^19.3.0",
+    "@types/react-dom": "~19.3.0",
     "next-sitemap": "^4.2.3",
     "pagefind": "^1.5.2",
+    "serve": "^14.2.6",
     "sharp": "0.35.4",
     "tsx": "4.23.15",
     "typescript": "^6.0.3"

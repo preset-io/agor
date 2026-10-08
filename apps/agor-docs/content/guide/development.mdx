@@ -201,12 +201,11 @@ agor/
 │   ├── core/                # Shared @agor/core package
 │   │   ├── types/           # TypeScript types (Session, Task, Branch, etc.)
 │   │   ├── db/              # Drizzle ORM + repositories + schema
-│   │   ├── git/             # Git utils (simple-git only, no subprocess)
 │   │   └── api/             # FeathersJS client utilities
+│   ├── git/                 # @agor/git (simple-git only, no subprocess)
+│   ├── executor/            # Process-isolated agent runtime
 │   └── agor-live/           # Published npm package
-└── context/                 # 📚 Architecture documentation (READ THIS!)
-    ├── concepts/            # Core design docs
-    └── explorations/        # Experimental designs
+└── context/                 # Agent-oriented design contracts and house rules
 ```
 
 ## Monorepo & Development Tooling
@@ -309,51 +308,15 @@ pnpm agor <command>   # Run CLI without global install
 
 See the **[Architecture Guide](/guide/architecture#technology-stack)** for the complete tech stack (FeathersJS, Drizzle, React, Ant Design, etc.).
 
-## Development Patterns
+## Contributor Conventions
 
-### Code Standards
-
-1. **Type-driven** - Use branded types for IDs, strict TypeScript
-2. **Centralize types** - ALWAYS import from `packages/core/src/types/` (never redefine)
-3. **Read before edit** - Always read files before modifying
-4. **Prefer Edit over Write** - Modify existing files when possible
-5. **Git operations** - ALWAYS use `simple-git` (NEVER subprocess `execSync`, `spawn`, etc.)
-6. **Error handling** - Clean user-facing errors, no stacktraces in CLI
-
-### Important Rules
-
-**Git Library:**
-
-- ✅ Use `simple-git` for ALL git operations
-- ❌ NEVER use `execSync`, `spawn`, or bash for git commands
-- Location: `packages/core/src/git/index.ts`
-
-**Watch Mode:**
-
-- Run `pnpm dev` in the daemon directory to watch core and daemon changes.
-- Watch mode handles recompilation during development; you do not need a separate build after each edit.
-- Run the validation commands above before submitting a contribution.
-
-**Type Reuse:**
-
-- Import types from `packages/core/src/types/`
-- Sessions, Tasks, Branches, Messages, Repos, Boards, Users, etc.
-- Never redefine canonical types
-
-**Branch-Centric Architecture:**
-
-- Boards display **Branches** as primary cards (NOT Sessions)
-- Sessions reference branches via required FK
-- Read `context/concepts/branches.md` before touching boards
-
-## Key Documentation
-
-Before diving into code, familiarize yourself with the architecture:
-
-- **[AGENTS.md](https://github.com/preset-io/agor/blob/main/AGENTS.md)** - Development patterns and project structure
-- **[CONTRIBUTING.md](https://github.com/preset-io/agor/blob/main/CONTRIBUTING.md)** - Complete contribution guide
-- **[context/README.md](https://github.com/preset-io/agor/blob/main/context/README.md)** - Architecture documentation index
-- **[context/concepts/core.md](https://github.com/preset-io/agor/blob/main/context/concepts/core.md)** - Core primitives and design philosophy
+Repository rules for humans and coding agents (type reuse, `simple-git`, multi-tenancy review,
+branch-centric boards, commit hooks) live in
+**[AGENTS.md](https://github.com/preset-io/agor/blob/main/AGENTS.md)**. Agent-oriented design
+contracts are indexed in
+**[context/README.md](https://github.com/preset-io/agor/blob/main/context/README.md)**, and the
+contribution workflow is in
+**[CONTRIBUTING.md](https://github.com/preset-io/agor/blob/main/CONTRIBUTING.md)**.
 
 ## Testing
 

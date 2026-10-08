@@ -499,6 +499,40 @@ describe('configured executor spawning', () => {
     }
   });
 
+  it('stamps the admission class from the command map on templated payloads', async () => {
+    const { requestExecutor, spawnExecutor } = await import('./spawn-executor');
+    const templated = { executorCommandTemplate: 'launch {command}' };
+    const launched = (command: string, claimed?: string) => {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValueOnce(proc);
+      spawnExecutor({ command, ...(claimed ? { admissionClass: claimed } : {}) }, templated);
+      return (JSON.parse(proc.written) as { admissionClass?: string }).admissionClass;
+    };
+
+    expect(launched('prompt')).toBe('agent');
+    expect(launched('environment.lifecycle')).toBe('utility');
+    expect(launched('unknown.command')).toBe('agent');
+    expect(launched('prompt', 'utility')).toBe('agent');
+
+    const proc = createMockProcess();
+    spawnMock.mockReturnValueOnce(proc);
+    const browse = requestExecutor({ command: 'branch.files.browse' }, templated);
+    expect(JSON.parse(proc.written)).toMatchObject({
+      command: 'branch.files.browse',
+      admissionClass: 'utility',
+      executorMode: 'request',
+    });
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(browse).resolves.toEqual({ success: true, data: { files: [] } });
+
+    const unknown = createMockProcess();
+    spawnMock.mockReturnValueOnce(unknown);
+    const unknownRequest = requestExecutor({ command: 'unknown.command' }, templated);
+    expect(JSON.parse(unknown.written)).toMatchObject({ admissionClass: 'agent' });
+    await deliverExecutorResponse(unknown, { success: true });
+    await unknownRequest;
+  });
+
   it('calls onExit for templated spawns', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -1144,6 +1178,54 @@ describe('configured executor spawning', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+  });
+
+  it('fails a templated request immediately when an opted-in launcher refuses it', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT: '75' });
+    try {
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const { requestExecutor } = await import('./spawn-executor');
+      const promise = requestExecutor(
+        { command: 'branch.files.browse' },
+        { executorCommandTemplate: 'launch {command}' }
+      );
+      proc.emit('exit', 75);
+
+      await expect(promise).resolves.toEqual({
+        success: false,
+        error: {
+          code: 'EXECUTOR_LAUNCH_REFUSED',
+          message:
+            'Your team has reached its limit of work running at once. Wait for something to finish, then try again.',
+        },
+      });
+    } finally {
+      configureLaunchRefusedExit({});
+    }
+  });
+
+  it('keeps waiting on a templated exit 75 without the launcher opt-in', async () => {
+    const { configureLaunchRefusedExit } = await import('./task-launch-state');
+    configureLaunchRefusedExit({});
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { requestExecutor } = await import('./spawn-executor');
+    const promise = requestExecutor(
+      { command: 'branch.files.browse' },
+      { executorCommandTemplate: 'launch {command}' }
+    );
+    proc.emit('exit', 75);
+
+    let settled = false;
+    void promise.finally(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
     await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
     await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
   });

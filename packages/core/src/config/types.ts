@@ -466,7 +466,7 @@ export interface AgorDatabaseSettings {
  *   each session gets a per-owner home overlay (`sandbox.home_mode: per_user`),
  *   and the branch is mounted per the caller's effective permission tier.
  *   Linux only. See
- *   `context/explorations/executor-sandboxing.md`.
+ *   `context/guides/rbac-and-unix-isolation.md`.
  */
 export type UnixUserMode = 'simple' | 'delegated' | 'sandbox';
 
@@ -525,7 +525,7 @@ export interface AgorSandboxIncludeSettings {
  *
  * Agor resolves `include.*` / `protect_secrets` / `isolate_branches` into
  * bubblewrap bind mounts + masks using paths it already knows. See
- * `context/explorations/executor-sandboxing.md`.
+ * `context/guides/rbac-and-unix-isolation.md`.
  */
 export interface AgorSandboxSettings {
   /** Master switch. Default: false (open filesystem; tool approval flows still apply). */
@@ -751,6 +751,15 @@ export interface AgorExecutionSettings {
    */
   executor_command_template?: string;
 
+  /** Trusted, synchronous remote containment command. Context is JSON on stdin (no interpolation).
+   * Exit 0 asserts all execution for the exact tenant/task is stopped and cannot start later.
+   * Nonzero/timeout means unknown. Run once; further attempts require explicit user retry.
+   * Uses the launcher's sanitized environment. Not used for local execution.
+   */
+  executor_cleanup_command_template?: string;
+  /** Total cleanup command deadline, 1000..120000ms. Default 30000ms. */
+  executor_cleanup_timeout_ms?: number;
+
   /**
    * Filesystem guarantees provided to every executor invocation.
    *
@@ -769,7 +778,11 @@ export interface AgorExecutionSettings {
    */
   delegated_branch_deletion?: boolean;
 
-  /** A nonzero template launcher may still have submitted remote work. Default: false. */
+  /**
+   * An ordinary nonzero template launcher exit may still have submitted remote
+   * work. Default: false. Signal/null and shell-style >=128 exits are always
+   * ambiguous, irrespective of this assertion; none is OOM evidence.
+   */
   executor_command_nonzero_may_have_dispatched?: boolean;
 
   /**
@@ -818,8 +831,7 @@ export interface AgorExecutionSettings {
    *
    * v0.20+ default already allows both `worktree` and `clone` with
    * `default_mode: worktree`, so this block is only needed when an
-   * operator wants to deviate. See `context/explorations/clone-redesign.md`
-   * for the storage-model design.
+   * operator wants to deviate.
    *
    * @example Disable clone mode entirely (security-gradient deployment)
    * ```yaml
@@ -843,7 +855,7 @@ export interface AgorExecutionSettings {
 
   /**
    * OS-level executor sandbox policy (SRT: bubblewrap / Seatbelt). Disabled by
-   * default. Global, single-policy. See `context/explorations/executor-sandboxing.md`.
+   * default. Global, single-policy. See `context/guides/rbac-and-unix-isolation.md`.
    */
   sandbox?: AgorSandboxSettings;
 }
@@ -1136,7 +1148,6 @@ export interface AgorCorsSettings {
  * `security.git_config_parameters` shape. Mirrors `security.csp`: `extras`
  * appends to safe defaults, `override` replaces them. Mutually exclusive.
  *
- * Defaults + rationale: `docs/internal/credential-leak-defenses-2026-05-11.md`.
  * Don't bake credential-bearing values (e.g. `http.proxy=http://user:pass@…`)
  * here — the daemon redacts them from logs but the env var itself isn't
  * routed through the encrypted env-file path.
@@ -1165,8 +1176,6 @@ export interface AgorSecuritySettings {
  *
  * Allows separation of daemon operating files from git data files.
  * This enables different storage backends (e.g., local SSD for daemon, EFS for branches).
- *
- * @see context/explorations/executor-expansion.md
  */
 export interface AgorPathSettings {
   /**
@@ -1541,6 +1550,14 @@ export interface AgorConfig {
 
   /** Generic external one-time launch-code authentication. */
   external_launch?: AgorExternalLaunchSettings;
+  /**
+   * Optional hosted callback relay. App credentials and user tokens stay in this
+   * runtime. The Cell identity and RS256 signing key come from the existing
+   * `AGOR_CLOUD_CELL_ID` / `AGOR_CLOUD_RUNTIME_*` environment.
+   */
+  mcp_oauth_relay?: {
+    callback_origin: string;
+  };
 
   /** User identity, lifecycle, role, and local-login authority. */
   identity?: AgorIdentitySettings;

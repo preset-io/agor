@@ -5,6 +5,7 @@
 import {
   DEFAULT_DISCORD_CATCH_UP,
   type DiscordConfigValidationResult,
+  type DiscordResponseMode,
   validateDiscordConfig,
   withDiscordConfigDefaults,
 } from '../../types/gateway';
@@ -40,7 +41,20 @@ export function evaluateDiscordConnectionVerification(
   }
 
   const candidate = result as Record<string, unknown>;
-  if (candidate.ok !== true) return failure('Discord verification did not succeed');
+  if (candidate.ok !== true) {
+    const reasons = Array.isArray(candidate.failures)
+      ? candidate.failures.flatMap((entry) =>
+          entry && typeof entry === 'object' && typeof entry.reason === 'string'
+            ? [entry.reason]
+            : []
+        )
+      : [];
+    return failure(
+      reasons.length > 0
+        ? `Discord verification did not succeed: ${reasons.join('; ')}`
+        : 'Discord verification did not succeed'
+    );
+  }
   if (!Array.isArray(candidate.failures)) {
     return failure('Discord verification returned malformed failures');
   }
@@ -115,6 +129,8 @@ export interface DiscordSetupDecisions {
   files?: boolean;
   /** Opt in to agent reads of allowlisted channel history. */
   channelHistory?: boolean;
+  /** Per allowed channel, answer messages without a bot mention. */
+  responseModes?: Record<string, DiscordResponseMode>;
   outboundEnabled?: boolean;
   defaultOutboundTarget?: string | null;
   catchUp?: Record<string, unknown>;
@@ -183,6 +199,8 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     agent_tools: { channel_history: decisions.channelHistory ?? false },
     outbound_enabled: decisions.outboundEnabled ?? false,
     default_outbound_target: decisions.defaultOutboundTarget ?? null,
+    // Always written, so clearing every mode in an edit replaces the stored map.
+    response_modes: decisions.responseModes ?? {},
     catch_up: { ...DEFAULT_DISCORD_CATCH_UP, ...(decisions.catchUp ?? {}) },
   });
   const validation = validateDiscordSetup(config, decisions.agorUserId);

@@ -3653,8 +3653,7 @@ describe('SQLite saved-row OAuth authority', () => {
   // The shape of the sandbox failure against `com.datadoghq/mcp`: discovery
   // succeeded, DCR succeeded, and the provider's authorize endpoint answered
   // `invalid_request — Mismatching redirect URI` on its own page, which never
-  // redirects to Agor. Its cause is not established; see §7.1.16 of
-  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  // redirects to Agor. Its cause is not established.
   // -------------------------------------------------------------------------
 
   const dcrCatalogEntry = (name: string, remoteUrl: string): MCPCatalogEntry =>

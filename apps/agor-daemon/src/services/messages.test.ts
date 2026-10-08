@@ -686,7 +686,17 @@ dbTest(
     const sessions = new SessionRepository(db);
     const tasks = new TaskRepository(db);
     const repository = new MessagesRepository(db);
-    app.use('/sessions', { get: (id: string) => sessions.findById(id) });
+    // SessionsService.get's opt-in completeness enrichment, without its RBAC.
+    app.use('/sessions', {
+      get: async (id: string, params?: { query?: Record<string, unknown> }) => {
+        const session = await sessions.findById(id);
+        if (!session || !params?.query?.include_tasks_complete) return session;
+        return {
+          ...session,
+          tasks_complete: await tasks.isSessionTaskListComplete(id as never, session.tasks),
+        };
+      },
+    });
     app.use('/tasks', createTasksService(db, app));
     app.service('tasks').hooks({ before: { all: [typedValidateQuery(taskQueryValidator)] } });
     app.use('/messages', createMessagesService(db));
@@ -795,16 +805,18 @@ dbTest(
           if (mode === 'lean') {
             expect(initial.some((receipt) => receipt.body.includes('CANARY'))).toBe(false);
             expect(handle.state.tasks).toHaveLength(10);
-            // Subscription + session + task page + queue + one message batch,
-            // plus the Session.tasks completeness check: the nonqueued count and
-            // one listed-ID membership count (100 positions).
-            expect(initial).toHaveLength(7);
-            expect(
-              initial.filter(
-                (receipt) => receipt.path === '/tasks' && receipt.body.includes('"data":[]')
-              )
-            ).toHaveLength(2);
-            expect(initial.filter((receipt) => receipt.path === '/messages')).toHaveLength(1);
+            // Display order, decided by the Session read itself: subscription +
+            // session (with tasks_complete) + task page + queue + one message batch.
+            expect(Reflect.get(handle, 'leanOrder')).toBe('display');
+            expect(initial.map((receipt) => receipt.path).sort()).toEqual(
+              [
+                '/messages',
+                '/session-streams',
+                `/sessions/${sessionId}`,
+                `/sessions/${sessionId}/tasks/queue`,
+                '/tasks',
+              ].sort()
+            );
           }
           const detailStart = receipts.length;
           if (mode === 'lean') await handle.loadTaskMessages(latestTaskId);

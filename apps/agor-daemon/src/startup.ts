@@ -27,7 +27,11 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
+import {
+  DAEMON_RESTART_RELEASED_MESSAGE,
+  isTerminalTaskStatus,
+  SessionStatus,
+} from '@agor/core/types';
 import {
   hasSecureLocalCredentialOverlay,
   isHostedOpenCode,
@@ -307,7 +311,7 @@ async function cleanupOrphanStatusesInTenantScope(
                 last_pulse: task.latest_executor_pulse,
                 termination: 'unverified',
               },
-          errorMessage: 'Daemon restart released this Task without verifying executor termination.',
+          errorMessage: DAEMON_RESTART_RELEASED_MESSAGE,
         },
         { ...startupParams, suppressTerminalQueueProcessing: true } as never
       );

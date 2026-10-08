@@ -44,12 +44,17 @@ import {
   renderAgorSystemPrompt,
 } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer, Session } from '@agor/core/types';
 import {
+  CODEX_LIFECYCLE_MESSAGES,
+  type CodexLifecycleFailureCode,
+  type CodexSandboxMode,
+  type ContextUsageSnapshot,
   getDefaultPermissionMode,
   isGatewaySession,
   MCP_CLIENT_HINT_HEADER,
   MCP_CLIENT_HINTS,
+  type MCPServer,
+  type Session,
 } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
@@ -66,6 +71,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -133,27 +139,6 @@ function applyMcpToolPermissions(config: CodexConfigObject, server: MCPServer): 
   );
 }
 const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
-
-type CodexLifecycleFailureCode =
-  | 'authentication_required'
-  | 'completed_without_response'
-  | 'turn_failed'
-  | 'stream_start_failed'
-  | 'stream_interrupted'
-  | 'stream_ended_without_completion';
-
-const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
-  authentication_required:
-    'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
-  completed_without_response:
-    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
-  turn_failed:
-    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
-  stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
-  stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
-  stream_ended_without_completion:
-    'Codex ended the turn without a completion event. Retry the prompt; restart the session if it continues.',
-};
 
 function projectCodexCompletedEvent(
   event: TurnCompletedEvent
@@ -1385,6 +1370,10 @@ export class CodexPromptService {
 
     let streamReturned = false;
     let firstEventObserved = false;
+    // The SDK awaits CLI exit only at EOF; break/return/throw/abort kill it
+    // without awaiting exit. Completion events prove the turn ended, not that
+    // the CLI is gone, so only stream exhaustion counts as teardown evidence.
+    let streamExhausted = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1774,6 +1763,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        streamExhausted = true;
         diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
@@ -1806,6 +1796,9 @@ export class CodexPromptService {
       // Preserve the existing UI distinction independently of diagnostic phase.
       throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
     } finally {
+      if (abortController && streamReturned && !streamExhausted) {
+        markExecutorCleanupUnverified(abortController);
+      }
       diagnostics.finish();
     }
   }

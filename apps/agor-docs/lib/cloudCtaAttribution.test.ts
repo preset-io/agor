@@ -23,9 +23,9 @@ describe('withCtaAttribution', () => {
 });
 
 describe('onCloudCtaClick', () => {
-  function stubBrowser(cookie: string) {
+  function stubBrowser(cookie: string, search = '') {
     const dataLayer: unknown[] = [];
-    vi.stubGlobal('window', { dataLayer });
+    vi.stubGlobal('window', { dataLayer, location: { search } });
     vi.stubGlobal('document', { cookie });
     return dataLayer;
   }
@@ -50,5 +50,22 @@ describe('onCloudCtaClick', () => {
     const other = { href: 'https://agor.live/' } as HTMLAnchorElement;
     onCloudCtaClick('hero', 'console', other);
     expect(other.href).toBe('https://agor.live/');
+  });
+
+  it('forwards a Google Ads click id from the current page to console links', () => {
+    stubBrowser('', '?gclid=abc123');
+    const anchor = { href: 'https://console.agor.cloud/' } as HTMLAnchorElement;
+    onCloudCtaClick('hero', 'console', anchor);
+    expect(new URL(anchor.href).searchParams.get('gclid')).toBe('abc123');
+  });
+
+  it('forwards gbraid/wbraid alongside the visitor token when both are present', () => {
+    stubBrowser(`hubspotutk=${TOKEN}`, '?gbraid=xyz&wbraid=789');
+    const anchor = { href: 'https://console.agor.cloud/' } as HTMLAnchorElement;
+    onCloudCtaClick('hero', 'console', anchor);
+    const params = new URL(anchor.href).searchParams;
+    expect(params.get('hutk')).toBe(TOKEN);
+    expect(params.get('gbraid')).toBe('xyz');
+    expect(params.get('wbraid')).toBe('789');
   });
 });

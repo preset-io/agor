@@ -29,7 +29,7 @@ import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTa
 import { useRetainEngagedTurns } from '../../hooks/useTaskDetailRetention';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
-import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
+import { HistoryTextChoices, historyTextKeyTurn } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
 import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
@@ -142,6 +142,9 @@ export interface ConversationViewProps {
 
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
+  /** A prompt sent now would run, not wait in the queue (`canSessionStartTurn`). */
+  canStartTurn?: boolean;
+
   /** Use the denser, full-width task treatment for phone-sized session routes. */
   compact?: boolean;
 }
@@ -164,6 +167,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     genealogy,
     teammateEmoji,
     onOpenAgenticToolSettings,
+    canStartTurn = false,
     compact = false,
   }) => {
     const { token } = theme.useToken();
@@ -310,6 +314,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // Realtime events also advance lastSyncedAt before that commit. Only loading
     // tracks initial readiness; ordinary reconnects leave it false.
     const initialHydrationPending = !!currentReactiveState?.loading;
+    const hasContent = tasks.length > 0 && !initialHydrationPending;
+    const loadedTurns = useMemo(() => new Set<string>(tasks.map((task) => task.task_id)), [tasks]);
     const latestTaskId = !initialHydrationPending ? tasks.at(-1)?.task_id : undefined;
     const liveIds = tasks
       .filter((task) => isTaskExecuting(task) || streamingMessagesByTask.has(task.task_id))
@@ -317,9 +323,18 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     const newlyProtected = [...liveIds, ...(latestTaskId ? [latestTaskId] : [])].filter(
       (id) => !protectedTurns.has(id)
     );
+    // Reading state lives as long as its turn is loaded: a trimmed turn takes
+    // it along and pages back in as plain history.
+    const keptProtected = [...protectedTurns].filter((id) => !hasContent || loadedTurns.has(id));
     // Render-time state adjustment prevents a full-text flash/collapse. Protection
-    // is monotonic for this mount, including messages arriving late in a turn.
-    if (newlyProtected.length) setProtectedTurns(new Set([...protectedTurns, ...newlyProtected]));
+    // is monotonic while the turn stays loaded, including messages arriving late in a turn.
+    if (newlyProtected.length || keptProtected.length < protectedTurns.size) {
+      setProtectedTurns(new Set([...keptProtected, ...newlyProtected]));
+    }
+    const keptTextChoices = [...textChoices].filter(
+      ([key]) => !hasContent || loadedTurns.has(historyTextKeyTurn(key))
+    );
+    if (keptTextChoices.length < textChoices.size) setTextChoices(new Map(keptTextChoices));
 
     // Land at the bottom on panel open / session switch — but only once real
     // content is mounted. On a cold open ConversationView early-returns <Spin/>
@@ -327,7 +342,6 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // that never re-runs; gating on tasks.length>0 fires it when the container
     // mounts. handleScrollToBottom also clears the escape so the library's
     // persistent observer reliably follows lazy/streamed growth from there.
-    const hasContent = tasks.length > 0 && !initialHydrationPending;
     useEffect(() => {
       if (isActive && sessionId && hasContent) {
         handleScrollToBottom();
@@ -623,6 +637,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // A loop rather than a render-scoped .map() callback, for the reason above.
     const taskBlocks: React.ReactNode[] = [];
     for (const [taskIndex, task] of tasks.entries()) {
+      // Only the latest turn offers recovery, so older memoized turns ignore promptability changes.
+      const isLatestTask = taskIndex === tasks.length - 1;
       taskBlocks.push(
         <TaskBlock
           key={task.task_id}
@@ -643,7 +659,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           onLoadTaskMessages={handleLoadTaskMessages}
           onRetainTaskDetails={handleRetainTaskDetails}
           teammateEmoji={teammateEmoji}
-          isLatestTask={taskIndex === tasks.length - 1}
+          isLatestTask={isLatestTask}
+          canStartTurn={canStartTurn && isLatestTask}
           client={client}
           onOpenAgenticToolSettings={onOpenAgenticToolSettings}
           compact={compact}
@@ -671,6 +688,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           overflowY: 'auto',
           padding: '12px 0',
           minHeight: 0,
+          // Contain absolute descendants so they cannot grow an outer scroller.
+          position: 'relative',
         }}
       >
         <HistoryTextChoices.Provider value={textChoiceContext}>

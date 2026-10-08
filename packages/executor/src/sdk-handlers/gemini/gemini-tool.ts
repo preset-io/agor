@@ -157,8 +157,7 @@ export class GeminiTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md).
+    // Create user message (or reuse the daemon's pre-write).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,
@@ -187,7 +186,7 @@ export class GeminiTool implements ITool {
         taskId,
         permissionMode,
         streamingCallbacks?.onPulse,
-        abortController?.signal
+        abortController
       )) {
         if (event.type === 'stopped') {
           wasStopped = true;
@@ -373,8 +372,7 @@ export class GeminiTool implements ITool {
     ]);
     let nextIndex = sessionNextIndex;
 
-    // Create user message (or reuse the daemon's pre-write — see Alt D in
-    // docs/never-lose-prompt-design.md).
+    // Create user message (or reuse the daemon's pre-write).
     const userMessage = await createUserMessage(
       sessionId,
       prompt,

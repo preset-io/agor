@@ -35,8 +35,6 @@
  *   - submitted (not attached)  ⚠️ Connected, but the session owner must attach
  *   - dismissed                 ⊘ Declined
  *   - already_present           ✓ Already connected (⚠️ if it could not be attached)
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
  */
 
 import type { AgorClient, MCPOAuthStartFailure, WidgetMessageMetadata } from '@agor-live/client';

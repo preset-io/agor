@@ -46,13 +46,18 @@ import {
   update,
 } from '../database-wrapper';
 import {
+  openConfiguredClientSecret,
+  sealConfiguredClientSecret,
+} from '../mcp-configured-client-secret';
+import {
   appVariables,
   type MCPServerInsert,
   type MCPServerRow,
   mcpServers,
   sessionMcpServers,
 } from '../schema';
-import { runWithTenantDatabaseTransaction } from '../tenant-scope';
+import { requireCurrentTenantId } from '../tenant-context';
+import { isPostgresDatabaseHandle, runWithTenantDatabaseTransaction } from '../tenant-scope';
 import { AppVariableRepository } from './app-variables';
 import {
   AmbiguousIdError,
@@ -325,7 +330,9 @@ export class MCPServerRepository
       url: row.data.url,
       headers: row.data.headers,
       env: row.data.env,
-      auth: row.data.auth,
+      auth: openConfiguredClientSecret(row.data.auth, () =>
+        this.clientSecretBinding(row.mcp_server_id)
+      ),
       config_version: projectedMCPConfigVersion(row.data.config_version, row.mcp_server_id),
 
       // Scope foreign key (nullable UUID string - DB stores null, type expects undefined)
@@ -347,9 +354,35 @@ export class MCPServerRepository
   /**
    * Convert MCPServer to database insert format
    */
+  /**
+   * Seal `oauth_client_secret` only for installs of a customer-owned
+   * (`configured_client`) catalog app on PostgreSQL. Every other server stores
+   * it exactly as before, so older daemons (rolling upgrade or rollback) keep
+   * reading their own rows unchanged.
+   */
+  private async sealsClientSecret(server: {
+    source?: MCPServer['source'];
+    catalog_entry_name?: string | null;
+    auth?: MCPAuth | null;
+  }): Promise<boolean> {
+    if (
+      !isPostgresDatabaseHandle(this.db) ||
+      server.source !== 'catalog' ||
+      !server.catalog_entry_name ||
+      !server.auth?.oauth_client_secret
+    )
+      return false;
+    // Package import (external in tsup, like config-manager's '@agor/core/db')
+    // so the built db entry resolves the catalog file from its own location.
+    const { findCatalogEntry, loadCatalog } = await import('@agor/core/mcp-catalog');
+    return Boolean(
+      findCatalogEntry(await loadCatalog(), server.catalog_entry_name)?.oauth?.configured_client
+    );
+  }
+
   private mcpServerToInsert(
     data: CreateMCPServerInput | Partial<MCPServer>,
-    options: { preserveDaemonRevisions?: boolean } = {}
+    options: { preserveDaemonRevisions?: boolean; sealClientSecret?: boolean } = {}
   ): MCPServerInsert {
     const submittedAuth = 'auth' in data ? (data.auth as unknown) : undefined;
     if (submittedAuth !== undefined) {
@@ -413,7 +446,11 @@ export class MCPServerRepository
         env: data.env,
         // CREATE auth:null is the explicit unauthenticated form, never a JSON
         // null masquerading as an MCPAuth object in later read paths.
-        auth: normalizedAuth,
+        auth: sealConfiguredClientSecret(
+          normalizedAuth,
+          () => this.clientSecretBinding(serverId),
+          options.sealClientSecret === true
+        ),
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,
@@ -426,6 +463,15 @@ export class MCPServerRepository
         tool_permissions: 'tool_permissions' in data ? data.tool_permissions : undefined,
       },
     };
+  }
+
+  private clientSecretBinding(serverId: string): string {
+    // SQLite is a single local database; PostgreSQL always needs trusted ambient
+    // tenant identity, including imports and background configuration reads.
+    return JSON.stringify([
+      isSQLiteDatabase(this.db) ? 'sqlite' : requireCurrentTenantId(),
+      serverId,
+    ]);
   }
 
   /**
@@ -525,7 +571,9 @@ export class MCPServerRepository
    */
   async create(data: CreateMCPServerInput): Promise<MCPServer> {
     try {
-      const insertData = this.mcpServerToInsert(data);
+      const insertData = this.mcpServerToInsert(data, {
+        sealClientSecret: await this.sealsClientSecret(data),
+      });
       await insert(this.db, mcpServers).values(insertData).run();
 
       const row = await select(this.db)
@@ -705,6 +753,7 @@ export class MCPServerRepository
           const merged = mergeServerConfiguration(current, updates, nextConfigVersion, options);
           const insertData = this.mcpServerToInsert(merged, {
             preserveDaemonRevisions: true,
+            sealClientSecret: await this.sealsClientSecret(merged),
           });
 
           await update(tx, mcpServers)
@@ -810,6 +859,7 @@ export class MCPServerRepository
         const merged = mergeServerConfiguration(current, updates, nextConfigVersion, {});
         const insertData = this.mcpServerToInsert(merged, {
           preserveDaemonRevisions: true,
+          sealClientSecret: await this.sealsClientSecret(merged),
         });
         await update(tx, mcpServers)
           .set({

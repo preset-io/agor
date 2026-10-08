@@ -9,8 +9,6 @@
  * `config` through the gateway-channels service — never through the agent's
  * MCP context. Setting a channel's tokens is admin-only, so `applySubmit`
  * gates on `ROLES.ADMIN` before touching anything.
- *
- * See §4 + §7 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
 
 import { Forbidden } from '@agor/core/feathers';

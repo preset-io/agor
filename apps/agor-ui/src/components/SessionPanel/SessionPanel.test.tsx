@@ -1,6 +1,14 @@
 import type { AgorClient, Branch, Session, Task, User } from '@agor-live/client';
 import { SESSION_LIST_ROW_SHAPE } from '@agor-live/client';
-import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  cleanup,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -114,6 +122,7 @@ const branch = {
   board_id: 'board-1',
   name: 'feature/same-name',
   path: '/tmp/feature-same-name',
+  primary_owner_user_id: 'branch-owner',
   filesystem_status: 'ready',
   archived: false,
 } as unknown as Branch;
@@ -135,6 +144,7 @@ function renderPanel({
   activeSession = session,
   open = true,
   onClose = vi.fn(),
+  currentUserId,
 }: {
   onOpenTerminal?: ReturnType<typeof vi.fn>;
   onChooseAgenticTool?: ReturnType<typeof vi.fn>;
@@ -142,6 +152,7 @@ function renderPanel({
   activeSession?: Session;
   open?: boolean;
   onClose?: ReturnType<typeof vi.fn>;
+  currentUserId?: string;
 } = {}) {
   render(
     <ConnectionProvider value={connected}>
@@ -153,6 +164,7 @@ function renderPanel({
             branch={branch}
             open={open}
             onClose={onClose}
+            currentUserId={currentUserId}
           />
         </AntApp>
       </AppActionsProvider>
@@ -505,7 +517,42 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     ).not.toBeInTheDocument();
   });
 
-  it('surfaces force-fail errors', async () => {
+  it.each([
+    [
+      Object.assign(new Error('Forbidden'), { code: 403 }),
+      'You do not have permission to retry cleanup. Ask the session owner or a branch manager for help.',
+    ],
+    [
+      Object.assign(new Error('Not authenticated'), { code: 401 }),
+      'Sign in again before retrying cleanup.',
+    ],
+    [
+      new Error('socket disconnected'),
+      'We could not confirm the cleanup request. Reconnect and check the status before retrying.',
+    ],
+  ])('distinguishes cleanup rejection from transport ambiguity (%s)', async (error, message) => {
+    reactive.tasks = [
+      {
+        task_id: '018f0000-0000-7000-8000-000000000001',
+        status: 'stopping',
+        sdk_failure: { termination: 'unverified' },
+        termination_request: { cause: 'heartbeat_lost', requested_at: '2026-06-24T00:00:01.000Z' },
+      } as Task,
+    ];
+    const create = vi.fn().mockRejectedValue(error);
+    renderPanel({
+      client: {
+        io: stopIo(),
+        service: () => ({ create, on: vi.fn(), off: vi.fn() }),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'stopping', agentic_tool: 'codex' },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    expect(await screen.findByText(message as string)).toBeVisible();
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it('surfaces errors when the branch owner reopens without confirmed cleanup', async () => {
     reactive.tasks = [
       {
         task_id: '018f0000-0000-7000-8000-000000000001',
@@ -521,21 +568,26 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     const nativePrompt = vi.spyOn(window, 'prompt');
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderPanel({
+      currentUserId: branch.primary_owner_user_id,
       client: {
         service: () => ({ create, on: vi.fn(), off: vi.fn() }),
       } as unknown as AgorClient,
       activeSession: { ...session, status: 'stopping', agentic_tool: 'codex' },
     });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Stop' }));
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry cleanup' })).toBeEnabled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Reopen anyway…' }));
 
-    expect(await screen.findByRole('dialog', { name: 'Force-fail task?' })).toBeInTheDocument();
-    expect(screen.getByText('Executor termination is unverified')).toBeInTheDocument();
-    expect(screen.getByText(/cannot prove or guarantee process termination/i)).toBeInTheDocument();
-    const forceFail = screen.getByRole('button', { name: 'Force fail' });
+    const dialog = within(
+      await screen.findByRole('dialog', { name: 'Reopen without confirmed cleanup?' })
+    );
+    expect(dialog.getByText('The previous work may still be running')).toBeInTheDocument();
+    expect(dialog.getByText(/without stopping the previous work/i)).toBeInTheDocument();
+    const forceFail = dialog.getByRole('button', { name: 'Reopen anyway' });
     expect(forceFail).toBeDisabled();
     const confirmation = screen.getByRole('textbox', {
-      name: 'Type STOP to confirm force-fail',
+      name: 'Type STOP to reopen without confirmed cleanup',
     });
     await waitFor(() => expect(confirmation).toHaveFocus());
     fireEvent.change(confirmation, { target: { value: 'STOP' } });
@@ -548,10 +600,13 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       confirmation: 'STOP',
       task_id: '018f0000-0000-7000-8000-000000000001',
       termination_requested_at: '2026-06-24T00:00:01.000Z',
+      recovery_revision: '2026-06-24T00:00:01.000Z',
     });
     expect(nativePrompt).not.toHaveBeenCalled();
     expect(
-      await screen.findByText('Failed to force-fail execution. You can try again.')
+      await dialog.findByText(
+        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+      )
     ).toBeVisible();
   });
 });

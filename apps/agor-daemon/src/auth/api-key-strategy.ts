@@ -55,8 +55,14 @@ export class ApiKeyStrategy extends AuthenticationBaseStrategy {
     // Browser-token issuance needs backend-only credential metadata. Preserve
     // the already-resolved tenant context while marking this one lookup as an
     // internal authentication read; ordinary external user reads stay redacted.
-    markAuthenticationUserLookup(params);
-    const user = await this.usersService.get(keyRow.user_id, params);
+    // User query validation mutates its query in place. Never give this
+    // internal lookup the caller's service query: it would strip unrelated
+    // filters (e.g. Knowledge namespace/bundle), and caller-controlled $select
+    // could alter the authentication entity. Preserve trusted tenant context,
+    // but isolate both the query and the authentication-lookup marker.
+    const lookupParams = { ...params, query: {} };
+    markAuthenticationUserLookup(lookupParams);
+    const user = await this.usersService.get(keyRow.user_id, lookupParams);
     if (!user) {
       throw new NotAuthenticated('User not found for API key');
     }

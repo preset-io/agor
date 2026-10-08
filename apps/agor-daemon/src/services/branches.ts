@@ -137,7 +137,10 @@ import {
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { verifyBranchWorkspacePreflight } from '../utils/branch-workspace-preflight.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
-import { dispatchEnvironmentCommand } from '../utils/environment-command-dispatch.js';
+import {
+  dispatchEnvironmentCommand,
+  ExecutorLaunchRefusedError,
+} from '../utils/environment-command-dispatch.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
@@ -525,9 +528,14 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           spawnExecutor(payload, executorOptions);
         }
       }
-    } catch {
+    } catch (error) {
+      const refused = error instanceof ExecutorLaunchRefusedError;
       await this.withTenantDatabase(params, () =>
-        new EnvironmentCommandRepository(this.db).dispatchFailed(branch.branch_id, attemptId)
+        new EnvironmentCommandRepository(this.db).dispatchFailed(
+          branch.branch_id,
+          attemptId,
+          refused ? 'launch_refused' : 'unknown'
+        )
       );
     }
     return publish();
@@ -1353,8 +1361,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Override patch to handle board_objects when board_id changes.
    *
-   * Schedule config lives on the `schedules` table now (see
-   * docs/internal/schedules-first-class-design-2026-05-24.md); patches
+   * Schedule config lives on the `schedules` table now; patches
    * to schedule fields go through the `schedules` service, not here.
    */
   async patch(
@@ -2032,7 +2039,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           new BranchWorkspaceOperationRepository(this.db).finishPreserve(admission.claim)
         );
         this.closeBranchTerminals(id, String(tenantId));
-        const current = await this.withTenantDatabase(params, () => this.get(id, params));
+        const current = await this.readCommittedBranch(id, params);
         emitServiceEvent(this.app, {
           path: 'branches',
           event: 'patched',
@@ -2101,7 +2108,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       };
       if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
-      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      const current = await this.readCommittedBranch(id, params);
       emitServiceEvent(this.app, { path: 'branches', event: 'patched', data: current, params, id });
       return { branch_id: id, operation_id: admission.claim.operation_id, status: 'accepted' };
     } catch (error) {
@@ -2112,6 +2119,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         );
       throw error;
     }
+  }
+
+  /** Post-write read that skips the request's pre-write authorization prefetch. */
+  private readCommittedBranch(id: BranchID, params?: BranchParams) {
+    return this.withTenantDatabase(params, () =>
+      this.getCanonicalBranch(id, withoutPrefetchedRecord(params))
+    );
   }
 
   /** Best-effort attachment closure shared by archive and permanent deletion. */
@@ -2280,8 +2294,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return this.requestPermanentDeletion(id, params);
     }
 
-    await this.requestWorkspaceOperation(id, { action: 'archive', filesystemAction }, params);
-    return this.withTenantDatabase(params, () => this.get(id, params));
+    const accepted = await this.requestWorkspaceOperation(
+      id,
+      { action: 'archive', filesystemAction },
+      params
+    );
+    return this.readCommittedBranch(accepted.branch_id, params);
   }
 
   /**
@@ -2326,7 +2344,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           // commit-deferred events and eviction; refused admission rolls it back.
           await lockTenantAuthorizationFence(db, params);
           await lockBranchReferenceMutation(db);
-          const current = await this.get(id, params);
+          // Committed placement under the locks, not the request's cached row.
+          const current = await this.readCommittedBranch(branch.branch_id, params);
           if (current.board_id !== options?.boardId) {
             await this.patch(id, { board_id: options?.boardId }, params);
           }
@@ -2374,7 +2393,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
 
     console.log(`✅ Unarchived branch ${branch.name} and ${unarchivedSessions.count} session(s)`);
-    return this.withTenantDatabase(params, () => this.get(id, params));
+    return this.readCommittedBranch(branch.branch_id, params);
   }
 
   /**
