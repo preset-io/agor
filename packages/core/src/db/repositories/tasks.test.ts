@@ -4580,6 +4580,60 @@ describe('durable single-attempt cleanup and explicit retry', () => {
     }
   );
 
+  dbTest.for([
+    { reason: 'termination_unverified' as const, retained: false },
+    { reason: 'heartbeat_lost' as const, retained: true },
+  ])(
+    'retry drops only the synthetic unverified diagnosis ($reason)',
+    async ({ reason, retained }, { db }) => {
+      const repo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const task = await repo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_mode: 'templated',
+        })
+      );
+      const requested = await repo.claimTermination({
+        taskId: task.task_id,
+        cause: 'heartbeat_lost',
+        errorMessage: 'Lost contact',
+      });
+      const epoch = requested.task.termination_request!.requested_at;
+      const claim = (token: string) =>
+        repo.claimTerminationCoordination({
+          taskId: task.task_id,
+          claimToken: token,
+          leaseDurationMs: 60000,
+          instanceId: 'daemon',
+          bootId: 'boot',
+        });
+      await claim('first');
+      await repo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'unverified',
+        coordinationToken: 'first',
+        errorMessage: 'Cleanup needs attention',
+        sdkFailure: { reason, tool: 'codex', detected_at: epoch, termination: 'unverified' },
+      });
+
+      const retried = await repo.retryTermination(task.task_id, epoch, epoch);
+      expect(retried?.sdk_failure).toEqual(
+        retained ? expect.objectContaining({ reason, termination: 'requested' }) : undefined
+      );
+      await claim('second');
+      const settled = await repo.settleTermination({
+        taskId: task.task_id,
+        outcome: 'verified_absent',
+        coordinationToken: 'second',
+      });
+      expect(settled.task.sdk_failure).toEqual(
+        retained ? expect.objectContaining({ reason, termination: 'verified' }) : undefined
+      );
+    }
+  );
+
   dbTest(
     'does not repeat a cleanup attempt after coordinator crash or user Stop',
     async ({ db }) => {

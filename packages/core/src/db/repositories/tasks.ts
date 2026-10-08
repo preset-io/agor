@@ -1811,12 +1811,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         coordination: _coordination,
         ...retained
       } = request;
+      // Like new quiescence evidence, a retry supersedes the synthetic guard
+      // diagnosis; only a real preceding SDK-health diagnosis survives it.
+      const sdkFailure =
+        current.sdk_failure.reason === 'termination_unverified'
+          ? undefined
+          : { ...current.sdk_failure, termination: 'requested' as const };
       const data = {
         ...row.data,
-        sdk_failure: { ...current.sdk_failure, termination: 'requested' as const },
+        ...(sdkFailure ? { sdk_failure: sdkFailure } : {}),
         termination_request: { ...retained, recovery_revision: generateId() },
       };
       delete data.error_message;
+      if (!sdkFailure) delete data.sdk_failure;
       const values = {
         data,
         termination_unverified_at: null,
