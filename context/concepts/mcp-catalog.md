@@ -104,6 +104,12 @@ to whatever a redirect names.
   HTTP Basic when advertised or unstated, else form-body `client_secret_post`.
   The choice travels in the sealed pending flow and is stored on the grant
   (`oauth_token_endpoint_auth_method`, NULL = Basic) so refresh matches it.
+  **Rolling upgrade caveat:** replicas older than this column ignore it and
+  refresh with Basic. A form-body-only grant (e.g. Slack, HubSpot) issued by a
+  new replica mid-rollout can therefore get `invalid_client` on an old replica's
+  refresh, which drops the grant; the user reconnects. Such grants could not
+  exist before (the Basic exchange failed), so only grants created during the
+  rollout are exposed. Finish the rollout before connecting those providers.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its
   OAuth challenge; the health audit flags if its OAuth metadata becomes usable.
 - **Sign-in completion.** Connect pre-opens the provider window during user

@@ -2652,13 +2652,26 @@ export async function registerMCPServices(
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
         resolveRedirectUri: (issuer: string) => {
+          // `issuer` is the AS metadata spelling, which is also what the flow
+          // context records and the relay `prepare` binds. A relay callback is
+          // derived from the issuer and shown in the Catalog form from the
+          // recipe, so relay recipes must state that exact string: one value
+          // then serves the shown redirect, the hash, and `prepare`. Direct
+          // flows keep the one-trailing-slash tolerance (resource vs AS
+          // spelling, e.g. Box/Google), since nothing is derived from it.
+          // A configuration error, not an authority one: it classifies as
+          // `issuer_mismatch` before DCR, relay `prepare`, or any attempt row.
+          if (configuredIssuer && relayFlow && issuer !== configuredIssuer)
+            throw new OAuthConfigurationError(
+              'issuer_mismatch',
+              'Configured app issuer must exactly match the authorization server issuer for the hosted callback relay; update the reviewed recipe'
+            );
           if (configuredIssuer && !oauthIssuerIdentifiersMatch(issuer, configuredIssuer))
-            throw new Forbidden('Configured app issuer no longer matches its reviewed recipe');
-          // The recipe spelling, not the metadata spelling: it is what the
-          // Catalog form showed as the redirect URI to register.
-          return oauthRelay && relayFlow
-            ? oauthRelay.redirectUri(configuredIssuer ?? issuer)
-            : redirectUri;
+            throw new OAuthConfigurationError(
+              'issuer_mismatch',
+              'Configured app issuer no longer matches its reviewed recipe'
+            );
+          return oauthRelay && relayFlow ? oauthRelay.redirectUri(issuer) : redirectUri;
         },
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
         tokenUrlOverride: effectiveTokenUrlOverride,
@@ -6064,12 +6077,28 @@ export async function registerMCPServices(
         // starts sign-in without a challenge (e.g. Google Workspace answers
         // initialize with 200); discovery below then reads the server's own
         // protected-resource metadata. Everything else still needs a 401.
+        // Only a healthy 200: a 5xx or other failure is an outage to report,
+        // not evidence that sign-in should start.
         const declaredOAuth =
-          probeResponse.status !== 401 && savedServer
+          probeResponse.status === 200 && savedServer
             ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
                 catalogInstallDeclaresOAuth(savedServer)
               )
             : false;
+        if (probeResponse.status >= 500) {
+          const recovery = {
+            category: 'provider_unavailable' as const,
+            action: 'retry' as const,
+            message: `This MCP server is unavailable (HTTP ${probeResponse.status}). Try again later.`,
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
+          await markSlackRecoveryStartFailed();
+          return {
+            success: false,
+            error: recovery.message,
+            recovery,
+          } satisfies MCPOAuthStartFailure;
+        }
         if (probeResponse.status !== 401 && !declaredOAuth) {
           const recovery = {
             category: 'configuration_changed' as const,

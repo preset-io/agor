@@ -836,10 +836,10 @@ function buildWellKnownUrl(issuerUrl: string, wellKnownSuffix: string): string {
  * scheme, port, path, query, username and password must still agree.
  */
 /**
- * Issuer identity for reviewed recipe pins: exact, or differing by exactly one
- * trailing slash. A resource's `authorization_servers` entry and the AS's own
- * `issuer` routinely disagree on that slash (Box, Google), and the audit and
- * the runtime pin see one spelling each, so both must use this rule.
+ * Issuer identity: exact, or differing by exactly one trailing slash. A
+ * resource's `authorization_servers` entry and the AS's own `issuer` routinely
+ * disagree on that slash (Box, Google). Recipe pins state the AS spelling; the
+ * direct-flow runtime pin keeps this tolerance, relay flows require exactness.
  */
 export function oauthIssuerIdentifiersMatch(left: unknown, right: unknown): boolean {
   if (typeof left !== 'string' || typeof right !== 'string') return false;

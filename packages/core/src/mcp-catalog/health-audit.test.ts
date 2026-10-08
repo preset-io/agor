@@ -168,9 +168,10 @@ describe('auditCatalogHealth', () => {
       source: 'well-known',
     });
     // The resource names the issuer with a trailing slash; the recipe states
-    // the AS metadata spelling. Both are the same issuer.
+    // the AS metadata spelling, which is what the audit pins exactly.
     oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
       issuer: 'https://accounts.google.com/',
+      authServerMetadata: { issuer: 'https://accounts.google.com' },
     });
 
     const [declared, undeclared] = await auditCatalogHealth([google, entry('oauth')], {
@@ -280,7 +281,7 @@ describe('auditCatalogHealth', () => {
   });
 });
 
-it.each(['https://issuer.example', 'https://wrong.example'])(
+it.each(['https://issuer.example', 'https://wrong.example', 'https://issuer.example/'])(
   'audits configured BYO without DCR or claiming the customer credential works (%s)',
   async (issuer) => {
     const configured = {
@@ -295,7 +296,12 @@ it.each(['https://issuer.example', 'https://wrong.example'])(
       },
     };
     oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
-    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({ issuer });
+    // The pin is the AS metadata issuer, exactly: a slash-only difference
+    // would break the hosted relay's callback binding.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer,
+      authServerMetadata: { issuer },
+    });
     const [result] = await auditCatalogHealth([configured], {
       probe: async () => ({ authType: 'oauth' }),
     });

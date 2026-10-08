@@ -2,7 +2,6 @@ import type { MCPCatalogEntry, MCPCatalogProbedAuthType } from '@agor/core/types
 import { MCPExternalError, type MCPExternalErrorCategory } from '../tools/mcp/external-error';
 import {
   OAuthConfigurationError,
-  oauthIssuerIdentifiersMatch,
   resolveMCPOAuthDiscovery,
   validateMCPOAuthMetadata,
 } from '../tools/mcp/oauth-mcp-transport';
@@ -80,7 +79,9 @@ async function assertOAuthMetadataReady(
     compatibilityMode,
   });
   if (entry.oauth?.configured_client) {
-    if (!oauthIssuerIdentifiersMatch(validated.issuer, entry.oauth.configured_client.issuer))
+    // Exactly the AS metadata `issuer`: the runtime pin, the flow context and
+    // the hosted relay callback all use that string.
+    if (validated.authServerMetadata.issuer !== entry.oauth.configured_client.issuer)
       throw new OAuthConfigurationError(
         'issuer_mismatch',
         'Configured app issuer no longer matches its reviewed recipe'

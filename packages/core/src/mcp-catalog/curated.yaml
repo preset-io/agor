@@ -1330,7 +1330,9 @@ unpublished:
       scheme: bearer
       label: API key
       acquisition_url: https://docs.similarweb.com/api-v5/similarweb-mcp
-      # Similarweb also documents a vendor key header; its 401 accepts Bearer.
+      # Similarweb's documented header; it treats a Bearer value as a malformed
+      # access token.
+      header: api-key
       oauth_challenge_compatible: true
 
   - name: com.render/mcp

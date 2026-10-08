@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
+import { renderMCPTokenHeader } from '../tools/mcp/http-headers';
 import { catalogServerSlug } from '../types/mcp-catalog';
 import { load as loadYaml } from '../yaml';
 import {
@@ -790,7 +791,27 @@ describe('the shipped catalog', () => {
 
   it('carries no secret-shaped value anywhere in the file', async () => {
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
-    expect(source).not.toMatch(/client_secret|token_url|authorization_url|api[_-]?key/i);
+    // A credential recipe's `header:` names where the user's key goes (e.g.
+    // `api-key`); it is a header name, not a value.
+    const withoutHeaderNames = source.replace(/^\s*header: [!#$%&'*+.^_`|~0-9A-Za-z-]+$/gm, '');
+    expect(withoutHeaderNames).not.toMatch(
+      /client_secret|token_url|authorization_url|api[_-]?key/i
+    );
+  });
+
+  it('renders the shipped Similarweb recipe as its documented api-key header', async () => {
+    const entries = await loadCuratedCatalog();
+    const similarweb = entries.find((entry) => entry.name === 'com.similarweb/mcp');
+    const recipe = similarweb?.credentials;
+    expect(recipe).toMatchObject({ header: 'api-key' });
+    expect(recipe?.prefix).toBeUndefined();
+    expect(
+      renderMCPTokenHeader({
+        token: 'fake-key',
+        ...(recipe?.header ? { token_header: recipe.header } : {}),
+        ...(recipe?.prefix ? { token_prefix: recipe.prefix } : {}),
+      })
+    ).toEqual({ 'api-key': 'fake-key' });
   });
 });
 

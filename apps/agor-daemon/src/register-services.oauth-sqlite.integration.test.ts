@@ -205,6 +205,8 @@ async function createTestProvider(
     clientCredentialsOnly?: boolean;
     /** Answer unauthenticated MCP requests with 200, as Google Workspace does. */
     noChallenge?: boolean;
+    /** Answer every MCP request with this status (an outage). */
+    mcpStatus?: number;
     /** Advertised `token_endpoint_auth_methods_supported`. */
     tokenAuthMethods?: string[];
   } = {}
@@ -450,6 +452,11 @@ async function createTestProvider(
     }
     if (url.pathname === '/saved/mcp') {
       mcpRequested.resolve();
+      if (options.mcpStatus) {
+        response.writeHead(options.mcpStatus);
+        response.end();
+        return;
+      }
       if (options.holdMcpChallenge) await releaseMcp.promise;
       if (!options.noChallenge && request.headers.authorization !== 'Bearer sqlite-access-token') {
         response.writeHead(401, {
@@ -3813,6 +3820,53 @@ describe('SQLite saved-row OAuth authority', () => {
       .find((entry) => entry.formBody?.get('grant_type') === 'refresh_token');
     expect(refresh?.authorization).toBeUndefined();
     expect(refresh?.formBody?.get('client_secret')).toBe('customer-secret');
+  });
+
+  it('reports an outage instead of starting declared-OAuth sign-in when the server answers 5xx', async () => {
+    const provider = await createTestProvider({ mcpStatus: 503 });
+    providers.push(provider);
+    const catalogEntry = {
+      ...dcrCatalogEntry('test/declared-oauth-outage', provider.savedMcpUrl),
+      oauth: {
+        dcr_mode: 'disabled',
+        configured_client: {
+          setup_url: 'https://provider.example.test/apps',
+          issuer: provider.baseUrl,
+          secret_required: true,
+        },
+      },
+    } as MCPCatalogEntry;
+    const catalogMock = vi.mocked(loadCatalog);
+    const previousImplementation = catalogMock.getMockImplementation();
+    catalogMock.mockResolvedValue([catalogEntry]);
+    onTestFinished(() => {
+      catalogMock.mockReset();
+      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+    });
+    const harness = await createHarness(provider, 'per_user', { catalogEntry });
+    databases.push(harness.rawDb);
+    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_dcr_mode: 'disabled',
+        oauth_client_id: 'customer-app',
+        oauth_client_secret: 'customer-secret',
+      },
+    });
+
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      success: boolean;
+      recovery?: { category: string };
+    };
+    expect(started).toMatchObject({
+      success: false,
+      recovery: { category: 'provider_unavailable' },
+    });
+    expect(provider.requests.filter((entry) => entry.path.startsWith('/.well-known/'))).toEqual([]);
+    expect(harness.emittedBrowserEvents).toEqual([]);
   });
 
   it('still refuses to start sign-in for a non-catalog server that answers without a challenge', async () => {

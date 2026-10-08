@@ -22,6 +22,7 @@ import {
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, MCPServerID, User, UserID } from '@agor/core/types';
+import { MCP_OAUTH_RELAY } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
@@ -1232,9 +1233,24 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           a.app
             .service('mcp-servers/oauth-start')
             .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant));
+        // A relay recipe issuer differing from the AS metadata issuer only by a
+        // trailing slash is refused before any relay work, with a recipe
+        // error rather than a `prepare` binding failure.
+        oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test/');
+        expect(await start()).toMatchObject({
+          success: false,
+          recovery: { category: 'metadata_incompatible', failure_reason: 'issuer_mismatch' },
+        });
+        expect(prepare).not.toHaveBeenCalled();
+        oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test');
         expect(await start()).toMatchObject({
           success: true,
           authorizationUrl: 'https://cloud.test/start/opaque',
+        });
+        // The exact recipe issuer is the one string bound into the relay.
+        expect(preparations.at(-1)).toMatchObject({
+          issuer: 'https://provider.example.test',
+          redirect_uri: `https://cloud.test${MCP_OAUTH_RELAY.callbackPrefix}${relayBodyHash('https://provider.example.test')}`,
         });
         const deliver = async (replica: Replica, overrides: Record<string, unknown> = {}) => {
           const { authorization_url: _authorization, ...binding } = preparations.at(-1)!;
