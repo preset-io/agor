@@ -348,15 +348,6 @@ export function catalogDisplayName(entry: Pick<MCPCatalogEntry, 'name' | 'title'
 }
 
 /**
- * The name an installed server carries into the agent's tool namespace.
- *
- * This is the `<name>` in every `mcp__<name>__<tool>` the model reads, so it
- * has to identify the server: two installs sharing one produce tool names
- * nothing can tell apart. The path segment is the wrong half of the identity —
- * it is usually the protocol's own name — so the publisher supplies it, and the
- * path segment is only a fallback for a name with no publisher left in it.
- */
-/**
  * Whether a reviewed entry declares OAuth up front rather than waiting for a
  * challenge: it states `auth_type: oauth` and brings a reviewed client (a
  * customer-owned app recipe or a public client ID). Some such servers (Google
@@ -372,6 +363,15 @@ export function catalogEntryDeclaresOAuth(
   );
 }
 
+/**
+ * The name an installed server carries into the agent's tool namespace.
+ *
+ * This is the `<name>` in every `mcp__<name>__<tool>` the model reads, so it
+ * has to identify the server: two installs sharing one produce tool names
+ * nothing can tell apart. The path segment is the wrong half of the identity —
+ * it is usually the protocol's own name — so the publisher supplies it, and the
+ * path segment is only a fallback for a name with no publisher left in it.
+ */
 export function catalogServerSlug(name: string): string {
   const slugify = (value: string): string =>
     value

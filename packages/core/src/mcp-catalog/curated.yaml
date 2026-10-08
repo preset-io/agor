@@ -767,6 +767,7 @@ unpublished:
     website_url: https://docs.customer.io/ai/mcp/get-started/
 
   - name: com.datadoghq/mcp
+    title: Datadog
     category: observability
     capabilities: [metrics, logs, alerts, traces, incidents]
     benefit: Give an agent the dashboards and logs it needs to explain an incident rather than speculate about one.
