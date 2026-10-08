@@ -96,10 +96,13 @@ to whatever a redirect names.
   challenge (Google Workspace), and oauth-start then discovers from the
   server's well-known metadata. Only current installs of such entries skip the
   401 requirement; manual and drifted rows keep the challenge-driven contract.
-- **Recipe issuer.** `configured_client.issuer` is compared exact-or-one-
-  trailing-slash (`oauthIssuerIdentifiersMatch`) by both the audit (resource
-  spelling) and the runtime pin (AS-metadata spelling); state the AS metadata
-  `issuer`. The hosted relay derives its callback from the recipe spelling.
+- **Recipe issuer.** State the authorization server metadata `issuer` in
+  `configured_client.issuer`. The health audit and hosted-relay flows require
+  the recipe issuer to equal that metadata issuer exactly; the relay's callback
+  hash and `prepare` binding both use that one string. Only direct (non-relay)
+  flows tolerate a single trailing-slash difference
+  (`oauthIssuerIdentifiersMatch`). A mismatch fails as an `issuer_mismatch`
+  configuration error before registration or relay work.
 - **Token endpoint client auth** follows AS `token_endpoint_auth_methods_supported`:
   HTTP Basic when advertised or unstated, else form-body `client_secret_post`.
   The choice travels in the sealed pending flow and is stored on the grant
