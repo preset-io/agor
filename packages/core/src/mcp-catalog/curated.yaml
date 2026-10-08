@@ -671,6 +671,7 @@ unpublished:
     # DCR admits allowlisted redirect URIs only, and there is no customer-app
     # route. Request the allowlist in the Square developer forum's MCP category
     # with each Cloud environment's stable callback; unhide once approved.
+    title: Square
     hidden: true
     category: productivity
     capabilities: [payments, crm]
