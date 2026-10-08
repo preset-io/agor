@@ -335,8 +335,8 @@ hand-maintained list in core.
   **Retry cleanup** action creates a new fenced recovery revision. Helpers must
   remain idempotent because manual retry can follow an ambiguous prior attempt.
 
-The helper uses the launcher's minimal environment plus the reserved `AGOR_CLOUD_*`
-credential namespace. Never put secrets in the command string. Raw stdout/stderr
+The helper uses the launcher's minimal environment plus the launcher's reserved
+deployment credential variables. Never put secrets in the command string. Raw stdout/stderr
 are discarded to prevent leaking credentials or unbounded output; Agor persists
 safe exit/timeout diagnostics and recovery state. Detailed platform diagnostics
 belong in the helper's secured operational logging. Exit 137 alone is not OOM

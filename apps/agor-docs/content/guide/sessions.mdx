@@ -71,8 +71,9 @@ was not confirmed; technical diagnostics are available under **Technical details
 Local execution uses Agor's existing process-group cleanup. Remote deployments
 need an operator-configured [cleanup command](./containerized-execution#remote-execution-cleanup)
 for automatic recovery after the executor dies. Without one, Agor can still
-recover when the agent acknowledges that its work stopped, but cannot independently
-confirm remote death.
+recover when the agent confirms that its work stopped, but cannot independently
+confirm remote death. Some agents (Codex today) cannot confirm their own shutdown,
+so remote recovery for them requires the cleanup command.
 
 Catchable termination signals allow bounded, best-effort cleanup and reporting.
 Abrupt kills and host failures do not. Unsaved output or uploads cannot be
