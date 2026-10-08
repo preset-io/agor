@@ -379,7 +379,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
       />
     ) : null;
   const moreButton = (
-    <Tooltip title="More options">
+    // A tap would leave the tooltip on top of the phone sheet.
+    <Tooltip title={isMobile ? undefined : 'More options'}>
       <Button
         size={actionSize}
         style={touchActionStyle}
