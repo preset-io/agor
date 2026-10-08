@@ -389,7 +389,8 @@ describe('hosted OpenCode executor adapter', () => {
       taskId,
       expect.objectContaining({ status: 'completed' }),
       turn,
-      checkpoint
+      checkpoint,
+      expect.any(Function)
     );
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(mocks.discardScratch).toHaveBeenCalledWith(turn.layout);

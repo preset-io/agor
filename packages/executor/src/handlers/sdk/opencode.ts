@@ -225,7 +225,14 @@ export async function executeOpenCodeTask(params: {
     };
     if (managed) {
       if (!result.checkpoint) throw new Error('Hosted OpenCode turn produced no checkpoint');
-      await completeManagedOpenCodeTurn(client, taskId, completion, managed, result.checkpoint);
+      await completeManagedOpenCodeTurn(
+        client,
+        taskId,
+        completion,
+        managed,
+        result.checkpoint,
+        () => params.abortController.signal.aborted
+      );
     } else {
       await client.service('tasks').patch(taskId, completion);
     }

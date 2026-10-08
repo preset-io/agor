@@ -107,7 +107,8 @@ export async function completeManagedOpenCodeTurn(
   taskId: TaskID,
   patch: Partial<Task>,
   turn: ManagedOpenCodeTurn,
-  checkpoint: OpenCodeCheckpointManifest
+  checkpoint: OpenCodeCheckpointManifest,
+  shouldSkipCompletion: () => boolean
 ): Promise<void> {
   await withRetries(async () => {
     const current = (await client.service('tasks').get(taskId)) as Task;
@@ -119,6 +120,8 @@ export async function completeManagedOpenCodeTurn(
     if (isTerminalTaskStatus(current.status) || current.status === TaskStatus.STOPPING) {
       throw new FinalError(`OpenCode completion was not accepted (task is ${current.status})`);
     }
+    // Stop can win during the read or a retry delay; the daemon then owns terminality.
+    if (shouldSkipCompletion()) return;
     const updated = (await client.service('tasks').patch(taskId, {
       ...patch,
       opencode_checkpoint: { holder_instance_id: turn.holderId, manifest: checkpoint },
