@@ -42,7 +42,11 @@ export {
   mayMemberUseMCPTransport,
   mayMemberWriteMCPServers,
 } from './member-policy';
-export { hasPreregisteredMCPOAuthClient, renderMCPSignInRequiredNotice } from './oauth-sign-in';
+export {
+  hasPreregisteredMCPOAuthClient,
+  MCPSignInNoticeCollector,
+  renderMCPSignInRequiredNotice,
+} from './oauth-sign-in';
 export {
   filterMCPServersForSession,
   isMCPServerNotUsableError,

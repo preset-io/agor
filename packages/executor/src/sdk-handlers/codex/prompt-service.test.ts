@@ -835,6 +835,50 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       });
     }
   });
+
+  it('appends the MCP sign-in notice to the per-turn provider prompt', async () => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const serviceWithPrivates = service as any;
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-flow.md');
+    serviceWithPrivates.buildMcpServersConfig = vi.fn().mockResolvedValue({
+      total: 0,
+      servers: {},
+      signInNotice: '## MCP servers that need sign-in\n- Asana (mcpServerId: asana-id)',
+    });
+    mockSessionsRepo.findById.mockResolvedValue({
+      session_id: 'session-flow',
+      branch_id: 'branch-1',
+      created_at: new Date().toISOString(),
+      sdk_session_id: 'existing-thread',
+      model_config: { model: 'gpt-5.4' },
+    });
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockBranchesRepo.findById.mockResolvedValue({ branch_id: 'branch-1', path: process.cwd() });
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    for await (const _ of service.promptSessionStreaming('session-flow' as any, 'review')) {
+    }
+
+    const input = mockRunStreamedInputs.at(-1);
+    expect(input).toContain('review');
+    expect(input).toContain('Current Agor session ID: session-flow');
+    expect(input).toContain('- Asana (mcpServerId: asana-id)');
+  });
 });
 
 describe('CodexPromptService - forked sessions', () => {
@@ -3318,6 +3362,66 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers[name].required).toBeUndefined();
       expect(servers[name].startup_timeout_ms).toBeUndefined();
     }
+  });
+
+  describe('OAuth servers without a grant', () => {
+    const remote = (name: string, auth: Record<string, unknown>) => ({
+      server: {
+        mcp_server_id: `${name}-id`,
+        name,
+        display_name: name === 'asana' ? 'Asana' : undefined,
+        transport: 'http',
+        url: `https://mcp.${name}.test/mcp`,
+        auth,
+      },
+    });
+    const build = () =>
+      (makeService() as any).buildMcpServersConfig(
+        '019e3700-aaaa-bbbb-cccc-dddddddddddd',
+        undefined,
+        { sessionOwnerId }
+      );
+
+    it.each([
+      ['per-user', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' }],
+      [
+        'shared after a mode switch',
+        {
+          type: 'oauth',
+          oauth_mode: 'shared',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'customer-app',
+        },
+      ],
+    ])('withholds a %s configured-client server and asks for sign-in', async (_label, auth) => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([remote('asana', auth)]);
+      const { servers, total, signInNotice } = await build();
+      expect(servers.asana).toBeUndefined();
+      expect(total).toBe(0);
+      expect(signInNotice).toContain('- Asana (mcpServerId: asana-id)');
+      expect(signInNotice).toContain('agor_widgets_request_oauth');
+      expect(signInNotice).toContain('tools are not loaded');
+    });
+
+    it('keeps passing a DCR server through, with the Connect note', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([remote('dcr', { type: 'oauth' })]);
+      const { servers, total, signInNotice } = await build();
+      expect(servers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(servers.dcr.bearer_token_env_var).toBeUndefined();
+      expect(total).toBe(1);
+      expect(signInNotice).toContain('- dcr (mcpServerId: dcr-id)');
+      expect(signInNotice).not.toContain('tools are not loaded');
+    });
+
+    it('adds no notice when the grant is present', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+        remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+      ]);
+      mcpAuthMocks.resolveMCPAuthHeaders.mockResolvedValue({ Authorization: 'Bearer token' });
+      const { servers, signInNotice } = await build();
+      expect(servers.asana.bearer_token_env_var).toBeDefined();
+      expect(signInNotice).toBeUndefined();
+    });
   });
 });
 

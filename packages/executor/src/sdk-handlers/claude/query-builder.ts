@@ -31,10 +31,9 @@ type Options = ClaudeSdk.Options;
 import {
   AGOR_MCP_SERVER_NAME,
   getMcpServersForSession,
-  hasPreregisteredMCPOAuthClient,
   listMcpToolsWithPermission,
+  MCPSignInNoticeCollector,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
-  renderMCPSignInRequiredNotice,
   resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
@@ -534,8 +533,7 @@ export async function setupQuery(
         const mcpConfig: MCPServersConfig = {};
         const deniedTools: string[] = [];
         const authDiagnostics = new McpAuthDiagnosticAccumulator();
-        const signInWithheld: MCPServer[] = [];
-        const signInPending: MCPServer[] = [];
+        const signIn = new MCPSignInNoticeCollector();
 
         for (const scoped of attachableServers) {
           const { server } = scoped; // Infer transport if missing (backwards compatibility)
@@ -576,15 +574,11 @@ export async function setupQuery(
               // Auth-backed remote server but no usable token. Track one concise summary below.
               authDiagnostics.recordUnavailable();
               canAlwaysLoad = false;
-              if (hasPreregisteredMCPOAuthClient(server.auth)) {
-                // Without a grant, Claude Code would run its own OAuth discovery
-                // and fail on Dynamic Client Registration this server never
-                // uses. Withhold it and point the agent at Agor's Connect flow,
-                // which attaches the server once the grant lands.
-                signInWithheld.push(server);
-                continue;
-              }
-              if (server.auth?.type === 'oauth') signInPending.push(server);
+              // Without a grant, Claude Code would run its own OAuth discovery
+              // and fail on Dynamic Client Registration a pre-registered client
+              // never uses. Withhold it and point the agent at Agor's Connect
+              // flow, which attaches the server once the grant lands.
+              if (signIn.recordMissingGrant(server)) continue;
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
@@ -623,10 +617,7 @@ export async function setupQuery(
           ...mcpConfig,
         };
         authDiagnostics.emitSummary('claude');
-        const signInNotice = renderMCPSignInRequiredNotice({
-          withheld: signInWithheld,
-          pending: signInPending,
-        });
+        const signInNotice = signIn.render();
         if (signInNotice) {
           const systemPrompt = queryOptions.systemPrompt as { append: string };
           systemPrompt.append = `${systemPrompt.append}\n\n${signInNotice}`;

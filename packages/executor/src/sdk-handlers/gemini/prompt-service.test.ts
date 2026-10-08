@@ -22,6 +22,19 @@ const state = vi.hoisted(() => ({
   events: [] as SDK.ServerGeminiStreamEvent[][],
 }));
 vi.mock('../../config.js', () => ({ getDaemonUrl: vi.fn(async () => 'http://localhost:3030') }));
+const mcp = vi.hoisted(() => ({
+  servers: [] as unknown[],
+  authorization: undefined as string | undefined,
+}));
+vi.mock('@agor/core/mcp', async (original) => ({
+  ...(await original<typeof import('@agor/core/mcp')>()),
+  getMcpServersForSession: vi.fn(async () =>
+    mcp.servers.map((server) => ({ server, source: 'global', oauthAuthResolution: 'unavailable' }))
+  ),
+  resolveScopedMCPAuthHeaders: vi.fn(async () =>
+    mcp.authorization ? { Authorization: mcp.authorization } : undefined
+  ),
+}));
 vi.mock('./runtime.js', async (original) => ({
   ...(await original<typeof import('./runtime.js')>()),
   enterGeminiRuntime: vi.fn(async () => async () => {}),
@@ -139,6 +152,8 @@ async function collect(
 }
 beforeEach(async () => {
   vi.clearAllMocks();
+  mcp.servers = [];
+  mcp.authorization = undefined;
   state.events = [];
   state.streamError = undefined;
   vi.mocked(findGeminiRecording).mockResolvedValue(undefined);
@@ -479,5 +494,68 @@ describe('retired models', () => {
     expect(() => resolveGeminiInvocationModel({ model_config: { model: 'gemini-3-pro' } })).toThrow(
       'retired'
     );
+  });
+});
+
+describe('Gemini MCP servers without an OAuth grant', () => {
+  const remote = (name: string, auth: Record<string, unknown>) => ({
+    mcp_server_id: `${name}-id`,
+    name,
+    display_name: name === 'asana' ? 'Asana' : undefined,
+    transport: 'http',
+    url: `https://mcp.${name}.test/mcp`,
+    auth,
+  });
+  async function configure() {
+    state.events = [[event('content', 'answer'), event('finished', {})]];
+    const s = new GeminiPromptService(
+      messages,
+      sessions,
+      'fake-key',
+      branches,
+      undefined,
+      {} as never,
+      {} as never,
+      false
+    );
+    await collect(s);
+    return state.config.mock.calls[0][0] as {
+      mcpServers: Record<string, unknown>;
+      userMemory: string;
+    };
+  }
+
+  it('withholds a configured-client server and asks for sign-in', async () => {
+    mcp.servers = [
+      remote('asana', {
+        type: 'oauth',
+        oauth_mode: 'shared',
+        oauth_dcr_mode: 'disabled',
+        oauth_client_id: 'customer-app',
+      }),
+    ];
+    const config = await configure();
+    expect(config.mcpServers.asana).toBeUndefined();
+    expect(config.userMemory).toContain('- Asana (mcpServerId: asana-id)');
+    expect(config.userMemory).toContain('agor_widgets_request_oauth');
+    expect(config.userMemory).toContain('tools are not loaded');
+  });
+
+  it('keeps passing a DCR server through, with the Connect note', async () => {
+    mcp.servers = [remote('dcr', { type: 'oauth' })];
+    const config = await configure();
+    expect(config.mcpServers.dcr).toBeDefined();
+    expect(config.userMemory).toContain('- dcr (mcpServerId: dcr-id)');
+    expect(config.userMemory).not.toContain('tools are not loaded');
+  });
+
+  it('adds no notice when the grant is present', async () => {
+    mcp.servers = [
+      remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+    ];
+    mcp.authorization = 'Bearer token';
+    const config = await configure();
+    expect(config.mcpServers.asana).toMatchObject({ headers: { Authorization: 'Bearer token' } });
+    expect(config.userMemory).not.toContain('need sign-in');
   });
 });

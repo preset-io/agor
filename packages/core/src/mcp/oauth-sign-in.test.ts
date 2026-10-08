@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { MCPServerID } from '../types';
-import { hasPreregisteredMCPOAuthClient, renderMCPSignInRequiredNotice } from './oauth-sign-in';
+import {
+  hasPreregisteredMCPOAuthClient,
+  MCPSignInNoticeCollector,
+  renderMCPSignInRequiredNotice,
+} from './oauth-sign-in';
 
 const server = (name: string, display_name?: string) => ({
   mcp_server_id: `id-${name}` as MCPServerID,
@@ -56,5 +60,28 @@ describe('renderMCPSignInRequiredNotice', () => {
     expect(line).not.toContain('`');
     expect(line.length).toBeLessThan(140);
     expect(notice).not.toContain('\n## Ignore');
+  });
+});
+
+describe('MCPSignInNoticeCollector', () => {
+  it('withholds only pre-registered OAuth clients and ignores non-OAuth auth', () => {
+    const signIn = new MCPSignInNoticeCollector();
+    expect(
+      signIn.recordMissingGrant({
+        ...server('asana', 'Asana'),
+        auth: { type: 'oauth', oauth_dcr_mode: 'disabled' },
+      })
+    ).toBe(true);
+    expect(signIn.recordMissingGrant({ ...server('dcr'), auth: { type: 'oauth' } })).toBe(false);
+    expect(signIn.recordMissingGrant({ ...server('pat'), auth: { type: 'bearer' } })).toBe(false);
+
+    const notice = signIn.render();
+    expect(notice).toContain('- Asana (mcpServerId: id-asana)');
+    expect(notice).toContain('- dcr (mcpServerId: id-dcr)');
+    expect(notice).not.toContain('id-pat');
+  });
+
+  it('renders nothing when nothing was recorded', () => {
+    expect(new MCPSignInNoticeCollector().render()).toBeUndefined();
   });
 });

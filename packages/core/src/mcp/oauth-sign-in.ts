@@ -76,3 +76,32 @@ export function renderMCPSignInRequiredNotice(servers: {
   }
   return sections.join('\n\n');
 }
+
+/**
+ * Collects OAuth servers with no usable grant while an executor builds its MCP
+ * config, so every agent runtime withholds the same servers and renders the
+ * same notice.
+ */
+export class MCPSignInNoticeCollector {
+  private readonly withheld: NoticeServer[] = [];
+  private readonly pending: NoticeServer[] = [];
+
+  /**
+   * Record a remote server that resolved no Authorization header. Returns true
+   * when it must be withheld from the agent runtime (see
+   * {@link hasPreregisteredMCPOAuthClient}); other auth types are ignored.
+   */
+  recordMissingGrant(server: NoticeServer & Pick<MCPServer, 'auth'>): boolean {
+    if (server.auth?.type !== 'oauth') return false;
+    if (hasPreregisteredMCPOAuthClient(server.auth)) {
+      this.withheld.push(server);
+      return true;
+    }
+    this.pending.push(server);
+    return false;
+  }
+
+  render(): string | undefined {
+    return renderMCPSignInRequiredNotice({ withheld: this.withheld, pending: this.pending });
+  }
+}
