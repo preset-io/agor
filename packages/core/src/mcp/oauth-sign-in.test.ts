@@ -143,6 +143,22 @@ describe('MCPSignInNoticeCollector', () => {
     expect(notice).not.toContain('id-dcr');
   });
 
+  it('routes a client-credentials server whose lookup fails to the machine line', () => {
+    const signIn = new MCPSignInNoticeCollector();
+    expect(
+      signIn.recordResolutionFailure({
+        ...server('m2m'),
+        auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
+      })
+    ).toBe(true);
+    const notice = signIn.render();
+    expect(notice).toContain('machine (client-credentials)');
+    expect(notice).toContain('id-m2m');
+    expect(notice).not.toContain("couldn't load the sign-in");
+    expect(notice).not.toContain('agor_widgets_request_oauth');
+    expect(notice).not.toContain('Refresh auth');
+  });
+
   it('renders nothing when nothing was recorded', () => {
     expect(new MCPSignInNoticeCollector().render()).toBeUndefined();
   });

@@ -140,7 +140,7 @@ export class MCPSignInNoticeCollector {
    */
   recordResolutionFailure(server: NoticeServer & Pick<MCPServer, 'auth'>): boolean {
     if (!hasPreregisteredMCPOAuthClient(server.auth)) return false;
-    this.unavailable.push(server);
+    (usesClientCredentialsGrant(server.auth) ? this.machine : this.unavailable).push(server);
     return true;
   }
 
