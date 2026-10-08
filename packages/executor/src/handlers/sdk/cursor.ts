@@ -36,6 +36,7 @@ import {
   reportWithheldMcpServers,
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { isDaemonOwnedAbort, markExecutorCleanupUnverified } from '../../termination-state.js';
 import {
   captureGitStateAtTaskEnd,
   createStreamingCallbacks,
@@ -451,10 +452,21 @@ export async function executeCursorTask(params: {
 
   const { Agent } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
   let currentRun: Run | undefined;
+  let runSettled = false;
+  let listenerCancel: Promise<void> | undefined;
+  const daemonOwnsTerminality = () => isDaemonOwnedAbort(params.abortController);
+  const cancelRun = async (run: Run) => {
+    try {
+      await run.cancel();
+    } catch (error) {
+      markExecutorCleanupUnverified(params.abortController);
+      throw error;
+    }
+  };
   const abortHandler = () => {
     if (!currentRun) return;
     console.log(`[cursor] Abort signal received; cancelling Cursor run ${currentRun.id}`);
-    currentRun.cancel().catch((error) => {
+    listenerCancel = cancelRun(currentRun).catch((error) => {
       console.warn('[cursor] Failed to cancel Cursor run:', error);
     });
   };
@@ -549,13 +561,13 @@ export async function executeCursorTask(params: {
       });
 
       if (params.abortController.signal.aborted) {
-        await currentRun.cancel();
+        await cancelRun(currentRun);
       }
 
       for await (const event of currentRun.stream()) {
         rawMessages.push(event);
         if (params.abortController.signal.aborted) {
-          await currentRun.cancel();
+          await cancelRun(currentRun);
           break;
         }
         await handleCursorEvent({
@@ -597,6 +609,7 @@ export async function executeCursorTask(params: {
       }
 
       const runResult = await currentRun.wait();
+      runSettled = true;
       const resultText = typeof runResult.result === 'string' ? runResult.result : '';
       const finalText = resultText.length > assistantText.length ? resultText : assistantText;
       const finalContent = buildCursorAssistantContent({ text: finalText, thinkingText });
@@ -636,11 +649,20 @@ export async function executeCursorTask(params: {
           sha_at_end: gitStateAtEnd.sha,
         };
       }
+      // Signal/Stop can win while transcript and git awaits above are in flight.
+      if (daemonOwnsTerminality()) return;
       await client.service('tasks').patch(taskId, taskPatch);
     } finally {
+      // Abort dispatch does not await the listener; its rejection must land before reporting.
+      await listenerCancel;
+      // @cursor/sdk exposes no exit evidence; after Stop only a settled wait() counts as teardown.
+      if (currentRun && params.abortController.signal.aborted && !runSettled) {
+        markExecutorCleanupUnverified(params.abortController);
+      }
       agent.close();
     }
   } catch (error) {
+    if (daemonOwnsTerminality()) return;
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] execution failed category=task_execution');
     const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
@@ -656,7 +678,15 @@ export async function executeCursorTask(params: {
         sha_at_end: gitStateAtEnd.sha,
       };
     }
-    await settleTaskFailure(client, sessionId, taskId, err, taskPatch);
+    const persisted = await settleTaskFailure(
+      client,
+      sessionId,
+      taskId,
+      err,
+      taskPatch,
+      daemonOwnsTerminality
+    );
+    if (!persisted) return;
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);

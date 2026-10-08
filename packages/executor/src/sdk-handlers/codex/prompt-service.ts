@@ -71,6 +71,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -1369,6 +1370,9 @@ export class CodexPromptService {
 
     let streamReturned = false;
     let firstEventObserved = false;
+    // The SDK awaits CLI exit only at EOF; break/throw/abort kill it without
+    // awaiting exit. A provider-declared completion is also accepted as settled.
+    let providerSettled = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1484,6 +1488,7 @@ export class CodexPromptService {
             // Terminal completion event from new Codex rollout format.
             // Treat as equivalent to turn.completed.
             receivedTerminalEvent = true;
+            providerSettled = true;
             threadId = thread.id || '';
             const taskCompleteUsage = extractCodexTokenUsage(
               (eventPayload?.usage ?? eventPayload?.token_usage) as unknown
@@ -1696,6 +1701,7 @@ export class CodexPromptService {
           case 'turn.completed': {
             // Turn complete, emit final message
             receivedTerminalEvent = true;
+            providerSettled = true;
             if (observedStreamError && !receivedAssistantMessage) {
               diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
               throw new CodexLifecycleError('completed_without_response');
@@ -1758,6 +1764,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        providerSettled = true;
         diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
@@ -1790,6 +1797,9 @@ export class CodexPromptService {
       // Preserve the existing UI distinction independently of diagnostic phase.
       throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
     } finally {
+      if (abortController && streamReturned && !providerSettled) {
+        markExecutorCleanupUnverified(abortController);
+      }
       diagnostics.finish();
     }
   }

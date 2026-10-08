@@ -47,6 +47,7 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
+import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { CodexTool } from './codex-tool.js';
 import { CodexPromptService, type CodexStreamEvent } from './prompt-service.js';
 
@@ -2805,6 +2806,50 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ).resolves.toBeUndefined();
 
     expect(emitted.some((e) => e.type === 'stopped')).toBe(true);
+  });
+
+  it('does not treat a mid-stream Stop as CLI exit evidence', async () => {
+    const { service, codex } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    const returned = vi.fn();
+    codex.resumeThread = vi.fn(() => ({
+      id: 'existing-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockResolvedValue({
+        events: {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next() {
+            expect(service.stopTask(testSessionId)).toEqual({ success: true });
+            abortController.abort();
+            return { done: false, value: { type: 'turn.started' } };
+          },
+          // Like the SDK's early return: the child is signalled, not awaited.
+          async return() {
+            returned();
+            return { done: true, value: undefined };
+          },
+        },
+      }),
+    }));
+
+    const emitted = await drain(service, abortController);
+
+    expect(emitted).toContainEqual({ type: 'stopped', threadId: 'existing-thread-id' });
+    expect(returned).toHaveBeenCalledOnce();
+    await expectSignalQuiescence(abortController, false);
+  });
+
+  it('accepts a provider-declared turn completion as settled', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    mockStreamEvents = [{ type: 'turn.completed', usage: {} }];
+
+    const emitted = await drain(service, abortController);
+
+    expect(emitted.some((event) => event.type === 'complete')).toBe(true);
+    await expectSignalQuiescence(abortController, true);
   });
 
   it('ignores unknown event_msg payload types without throwing', async () => {
