@@ -903,6 +903,8 @@ export class CodexPromptService {
       } catch {
         authDiagnostics.recordResolutionFailure();
         canRequireServer = false;
+        // Same withholding when the credential lookup itself failed.
+        if (signIn.recordResolutionFailure(server)) continue;
       }
 
       applyGatewayMcpStartupGuard(serverConfig, canRequireServer);

@@ -853,7 +853,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     serviceWithPrivates.buildMcpServersConfig = vi.fn().mockResolvedValue({
       total: 0,
       servers: {},
-      signInNotice: '## MCP servers that need sign-in\n- Asana (mcpServerId: asana-id)',
+      signInNotice: '## MCP servers that need sign-in\n- mcpServerId: asana-id, label: "Asana"',
     });
     mockSessionsRepo.findById.mockResolvedValue({
       session_id: 'session-flow',
@@ -877,7 +877,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
     const input = mockRunStreamedInputs.at(-1);
     expect(input).toContain('review');
     expect(input).toContain('Current Agor session ID: session-flow');
-    expect(input).toContain('- Asana (mcpServerId: asana-id)');
+    expect(input).toContain('- mcpServerId: asana-id, label: "Asana"');
   });
 });
 
@@ -3398,7 +3398,7 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       const { servers, total, signInNotice } = await build();
       expect(servers.asana).toBeUndefined();
       expect(total).toBe(0);
-      expect(signInNotice).toContain('- Asana (mcpServerId: asana-id)');
+      expect(signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
       expect(signInNotice).toContain('agor_widgets_request_oauth');
       expect(signInNotice).toContain('tools are not loaded');
     });
@@ -3409,8 +3409,23 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(servers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
       expect(servers.dcr.bearer_token_env_var).toBeUndefined();
       expect(total).toBe(1);
-      expect(signInNotice).toContain('- dcr (mcpServerId: dcr-id)');
+      expect(signInNotice).toContain('- mcpServerId: dcr-id, label: "dcr"');
       expect(signInNotice).not.toContain('tools are not loaded');
+    });
+
+    it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
+      mcpScopingMocks.getMcpServersForSession.mockResolvedValue([
+        remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
+        remote('dcr', { type: 'oauth' }),
+      ]);
+      mcpAuthMocks.resolveMCPAuthHeaders.mockRejectedValue(new Error('authority timed out'));
+      const { servers, signInNotice } = await build();
+      expect(servers.asana).toBeUndefined();
+      expect(signInNotice).toContain("couldn't load the sign-in");
+      expect(signInNotice).toContain('mcpServerId: asana-id');
+      // DCR keeps today's catch behavior: dispatched, no notice.
+      expect(servers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(signInNotice).not.toContain('dcr-id');
     });
 
     it('adds no notice when the grant is present', async () => {

@@ -583,6 +583,8 @@ export async function setupQuery(
           } catch {
             authDiagnostics.recordResolutionFailure();
             canAlwaysLoad = false;
+            // Same withholding when the credential lookup itself failed.
+            if (transport !== 'stdio' && signIn.recordResolutionFailure(server)) continue;
           }
 
           if (canAlwaysLoad) {

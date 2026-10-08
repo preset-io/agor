@@ -997,11 +997,15 @@ describe('setupQuery - Local Settings Support', () => {
   });
 
   describe('OAuth servers without a grant', () => {
-    async function setupWith(servers: unknown[]) {
+    async function setupWith(servers: unknown[], setup: { lookupFails?: boolean } = {}) {
       const deps = createMockDeps();
       deps.sessionMCPRepo = {} as any;
       deps.mcpServerRepo = {} as any;
-      vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
+      if (setup.lookupFails) {
+        vi.mocked(resolveMCPAuthHeaders).mockRejectedValue(new Error('authority timed out'));
+      } else {
+        vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
+      }
       vi.mocked(getMcpServersForSession).mockResolvedValue(
         servers.map((server) => ({ server, source: 'global', oauthAuthResolution: 'unavailable' }))
       );
@@ -1044,7 +1048,7 @@ describe('setupQuery - Local Settings Support', () => {
       // Not handed to the CLI, so it cannot attempt its own OAuth / DCR.
       expect(mcpServers.asana).toBeUndefined();
       expect(append).toContain('## MCP servers that need sign-in');
-      expect(append).toContain('- Asana (mcpServerId: asana-id)');
+      expect(append).toContain('- mcpServerId: asana-id, label: "Asana"');
       expect(append).toContain('agor_widgets_request_oauth');
       expect(append).not.toMatch(/dynamic client registration/i);
     });
@@ -1065,7 +1069,7 @@ describe('setupQuery - Local Settings Support', () => {
         url: 'https://mcp.dcr.test/mcp',
       });
       expect(mcpServers.dcrRemote.alwaysLoad).toBeUndefined();
-      expect(append).toContain('- dcrRemote (mcpServerId: dcr-id)');
+      expect(append).toContain('- mcpServerId: dcr-id, label: "dcrRemote"');
       expect(append).not.toContain('tools are not loaded');
     });
 
@@ -1083,6 +1087,51 @@ describe('setupQuery - Local Settings Support', () => {
       expect(mcpServers.manual).toBeDefined();
       expect(append).toContain('agor_widgets_request_oauth');
       expect(append).toContain('an administrator must save one');
+    });
+
+    it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
+      const { mcpServers, append } = await setupWith(
+        [
+          {
+            mcp_server_id: 'asana-id',
+            name: 'asana',
+            transport: 'http',
+            url: 'https://mcp.asana.test/mcp',
+            auth: { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' },
+          },
+          {
+            mcp_server_id: 'dcr-id',
+            name: 'dcrRemote',
+            transport: 'http',
+            url: 'https://mcp.dcr.test/mcp',
+            auth: { type: 'oauth' },
+          },
+        ],
+        { lookupFails: true }
+      );
+
+      expect(mcpServers.asana).toBeUndefined();
+      expect(append).toContain("couldn't load the sign-in");
+      expect(append).toContain('mcpServerId: asana-id');
+      // DCR keeps today's catch behavior: dispatched, no notice.
+      expect(mcpServers.dcrRemote).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(append).not.toContain('dcr-id');
+    });
+
+    it('gives a client-credentials server admin guidance instead of a browser sign-in', async () => {
+      const { mcpServers, append } = await setupWith([
+        {
+          mcp_server_id: 'm2m-id',
+          name: 'm2m',
+          transport: 'http',
+          url: 'https://mcp.m2m.test/mcp',
+          auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
+        },
+      ]);
+
+      expect(mcpServers.m2m).toBeUndefined();
+      expect(append).toContain('machine (client-credentials)');
+      expect(append).not.toContain('agor_widgets_request_oauth');
     });
 
     it('adds no notice when every OAuth server has a grant', async () => {

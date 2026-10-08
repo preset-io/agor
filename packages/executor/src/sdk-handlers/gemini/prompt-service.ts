@@ -526,6 +526,8 @@ export class GeminiPromptService {
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
+            // Same withholding when the credential lookup itself failed.
+            if (server.transport !== 'stdio' && signIn.recordResolutionFailure(server)) continue;
           }
 
           const excludeTools = listMcpToolsWithPermission(
