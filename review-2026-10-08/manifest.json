@@ -1,0 +1,226 @@
+[
+  {
+    "file": "android360-dark-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "The input sits in one row with attach, more and send, one touch target tall.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "The input sits in one row with attach, more and send, one touch target tall.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "desktop-dark-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "Desktop keeps the input above the action row; only the chips and buttons were tidied.",
+    "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "desktop-light-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "Desktop keeps the input above the action row; only the chips and buttons were tidied.",
+    "viewport": "Desktop 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "iphone15-dark-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "The input sits in one row with attach, more and send, one touch target tall.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone15-light-idle.png",
+    "kind": "image",
+    "title": "Composer idle",
+    "caption": "The input sits in one row with attach, more and send, one touch target tall.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "light"
+  },
+  {
+    "file": "android360-dark-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "desktop-dark-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "desktop-light-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "Desktop 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "iphone15-dark-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone15-light-running.png",
+    "kind": "image",
+    "title": "Composer running",
+    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "light"
+  },
+  {
+    "file": "android360-dark-more.png",
+    "kind": "image",
+    "title": "More sheet",
+    "caption": "Sentence-case sections and 44px rows in the session controls sheet.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-more.png",
+    "kind": "image",
+    "title": "More sheet",
+    "caption": "Sentence-case sections and 44px rows in the session controls sheet.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "desktop-dark-more.png",
+    "kind": "image",
+    "title": "More popover",
+    "caption": "Sentence-case sections, 12 and 14px text and 32px rows in the more popover.",
+    "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "desktop-light-more.png",
+    "kind": "image",
+    "title": "More popover",
+    "caption": "Sentence-case sections, 12 and 14px text and 32px rows in the more popover.",
+    "viewport": "Desktop 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "iphone15-dark-more.png",
+    "kind": "image",
+    "title": "More sheet",
+    "caption": "Sentence-case sections and 44px rows in the session controls sheet.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone15-light-more.png",
+    "kind": "image",
+    "title": "More sheet",
+    "caption": "Sentence-case sections and 44px rows in the session controls sheet.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "light"
+  },
+  {
+    "file": "android360-dark-multiline.png",
+    "kind": "image",
+    "title": "Multi-line input",
+    "caption": "The input grows to five lines, then scrolls inside; buttons stay on the last line.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-multiline.png",
+    "kind": "image",
+    "title": "Multi-line input",
+    "caption": "The input grows to five lines, then scrolls inside; buttons stay on the last line.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "iphone15-dark-multiline.png",
+    "kind": "image",
+    "title": "Multi-line input",
+    "caption": "The input grows to five lines, then scrolls inside; buttons stay on the last line.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone15-light-multiline.png",
+    "kind": "image",
+    "title": "Multi-line input",
+    "caption": "The input grows to five lines, then scrolls inside; buttons stay on the last line.",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "light"
+  },
+  {
+    "file": "android360-dark-chips-end.png",
+    "kind": "image",
+    "title": "Chip row scrolled to the end",
+    "caption": "The chip row stays on one line and scrolls sideways with no fade or scrollbar.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-chips-end.png",
+    "kind": "image",
+    "title": "Chip row scrolled to the end",
+    "caption": "The chip row stays on one line and scrolls sideways with no fade or scrollbar.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "video-phone-send.webm",
+    "kind": "video",
+    "title": "Phone: type, send, stop",
+    "caption": "The input grows to five lines while typing, then Stop appears next to the input after sending.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-phone-chips.webm",
+    "kind": "video",
+    "title": "Phone: swipe the chip row",
+    "caption": "The chip row scrolls sideways on one line with no fade and no scrollbar.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-phone-sheet.webm",
+    "kind": "video",
+    "title": "Phone: change model and effort",
+    "caption": "The sheet changes the model to opus-5.5 and effort to medium, and the chips update after closing.",
+    "viewport": "Chromium 390x844",
+    "theme": "dark"
+  },
+  {
+    "file": "video-desktop-popover.webm",
+    "kind": "video",
+    "title": "Desktop: more popover",
+    "caption": "Rows in the more popover share one 32px height while hovering down the list.",
+    "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  }
+]
