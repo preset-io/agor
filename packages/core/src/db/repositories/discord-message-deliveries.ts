@@ -16,6 +16,7 @@ import type {
   MessageID,
   ThreadSessionMapID,
 } from '@agor/core/types';
+import { isDiscordNoReply } from '@agor/core/types';
 import { and, asc, eq, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
@@ -89,8 +90,8 @@ function messageText(message: Message): string {
 
 function isRoutableAssistantMessage(message: Message): boolean {
   if (message.role !== 'assistant') return false;
-  const text = messageText(message);
-  return text.trim().length > 0 && !/^thinking\s*\.{3}$/i.test(text.trim());
+  const text = messageText(message).trim();
+  return text.length > 0 && !/^thinking\s*\.{3}$/i.test(text) && !isDiscordNoReply(text);
 }
 
 /** Extract text only at the worker boundary; it is never stored in the intent. */

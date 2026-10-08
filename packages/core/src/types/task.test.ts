@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  type ExecutorCleanupContext,
   isTaskExecuting,
   isTaskPendingDispatch,
   NONTERMINAL_TASK_STATUSES,
   TaskStatus,
   TERMINAL_TASK_STATUSES,
+  TERMINATION_CAUSES,
+  type TerminationCause,
 } from './task';
 
 describe('task execution helpers', () => {
@@ -41,5 +44,34 @@ describe('task execution helpers', () => {
     expect(isTaskExecuting({ status: TaskStatus.FAILED })).toBe(false);
     expect(isTaskExecuting({ status: TaskStatus.STOPPED })).toBe(false);
     expect(isTaskExecuting({ status: TaskStatus.TIMED_OUT })).toBe(false);
+  });
+});
+
+// A deliberate v1 wire snapshot, not a second production declaration.
+describe('cleanup v1 cause contract', () => {
+  it('keeps the runtime family and serialized context cause exhaustive', () => {
+    const v1: Record<TerminationCause, true> = {
+      user_stop: true,
+      startup_timeout: true,
+      heartbeat_lost: true,
+      sdk_health_failure: true,
+      executor_interrupted: true,
+      authorization_revoked: true,
+      launch_refused: true,
+    };
+    expect([...TERMINATION_CAUSES].sort()).toEqual(Object.keys(v1).sort());
+    for (const cause of TERMINATION_CAUSES) {
+      const context: ExecutorCleanupContext = {
+        version: 1,
+        tenant_id: 'tenant',
+        task_id: 'task',
+        session_id: 'session',
+        branch_id: 'branch',
+        requested_at: 'now',
+        attempt_id: 'attempt',
+        cause,
+      };
+      expect(JSON.parse(JSON.stringify(context))).toMatchObject({ version: 1, cause });
+    }
   });
 });

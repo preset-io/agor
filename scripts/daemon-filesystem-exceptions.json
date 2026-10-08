@@ -1986,5 +1986,19 @@
     "rationale": "Canonicalizes the trusted existing deployment-root ancestor so symlinked data roots resolve to one credential authority.",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-252",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/executor-cleanup-command.ts",
+    "import": "node:child_process",
+    "symbol": "spawn",
+    "local": "spawn",
+    "operation": "call:spawn@runExecutorCleanupCommand#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "operator-configured remote execution containment",
+    "rationale": "Runs only the trusted operator cleanup command after the termination coordinator verifies tenant/task context and durably claims the attempt. Sends scoped context on stdin without shell interpolation, uses the sanitized launcher environment, discards raw output, and bounds execution by terminating only the helper's owned process group. The helper must enforce tenant/task workload identity and confirm containment before returning zero; this is not a branch-filesystem capability.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

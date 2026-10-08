@@ -57,4 +57,7 @@ export default {
   'api-reference': 'API Reference',
   security: 'Security',
   faq: 'FAQ',
+  // Linked from every footer; hidden from the sidebar.
+  privacy: { title: 'Privacy Policy', display: 'hidden' },
+  terms: { title: 'Terms of Use', display: 'hidden' },
 };

@@ -186,7 +186,7 @@ export class GeminiTool implements ITool {
         taskId,
         permissionMode,
         streamingCallbacks?.onPulse,
-        abortController?.signal
+        abortController
       )) {
         if (event.type === 'stopped') {
           wasStopped = true;

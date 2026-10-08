@@ -305,8 +305,15 @@ describe('DiscordMessageDeliveryRepository', () => {
           content_preview: 'Thinking...',
         })
       );
+      const noReply = await messages.create(
+        assistantMessage(mappedSession.session_id, {
+          content: ' [no-reply] ',
+          content_preview: '[no-reply]',
+        })
+      );
       expect(await deliveries.findByMessageId(user.message_id)).toBeNull();
       expect(await deliveries.findByMessageId(thinking.message_id)).toBeNull();
+      expect(await deliveries.findByMessageId(noReply.message_id)).toBeNull();
 
       const mappings = new ThreadSessionMapRepository(db);
       await mappings.update(mappedMapping.id, { metadata: { outbound_seed_id: generateId() } });

@@ -71,6 +71,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -1369,6 +1370,10 @@ export class CodexPromptService {
 
     let streamReturned = false;
     let firstEventObserved = false;
+    // The SDK awaits CLI exit only at EOF; break/return/throw/abort kill it
+    // without awaiting exit. Completion events prove the turn ended, not that
+    // the CLI is gone, so only stream exhaustion counts as teardown evidence.
+    let streamExhausted = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1758,6 +1763,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
+        streamExhausted = true;
         diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
@@ -1790,6 +1796,9 @@ export class CodexPromptService {
       // Preserve the existing UI distinction independently of diagnostic phase.
       throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
     } finally {
+      if (abortController && streamReturned && !streamExhausted) {
+        markExecutorCleanupUnverified(abortController);
+      }
       diagnostics.finish();
     }
   }

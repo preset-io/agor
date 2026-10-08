@@ -37,7 +37,7 @@ import type { StreamingCallbacks } from '../../sdk-handlers/base/types.js';
 import { normalizeRawSdkResponse } from '../../sdk-handlers/normalizer-factory.js';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { markTaskFailurePersisted } from '../../terminal-task.js';
-import { isDaemonOwnedAbort } from '../../termination-state.js';
+import { isDaemonOwnedAbort, markExecutorCleanupUnverified } from '../../termination-state.js';
 import { configureSessionGitSafeDirectories } from './git-safe-directory.js';
 
 const DEBUG_SDK_EXECUTOR =
@@ -94,21 +94,26 @@ async function appendTaskFailureMessage(
   }
 }
 
+/** Returns false when a signal took ownership of terminality before the patch. */
 export async function settleTaskFailure(
   client: AgorClient,
   sessionId: SessionID,
   taskId: TaskID,
   failure: Error,
-  patch: Partial<Task>
-): Promise<void> {
+  patch: Partial<Task>,
+  shouldSkipTerminal: () => boolean = () => false
+): Promise<boolean> {
   // Terminal task hooks may drain the next queued turn, so reserve the current
   // transcript index before publishing terminality. Message failure stays best-effort.
   await appendTaskFailureMessage(client, sessionId, taskId, failure);
+  // A signal can arrive during the message RPCs; it then owns STOPPING→terminal.
+  if (shouldSkipTerminal()) return false;
   await client.service('tasks').patch(taskId, {
     ...patch,
     ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
   });
   markTaskFailurePersisted(failure);
+  return true;
 }
 
 /**
@@ -519,6 +524,7 @@ export async function executeToolTask(params: {
 
   let abortHandler: (() => Promise<void>) | undefined;
   let abortCompletion: Promise<void> | undefined;
+  let providerStarted = false;
   let credentialExpiresAt: string | undefined;
 
   try {
@@ -584,12 +590,15 @@ export async function executeToolTask(params: {
             if (stopResult.success) {
               console.log(`[${toolName}] Tool stopped successfully`);
             } else {
+              if (providerStarted) markExecutorCleanupUnverified(params.abortController);
               console.warn(`[${toolName}] Tool stop failed: ${stopResult.reason}`);
             }
           } catch (error) {
+            if (providerStarted) markExecutorCleanupUnverified(params.abortController);
             console.error(`[${toolName}] Error calling stopTask:`, error);
           }
         } else {
+          if (providerStarted) markExecutorCleanupUnverified(params.abortController);
           console.warn(`[${toolName}] Tool does not implement stopTask method`);
         }
       })();
@@ -610,6 +619,7 @@ export async function executeToolTask(params: {
 
     // Execute prompt with streaming
     // Pass abortController directly to SDK for proper cancellation support
+    providerStarted = true;
     const result = await tool.executePromptWithStreaming(
       sessionId,
       prompt,
@@ -745,6 +755,8 @@ export async function executeToolTask(params: {
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
+    // Signal/Stop can win while git/accounting awaits above are in flight.
+    if (daemonOwnsTerminality()) return;
     await client.service('tasks').patch(taskId, patchData);
   } catch (error) {
     if (daemonOwnsTerminality()) return;
@@ -775,7 +787,16 @@ export async function executeToolTask(params: {
       };
     }
 
-    await settleTaskFailure(client, sessionId, taskId, err, patchData);
+    if (daemonOwnsTerminality()) return;
+    const persisted = await settleTaskFailure(
+      client,
+      sessionId,
+      taskId,
+      err,
+      patchData,
+      daemonOwnsTerminality
+    );
+    if (!persisted) return;
 
     throw err;
   } finally {

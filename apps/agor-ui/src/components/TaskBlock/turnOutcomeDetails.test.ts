@@ -31,6 +31,18 @@ describe('turnOutcomeDetails', () => {
     expect(rows.find((row) => row.label === 'Cause')?.value).toBe('launch_refused');
   });
 
+  it('keeps the safe cleanup diagnostic in the shared technical details', () => {
+    const { rows } = turnOutcomeDetails({
+      ...base,
+      termination_request: {
+        cause: 'heartbeat_lost',
+        requested_at: '',
+        cleanup_diagnostic: 'Cleanup timed out.',
+      },
+    } as Task);
+    expect(rows).toContainEqual({ label: 'Cleanup', value: 'Cleanup timed out.', code: true });
+  });
+
   it('lists only the rows that have data, in a fixed order', () => {
     const { rows, hasSignal } = turnOutcomeDetails(
       {

@@ -23,6 +23,7 @@ export {
   chunkDiscordMessage,
   DiscordConnector,
   DiscordDirectMessageError,
+  DiscordThreadUnavailableError,
   extractDiscordInboundFiles,
   isAllowedDiscordAttachmentUrl,
   stripDiscordBotMention,
@@ -130,7 +131,11 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
-export { gatewayFailureCode, sanitizeGatewayProviderError } from './provider-error';
+export {
+  gatewayFailureCode,
+  isPermanentProviderRefusal,
+  sanitizeGatewayProviderError,
+} from './provider-error';
 export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,

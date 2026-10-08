@@ -147,7 +147,8 @@ describe('completeManagedOpenCodeTurn', () => {
         taskId,
         { status: 'completed' },
         turn,
-        manifest
+        manifest,
+        () => false
       );
       await vi.runAllTimersAsync();
       await expect(done).resolves.toBeUndefined();
@@ -161,5 +162,28 @@ describe('completeManagedOpenCodeTurn', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('does not publish completion when Stop lands during the task read', async () => {
+    const state = client(undefined);
+    const controller = new AbortController();
+    state.tasks.get.mockImplementationOnce(async () => {
+      controller.abort();
+      return { status: 'running' };
+    });
+
+    await expect(
+      completeManagedOpenCodeTurn(
+        state.value,
+        taskId,
+        { status: 'completed' },
+        turn,
+        manifest,
+        () => controller.signal.aborted
+      )
+    ).resolves.toBeUndefined();
+
+    expect(state.tasks.get).toHaveBeenCalledOnce();
+    expect(state.tasks.patch).not.toHaveBeenCalled();
   });
 });

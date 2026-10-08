@@ -63,7 +63,9 @@ import {
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,
   DISCORD_METADATA_KEY,
+  type DiscordAuthorityMetadata,
   DiscordDirectMessageError,
+  DiscordThreadUnavailableError,
   extractDiscordStarterMessageId,
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
@@ -73,6 +75,7 @@ import {
   gatewayListenerFailure,
   getConnector,
   hasConnector,
+  isPermanentProviderRefusal,
   isSlackWriteTargetAllowed,
   normalizeOutbound,
   normalizeSendReceipt,
@@ -89,6 +92,7 @@ import type {
   AuthenticatedParams,
   BranchPermissionLevel,
   ChannelType,
+  DiscordGatewayConfig,
   GatewayChannel,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
@@ -115,10 +119,13 @@ import type {
 import {
   compareDiscordSnowflakes,
   DEFAULT_DISCORD_CATCH_UP,
+  DISCORD_NO_REPLY_SENTINEL,
+  discordResponseModeAdmits,
   discordSnowflakeTimestampMs,
   GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   hasMinimumRole,
   isDiscordDirectMessagesEnabled,
+  isDiscordNoReply,
   isDiscordSnowflake,
   isTerminalTaskStatus,
   previousDiscordSnowflake,
@@ -508,6 +515,46 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
   }
 }
 
+/**
+ * A Discord channel message without a bot mention that its channel's response
+ * mode admits, re-derived from fresh channel config rather than trusted from
+ * the connector.
+ */
+function discordResponseModeAdmitsMetadata(
+  config: Record<string, unknown>,
+  metadata: DiscordAuthorityMetadata
+): boolean {
+  const channelId = metadata[DISCORD_METADATA_KEY.channelId];
+  const messageId = metadata[DISCORD_METADATA_KEY.messageId];
+  const isThread = metadata[DISCORD_METADATA_KEY.isThread];
+  const parentChannelId = metadata[DISCORD_METADATA_KEY.parentChannelId];
+  if (
+    metadata[DISCORD_METADATA_KEY.hasMention] !== false ||
+    typeof channelId !== 'string' ||
+    typeof messageId !== 'string' ||
+    typeof isThread !== 'boolean'
+  ) {
+    return false;
+  }
+  return discordResponseModeAdmits(config as DiscordGatewayConfig, {
+    channelId,
+    messageId,
+    isThread,
+    ...(typeof parentChannelId === 'string' ? { parentChannelId } : {}),
+  });
+}
+
+/** A Discord channel message the bot was not mentioned in (admitted by a response mode). */
+function isUnmentionedDiscordInbound(
+  channel: GatewayChannel,
+  metadata: Record<string, unknown> | undefined
+): boolean {
+  return (
+    channel.channel_type === 'discord' &&
+    parseDiscordAuthorityMetadata(metadata)?.[DISCORD_METADATA_KEY.hasMention] === false
+  );
+}
+
 function discordInboundMetadataIsAuthoritative(
   channel: GatewayChannel,
   data: PostMessageData
@@ -576,7 +623,8 @@ function discordInboundMetadataIsAuthoritative(
     allowedChannels.length === 0 ||
     allowedChannels.some((id) => !snowflake(id)) ||
     metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
-    metadata[DISCORD_METADATA_KEY.hasMention] !== true
+    (metadata[DISCORD_METADATA_KEY.hasMention] !== true &&
+      !discordResponseModeAdmitsMetadata(config, metadata))
   )
     return false;
   if (isThread) {
@@ -728,6 +776,9 @@ const SLACK_GATEWAY_REPLY_NOTE =
 
 const GATEWAY_STARTUP_BOOTSTRAP_HINT =
   'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
+
+/** Prompt note for a Discord message admitted by a response mode without a mention. */
+const DISCORD_UNADDRESSED_NOTE = `This Discord message did not mention you; the channel is set to let you answer anyway, and every message you write is posted. Reply only if you can genuinely help. If people are already handling it or you have nothing useful to add, write nothing else at all: your only message must be exactly ${DISCORD_NO_REPLY_SENTINEL}, and nothing will be posted.`;
 
 function prependSlackGatewayReplyNote(prompt: string): string {
   if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
@@ -4484,6 +4535,29 @@ export class GatewayService {
   }
 
   /**
+   * Admit an inbound message. An unmentioned Discord message is ordinary
+   * chatter: when it is denied (Forbidden), it ends quietly instead of failing
+   * the listener, matching the suppressed notices inside create().
+   */
+  private async createQuietlyIfUnmentioned(
+    channel: GatewayChannel,
+    metadata: Record<string, unknown> | undefined,
+    data: Parameters<GatewayService['create']>[0]
+  ): Promise<PostMessageResult> {
+    try {
+      return await this.create(data);
+    } catch (error) {
+      if (!(error instanceof Forbidden) || !isUnmentionedDiscordInbound(channel, metadata)) {
+        throw error;
+      }
+      console.debug(
+        `[gateway] IGNORED: denied unmentioned Discord message: channel=${shortId(channel.id)}`
+      );
+      return { success: false, sessionId: '', created: false };
+    }
+  }
+
+  /**
    * Gateway calls the Session and Prompt services internally, so their
    * provider-only RBAC hooks do not run. Keep inbound admission on the same
    * normalized branch policy as browser, REST, MCP, and scheduler callers.
@@ -4738,6 +4812,13 @@ export class GatewayService {
     const discordMetadata =
       channel.channel_type === 'discord' ? parseDiscordAuthorityMetadata(data.metadata) : null;
     const discordDm = discordMetadata?.[DISCORD_METADATA_KEY.directMessage] === true;
+    // Admitted by a channel response mode without mentioning the bot.
+    // These stay quiet: no lifecycle, denial, or error notices, and a denial
+    // ends the event instead of failing the listener.
+    const discordUnaddressed =
+      !!discordMetadata &&
+      !discordDm &&
+      discordResponseModeAdmitsMetadata(channel.config as Record<string, unknown>, discordMetadata);
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -4885,7 +4966,8 @@ export class GatewayService {
     if (
       channel.channel_type === 'discord' &&
       !discordDm &&
-      discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true
+      discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true &&
+      !discordUnaddressed
     ) {
       console.debug(
         `[gateway] IGNORED: Discord message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
@@ -4953,7 +5035,7 @@ export class GatewayService {
         console.error(
           `[gateway] Channel "${channel.name}" has no agor_user_id and alignment is OFF. Cannot process message.`
         );
-        this.sendSystemMessage(channel, data.thread_id, errMsg);
+        if (!discordUnaddressed) this.sendSystemMessage(channel, data.thread_id, errMsg);
         // For GitHub: edit the Processing comment with the error
         if (channel.channel_type === 'github' && data.metadata?.processing_comment_id) {
           try {
@@ -5129,7 +5211,9 @@ export class GatewayService {
         await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
       } catch (error) {
         if (!(error instanceof GatewayPromptAuthorizationError)) throw error;
-        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        if (!discordUnaddressed) {
+          await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        }
         return { success: false, sessionId: '', created: false };
       }
     } else {
@@ -5341,7 +5425,7 @@ export class GatewayService {
       }
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
-      if (sessionUrl && channel.channel_type !== 'slack' && !discordDm) {
+      if (sessionUrl && channel.channel_type !== 'slack' && !discordDm && !discordUnaddressed) {
         this.sendSystemMessage(
           channel,
           data.thread_id,
@@ -5671,7 +5755,7 @@ export class GatewayService {
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
-      if (sessionUrl || channel.channel_type === 'slack') {
+      if ((sessionUrl || channel.channel_type === 'slack') && !discordUnaddressed) {
         this.sendSystemMessage(
           channel,
           data.thread_id,
@@ -5992,6 +6076,9 @@ export class GatewayService {
       if (channel.channel_type === 'slack') {
         promptText = prependSlackGatewayReplyNote(promptText);
       }
+      if (discordUnaddressed) {
+        promptText = `${DISCORD_UNADDRESSED_NOTE}\n\n${promptText}`;
+      }
 
       // Prepend MCP auth warning to the initial prompt so the agent is aware
       if (created && mcpAuthWarning) {
@@ -6140,7 +6227,9 @@ export class GatewayService {
       }
     } catch (error) {
       if (error instanceof GatewayPromptAuthorizationError) {
-        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        if (!discordUnaddressed) {
+          await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        }
         this.updateProgressAfterCommit({
           session_id: sessionId,
           state: 'failed',
@@ -6155,7 +6244,9 @@ export class GatewayService {
       console.error(
         `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`
       );
-      this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${safeError}`);
+      if (!discordUnaddressed) {
+        this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${safeError}`);
+      }
       this.updateProgressAfterCommit({
         session_id: sessionId,
         state: 'failed',
@@ -6267,11 +6358,15 @@ export class GatewayService {
     if (data.message_id && (await this.deliveryRepo.findByMessageId(data.message_id))) {
       return { routed: true, channelType: 'discord' };
     }
-
     if (params?.provider) {
       if (!transportedSession || transportedSession.branch_id !== channel.target_branch_id) {
         throw new Forbidden('Gateway outbound access denied');
       }
+    }
+
+    // The agent chose not to answer: no delivery intent exists, and nothing is posted.
+    if (channel.channel_type === 'discord' && isDiscordNoReply(data.message)) {
+      return { routed: true, channelType: 'discord' };
     }
 
     // Check if we have a connector for this channel type
@@ -7204,6 +7299,7 @@ export class GatewayService {
           let eventId: import('@agor/core/types').GatewayInboundEventID | undefined;
           let metadata = msg.metadata;
           let deliveryMetadata: Record<string, unknown> | undefined;
+          let unaddressedDropped = false;
           if (this.durableListenerOwnership) {
             if (!lease || !msg.providerEventId) {
               throw new Error(
@@ -7276,11 +7372,32 @@ export class GatewayService {
                   skipProviderThreadMaterialization?: boolean;
                 }) => Promise<Record<string, unknown> | undefined>)
               | undefined;
-            const prepared = await prepareDelivery?.({
-              ...(skipProviderThreadMaterialization
-                ? { skipProviderThreadMaterialization: true }
-                : {}),
-            });
+            let prepared: Record<string, unknown> | undefined;
+            try {
+              prepared = await prepareDelivery?.({
+                ...(skipProviderThreadMaterialization
+                  ? { skipProviderThreadMaterialization: true }
+                  : {}),
+              });
+            } catch (error) {
+              // An unmentioned message admitted by a response mode is ordinary
+              // chatter: when its thread definitively cannot be verified, end
+              // the event quietly instead of failing the listener. Transient
+              // provider failures still fail so the event is retried.
+              if (
+                !(
+                  error instanceof DiscordThreadUnavailableError ||
+                  isPermanentProviderRefusal(error)
+                ) ||
+                !isUnmentionedDiscordInbound(channel, msg.metadata)
+              ) {
+                throw error;
+              }
+              console.debug(
+                `[gateway] IGNORED: unverifiable thread for an unmentioned Discord message: channel=${shortId(channel.id)} code=${gatewayFailureCode(error)}`
+              );
+              unaddressedDropped = true;
+            }
             if (prepared) {
               if (eventId && lease) {
                 const recorded = await this.inboundEventRepo.recordDeliveryMetadata({
@@ -7307,30 +7424,33 @@ export class GatewayService {
             throw new Error('Gateway listener ownership lost before inbound routing');
           }
 
-          const result = await this.create({
-            channel_key: channel.channel_key,
-            thread_id:
-              channel.channel_type === 'discord' &&
-              typeof parseDiscordAuthorityMetadata(metadata)?.[DISCORD_METADATA_KEY.threadId] ===
-                'string'
-                ? (parseDiscordAuthorityMetadata(metadata)?.[
+          const result: PostMessageResult = unaddressedDropped
+            ? { success: false, sessionId: '', created: false }
+            : await this.createQuietlyIfUnmentioned(channel, msg.metadata, {
+                channel_key: channel.channel_key,
+                thread_id:
+                  channel.channel_type === 'discord' &&
+                  typeof parseDiscordAuthorityMetadata(metadata)?.[
                     DISCORD_METADATA_KEY.threadId
-                  ] as string)
-                : msg.threadId,
-            text: msg.text,
-            user_name: msg.userId,
-            ...(msg.files ? { files: msg.files } : {}),
-            metadata,
-            ...(eventId && lease
-              ? {
-                  gateway_inbound_event_id: eventId,
-                  idempotency_task_id: gatewayInboundTaskId(eventId),
-                  idempotency_session_id: gatewayInboundSessionId(eventId),
-                  listener_claim_token: lease.claim_token,
-                  listener_channel_id: channel.id,
-                }
-              : {}),
-          });
+                  ] === 'string'
+                    ? (parseDiscordAuthorityMetadata(metadata)?.[
+                        DISCORD_METADATA_KEY.threadId
+                      ] as string)
+                    : msg.threadId,
+                text: msg.text,
+                user_name: msg.userId,
+                ...(msg.files ? { files: msg.files } : {}),
+                metadata,
+                ...(eventId && lease
+                  ? {
+                      gateway_inbound_event_id: eventId,
+                      idempotency_task_id: gatewayInboundTaskId(eventId),
+                      idempotency_session_id: gatewayInboundSessionId(eventId),
+                      listener_claim_token: lease.claim_token,
+                      listener_channel_id: channel.id,
+                    }
+                  : {}),
+              });
 
           if (eventId && lease) {
             const completed = await this.inboundEventRepo.complete({

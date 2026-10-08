@@ -66,6 +66,7 @@ export type SdkFailureReason =
   | 'startup_timeout'
   | SdkWatchdogFailureReason
   | 'heartbeat_lost'
+  | 'executor_interrupted'
   | 'termination_unverified'
   | 'launch_refused';
 
@@ -93,13 +94,23 @@ export type SdkHealthFailureInput = Pick<
   'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
-export type TerminationCause =
-  | 'user_stop'
-  | 'startup_timeout'
-  | 'heartbeat_lost'
-  | 'sdk_health_failure'
-  | 'authorization_revoked'
-  | 'launch_refused';
+// Wire values for ExecutorCleanupContext v1; keep additions coordinated with helpers.
+export const TERMINATION_CAUSES = [
+  'user_stop',
+  'startup_timeout',
+  'heartbeat_lost',
+  'sdk_health_failure',
+  'executor_interrupted',
+  'authorization_revoked',
+  'launch_refused',
+] as const;
+export type TerminationCause = (typeof TERMINATION_CAUSES)[number];
+
+/** A live executor's signal observation, not evidence of process absence or OOM. */
+export interface ExecutorInterruptionInput {
+  task_id: string;
+  signal: 'SIGTERM' | 'SIGINT';
+}
 
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
@@ -141,7 +152,25 @@ export interface TerminationCoordinationClaim {
 /** How a termination request reached Agor; absent on requests recorded before this existed. */
 export type TerminationRequestVia = 'ui' | 'api' | 'mcp' | 'agor';
 
+/** Trusted supervisor stdin. Task IDs are immutable dispatch identities, never reused for replay. */
+export interface ExecutorCleanupContext {
+  version: 1;
+  tenant_id: string;
+  task_id: string;
+  session_id: string;
+  branch_id: string;
+  requested_at: string;
+  attempt_id: string;
+  cause: TerminationCause;
+}
+
 export interface TerminationRequest {
+  /** Changed on explicit Retry cleanup; fences duplicate/stale browser requests. */
+  recovery_revision?: string;
+  /** Bounded daemon-authored diagnostic, never raw command output. */
+  cleanup_diagnostic?: string;
+  /** Written before invoking the external command. Never automatically invoked twice. */
+  cleanup_attempt?: { attempt_id: string; started_at: string };
   cause: TerminationCause;
   requested_at: string;
   /** Authenticated user whose request won the claim, when a person or their agent asked. */

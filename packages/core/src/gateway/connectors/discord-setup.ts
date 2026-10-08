@@ -5,6 +5,7 @@
 import {
   DEFAULT_DISCORD_CATCH_UP,
   type DiscordConfigValidationResult,
+  type DiscordResponseMode,
   validateDiscordConfig,
   withDiscordConfigDefaults,
 } from '../../types/gateway';
@@ -128,6 +129,8 @@ export interface DiscordSetupDecisions {
   files?: boolean;
   /** Opt in to agent reads of allowlisted channel history. */
   channelHistory?: boolean;
+  /** Per allowed channel, answer messages without a bot mention. */
+  responseModes?: Record<string, DiscordResponseMode>;
   outboundEnabled?: boolean;
   defaultOutboundTarget?: string | null;
   catchUp?: Record<string, unknown>;
@@ -196,6 +199,8 @@ export function buildDiscordSetupArtifact(decisions: DiscordSetupDecisions): Dis
     agent_tools: { channel_history: decisions.channelHistory ?? false },
     outbound_enabled: decisions.outboundEnabled ?? false,
     default_outbound_target: decisions.defaultOutboundTarget ?? null,
+    // Always written, so clearing every mode in an edit replaces the stored map.
+    response_modes: decisions.responseModes ?? {},
     catch_up: { ...DEFAULT_DISCORD_CATCH_UP, ...(decisions.catchUp ?? {}) },
   });
   const validation = validateDiscordSetup(config, decisions.agorUserId);

@@ -45,7 +45,8 @@ export function requestSessionStop(
   client: AgorClient,
   sessionId: SessionID,
   expectedTaskId: TaskID,
-  timeoutMs = STOP_ACK_TIMEOUT_MS
+  timeoutMs = STOP_ACK_TIMEOUT_MS,
+  request: SessionStopRequest = { expected_task_id: expectedTaskId }
 ): Promise<SessionStopResult> {
   const socket = client.io;
   if (!socket.connected) {
@@ -80,7 +81,6 @@ export function requestSessionStop(
       // error-aware acknowledgement callback. This also lets Socket.IO retire
       // the callback if the server never acknowledges.
       socket.timeout(timeoutMs);
-      const request: SessionStopRequest = { expected_task_id: expectedTaskId };
       void client
         .service(`sessions/${sessionId}/stop`)
         .create(request)
