@@ -2578,6 +2578,7 @@ describe('TaskRepository.update', () => {
       const requested = await tasks.claimTermination({
         taskId: task.task_id,
         cause: 'heartbeat_lost',
+        errorMessage: 'Executor heartbeat lost during the task.',
       });
       await tasks.claimTerminationCoordination({
         taskId: task.task_id,
