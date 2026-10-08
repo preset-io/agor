@@ -26,13 +26,13 @@ The daemon owns orchestration and delegates all git **mutations** to the executo
 
 ### What the Executor Does
 
-| Command               | Purpose                                        |
-| --------------------- | ---------------------------------------------- |
-| `prompt`              | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
-| `git.clone`           | Clone a repository in the selected substrate   |
-| `git.branch.add`    | Materialize a branch workspace               |
-| `git.branch.remove` | Remove branch and cleanup                    |
-| `zellij.attach`       | Attach to terminal session                     |
+| Command             | Purpose                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `prompt`            | Run an agent harness (Claude Code, Codex, Gemini, OpenCode, Copilot, Cursor) |
+| `git.clone`         | Clone a repository in the selected substrate                                 |
+| `git.branch.add`    | Materialize a branch workspace                                               |
+| `git.branch.remove` | Remove branch and cleanup                                                    |
+| `zellij.attach`     | Attach to terminal session                                                   |
 
 ---
 
@@ -45,7 +45,7 @@ Running Agor in Kubernetes is fundamentally different from deploying static web 
 | Static Deploys       | Agor Dev Environments   |
 | -------------------- | ----------------------- |
 | Immutable containers | Interactive development |
-| No shared state      | Shared git branches    |
+| No shared state      | Shared git branches     |
 | Scale out replicas   | User-specific sessions  |
 | Ephemeral storage    | Persistent filesystem   |
 
@@ -315,7 +315,12 @@ It receives one JSON object on stdin: `version: 1`, trusted `tenant_id`, `task_i
 `session_id`, `branch_id`, termination `requested_at`, unique `attempt_id`, and
 `cause`. The immutable Task ID identifies the dispatch; helpers must resolve it
 through a trusted, durable tenant/task-to-workload-UID binding, never process-name
-matching or unscoped Kubernetes name searches.
+matching or unscoped Kubernetes name searches. The v1 cause family is exported as
+`TERMINATION_CAUSES`: `user_stop`, `startup_timeout`, `heartbeat_lost`,
+`sdk_health_failure`, `executor_interrupted`, `authorization_revoked`, and
+`launch_refused`. Helpers must validate the version and support this family;
+cause additions require coordinated helper compatibility, not a separate
+hand-maintained list in core.
 
 - Exit **0** asserts that **all** work for that dispatch has stopped and cannot
   start later. Already stopped is success. Accepted deletion/cancellation is not.
@@ -338,9 +343,39 @@ belong in the helper's secured operational logging. Exit 137 alone is not OOM
 attribution.
 
 Failed containment emits the `executor.cleanup_failures` metric and structured
-termination logs. Operators must configure alert delivery; enabling this setting
+termination logs, including `mode`, `helper_configured`, and
+`helper_attempted` metric tags. An attempt tag records a durable claim, not
+proof the process started (a daemon can crash between those steps). Scope
+helper-specific alerts to configured/attempted helpers; other containment
+failures still need operational visibility. Operators must configure alert delivery; enabling this setting
 does not automatically create paging rules. Cloud needs a companion helper using
 its existing manager's workload tracking/cancellation and retained terminal evidence.
+
+#### Recovery limits
+
+Recovery currently processes candidates sequentially on each daemon. Each
+connected remote task can spend the cooperative grace (15 seconds by default)
+plus its cleanup deadline before the next candidate runs. A batch of 25 such
+tasks can therefore take about 19 minutes at the default 30-second cleanup
+deadline, or 56 minutes at the maximum 120-second deadline, plus database and
+scheduling overhead. Other candidates in that scan wait too. Per-task ownership
+fences prevent duplicate cleanup across daemons, but additional replicas are
+not a guaranteed latency bound. Monitor recovery backlog as well as helper
+failures; bounded concurrent containment is a separate scheduler improvement.
+
+A remote dispatch that **never connected** has no heartbeat to lose. Its startup
+deadline currently records a warning and keeps waiting, even when a cleanup
+helper is configured; it does not automatically run that helper. Explicit Stop
+enters the containment workflow, and the reconciler can run cleanup once that
+pending stop reaches its startup deadline. This avoids treating a slow remote
+start as proof of death, but means a pre-connect kill still needs intervention.
+
+**Reopen anyway…** releases the session, not the remote workload or the
+launcher's admission capacity. If the old run is still alive or its containment
+is unknown, it may continue to count against the team's concurrent-run limit.
+The next prompt can consequently be refused even though the session accepts
+prompts. Prefer **Retry cleanup**; operators must resolve the old workload
+rather than bypass admission limits.
 
 ### Template Variables
 
@@ -349,15 +384,15 @@ Handlebars evaluation. `{command}` is populated for both autonomous and
 request-mode launches, so a shell template may use it in a `case` statement
 when the external launcher needs command-specific behavior.
 
-| Variable          | Description                             | Example               |
-| ----------------- | --------------------------------------- | --------------------- |
-| `{task_id}`       | Unique task identifier (auto-generated) | `a1b2c3d4`            |
-| `{command}`       | Executor command                        | `prompt`, `git.clone` |
-| `{unix_user}`     | Compatibility delegated home key        | `agor_alice`          |
-| `{session_id}`    | Agor session ID (if available)          | `01abc123...`         |
-| `{branch_id}`     | Branch ID (if available)                | `01xyz789...`         |
-| `{user_id}`       | Trusted authenticated Agor user UUID    | `01user789...`        |
-| `{tenant_id}`     | Trusted ambient tenant ID                | `tenant-abc`          |
+| Variable       | Description                             | Example               |
+| -------------- | --------------------------------------- | --------------------- |
+| `{task_id}`    | Unique task identifier (auto-generated) | `a1b2c3d4`            |
+| `{command}`    | Executor command                        | `prompt`, `git.clone` |
+| `{unix_user}`  | Compatibility delegated home key        | `agor_alice`          |
+| `{session_id}` | Agor session ID (if available)          | `01abc123...`         |
+| `{branch_id}`  | Branch ID (if available)                | `01xyz789...`         |
+| `{user_id}`    | Trusted authenticated Agor user UUID    | `01user789...`        |
+| `{tenant_id}`  | Trusted ambient tenant ID               | `tenant-abc`          |
 
 `{tenant_id}` comes from the authenticated operation's ambient tenant context
 and is rendered as one shell-escaped argument because tenant identity may
@@ -495,6 +530,7 @@ trusted tenant and user identifiers plus the transitional execution-home key,
 then owns runtime identity, persistent credential storage, workspace mounts,
 containment, cancellation, and cleanup. Document and test that contract for the
 chosen orchestrator; a `runAsUser` value alone is not proof of tenant isolation.
+
 - **Init container** to set up user environment
 
 ---
@@ -526,12 +562,12 @@ spec:
 
 Different executor commands have different timeout needs:
 
-| Command            | Typical Duration | Recommended Timeout |
-| ------------------ | ---------------- | ------------------- |
-| `prompt`           | 5-60 minutes     | 2 hours             |
-| `git.clone`        | 1-10 minutes     | 30 minutes          |
+| Command          | Typical Duration | Recommended Timeout |
+| ---------------- | ---------------- | ------------------- |
+| `prompt`         | 5-60 minutes     | 2 hours             |
+| `git.clone`      | 1-10 minutes     | 30 minutes          |
 | `git.branch.add` | 1-30 seconds     | 5 minutes           |
-| `zellij.attach`    | Session duration | 8 hours             |
+| `zellij.attach`  | Session duration | 8 hours             |
 
 ### Timeout Configuration
 

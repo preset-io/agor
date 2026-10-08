@@ -1,7 +1,9 @@
 import { type Task, TaskStatus } from '@agor/core/types';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { describeTurnOutcome } from '../TaskBlock/describeTurnOutcome';
 import { TurnOutcome } from '../TaskBlock/TurnOutcome';
+import { turnOutcomeDetails } from '../TaskBlock/turnOutcomeDetails';
 import { RecoveryActions } from './RecoveryActions';
 
 const task = {
@@ -61,9 +63,18 @@ describe('recovery actions', () => {
     expect(screen.queryByRole('button', { name: 'Retry cleanup' })).toBeNull();
   });
   it('shows plain language first and hides technical diagnostics in a disclosure', () => {
-    render(<TurnOutcome task={task} />);
+    render(
+      <TurnOutcome
+        task={task}
+        outcome={describeTurnOutcome(task)}
+        details={turnOutcomeDetails(task)}
+      />
+    );
     expect(screen.getByRole('status')).toHaveTextContent('Cleanup needs attention');
-    expect(screen.getByText('Technical details')).toBeVisible();
-    expect(screen.getByText(task.error_message!)).not.toBeVisible();
+    expect(screen.queryByText(task.error_message!)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      task.error_message!
+    );
   });
 });

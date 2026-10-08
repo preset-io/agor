@@ -316,7 +316,9 @@ containment workflow. Only after provider execution and stop hooks return does
 it report the winning request's quiescence. Promise settlement alone is not
 teardown evidence: provider close timeouts, close failures, and failed stop hooks
 mark cleanup unverified for that execution and suppress all quiescence reports,
-including error/reconnect recovery. Duplicate signals share one shutdown
+including error/reconnect recovery. Gemini disposal failures and Copilot stop
+rejections or returned cleanup errors are tracked at the adapter teardown boundary,
+not inferred from a successful cancellation request. Duplicate signals share one shutdown
 and a **10 second total deadline**, including daemon I/O. Deadline expiry exits
 without inventing quiescence; local process-group containment or remote substrate
 evidence is still required. The first signal determines exit 143/130, not OOM
@@ -515,3 +517,11 @@ fenced to the observed recovery revision. UI projects this as recovery in
 progress, Cleanup needs attention, or reopened without confirmed cleanup—not
 new branch lifecycle states. Failures use durable Task errors/realtime plus
 `executor.cleanup_failures`; Cloud owns paging and its trusted cleanup helper.
+
+The UI's recovery copy is owned by `TaskBlock/describeTurnOutcome.ts`; do not add
+a second recovery presentation classifier. Templated exit 75 is a launch refusal
+only with the explicit opt-in, while signal exits remain ambiguous. Hosted
+OpenCode's descriptor exemption requires cooperative quiescence, successful
+helper containment, or the explicit pre-launch refusal contract—not bare
+launcher absence. The operator guide documents sequential reconciliation
+latency and the pre-connect startup-warning-only exclusion.

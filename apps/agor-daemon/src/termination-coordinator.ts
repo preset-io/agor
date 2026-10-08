@@ -219,7 +219,7 @@ async function containRemoteExecution(input: TerminationInput, task: Task, waite
     input.app.get?.('config')?.execution?.executor_cleanup_timeout_ms ?? DEFAULT_CLEANUP_TIMEOUT_MS
   );
   return result.confirmed
-    ? { status: 'verified_absent' as const }
+    ? { status: 'verified_absent' as const, helperConfirmed: true as const }
     : { status: 'unverified' as const, reason: result.diagnostic };
 }
 
@@ -351,9 +351,10 @@ async function runContainment(
   }
   if (!coordinationToken) return { status: 'condition_changed', task: current };
   // Hosted OpenCode runs inside the executor's own Job, so its acknowledged quiescence covers the server.
+  const helperConfirmed = 'helperConfirmed' in containment && containment.helperConfirmed;
   const hostedOpenCodeQuiesced =
     remoteMode &&
-    containment.status === 'verified_absent' &&
+    (executorQuiesced || helperConfirmed) &&
     tool === 'opencode' &&
     resolveOpenCodeCapabilities(input.app.get('config') ?? {}).mode === 'managed-projection';
   // An opted-in launcher refused admission before creating anything, so there

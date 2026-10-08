@@ -1043,3 +1043,20 @@ it('gives a stop Details only when it has a cause code or a recorded requester',
   expect(region).toHaveTextContent('user_stop');
   expect(region).toHaveTextContent('Ada Lovelace · ui');
 });
+
+it('keeps received output visible without a typing indicator after cleanup fails', () => {
+  const { container } = render(
+    view({
+      task: {
+        ...task,
+        status: TaskStatus.STOPPING,
+        sdk_failure: { termination: 'unverified' } as Task['sdk_failure'],
+        termination_request: { cause: 'heartbeat_lost', requested_at: 'now' },
+      },
+    })
+  );
+  expect(screen.getByText('Visible answer')).toBeVisible();
+  expect(screen.getByText('Retained prompt')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Cleanup needs attention');
+  expect(container.querySelector('.ant-bubble-loading')).toBeNull();
+});

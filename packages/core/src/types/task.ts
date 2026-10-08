@@ -94,14 +94,17 @@ export type SdkHealthFailureInput = Pick<
   'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
-export type TerminationCause =
-  | 'user_stop'
-  | 'startup_timeout'
-  | 'heartbeat_lost'
-  | 'sdk_health_failure'
-  | 'executor_interrupted'
-  | 'authorization_revoked'
-  | 'launch_refused';
+// Wire values for ExecutorCleanupContext v1; keep additions coordinated with helpers.
+export const TERMINATION_CAUSES = [
+  'user_stop',
+  'startup_timeout',
+  'heartbeat_lost',
+  'sdk_health_failure',
+  'executor_interrupted',
+  'authorization_revoked',
+  'launch_refused',
+] as const;
+export type TerminationCause = (typeof TERMINATION_CAUSES)[number];
 
 /** A live executor's signal observation, not evidence of process absence or OOM. */
 export interface ExecutorInterruptionInput {

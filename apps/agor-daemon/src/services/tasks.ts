@@ -718,6 +718,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (result.outcome === 'unverified') {
         getDaemonMetrics(this.app).increment('executor.cleanup_failures', 1, {
           mode: result.task.executor_mode ?? 'local',
+          helper_configured: !!this.app.get('config')?.execution?.executor_cleanup_command_template,
+          helper_attempted: !!result.task.termination_request?.cleanup_attempt,
         });
         console.warn(
           `[task.termination] event=settled task_id=${shortId(result.task.task_id)} ` +

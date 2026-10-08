@@ -15,6 +15,8 @@ import type { CompactNoticeType } from '../CompactNotice';
 
 export type TurnOutcomeCause =
   | 'stop_unconfirmed'
+  | 'reopened_unconfirmed'
+  | 'interrupted'
   | 'restart_unconfirmed'
   | 'stopping'
   | 'waiting_to_start'
@@ -158,14 +160,36 @@ export function describeTurnOutcome(
           message: 'Agor restarted. The agent may still be editing files.',
         }
       : {
-          cause: 'stop_unconfirmed',
           type: 'warning',
-          message: 'The agent may not have stopped. Files may still change.',
-          detailsLead: 'Only a branch owner or admin can force-stop it.',
+          cause: status === TaskStatus.FAILED ? 'reopened_unconfirmed' : 'stop_unconfirmed',
+          message:
+            status === TaskStatus.FAILED
+              ? 'Session reopened without confirmed cleanup. The previous work may still change files.'
+              : 'Cleanup needs attention. The previous work may still change files.',
+          detailsLead:
+            status === TaskStatus.FAILED
+              ? 'Reopening did not stop the previous work. Messages already received are saved.'
+              : 'Use Retry cleanup before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
         };
   }
   if (status === TaskStatus.STOPPING) {
-    return { cause: 'stopping', type: 'info', message: 'Stopping the agent…' };
+    const message =
+      cause === 'heartbeat_lost'
+        ? 'Connection interrupted — recovering…'
+        : cause === 'executor_interrupted'
+          ? 'Work interrupted — recovering…'
+          : cause === 'sdk_health_failure'
+            ? 'Agent stopped responding — recovering…'
+            : cause === 'authorization_revoked'
+              ? 'Access changed — stopping work…'
+              : 'Stopping the agent…';
+    return {
+      cause: 'stopping',
+      type: 'info',
+      message,
+      detailsLead:
+        'Agor is checking that the previous work has stopped. You do not need to stop it again. Queued prompts will wait until recovery finishes.',
+    };
   }
   if (!isTerminalTaskStatus(status)) {
     return status === TaskStatus.DISPATCHING && !task.executor_connected_at
@@ -223,6 +247,14 @@ export function describeTurnOutcome(
     };
   }
 
+  if (cause === 'executor_interrupted' || reason === 'executor_interrupted') {
+    return {
+      cause: 'interrupted',
+      type: 'warning',
+      message: `The agent was interrupted before it could finish. ${EDITS_KEPT}`,
+      action: 'resume',
+    };
+  }
   if (missingCredential) return null;
   if (isMissingCredentialMessage(error)) {
     return {

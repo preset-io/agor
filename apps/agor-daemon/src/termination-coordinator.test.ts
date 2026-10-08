@@ -1,5 +1,10 @@
 import { runWithTenantContext } from '@agor/core/db';
-import { AGENTIC_TOOL_NAMES, EXECUTOR_LAUNCH_REFUSED_MESSAGE, type Task, TaskStatus } from '@agor/core/types';
+import {
+  AGENTIC_TOOL_NAMES,
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  type Task,
+  TaskStatus,
+} from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const runCleanup = vi.hoisted(() => vi.fn());
@@ -684,43 +689,57 @@ describe('termination coordinator', () => {
     }
   );
 
-  it('keeps the OpenCode safeguard for verified absence with any other cause', async () => {
-    const state = appDouble('opencode');
-    const lostDispatch = {
-      ...refusedDispatch(),
-      termination_request: {
-        cause: 'heartbeat_lost',
-        requested_at: '2026-01-01T00:00:01.000Z',
-      },
-      sdk_failure: { reason: 'heartbeat_lost', termination: 'requested' },
-    };
-    state.claim(lostDispatch);
-    state.settle(
-      task(TaskStatus.STOPPING, {
-        termination_request: lostDispatch.termination_request,
-        sdk_failure: { reason: 'heartbeat_lost', termination: 'unverified' },
-      }),
-      'unverified'
-    );
+  it.each([false, true])(
+    'keeps the OpenCode safeguard for bare launcher absence (hosted=%s)',
+    async (hosted) => {
+      const state = appDouble('opencode', {
+        config: hosted
+          ? {
+              multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+              execution: {
+                unix_user_mode: 'delegated',
+                executor_command_template: 'launch {task_id}',
+                executor_storage: { user_home: 'persistent-per-user' },
+              },
+            }
+          : undefined,
+      });
+      const lostDispatch = {
+        ...refusedDispatch(),
+        termination_request: {
+          cause: 'heartbeat_lost',
+          requested_at: '2026-01-01T00:00:01.000Z',
+        },
+        sdk_failure: { reason: 'heartbeat_lost', termination: 'requested' },
+      };
+      state.claim(lostDispatch);
+      state.settle(
+        task(TaskStatus.STOPPING, {
+          termination_request: lostDispatch.termination_request,
+          sdk_failure: { reason: 'heartbeat_lost', termination: 'unverified' },
+        }),
+        'unverified'
+      );
 
-    await expect(
-      requestExecutorTermination({
-        app: state.app,
-        taskId,
-        cause: 'heartbeat_lost',
-        errorMessage: 'Executor exited unexpectedly with code 1.',
-        absenceVerified: true,
-        runInFreshTenantWriteDatabase,
-      })
-    ).resolves.toMatchObject({
-      status: 'unverified',
-      reason: 'OpenCode server-side execution termination is not verified.',
-    });
-    expect(state.settleTermination).toHaveBeenCalledWith(
-      expect.objectContaining({ outcome: 'unverified' }),
-      expect.anything()
-    );
-  });
+      await expect(
+        requestExecutorTermination({
+          app: state.app,
+          taskId,
+          cause: 'heartbeat_lost',
+          errorMessage: 'Executor exited unexpectedly with code 1.',
+          absenceVerified: true,
+          runInFreshTenantWriteDatabase,
+        })
+      ).resolves.toMatchObject({
+        status: 'unverified',
+        reason: 'OpenCode server-side execution termination is not verified.',
+      });
+      expect(state.settleTermination).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: 'unverified' }),
+        expect.anything()
+      );
+    }
+  );
 
   it('generically contains historical Claude CLI work during recovery', async () => {
     containExecutorProcess.mockResolvedValue({ status: 'verified_absent' });
@@ -1175,6 +1194,34 @@ describe('remote cleanup integration', () => {
       expect.anything()
     );
   });
+  it('accepts helper containment for hosted OpenCode without a cooperative acknowledgement', async () => {
+    const state = appDouble('opencode', {
+      config: {
+        ...config,
+        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        execution: {
+          ...config.execution,
+          unix_user_mode: 'delegated',
+          executor_command_template: 'launch {task_id}',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      },
+    });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated',
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    state.settle(task(TaskStatus.FAILED));
+    runCleanup.mockResolvedValueOnce({ confirmed: true });
+    expect((await execute(state)).status).toBe('terminal');
+    expect(runCleanup).toHaveBeenCalledOnce();
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'verified_absent' }),
+      expect.anything()
+    );
+  });
+
   it('does not re-invoke an attempt whose daemon disappeared', async () => {
     const state = appDouble('codex', { config });
     state.claim({
