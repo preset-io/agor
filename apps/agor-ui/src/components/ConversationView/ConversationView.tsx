@@ -678,6 +678,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           overflowY: 'auto',
           padding: '12px 0',
           minHeight: 0,
+          // Contain absolute descendants so they cannot grow an outer scroller.
+          position: 'relative',
         }}
       >
         <HistoryTextChoices.Provider value={textChoiceContext}>
