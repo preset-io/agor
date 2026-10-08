@@ -26,13 +26,20 @@ const mcp = vi.hoisted(() => ({
   servers: [] as unknown[],
   authorization: undefined as string | undefined,
   lookupFails: false,
+  real: undefined as Awaited<ReturnType<typeof realMcpScoping>> | undefined,
 }));
 vi.mock('@agor/core/mcp', async (original) => ({
   ...(await original<typeof import('@agor/core/mcp')>()),
-  getMcpServersForSession: vi.fn(async () =>
-    mcp.servers.map((server) => ({ server, source: 'global', oauthAuthResolution: 'unavailable' }))
-  ),
-  resolveScopedMCPAuthHeaders: vi.fn(async () => {
+  getMcpServersForSession: vi.fn(async (...args: unknown[]) => {
+    if (mcp.real) return mcp.real.getMcpServersForSession(...(args as [never, never, never]));
+    return mcp.servers.map((server) => ({
+      server,
+      source: 'global',
+      oauthAuthResolution: 'unavailable',
+    }));
+  }),
+  resolveScopedMCPAuthHeaders: vi.fn(async (...args: unknown[]) => {
+    if (mcp.real) return mcp.real.resolveScopedMCPAuthHeaders(...(args as [never]));
     if (mcp.lookupFails) throw new Error('authority timed out');
     return mcp.authorization ? { Authorization: mcp.authorization } : undefined;
   }),
@@ -112,6 +119,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
 import { findGeminiRecording } from './runtime.js';
@@ -157,6 +165,7 @@ beforeEach(async () => {
   mcp.servers = [];
   mcp.authorization = undefined;
   mcp.lookupFails = false;
+  mcp.real = undefined;
   state.events = [];
   state.streamError = undefined;
   vi.mocked(findGeminiRecording).mockResolvedValue(undefined);
@@ -551,6 +560,18 @@ describe('Gemini MCP servers without an OAuth grant', () => {
     expect(config.userMemory).toContain('- mcpServerId: dcr-id, label: "dcr"');
     expect(config.userMemory).not.toContain('tools are not loaded');
   });
+
+  it.each(['per_user', 'shared'] as const)(
+    'withholds the shipped Asana install (%s) through real scoping with the Connect notice',
+    async (mode) => {
+      mcp.real = await realMcpScoping([await shippedAsanaInstall(mode)]);
+      const config = await configure();
+      expect(config.mcpServers.asana).toBeUndefined();
+      expect(config.userMemory).toContain('- mcpServerId: asana-id, label: "Asana"');
+      expect(config.userMemory).toContain('agor_widgets_request_oauth');
+      expect(config.userMemory).not.toContain('machine (client-credentials)');
+    }
+  );
 
   it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
     mcp.servers = [

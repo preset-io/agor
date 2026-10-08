@@ -47,6 +47,8 @@ const configMocks = vi.hoisted(() => ({
   getDaemonUrl: vi.fn(),
 }));
 
+import { resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { CodexTool } from './codex-tool.js';
@@ -3412,6 +3414,25 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       expect(signInNotice).toContain('- mcpServerId: dcr-id, label: "dcr"');
       expect(signInNotice).not.toContain('tools are not loaded');
     });
+
+    it.each(['per_user', 'shared'] as const)(
+      'withholds the shipped Asana install (%s) through real scoping with the Connect notice',
+      async (mode) => {
+        const real = await realMcpScoping([await shippedAsanaInstall(mode)]);
+        mcpScopingMocks.getMcpServersForSession.mockImplementationOnce(
+          real.getMcpServersForSession
+        );
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        mcpAuthMocks.resolveMCPAuthHeaders.mockImplementationOnce(real.resolveMCPAuthHeaders);
+        const { servers, signInNotice } = await build();
+        expect(servers.asana).toBeUndefined();
+        expect(signInNotice).toContain('- mcpServerId: asana-id, label: "Asana"');
+        expect(signInNotice).toContain('agor_widgets_request_oauth');
+        expect(signInNotice).not.toContain('machine (client-credentials)');
+      }
+    );
 
     it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
       mcpScopingMocks.getMcpServersForSession.mockResolvedValue([

@@ -3,6 +3,7 @@
  */
 
 import type { MCPAuth, MCPServer } from '../types';
+import type { MCPServerWithSource } from './scoping';
 
 /**
  * True for an OAuth setup whose client is already known: an explicit client ID,
@@ -19,9 +20,23 @@ export function hasPreregisteredMCPOAuthClient(auth: MCPAuth | undefined): boole
   );
 }
 
-/** Machine-to-machine OAuth: no browser sign-in can mint its token. */
-function usesClientCredentialsGrant(auth: MCPAuth | undefined): boolean {
-  return auth?.type === 'oauth' && auth.oauth_grant_type === 'client_credentials';
+type NoticeServer = Pick<MCPServer, 'mcp_server_id' | 'name' | 'display_name'>;
+
+type CollectedServer = Pick<MCPServerWithSource, 'configuredOAuthGrantType'> & {
+  server: NoticeServer & Pick<MCPServer, 'auth'>;
+};
+
+/**
+ * Machine-to-machine OAuth: no browser sign-in can mint its token. Reads the
+ * grant type as configured, not the resolved one: template resolution defaults
+ * a missing grant type to `client_credentials`, which would misfile every
+ * ordinary browser-OAuth server.
+ */
+function usesClientCredentialsGrant({
+  server,
+  configuredOAuthGrantType,
+}: CollectedServer): boolean {
+  return server.auth?.type === 'oauth' && configuredOAuthGrantType === 'client_credentials';
 }
 
 const MAX_NOTICE_LABEL_LENGTH = 80;
@@ -45,8 +60,6 @@ function noticeLabel(server: Pick<MCPServer, 'name' | 'display_name'>): string {
     (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
   );
 }
-
-type NoticeServer = Pick<MCPServer, 'mcp_server_id' | 'name' | 'display_name'>;
 
 const CONNECT_INSTRUCTION =
   "call agor_widgets_request_oauth({ mcpServerId: '<id>' }) to render an inline Connect button; the user signs in in their browser and Agor attaches the server and resumes you. The user can also reconnect it with Refresh auth in Agor.";
@@ -122,14 +135,15 @@ export class MCPSignInNoticeCollector {
   private readonly pending: NoticeServer[] = [];
 
   /**
-   * Record a remote server that resolved no Authorization header. Returns true
-   * when it must be withheld from the agent runtime; other auth types are
-   * ignored.
+   * Record a scoped remote server that resolved no Authorization header.
+   * Returns true when it must be withheld from the agent runtime; other auth
+   * types are ignored.
    */
-  recordMissingGrant(server: NoticeServer & Pick<MCPServer, 'auth'>): boolean {
+  recordMissingGrant(scoped: CollectedServer): boolean {
+    const { server } = scoped;
     if (server.auth?.type !== 'oauth') return false;
     const withhold = hasPreregisteredMCPOAuthClient(server.auth);
-    if (usesClientCredentialsGrant(server.auth)) this.machine.push(server);
+    if (usesClientCredentialsGrant(scoped)) this.machine.push(server);
     else (withhold ? this.withheld : this.pending).push(server);
     return withhold;
   }
@@ -138,9 +152,10 @@ export class MCPSignInNoticeCollector {
    * Record a remote server whose credential lookup threw. Returns true when it
    * must be withheld; DCR servers and other auth types keep today's behavior.
    */
-  recordResolutionFailure(server: NoticeServer & Pick<MCPServer, 'auth'>): boolean {
+  recordResolutionFailure(scoped: CollectedServer): boolean {
+    const { server } = scoped;
     if (!hasPreregisteredMCPOAuthClient(server.auth)) return false;
-    (usesClientCredentialsGrant(server.auth) ? this.machine : this.unavailable).push(server);
+    (usesClientCredentialsGrant(scoped) ? this.machine : this.unavailable).push(server);
     return true;
   }
 

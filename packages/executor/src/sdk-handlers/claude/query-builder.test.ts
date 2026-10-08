@@ -58,9 +58,10 @@ vi.mock('../base/permission-hooks.js', () => ({
   ),
 }));
 
-import { getMcpServersForSession } from '@agor/core/mcp';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
+import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -1007,7 +1008,12 @@ describe('setupQuery - Local Settings Support', () => {
         vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
       }
       vi.mocked(getMcpServersForSession).mockResolvedValue(
-        servers.map((server) => ({ server, source: 'global', oauthAuthResolution: 'unavailable' }))
+        servers.map((server: any) => ({
+          server,
+          source: 'global',
+          oauthAuthResolution: 'unavailable',
+          configuredOAuthGrantType: server.auth?.oauth_grant_type,
+        }))
       );
       await setupQuery('test-session' as SessionID, 'test prompt', deps);
       const options = claudeQuery.mock.calls[0][0].options;
@@ -1133,6 +1139,29 @@ describe('setupQuery - Local Settings Support', () => {
       expect(append).toContain('machine (client-credentials)');
       expect(append).not.toContain('agor_widgets_request_oauth');
     });
+
+    it.each(['per_user', 'shared'] as const)(
+      'withholds the shipped Asana install (%s) through real scoping with the Connect notice',
+      async (mode) => {
+        const real = await realMcpScoping([await shippedAsanaInstall(mode)]);
+        vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        vi.mocked(resolveMCPAuthHeaders).mockImplementationOnce(real.resolveMCPAuthHeaders);
+        const deps = createMockDeps();
+        deps.sessionMCPRepo = {} as any;
+        deps.mcpServerRepo = {} as any;
+
+        await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+        const options = claudeQuery.mock.calls[0][0].options;
+        expect(options.mcpServers.asana).toBeUndefined();
+        expect(options.systemPrompt.append).toContain('- mcpServerId: asana-id, label: "Asana"');
+        expect(options.systemPrompt.append).toContain('agor_widgets_request_oauth');
+        expect(options.systemPrompt.append).not.toContain('machine (client-credentials)');
+      }
+    );
 
     it('adds no notice when every OAuth server has a grant', async () => {
       const deps = createMockDeps();

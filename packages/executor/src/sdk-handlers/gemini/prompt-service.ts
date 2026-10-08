@@ -522,12 +522,12 @@ export class GeminiPromptService {
               // A pre-registered OAuth client with no grant is withheld, so
               // Gemini never runs its own OAuth discovery / Dynamic Client
               // Registration against it.
-              if (signIn.recordMissingGrant(server)) continue;
+              if (signIn.recordMissingGrant(scoped)) continue;
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
             // Same withholding when the credential lookup itself failed.
-            if (server.transport !== 'stdio' && signIn.recordResolutionFailure(server)) continue;
+            if (server.transport !== 'stdio' && signIn.recordResolutionFailure(scoped)) continue;
           }
 
           const excludeTools = listMcpToolsWithPermission(

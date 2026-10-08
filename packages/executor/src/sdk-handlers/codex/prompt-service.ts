@@ -854,7 +854,7 @@ export class CodexPromptService {
         const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
         // A pre-registered OAuth client with no grant is withheld, so the CLI
         // never runs its own OAuth discovery / Dynamic Client Registration.
-        if (missingRequiredAuth && signIn.recordMissingGrant(server)) {
+        if (missingRequiredAuth && signIn.recordMissingGrant(scoped)) {
           authDiagnostics.recordUnavailable();
           continue;
         }
@@ -904,7 +904,7 @@ export class CodexPromptService {
         authDiagnostics.recordResolutionFailure();
         canRequireServer = false;
         // Same withholding when the credential lookup itself failed.
-        if (signIn.recordResolutionFailure(server)) continue;
+        if (signIn.recordResolutionFailure(scoped)) continue;
       }
 
       applyGatewayMcpStartupGuard(serverConfig, canRequireServer);

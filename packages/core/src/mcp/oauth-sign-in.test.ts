@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { MCPServerID } from '../types';
+import type { MCPAuth, MCPServerID } from '../types';
 import {
   hasPreregisteredMCPOAuthClient,
   MCPSignInNoticeCollector,
@@ -95,16 +95,28 @@ describe('renderMCPSignInRequiredNotice', () => {
 });
 
 describe('MCPSignInNoticeCollector', () => {
+  const scoped = (
+    name: string,
+    auth: MCPAuth,
+    configuredOAuthGrantType?: string,
+    display_name?: string
+  ) => ({ server: { ...server(name, display_name), auth }, configuredOAuthGrantType });
+  const explicitMachine = () =>
+    scoped(
+      'm2m',
+      { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
+      'client_credentials'
+    );
+
   it('withholds only pre-registered OAuth clients and ignores non-OAuth auth', () => {
     const signIn = new MCPSignInNoticeCollector();
     expect(
-      signIn.recordMissingGrant({
-        ...server('asana', 'Asana'),
-        auth: { type: 'oauth', oauth_dcr_mode: 'disabled' },
-      })
+      signIn.recordMissingGrant(
+        scoped('asana', { type: 'oauth', oauth_dcr_mode: 'disabled' }, undefined, 'Asana')
+      )
     ).toBe(true);
-    expect(signIn.recordMissingGrant({ ...server('dcr'), auth: { type: 'oauth' } })).toBe(false);
-    expect(signIn.recordMissingGrant({ ...server('pat'), auth: { type: 'bearer' } })).toBe(false);
+    expect(signIn.recordMissingGrant(scoped('dcr', { type: 'oauth' }))).toBe(false);
+    expect(signIn.recordMissingGrant(scoped('pat', { type: 'bearer' }))).toBe(false);
 
     const notice = signIn.render();
     expect(notice).toContain('- mcpServerId: id-asana, label: "Asana"');
@@ -112,14 +124,28 @@ describe('MCPSignInNoticeCollector', () => {
     expect(notice).not.toContain('id-pat');
   });
 
-  it('withholds a client-credentials server with the machine-credential line', () => {
+  it('ignores the grant type template resolution defaults to client_credentials', () => {
+    // The resolver fills a missing grant type with client_credentials; only the
+    // configured value may classify a server as machine-to-machine.
     const signIn = new MCPSignInNoticeCollector();
     expect(
-      signIn.recordMissingGrant({
-        ...server('m2m'),
-        auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
-      })
+      signIn.recordMissingGrant(
+        scoped('asana', {
+          type: 'oauth',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'customer-app',
+          oauth_grant_type: 'client_credentials',
+        })
+      )
     ).toBe(true);
+    const notice = signIn.render();
+    expect(notice).toContain('agor_widgets_request_oauth');
+    expect(notice).not.toContain('machine (client-credentials)');
+  });
+
+  it('withholds an explicit client-credentials server with the machine-credential line', () => {
+    const signIn = new MCPSignInNoticeCollector();
+    expect(signIn.recordMissingGrant(explicitMachine())).toBe(true);
     const notice = signIn.render();
     expect(notice).toContain('machine (client-credentials)');
     expect(notice).not.toContain('agor_widgets_request_oauth');
@@ -128,29 +154,19 @@ describe('MCPSignInNoticeCollector', () => {
   it('withholds only pre-registered clients when the credential lookup fails', () => {
     const signIn = new MCPSignInNoticeCollector();
     expect(
-      signIn.recordResolutionFailure({
-        ...server('asana'),
-        auth: { type: 'oauth', oauth_client_id: 'app' },
-      })
+      signIn.recordResolutionFailure(scoped('asana', { type: 'oauth', oauth_client_id: 'app' }))
     ).toBe(true);
-    expect(signIn.recordResolutionFailure({ ...server('dcr'), auth: { type: 'oauth' } })).toBe(
-      false
-    );
-    expect(signIn.recordResolutionFailure({ ...server('jwt'), auth: { type: 'jwt' } })).toBe(false);
+    expect(signIn.recordResolutionFailure(scoped('dcr', { type: 'oauth' }))).toBe(false);
+    expect(signIn.recordResolutionFailure(scoped('jwt', { type: 'jwt' }))).toBe(false);
     const notice = signIn.render();
     expect(notice).toContain("couldn't load the sign-in");
     expect(notice).toContain('id-asana');
     expect(notice).not.toContain('id-dcr');
   });
 
-  it('routes a client-credentials server whose lookup fails to the machine line', () => {
+  it('routes an explicit client-credentials server whose lookup fails to the machine line', () => {
     const signIn = new MCPSignInNoticeCollector();
-    expect(
-      signIn.recordResolutionFailure({
-        ...server('m2m'),
-        auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
-      })
-    ).toBe(true);
+    expect(signIn.recordResolutionFailure(explicitMachine())).toBe(true);
     const notice = signIn.render();
     expect(notice).toContain('machine (client-credentials)');
     expect(notice).toContain('id-m2m');

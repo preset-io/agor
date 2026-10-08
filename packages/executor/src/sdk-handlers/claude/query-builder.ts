@@ -578,13 +578,13 @@ export async function setupQuery(
               // and fail on Dynamic Client Registration a pre-registered client
               // never uses. Withhold it and point the agent at Agor's Connect
               // flow, which attaches the server once the grant lands.
-              if (signIn.recordMissingGrant(server)) continue;
+              if (signIn.recordMissingGrant(scoped)) continue;
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
             canAlwaysLoad = false;
             // Same withholding when the credential lookup itself failed.
-            if (transport !== 'stdio' && signIn.recordResolutionFailure(server)) continue;
+            if (transport !== 'stdio' && signIn.recordResolutionFailure(scoped)) continue;
           }
 
           if (canAlwaysLoad) {
