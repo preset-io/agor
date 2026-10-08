@@ -3,7 +3,7 @@
     "file": "iphone-light-home-top.png",
     "kind": "image",
     "title": "Home top, iPhone light",
-    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "caption": "Home opens with no header; the Home tab badge shows the same count as the \"need you\" line.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "light"
   },
@@ -27,7 +27,7 @@
     "file": "iphone-light-board-canvas.png",
     "kind": "image",
     "title": "Board tab canvas, iPhone light",
-    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "caption": "The view-only canvas opens fitted to the width of the first zone, at a zoom where card titles are readable.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "light"
   },
@@ -75,7 +75,7 @@
     "file": "iphone-dark-home-top.png",
     "kind": "image",
     "title": "Home top, iPhone dark",
-    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "caption": "Home opens with no header; the Home tab badge shows the same count as the \"need you\" line.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "dark"
   },
@@ -99,7 +99,7 @@
     "file": "iphone-dark-board-canvas.png",
     "kind": "image",
     "title": "Board tab canvas, iPhone dark",
-    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "caption": "The view-only canvas opens fitted to the width of the first zone, at a zoom where card titles are readable.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "dark"
   },
@@ -147,7 +147,7 @@
     "file": "android-light-home-top.png",
     "kind": "image",
     "title": "Home top, Android light",
-    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "caption": "Home opens with no header; the Home tab badge shows the same count as the \"need you\" line.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -171,7 +171,7 @@
     "file": "android-light-board-canvas.png",
     "kind": "image",
     "title": "Board tab canvas, Android light",
-    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "caption": "The view-only canvas opens fitted to the width of the first zone, at a zoom where card titles are readable.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -219,7 +219,7 @@
     "file": "android-dark-home-top.png",
     "kind": "image",
     "title": "Home top, Android dark",
-    "caption": "Home opens with no header bar and the tab bar flush at the bottom.",
+    "caption": "Home opens with no header; the Home tab badge shows the same count as the \"need you\" line.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   },
@@ -243,7 +243,7 @@
     "file": "android-dark-board-canvas.png",
     "kind": "image",
     "title": "Board tab canvas, Android dark",
-    "caption": "The Board tab shows the desktop canvas view-only, with no drag handles, tools or minimap.",
+    "caption": "The view-only canvas opens fitted to the width of the first zone, at a zoom where card titles are readable.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   },
@@ -291,7 +291,7 @@
     "file": "video-a-home-scroll.webm",
     "kind": "video",
     "title": "Home scroll",
-    "caption": "Scroll to the bottom and back: no header appears and the tab bar stays flush.",
+    "caption": "Scroll to the bottom and back: no header appears, the tab bar stays flush and the Home badge matches \"6 need you\".",
     "viewport": "Chromium 390x844",
     "theme": "dark"
   },
@@ -315,7 +315,7 @@
     "file": "video-d-canvas.webm",
     "kind": "video",
     "title": "View-only canvas",
-    "caption": "Pinch to zoom and pan the canvas, tap a session to open it, then Back; the canvas refits the whole board on return.",
+    "caption": "Opens on the first zone at a readable zoom, pinch in, tap a session to open it, then Back returns to the same zoom and position.",
     "viewport": "Chromium 390x844",
     "theme": "dark"
   },
