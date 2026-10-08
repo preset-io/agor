@@ -177,15 +177,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   const supportsLiveEffort = Boolean(toolCaps?.reasoningEffortLevels?.length);
   const { token } = theme.useToken();
   const footerRef = React.useRef<HTMLDivElement>(null);
-  const pinnedRef = React.useRef<HTMLDivElement>(null);
-  const inputRef = React.useRef<HTMLDivElement>(null);
-  const [pinnedHeight, setPinnedHeight] = React.useState(0);
-  const scrollPinnedChrome = maxHeight !== undefined && pinnedHeight > maxHeight;
+  const infoRef = React.useRef<HTMLDivElement>(null);
+  const actionsRef = React.useRef<HTMLDivElement>(null);
   React.useLayoutEffect(() => {
     const footer = footerRef.current;
-    const pinned = pinnedRef.current;
-    const input = inputRef.current;
-    if (!footer || !pinned || !input) return;
+    const info = infoRef.current;
+    const actions = actionsRef.current;
+    if (!footer || !info || !actions) return;
     const measure = () => {
       const style = getComputedStyle(footer);
       const inset =
@@ -193,12 +191,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         Number.parseFloat(style.paddingBottom) +
         Number.parseFloat(style.borderTopWidth) +
         Number.parseFloat(style.borderBottomWidth);
-      // Exclude the input itself so autosizing cannot change its own budget.
-      setPinnedHeight(pinned.offsetHeight + inset);
-      onChromeHeightChange?.(pinned.offsetHeight - input.offsetHeight + inset);
+      // Measure only fixed chrome, never the input or optional scrolling tray.
+      onChromeHeightChange?.(
+        info.offsetHeight +
+          actions.offsetHeight +
+          Number.parseFloat(getComputedStyle(actions).marginTop) +
+          inset
+      );
     };
     const observer = new ResizeObserver(measure);
-    for (const element of [footer, pinned, input]) observer.observe(element);
+    for (const element of [footer, info, actions]) observer.observe(element);
     measure();
     return () => observer.disconnect();
   }, [onChromeHeightChange]);
@@ -1436,22 +1438,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           // At very short heights, a one-row input plus wrapped touch targets
           // can exceed the entire budget. Scroll this footer only, so keyboard
           // focus/native scrolling can still reach actions without moving the drawer.
-          overflowY: scrollPinnedChrome ? 'auto' : undefined,
+          overflowY: 'auto',
+          // Leave room for keyboard focus outlines at the scrollport edges.
+          paddingInline: token.paddingXS,
+          marginInline: -token.paddingXS,
           overscrollBehaviorY: 'contain',
         }}
       >
-        {/* Normally only optional content scrolls; input and actions stay pinned. */}
-        <section
-          aria-label="Composer attachments and notices"
-          style={{
-            minHeight: 0,
-            overflowY: 'auto',
-            overscrollBehaviorY: 'contain',
-            // Preserve a small, independently scrollable tray in the fallback
-            // rather than collapsing attachments/notices to an unreachable zero.
-            flexShrink: scrollPinnedChrome ? 0 : 1,
-            maxHeight: scrollPinnedChrome ? (maxHeight ?? 0) * 0.25 : undefined,
-          }}
+        {/* Info/status chrome is not part of the optional scrolling tray. */}
+        <div
+          ref={infoRef}
+          style={{ flexShrink: 0, paddingTop: token.lineWidthFocus + token.lineWidth }}
         >
           <RecoveryActions
             task={recoveryTask}
@@ -1654,229 +1651,240 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               )}
             </div>
           )}
+        </div>
 
-          {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
-          {showMcpNotice && (
-            <CompactNotice
-              type="warning"
-              message={mcpNoticeMessage}
-              onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
-              dismissLabel="Dismiss MCP connection notice"
-              data-testid="mcp-disconnected-notice"
-              role="status"
-              aria-live="polite"
-              aria-atomic="true"
-              style={{ marginBottom: token.marginXS }}
-            />
-          )}
-
-          {composerExtrasSlot && (
-            <div style={{ padding: token.paddingXS }}>{composerExtrasSlot}</div>
-          )}
-        </section>
-        <div ref={pinnedRef} style={{ flexShrink: 0 }}>
-          {/* Row 2 — Prompt textarea */}
-          <div ref={inputRef}>{promptInputSlot}</div>
-
-          {/* Row 3 — Action bar */}
-          <div
+        {(showMcpNotice || composerExtrasSlot) && (
+          <section
+            aria-label="Composer attachments and notices"
             style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              gap: token.sizeUnit,
-              marginTop: token.sizeUnit * 2,
+              // Keep removal controls reachable even in the tiny-panel fallback.
+              minHeight: token.controlHeightLG,
+              scrollPadding: token.paddingXS,
+              maxHeight: maxHeight === undefined ? undefined : maxHeight * 0.25,
+              overflowY: 'auto',
+              overscrollBehaviorY: 'contain',
             }}
           >
-            {/* Left group */}
-            <Space size={4}>
-              {barPinnedItems.includes('upload') && (
-                <Tooltip
-                  title={
-                    composerAttachmentUploading
-                      ? composerUploadTooltip
-                      : connectionDisabled
-                        ? 'Disconnected from daemon'
-                        : 'Attach Files'
-                  }
-                >
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Attach files"
-                    title="Attach files"
-                    icon={<PaperClipOutlined />}
-                    onClick={onAttachFiles}
-                    disabled={uploadDisabled}
-                    data-testid="upload-bar-btn"
-                  />
-                </Tooltip>
-              )}
-              {barPinnedItems.includes('advanced-upload') && (
-                <Tooltip
-                  title={
-                    composerAttachmentUploading
-                      ? composerUploadTooltip
-                      : connectionDisabled
-                        ? 'Disconnected from daemon'
-                        : 'Advanced upload'
-                  }
-                >
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Advanced upload"
-                    title="Advanced upload"
-                    icon={<UploadOutlined />}
-                    onClick={onUploadOpen}
-                    disabled={advancedUploadDisabled}
-                  />
-                </Tooltip>
-              )}
-              {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Fork session"
-                    icon={<ForkOutlined />}
-                    onClick={onFork}
-                    disabled={forkDisabled}
-                    data-testid="fork-bar-btn"
-                  />
-                </Tooltip>
-              )}
-              {/* Dynamically pinned items */}
-              {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-                <Tooltip title="BTW fork">
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Ask side question via BTW fork"
-                    icon={<QuestionCircleOutlined />}
-                    onClick={onBtwSend}
-                    disabled={btwForkDisabled}
-                    data-testid="btw-fork-bar-btn"
-                  />
-                </Tooltip>
-              )}
-              {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-                <Tooltip title="Spawn subsession">
-                  <Button
-                    size={actionSize}
-                    style={touchActionStyle}
-                    type="text"
-                    aria-label="Spawn subsession"
-                    icon={<BranchesOutlined />}
-                    onClick={onSpawnOpen}
-                    disabled={spawnDisabled}
-                  />
-                </Tooltip>
-              )}
-              {isMobile ? (
-                moreButton
-              ) : (
-                <Popover
-                  open={moreOpen}
-                  onOpenChange={setMoreOpen}
-                  trigger="click"
-                  placement="topLeft"
-                  content={moreContent}
-                  title={null}
-                >
-                  {moreButton}
-                </Popover>
-              )}
-            </Space>
+            {/* Unauthorized MCP servers block their tools silently; nudge above the composer. */}
+            {showMcpNotice && (
+              <CompactNotice
+                type="warning"
+                message={mcpNoticeMessage}
+                onDismiss={() => setDismissedMcpSignature(unauthedSignature)}
+                dismissLabel="Dismiss MCP connection notice"
+                data-testid="mcp-disconnected-notice"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+                style={{ marginBottom: token.marginXS }}
+              />
+            )}
 
-            {/* Right group */}
+            {composerExtrasSlot && (
+              <div style={{ padding: token.paddingXS + token.lineWidthFocus + token.lineWidth }}>
+                {composerExtrasSlot}
+              </div>
+            )}
+          </section>
+        )}
+        {/* Row 2 — Prompt textarea */}
+        <div style={{ flexShrink: 0 }}>{promptInputSlot}</div>
+
+        {/* Row 3 — Action bar */}
+        <div
+          ref={actionsRef}
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: token.sizeUnit,
+            marginTop: token.sizeUnit * 2,
+          }}
+        >
+          {/* Left group */}
+          <Space size={4}>
+            {barPinnedItems.includes('upload') && (
+              <Tooltip
+                title={
+                  composerAttachmentUploading
+                    ? composerUploadTooltip
+                    : connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : 'Attach Files'
+                }
+              >
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Attach files"
+                  title="Attach files"
+                  icon={<PaperClipOutlined />}
+                  onClick={onAttachFiles}
+                  disabled={uploadDisabled}
+                  data-testid="upload-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {barPinnedItems.includes('advanced-upload') && (
+              <Tooltip
+                title={
+                  composerAttachmentUploading
+                    ? composerUploadTooltip
+                    : connectionDisabled
+                      ? 'Disconnected from daemon'
+                      : 'Advanced upload'
+                }
+              >
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Advanced upload"
+                  title="Advanced upload"
+                  icon={<UploadOutlined />}
+                  onClick={onUploadOpen}
+                  disabled={advancedUploadDisabled}
+                />
+              </Tooltip>
+            )}
+            {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
+              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Fork session"
+                  icon={<ForkOutlined />}
+                  onClick={onFork}
+                  disabled={forkDisabled}
+                  data-testid="fork-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {/* Dynamically pinned items */}
+            {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
+              <Tooltip title="BTW fork">
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Ask side question via BTW fork"
+                  icon={<QuestionCircleOutlined />}
+                  onClick={onBtwSend}
+                  disabled={btwForkDisabled}
+                  data-testid="btw-fork-bar-btn"
+                />
+              </Tooltip>
+            )}
+            {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+              <Tooltip title="Spawn subsession">
+                <Button
+                  size={actionSize}
+                  style={touchActionStyle}
+                  type="text"
+                  aria-label="Spawn subsession"
+                  icon={<BranchesOutlined />}
+                  onClick={onSpawnOpen}
+                  disabled={spawnDisabled}
+                />
+              </Tooltip>
+            )}
+            {isMobile ? (
+              moreButton
+            ) : (
+              <Popover
+                open={moreOpen}
+                onOpenChange={setMoreOpen}
+                trigger="click"
+                placement="topLeft"
+                content={moreContent}
+                title={null}
+              >
+                {moreButton}
+              </Popover>
+            )}
+          </Space>
+
+          {/* Right group */}
+          <Flex
+            align="center"
+            gap={token.marginXS}
+            style={{ marginInlineStart: 'auto', flexShrink: 0 }}
+          >
+            {/* Reserve the compact slot so activity changes never move controls.
+                Spin inherits the shared reduced-motion rule in index.css. */}
             <Flex
               align="center"
-              gap={token.marginXS}
-              style={{ marginInlineStart: 'auto', flexShrink: 0 }}
+              justify="center"
+              style={{ width: token.controlHeightXS, flexShrink: 0 }}
             >
-              {/* Reserve the compact slot so activity changes never move controls.
-                Spin inherits the shared reduced-motion rule in index.css. */}
-              <Flex
-                align="center"
-                justify="center"
-                style={{ width: token.controlHeightXS, flexShrink: 0 }}
-              >
-                {showActivity && (
-                  <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
-                    <Spin size="small" aria-hidden="true" />
-                  </span>
-                )}
-              </Flex>
-              {/* Flex avoids inline baseline/descender space around the controls. */}
-              <Flex align="center" gap={token.sizeUnit}>
-                {showStop && (
-                  <Tooltip title={stopTooltip}>
-                    <Button
-                      danger
-                      aria-label={isStopping ? 'Recovering' : 'Stop'}
-                      aria-busy={stopRequestInFlight || isStopping}
-                      size={actionSize}
-                      style={touchActionStyle}
-                      icon={
-                        stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
-                      }
-                      onClick={onStop}
-                      disabled={
-                        connectionDisabled || !isRunning || stopRequestInFlight || isStopping
-                      }
-                    >
-                      {/* Reserve the longest label so recovery does not move the controls. */}
-                      <span style={{ display: 'inline-grid' }}>
-                        <span
-                          aria-hidden="true"
-                          style={{ gridArea: '1 / 1', visibility: 'hidden' }}
-                        >
-                          Recovering…
-                        </span>
-                        <span style={{ gridArea: '1 / 1' }}>
-                          {isStopping
-                            ? recoveryTask?.termination_request?.cause === 'user_stop'
-                              ? 'Stopping…'
-                              : 'Recovering…'
-                            : 'Stop'}
-                        </span>
-                      </span>
-                    </Button>
-                  </Tooltip>
-                )}
-                <Tooltip title={sendTooltip}>
-                  <Badge
-                    count={queuedTasks.length > 0 ? queuedTasks.length : 0}
-                    size="small"
-                    offset={[-2, 2]}
-                    styles={{ root: { display: 'inline-flex' } }}
-                    style={{
-                      boxShadow: 'none',
-                      backgroundColor: token.colorTextTertiary,
-                      fontSize: 10,
-                    }}
-                  >
-                    <Button
-                      type="primary"
-                      aria-label={sendLabel}
-                      size={actionSize}
-                      style={touchActionStyle}
-                      icon={<SendOutlined />}
-                      onClick={onSendPrompt}
-                      disabled={sendDisabled}
-                    >
-                      {sendLabel}
-                    </Button>
-                  </Badge>
-                </Tooltip>
-              </Flex>
+              {showActivity && (
+                <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
+                  <Spin size="small" aria-hidden="true" />
+                </span>
+              )}
             </Flex>
-          </div>
+            {/* Flex avoids inline baseline/descender space around the controls. */}
+            <Flex align="center" gap={token.sizeUnit}>
+              {showStop && (
+                <Tooltip title={stopTooltip}>
+                  <Button
+                    danger
+                    aria-label={isStopping ? 'Recovering' : 'Stop'}
+                    aria-busy={stopRequestInFlight || isStopping}
+                    size={actionSize}
+                    style={touchActionStyle}
+                    icon={
+                      stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
+                    }
+                    onClick={onStop}
+                    disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
+                  >
+                    {/* Reserve the longest label so recovery does not move the controls. */}
+                    <span style={{ display: 'inline-grid' }}>
+                      <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden' }}>
+                        Recovering…
+                      </span>
+                      <span style={{ gridArea: '1 / 1' }}>
+                        {isStopping
+                          ? recoveryTask?.termination_request?.cause === 'user_stop'
+                            ? 'Stopping…'
+                            : 'Recovering…'
+                          : 'Stop'}
+                      </span>
+                    </span>
+                  </Button>
+                </Tooltip>
+              )}
+              <Tooltip title={sendTooltip}>
+                <Badge
+                  count={queuedTasks.length > 0 ? queuedTasks.length : 0}
+                  size="small"
+                  offset={[-2, 2]}
+                  styles={{ root: { display: 'inline-flex' } }}
+                  style={{
+                    boxShadow: 'none',
+                    backgroundColor: token.colorTextTertiary,
+                    fontSize: 10,
+                  }}
+                >
+                  <Button
+                    type="primary"
+                    aria-label={sendLabel}
+                    size={actionSize}
+                    style={touchActionStyle}
+                    icon={<SendOutlined />}
+                    onClick={onSendPrompt}
+                    disabled={sendDisabled}
+                  >
+                    {sendLabel}
+                  </Button>
+                </Badge>
+              </Tooltip>
+            </Flex>
+          </Flex>
         </div>
       </div>
 

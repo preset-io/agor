@@ -1,4 +1,5 @@
-import type { AgorClient, MCPServer, Session, Task } from '@agor-live/client';
+import { generateId } from '@agor/core/ids/browser';
+import type { AgorClient, MCPServer, Session, Task, User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type {} from '@vitest/browser-playwright';
 import { App } from 'antd';
@@ -46,8 +47,13 @@ vi.mock('../TaskBlock', () => ({
             message="Retained tool notice"
             details={[{ label: 'Output', value: 'Expanded output\n'.repeat(90) }]}
           />
+          <div data-testid="local-positioned-block" style={{ position: 'relative', height: 40 }}>
+            <span data-testid="local-absolute-child" style={{ position: 'absolute', inset: 0 }}>
+              Local overlay
+            </span>
+          </div>
           {/* A sibling live region without a locally positioned notice models
-              VegaLiteRendererGate and other absolute transcript descendants. */}
+              a future transcript renderer lacking its own containing block. */}
           <span
             data-testid="generic-live-region"
             aria-live="polite"
@@ -80,6 +86,7 @@ vi.mock('../../utils/clipboard', () => ({
 
 import { copyToClipboard } from '../../utils/clipboard';
 
+const originalUsers = agorStore.getState().userById;
 const originalMcpServers = agorStore.getState().mcpServerById;
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 beforeEach(async () => {
@@ -226,7 +233,7 @@ async function expectBounded() {
 
 afterEach(async () => {
   cleanup();
-  agorStore.setState({ mcpServerById: originalMcpServers });
+  agorStore.setState({ mcpServerById: originalMcpServers, userById: originalUsers });
   await page.viewport(originalViewport.width, originalViewport.height);
   queueFeed.tasks = [];
   queueFeed.deepNotice = false;
@@ -624,6 +631,12 @@ it('keeps ten attachments and notices independently scrollable beside a multilin
   const transcript = conversation();
   const headerTop = root.firstElementChild!.getBoundingClientRect().top;
   const pinnedBottom = composer.getBoundingClientRect().bottom;
+  const infoControls = [
+    screen.getByTestId('model-chip'),
+    screen.getByRole('button', { name: /^MCP servers/ }),
+  ];
+  const infoBounds = infoControls.map((control) => control.getBoundingClientRect().toJSON());
+  for (const control of infoControls) expect(extras).not.toContainElement(control);
   await userEvent.wheel(extras, { delta: { y: 10000 } });
   if (extras.scrollHeight > extras.clientHeight) {
     await waitFor(() => expect(extras.scrollTop).toBeGreaterThan(0));
@@ -636,7 +649,38 @@ it('keeps ten attachments and notices independently scrollable beside a multilin
     expect(hit && removeLast.contains(hit)).toBe(true);
   });
   expect(composer.getBoundingClientRect().bottom).toBe(pinnedBottom);
+  for (const [i, control] of infoControls.entries()) {
+    expect(control.getBoundingClientRect().toJSON()).toEqual(infoBounds[i]);
+  }
   expect(root.firstElementChild!.getBoundingClientRect().top).toBe(headerTop);
+  if (window.innerWidth < 1024) {
+    const model = infoControls[0];
+    model.focus();
+    await userEvent.keyboard('{Tab}{Shift>}{Tab}{/Shift}');
+    expect(model).toHaveFocus();
+    expect(model.matches(':focus-visible')).toBe(true);
+    const rect = model.getBoundingClientRect();
+    const style = getComputedStyle(model);
+    const ring = Number.parseFloat(style.outlineWidth) + Number.parseFloat(style.outlineOffset);
+    expect(ring).toBeGreaterThan(0);
+    const scrollport = extras.parentElement!.getBoundingClientRect();
+    expect(rect.top - ring).toBeGreaterThanOrEqual(scrollport.top);
+    expect(rect.left - ring).toBeGreaterThanOrEqual(scrollport.left);
+    expect(rect.right + ring).toBeLessThanOrEqual(scrollport.right);
+    removeLast.focus();
+    await waitFor(() => {
+      expect(removeLast.matches(':focus-visible')).toBe(true);
+      const removeRect = removeLast.getBoundingClientRect();
+      const removeStyle = getComputedStyle(removeLast);
+      const removeRing =
+        Number.parseFloat(removeStyle.outlineWidth) + Number.parseFloat(removeStyle.outlineOffset);
+      expect(removeRing).toBeGreaterThan(0);
+      const trayBounds = extras.getBoundingClientRect();
+      expect(removeRect.left - removeRing).toBeGreaterThanOrEqual(trayBounds.left);
+      expect(removeRect.top - removeRing).toBeGreaterThanOrEqual(trayBounds.top);
+      expect(removeRect.bottom + removeRing).toBeLessThanOrEqual(trayBounds.bottom);
+    });
+  }
   await waitFor(assertControls);
   await userEvent.wheel(extras, { delta: { y: -10000 } });
   await waitFor(() => expect(extras.scrollTop).toBe(0));
@@ -652,6 +696,32 @@ it('keeps ten attachments and notices independently scrollable beside a multilin
   expect(screen.queryByRole('button', { name: 'Remove attachment-9.txt' })).toBeNull();
   expect(screen.getAllByRole('button', { name: /^Remove attachment-/ })).toHaveLength(9);
   await waitFor(assertControls);
+  const trayDropZone = screen.getByLabelText('Composer attachment drop zone');
+  const inputDropZone = screen.getByLabelText('Composer attachments and input drop zone');
+  const dragFeedback = new DataTransfer();
+  dragFeedback.items.add(new File(['dragging'], 'dragging.txt'));
+  fireEvent(
+    trayDropZone,
+    new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dragFeedback })
+  );
+  await waitFor(() => {
+    expect(trayDropZone).toHaveTextContent('Drop files here to attach');
+    expect(inputDropZone).toHaveTextContent('Drop files here to attach');
+  });
+  // Crossing from tray to input must not let the old zone's dragleave clear
+  // the new zone's feedback. Window cancellation clears both.
+  fireEvent(
+    inputDropZone,
+    new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dragFeedback })
+  );
+  fireEvent(
+    trayDropZone,
+    new DragEvent('dragleave', { bubbles: true, cancelable: true, dataTransfer: dragFeedback })
+  );
+  await waitFor(() => expect(trayDropZone).toHaveTextContent('Drop files here to attach'));
+  fireEvent(window, new Event('dragend'));
+  await waitFor(() => expect(screen.queryByText('Drop files here to attach')).toBeNull());
+
   // Both the pinned input and the independently scrolled tray remain drop
   // targets after splitting their layout ownership.
   const replacementDrop = new DataTransfer();
@@ -752,15 +822,16 @@ it.each([
   // the body/drawer. The normal-height cases still keep everything pinned.
   await waitFor(() => {
     const scroller = extras.parentElement!;
-    if (height > 220) expect(getComputedStyle(scroller).overflowY).not.toBe('auto');
-    if (getComputedStyle(scroller).overflowY === 'auto') {
+    const scrolls = scroller.scrollHeight > scroller.clientHeight + 1;
+    if (height > 220) expect(scrolls, 'normal-height chrome stays pinned').toBe(false);
+    if (scrolls) {
       expect(scroller.scrollHeight).toBeGreaterThan(scroller.clientHeight);
     } else {
       for (const control of [composer, stop, queue]) assertHit(control);
     }
   });
   const scroller = extras.parentElement!;
-  if (getComputedStyle(scroller).overflowY === 'auto') {
+  if (scroller.scrollHeight > scroller.clientHeight + 1) {
     // Wheel over action chrome (not the independently scrolling tray/input).
     await userEvent.wheel(screen.getByRole('button', { name: 'Attach files' }), {
       delta: { y: 10000 },
@@ -769,6 +840,10 @@ it.each([
     await waitFor(assertOuterBounds);
     await userEvent.wheel(queue, { delta: { y: -10000 } });
     await waitFor(() => expect(scroller.scrollTop).toBe(0));
+    // Wheel does not blur the editor. Calling focus() again would be a no-op;
+    // exercise a real keyboard return to it through the preceding tray control.
+    expect(composer).toHaveFocus();
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}{Tab}');
   }
   composer.focus();
   await waitFor(() => assertHit(composer));
@@ -836,6 +911,12 @@ it.each(['hidden', 'auto'] as const)(
       expect(live.offsetParent).toBe(notice);
       const genericLive = screen.getByTestId('generic-live-region');
       expect(genericLive.offsetParent).toBe(transcript);
+      const localBlock = screen.getByTestId('local-positioned-block');
+      const localChild = screen.getByTestId('local-absolute-child');
+      expect(localChild.offsetParent).toBe(localBlock);
+      expect(localChild.getBoundingClientRect().toJSON()).toEqual(
+        localBlock.getBoundingClientRect().toJSON()
+      );
       expect(genericLive).toHaveAttribute('aria-live', 'polite');
       expect(genericLive).not.toHaveAttribute('aria-hidden');
       expect(live).toHaveAttribute('aria-live', 'polite');
@@ -855,6 +936,11 @@ it.each(['hidden', 'auto'] as const)(
     );
     await waitFor(assertLayout);
     const assertComposerWheel = async () => {
+      // Let ResizeObserver/AntD autosizing settle after viewport resize before
+      // distinguishing native wheel movement from the legitimate new layout.
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+      );
       const inputTop = composer.getBoundingClientRect().top;
       const transcriptTop = transcript.scrollTop;
       await userEvent.wheel(composer, { delta: { y: 600 } });
@@ -892,3 +978,60 @@ it.each(['hidden', 'auto'] as const)(
     await assertComposerWheel();
   }
 );
+
+it('keeps mention and emoji popups reachable above a bounded composer during resize', async () => {
+  await page.viewport(window.innerWidth, 900);
+  const user = {
+    user_id: generateId(),
+    name: 'Popup Teammate',
+    email: 'popup@example.test',
+  } as User;
+  agorStore.setState({ userById: new Map([[user.user_id, user]]) });
+  render(
+    <App>
+      <AppActionsProvider value={{}}>
+        <div data-testid="popup-panel" style={{ width: 420, maxWidth: '100vw', height: 700 }}>
+          <SessionPanel client={null} session={session} open onClose={noop} />
+        </div>
+      </AppActionsProvider>
+    </App>
+  );
+  const frame = screen.getByTestId('popup-panel');
+  const composer = screen.getByPlaceholderText('Queue here… @ for mentions, : for emoji');
+  const input = frame.querySelector('input[type="file"]')!;
+  fireEvent.change(input, {
+    target: {
+      files: Array.from({ length: 10 }, (_, i) => new File(['attachment'], `popup-${i}.txt`)),
+    },
+  });
+  await screen.findByRole('button', { name: 'Remove popup-9.txt' });
+  const assertPopup = async (label: string) => {
+    const suggestion = await screen.findByText(label, { exact: true });
+    const popup = suggestion.closest<HTMLElement>('.ant-popover')!;
+    await waitFor(() => {
+      // Verify the actual popup node, not its inline zero-size caret anchor.
+      expect(frame.contains(popup)).toBe(false);
+      const rect = suggestion.getBoundingClientRect();
+      expect(rect.top).toBeGreaterThanOrEqual(0);
+      expect(rect.bottom).toBeLessThanOrEqual(window.innerHeight);
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+      expect(hit && suggestion.contains(hit), 'autocomplete suggestion is not clipped').toBe(true);
+    });
+    return popup;
+  };
+  for (const height of [700, 390, 220, 700]) {
+    await page.viewport(window.innerWidth, height === 220 ? 390 : height);
+    frame.style.height = `${height}px`;
+    await userEvent.fill(composer, '');
+    await userEvent.keyboard('@Popup');
+    await assertPopup('Popup Teammate (popup@example.test)');
+    await userEvent.keyboard('{Enter}');
+    expect(composer).toHaveValue('@Popup Teammate ');
+    await userEvent.fill(composer, '');
+    await userEvent.keyboard(':smile');
+    await assertPopup(':smile:');
+    await userEvent.keyboard('{Escape}');
+    expect(composer).toHaveFocus();
+    expect(composer).toHaveValue(':smile');
+  }
+});

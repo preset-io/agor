@@ -530,6 +530,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [uploadModalOpen, setUploadModalOpen] = React.useState(false);
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
+  const [composerTrayDropActive, setComposerTrayDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
   const currentClientRef = React.useRef(client);
   currentClientRef.current = client;
@@ -679,14 +680,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         bodyHeight,
         Math.max(
           bodyHeight * 0.75,
-          footerChromeHeight + composerLineHeight + composerInsets + token.controlHeight
+          footerChromeHeight + composerLineHeight + composerInsets + token.controlHeightLG
         )
       )
     : undefined;
   const extrasReserve =
     hasComposerAttachments || composerAttachmentValidationError
       ? Math.min(token.controlHeightLG * 2, (footerMaxHeight ?? 0) * 0.25)
-      : token.controlHeight;
+      : token.controlHeightLG;
   const composerMaxRows = Math.max(
     1,
     Math.min(
@@ -899,6 +900,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     return (
       <SessionComposerDropZone
         ariaLabel="Composer attachment drop zone"
+        onDragActiveChange={setComposerTrayDropActive}
+        dragActive={composerDropActive}
         disabled={composerAttachmentUploading}
         onFilesDrop={addComposerAttachments}
       >
@@ -925,6 +928,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     addComposerAttachments,
     removeComposerAttachment,
     token.borderRadius,
+    composerDropActive,
   ]);
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
@@ -932,6 +936,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       <SessionComposerDropZone
         disabled={composerAttachmentUploading}
         onDragActiveChange={setComposerDropActive}
+        dragActive={composerTrayDropActive}
         onFilesDrop={addComposerAttachments}
       >
         <PromptInput
@@ -958,7 +963,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onFilesDrop={addComposerAttachments}
           filesDropDisabled={composerAttachmentUploading}
           showFilesDropOverlay={false}
-          suppressEmptyHighlight={composerDropActive}
+          suppressEmptyHighlight={composerDropActive || composerTrayDropActive}
           slashCommands={
             Array.isArray(sessionCustomContext?.slash_commands)
               ? sessionCustomContext.slash_commands
@@ -986,6 +991,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     sessionCustomContext,
     composerAttachmentUploading,
     composerDropActive,
+    composerTrayDropActive,
     composerIdentityKey,
     hasComposerAttachments,
     composerMaxRows,

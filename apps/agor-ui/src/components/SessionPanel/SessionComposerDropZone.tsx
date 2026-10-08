@@ -6,6 +6,8 @@ interface SessionComposerDropZoneProps {
   children: React.ReactNode;
   ariaLabel?: string;
   disabled?: boolean;
+  /** Show shared feedback without reporting a sibling zone as a local drag. */
+  dragActive?: boolean;
   onDragActiveChange?: (active: boolean) => void;
   onFilesDrop: (files: File[]) => void;
 }
@@ -18,6 +20,7 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
   children,
   ariaLabel = 'Composer attachments and input drop zone',
   disabled = false,
+  dragActive = false,
   onDragActiveChange,
   onFilesDrop,
 }) => {
@@ -111,7 +114,7 @@ export const SessionComposerDropZone: React.FC<SessionComposerDropZoneProps> = (
       }}
     >
       {children}
-      {isDragOver && (
+      {!disabled && (isDragOver || dragActive) && (
         <div
           style={{
             position: 'absolute',

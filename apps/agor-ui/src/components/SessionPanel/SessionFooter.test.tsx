@@ -107,6 +107,7 @@ describe('SessionFooter', () => {
     render(<SessionFooter {...baseProps} hasInput={false} />, { wrapper: Wrapper });
     const sendBtn = screen.getByRole('button', { name: /send/i });
     expect(sendBtn).toBeDisabled();
+    expect(screen.queryByRole('region', { name: 'Composer attachments and notices' })).toBeNull();
   });
 
   it('Send button is enabled when there is input', () => {

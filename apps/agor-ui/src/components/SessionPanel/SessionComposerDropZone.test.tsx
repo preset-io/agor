@@ -130,3 +130,18 @@ describe('SessionComposerDropZone', () => {
     expect(onFilesDrop).not.toHaveBeenCalled();
   });
 });
+
+it('shows sibling drag feedback without reporting a sibling as a local drag', () => {
+  const onDragActiveChange = vi.fn();
+  render(
+    <SessionComposerDropZone
+      dragActive
+      onDragActiveChange={onDragActiveChange}
+      onFilesDrop={vi.fn()}
+    >
+      <textarea />
+    </SessionComposerDropZone>
+  );
+  expect(screen.getByText('Drop files here to attach')).toBeInTheDocument();
+  expect(onDragActiveChange).not.toHaveBeenCalledWith(true);
+});

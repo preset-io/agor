@@ -1388,6 +1388,9 @@ export const AutocompleteTextarea = React.forwardRef<
           trigger={[]}
           placement={popoverPlacement}
           autoAdjustOverflow
+          // Corner placements flip but do not normally shift. Keep a dense
+          // suggestion list inside short viewports even when it cannot fit above.
+          align={{ overflow: { shiftY: true } }}
           arrow={false}
         >
           <span
