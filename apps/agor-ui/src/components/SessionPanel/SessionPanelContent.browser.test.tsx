@@ -46,6 +46,21 @@ vi.mock('../TaskBlock', () => ({
             message="Retained tool notice"
             details={[{ label: 'Output', value: 'Expanded output\n'.repeat(90) }]}
           />
+          {/* A sibling live region without a locally positioned notice models
+              VegaLiteRendererGate and other absolute transcript descendants. */}
+          <span
+            data-testid="generic-live-region"
+            aria-live="polite"
+            style={{
+              position: 'absolute',
+              width: 1,
+              height: 1,
+              overflow: 'hidden',
+              clipPath: 'inset(50%)',
+            }}
+          >
+            Chart ready
+          </span>
           <div style={{ height: 2257 }} />
         </>
       )}
@@ -775,7 +790,8 @@ it.each([
   await waitFor(assertOuterBounds);
 });
 
-// Exercise the real CompactNotice inside an already-scrolled ConversationView.
+// Exercise the real CompactNotice and a sibling hidden absolute live region
+// inside an already-scrolled ConversationView.
 // The auto variant restores the old outer-scroll boundary in this isolated
 // fixture, proving local containment fixes geometry rather than masking wheel.
 it.each(['hidden', 'auto'] as const)(
@@ -818,6 +834,10 @@ it.each(['hidden', 'auto'] as const)(
       expect(root.scrollHeight).toBe(root.clientHeight);
       expect(body.scrollTop).toBe(0);
       expect(live.offsetParent).toBe(notice);
+      const genericLive = screen.getByTestId('generic-live-region');
+      expect(genericLive.offsetParent).toBe(transcript);
+      expect(genericLive).toHaveAttribute('aria-live', 'polite');
+      expect(genericLive).not.toHaveAttribute('aria-hidden');
       expect(live).toHaveAttribute('aria-live', 'polite');
       expect(live).not.toHaveAttribute('aria-hidden');
       expect(getComputedStyle(live).display).not.toBe('none');

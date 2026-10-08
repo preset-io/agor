@@ -675,6 +675,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         }}
         style={{
           flex: 1,
+          // Contain absolute transcript descendants (including hidden live regions).
+          position: 'relative',
           overflowY: 'auto',
           padding: '12px 0',
           minHeight: 0,
