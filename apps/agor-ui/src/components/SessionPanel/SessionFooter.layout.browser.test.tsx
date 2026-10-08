@@ -7,7 +7,7 @@ import { cdp, page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import globalCss from '../../index.css?raw';
-import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { isMobileViewport, MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
 // Keep the actual panel and composer layout; substitute only transcript data
@@ -94,7 +94,9 @@ it.each([false, true])(
     await waitFor(() => expect(history.scrollHeight).toBeGreaterThan(history.clientHeight));
 
     const buttonBounds = send.getBoundingClientRect();
-    for (const control of [stop, send, activity]) {
+    // Phones keep the activity status for screen readers only.
+    const phone = isMobileViewport();
+    for (const control of phone ? [stop, send] : [stop, send, activity]) {
       const rect = control.getBoundingClientRect();
       expect(rect.left).toBeGreaterThanOrEqual(bounds.left);
       expect(rect.right).toBeLessThanOrEqual(bounds.right);
@@ -104,8 +106,13 @@ it.each([false, true])(
         document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
       ).toSatisfy((element: Element | null) => !!element && control.contains(element));
     }
-    expect(activity.getBoundingClientRect().right).toBeLessThan(stop.getBoundingClientRect().left);
+    if (phone) expect(activity.parentElement!.getBoundingClientRect().width).toBeLessThanOrEqual(1);
+    else
+      expect(activity.getBoundingClientRect().right).toBeLessThan(
+        stop.getBoundingClientRect().left
+      );
     const expectCenteredActivity = () => {
+      if (phone) return;
       // Measure the visible indicator, not its status wrapper's line box.
       const indicator = activity.querySelector('.ant-spin-dot-holder')!.getBoundingClientRect();
       const center = indicator.top + indicator.height / 2;

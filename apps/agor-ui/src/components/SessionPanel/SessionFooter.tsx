@@ -49,6 +49,7 @@ import { useFooterPreferences } from '../../hooks/useFooterPreferences';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { CompactNotice } from '../CompactNotice';
 import { EffortSelector } from '../EffortSelector';
@@ -1234,11 +1235,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             style={{ marginInlineStart: 'auto', flexShrink: 0 }}
           >
             {/* Reserve the compact slot so activity changes never move controls.
+                Phones keep it for screen readers only; Stop already shows work.
                 Spin inherits the shared reduced-motion rule in index.css. */}
             <Flex
               align="center"
               justify="center"
-              style={{ width: token.controlHeightXS, flexShrink: 0 }}
+              style={
+                isMobile ? VISUALLY_HIDDEN_STYLE : { width: token.controlHeightXS, flexShrink: 0 }
+              }
             >
               {showActivity && (
                 <span role="status" aria-label="Agent is working" style={{ display: 'flex' }}>
