@@ -2243,6 +2243,11 @@ function AppContent() {
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
                   onExecuteScheduleNow={handleExecuteScheduleNow}
+                  onCreateBranch={handleCreateBranch}
+                  onCreateBoard={handleCreateBoard}
+                  onCreateRepo={handleCreateRepo}
+                  onCreateLocalRepo={handleCreateLocalRepo}
+                  branchStorageConfig={featuresConfig?.branchStorage}
                 />
               }
             />

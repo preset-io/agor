@@ -3,6 +3,7 @@ import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import type { CreateTab } from '../CreateDialog/createMenuItems';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
@@ -18,11 +19,13 @@ interface MobileMoreSheetProps {
   onLogout?: () => void;
   externalAppLink?: string;
   externalAppLabel?: string;
+  onCreate?: (tab: CreateTab) => void;
+  isAdmin?: boolean;
 }
 
 /**
- * "More" bottom sheet: board switcher + Knowledge base + Settings (incl. MCP
- * servers) + account/sign out via the reused nav tree, with an Appearance
+ * "More" bottom sheet: board switcher + Knowledge base + Create new + Settings
+ * (incl. MCP servers) + account/sign out via the reused nav tree, with an Appearance
  * (light/dark) control on top. Opened from the tab bar's More destination.
  */
 export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
@@ -37,6 +40,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onLogout,
   externalAppLink,
   externalAppLabel,
+  onCreate,
+  isAdmin,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -88,6 +93,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
+        onCreate={onCreate}
+        isAdmin={isAdmin}
       />
     </Drawer>
   );

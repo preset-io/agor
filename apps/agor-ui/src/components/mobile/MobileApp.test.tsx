@@ -28,7 +28,20 @@ vi.mock('../BranchModal', () => ({
   },
 }));
 
-vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
+let navTreeProps: { onCreate?: (tab: string) => void; isAdmin?: boolean } = {};
+vi.mock('./MobileNavTree', () => ({
+  MobileNavTree: (props: typeof navTreeProps) => {
+    navTreeProps = props;
+    return null;
+  },
+}));
+let createDialogProps: { open?: boolean; defaultTab?: string } = {};
+vi.mock('../CreateDialog', () => ({
+  CreateDialog: (props: typeof createDialogProps) => {
+    createDialogProps = props;
+    return null;
+  },
+}));
 // Home is the shared HomePage (covered by its own suites); these cases drive the tab-bar Ask.
 vi.mock('../HomePage', () => ({ HomePage: () => null }));
 
@@ -125,6 +138,18 @@ async function askWithPendingCreation(extraProps: Record<string, unknown> = {}) 
   await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
   return { view, props, finish: () => act(async () => resolve({ sessionId: 'session-new' })) };
 }
+
+describe('MobileApp create', () => {
+  it('opens the shared create dialog on the tab picked in the More sheet', () => {
+    renderMobileApp('/m', { user: { user_id: 'user-1', role: 'member' } });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    expect(navTreeProps.isAdmin).toBe(false);
+    expect(createDialogProps.open).toBe(false);
+
+    act(() => navTreeProps.onCreate?.('board'));
+    expect(createDialogProps).toMatchObject({ open: true, defaultTab: 'board' });
+  });
+});
 
 describe('MobileApp branch actions', () => {
   it('wires board branch actions to the requested bottom sheet tab', () => {

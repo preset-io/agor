@@ -78,7 +78,7 @@ import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { CreateDialog } from '../CreateDialog';
+import { CreateDialog, type CreateTab } from '../CreateDialog';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
@@ -397,9 +397,7 @@ export const App: React.FC<AppProps> = ({
   // old blocking modal — see `chooseAgenticTool` / `handleQuickStartSession`.
   const [pendingToolChoiceBranchId, setPendingToolChoiceBranchId] = useState<string | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'teammate' | 'board' | 'repository'
-  >('teammate');
+  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<CreateTab>('teammate');
   // Board a new teammate joins as primary (set from its empty Teammate tab); null creates a fresh board.
   const [teammateTargetBoardId, setTeammateTargetBoardId] = useState<string | null>(null);
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
@@ -744,7 +742,7 @@ export const App: React.FC<AppProps> = ({
   }, [currentBoardId]);
 
   const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'teammate' | 'board' | 'repository', boardId?: string) => {
+    (tab?: CreateTab, boardId?: string) => {
       if (boardId) navigation.goToBoard(boardId);
       setNewBranchDefaultPosition(null);
       setCreateDialogDefaultTab(tab || 'teammate');

@@ -7,6 +7,7 @@ import {
   ExportOutlined,
   InfoCircleOutlined,
   LogoutOutlined,
+  PlusOutlined,
   SearchOutlined,
   SettingOutlined,
   UserOutlined,
@@ -20,6 +21,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { BoardCollapse } from '../BoardCollapse';
 import { getBoardEmoji } from '../BoardTile';
+import { type CreateTab, createMenuItems } from '../CreateDialog/createMenuItems';
 
 const { Text } = Typography;
 
@@ -35,6 +37,9 @@ interface MobileNavTreeProps {
   /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
   externalAppLink?: string;
   externalAppLabel?: string;
+  /** Adds the Create new row; Repository is listed for admins only. */
+  onCreate?: (tab: CreateTab) => void;
+  isAdmin?: boolean;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -48,6 +53,8 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   onLogout,
   externalAppLink,
   externalAppLabel,
+  onCreate,
+  isAdmin = false,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -134,6 +141,16 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   const utilityItems: MenuProps['items'] = [
     { key: 'search', label: 'Search', icon: <SearchOutlined /> },
     { key: 'knowledge', label: 'Knowledge Base', icon: <BulbOutlined /> },
+    ...(onCreate
+      ? [
+          {
+            key: 'create',
+            label: 'Create new',
+            icon: <PlusOutlined />,
+            children: createMenuItems(isAdmin),
+          },
+        ]
+      : []),
     { key: 'workspace-settings', label: 'Workspace settings', icon: <SettingOutlined /> },
     { key: 'user-settings', label: 'User settings', icon: <UserOutlined /> },
     { key: 'documentation', label: 'Documentation', icon: <InfoCircleOutlined /> },
@@ -295,8 +312,9 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         mode="inline"
         selectable={false}
         items={utilityItems}
-        onClick={({ key }) => {
-          if (key === 'search') navigate('/m/search');
+        onClick={({ key, keyPath }) => {
+          if (keyPath[1] === 'create') onCreate?.(key as CreateTab);
+          else if (key === 'search') navigate('/m/search');
           else if (key === 'workspace-settings') openSettings('boards');
           else if (key === 'knowledge') navigate('/knowledge');
           else if (key === 'user-settings') onOpenUserSettings();

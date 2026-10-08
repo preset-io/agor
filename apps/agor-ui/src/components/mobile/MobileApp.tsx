@@ -1,8 +1,11 @@
 import type {
   AgenticToolName,
   AgorClient,
+  Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
   Repo,
   Session,
   SpawnConfig,
@@ -12,11 +15,13 @@ import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
+import { type CreateBranchHandler, useCreateFlows } from '../../hooks/useCreateFlows';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
@@ -45,6 +50,7 @@ import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { CreateDialog, type CreateTab } from '../CreateDialog';
 import { type HomeLocationState, HomePage } from '../HomePage';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
@@ -106,6 +112,12 @@ interface MobileAppProps {
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
+  // Same create handlers as desktop, behind the More sheet's Create new row.
+  onCreateBranch?: CreateBranchHandler;
+  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
+  onCreateRepo?: (data: CreateRepoRequest) => unknown;
+  onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
+  branchStorageConfig?: BranchStorageConfig;
 }
 
 export const MobileApp: React.FC<MobileAppProps> = ({
@@ -138,6 +150,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateRepo,
   onArchiveOrDeleteBranch,
   onExecuteScheduleNow,
+  onCreateBranch,
+  onCreateBoard,
+  onCreateRepo,
+  onCreateLocalRepo,
+  branchStorageConfig,
 }) => {
   const navigate = useNavigate();
   const navigation = useAppNavigation();
@@ -161,6 +178,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const agenticToolSettings = useAgorStore((s) => s.agenticToolSettingsByName);
 
   const [moreOpen, setMoreOpen] = useState(false);
+  const [createTab, setCreateTab] = useState<CreateTab | null>(null);
   const [askPickerOpen, setAskPickerOpen] = useState(false);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
   const [branchEditor, setBranchEditor] = useState<{
@@ -224,6 +242,25 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
   }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
+
+  const createFlows = useCreateFlows({
+    client,
+    user,
+    currentBoardId: effectiveBoardId,
+    navigation: {
+      // A branch the store hasn't received yet lands on Home.
+      goToBranch: (branchId) => {
+        const boardId = agorStore.getState().branchById.get(branchId)?.board_id;
+        navigate(boardId ? `/m/board/${boardId}` : '/m');
+      },
+      goToBoard: (boardId) => navigate(`/m/board/${boardId}`),
+      goToSession: (sessionId) => navigate(`/m/session/${sessionId}`),
+    },
+    onCreateBranch,
+    onUpdateBranch,
+    onCreateBoard,
+    onCreateSession,
+  });
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
@@ -660,6 +697,24 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
+        onCreate={setCreateTab}
+        isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
+      />
+
+      <CreateDialog
+        open={createTab !== null}
+        onClose={() => setCreateTab(null)}
+        defaultTab={createTab ?? undefined}
+        currentBoardId={effectiveBoardId}
+        availableAgents={AVAILABLE_AGENTS}
+        currentUser={user}
+        client={client}
+        onCreateBranch={createFlows.createBranch}
+        onCreateBoard={createFlows.createBoard}
+        onCreateRepo={(data) => onCreateRepo?.(data)}
+        onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
+        onCreateTeammate={createFlows.createTeammate}
+        branchStorageConfig={branchStorageConfig}
       />
 
       <BranchModal

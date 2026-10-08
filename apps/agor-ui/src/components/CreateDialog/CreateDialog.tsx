@@ -11,12 +11,13 @@ import {
   FolderOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Modal, Tabs } from 'antd';
+import { Alert, Button, Grid, Modal, Tabs } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectMcpServerById, selectRepoById } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
+import type { CreateTab } from './createMenuItems';
 import { BoardTab } from './tabs/BoardTab';
 import type { BranchTabConfig } from './tabs/BranchTab';
 import { BranchTab } from './tabs/BranchTab';
@@ -25,7 +26,7 @@ import { RepoTab } from './tabs/RepoTab';
 import type { TeammateTabResult } from './tabs/TeammateTab';
 import { TeammateTab } from './tabs/TeammateTab';
 
-type ActiveTab = 'branch' | 'teammate' | 'board' | 'repository';
+type ActiveTab = CreateTab;
 type CreateDialogTab = ActiveTab;
 
 export interface CreateDialogProgress {
@@ -121,6 +122,7 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
   const repoById = useAgorStore(selectRepoById);
   const boardById = useAgorStore(selectBoardById);
   const mcpServerById = useAgorStore(selectMcpServerById);
+  const compact = !Grid.useBreakpoint().md;
   const [activeTab, setActiveTab] = useState<ActiveTab>(() => normalizeTab(defaultTab));
   // Validity is tracked per tab so a sibling tab's empty-form state (or a
   // deferred validity push from its init effect) can't clobber the active
@@ -336,7 +338,8 @@ export const CreateDialog: React.FC<CreateDialogProps> = ({
       open={open}
       onCancel={handleCancel}
       destroyOnHidden
-      width={720}
+      width={compact ? 'calc(100vw - 16px)' : 720}
+      style={compact ? { top: 8 } : undefined}
       closable={!isSubmitting}
       maskClosable={false}
       keyboard={!isSubmitting}

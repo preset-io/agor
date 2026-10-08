@@ -1,6 +1,7 @@
 import type { AgorClient, HomeWorkView, User } from '@agor-live/client';
 import { HOME_WORK_VIEWS, hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Flex, Skeleton, Typography, theme } from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
+import { Alert, Button, Dropdown, Flex, Skeleton, Typography, theme } from 'antd';
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
@@ -35,6 +36,7 @@ import {
   requestShellPicker,
 } from '../../utils/shellEvents';
 import { patchUserPreferences } from '../../utils/userPreferences';
+import { type CreateTab, createMenuItems } from '../CreateDialog/createMenuItems';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
@@ -71,8 +73,6 @@ const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
-type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
-
 /** Route state other surfaces use to land on part of Home. */
 export interface HomeLocationState {
   needsFilter?: NeedsFilter;
@@ -91,7 +91,7 @@ export interface HomePageProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionCreationResult | null>;
-  /** Board and teammate onboarding steps; phones have no create dialog. */
+  /** Header New menu and onboarding steps; the phone shell creates from its More sheet instead. */
   onOpenCreateDialog?: (tab: CreateTab, boardId?: string) => void;
   onOpenSettings?: (section: 'repos' | 'mcp' | 'users') => void;
   /** Defaults to the header board switcher. */
@@ -436,9 +436,22 @@ export const HomePage = memo(function HomePage({
         />
       )}
       <div style={{ minWidth: 0 }}>
-        <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0 }}>
-          Good {greeting()}, {firstName}
-        </Typography.Title>
+        <Flex align="center" justify="space-between" gap={token.marginSM}>
+          <Typography.Title level={HOME_PAGE_TITLE_LEVEL} style={{ margin: 0, minWidth: 0 }}>
+            Good {greeting()}, {firstName}
+          </Typography.Title>
+          {onOpenCreateDialog && (
+            <Dropdown
+              trigger={['click']}
+              menu={{
+                items: createMenuItems(isAdmin),
+                onClick: ({ key }) => onOpenCreateDialog(key as CreateTab),
+              }}
+            >
+              <Button icon={<PlusOutlined />}>New</Button>
+            </Dropdown>
+          )}
+        </Flex>
         {!hydrated ? (
           <Skeleton.Input active size="small" style={{ width: 220 }} />
         ) : (
