@@ -96,6 +96,7 @@ it.each([
   const lineBottom = Math.min(...chips.map((chip) => chip.bottom));
   for (const chip of chips) expect(chip.top).toBeLessThan(lineBottom);
   expect(getComputedStyle(bar).overflowX).toBe('auto');
+  expect(screen.getByTestId('model-chip').getBoundingClientRect().width).toBeGreaterThanOrEqual(96);
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
   const actions = ['Attach files', 'More options', 'Stop', 'Queue'].map((name) =>

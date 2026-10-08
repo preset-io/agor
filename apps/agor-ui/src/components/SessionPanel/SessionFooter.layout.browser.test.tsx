@@ -3,10 +3,11 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import type {} from '@vitest/browser-playwright';
 import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { cdp, page } from 'vitest/browser';
+import { cdp, page, userEvent } from 'vitest/browser';
 import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import globalCss from '../../index.css?raw';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import SessionPanel from './SessionPanel';
 
 // Keep the actual panel and composer layout; substitute only transcript data
@@ -177,4 +178,30 @@ it('retains the bottom inset when resizing from mobile to desktop', async () => 
     const send = screen.getByRole('button', { name: 'Send' }).getBoundingClientRect();
     expect(bounds.bottom - send.bottom).toBeGreaterThanOrEqual(bottomInset);
   });
+});
+
+it('puts the phone composer in one chat bar that grows to five lines', async () => {
+  await page.viewport(390, 700);
+  render(panel(SessionStatus.RUNNING, false));
+  const input = screen.getByPlaceholderText('Queue here…');
+  const buttons = ['More options', 'Stop', 'Send'].map((name) =>
+    screen.getByRole('button', { name })
+  );
+  const expectBottomAligned = () => {
+    const field = input.getBoundingClientRect();
+    expect(buttons[0].getBoundingClientRect().right).toBeLessThanOrEqual(field.left);
+    expect(field.right).toBeLessThanOrEqual(buttons[1].getBoundingClientRect().left);
+    for (const button of buttons) {
+      expect(Math.abs(button.getBoundingClientRect().bottom - field.bottom)).toBeLessThanOrEqual(1);
+    }
+    return field.height;
+  };
+  expect(Math.round(expectBottomAligned())).toBe(MOBILE_TOUCH_TARGET);
+
+  await userEvent.fill(input, Array.from({ length: 8 }, (_, i) => `Line ${i + 1}`).join('\n'));
+  await waitFor(() => expect(input.scrollHeight).toBeGreaterThan(input.clientHeight));
+  const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
+  const grown = expectBottomAligned();
+  expect(grown).toBeGreaterThan(lineHeight * 4 + MOBILE_TOUCH_TARGET - lineHeight);
+  expect(grown).toBeLessThanOrEqual(lineHeight * 5 + MOBILE_TOUCH_TARGET - lineHeight + 1);
 });

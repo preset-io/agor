@@ -120,6 +120,9 @@ export type { PermissionMode };
 // The parent reads/clears the value imperatively via a ref.
 // ---------------------------------------------------------------------------
 
+// iOS Safari zooms into inputs below 16px.
+const MOBILE_COMPOSER_FONT_SIZE = 16;
+
 export interface PromptInputHandle {
   getValue: () => string;
   clear: () => void;
@@ -180,6 +183,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     ref
   ) => {
     const isMobile = useIsMobileViewport();
+    const { token } = theme.useToken();
     const [value, setValue] = React.useState(() => getDraft(sessionId));
     const valueRef = React.useRef(value);
     const textareaElementRef = React.useRef<HTMLTextAreaElement | null>(null);
@@ -326,7 +330,19 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         highlightWhenEmpty
         // Preserve the mobile composer's iOS no-autozoom threshold. The shared
         // textarea also applies these metrics to its mention highlight overlay.
-        textareaStyle={isMobile ? { fontSize: 16 } : undefined}
+        // Block padding makes one line a full touch-target tall.
+        textareaStyle={
+          isMobile
+            ? {
+                fontSize: MOBILE_COMPOSER_FONT_SIZE,
+                paddingBlock:
+                  (MOBILE_TOUCH_TARGET -
+                    2 * token.lineWidth -
+                    MOBILE_COMPOSER_FONT_SIZE * token.lineHeight) /
+                  2,
+              }
+            : undefined
+        }
       />
     );
   }
@@ -876,11 +892,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onSubmit={stableFooterHandlers.onSendPrompt}
           hasExternalInput={hasComposerAttachments}
           placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
+            isMobileShell
+              ? isRunning
+                ? 'Queue here…'
+                : 'Prompt here…'
+              : isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
           }
-          autoSize={{ minRows: 1, maxRows: isMobileShell ? 4 : 10 }}
+          autoSize={{ minRows: 1, maxRows: isMobileShell ? 5 : 10 }}
           client={client}
           userById={userById}
           onFilesDrop={addComposerAttachments}

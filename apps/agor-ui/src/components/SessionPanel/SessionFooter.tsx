@@ -222,7 +222,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           : effectiveModel
       )
     : null;
-  const modelChipMinWidth = token.controlHeight * 2;
+  const modelChipMinWidth = token.controlHeight * 3;
 
   // Signature of the currently-disconnected servers. Dismissal is keyed by it,
   // so hiding the notice sticks — until a *different* server disconnects, which
@@ -1105,17 +1105,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           />
         )}
 
-        {/* Row 2 — Prompt textarea */}
-        {promptInputSlot}
+        {/* Row 2 — Prompt textarea (inline in the action bar on phones) */}
+        {!isMobile && promptInputSlot}
 
-        {/* Row 3 — Action bar */}
+        {/* Row 3 — Action bar. On phones it is a chat bar: the input grows
+            upward and the buttons stay aligned with its last line. */}
         <div
           style={{
             display: 'flex',
-            flexWrap: 'wrap',
-            alignItems: 'center',
+            flexWrap: isMobile ? 'nowrap' : 'wrap',
+            alignItems: isMobile ? 'flex-end' : 'center',
             gap: token.sizeUnit,
-            marginTop: token.sizeUnit * 2,
+            marginTop: isMobile ? 0 : token.sizeUnit * 2,
           }}
         >
           {/* Left group */}
@@ -1222,6 +1223,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Popover>
             )}
           </Space>
+
+          {isMobile && <div style={{ flex: 1, minWidth: 0 }}>{promptInputSlot}</div>}
 
           {/* Right group */}
           <Flex
