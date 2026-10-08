@@ -30,23 +30,22 @@ describe('HomePage', () => {
   it('shows rows before hydration but never “all caught up” or counts', () => {
     seed({ sessions: [session('idle')], hydrated: false });
     renderHome();
-    expect(screen.getByRole('heading', { name: 'Needs you' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Waiting on you' })).toBeInTheDocument();
     expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
     expect(screen.getByText('Session idle')).toBeInTheDocument();
 
     act(() => agorStore.setState({ sessionsHydrated: true, branchesHydrated: true }));
     expect(screen.getByText('You’re all caught up.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /All caught up/ })).toBeInTheDocument();
   });
 
-  it('hides Needs you and the status line for new users', () => {
+  it('hides Waiting on you for new users', () => {
     seed({});
     renderHome();
-    expect(screen.queryByRole('heading', { name: 'Needs you' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Waiting on you' })).not.toBeInTheDocument();
     expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
   });
 
-  it('greets the user with what needs them and what is running', () => {
+  it('greets the user by first name, with no status line under the greeting', () => {
     seed({
       sessions: [
         session('perm', { status: 'awaiting_permission' }),
@@ -58,8 +57,8 @@ describe('HomePage', () => {
     expect(
       screen.getByRole('heading', { name: /^Good (morning|afternoon|evening), Kasia$/ })
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '2 need you' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '1 running' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /need you|running/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Running 1' })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: 'All' })).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Session perm, Waiting for your permission' })
@@ -73,7 +72,7 @@ describe('HomePage', () => {
       ),
     });
     renderHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(needs.querySelectorAll('[data-home-row]')).toHaveLength(3);
     const toggle = within(needs).getByRole('button', { name: '2 more · 2 permission requests' });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -100,7 +99,7 @@ describe('HomePage', () => {
       comments: Array.from({ length: 5 }, (_, i) => comment(`c${i}`)),
     });
     renderHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(
       within(needs).getByRole('button', { name: '7 more · 4 comments, 1 failed, 2 finished' })
     ).toBeInTheDocument();
@@ -119,7 +118,7 @@ describe('HomePage', () => {
       });
       const onSessionClick = vi.fn();
       const { unmount } = renderHome({ onSessionClick });
-      const needs = screen.getByRole('region', { name: 'Needs you' });
+      const needs = screen.getByRole('region', { name: 'Waiting on you' });
       fireEvent.click(within(needs).getByText('Broken run'));
       expect(onSessionClick).toHaveBeenCalledWith('f1');
       expect(Object.keys(JSON.parse(localStorage.getItem(key) ?? '{}'))).toEqual(['f1']);
@@ -142,7 +141,7 @@ describe('HomePage', () => {
     seed({ sessions: failures, branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch] });
     const onSessionClick = vi.fn();
     renderHome({ client, onSessionClick });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).getByText('2 failed on nightly')).toBeInTheDocument();
     // The cause comes from the newest failure, as on a single failure row.
     expect(await within(needs).findByText('Failed · Out of credits')).toBeInTheDocument();
@@ -184,7 +183,7 @@ describe('HomePage', () => {
     } as unknown as AgorClient;
     seed({ sessions: [run] });
     renderHome({ client });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(await within(needs).findByText(label)).toBeInTheDocument();
   });
 
@@ -203,7 +202,7 @@ describe('HomePage', () => {
     });
     const onSessionClick = vi.fn();
     renderHome({ onSessionClick });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     // The group is one need, so the collapsed counts stay per group.
     expect(within(needs).getByRole('button', { name: '1 more · 1 finished' })).toBeInTheDocument();
     fireEvent.click(within(needs).getByRole('button', { name: 'Show 2' }));
@@ -229,7 +228,7 @@ describe('HomePage', () => {
       branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch],
     });
     renderHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     fireEvent.click(within(needs).getByRole('button', { name: 'More actions' }));
     expect(await screen.findByText('Show all 2')).toBeInTheDocument();
     expect(screen.queryByText(/Archive/)).not.toBeInTheDocument();
@@ -266,7 +265,7 @@ describe('HomePage', () => {
     } as unknown as AgorClient;
     seed({ sessions: failures, branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch] });
     renderHome({ client });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).queryByRole('button', { name: /Archive/ })).not.toBeInTheDocument();
     fireEvent.click(within(needs).getByRole('button', { name: 'Show 2' }));
     // The header and the newest expanded run share one read of its cause.
@@ -292,7 +291,7 @@ describe('HomePage', () => {
     seed({ sessions: [failed] });
     const onSessionClick = vi.fn();
     renderHome({ onSessionClick });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     fireEvent.click(within(needs).getByText('Broken run'));
     expect(onSessionClick).toHaveBeenCalledWith('f1');
     await waitFor(() => expect(within(needs).queryByText('Broken run')).not.toBeInTheDocument());
@@ -377,7 +376,7 @@ describe('HomePage', () => {
       hash: '#needs',
       state: { needsFilter: 'comments' },
     });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).getAllByRole('button', { name: /mentioned you/ })).toHaveLength(1);
     expect(within(needs).queryByRole('button', { name: /Session perm/ })).not.toBeInTheDocument();
     // Back to this entry must not apply the filter again.
@@ -390,7 +389,7 @@ describe('HomePage', () => {
   it('stays on All when the bell lands with no comments for you', async () => {
     seed({ sessions: [session('perm', { status: 'awaiting_permission' })] });
     renderHome({}, undefined, { pathname: '/', state: { needsFilter: 'comments' } });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(
       within(needs).getByRole('button', { name: 'Session perm, Waiting for your permission' })
     ).toBeInTheDocument();
@@ -412,12 +411,11 @@ describe('HomePage', () => {
     expect(screen.getByRole('button', { name: 'Teammate t, open B' })).toBeInTheDocument();
   });
 
-  it('keeps quiet counters: no “0 running”, no “more in Needs you” row', () => {
+  it('keeps quiet counters: no “0 running”, no “more in Waiting on you” row', () => {
     seed({ sessions: [session('done', { ready_for_prompt: true }), session('idle')] });
     renderHome();
-    expect(screen.getByRole('button', { name: '1 need you' })).toBeInTheDocument();
     expect(screen.queryByText(/running/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/more in Needs you/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/more in Waiting on you/)).not.toBeInTheDocument();
   });
 
   it('groups finished results per branch behind the latest, and marks them all as read', async () => {
@@ -433,7 +431,7 @@ describe('HomePage', () => {
       branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch],
     });
     renderHome({ client });
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).getByText('3 finished on nightly')).toBeInTheDocument();
     fireEvent.click(within(needs).getByRole('button', { name: 'Show 3' }));
     expect(within(needs).getByText('Session r3')).toBeInTheDocument();
@@ -450,7 +448,7 @@ describe('HomePage', () => {
       branches: [{ branch_id: 'branch-1', name: 'nightly' } as Branch],
     });
     renderHome();
-    const needs = screen.getByRole('region', { name: 'Needs you' });
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
     expect(within(needs).queryByRole('button', { name: 'Show 2' })).not.toBeInTheDocument();
     fireEvent.click(within(needs).getByRole('button', { name: 'More actions' }));
     fireEvent.click(await screen.findByText('Show all 2'));
@@ -496,16 +494,16 @@ describe('HomePage', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Filters' }));
     const sheet = await screen.findByRole('dialog', { name: 'Filters' });
     expect(within(sheet).getByRole('combobox', { name: 'View' })).toBeInTheDocument();
-    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Hide scheduled and agent runs' }));
     expect(within(toolbar).getByText('1')).toBeInTheDocument();
   });
 
-  it('keeps “Only sessions I started” per user', async () => {
+  it('keeps “Hide scheduled and agent runs” per user', async () => {
     seed({ sessions: [session('idle')] });
     const { unmount } = renderHome();
     fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
     const sheet = await screen.findByRole('dialog', { name: 'Filters' });
-    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Hide scheduled and agent runs' }));
     unmount();
 
     renderHome({ currentUser: { ...user, user_id: 'someone-else' } as User });
@@ -518,8 +516,10 @@ describe('HomePage', () => {
     renderHome({ currentUser: null });
     fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
     const sheet = await screen.findByRole('dialog', { name: 'Filters' });
-    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' }));
-    expect(within(sheet).getByRole('checkbox', { name: 'Only sessions I started' })).toBeChecked();
+    fireEvent.click(within(sheet).getByRole('checkbox', { name: 'Hide scheduled and agent runs' }));
+    expect(
+      within(sheet).getByRole('checkbox', { name: 'Hide scheduled and agent runs' })
+    ).toBeChecked();
     expect(Object.keys(localStorage).filter((key) => key.includes('anonymous'))).toEqual([]);
   });
 
@@ -538,6 +538,84 @@ describe('HomePage', () => {
     expect(
       within(work).queryByRole('button', { name: 'Open Launch board' })
     ).not.toBeInTheDocument();
+  });
+
+  it('switches My work to a teammate or everyone with People, showing who started each row', async () => {
+    asDesktop();
+    const vitor = { user_id: 'user-vitor', name: 'Vitor Demo', email: 'v@example.test' } as User;
+    seed({
+      sessions: [
+        session('mine'),
+        session('v-run', { created_by: vitor.user_id, status: 'running' }),
+        session('v-perm', { created_by: vitor.user_id, status: 'awaiting_permission' }),
+      ],
+    });
+    act(() =>
+      agorStore.setState({
+        userById: new Map([
+          [ME, user],
+          [vitor.user_id, vitor],
+        ]),
+      })
+    );
+    renderHome();
+    const work = () => screen.getByRole('region', { name: /work$/ });
+    const toolbar = document.querySelector<HTMLElement>('[data-home-toolbar]') as HTMLElement;
+    expect(work()).toHaveAccessibleName('My work');
+    expect(within(work()).getByRole('button', { name: 'Session mine' })).toBeInTheDocument();
+
+    fireEvent.click(within(toolbar).getByRole('button', { name: 'Filters' }));
+    const people = await screen.findByRole('combobox', { name: 'People' });
+    fireEvent.mouseDown(people);
+    fireEvent.click(await screen.findByTitle('Vitor Demo'));
+    expect(work()).toHaveAccessibleName('Vitor Demo’s work');
+    expect(
+      within(work()).getByRole('button', { name: 'Session v-run, Vitor Demo' })
+    ).toBeInTheDocument();
+    expect(
+      within(work()).getByRole('button', { name: 'Session v-perm, Vitor Demo' })
+    ).toBeInTheDocument();
+    expect(within(work()).queryByRole('button', { name: /Session mine/ })).not.toBeInTheDocument();
+    expect(within(work()).getByRole('radio', { name: 'Running 1' })).toBeInTheDocument();
+    expect(within(toolbar).getByText('1')).toBeInTheDocument();
+    // Waiting on you stays the caller's own.
+    const needs = screen.getByRole('region', { name: 'Waiting on you' });
+    expect(within(needs).queryByText('Session v-perm')).not.toBeInTheDocument();
+
+    fireEvent.mouseDown(people);
+    fireEvent.click(await screen.findByTitle('Everyone'));
+    expect(work()).toHaveAccessibleName('Everyone’s work');
+    expect(
+      within(work()).getByRole('button', { name: 'Session mine, Kasia Designer' })
+    ).toBeInTheDocument();
+
+    fireEvent.change(within(toolbar).getByRole('textbox', { name: 'Filter sessions' }), {
+      target: { value: 'nothing matches' },
+    });
+    fireEvent.click(await within(work()).findByRole('button', { name: 'Clear filters' }));
+    expect(work()).toHaveAccessibleName('My work');
+    expect(within(work()).getByRole('button', { name: 'Session mine' })).toBeInTheDocument();
+    expect(within(toolbar).queryByText('1')).not.toBeInTheDocument();
+  });
+
+  it('says when a teammate has no sessions yet', async () => {
+    asDesktop();
+    const ana = { user_id: 'user-ana', name: 'Ana', email: 'a@example.test' } as User;
+    seed({ sessions: [session('mine')] });
+    act(() =>
+      agorStore.setState({
+        userById: new Map([
+          [ME, user],
+          [ana.user_id, ana],
+        ]),
+      })
+    );
+    renderHome();
+    fireEvent.click(screen.getByRole('button', { name: 'Filters' }));
+    fireEvent.mouseDown(await screen.findByRole('combobox', { name: 'People' }));
+    fireEvent.click(await screen.findByTitle('Ana'));
+    const work = screen.getByRole('region', { name: 'Ana’s work' });
+    expect(within(work).getByText('No sessions from Ana yet.')).toBeInTheDocument();
   });
 
   it('saves the view to the user preferences and reads it back per user', async () => {

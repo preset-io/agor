@@ -4,7 +4,7 @@
  * Each factory keeps its previous result while the inputs it reads are
  * unchanged, so Home subscribers stay quiet through unrelated store patches.
  */
-import type { BoardComment, Branch, Session } from '@agor-live/client';
+import type { BoardComment, Branch, Session, UserID } from '@agor-live/client';
 import { getTeammateConfig, isGatewaySession, SessionStatus } from '@agor-live/client';
 import { commentMentionsUser } from '../utils/commentMentions';
 import { getTimeMs } from '../utils/entityTime';
@@ -74,8 +74,13 @@ interface HomeBuckets {
   hasSessions: boolean;
 }
 
+/** Whose sessions My work lists: the caller's, everyone's in the store, or one person's. */
+export type HomeWorkOwner = 'me' | 'everyone' | UserID;
+
 export interface HomeBucketsOptions {
   userId?: string;
+  /** Switches only `recent` and `running`; needs, unread and boards stay the caller's. */
+  owner?: HomeWorkOwner;
   now: number;
   needsLimit: number;
   recentLimit: number;
@@ -209,6 +214,7 @@ export function makeHomeBucketsSelector(
     needsLimit,
     recentLimit,
     boardsLimit = 0,
+    owner = 'me',
     onlyStartedByMe,
     openedFailures = {},
   } = options;
@@ -219,6 +225,7 @@ export function makeHomeBucketsSelector(
   let source: [AgorState['sessionById'], AgorState['branchById'], AgorState['boardById']] | null =
     null;
   let ownSessions: Session[] = [];
+  let workSessions: Session[] = [];
   // A clean fork can depend on another user's session or a currently missing ancestor.
   const lineageDependencies = new Map<string, Session | undefined>();
 
@@ -226,19 +233,25 @@ export function makeHomeBucketsSelector(
     const sameBoards = source?.[1] === s.branchById && source[2] === s.boardById;
     if (prev && sameBoards && source?.[0] === s.sessionById) return prev;
     const nextOwnSessions: Session[] = [];
+    const nextWorkSessions: Session[] = [];
     for (const session of userId ? s.sessionById.values() : []) {
-      if (!session.archived && session.created_by === userId) nextOwnSessions.push(session);
+      if (session.archived) continue;
+      if (session.created_by === userId) nextOwnSessions.push(session);
+      if (owner !== 'me' && (owner === 'everyone' || session.created_by === owner))
+        nextWorkSessions.push(session);
     }
     source = [s.sessionById, s.branchById, s.boardById];
     if (
       prev &&
       sameBoards &&
       sameItems(ownSessions, nextOwnSessions) &&
+      sameItems(workSessions, nextWorkSessions) &&
       [...lineageDependencies].every(([id, session]) => s.sessionById.get(id) === session)
     ) {
       return prev;
     }
     ownSessions = nextOwnSessions;
+    workSessions = nextWorkSessions;
     lineageDependencies.clear();
     const nextItemCache = new Map<string, HomeSessionNeed>();
     const sessionNeed = (
@@ -282,6 +295,15 @@ export function makeHomeBucketsSelector(
       recentCount++;
       insertTopK(recent, session, recentLimit, updatedBefore);
     };
+    const addRunning = (session: Session) => {
+      if (session.status !== SessionStatus.RUNNING) return;
+      runningCount++;
+      if (passes(session)) {
+        runningMatchCount++;
+        insertTopK(running, session, recentLimit, updatedBefore);
+      }
+    };
+    const mine = owner === 'me';
     // Needs you ignores the My work query and started-by-me filters on purpose.
     const addNeed = (session: Session, reason: HomeSessionNeed['reason'], earlier?: Session[]) => {
       needsCount++;
@@ -303,13 +325,7 @@ export function makeHomeBucketsSelector(
       const board = boardsLimit && boardId ? s.boardById.get(boardId) : undefined;
       if (board && !board.archived && updatedAt(session) > (boardAt.get(board.board_id) ?? 0))
         boardAt.set(board.board_id, updatedAt(session));
-      if (session.status === SessionStatus.RUNNING) {
-        runningCount++;
-        if (passes(session)) {
-          runningMatchCount++;
-          insertTopK(running, session, recentLimit, updatedBefore);
-        }
-      }
+      if (mine) addRunning(session);
       if (ranCleanly(session)) {
         const [cleanRuns, key] = session.scheduled_from_branch
           ? [cleanScheduledRuns, scheduleKey(session)]
@@ -337,7 +353,7 @@ export function makeHomeBucketsSelector(
         const finished = finishedByBranch.get(session.branch_id);
         if (finished) finished.push(session);
         else finishedByBranch.set(session.branch_id, [session]);
-      } else {
+      } else if (mine) {
         addRecent(session);
       }
     }
@@ -349,7 +365,7 @@ export function makeHomeBucketsSelector(
         (session.scheduled_from_branch &&
           (cleanScheduledRuns.get(scheduleKey(session)) ?? 0) > settledAt)
       ) {
-        addRecent(session);
+        if (mine) addRecent(session);
         continue;
       }
       const failed = failedByBranch.get(session.branch_id);
@@ -364,6 +380,10 @@ export function makeHomeBucketsSelector(
     };
     addGroups(failedByBranch, 'failed');
     addGroups(finishedByBranch, 'finished');
+    for (const session of workSessions) {
+      addRunning(session);
+      addRecent(session);
+    }
     itemCache = nextItemCache;
     const boardIds = [...boardAt]
       .sort((a, b) => b[1] - a[1])

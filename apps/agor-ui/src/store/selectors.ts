@@ -23,6 +23,7 @@ export {
   type HomeCommentNeed,
   type HomeNeed,
   type HomeSessionNeed,
+  type HomeWorkOwner,
   isSessionStartedByUser,
   isUnreadResult,
   lastRunStartedAt,

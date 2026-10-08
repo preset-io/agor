@@ -1,4 +1,4 @@
-import type { Board, Branch, HomeWorkView, Session } from '@agor-live/client';
+import type { Board, Branch, HomeWorkView, Session, User } from '@agor-live/client';
 import { HOME_WORK_VIEWS } from '@agor-live/client';
 import { FilterOutlined, RightOutlined, SearchOutlined } from '@ant-design/icons';
 import {
@@ -21,11 +21,13 @@ import {
   useAgorStore,
   useStoreWithEqualityFn,
 } from '../../store/agorStore';
-import { makeBoardSelector } from '../../store/selectors';
+import { type HomeWorkOwner, makeBoardSelector } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
+import { searchableSelectProps, userSelectSearchText } from '../../utils/selectSearch';
 import { sameName, teammateLabel } from '../../utils/teammateLabels';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
-import { HomeContext, HomeList, HomePressable, HomeSessionRow } from './HomeRow';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
+import { HomeContext, HomeList, HomePressable, HomeSessionRow, personName } from './HomeRow';
 import {
   HomeCard,
   HomeLink,
@@ -59,6 +61,9 @@ interface HomeMyWorkProps {
   onViewChange: (view: HomeWorkView) => void;
   query: string;
   onQueryChange: (query: string) => void;
+  owner: HomeWorkOwner;
+  onOwnerChange: (owner: HomeWorkOwner) => void;
+  currentUser?: User | null;
   onlyStartedByMe: boolean;
   onOnlyStartedByMeChange: (value: boolean) => void;
   onShowMore: () => void;
@@ -158,6 +163,9 @@ export const HomeMyWork = memo(function HomeMyWork({
   onViewChange,
   query,
   onQueryChange,
+  owner,
+  onOwnerChange,
+  currentUser,
   onlyStartedByMe,
   onOnlyStartedByMeChange,
   onShowMore,
@@ -182,11 +190,32 @@ export const HomeMyWork = memo(function HomeMyWork({
     [grouped, sessions, homes]
   );
   const showLogo = sessions.some((s) => s.agentic_tool !== sessions[0]?.agentic_tool);
-  const activeFilters = Number(onlyStartedByMe);
+  const activeFilters = Number(onlyStartedByMe) + Number(owner !== 'me');
+  const userById = useAgorStore((s) => s.userById);
+  const peopleOptions = useMemo(
+    () => [
+      { value: 'me', label: 'Me', searchText: 'me' },
+      { value: 'everyone', label: 'Everyone', searchText: 'everyone' },
+      ...[...userById.values()]
+        .filter((u) => u.user_id !== currentUser?.user_id)
+        .map((u) => ({
+          value: u.user_id,
+          label: personName(u),
+          searchText: userSelectSearchText(u),
+          user: u,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ],
+    [userById, currentUser?.user_id]
+  );
+  const ownerName = owner === 'me' || owner === 'everyone' ? '' : personName(userById.get(owner));
+  const title =
+    owner === 'me' ? 'My work' : owner === 'everyone' ? 'Everyone’s work' : `${ownerName}’s work`;
 
   const clearFilters = () => {
     onQueryChange('');
     onOnlyStartedByMeChange(false);
+    onOwnerChange('me');
   };
   const empty =
     filtered && (tab === 'recent' || runningCount > 0) ? (
@@ -197,8 +226,12 @@ export const HomeMyWork = memo(function HomeMyWork({
       </>
     ) : tab === 'running' ? (
       'No agents running right now.'
-    ) : (
+    ) : owner === 'me' ? (
       'Nothing here yet.'
+    ) : owner === 'everyone' ? (
+      'No sessions yet.'
+    ) : (
+      `No sessions from ${ownerName} yet.`
     );
 
   // A view, not a filter: in the toolbar where it fits, in the Filters sheet on phones.
@@ -214,14 +247,36 @@ export const HomeMyWork = memo(function HomeMyWork({
       options={VIEW_OPTIONS}
     />
   );
+  // The toolbar has no room for it at the narrowest desktop column, so it lives with the filters.
+  const peopleSelect = (
+    <Select<HomeWorkOwner>
+      {...searchableSelectProps}
+      value={owner}
+      onChange={onOwnerChange}
+      prefix="People"
+      styles={{ prefix: { color: token.colorTextSecondary } }}
+      aria-label="People"
+      popupMatchSelectWidth={false}
+      options={peopleOptions}
+      optionRender={({ data }) => (
+        <Flex align="center" gap={token.marginXS}>
+          {'user' in data && (
+            <UserIdentityAvatar user={data.user} size={20} style={{ fontSize: token.fontSizeSM }} />
+          )}
+          {data.label}
+        </Flex>
+      )}
+    />
+  );
   const filters = (
     <Flex vertical gap={token.marginSM} style={{ minWidth: 220 }}>
       {compact && viewSelect}
+      {peopleSelect}
       <Checkbox
         checked={onlyStartedByMe}
         onChange={(e) => onOnlyStartedByMeChange(e.target.checked)}
       >
-        Only sessions I started
+        Hide scheduled and agent runs
       </Checkbox>
     </Flex>
   );
@@ -240,7 +295,7 @@ export const HomeMyWork = memo(function HomeMyWork({
   return (
     <HomeSection
       id="mywork"
-      title="My work"
+      title={title}
       extra={<HomeLink onClick={onSeeAll}>See all sessions</HomeLink>}
     >
       {!hydrated && recent.length === 0 && running.length === 0 ? (
@@ -337,6 +392,7 @@ export const HomeMyWork = memo(function HomeMyWork({
                           session={session}
                           showContext={false}
                           showLogo={showLogo}
+                          showCreator={owner !== 'me'}
                           indent={
                             compact
                               ? token.paddingSM
@@ -357,7 +413,12 @@ export const HomeMyWork = memo(function HomeMyWork({
               items={sessions}
               itemKey={(session) => session.session_id}
               renderItem={(session) => (
-                <HomeSessionRow session={session} showLogo={showLogo} onOpen={onOpenSession} />
+                <HomeSessionRow
+                  session={session}
+                  showLogo={showLogo}
+                  showCreator={owner !== 'me'}
+                  onOpen={onOpenSession}
+                />
               )}
             />
           )}

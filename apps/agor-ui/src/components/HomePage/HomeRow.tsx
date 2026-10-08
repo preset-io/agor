@@ -1,5 +1,5 @@
 import { PROVIDER_DETAIL_SEPARATOR, parsePermissionTimeoutMs } from '@agor/core/types';
-import type { AgorClient, Session, Task } from '@agor-live/client';
+import type { AgorClient, Session, Task, User } from '@agor-live/client';
 import { getGatewaySource, getTeammateConfig } from '@agor-live/client';
 import {
   CheckOutlined,
@@ -40,6 +40,9 @@ import {
   HOME_ROW_TITLE_WEIGHT,
   homeDivider,
 } from './homeLayout';
+
+export const personName = (user?: Pick<User, 'name' | 'email'>) =>
+  user?.name?.trim() || user?.email || 'Someone';
 
 /** Divided list of Home rows; short previews, so no virtualization. */
 export function HomeList<T>({
@@ -328,6 +331,8 @@ interface HomeSessionRowProps {
   showContext?: boolean;
   /** Off when every row in view uses the same agent. */
   showLogo?: boolean;
+  /** Leads with the creator's avatar instead of the agent logo (someone else's work). */
+  showCreator?: boolean;
   indent?: number;
   /** A group row's toggle for its earlier runs. */
   expand?: { expanded: boolean; count: number; onToggle: () => void };
@@ -344,6 +349,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   title = getSessionDisplayTitle(session, { includeAgentFallback: true }),
   showContext = true,
   showLogo = true,
+  showCreator,
   indent,
   expand,
   onOpen,
@@ -362,6 +368,10 @@ export const HomeSessionRow = memo(function HomeSessionRow({
       ? 'Timed out'
       : reason && SESSION_REASONS[reason];
   const origin = compact ? null : sessionOrigin(session);
+  const creator = useAgorStore((s) =>
+    showCreator ? s.userById.get(session.created_by) : undefined
+  );
+  const creatorName = showCreator ? personName(creator) : undefined;
   const id = session.session_id;
   const menu: MenuProps['items'] = [
     ...(expand && inMenu
@@ -401,6 +411,10 @@ export const HomeSessionRow = memo(function HomeSessionRow({
           <SessionStatusMark session={session} />
         ) : reason ? (
           <NeedDot />
+        ) : showCreator ? (
+          <Tooltip title={creatorName}>
+            <UserIdentityAvatar user={creator} size={20} style={{ fontSize: token.fontSizeSM }} />
+          </Tooltip>
         ) : showLogo ? (
           <SessionRowLogo tool={session.agentic_tool} />
         ) : undefined
@@ -412,7 +426,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
           ? waited(session.last_updated)
           : `${reason === 'failed' ? 'failed ' : ''}${formatRelativeTime(session.last_updated)}`
       }
-      ariaLabel={[title, reasonLabel, detail].filter(Boolean).join(', ')}
+      ariaLabel={[title, creatorName, reasonLabel, detail].filter(Boolean).join(', ')}
       onOpen={() => onOpen(id)}
       indent={indent}
       action={
@@ -498,7 +512,7 @@ export const HomeCommentRow = memo(function HomeCommentRow({
   const sessionBranchId = useAgorStore((s) =>
     thread.session_id ? s.sessionById.get(thread.session_id)?.branch_id : undefined
   );
-  const name = author?.name || author?.email || 'Someone';
+  const name = personName(author);
   const reasonLabel =
     reason === 'mention'
       ? `${name} mentioned you`
