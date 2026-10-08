@@ -655,8 +655,9 @@ export async function executeCursorTask(params: {
     } finally {
       // Abort dispatch does not await the listener; its rejection must land before reporting.
       await listenerCancel;
-      // @cursor/sdk exposes no exit evidence; after Stop only a settled wait() counts as teardown.
-      if (currentRun && params.abortController.signal.aborted && !runSettled) {
+      // @cursor/sdk exposes no exit evidence; only a settled wait() counts as teardown.
+      // Mark regardless of abort: a signal may still land during the outer catch.
+      if (currentRun && !runSettled) {
         markExecutorCleanupUnverified(params.abortController);
       }
       agent.close();
@@ -690,6 +691,8 @@ export async function executeCursorTask(params: {
     throw err;
   } finally {
     params.abortController.signal.removeEventListener('abort', abortHandler);
+    // A signal during the outer catch can start a cancel after the inner await.
+    await listenerCancel;
   }
 }
 

@@ -4,7 +4,7 @@ import {
   isExecutorCleanupUnverified,
   markCoordinatorTerminationAbort,
 } from '../../termination-state.js';
-import { settleTaskFailure } from './base-executor.js';
+import { captureGitStateAtTaskEnd, settleTaskFailure } from './base-executor.js';
 import {
   buildCursorAssistantContent,
   executeCursorTask,
@@ -212,6 +212,52 @@ describe('Cursor Stop and teardown evidence', () => {
     }
 
     expect(isExecutorCleanupUnverified(controller)).toBe(true);
+  });
+
+  it('holds quiescence for a signal that lands after a stream failure', async () => {
+    vi.mocked(settleTaskFailure).mockClear();
+    const controller = new AbortController();
+    const { client, taskPatch } = cursorClient();
+    let releaseCancel!: () => void;
+    const cancelHeld = new Promise<void>((resolve) => {
+      releaseCancel = resolve;
+    });
+    const cancel = vi.fn(() => cancelHeld);
+    mocks.send.mockResolvedValueOnce({
+      id: 'run-1',
+      cancel,
+      wait: async () => ({ status: 'completed', result: '' }),
+      // biome-ignore lint/correctness/useYield: the stream rejects before any event.
+      stream: async function* () {
+        throw new Error('stream lost');
+      },
+    });
+    // The signal arrives while the outer catch captures git state.
+    vi.mocked(captureGitStateAtTaskEnd).mockImplementationOnce(async () => {
+      markCoordinatorTerminationAbort(controller);
+      controller.abort();
+      return undefined;
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    let settled = false;
+    const execution = execute(client, controller).finally(() => {
+      settled = true;
+    });
+    try {
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+      releaseCancel();
+      await expect(execution).resolves.toBeUndefined();
+    } finally {
+      error.mockRestore();
+    }
+
+    expect(isExecutorCleanupUnverified(controller)).toBe(true);
+    expect(taskPatch).not.toHaveBeenCalled();
+    const shouldSkipTerminal = vi.mocked(settleTaskFailure).mock.calls[0]?.[5];
+    expect(shouldSkipTerminal?.()).toBe(true);
   });
 
   it('accepts a clean cancel with a settled run as teardown', async () => {
