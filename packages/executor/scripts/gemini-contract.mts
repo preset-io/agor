@@ -471,7 +471,7 @@ try {
         undefined,
         'autoEdit',
         undefined,
-        stopped.signal
+        stopped
       ))
         stopEvents.push(event);
       assert.ok(stopEvents.some((event) => event.type === 'stopped'));
