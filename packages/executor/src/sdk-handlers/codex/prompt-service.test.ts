@@ -48,6 +48,7 @@ const configMocks = vi.hoisted(() => ({
 }));
 
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
+import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { CodexTool } from './codex-tool.js';
 import { CodexPromptService, type CodexStreamEvent } from './prompt-service.js';
 
@@ -2841,14 +2842,71 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     await expectSignalQuiescence(abortController, false);
   });
 
-  it('accepts a provider-declared turn completion as settled', async () => {
-    const { service } = await makeInitializedStreamingService('existing-thread-id');
+  it('does not treat a turn completion event as CLI exit evidence', async () => {
+    const { service, codex } = await makeInitializedStreamingService('existing-thread-id');
     const abortController = new AbortController();
-    mockStreamEvents = [{ type: 'turn.completed', usage: {} }];
+    const returned = vi.fn();
+    const events = [{ type: 'turn.completed', usage: {} }];
+    codex.resumeThread = vi.fn(() => ({
+      id: 'existing-thread-id',
+      run: vi.fn(),
+      runStreamed: vi.fn().mockResolvedValue({
+        events: {
+          [Symbol.asyncIterator]() {
+            return this;
+          },
+          async next() {
+            const value = events.shift();
+            return value ? { done: false, value } : { done: true, value: undefined };
+          },
+          // Like the SDK's early return: the child is signalled, not awaited.
+          async return() {
+            returned();
+            return { done: true, value: undefined };
+          },
+        },
+      }),
+    }));
 
     const emitted = await drain(service, abortController);
 
     expect(emitted.some((event) => event.type === 'complete')).toBe(true);
+    expect(returned).toHaveBeenCalledOnce();
+    await expectSignalQuiescence(abortController, false);
+  });
+
+  it('keeps the normal completion result unchanged when cleanup is unverified', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    mockStreamEvents = [
+      { type: 'item.completed', item: { id: 'm1', type: 'agent_message', text: 'done' } },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
+      },
+    ];
+
+    const emitted = await drain(service, abortController);
+
+    expect(abortController.signal.aborted).toBe(false);
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
+    expect(emitted.map((event) => event.type)).toEqual(['complete', 'complete']);
+    expect(emitted[0]).toMatchObject({ content: [{ type: 'text', text: 'done' }] });
+    expect(emitted[1]).toMatchObject({
+      threadId: 'existing-thread-id',
+      usage: { input_tokens: 5, output_tokens: 2, total_tokens: 7 },
+      rawSdkEvent: { type: 'turn.completed' },
+    });
+  });
+
+  it('accepts stream exhaustion as CLI exit evidence', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const abortController = new AbortController();
+    mockStreamEvents = [{ type: 'turn.started' }];
+
+    await expect(drain(service, abortController)).rejects.toThrow(
+      'Codex ended the turn without a completion event'
+    );
     await expectSignalQuiescence(abortController, true);
   });
 

@@ -4,6 +4,7 @@ import { isTaskFailurePersisted } from '../../terminal-task.js';
 import {
   isExecutorCleanupUnverified,
   markCoordinatorTerminationAbort,
+  markExecutorCleanupUnverified,
 } from '../../termination-state.js';
 import {
   createStreamingCallbacks,
@@ -508,6 +509,56 @@ describe('executeToolTask provider-failure settlement', () => {
       expect(JSON.stringify(patch)).not.toContain(secret);
     }
   );
+});
+
+describe('executeToolTask normal completion', () => {
+  it('completes the task even when provider teardown stayed unverified', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const abortController = new AbortController();
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') return { create: vi.fn(), patch: vi.fn() };
+        if (name === '/tasks/streaming') return { create: vi.fn() };
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await executeToolTask({
+      client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: 'hello',
+      abortController,
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      toolName: 'codex',
+      createTool: vi.fn(() => ({
+        // Codex returns after turn.completed without awaiting CLI exit.
+        executePromptWithStreaming: vi.fn(async () => {
+          markExecutorCleanupUnverified(abortController);
+          return { userMessageId: 'user-1' as MessageID, assistantMessageIds: [] };
+        }),
+        stopTask: vi.fn().mockResolvedValue({ success: true }),
+      })),
+    });
+
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
+    expect(taskPatch).toHaveBeenCalledOnce();
+    expect(taskPatch).toHaveBeenCalledWith(
+      'task-1',
+      expect.objectContaining({ status: 'completed' })
+    );
+  });
 });
 
 describe('executeToolTask failure settlement race', () => {

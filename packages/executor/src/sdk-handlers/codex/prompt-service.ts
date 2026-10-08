@@ -1370,9 +1370,10 @@ export class CodexPromptService {
 
     let streamReturned = false;
     let firstEventObserved = false;
-    // The SDK awaits CLI exit only at EOF; break/throw/abort kill it without
-    // awaiting exit. A provider-declared completion is also accepted as settled.
-    let providerSettled = false;
+    // The SDK awaits CLI exit only at EOF; break/return/throw/abort kill it
+    // without awaiting exit. Completion events prove the turn ended, not that
+    // the CLI is gone, so only stream exhaustion counts as teardown evidence.
+    let streamExhausted = false;
     try {
       codexDebug(
         `▶️  [Codex] Running prompt: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`
@@ -1488,7 +1489,6 @@ export class CodexPromptService {
             // Terminal completion event from new Codex rollout format.
             // Treat as equivalent to turn.completed.
             receivedTerminalEvent = true;
-            providerSettled = true;
             threadId = thread.id || '';
             const taskCompleteUsage = extractCodexTokenUsage(
               (eventPayload?.usage ?? eventPayload?.token_usage) as unknown
@@ -1701,7 +1701,6 @@ export class CodexPromptService {
           case 'turn.completed': {
             // Turn complete, emit final message
             receivedTerminalEvent = true;
-            providerSettled = true;
             if (observedStreamError && !receivedAssistantMessage) {
               diagnostics.recordFailure('turn_completed_without_response', observedStreamError);
               throw new CodexLifecycleError('completed_without_response');
@@ -1764,7 +1763,7 @@ export class CodexPromptService {
       // exited without emitting a terminal event (turn.completed / task_complete / turn_complete),
       // which is the bug described in issue #1749.
       if (!didStop) {
-        providerSettled = true;
+        streamExhausted = true;
         diagnostics.recordFailure('stream_ended_without_completion', undefined);
         throw new CodexLifecycleError('stream_ended_without_completion');
       }
@@ -1797,7 +1796,7 @@ export class CodexPromptService {
       // Preserve the existing UI distinction independently of diagnostic phase.
       throw new CodexLifecycleError(streamReturned ? 'stream_interrupted' : 'stream_start_failed');
     } finally {
-      if (abortController && streamReturned && !providerSettled) {
+      if (abortController && streamReturned && !streamExhausted) {
         markExecutorCleanupUnverified(abortController);
       }
       diagnostics.finish();
