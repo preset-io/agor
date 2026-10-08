@@ -975,11 +975,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     height: MOBILE_CHIP_HEIGHT,
                     display: 'inline-flex',
                     alignItems: 'center',
+                    gap: token.marginXXS,
                     minWidth: modelChipMinWidth,
                   }}
                   data-testid="model-chip"
                 >
-                  <Typography.Text ellipsis style={{ minWidth: 0 }}>
+                  <Typography.Text ellipsis style={{ minWidth: 0, fontSize: token.fontSizeSM }}>
                     {modelName}
                   </Typography.Text>
                 </Button>
