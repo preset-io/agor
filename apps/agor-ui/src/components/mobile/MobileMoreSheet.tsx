@@ -3,6 +3,7 @@ import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import type { CreateModalKind } from '../CreateMenu';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
@@ -18,6 +19,9 @@ interface MobileMoreSheetProps {
   onLogout?: () => void;
   externalAppLink?: string;
   externalAppLabel?: string;
+  /** Opens the shared create flow for the picked kind (sheet closes first). Omit to hide the row. */
+  onCreate?: (kind: CreateModalKind) => void;
+  isAdmin: boolean;
 }
 
 /**
@@ -37,6 +41,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onLogout,
   externalAppLink,
   externalAppLabel,
+  onCreate,
+  isAdmin,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -88,6 +94,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
+        onCreate={onCreate}
+        isAdmin={isAdmin}
       />
     </Drawer>
   );

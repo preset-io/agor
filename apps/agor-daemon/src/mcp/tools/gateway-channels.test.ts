@@ -3003,6 +3003,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       agent_tools: { channel_history: false },
       outbound_enabled: true,
       default_outbound_target: 'channel:333333333333333333',
+      response_modes: {},
     });
     expect(payload.validation).toEqual({ ok: true, errors: [] });
     expect(payload.setup_artifact.permissions.bitmask).toBe('309237713920');
@@ -3576,6 +3577,39 @@ describe('Discord channel history agent tool (MCP)', () => {
         after: '555555555555555556',
       })
     ).rejects.toThrow('either before or after');
+  });
+
+  it('maps setup responseModes to config.response_modes and validates them', async () => {
+    const tools = await captureTools('admin');
+    const base = {
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      messageContentAcknowledged: true,
+      allowedChannelIds: ['333333333333333333'],
+      allowedUserIds: ['444444444444444444'],
+      agorUserId: 'user-1',
+    };
+    const result = await tools.agor_gateway_discord_setup.handler({
+      ...base,
+      responseModes: { '333333333333333333': 'starters' },
+    });
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.setup_artifact.draft.config.response_modes).toEqual({
+      '333333333333333333': 'starters',
+    });
+    expect(payload.validation.ok).toBe(true);
+
+    const outside = await tools.agor_gateway_discord_setup.handler({
+      ...base,
+      responseModes: { '555555555555555555': 'all' },
+    });
+    expect(JSON.parse(outside.content[0].text).validation.errors).toContain(
+      'response_modes keys must be allowed channel IDs'
+    );
+    const schema = tools.agor_gateway_discord_setup.cfg.inputSchema;
+    expect(
+      schema.safeParse({ ...base, responseModes: { '333333333333333333': 'loud' } }).success
+    ).toBe(false);
   });
 
   it('exposes the channelHistory setup option as agent_tools config', async () => {

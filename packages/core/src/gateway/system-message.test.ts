@@ -20,6 +20,20 @@ describe('formatGatewaySystemMessage', () => {
     expect(formatted).toContain('Mention me again to follow up.');
   });
 
+  it('formats Discord session-created messages as a masked link without a preview', () => {
+    expect(formatGatewaySystemMessage('discord', `Session created: ${sessionUrl}`)).toBe(
+      `Agor: Session created: [View session](<${sessionUrl}>). Mention me again to follow up.`
+    );
+    expect(
+      formatGatewaySystemMessage('discord', `Session created: ${sessionUrl}`, {
+        followUpHint: false,
+      })
+    ).toBe(`Agor: Session created: [View session](<${sessionUrl}>).`);
+    expect(formatGatewaySystemPayload('discord', 'Error sending prompt: x')).toEqual({
+      text: 'Agor: Error sending prompt: x',
+    });
+  });
+
   it('keeps generic Slack system messages plain', () => {
     expect(formatGatewaySystemMessage('slack', 'Creating new codex session...')).toBe(
       'Agor: Creating new codex session...'

@@ -1,15 +1,15 @@
 /**
  * Terminal-status helpers for the executor's fail-safe paths.
  *
- * The executor has four fail-safe paths that try to mark a task terminal —
- * the top-level catch in `AgorExecutor.start()`, the SIGTERM/SIGINT
- * shutdown handler, the `uncaughtException` handler, and the
+ * The executor has three fail-safe paths that try to mark a task terminal —
+ * the top-level catch in `AgorExecutor.start()`, the `uncaughtException` handler, and the
  * `unhandledRejection` handler. The SDK handler (`base-executor`) is
  * the authoritative writer for terminal state and stamps a richer payload
  * (timing, `git_state.sha_at_end`, normalized SDK responses). If that
  * inner path already ran, the fail-safe paths must NOT redundantly emit a
  * second `'patched'` event — that's the bug the UI saw as
  * "chime plays twice".
+ * Signals instead request fenced containment and never use this fallback.
  *
  * Lives outside `index.ts` so the helper and its constant don't pollute
  * the package's public surface, and so the unit tests don't have to

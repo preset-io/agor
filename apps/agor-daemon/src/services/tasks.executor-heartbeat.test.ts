@@ -1,5 +1,6 @@
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { NOOP_METRICS } from '../metrics/index.js';
 import { TasksService } from './tasks';
 
 function completionHarness(input: {
@@ -51,6 +52,53 @@ function completionHarness(input: {
 }
 
 describe('TasksService executor heartbeat helpers', () => {
+  it.each([
+    ['local', false, false],
+    ['templated', false, false],
+    ['templated', true, false],
+    ['templated', true, true],
+  ])(
+    'tags containment failure metrics (mode=%s, configured=%s, attempted=%s)',
+    async (mode, configured, attempted) => {
+      const task = {
+        task_id: 'task-1',
+        session_id: 'session-1',
+        status: TaskStatus.STOPPING,
+        executor_mode: mode,
+        sdk_failure: { termination: 'unverified' },
+        termination_request: {
+          cause: 'heartbeat_lost',
+          requested_at: 'now',
+          ...(attempted ? { cleanup_attempt: { attempt_id: 'attempt-1', started_at: 'now' } } : {}),
+        },
+      };
+      const { service } = completionHarness({ currentTask: task, resultTask: task });
+      Reflect.set(service, 'taskRepo', {
+        settleTermination: vi.fn().mockResolvedValue({ outcome: 'unverified', task }),
+      });
+      const increment = vi.fn();
+      Reflect.set(service.app as object, 'get', (name: string) =>
+        name === 'metrics'
+          ? { ...NOOP_METRICS, increment }
+          : name === 'config'
+            ? {
+                execution: { executor_cleanup_command_template: configured ? 'helper' : undefined },
+              }
+            : undefined
+      );
+      await service.settleTermination({
+        taskId: task.task_id,
+        outcome: 'unverified',
+        coordinationToken: 'test',
+      });
+      expect(increment).toHaveBeenCalledWith('executor.cleanup_failures', 1, {
+        mode,
+        helper_configured: configured,
+        helper_attempted: attempted,
+      });
+    }
+  );
+
   it('returns durable STOPPING control state when a heartbeat reaches another daemon', async () => {
     const stoppingTask = {
       task_id: '018f0000-0000-7000-8000-000000000099',

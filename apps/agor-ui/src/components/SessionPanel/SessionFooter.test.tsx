@@ -685,7 +685,7 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     expect(screen.getByText('Stop').closest('button')!).toBeEnabled();
   });
 
-  it('retains pending feedback, disables duplicate/offline Stop, and allows stopping retries', () => {
+  it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
     const onStop = vi.fn();
     const view = render(
       <SessionFooter {...baseProps} isRunning stopRequestInFlight onStop={onStop} />,
@@ -698,8 +698,10 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     view.rerender(<SessionFooter {...baseProps} stopRequestInFlight onStop={onStop} />);
     expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
-    fireEvent.click(screen.getByText('Stop').closest('button')!);
-    expect(onStop).toHaveBeenCalledOnce();
+    const recovering = screen.getByRole('button', { name: 'Recovering' });
+    expect(recovering).toBeDisabled();
+    fireEvent.click(recovering);
+    expect(onStop).not.toHaveBeenCalled();
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
     expect(screen.getByText('Stop').closest('button')!).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);

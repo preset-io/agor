@@ -21,6 +21,7 @@ import {
 } from '@agor/core/gateway/slack-manifest';
 import {
   DEFAULT_DISCORD_CATCH_UP,
+  type DiscordResponseMode,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
   validateDiscordConfig,
@@ -436,6 +437,8 @@ function createStepFields(
   if (type === 'discord' && step === 2) {
     return [
       'discord_allowed_channel_ids',
+      'discord_respond_starters_channel_ids',
+      'discord_respond_all_channel_ids',
       'discord_files',
       'discord_direct_messages_enabled',
       'discord_channel_history',
@@ -485,6 +488,8 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_allowed_channel_ids',
   'discord_allowed_user_ids',
   'discord_allowed_role_ids',
+  'discord_respond_starters_channel_ids',
+  'discord_respond_all_channel_ids',
   'discord_message_content_enabled',
   'discord_thread_mode',
   'discord_files',
@@ -1716,6 +1721,20 @@ const DiscordSetupFields: React.FC<{
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
           </Form.Item>
           <Form.Item
+            label="Answer new forum posts in"
+            name="discord_respond_starters_channel_ids"
+            tooltip="Allowed forum channels where the bot answers each new post without a mention. Follow-ups in the post still need a mention. Forum channels only; text channels stay mention-only."
+          >
+            <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
+          </Form.Item>
+          <Form.Item
+            label="Answer every forum message in"
+            name="discord_respond_all_channel_ids"
+            tooltip="Allowed forum channels where the bot answers every message from allowed authors in their posts, without a mention. It may stay silent when it has nothing useful to add. Forum channels only; text channels stay mention-only."
+          >
+            <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
+          </Form.Item>
+          <Form.Item
             label="Allowed user IDs"
             name="discord_allowed_user_ids"
             rules={[{ validator: validateAuthorAllowlist }]}
@@ -2028,11 +2047,30 @@ function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupD
     files: readFormBoolean(values.discord_files, false),
     directMessagesEnabled: readFormBoolean(values.discord_direct_messages_enabled, false),
     channelHistory: readFormBoolean(values.discord_channel_history, false),
+    responseModes: discordResponseModesFromForm(values),
     outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
     defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
     catchUp: catch_up,
     threadAutoArchiveMinutes: readFormNumber(values.discord_thread_auto_archive_minutes, 1440),
   };
+}
+
+/**
+ * Response modes from the form; a channel in both fields answers every
+ * message. Entries outside the allowed channels are kept so validation
+ * reports them instead of silently dropping them.
+ */
+function discordResponseModesFromForm(
+  values: Record<string, unknown>
+): Record<string, DiscordResponseMode> {
+  const modes: Record<string, DiscordResponseMode> = {};
+  for (const id of readFormStringArray(values.discord_respond_starters_channel_ids)) {
+    modes[id] = 'starters';
+  }
+  for (const id of readFormStringArray(values.discord_respond_all_channel_ids)) {
+    modes[id] = 'all';
+  }
+  return modes;
 }
 
 function discordConfigFromFormValues(values: Record<string, unknown>): Record<string, unknown> {
@@ -4465,6 +4503,15 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ).channel_history;
       formValues.discord_outbound_enabled = config?.outbound_enabled ?? false;
       formValues.discord_default_outbound_target = config?.default_outbound_target;
+      const responseModes = Object.entries(
+        (config?.response_modes as Record<string, string> | undefined) ?? {}
+      );
+      formValues.discord_respond_starters_channel_ids = responseModes
+        .filter(([, mode]) => mode === 'starters')
+        .map(([id]) => id);
+      formValues.discord_respond_all_channel_ids = responseModes
+        .filter(([, mode]) => mode === 'all')
+        .map(([id]) => id);
     }
 
     editForm.setFieldsValue(formValues);

@@ -140,9 +140,13 @@ it.each([false, true])(
     expect(activity).toBeVisible();
     expectCenteredActivity();
 
-    // Stopping retains both buttons; removing activity must not shift either.
+    // Stopping retains both buttons; neither the longer recovery label nor
+    // removing activity may shift the controls while reading older messages.
     const stopBounds = stop.getBoundingClientRect();
     view.rerender(panel(SessionStatus.STOPPING, embedded));
+    expect(screen.getByRole('button', { name: 'Recovering' })).toBe(stop);
+    expect(stop).toBeDisabled();
+    expect(stop).toHaveAttribute('aria-busy', 'true');
     expect(screen.queryByRole('status', { name: 'Agent is working' })).toBeNull();
     for (const [control, previous] of [
       [send, buttonBounds],

@@ -1,8 +1,11 @@
 import type {
   AgenticToolName,
   AgorClient,
+  Board,
   Branch,
   BranchArchiveOrDeleteOptions,
+  CreateLocalRepoRequest,
+  CreateRepoRequest,
   Repo,
   Session,
   SpawnConfig,
@@ -12,11 +15,13 @@ import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useCommentsForYou } from '../../hooks/useCommentsForYou';
+import { type CreateBranchFn, useCreateFlows } from '../../hooks/useCreateFlows';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
@@ -45,6 +50,7 @@ import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
@@ -79,6 +85,13 @@ interface MobileAppProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionCreationResult | null>;
+  // Create seams for the shared create flows (New teammate / branch / board /
+  // repo), reached from the "More" sheet's "Create new" row.
+  onCreateBranch?: CreateBranchFn;
+  onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
+  onCreateRepo: (data: CreateRepoRequest) => unknown;
+  onCreateLocalRepo: (data: CreateLocalRepoRequest) => void | Promise<void>;
+  branchStorageConfig?: BranchStorageConfig;
   // Full session controls for the reused SessionPanel composer (parity with desktop).
   onForkSession: (sessionId: string, prompt: string) => Promise<void>;
   onBtwForkSession: (sessionId: string, prompt: string) => Promise<void>;
@@ -116,6 +129,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   topBanner,
   onSendPrompt,
   onCreateSession,
+  onCreateBranch,
+  onCreateBoard,
+  onCreateRepo,
+  onCreateLocalRepo,
+  branchStorageConfig,
   onForkSession,
   onBtwForkSession,
   onSpawnSession,
@@ -224,6 +242,30 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
   }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
+
+  // Same create flows as desktop, via the shared hook. Mobile has no board
+  // canvas, so branch positions aren't captured; navigation lands on /m routes.
+  const createFlows = useCreateFlows({
+    client,
+    currentUser: user,
+    currentBoardId: effectiveBoardId,
+    availableAgents: AVAILABLE_AGENTS,
+    branchStorageConfig,
+    navigation: {
+      goToBranch: (branchId) => {
+        const boardId = agorStore.getState().branchById.get(branchId)?.board_id;
+        navigate(boardId ? `/m/board/${boardId}` : '/m');
+      },
+      goToBoard: (boardId) => navigate(`/m/board/${boardId}`),
+      goToSession: (sessionId) => navigate(`/m/session/${sessionId}`),
+    },
+    onCreateBranch,
+    onUpdateBranch,
+    onCreateSession,
+    onCreateBoard,
+    onCreateRepo,
+    onCreateLocalRepo,
+  });
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
@@ -443,6 +485,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onBranchClick={openHomeBranch}
                 onSessionClick={openHomeSession}
                 onCreateSession={canCreateSessions ? createSession : undefined}
+                onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
                 onOpenSettings={onOpenWorkspaceSettings}
                 onAllBoards={openBoardList}
                 onSeeAllSessions={openSessionList}
@@ -660,7 +703,11 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
+        onCreate={canCreateSessions ? createFlows.openCreate : undefined}
+        isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
       />
+
+      <CreateModals {...createFlows.createModalsProps} fullScreen />
 
       <BranchModal
         open={branchEditor !== null}

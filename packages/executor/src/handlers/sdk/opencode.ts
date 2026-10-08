@@ -41,6 +41,7 @@ import {
 } from '../../sdk-handlers/base/withheld-mcp-report.js';
 import { createUserMessage } from '../../sdk-handlers/claude/message-builder.js';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import { createStreamingCallbacks, settleTaskFailure } from './base-executor.js';
 import {
   completeManagedOpenCodeTurn,
@@ -215,6 +216,8 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
+    // Stop can win while the final message is persisted; never publish completion then.
+    if (params.abortController.signal.aborted) return;
     const completion = {
       status: 'completed' as const,
       completed_at: new Date().toISOString(),
@@ -222,7 +225,14 @@ export async function executeOpenCodeTask(params: {
     };
     if (managed) {
       if (!result.checkpoint) throw new Error('Hosted OpenCode turn produced no checkpoint');
-      await completeManagedOpenCodeTurn(client, taskId, completion, managed, result.checkpoint);
+      await completeManagedOpenCodeTurn(
+        client,
+        taskId,
+        completion,
+        managed,
+        result.checkpoint,
+        () => params.abortController.signal.aborted
+      );
     } else {
       await client.service('tasks').patch(taskId, completion);
     }
@@ -231,16 +241,24 @@ export async function executeOpenCodeTask(params: {
     console.error('[opencode] execution failed category=task_execution');
 
     if (isOpenCodeCleanupUnverifiedError(failure)) {
+      markExecutorCleanupUnverified(params.abortController);
       // Keep the task active. Executor exit hands containment to the daemon;
       // making it terminal here would release the session before absence is proven.
       return;
     }
     if (!params.abortController.signal.aborted) {
-      await settleTaskFailure(client, sessionId, taskId, failure, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-        error_message: failure.message,
-      });
+      await settleTaskFailure(
+        client,
+        sessionId,
+        taskId,
+        failure,
+        {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: failure.message,
+        },
+        () => params.abortController.signal.aborted
+      );
     }
     throw failure;
   } finally {

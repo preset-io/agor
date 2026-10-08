@@ -330,6 +330,7 @@ function AppContent() {
     loginForAuthorityCycle,
     logout,
     logoutForAuthorityCycle,
+    reconcileStoredCredentials,
     refreshCurrentUserForAuthorityCycle,
   } = useAuth();
 
@@ -347,6 +348,8 @@ function AppContent() {
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
+    reconcileCredentials: reconcileStoredCredentials,
+    isAuthorityGenerationCurrent: isAuthenticationGenerationCurrent,
   });
   const clientRef = useRef(client);
   clientRef.current = client;
@@ -1016,7 +1019,7 @@ function AppContent() {
   }
 
   // Show connection error
-  if (connectionError) {
+  if (connectionError && !hasLoadedOnce) {
     return (
       <div
         style={{
@@ -2215,6 +2218,11 @@ function AppContent() {
                   topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
                   onCreateSession={handleCreateSession}
+                  onCreateBranch={handleCreateBranch}
+                  onCreateBoard={handleCreateBoard}
+                  onCreateRepo={handleCreateRepo}
+                  onCreateLocalRepo={handleCreateLocalRepo}
+                  branchStorageConfig={featuresConfig?.branchStorage}
                   onForkSession={handleForkSession}
                   onBtwForkSession={handleBtwForkSession}
                   onSpawnSession={handleSpawnSession}

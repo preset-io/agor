@@ -42,6 +42,9 @@ export function turnOutcomeDetails(
   }
 
   const request = task.termination_request;
+  if (request?.cleanup_diagnostic) {
+    rows.push({ label: 'Cleanup', value: request.cleanup_diagnostic, code: true });
+  }
   const requesterId = request?.requested_by_user_id;
   if (requesterId || request?.requested_via) {
     const name = requesterId

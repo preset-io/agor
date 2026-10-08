@@ -60,6 +60,7 @@ import { ContextWindowPill, TimerPill } from '../Pill';
 import { getModelDisplayName } from '../Pill/modelDisplay';
 import { SessionIdsList } from '../SessionIds';
 import { Tag } from '../Tag';
+import { RecoveryActions } from './RecoveryActions';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 import { SessionUsagePopover } from './SessionUsagePopover';
 
@@ -79,6 +80,10 @@ export interface SessionFooterProps {
   isRunning: boolean;
   isStopping: boolean;
   stopRequestInFlight: boolean;
+  recoveryTask?: Task;
+  recoveryError?: string | null;
+  canReopenSession?: boolean;
+  onRetryCleanup?: () => void;
   hasInput: boolean;
   composerAttachmentsPresent?: boolean;
   composerAttachmentUploading?: boolean;
@@ -131,6 +136,10 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   isRunning,
   isStopping,
   stopRequestInFlight,
+  recoveryTask,
+  recoveryError,
+  canReopenSession,
+  onRetryCleanup,
   hasInput,
   composerAttachmentsPresent = false,
   composerAttachmentUploading = false,
@@ -1326,10 +1335,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     : stopRequestInFlight
       ? 'Stopping...'
       : isStopping
-        ? 'Stopping... (Click again to retry if stuck)'
+        ? 'Agor is checking that the previous work has stopped.'
         : 'Stop Execution';
 
-  const showStop = isRunning || stopRequestInFlight;
+  const recoveryFailed = recoveryTask?.sdk_failure?.termination === 'unverified';
+  const showStop = !recoveryFailed && (isRunning || stopRequestInFlight);
   // isRunning also includes stopping for the action controls. Only advertise
   // active work here, not permission/input waits or a stale offline state.
   const showActivity =
@@ -1362,6 +1372,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         marginRight: -token.sizeUnit * 6,
       }}
     >
+      <RecoveryActions
+        task={recoveryTask}
+        busy={stopRequestInFlight}
+        disconnected={connectionDisabled}
+        canReopen={canReopenSession}
+        onRetry={onRetryCleanup}
+        onReopen={onStop}
+        error={recoveryError}
+      />
       {/* Context window gradient overlay */}
       {footerGradient && (
         <div
@@ -1730,7 +1749,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tooltip title={stopTooltip}>
                   <Button
                     danger
-                    aria-label="Stop"
+                    aria-label={isStopping ? 'Recovering' : 'Stop'}
                     aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
@@ -1738,9 +1757,21 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                     }
                     onClick={onStop}
-                    disabled={connectionDisabled || !isRunning || stopRequestInFlight}
+                    disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
                   >
-                    Stop
+                    {/* Reserve the longest label so recovery does not move the controls. */}
+                    <span style={{ display: 'inline-grid' }}>
+                      <span aria-hidden="true" style={{ gridArea: '1 / 1', visibility: 'hidden' }}>
+                        Recovering…
+                      </span>
+                      <span style={{ gridArea: '1 / 1' }}>
+                        {isStopping
+                          ? recoveryTask?.termination_request?.cause === 'user_stop'
+                            ? 'Stopping…'
+                            : 'Recovering…'
+                          : 'Stop'}
+                      </span>
+                    </span>
                   </Button>
                 </Tooltip>
               )}

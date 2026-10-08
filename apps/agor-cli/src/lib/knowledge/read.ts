@@ -1,5 +1,9 @@
 import { PAGINATION } from '@agor/core/config';
-import type { HydratedKnowledgeDocument, KnowledgeDocumentStatus } from '@agor/core/types';
+import type {
+  HydratedKnowledgeDocument,
+  KnowledgeArchiveFilter,
+  KnowledgeDocumentStatus,
+} from '@agor/core/types';
 import { normalizeKnowledgePath } from '@agor/core/types';
 import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { Flags } from '@oclif/core';
@@ -20,12 +24,14 @@ export async function listDocuments(
   client: AuthenticatedAgorClient,
   slug: string,
   status?: KnowledgeDocumentStatus,
-  path?: string
+  path?: string,
+  archiveFilter: KnowledgeArchiveFilter = 'active'
 ) {
   const namespace = await namespaceBySlug(client, slug);
   const rows = await client.service('kb/documents').findAll({
     query: {
       namespace_id: namespace.namespace_id,
+      archive_filter: archiveFilter,
       include_other_user_drafts: true,
       ...(status ? { status } : {}),
       ...(path ? { path: normalizeKnowledgePath(path) } : {}),
@@ -35,7 +41,7 @@ export async function listDocuments(
 }
 
 export async function getDocument(client: AuthenticatedAgorClient, slug: string, path: string) {
-  const rows = await listDocuments(client, slug, undefined, path);
+  const rows = await listDocuments(client, slug, undefined, path, 'all');
   if (rows.length !== 1) throw new Error(`Document not found or not accessible: ${slug}/${path}`);
   const document = (await client.service('kb/documents').get(rows[0].document_id, {
     query: { include_content: true },
@@ -71,7 +77,7 @@ export function terminalText(text: string) {
 
 export function pageSummary(result: { data: unknown[]; total: number; offset: number }) {
   const count = result.data.length;
-  return `Showing ${count} of ${result.total}${count ? ` (${result.offset + 1}–${result.offset + count})` : ''}; accessible, active entries only.`;
+  return `Showing ${count} of ${result.total}${count ? ` (${result.offset + 1}–${result.offset + count})` : ''}; accessible entries only.`;
 }
 
 /** Return fresh flag definitions for each oclif command. */

@@ -15,6 +15,8 @@ describe('MobileNavTree settings navigation', () => {
           commentById={new Map()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
+          isAdmin={false}
         />
       </MemoryRouter>
     );
@@ -37,6 +39,8 @@ describe('MobileNavTree settings navigation', () => {
           commentById={new Map()}
           onOpenWorkspaceSettings={onOpenWorkspaceSettings}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
+          isAdmin={false}
           onNavigate={onNavigate}
         />
       </MemoryRouter>
@@ -68,6 +72,8 @@ describe('MobileNavTree external app link', () => {
           onNavigate={onNavigate}
           externalAppLink={externalAppLink}
           externalAppLabel="Open Agor Cloud"
+          onCreate={vi.fn()}
+          isAdmin={false}
         />
       </MemoryRouter>
     );

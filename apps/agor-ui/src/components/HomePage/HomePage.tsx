@@ -35,6 +35,7 @@ import {
   requestShellPicker,
 } from '../../utils/shellEvents';
 import { patchUserPreferences } from '../../utils/userPreferences';
+import type { CreateModalKind } from '../CreateMenu';
 import { HomeAskBox } from './HomeAskBox';
 import { HomeKnowledgeSection } from './HomeKnowledgeSection';
 import { HomeMyWork, MY_WORK_PAGE, type MyWorkTab } from './HomeMyWork';
@@ -71,8 +72,6 @@ const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
-type CreateTab = 'teammate' | 'branch' | 'board' | 'repository';
-
 /** Route state other surfaces use to land on part of Home. */
 export interface HomeLocationState {
   needsFilter?: NeedsFilter;
@@ -91,8 +90,8 @@ export interface HomePageProps {
     config: NewSessionConfig,
     boardId: string
   ) => Promise<SessionCreationResult | null>;
-  /** Board and teammate onboarding steps; phones have no create dialog. */
-  onOpenCreateDialog?: (tab: CreateTab, boardId?: string) => void;
+  /** Board and teammate onboarding steps open the shared create modals. */
+  onOpenCreateDialog?: (kind: CreateModalKind) => void;
   onOpenSettings?: (section: 'repos' | 'mcp' | 'users') => void;
   /** Defaults to the header board switcher. */
   onAllBoards?: () => void;

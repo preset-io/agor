@@ -88,12 +88,13 @@ function events() {
 }
 
 /** A fresh client per test: shared handles are cached per client. */
-function transport(persisted: number, { long = false } = {}) {
+function transport(persisted: number, failedTurns: number[] = [], { long = false } = {}) {
   let turns = persisted;
+  const row = (n: number) => task(n, failedTurns.includes(n) ? TaskStatus.FAILED : undefined);
   const tasks = Object.assign(events(), {
     find: async ({ query }: { query: Record<string, unknown> }) => {
       const range = query.task_id as { $lte?: string; $gt?: string; $in?: string[] } | undefined;
-      let rows = Array.from({ length: turns }, (_, n) => task(n)).filter(
+      let rows = Array.from({ length: turns }, (_, n) => row(n)).filter(
         (row) =>
           (!range?.$lte || row.task_id <= range.$lte) &&
           (!range?.$gt || row.task_id > range.$gt) &&
@@ -102,7 +103,7 @@ function transport(persisted: number, { long = false } = {}) {
       if ((query.$sort as { task_id?: number } | undefined)?.task_id === -1) rows = rows.reverse();
       return { data: rows.slice(0, Number(query.$limit)), total: rows.length };
     },
-    get: async (id: string) => task(turnOf(id)),
+    get: async (id: string) => row(turnOf(id)),
   });
   const messageService = Object.assign(events(), {
     findAll: async ({ query }: { query: { task_id: string | { $in: string[] } } }) => {
@@ -392,8 +393,45 @@ it('trims again once the panel is reactivated after the reader scrolled away', a
   await waitFor(() => expect(distanceFromBottom(viewport())).toBeLessThan(2), { timeout: 5_000 });
 });
 
+it('keeps a scrolled-away turn notice from growing an outer positioned scroller', async () => {
+  // A middle turn failed, so it renders a turn-outcome notice with an aria-live span.
+  const { client } = transport(30, [25]);
+  // The session drawer's body is a positioned scroller around the transcript and composer.
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <App>
+        <div
+          data-testid="outer-scroller"
+          style={{
+            position: 'relative',
+            overflowY: 'auto',
+            height: 320,
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <ConversationView client={client} sessionId={SESSION_ID} />
+        </div>
+      </App>
+    </ConfigProvider>
+  );
+  await screen.findByText(/Answer 29\./);
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  const outer = screen.getByTestId('outer-scroller');
+  await scrollTo(viewport, viewport.scrollHeight);
+  expect(viewport.scrollTop).toBeGreaterThan(viewport.clientHeight);
+
+  const notice = viewport.querySelector<HTMLElement>('[data-notice-type]')!;
+  const live = notice.querySelector<HTMLElement>('span[aria-live="polite"]')!;
+  expect(getComputedStyle(live).position).toBe('absolute');
+  expect(notice.getBoundingClientRect().bottom).toBeLessThan(viewport.getBoundingClientRect().top);
+
+  expect(outer.scrollHeight).toBe(outer.clientHeight);
+  expect(live.offsetParent).toBe(viewport);
+});
+
 it('forgets the reading state of trimmed turns and keeps it for turns still loaded', async () => {
-  const { client, addTurn } = transport(10, { long: true });
+  const { client, addTurn } = transport(10, [], { long: true });
   const viewport = await mount(client);
   const toggle = (n: number) =>
     within(viewport.querySelector<HTMLElement>(`[data-task-block="${taskId(n)}"]`)!).getByRole(

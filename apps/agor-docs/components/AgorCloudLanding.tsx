@@ -29,6 +29,8 @@ import { getBasePath, LOGO_MARK_PATH } from '../lib/siteMetadata';
 import styles from './AgorCloudLanding.module.css';
 import Aurora from './Aurora/Aurora';
 import { CloudCtaLink } from './CloudCtaLink';
+import { FinePrint } from './FinePrint';
+import { FooterLegal } from './FooterLegal';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 import Lightfall from './Lightfall/Lightfall';
 import { LandingLink } from './landing/LandingLink';
@@ -754,9 +756,9 @@ export function AgorCloudLanding() {
             <CloudCtaLink placement="cloud-page-footer" className={styles.footerLink} />
           </div>
         </div>
+        <FooterLegal className={styles.footerLegal} />
         <p className={styles.footerTrademarks}>
-          Agor is not affiliated with or endorsed by the companies mentioned on this site. All
-          product names, logos, and brands are property of their respective owners.
+          <FinePrint />
         </p>
       </footer>
 

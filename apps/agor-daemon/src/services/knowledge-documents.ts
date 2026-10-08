@@ -11,6 +11,7 @@ import {
   isPostgresDatabaseHandle,
   KnowledgeAttributionRepository,
   type KnowledgeDocumentFilters,
+  KnowledgeDocumentPathConflictError,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
   KnowledgeGraphRepository,
@@ -21,12 +22,14 @@ import {
   type TenantScopedDatabase,
   type UpdateKnowledgeDocumentInput,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden, NotFound } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   HydratedKnowledgeDocument,
   Id,
+  KnowledgeArchiveFilter,
   KnowledgeDocument,
+  KnowledgeDocumentArchivePatch,
   KnowledgeDocumentVersion,
   KnowledgeNamespaceID,
   KnowledgeWriteAttribution,
@@ -39,13 +42,17 @@ import type {
 import {
   buildKnowledgeDocumentUri,
   extractKnowledgeLinks,
+  KNOWLEDGE_ARCHIVE_FILTERS,
   normalizeKnowledgeDocumentIconEmoji,
   parseKnowledgeUri,
   titleFromKnowledgeContent,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { isUsableOpenAIEmbeddingConfig } from '../knowledge/embeddings.js';
-import { ensureKnowledgePgvectorStorage } from '../knowledge/pgvector.js';
+import {
+  ensureKnowledgePgvectorStorage,
+  getKnowledgePgvectorCapability,
+} from '../knowledge/pgvector.js';
 import { runKnowledgePolicyTransaction } from '../knowledge/policy-transaction.js';
 import {
   knowledgeChunkerOptionsFromSettings,
@@ -68,6 +75,7 @@ export type KnowledgeDocumentParams = QueryParams<{
   visibility?: KnowledgeDocument['visibility'];
   status?: KnowledgeDocument['status'];
   archived?: boolean;
+  archive_filter?: KnowledgeArchiveFilter;
   include_my_drafts?: boolean;
   includeMyDrafts?: boolean;
   include_other_user_drafts?: boolean;
@@ -83,6 +91,11 @@ export type KnowledgeDocumentParams = QueryParams<{
     knowledgeWriteAttribution?: KnowledgeWriteAttribution;
   };
 
+function documentWriteError(error: unknown): never {
+  if (error instanceof KnowledgeDocumentPathConflictError) throw new Conflict(error.message);
+  throw error;
+}
+
 type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput) & {
   document_id?: string;
   uri?: string;
@@ -91,6 +104,7 @@ type KnowledgeDocumentWriteData = (CreateKnowledgeDocumentInput | UpdateKnowledg
   create_namespace?: boolean;
   namespace_display_name?: string | null;
   expected_version?: string | number;
+  expected_archived?: boolean;
 };
 
 function assistantAttribution(params?: KnowledgeDocumentParams) {
@@ -120,6 +134,12 @@ type KnowledgeDocumentRef = {
 // drafts or hydrating content. Permissions are still checked for every result.
 function normalizeDocumentQuery(query: KnowledgeDocumentParams['query']) {
   const normalized = { ...query };
+  if (
+    normalized.archive_filter !== undefined &&
+    !KNOWLEDGE_ARCHIVE_FILTERS.includes(normalized.archive_filter)
+  ) {
+    throw new BadRequest('archive_filter must be active, archived, or all');
+  }
   for (const key of [
     'archived',
     'include_my_drafts',
@@ -242,9 +262,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return (user?.user_id as UserID | undefined) ?? null;
   }
 
-  private async assertActiveDocument(document: KnowledgeDocument): Promise<void> {
-    if (document.archived) {
-      throw new NotFound('Knowledge document not found');
+  private async assertActiveDocument(
+    document: KnowledgeDocument,
+    allowArchived = false
+  ): Promise<void> {
+    if (document.archived && !allowArchived) {
+      throw new Conflict('Knowledge document is archived; restore it before editing');
     }
     const namespace = await this.namespaces.findById(document.namespace_id);
     if (!namespace || namespace.archived) {
@@ -305,15 +328,21 @@ export class KnowledgeDocumentsService extends DrizzleService<
 
     const namespace = await this.namespaces.findBySlug(String(namespaceSlug));
     if (!namespace || namespace.archived) return null;
-    return this.repo.findByNamespaceAndPath(namespace.namespace_id, String(path));
+    return this.repo
+      .findByNamespaceAndPath(namespace.namespace_id, String(path), true)
+      .catch(documentWriteError);
   }
 
-  private async isEmbeddingConfigured(): Promise<boolean> {
+  private async isEmbeddingConfigured(ensureStorage = true): Promise<boolean> {
     if (!isPostgresDatabaseHandle(this.db)) return false;
     const settings = await this.semanticSettings.find();
     return (
       isUsableOpenAIEmbeddingConfig(settings, settings.api_key_configured) &&
-      (await ensureKnowledgePgvectorStorage(this.db)).available
+      (
+        await (ensureStorage
+          ? ensureKnowledgePgvectorStorage(this.db)
+          : getKnowledgePgvectorCapability(this.db))
+      ).available
     );
   }
 
@@ -407,7 +436,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   async reconcileReferences(id: string, params?: KnowledgeDocumentParams): Promise<void> {
     const doc = await this.repo.findById(id);
     if (!doc) throw new NotFound('Knowledge document not found');
-    await this.assertActiveDocument(doc);
+    await this.assertActiveDocument(doc, true);
     if (!(await this.canEdit(doc, params?.user as User | undefined)))
       throw new Forbidden('Cannot reconcile this document');
     const version = await this.versionFor(doc);
@@ -528,7 +557,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       current?.version_id === String(expectedVersion) ||
       String(current?.version_number) === String(expectedVersion);
     if (!matches) {
-      throw new BadRequest(
+      throw new Conflict(
         `Knowledge document version mismatch: expected ${expectedVersion}, current is ${current?.version_number ?? 'none'}`
       );
     }
@@ -547,7 +576,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
           kind: query.kind,
           visibility: query.visibility,
           status: query.status,
-          archived: isAdmin ? query.archived : false,
+          archived: query.archived,
+          archive_filter: query.archive_filter,
           include_my_drafts: query.include_my_drafts ?? query.includeMyDrafts ?? true,
           include_other_user_drafts:
             query.include_other_user_drafts ?? query.includeOtherUserDrafts ?? false,
@@ -606,7 +636,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   async get(id: Id, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
     const doc = await this.repo.findById(String(id));
     if (!doc) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveDocument(doc);
+    await this.assertActiveDocument(doc, true);
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -619,7 +649,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   ): Promise<KnowledgeDocument | HydratedKnowledgeDocument> {
     const doc = await this.resolveDocumentRef(data);
     if (!doc) throw new NotFound('Knowledge document not found');
-    await this.assertActiveDocument(doc);
+    await this.assertActiveDocument(doc, true);
     if (!(await this.canRead(doc, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to view this knowledge document');
     }
@@ -630,11 +660,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: KnowledgeDocumentWriteData,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
+    this.assertOrdinaryWrite(data);
     const write = (service: KnowledgeDocumentsService) => service.writePutDocument(data, params);
     const result =
       typeof data.content_text === 'string'
-        ? await this.runPolicyDependentWrite(write)
-        : await write(this);
+        ? await this.runPolicyDependentWrite(write).catch(documentWriteError)
+        : await write(this).catch(documentWriteError);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
@@ -674,7 +705,8 @@ export class KnowledgeDocumentsService extends DrizzleService<
             ...assistantAttribution(params),
           },
           existing
-        )
+        ),
+        (current) => this.assertCurrentWrite(current, data, params)
       );
       await this.replaceSearchUnitsForContent(persisted, data.content_text);
       await this.syncGraphReferences(persisted, data.content_text, userId);
@@ -735,6 +767,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ): Promise<KnowledgeDocument> {
+    this.assertOrdinaryWrite(data);
     const userId = this.attributionUserId(params, data.created_by);
     const prepared = this.prepareWriteData(
       {
@@ -779,22 +812,32 @@ export class KnowledgeDocumentsService extends DrizzleService<
       (Array.isArray(data) && data.some((item) => typeof item.content_text === 'string')) ||
       (!Array.isArray(data) && typeof data.content_text === 'string');
     const result = materializesUnits
-      ? await this.runPolicyDependentWrite(write)
-      : await write(this);
+      ? await this.runPolicyDependentWrite(write).catch(documentWriteError)
+      : await write(this).catch(documentWriteError);
     if (materializesUnits) this.wakeIndexer();
     return result;
   }
 
   async patch(
     id: NullableId,
-    data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
+    data: (CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput) &
+      Partial<KnowledgeDocumentArchivePatch>,
     params?: KnowledgeDocumentParams
   ) {
+    if (data.archived !== undefined) {
+      if (data.archived !== false) return this.patchArchive(id, data, params);
+      const result = await this.runPolicyDependentWrite((service) =>
+        service.patchArchive(id, data, params)
+      );
+      this.wakeIndexer();
+      return result;
+    }
+    this.assertOrdinaryWrite(data);
     const write = (service: KnowledgeDocumentsService) => service.writePatch(id, data, params);
     const result =
       typeof data.content_text === 'string'
-        ? await this.runPolicyDependentWrite(write)
-        : await write(this);
+        ? await this.runPolicyDependentWrite(write).catch(documentWriteError)
+        : await write(this).catch(documentWriteError);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
@@ -812,12 +855,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const persisted = await this.repo.update(String(id), {
-      ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
-      created_by: existing.created_by,
-      updated_by: this.attributionUserId(params, data.updated_by),
-      ...assistantAttribution(params),
-    });
+    const persisted = await this.repo.update(
+      String(id),
+      {
+        ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
+        created_by: existing.created_by,
+        updated_by: this.attributionUserId(params, data.updated_by),
+        ...assistantAttribution(params),
+      },
+      (current) => this.assertCurrentWrite(current, data, params)
+    );
     await this.replaceSearchUnitsForContent(
       persisted,
       (data as KnowledgeDocumentWriteData).content_text
@@ -835,11 +882,12 @@ export class KnowledgeDocumentsService extends DrizzleService<
     data: CreateKnowledgeDocumentInput | UpdateKnowledgeDocumentInput,
     params?: KnowledgeDocumentParams
   ) {
+    this.assertOrdinaryWrite(data);
     const write = (service: KnowledgeDocumentsService) => service.writeUpdate(id, data, params);
     const result =
       typeof data.content_text === 'string'
-        ? await this.runPolicyDependentWrite(write)
-        : await write(this);
+        ? await this.runPolicyDependentWrite(write).catch(documentWriteError)
+        : await write(this).catch(documentWriteError);
     if (typeof data.content_text === 'string') this.wakeIndexer();
     return result;
   }
@@ -856,12 +904,16 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const persisted = await this.repo.update(String(id), {
-      ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
-      created_by: existing.created_by,
-      updated_by: this.attributionUserId(params, data.updated_by),
-      ...assistantAttribution(params),
-    });
+    const persisted = await this.repo.update(
+      String(id),
+      {
+        ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
+        created_by: existing.created_by,
+        updated_by: this.attributionUserId(params, data.updated_by),
+        ...assistantAttribution(params),
+      },
+      (current) => this.assertCurrentWrite(current, data, params)
+    );
     await this.replaceSearchUnitsForContent(
       persisted,
       (data as KnowledgeDocumentWriteData).content_text
@@ -874,17 +926,104 @@ export class KnowledgeDocumentsService extends DrizzleService<
     return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
-  async remove(id: NullableId, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
-    if (id === null) throw new Error('Bulk remove is not supported for knowledge documents');
-    const existing = await this.repo.findById(String(id));
-    if (!existing) throw new NotFound(`Knowledge document not found: ${id}`);
-    await this.assertActiveDocument(existing);
-    await this.assertCanWriteNamespace(existing.namespace_id, params?.user as User | undefined);
-    if (!this.canManageDocument(existing, params?.user as User | undefined)) {
-      throw new Forbidden('You do not have permission to delete this knowledge document');
+  private assertOrdinaryWrite(data: KnowledgeDocumentWriteData): void {
+    if (data.archived !== undefined || data.archived_at !== undefined) {
+      throw new BadRequest('Use a metadata-only PATCH with archived:true or archived:false');
     }
-    await this.repo.delete(String(id));
-    return (await this.attribution.attachToDocuments([existing]))[0];
+  }
+
+  private async assertCurrentWrite(
+    current: KnowledgeDocument,
+    data: KnowledgeDocumentWriteData,
+    params?: KnowledgeDocumentParams
+  ): Promise<boolean> {
+    if (!(await this.canEdit(current, params?.user as User | undefined)))
+      throw new Forbidden('You do not have permission to update this knowledge document');
+    await this.assertActiveDocument(current);
+    this.assertCanChangeGovernance(current, data, params?.user as User | undefined);
+    await this.assertExpectedVersion(current, data.expected_version);
+    return true;
+  }
+
+  private async patchArchive(
+    id: NullableId,
+    data: Partial<KnowledgeDocumentArchivePatch>,
+    params?: KnowledgeDocumentParams
+  ): Promise<KnowledgeDocument> {
+    if (id === null) throw new BadRequest('Archive requires an explicit document ID');
+    if (
+      typeof data.archived !== 'boolean' ||
+      (data.expected_version !== undefined &&
+        !(
+          (typeof data.expected_version === 'string' &&
+            data.expected_version.length > 0 &&
+            data.expected_version.length <= 64) ||
+          (typeof data.expected_version === 'number' &&
+            Number.isSafeInteger(data.expected_version) &&
+            data.expected_version > 0)
+        )) ||
+      (data.expected_archived !== undefined && typeof data.expected_archived !== 'boolean') ||
+      Object.keys(data).some(
+        (key) => !['archived', 'expected_version', 'expected_archived'].includes(key)
+      )
+    ) {
+      throw new BadRequest(
+        'Archive PATCH accepts only archived, expected_version and expected_archived'
+      );
+    }
+    const existing = await this.repo.findById(String(id));
+    if (!existing) throw new NotFound('Knowledge document not found');
+    const authorize = async (current: KnowledgeDocument) => {
+      // Namespace write is the outer gate; being a public editor is not ownership.
+      if (
+        !(await this.canEdit(current, params?.user as User | undefined)) ||
+        !this.canManageDocument(current, params?.user as User | undefined)
+      ) {
+        throw new Forbidden(
+          'Only the owner or an admin with namespace write access can archive or restore this document'
+        );
+      }
+      await this.assertActiveDocument(current, true);
+    };
+    await authorize(existing);
+    const requeueRestoredUnits =
+      data.archived === false && (await this.isEmbeddingConfigured(false));
+    const persisted = await this.repo.update(
+      existing.document_id,
+      {
+        archived: data.archived,
+        updated_by: this.attributionUserId(params),
+        ...assistantAttribution(params),
+      },
+      async (current) => {
+        await authorize(current);
+        // A retry of an already-satisfied request changes no timestamp or attribution.
+        if (current.archived === data.archived) return false;
+        if (data.expected_archived !== undefined && current.archived !== data.expected_archived) {
+          throw new Conflict('Knowledge document archive state changed; reload before retrying');
+        }
+        await this.assertExpectedVersion(current, data.expected_version);
+        if (!data.archived) {
+          const occupied = await this.repo.findByNamespaceAndPath(
+            current.namespace_id,
+            current.path
+          );
+          if (occupied && occupied.document_id !== current.document_id) {
+            throw new Conflict(
+              'Another active document uses this path; rename it before restoring this document'
+            );
+          }
+        }
+        return true;
+      },
+      { requeueRestoredUnits }
+    );
+    return (await this.attribution.attachToDocuments([persisted]))[0];
+  }
+
+  /** Compatibility: DELETE has always meant soft archive, never hard deletion. */
+  async remove(id: NullableId, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
+    return this.patchArchive(id, { archived: true }, params);
   }
 
   private emitDocumentEvent(

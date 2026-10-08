@@ -211,7 +211,10 @@ function stopRequester(
 
 /** Presentation policy: keep STOPPING output visible until a durable terminal projection arrives. */
 export function shouldRenderLiveTaskProgress(task: Task): boolean {
-  return task.status === TaskStatus.RUNNING || task.status === TaskStatus.STOPPING;
+  return (
+    task.status === TaskStatus.RUNNING ||
+    (task.status === TaskStatus.STOPPING && task.sdk_failure?.termination !== 'unverified')
+  );
 }
 
 export function MCPRecoveryNotice({
@@ -1287,11 +1290,11 @@ export const TaskBlock = React.memo<TaskBlockProps>(
         {/* Keep latest TODO visible even after completion (Claude parity). */}
         <StickyTodoRenderer messages={messages} taskStatus={task.status} />
 
-        {/* Show typing indicator whenever the executor may still be live.
+        {/* Show typing only during active work, not recovery or a failed cleanup.
                       Marked as a conversation block so its unmount at stream
                       end gives search one final structural re-scan that picks
                       up the finished message text. */}
-        {runtimeLive && (
+        {task.status === TaskStatus.RUNNING && (
           <div data-conversation-block style={{ margin: `${token.marginSM}px 0` }}>
             <Bubble
               placement="start"

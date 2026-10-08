@@ -217,6 +217,72 @@ export interface DiscordGatewayConfig {
   agent_tools?: DiscordAgentToolsConfig | never[];
   outbound_enabled?: boolean;
   default_outbound_target?: string | null;
+  /**
+   * Per allowed channel: answer messages that do not mention the bot. Absent
+   * channels keep the default `mention` mode. See {@link discordResponseModeAdmits}.
+   */
+  response_modes?: Record<string, DiscordResponseMode>;
+}
+
+/**
+ * How the bot treats messages that do not mention it in one allowed forum
+ * channel (text channels stay mention-only):
+ * - `mention`: only mentions start or continue a conversation (default);
+ * - `starters`: a new post's opening message also starts one; follow-ups in
+ *   the post still need a mention;
+ * - `all`: every message from an allowed author in the forum's posts is answered.
+ */
+export const DISCORD_RESPONSE_MODES = ['mention', 'starters', 'all'] as const;
+export type DiscordResponseMode = (typeof DISCORD_RESPONSE_MODES)[number];
+
+/** An assistant reply of only this marker is not posted to Discord. */
+export const DISCORD_NO_REPLY_SENTINEL = '[no-reply]';
+
+/** True for a reply that is just the no-reply marker, tolerating wrappers, a period, and case. */
+export function isDiscordNoReply(text: string): boolean {
+  const trimmed = text.trim();
+  // Only a short reply can be the marker; never run the regex on long output.
+  if (trimmed.length > DISCORD_NO_REPLY_SENTINEL.length + 16) return false;
+  // Tolerate Markdown, code-fence (with a language tag), quote, or blockquote wrappers and a trailing period.
+  return (
+    trimmed
+      .replace(/^```[a-z]*\s+/i, '')
+      .replace(/^[`*_~"'>\s]+|[`*_~"'.\s]+$/g, '')
+      .toLowerCase() === DISCORD_NO_REPLY_SENTINEL
+  );
+}
+
+/**
+ * Whether a forum post message that does not mention the bot is admitted by
+ * its forum's response mode. Response modes apply to forum channels only (the
+ * listener refuses them elsewhere), so a top-level message is never admitted.
+ * Within a post, only the opening message has the post's own ID.
+ */
+export function discordResponseModeAdmits(
+  config: Pick<DiscordGatewayConfig, 'response_modes'>,
+  message: { channelId: string; parentChannelId?: string; messageId: string; isThread: boolean }
+): boolean {
+  if (!message.isThread || !message.parentChannelId) return false;
+  const mode = config.response_modes?.[message.parentChannelId];
+  if (mode === 'all') return true;
+  if (mode === 'starters') return message.messageId === message.channelId;
+  return false;
+}
+
+/**
+ * Cheap pre-check, before any channel lookup, for a message that does not
+ * mention the bot: only a message in a forum post (never an allowed top-level
+ * channel) can qualify, and under `starters` only a post's opening message.
+ */
+export function discordResponseModeMayAdmit(
+  config: Pick<DiscordGatewayConfig, 'allowed_channel_ids' | 'response_modes'>,
+  message: { channelId: string; messageId: string }
+): boolean {
+  if (config.allowed_channel_ids?.includes(message.channelId)) return false;
+  const modes = Object.values(config.response_modes ?? {});
+  return (
+    modes.includes('all') || (modes.includes('starters') && message.messageId === message.channelId)
+  );
 }
 
 /**
@@ -580,6 +646,21 @@ export function validateDiscordConfig(
   };
   validateAllowlist('allowed_user_ids');
   validateAllowlist('allowed_role_ids');
+  if (raw.response_modes !== undefined) {
+    if (!isRecord(raw.response_modes)) {
+      errors.push('response_modes must map allowed channel IDs to a response mode');
+    } else {
+      const entries = Object.entries(raw.response_modes);
+      if (entries.some(([channelId]) => !allowedChannelIds.includes(channelId))) {
+        errors.push('response_modes keys must be allowed channel IDs');
+      }
+      if (
+        entries.some(([, mode]) => !DISCORD_RESPONSE_MODES.includes(mode as DiscordResponseMode))
+      ) {
+        errors.push('response_modes values must be mention, starters, or all');
+      }
+    }
+  }
   const userAllowlist = Array.isArray(raw.allowed_user_ids) ? raw.allowed_user_ids : [];
   const roleAllowlist = Array.isArray(raw.allowed_role_ids) ? raw.allowed_role_ids : [];
   if (userAllowlist.length === 0 && roleAllowlist.length === 0) {
