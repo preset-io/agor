@@ -3,11 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createRestClient } from '@agor/core/api';
 import { BadRequest, errorHandler, feathers, feathersExpress, rest } from '@agor/core/feathers';
+import { serializeKnowledgeYaml } from '@agor/core/knowledge';
 import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { KnowledgeProgress } from './progress';
 import { importKnowledge, knowledgeTransferClient } from './transfer';
-import { transferRequest } from './transfer-errors';
+import { TransferFailures, TransferRequestError, transferRequest } from './transfer-errors';
 
 it('provides compatibility guidance when a daemon supplies no field details', async () => {
   const progress = new KnowledgeProgress({ isTTY: false, write: () => true });
@@ -68,13 +69,10 @@ describe.skipIf(process.platform === 'win32')('transfer failure diagnostics', ()
     const progress = new KnowledgeProgress({ isTTY: false, write: () => true });
     try {
       await writeFile(
-        join(directory, 'manifest.json'),
-        JSON.stringify({
+        join(directory, 'manifest.yaml'),
+        serializeKnowledgeYaml({
           format: KNOWLEDGE_TRANSFER.format,
-          version: 1,
-          completed: true,
-          consistency: 'per-document-version; non-atomic-inventory',
-          exported_at: '2026-09-22T12:00:00Z',
+          version: 2,
           namespace: {
             slug: 'synthetic',
             display_name: 'Synthetic',
@@ -109,4 +107,72 @@ describe.skipIf(process.platform === 'win32')('transfer failure diagnostics', ()
       await rm(directory, { recursive: true, force: true });
     }
   });
+});
+
+it.each([
+  ['Importing document', 500, '', true],
+  ['Reconciling references', 409, '', true],
+  ['Exporting document', 404, '', true],
+  ['Importing document', 413, '', true],
+  ['Exporting document', 400, 'Unsupported or missing Knowledge version', true],
+  ['Importing document', 400, 'Content does not match transfer plan', true],
+  ['Importing document', 400, 'Invalid Knowledge transfer request', false],
+  ['Importing document', 400, 'Import exceeds namespace transfer limits', false],
+  ['Importing document', 401, '', false],
+  ['Importing document', 403, '', false],
+  ['Importing document', 404, '', false],
+  ['Importing document', 405, '', false],
+  ['Importing document', 429, '', false],
+  ['Importing document', 502, '', false],
+  ['Importing document', 503, '', false],
+  ['Importing document', 504, '', false],
+  ['Importing document', undefined, '', false],
+  ['Planning: source inventory', 500, '', false],
+  ['Creating import namespace', 409, '', false],
+] as const)('classifies %s HTTP %s (%s): continue=%s', async (stage, code, message, continuing) => {
+  const progress = new KnowledgeProgress({ isTTY: false, write: () => true });
+  try {
+    await expect(
+      transferRequest(progress, stage, 'POST', async () => {
+        throw Object.assign(new Error(message), { code });
+      })
+    ).rejects.toMatchObject({ continueDocuments: continuing });
+  } finally {
+    progress.close();
+  }
+});
+
+it('bounds partial failure diagnostics and never continues arbitrary local errors', () => {
+  const lines: string[] = [];
+  const progress = new KnowledgeProgress({
+    isTTY: false,
+    write: (text) => {
+      lines.push(String(text));
+      return true;
+    },
+  });
+  try {
+    const failures = new TransferFailures();
+    for (let i = 0; i < 25; i++)
+      failures.capture(
+        new TransferRequestError('Sanitized reason', true),
+        'untrusted key',
+        progress,
+        'private source metadata'
+      );
+    expect(lines).toHaveLength(20);
+    expect(lines.join('')).not.toContain('untrusted');
+    expect(lines.join('')).not.toContain('private');
+    expect(() => failures.finish('Partial', 'Resolve before resume')).toThrow(
+      '25 failed or unconfirmed'
+    );
+    expect(() => failures.finish('Partial', 'Resolve before resume')).toThrow(
+      '5 additional failures omitted'
+    );
+    expect(() => failures.capture(new Error('Unsafe local file'), 'd000001', progress)).toThrow(
+      'Unsafe local file'
+    );
+  } finally {
+    progress.close();
+  }
 });

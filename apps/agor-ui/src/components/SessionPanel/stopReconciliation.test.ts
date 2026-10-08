@@ -120,4 +120,16 @@ describe('requestSessionStop', () => {
     expect(error).toBe(responseError);
     expect(isStopTransportAmbiguous(error)).toBe(false);
   });
+  it('sends an exact cleanup retry without converting the failure into a user Stop', async () => {
+    const create = vi.fn().mockResolvedValue({ success: false, outcome: 'pending' });
+    const { client } = stopClient(create);
+    const request = {
+      retry_cleanup: true as const,
+      expected_task_id: taskId,
+      termination_requested_at: 'epoch',
+      recovery_revision: 'revision',
+    };
+    await requestSessionStop(client, sessionId, taskId, 100, request);
+    expect(create).toHaveBeenCalledWith(request);
+  });
 });

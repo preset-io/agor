@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   getMcpServersForSession: vi.fn(),
   sendAndWait: vi.fn(),
   configured: vi.fn(),
+  stop: vi.fn(),
 }));
 
 // Configuration fixtures must not depend on the invoking executor's environment.
@@ -22,7 +23,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   loadManagedAgenticToolSdk: vi.fn(async () => ({
     CopilotClient: class {
       start = vi.fn();
-      stop = vi.fn();
+      stop = mocks.stop;
       createSession = this.resumeSession;
       async resumeSession(idOrOptions: unknown, options?: unknown) {
         mocks.configured(options ?? idOrOptions);
@@ -38,11 +39,13 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { CopilotPromptService } from './prompt-service.js';
 
 describe('CopilotPromptService MCP identity scoping', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.stop.mockResolvedValue([]);
     mocks.getMcpServersForSession.mockResolvedValue([
       {
         server: {
@@ -53,6 +56,43 @@ describe('CopilotPromptService MCP identity scoping', () => {
       },
     ]);
   });
+
+  it.each(['success', 'rejection', 'errors'])(
+    'requires successful CLI teardown even when Stop succeeds (%s)',
+    async (outcome) => {
+      const controller = new AbortController();
+      const service = new CopilotPromptService(
+        {} as never,
+        {
+          findById: vi.fn().mockResolvedValue({
+            created_by: 'owner',
+            branch_id: 'branch-1',
+            sdk_session_id: 'provider-thread-A',
+          }),
+        } as never,
+        undefined,
+        { findById: vi.fn().mockResolvedValue({ path: '/workspace' }) } as never
+      );
+      mocks.sendAndWait.mockImplementationOnce(async () => {
+        expect(service.stopTask('session-1' as SessionID)).toEqual({ success: true });
+        controller.abort();
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+      });
+      if (outcome === 'rejection') mocks.stop.mockRejectedValueOnce(new Error('stop failed'));
+      if (outcome === 'errors') mocks.stop.mockResolvedValueOnce([new Error('disconnect failed')]);
+      for await (const _ of service.promptSessionStreaming(
+        'session-1' as SessionID,
+        'hello',
+        undefined,
+        undefined,
+        controller
+      )) {
+        /* Drain cancellation and actual finally. */
+      }
+      expect(mocks.stop).toHaveBeenCalledOnce();
+      await expectSignalQuiescence(controller, outcome === 'success');
+    }
+  );
 
   it('sends current execution identity on each resumed provider request', async () => {
     const service = new CopilotPromptService(

@@ -1015,3 +1015,10 @@
   color: var(--landing-teal);
   font-weight: 600;
 }
+
+/* Privacy Policy · Terms of Use · Cookie settings (FooterLegal). */
+.footerLegal {
+  max-width: 1180px;
+  margin: 24px auto 0;
+  color: #6f928c;
+}

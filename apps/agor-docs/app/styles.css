@@ -266,3 +266,8 @@ html[data-crt-intro="locked"] body::after {
   z-index: 2147483000;
   background: #050403;
 }
+
+/* Docs footer: the legal row (FooterLegal) under the license line. */
+.agor-docs-footer-legal {
+  margin-top: 8px;
+}

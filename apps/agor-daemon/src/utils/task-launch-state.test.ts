@@ -30,6 +30,11 @@ describe('classifyExecutorExit', () => {
     [{ mode: 'templated', code: 0, nonzeroMayHaveDispatched: false }, 'passive'],
     [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: false }, 'authoritative'],
     [{ mode: 'templated', code: 9, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: null, nonzeroMayHaveDispatched: false }, 'ambiguous'],
+    [{ mode: 'templated', code: null, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: 137, nonzeroMayHaveDispatched: true }, 'ambiguous'],
+    [{ mode: 'templated', code: 137, nonzeroMayHaveDispatched: false }, 'ambiguous'],
+    [{ mode: 'templated', code: 143, nonzeroMayHaveDispatched: false }, 'ambiguous'],
   ] as const)('classifies %# as %s', (input, expected) => {
     expect(classifyExecutorExit(input)).toBe(expected);
   });
@@ -52,7 +57,7 @@ describe('launch-refused exit opt-in', () => {
     expect(classifyExecutorExit({ mode: 'local', code: 75, nonzeroMayHaveDispatched: false })).toBe(
       'authoritative'
     );
-    for (const code of [0, 1, 74, 76, null]) {
+    for (const code of [0, 1, 74, 76]) {
       expect(
         classifyExecutorExit({ mode: 'templated', code, nonzeroMayHaveDispatched: false })
       ).toBe(code === 0 ? 'passive' : 'authoritative');
@@ -61,6 +66,21 @@ describe('launch-refused exit opt-in', () => {
       ).toBe(code === 0 ? 'passive' : 'ambiguous');
     }
   });
+
+  it.each([null, 130, 137, 143])(
+    'keeps signalled exit %s ambiguous with refusal enabled',
+    (code) => {
+      configureLaunchRefusedExit({ AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT: '75' });
+      for (const nonzeroMayHaveDispatched of [false, true]) {
+        expect(
+          classifyExecutorExit({ mode: 'templated', code: 75, nonzeroMayHaveDispatched })
+        ).toBe('refused');
+        expect(classifyExecutorExit({ mode: 'templated', code, nonzeroMayHaveDispatched })).toBe(
+          'ambiguous'
+        );
+      }
+    }
+  );
 
   it('keeps exit 75 an ordinary nonzero exit without the opt-in', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -9,29 +9,86 @@ import type {
   ExecutorResult,
 } from '../payload-types.js';
 import type { AgorClient } from '../services/feathers-client.js';
-import { createExecutorClient } from '../services/feathers-client.js';
+import {
+  assertExecutorRequestDataWithinBudget,
+  createExecutorClient,
+  EXECUTOR_REQUEST_DATA_BUDGET_BYTES,
+} from '../services/feathers-client.js';
 import { resolveExecutorBranch, resolvePathInsideBranch } from './branch-filesystem.js';
 import type { CommandOptions } from './index.js';
 
-export async function readArtifactTree(
+// Bound per-file stat/read/decode work even when source files are empty.
+// This is an independent work limit, not a Socket.IO frame-size estimate.
+export const MAX_ARTIFACT_FILE_COUNT = 1_000;
+export const MAX_ARTIFACT_FILE_BYTES = EXECUTOR_REQUEST_DATA_BUDGET_BYTES;
+export const MAX_ARTIFACT_TOTAL_BYTES = EXECUTOR_REQUEST_DATA_BUDGET_BYTES;
+
+interface ArtifactTreeReadState {
+  files: Record<string, string>;
+  fileCount: number;
+  totalBytes: number;
+}
+
+function decodeArtifactTextFile(buffer: Buffer, relativePath: string): string {
+  if (buffer.includes(0)) {
+    throw new Error(
+      `Unsupported binary artifact file: /${relativePath}. Sandpack artifact files must be UTF-8 text. ` +
+        'Embed binary assets as data URLs in a source file or use a controlled external URL.'
+    );
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(buffer);
+  } catch {
+    throw new Error(
+      `Artifact file /${relativePath} is not valid UTF-8 text. ` +
+        'Re-save text files as UTF-8; embed binary assets as data URLs in a source file or use a controlled external URL.'
+    );
+  }
+}
+
+async function readArtifactDirectory(
   root: string,
-  directory = root
-): Promise<Record<string, string>> {
-  const files: Record<string, string> = {};
+  directory: string,
+  state: ArtifactTreeReadState
+): Promise<void> {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name === '.git') continue;
     const fullPath = join(directory, entry.name);
     const stats = await lstat(fullPath);
     if (stats.isSymbolicLink()) continue;
     if (stats.isDirectory()) {
-      Object.assign(files, await readArtifactTree(root, fullPath));
+      await readArtifactDirectory(root, fullPath, state);
     } else if (stats.isFile()) {
       const relativePath = relative(root, fullPath).split(sep).join('/');
       if (relativePath === 'agor.artifact.json' || relativePath === '.env') continue;
-      files[`/${relativePath}`] = await readFile(fullPath, 'utf-8');
+      state.fileCount += 1;
+      if (state.fileCount > MAX_ARTIFACT_FILE_COUNT) {
+        throw new Error(
+          `Artifact contains more than ${MAX_ARTIFACT_FILE_COUNT} files. ` +
+            'This file-count limit bounds filesystem work independently of byte size; reduce the number of source files.'
+        );
+      }
+      if (stats.size > MAX_ARTIFACT_FILE_BYTES) {
+        throw new Error(
+          `Artifact file /${relativePath} is ${stats.size} bytes, exceeding the ${MAX_ARTIFACT_FILE_BYTES}-byte per-file limit`
+        );
+      }
+      state.totalBytes += stats.size;
+      if (state.totalBytes > MAX_ARTIFACT_TOTAL_BYTES) {
+        throw new Error(
+          `Artifact source is ${state.totalBytes} bytes, exceeding the ${MAX_ARTIFACT_TOTAL_BYTES}-byte total limit`
+        );
+      }
+      const buffer = await readFile(fullPath);
+      state.files[`/${relativePath}`] = decodeArtifactTextFile(buffer, relativePath);
     }
   }
-  return files;
+}
+
+export async function readArtifactTree(root: string): Promise<Record<string, string>> {
+  const state: ArtifactTreeReadState = { files: {}, fileCount: 0, totalBytes: 0 };
+  await readArtifactDirectory(root, root, state);
+  return state.files;
 }
 
 export async function handleBranchArtifactValidate(
@@ -60,13 +117,15 @@ export async function handleBranchArtifactValidate(
       }): Promise<unknown>;
     };
     artifacts.methods?.('validateFromExecutor');
+    const validateData = {
+      files,
+      sidecar,
+      branch_id: branch.branch_id,
+    };
+    assertExecutorRequestDataWithinBudget('artifacts', 'validateFromExecutor', validateData);
     return {
       success: true,
-      data: await artifacts.validateFromExecutor({
-        files,
-        sidecar,
-        branch_id: branch.branch_id,
-      }),
+      data: await artifacts.validateFromExecutor(validateData),
     };
   } catch (error) {
     return {
@@ -219,13 +278,15 @@ export async function handleBranchArtifactPublish(
       ): Promise<{ artifact_id: string; content_hash?: string; build_status: string }>;
     };
     artifacts.methods?.('publishFromExecutor');
-    const artifact = await artifacts.publishFromExecutor({
+    const publishData = {
       ...payload.params.publishData,
       branch_id: branch.branch_id,
       subpath: source.relative,
       files,
       sidecar,
-    });
+    };
+    assertExecutorRequestDataWithinBudget('artifacts', 'publishFromExecutor', publishData);
+    const artifact = await artifacts.publishFromExecutor(publishData);
     return {
       success: true,
       data: {

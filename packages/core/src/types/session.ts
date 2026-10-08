@@ -53,6 +53,13 @@ export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
 /** Authenticated Session Stop endpoint request. */
 export type SessionStopRequest =
   | {
+      retry_cleanup: true;
+      expected_task_id: TaskID;
+      termination_requested_at: string;
+      recovery_revision: string;
+      force_unverified?: false;
+    }
+  | {
       force_unverified?: false;
       reason?: string;
       expected_task_id?: TaskID;
@@ -62,6 +69,7 @@ export type SessionStopRequest =
     }
   | {
       force_unverified: true;
+      recovery_revision?: string;
       task_id: TaskID;
       termination_requested_at: string;
       confirmation: string;
@@ -542,11 +550,12 @@ export interface Session {
      */
     callback_session_id?: SessionID;
     /**
-     * User ID of the person who set up this callback.
+     * User ID of the person who set up this callback. Server-managed: the
+     * daemon discards client-supplied values and stamps the authenticated
+     * caller after checking they may prompt the callback target.
      *
-     * Used as queued_by_user_id when the callback is delivered, so the
-     * resulting task is attributed to the callback setter, not the target
-     * session owner. Execution still uses the target session's home and credentials.
+     * Becomes the delivered callback Task's `created_by`, i.e. its executor
+     * principal (identity, environment, and credentials).
      */
     callback_created_by?: string;
     /**

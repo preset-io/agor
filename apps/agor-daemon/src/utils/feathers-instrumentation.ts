@@ -54,6 +54,7 @@ const TAGGED_CUSTOM_METHODS: Readonly<Record<string, readonly string[]>> = {
   tasks: [
     'connectExecutor',
     'reportTerminationComplete',
+    'reportExecutorInterruption',
     'reportRuntimeTelemetry',
     'reportSdkHealthFailure',
     'beginOpenCodeCheckpoint',

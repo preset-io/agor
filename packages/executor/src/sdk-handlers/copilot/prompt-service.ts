@@ -35,6 +35,7 @@ import type {
 } from '../../db/feathers-repositories.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
@@ -624,9 +625,13 @@ export class CopilotPromptService {
       // Clean up client (stops CLI process)
       if (this.client) {
         try {
-          await this.client.stop();
-          console.log(`✅ [Copilot] Client stopped`);
+          const errors = await this.client.stop();
+          if (errors.length > 0) {
+            if (abortController) markExecutorCleanupUnverified(abortController);
+            console.warn('[Copilot] Client cleanup reported errors; shutdown is unverified');
+          } else console.log(`✅ [Copilot] Client stopped`);
         } catch (err) {
+          if (abortController) markExecutorCleanupUnverified(abortController);
           console.warn(`⚠️  [Copilot] Failed to stop client:`, err);
         }
         this.client = null;

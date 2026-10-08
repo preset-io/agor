@@ -25,6 +25,7 @@ import {
 } from '../../mcp-runtime-refresh.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
+import { markExecutorCleanupUnverified } from '../../termination-state.js';
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
@@ -599,11 +600,17 @@ If you continue to see authentication errors, please contact your Agor administr
       // Bounded because `cleanup()` awaits the subprocess exit.
       try {
         const closing = result.return?.();
-        if (closing) {
-          await awaitWithTimeout(closing, ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS);
+        if (
+          !closing ||
+          (await awaitWithTimeout(closing, ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS)) ===
+            AWAIT_TIMEOUT
+        ) {
+          if (abortController) markExecutorCleanupUnverified(abortController);
         }
       } catch {
-        // best-effort — teardown must never turn a settled turn into a failure
+        // Preserve the turn output, but never let Stop/TERM mistake this
+        // best-effort return for affirmative subprocess containment.
+        if (abortController) markExecutorCleanupUnverified(abortController);
       }
     }
   }

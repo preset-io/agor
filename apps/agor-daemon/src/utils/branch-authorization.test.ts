@@ -21,6 +21,7 @@ import {
   resolveBranchPermission,
   resolveSessionContext,
   setSessionUnixUsername,
+  stampCallbackPrincipal,
 } from './branch-authorization';
 
 describe('protectGatewaySourceMetadata', () => {
@@ -68,6 +69,143 @@ describe('protectGatewaySourceMetadata', () => {
   it('allows trusted gateway service writes', () => {
     const hook = context({ custom_context: { gateway_source: { channel_type: 'slack' } } }, null);
     expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+});
+
+describe('stampCallbackPrincipal', () => {
+  const caller = 'user-caller';
+  const target = 'session-target';
+  const other = 'session-other';
+  const victimCallback = {
+    enabled: true,
+    callback_session_id: target,
+    callback_created_by: 'victim',
+  };
+
+  function setup(options: { allowed?: boolean } = {}) {
+    const resolveSessionPromptAuthority = vi.fn(async () =>
+      options.allowed === false
+        ? { allowed: false, source: 'none', reason: 'no_branch_prompt_permission' }
+        : { allowed: true, source: 'owner' }
+    );
+    const branchRepo = {
+      findById: vi.fn(async () => ({ branch_id: 'branch-1' })),
+      resolveSessionPromptAuthority,
+    } as unknown as BranchRepository;
+    const app = {
+      service: () => ({
+        get: vi.fn(async (id: string) => ({
+          session_id: id,
+          branch_id: 'branch-1',
+          created_by: 'user-owner',
+        })),
+      }),
+    };
+    const run = async (
+      data: Record<string, unknown>,
+      opts: { method?: 'create' | 'patch'; stored?: Partial<Session>; provider?: string } = {}
+    ) => {
+      const context = {
+        app,
+        data,
+        method: opts.method ?? 'patch',
+        params: {
+          provider: 'provider' in opts ? opts.provider : 'rest',
+          user: { user_id: caller },
+          session: opts.stored,
+        },
+      } as unknown as HookContext;
+      await stampCallbackPrincipal(branchRepo)(context);
+      return (context.data as { callback_config?: Record<string, unknown> }).callback_config;
+    };
+    return { run, resolveSessionPromptAuthority };
+  }
+
+  it('discards a supplied principal and keeps the stored one on edits that do not move delivery', async () => {
+    const { run, resolveSessionPromptAuthority } = setup({ allowed: false });
+    await expect(
+      run(
+        {
+          callback_config: {
+            ...victimCallback,
+            include_last_message: true,
+            callback_created_by: 'x',
+          },
+        },
+        { stored: { callback_config: victimCallback } }
+      )
+    ).resolves.toEqual({ enabled: true, callback_session_id: target, include_last_message: true });
+    expect(resolveSessionPromptAuthority).not.toHaveBeenCalled();
+  });
+
+  it('rebinds when a stored principal would follow a new target, refusing callers who cannot prompt it', async () => {
+    const stored = { callback_config: victimCallback };
+    await expect(
+      setup().run({ callback_config: { callback_session_id: other } }, { stored })
+    ).resolves.toEqual({ callback_session_id: other, callback_created_by: caller });
+    await expect(
+      setup({ allowed: false }).run({ callback_config: { callback_session_id: other } }, { stored })
+    ).rejects.toThrow('Cannot prompt session');
+  });
+
+  it('treats a null target as falling back to a patched genealogy parent', async () => {
+    const { run } = setup({ allowed: false });
+    await expect(
+      run(
+        { callback_config: { callback_session_id: null }, genealogy: { parent_session_id: other } },
+        { stored: { callback_config: victimCallback, genealogy: { children: [] } } }
+      )
+    ).rejects.toThrow('Cannot prompt session');
+  });
+
+  it('treats null enabled as re-arming a disabled callback', async () => {
+    const { run } = setup({ allowed: false });
+    await expect(
+      run(
+        { callback_config: { enabled: null } },
+        { stored: { callback_config: { ...victimCallback, enabled: false } } }
+      )
+    ).rejects.toThrow('Cannot prompt session');
+  });
+
+  it('rejects clearing the whole callback config', async () => {
+    await expect(setup().run({ callback_config: null })).rejects.toThrow(
+      'callback_config must be an object'
+    );
+  });
+
+  it('does not require target authority to disable a callback or save settings without a stored principal', async () => {
+    const { run, resolveSessionPromptAuthority } = setup({ allowed: false });
+    await expect(
+      run(
+        { callback_config: { enabled: false, callback_session_id: other } },
+        { stored: { callback_config: victimCallback } }
+      )
+    ).resolves.toEqual({ enabled: false, callback_session_id: other });
+    await expect(
+      run(
+        { callback_config: { enabled: true, include_last_message: true } },
+        { stored: { callback_config: { callback_session_id: target } } }
+      )
+    ).resolves.toEqual({ enabled: true, include_last_message: true });
+    expect(resolveSessionPromptAuthority).not.toHaveBeenCalled();
+  });
+
+  it('binds genealogy-only children to a caller who can prompt the parent', async () => {
+    const genealogy = { parent_session_id: target, children: [] };
+    await expect(setup().run({ genealogy }, { method: 'create' })).resolves.toEqual({
+      callback_created_by: caller,
+    });
+    await expect(
+      setup({ allowed: false }).run({ genealogy: { parent_session_id: other } }, { stored: {} })
+    ).rejects.toThrow('Cannot prompt session');
+  });
+
+  it('leaves trusted internal writes unchanged', async () => {
+    const config = { callback_session_id: target, callback_created_by: 'setter' };
+    await expect(setup().run({ callback_config: config }, { provider: undefined })).resolves.toBe(
+      config
+    );
   });
 });
 

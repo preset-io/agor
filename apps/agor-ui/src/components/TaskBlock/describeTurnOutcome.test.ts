@@ -288,7 +288,7 @@ describe('describeTurnOutcome v3', () => {
     });
   });
 
-  it('8. an unconfirmed stop says who can force-stop it, with no action', () => {
+  it('8. an unconfirmed stop explains retry versus reopening, with no resume action', () => {
     expect(
       describe3({
         status: TaskStatus.STOPPING,
@@ -297,9 +297,37 @@ describe('describeTurnOutcome v3', () => {
     ).toEqual({
       cause: 'stop_unconfirmed',
       type: 'warning',
-      message: 'The agent may not have stopped. Files may still change.',
-      detailsLead: 'Only a branch owner or admin can force-stop it.',
+      message: 'Cleanup needs attention. The previous work may still change files.',
+      detailsLead:
+        'Use Retry cleanup before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
     });
+  });
+
+  it.each(['heartbeat_lost', 'executor_interrupted', 'sdk_health_failure'] as const)(
+    'explains recovery for %s without asking for Stop again',
+    (interruption) => {
+      const notice = describe3({ status: TaskStatus.STOPPING, ...cause(interruption) })!;
+      expect(notice.message).toContain('recovering…');
+      expect(notice.detailsLead).toContain('do not need to stop it again');
+      expect(notice.action).toBeUndefined();
+    }
+  );
+
+  it('names an executor interruption without confusing it with user cancellation', () => {
+    const notice = describe3({
+      ...cause('executor_interrupted'),
+      sdk_failure: sdkFailure({ reason: 'executor_interrupted' }),
+    })!;
+    expect(notice).toMatchObject({ cause: 'interrupted', action: 'resume' });
+    expect(notice.message).toContain('interrupted before it could finish');
+  });
+
+  it('does not claim reopening stopped the previous work or offer automatic resume', () => {
+    const notice = describe3({ sdk_failure: sdkFailure({ termination: 'unverified' }) })!;
+    expect(notice.cause).toBe('reopened_unconfirmed');
+    expect(notice.message).toContain('may still change files');
+    expect(notice.detailsLead).toContain('did not stop');
+    expect(notice.action).toBeUndefined();
   });
 
   it('9. an access change is amber and offers no action', () => {
@@ -405,6 +433,8 @@ describe('describeTurnOutcome v3', () => {
       cause: 'stopping',
       type: 'info',
       message: 'Stopping the agent…',
+      detailsLead:
+        'Agor is checking that the previous work has stopped. You do not need to stop it again. Queued prompts will wait until recovery finishes.',
     });
   });
 
@@ -613,7 +643,7 @@ describe('describeTurnOutcome v3', () => {
     [
       'Force-failed by an authorized user; executor termination remains unverified.',
       { sdk_failure: sdkFailure({ termination: 'unverified' }) },
-      'stop_unconfirmed',
+      'reopened_unconfirmed',
       'warning',
       undefined,
     ],

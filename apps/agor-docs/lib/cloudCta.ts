@@ -81,3 +81,20 @@ export function hubspotVisitorToken(): string | null {
   const token = match ? decodeURIComponent(match[1]) : null;
   return token && /^[a-f0-9]{32}$/.test(token) ? token : null;
 }
+
+const AD_CLICK_PARAMS = ['gclid', 'gbraid', 'wbraid'] as const;
+
+/**
+ * Google Ads click identifiers from the page the visitor is clicking a CTA
+ * from, so a console sign-up can be matched back to the ad click even though
+ * console.agor.cloud is a different domain and never sees it.
+ */
+export function adClickIds(): Record<string, string> {
+  const params = new URLSearchParams(window.location.search);
+  const ids: Record<string, string> = {};
+  for (const key of AD_CLICK_PARAMS) {
+    const value = params.get(key);
+    if (value) ids[key] = value;
+  }
+  return ids;
+}

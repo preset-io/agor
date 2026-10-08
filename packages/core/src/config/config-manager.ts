@@ -877,6 +877,8 @@ function validateConfig(config: AgorConfig): void {
     'daemon_writes_user_message',
     'permission_timeout_ms',
     'executor_command_template',
+    'executor_cleanup_command_template',
+    'executor_cleanup_timeout_ms',
     'executor_storage',
     'delegated_branch_deletion',
     'executor_command_nonzero_may_have_dispatched',
@@ -1714,6 +1716,24 @@ export function assertValidEffectiveExecutionConfig(config: AgorConfig): void {
 
   if (!execution) return;
 
+  if (
+    execution.executor_cleanup_command_template !== undefined &&
+    (typeof execution.executor_cleanup_command_template !== 'string' ||
+      !execution.executor_cleanup_command_template.trim() ||
+      !execution.executor_command_template)
+  ) {
+    throw new Error(
+      'execution.executor_cleanup_command_template requires a nonempty command and executor_command_template'
+    );
+  }
+  if (
+    execution.executor_cleanup_timeout_ms !== undefined &&
+    (!Number.isInteger(execution.executor_cleanup_timeout_ms) ||
+      execution.executor_cleanup_timeout_ms < 1000 ||
+      execution.executor_cleanup_timeout_ms > 120000)
+  ) {
+    throw new Error('execution.executor_cleanup_timeout_ms must be an integer from 1000 to 120000');
+  }
   const response = resolveExecutorResponseConfig(execution.executor_response);
 
   // Enforced here, NOT in the raw config.yaml parse: one shared config.yaml

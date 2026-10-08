@@ -1,0 +1,151 @@
+/* Cookie banner (CookieConsent.tsx): a small card in the bottom-left corner.
+ * Both choices carry equal weight. z-index 38 keeps it above page content
+ * and the cursor troupe (35) but under every overlay: the mobile menu (39),
+ * the nav (40), the search palette (60), image zooms, and modals. */
+.banner {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 38;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(400px, calc(100vw - 32px));
+  padding: 18px 18px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 16px;
+  background: rgba(9, 15, 15, 0.92);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  color: #c9d2d3;
+  font:
+    400 14px / 1.5 var(--font-body),
+    "Hanken Grotesk",
+    system-ui,
+    sans-serif;
+  animation: bannerIn 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes bannerIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+.text {
+  margin: 0;
+}
+
+.banner a.link {
+  color: #45c4bb;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.accept,
+.reject {
+  height: 38px;
+  border-radius: 999px;
+  font:
+    600 14px var(--font-body),
+    "Hanken Grotesk",
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s;
+}
+
+.reject {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: transparent;
+  color: #dfe6e6;
+}
+
+.reject:hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.accept {
+  border: 1px solid #45c4bb;
+  background: #45c4bb;
+  color: #062321;
+}
+
+.accept:hover {
+  background: #5fd6cd;
+}
+
+.accept:focus-visible,
+.reject:focus-visible,
+.settingsLink:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 2px;
+}
+
+/* "Cookie settings" where it sits among plain links (privacy policy). */
+.settingsLink {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .banner {
+    animation: none;
+  }
+}
+
+/* Footer legal row (FooterLegal.tsx): quiet links with plain dots between
+ * them. Everything takes the footer's text color; `nav.legal a` outranks the
+ * site-wide link color. */
+.legal {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  font-size: 0.8rem;
+}
+
+.legalDot {
+  opacity: 0.6;
+  user-select: none;
+}
+
+nav.legal a,
+.legalButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+nav.legal a:hover,
+.legalButton:hover {
+  color: #45c4bb;
+}
+
+.legalButton:focus-visible,
+nav.legal a:focus-visible {
+  outline: 2px solid #45c4bb;
+  outline-offset: 2px;
+  border-radius: 2px;
+}

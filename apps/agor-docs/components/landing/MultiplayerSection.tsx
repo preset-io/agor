@@ -67,8 +67,8 @@ export function MultiplayerSection({
           <div className={styles.liveHeroGrid}>
             <div>
               <Heading className={styles.liveStatement}>
-                Work <span className={styles.headingStrong}>together</span>{' '}
-                <span className={styles.headingAccent}>again</span>
+                Work <span className={styles.headingAccent}>together</span>{' '}
+                <span className={styles.headingStrong}>again</span>
               </Heading>
               <p className={styles.liveSub}>
                 One shared board instead of ten private terminals.

@@ -26,16 +26,18 @@ export function LandingPage() {
       {/* On by default; ?cursors=off turns it off. See CursorTroupe.tsx. */}
       <CursorTroupe />
       {/* Positioning order (M&P v4): the board first, so the product shows
-          early; the problem cards as the bridge into Multiplayer AI; then
-          teammates with the roster as their proof, the builder's command
-          center, and the trust story. */}
+          early; then Multiplayer AI, teammates with the roster as their proof,
+          the builder's command center, and the trust story; the problem cards
+          close it out. */}
       <BoardSection sampler />
-      <ProblemSection />
       <MultiplayerSection sampler />
       <TeammatesSection sampler />
       <RosterSection sampler />
       <CommandCenterSection sampler />
       <GovernanceSection sampler />
+      {/* The problem last, as the lead-in to the closing "Bring your team and
+          agents together" call to action (LandingShell). */}
+      <ProblemSection />
     </LandingShell>
   );
 }

@@ -317,38 +317,30 @@ describe('Knowledge repositories', () => {
     });
   });
 
-  dbTest('soft-delete allows path reuse while search hides archived documents', async ({ db }) => {
+  dbTest('archival reserves paths and hides documents from default search', async ({ db }) => {
     const namespaces = new KnowledgeNamespaceRepository(db);
     const documents = new KnowledgeDocumentRepository(db);
     const search = new KnowledgeSearchRepository(db);
     const namespace = await namespaces.create({ slug: 'reuse-test', display_name: 'Reuse Test' });
-
     const first = await documents.create({
       namespace_id: namespace.namespace_id,
       path: 'same.md',
-      title: 'First',
-      content_text: 'first-only needle',
+      content_text: 'needle',
     });
     await documents.delete(first.document_id);
-
-    const second = await documents.create({
-      namespace_id: namespace.namespace_id,
-      path: 'same.md',
-      title: 'Second',
-      content_text: 'second-only needle',
-    });
-
-    expect(second.document_id).not.toBe(first.document_id);
-    expect(await documents.findByNamespaceAndPath(namespace.namespace_id, 'same.md')).toMatchObject(
-      {
-        document_id: second.document_id,
-        title: 'Second',
-      }
-    );
-    expect(await search.search({ q: 'first-only' })).toHaveLength(0);
-    expect((await search.search({ q: 'second-only' }))[0].document.document_id).toBe(
-      second.document_id
-    );
+    await expect(
+      documents.create({
+        namespace_id: namespace.namespace_id,
+        path: 'same.md',
+        content_text: 'new',
+      })
+    ).rejects.toThrow('reserved');
+    expect(await documents.findByNamespaceAndPath(namespace.namespace_id, 'same.md')).toBeNull();
+    expect(
+      await documents.findByNamespaceAndPath(namespace.namespace_id, 'same.md', true)
+    ).toMatchObject({ document_id: first.document_id });
+    expect(await search.search({ q: 'needle' })).toHaveLength(0);
+    expect(await search.search({ q: 'needle', archive_filter: 'archived' })).toHaveLength(1);
   });
 
   dbTest('search scopes private results before applying limits', async ({ db }) => {
@@ -450,3 +442,47 @@ describe('Knowledge repositories', () => {
     ]);
   });
 });
+
+dbTest(
+  'restoration preserves ready search units and requeues only unfinished current units',
+  async ({ db }) => {
+    const namespaces = new KnowledgeNamespaceRepository(db);
+    const documents = new KnowledgeDocumentRepository(db);
+    const namespace = await namespaces.create({
+      slug: 'restore-embedding',
+      display_name: 'Restore embedding',
+    });
+    const doc = await documents.create({
+      namespace_id: namespace.namespace_id,
+      path: 'units.md',
+      content_text: '# Unit',
+    });
+    const units = await select(db)
+      .from(kbDocumentUnits)
+      .where(eq(kbDocumentUnits.document_id, doc.document_id))
+      .all();
+    const unitId = units[0].unit_id;
+    await update(db, kbDocumentUnits)
+      .set({ embedding_status: 'ready' })
+      .where(eq(kbDocumentUnits.unit_id, unitId))
+      .run();
+    await documents.update(doc.document_id, { archived: true });
+    await documents.update(doc.document_id, { archived: false }, undefined, {
+      requeueRestoredUnits: true,
+    });
+    expect(
+      await select(db).from(kbDocumentUnits).where(eq(kbDocumentUnits.unit_id, unitId)).one()
+    ).toMatchObject({ embedding_status: 'ready', version_id: doc.current_version_id });
+    await documents.update(doc.document_id, { archived: true });
+    await update(db, kbDocumentUnits)
+      .set({ embedding_status: 'not_configured' })
+      .where(eq(kbDocumentUnits.unit_id, unitId))
+      .run();
+    await documents.update(doc.document_id, { archived: false }, undefined, {
+      requeueRestoredUnits: true,
+    });
+    expect(
+      await select(db).from(kbDocumentUnits).where(eq(kbDocumentUnits.unit_id, unitId)).one()
+    ).toMatchObject({ embedding_status: 'pending', version_id: doc.current_version_id });
+  }
+);

@@ -1,6 +1,16 @@
 export type AgorAbortCause = 'coordinator_termination' | 'sdk_health_failure';
 
 const abortCauses = new WeakMap<AbortController, AgorAbortCause>();
+const cleanupUnverified = new WeakSet<AbortController>();
+
+/** Sticky for this execution: a settled provider promise is not always proof of teardown. */
+export function markExecutorCleanupUnverified(controller: AbortController): void {
+  cleanupUnverified.add(controller);
+}
+
+export function isExecutorCleanupUnverified(controller: AbortController): boolean {
+  return cleanupUnverified.has(controller);
+}
 
 export function markAgorAbortCause(controller: AbortController, cause: AgorAbortCause): void {
   abortCauses.set(controller, cause);

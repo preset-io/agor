@@ -158,6 +158,7 @@ describe('Feathers tracing hook', () => {
   it.each([
     'connectExecutor',
     'reportTerminationComplete',
+    'reportExecutorInterruption',
     'reportRuntimeTelemetry',
     'reportSdkHealthFailure',
   ])(

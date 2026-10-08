@@ -33,6 +33,8 @@ import type {
 } from '../../types/gateway';
 import {
   discordOutboundChannelTarget,
+  discordResponseModeAdmits,
+  discordResponseModeMayAdmit,
   isDiscordDirectMessagesEnabled,
   isDiscordSnowflake,
   isDiscordThreadCoordinates,
@@ -72,6 +74,7 @@ import {
 } from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
+const DISCORD_CHANNEL_INFO_CACHE_LIMIT = 1_000;
 const DISCORD_TEXT_CHANNEL_TYPE = DiscordChannelType.GuildText;
 const DISCORD_FORUM_CHANNEL_TYPE = DiscordChannelType.GuildForum;
 const DISCORD_PUBLIC_THREAD_TYPES = new Set<number>([
@@ -141,6 +144,15 @@ export function createDiscordRest(token: string, makeRequest?: RESTOptions['make
     rejectOnRateLimit: (data) => /^\/guilds\/[^/]+\/members\/[^/]+$/.test(data.route),
     ...(makeRequest ? { makeRequest } : {}),
   }).setToken(token);
+}
+
+/**
+ * A summon's thread or starter message definitively cannot be verified (gone,
+ * moved, or not a public child of the configured parent). Provider outages
+ * and rate limits surface as their own errors instead, so callers can retry those.
+ */
+export class DiscordThreadUnavailableError extends Error {
+  readonly name = 'DiscordThreadUnavailableError';
 }
 
 export class DiscordDirectMessageError extends Error {
@@ -625,6 +637,19 @@ function channelKind(
   return undefined;
 }
 
+/** Allowed channels given a `starters`/`all` response mode that are not forums. */
+function nonForumResponseModeChannels(
+  config: DiscordGatewayConfig,
+  channels: Array<{ channelId: string; channel: Record<string, unknown> | null }>
+): string[] {
+  return channels
+    .filter(({ channelId, channel }) => {
+      const mode = config.response_modes?.[channelId];
+      return (mode === 'starters' || mode === 'all') && !isForumChannel(channel);
+    })
+    .map(({ channelId }) => channelId);
+}
+
 /** True when outbound is on and its default target is one of these allowed forum channels. */
 function isForumDefaultOutboundTarget(
   config: DiscordGatewayConfig,
@@ -860,7 +885,7 @@ export class DiscordConnector implements GatewayConnector {
       coordinates.parent_channel_id !== parentChannelId ||
       !DISCORD_PUBLIC_THREAD_TYPES.has(thread?.type as number)
     ) {
-      throw new Error(
+      throw new DiscordThreadUnavailableError(
         'Discord provider thread is not a verified public child of the configured parent'
       );
     }
@@ -938,16 +963,38 @@ export class DiscordConnector implements GatewayConnector {
     }
   }
 
+  /**
+   * Remember a looked-up channel. Response modes can look up many unrelated
+   * channels and threads, so the oldest lookups are evicted past a bound;
+   * allowlisted parents are re-read on demand.
+   */
+  private cacheChannelInfo(channelId: string, channel: Record<string, unknown>): void {
+    this.channelInfoCache.delete(channelId);
+    this.channelInfoCache.set(channelId, channel);
+    while (this.channelInfoCache.size > DISCORD_CHANNEL_INFO_CACHE_LIMIT) {
+      const oldest = this.channelInfoCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.channelInfoCache.delete(oldest);
+    }
+  }
+
+  /** A cached channel lookup, refreshed as most recently used. */
+  private cachedChannelInfo(channelId: string): Record<string, unknown> | undefined {
+    const channel = this.channelInfoCache.get(channelId);
+    if (channel) this.cacheChannelInfo(channelId, channel);
+    return channel;
+  }
+
   /** An allowlisted parent channel record, from the listener's cache when present. */
   private async getAllowedParentChannel(
     parentChannelId: string
   ): Promise<Record<string, unknown> | null> {
     if (!configuredChannelIds(this.config).includes(parentChannelId)) return null;
-    const cached = this.channelInfoCache.get(parentChannelId);
+    const cached = this.cachedChannelInfo(parentChannelId);
     if (cached) return cached;
     const parent = await this.getProviderRecord(Routes.channel(parentChannelId));
     if (parent?.id !== parentChannelId) return null;
-    this.channelInfoCache.set(parentChannelId, parent);
+    this.cacheChannelInfo(parentChannelId, parent);
     return parent;
   }
 
@@ -957,16 +1004,20 @@ export class DiscordConnector implements GatewayConnector {
     starterMessageId: string
   ): Promise<VerifiedDiscordThread> {
     const thread = await this.getProviderRecord(Routes.channel(threadChannelId));
-    if (!thread) throw new Error('Discord public thread is inaccessible');
+    if (!thread) throw new DiscordThreadUnavailableError('Discord public thread is inaccessible');
     const verified = await this.verifyPublicThread(thread, parentChannelId, starterMessageId);
     const parent = await this.getAllowedParentChannel(parentChannelId);
-    if (!parent) throw new Error('Discord public thread parent is inaccessible');
+    if (!parent) {
+      throw new DiscordThreadUnavailableError('Discord public thread parent is inaccessible');
+    }
     const starterChannelId = isForumChannel(parent) ? threadChannelId : parentChannelId;
     const starter = await this.getProviderRecord(
       Routes.channelMessage(starterChannelId, starterMessageId)
     );
     if (!starter || starter.id !== starterMessageId || starter.channel_id !== starterChannelId) {
-      throw new Error('Discord public thread starter message is inaccessible or malformed');
+      throw new DiscordThreadUnavailableError(
+        'Discord public thread starter message is inaccessible or malformed'
+      );
     }
     return verified;
   }
@@ -1437,7 +1488,15 @@ export class DiscordConnector implements GatewayConnector {
 
     const rawContent = typeof message.content === 'string' ? message.content : '';
     const mentioned = hasStructuredDiscordBotMention(message, botUserId);
-    if (!directMessage && !mentioned) return { accepted: false };
+    // Drop unmentioned chatter before any further check or channel lookup
+    // unless a forum response mode could admit it.
+    if (
+      !directMessage &&
+      !mentioned &&
+      !discordResponseModeMayAdmit(this.config, { channelId, messageId })
+    ) {
+      return { accepted: false };
+    }
     const rawAttachments = message.attachments;
     if (rawAttachments !== undefined && !Array.isArray(rawAttachments)) {
       return { accepted: false };
@@ -1507,11 +1566,11 @@ export class DiscordConnector implements GatewayConnector {
     let isThread = false;
     let parentId: string | undefined;
     if (!configuredChannelIdsList.includes(channelId)) {
-      let channel = this.channelInfoCache.get(channelId);
+      let channel = this.cachedChannelInfo(channelId);
       if (!channel) {
         try {
           channel = asRecord(await this.transport.rest.get(Routes.channel(channelId))) ?? undefined;
-          if (channel) this.channelInfoCache.set(channelId, channel);
+          if (channel) this.cacheChannelInfo(channelId, channel);
         } catch {
           return { accepted: false };
         }
@@ -1523,9 +1582,21 @@ export class DiscordConnector implements GatewayConnector {
         configuredChannelIdsList.includes(parentId ?? '');
     }
     if (!configuredChannelIdsList.includes(channelId) && !isThread) return { accepted: false };
+    if (
+      !mentioned &&
+      !discordResponseModeAdmits(this.config, {
+        channelId,
+        ...(parentId ? { parentChannelId: parentId } : {}),
+        messageId,
+        isThread,
+      })
+    ) {
+      return { accepted: false };
+    }
 
     const reference = asRecord(message.message_reference);
     const referencedMessageId = snowflake(reference?.message_id);
+
     const threadId = isThread
       ? existingThreadId(parentId!, channelId)
       : messageThreadId(channelId, referencedMessageId ?? messageId);
@@ -1544,6 +1615,7 @@ export class DiscordConnector implements GatewayConnector {
         isThread,
         ...(isThread && parentId ? { parentChannelId: parentId } : {}),
         ...(referencedMessageId ? { replyToMessageId: referencedMessageId } : {}),
+        hasMention: mentioned,
       }),
       prepareDelivery: async (context) =>
         this.prepareInboundDelivery(
@@ -1654,8 +1726,23 @@ export class DiscordConnector implements GatewayConnector {
         'The default proactive target must be a text channel; forum channels cannot receive proactive messages.'
       );
     }
+    if (
+      nonForumResponseModeChannels(
+        this.config,
+        configuredChannels.map((channel, index) => ({
+          channelId: allowedChannelIds[index]!,
+          channel,
+        }))
+      ).length > 0
+    ) {
+      throw new GatewayListenerError(
+        'discord_response_mode_invalid',
+        'permanent',
+        'Response modes (starters or all) apply to forum channels only; set text channels back to mention.'
+      );
+    }
     configuredChannels.forEach((channel, index) => {
-      if (channel) this.channelInfoCache.set(allowedChannelIds[index], channel);
+      if (channel) this.cacheChannelInfo(allowedChannelIds[index], channel);
     });
     // Discord transport resume is deliberately process-local. Listener
     // ownership and event idempotency remain durable, but transport session
@@ -1846,6 +1933,15 @@ export class DiscordConnector implements GatewayConnector {
                   'One or more allowed channels is not a public text or forum channel, or lacks a required permission: view, history, and thread replies everywhere; send and public-thread creation in text channels.',
               },
             ]),
+        ...(nonForumResponseModeChannels(this.config, channels).length > 0
+          ? [
+              {
+                capability: 'response_modes',
+                reason:
+                  'Response modes (starters or all) apply to forum channels only; set text channels back to mention.',
+              },
+            ]
+          : []),
         ...(forumOutboundTarget
           ? [
               {

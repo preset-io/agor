@@ -76,6 +76,7 @@ vi.mock('./base-executor.js', async (importOriginal) => ({
   createStreamingCallbacks: () => ({}),
 }));
 
+import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { executeOpenCodeTask } from './opencode.js';
 
 const sessionId = '00000000-0000-7000-8000-000000000001';
@@ -274,7 +275,9 @@ describe('OpenCode executor adapter', () => {
     failure.name = 'OpenCodeCleanupUnverifiedError';
     mocks.runTurn.mockRejectedValue(failure);
 
-    await expect(execute(state.value)).resolves.toBeUndefined();
+    const abortController = new AbortController();
+    await expect(execute(state.value, abortController)).resolves.toBeUndefined();
+    expect(isExecutorCleanupUnverified(abortController)).toBe(true);
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
@@ -291,6 +294,35 @@ describe('OpenCode executor adapter', () => {
 
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
+  });
+
+  it('does not complete when Stop wins during final message persistence', async () => {
+    const state = client();
+    const abortController = new AbortController();
+    mocks.messagesCreate.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {};
+    });
+
+    await expect(execute(state.value, abortController)).resolves.toBeUndefined();
+
+    expect(mocks.messagesCreate).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the task when Stop wins during failure message persistence', async () => {
+    const state = client();
+    const abortController = new AbortController();
+    mocks.runTurn.mockRejectedValue(new Error('provider failed'));
+    state.services.messages.create.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {};
+    });
+
+    await expect(execute(state.value, abortController)).rejects.toThrow('provider failed');
+
+    expect(state.services.messages.create).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
   });
 });
 
@@ -357,7 +389,8 @@ describe('hosted OpenCode executor adapter', () => {
       taskId,
       expect.objectContaining({ status: 'completed' }),
       turn,
-      checkpoint
+      checkpoint,
+      expect.any(Function)
     );
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(mocks.discardScratch).toHaveBeenCalledWith(turn.layout);

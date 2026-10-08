@@ -13,6 +13,7 @@ import {
 import {
   invalidateTokenAuthority,
   REFRESH_TOKEN_KEY,
+  RefreshSupersededError,
   SupersededAuthenticationError,
   storeTokens,
 } from './tokenRefresh';
@@ -78,7 +79,7 @@ describe('refreshTokensSingleFlight', () => {
     const first = await refreshTokensSingleFlight(client, 'rt');
     expect(first.accessToken).toBe('first');
 
-    const second = await refreshTokensSingleFlight(client, 'rt');
+    const second = await refreshTokensSingleFlight(client, 'new-refresh');
     expect(second.accessToken).toBe('second');
     expect(mockRefresh).toHaveBeenCalledTimes(2);
   });
@@ -235,5 +236,82 @@ describe('refreshTokensSingleFlight', () => {
     const recovered = await refreshTokensSingleFlight(client, 'rt');
     expect(recovered.accessToken).toBe('fresh');
     expect(isRefreshUnrecoverable()).toBe(false);
+  });
+  it('retains each token flight while discarding an older cross-tab result', async () => {
+    const resolvers: Array<(v: ReturnType<typeof makeResult>) => void> = [];
+    mockRefresh.mockImplementation(
+      () => new Promise<ReturnType<typeof makeResult>>((resolve) => resolvers.push(resolve))
+    );
+    const client = makeClient();
+    const older = refreshTokensSingleFlight(client, 'rt');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'rt-newer');
+    const newer = refreshTokensSingleFlight(client, 'rt-newer');
+    expect(refreshTokensSingleFlight(client, 'rt')).toBe(older);
+    expect(newer).not.toBe(older);
+    expect(mockRefresh).toHaveBeenNthCalledWith(1, { refreshToken: 'rt' });
+    expect(mockRefresh).toHaveBeenNthCalledWith(2, { refreshToken: 'rt-newer' });
+    resolvers[0](makeResult('older'));
+    await expect(older).rejects.toBeInstanceOf(RefreshSupersededError);
+    expect(refreshTokensSingleFlight(client, 'rt-newer')).toBe(newer);
+    resolvers[1](makeResult('newer'));
+    await expect(newer).resolves.toMatchObject({ accessToken: 'newer' });
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+  });
+
+  it('a superseded refresh rejection neither latches nor broadcasts nor signs the user out', async () => {
+    const authErr = Object.assign(new Error('jwt expired'), {
+      name: 'NotAuthenticated',
+      code: 401,
+    });
+    let rejectOlder!: (e: unknown) => void;
+    mockRefresh.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectOlder = reject;
+        })
+    );
+
+    const listener = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    try {
+      const older = refreshTokensSingleFlight(makeClient(), 'rt');
+      // The user signs in again (or another tab rotates) while the POST is out.
+      localStorage.setItem(REFRESH_TOKEN_KEY, 'rt-after-sign-in');
+      rejectOlder(authErr);
+
+      await expect(older).rejects.toBeInstanceOf(RefreshSupersededError);
+      expect(isRefreshUnrecoverable()).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+
+      // The newer credentials are not fast-failed by the old rejection.
+      mockRefresh.mockResolvedValueOnce(makeResult('newer'));
+      await expect(refreshTokensSingleFlight(makeClient(), 'rt-after-sign-in')).resolves.toEqual(
+        expect.objectContaining({ accessToken: 'newer' })
+      );
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    }
+  });
+
+  it('a rejection after logout cleared the stored token is superseded, not an unrecoverable broadcast', async () => {
+    const authErr = Object.assign(new Error('jwt expired'), {
+      name: 'NotAuthenticated',
+      code: 401,
+    });
+    mockRefresh.mockImplementationOnce(async () => {
+      localStorage.removeItem(REFRESH_TOKEN_KEY);
+      throw authErr;
+    });
+    const listener = vi.fn();
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    try {
+      await expect(refreshTokensSingleFlight(makeClient(), 'rt')).rejects.toBeInstanceOf(
+        RefreshSupersededError
+      );
+      expect(isRefreshUnrecoverable()).toBe(false);
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    }
   });
 });

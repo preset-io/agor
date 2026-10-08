@@ -225,7 +225,7 @@ import {
   markLocalAuthenticationLookup,
 } from './services/users.js';
 import { resolveWebTerminalCapability } from './terminal-capability.js';
-import { forceFailUnverifiedTask } from './termination-coordinator.js';
+import { beginExecutorTermination, forceFailUnverifiedTask } from './termination-coordinator.js';
 import { createFeathersTracingHook } from './tracing/feathers.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -873,6 +873,30 @@ export function createUploadAuthMiddleware(input: {
       recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
+  };
+}
+
+/** Called only after the Stop route's session lifecycle authorization and in trusted tenant scope. */
+export async function resolveCleanupRetryTarget(input: {
+  sessionId: SessionID;
+  body: Record<string, unknown>;
+  findTask: (taskId: string) => Promise<Task>;
+}): Promise<{ taskId: TaskID; requestedAt: string; revision: string }> {
+  const body = input.body;
+  if (
+    !isCanonicalFullUuid(body.expected_task_id) ||
+    typeof body.termination_requested_at !== 'string' ||
+    typeof body.recovery_revision !== 'string'
+  ) {
+    throw new BadRequest('An exact task and recovery request are required.');
+  }
+  const task = await input.findTask(body.expected_task_id as string);
+  if (task.session_id !== input.sessionId)
+    throw new Forbidden('This task belongs to another session.');
+  return {
+    taskId: task.task_id,
+    requestedAt: body.termination_requested_at,
+    revision: body.recovery_revision,
   };
 }
 
@@ -3280,6 +3304,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 app,
                 taskId: target.task.task_id,
                 terminationRequestedAt: target.terminationRequestedAt,
+                recoveryRevision:
+                  typeof body.recovery_revision === 'string' ? body.recovery_revision : undefined,
                 confirmation: target.confirmation,
                 params,
               })
@@ -3301,6 +3327,52 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
           triggerPreservedQueue();
           return result;
+        }
+
+        if (body.retry_cleanup === true) {
+          const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+          const { target, retry } = await runInFreshTerminationTenantWriteDatabase(async () => {
+            const target = await resolveCleanupRetryTarget({
+              sessionId: session.session_id,
+              body,
+              findTask: (taskId) => app.service('tasks').get(taskId, params),
+            });
+            const retry = await tasksService.retryTermination(
+              target.taskId,
+              target.requestedAt,
+              target.revision,
+              { ...params, provider: undefined }
+            );
+            return { target, retry };
+          });
+          const taskId = target.taskId;
+          if (!retry?.termination_request)
+            return {
+              success: false,
+              outcome: 'condition_changed',
+              reason: 'Recovery has already changed. Check the latest session status.',
+              stoppedTaskId: taskId,
+            };
+          // The retry marker commits before this begins; realtime owns progress, not a long UI request.
+          await beginExecutorTermination({
+            app,
+            taskId,
+            cause: retry.termination_request.cause,
+            errorMessage:
+              retry.termination_request.error_message ?? 'The agent stopped responding.',
+            params,
+            remoteConnectDeadlineExpired: true,
+            allowUnownedLocalContainment: true,
+            runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
+          });
+          return {
+            success: false,
+            outcome: 'pending',
+            status: SessionStatus.STOPPING,
+            pendingCode: 'coordination_in_progress',
+            reason: 'Retrying cleanup.',
+            stoppedTaskId: taskId,
+          };
         }
 
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;

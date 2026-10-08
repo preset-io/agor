@@ -72,7 +72,7 @@ export class KnowledgeVersionsService extends DrizzleService<
       const namespaceSlug = query.namespace_slug ?? query.namespace ?? parsed?.namespace_slug;
       const path = query.path ?? parsed?.path;
       if (namespaceSlug && path) {
-        const document = await this.documents.findByNamespaceSlugAndPath(namespaceSlug, path);
+        const document = await this.documents.findByNamespaceSlugAndPath(namespaceSlug, path, true);
         documentId = document?.document_id;
       }
     }
@@ -80,7 +80,6 @@ export class KnowledgeVersionsService extends DrizzleService<
 
     const document = await this.documents.findById(String(documentId));
     if (!document) return [];
-    if (document.archived) return [];
     const namespace = await this.namespaces.findById(document.namespace_id);
     if (!namespace || namespace.archived) return [];
     if (!(await this.canRead(document, params?.user as User | undefined))) {

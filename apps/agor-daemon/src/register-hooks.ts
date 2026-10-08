@@ -164,7 +164,6 @@ import {
   ensureCanCreateSession,
   ensureCanModifySchedule,
   ensureCanPromptInSession,
-  ensureCanPromptTargetSession,
   ensureCanView,
   ensureSessionImmutability,
   loadBranch,
@@ -180,6 +179,7 @@ import {
   scopeReadToAccessibleBoardsSql,
   scopeScheduleQuery,
   setSessionUnixUsername,
+  stampCallbackPrincipal,
   validateSessionUnixUsername,
 } from './utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
@@ -3302,25 +3302,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       }
       return ensureBranchPermission('all', 'update session metadata', superadminOpts)(context);
     },
-    // Validate user has prompt permission on callback target session's branch.
-    // Skip for internal calls (no provider) — patches from dispatchCompletionCallbacks
-    // spread the existing callback_config (which includes callback_session_id) and must
-    // not be blocked by this check.
-    async (context: HookContext) => {
-      const patchCbConfig = (context.data as Record<string, unknown> | undefined)
-        ?.callback_config as { callback_session_id?: string } | undefined;
-      if (patchCbConfig?.callback_session_id && context.params.provider) {
-        const userId =
-          (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
-        await ensureCanPromptTargetSession(
-          patchCbConfig.callback_session_id,
-          userId,
-          context.app,
-          branchRepository
-        );
-      }
-      return context;
-    },
+    // Internal callback dispatch patches skip this (no provider).
+    stampCallbackPrincipal(branchRepository),
   ];
 
   app.service('sessions').hooks({
@@ -3367,25 +3350,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             }
           }
 
-          // Validate user has prompt permission on callback target session's branch.
-          // Skip for internal calls (no provider) — those are trusted system calls.
-          const cbConfig = (context.data as Record<string, unknown> | undefined)?.callback_config as
-            | { callback_session_id?: string }
-            | undefined;
-          if (cbConfig?.callback_session_id && context.params.provider) {
-            // Use authenticated user, NOT context.data.created_by (which could be client-supplied)
-            const authenticatedUserId =
-              (context.params as { user?: { user_id: string } }).user?.user_id || 'unknown';
-            await ensureCanPromptTargetSession(
-              cbConfig.callback_session_id,
-              authenticatedUserId,
-              context.app,
-              branchRepository
-            );
-          }
-
           return context;
         },
+        stampCallbackPrincipal(branchRepository),
       ],
       update: sessionWriteGuards,
       patch: sessionWriteGuards,
@@ -3599,6 +3566,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       reorderQueued: manageTaskQueueGuards,
       connectExecutor: [requireTaskScopedExecutorRuntimeToken()],
       reportTerminationComplete: [requireTaskScopedExecutorRuntimeToken()],
+      reportExecutorInterruption: [requireTaskScopedExecutorRuntimeToken()],
       reportRuntimeTelemetry: [requireTaskScopedExecutorRuntimeToken()],
       reportSdkHealthFailure: [requireTaskScopedExecutorRuntimeToken()],
       beginOpenCodeCheckpoint: [requireTaskScopedExecutorRuntimeToken()],

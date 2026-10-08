@@ -32,6 +32,7 @@ import {
   type BranchID,
   type ChannelType,
   DEFAULT_DISCORD_CATCH_UP,
+  DISCORD_RESPONSE_MODES,
   type DiscordAgentChannelHistoryRequest,
   type DiscordAgentForumPostsRequest,
   type DiscordAgentToolCapability,
@@ -268,6 +269,7 @@ const DISCORD_PUBLIC_CONFIG_KEYS = new Set([
   'agent_tools',
   'outbound_enabled',
   'default_outbound_target',
+  'response_modes',
 ]);
 
 function addPublicConfigIssues(
@@ -1218,6 +1220,15 @@ const discordSetupSchema = z
       .describe(
         'Let session agents read allowed channel history via agor_gateway_discord_channel_history_get and list forum posts via agor_gateway_discord_forum_posts_list. Maps to config.agent_tools.channel_history.'
       ),
+    responseModes: z
+      .record(
+        z.string().refine(isDiscordSnowflake, 'Must be a Discord channel snowflake.'),
+        z.enum(DISCORD_RESPONSE_MODES)
+      )
+      .optional()
+      .describe(
+        'Per allowed forum channel, answer messages without a bot mention: "starters" answers each new post\'s opening message (follow-ups need a mention); "all" answers every message in the forum\'s posts. Forum channels only; text channels stay "mention". Maps to config.response_modes.'
+      ),
     catchUp: z
       .strictObject({
         maxPages: z
@@ -1977,6 +1988,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         files: args.files,
         directMessagesEnabled: args.directMessages,
         channelHistory: args.channelHistory,
+        responseModes: args.responseModes,
         outboundEnabled: args.outbound,
         defaultOutboundTarget:
           args.outbound && args.allowedChannelIds[0]
@@ -2003,7 +2015,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           artifact.messageContent.instruction,
           'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
           'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
-          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages; DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
+          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages unless a forum channel has a response_modes entry (starters or all); DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
         ],
         validation: artifact.validation,
         caveats: [
