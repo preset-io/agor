@@ -358,7 +358,11 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         />
         {onCreate && (
           <Tooltip title="Create new">
-            <CreateMenu onSelect={onCreate} disabled={mutationDisabled}>
+            <CreateMenu
+              onSelect={onCreate}
+              isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
+              disabled={mutationDisabled}
+            >
               <Button
                 type="text"
                 icon={<PlusOutlined style={{ fontSize: token.fontSizeLG }} />}

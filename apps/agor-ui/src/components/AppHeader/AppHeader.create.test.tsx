@@ -1,8 +1,9 @@
 /**
- * The navbar "+" (right of global search) opens the shared CreateMenu and
- * routes the picked flow back to the host via onCreate.
+ * The navbar "+" (right of global search) opens the shared CreateMenu
+ * and routes the picked flow back to the host via onCreate.
  */
 
+import type { User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,21 +33,43 @@ function renderHeader(node: React.ReactNode) {
   );
 }
 
+const asRole = (role: string) => ({ user_id: 'u1', name: 'U', role }) as unknown as User;
+
+async function openMenu() {
+  fireEvent.click(screen.getByRole('button', { name: 'Create new' }));
+  return screen.findAllByRole('menuitem');
+}
+
 describe('AppHeader navbar create button', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
-  it('opens the shared create menu and reports the picked flow', async () => {
+  it('lists Teammate, Branch and Board for members, and reports the picked flow', async () => {
     const onCreate = vi.fn();
-    renderHeader(<AppHeader onCreate={onCreate} />);
+    renderHeader(<AppHeader user={asRole('member')} onCreate={onCreate} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create new' }));
+    const items = await openMenu();
+    expect(items.map((item) => item.textContent)).toEqual(['Teammate', 'Branch', 'Board']);
 
-    const boardItem = await screen.findByText('New board');
-    fireEvent.click(boardItem);
-
+    fireEvent.click(screen.getByRole('menuitem', { name: /Board/ }));
     await waitFor(() => expect(onCreate).toHaveBeenCalledWith('board'));
+  });
+
+  it('adds Repository for admins', async () => {
+    const onCreate = vi.fn();
+    renderHeader(<AppHeader user={asRole('admin')} onCreate={onCreate} />);
+
+    const items = await openMenu();
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Teammate',
+      'Branch',
+      'Board',
+      'Repository',
+    ]);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /Repository/ }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith('repository'));
   });
 
   it('renders no create button when onCreate is absent', () => {

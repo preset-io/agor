@@ -21,6 +21,7 @@ interface MobileMoreSheetProps {
   externalAppLabel?: string;
   /** Opens the shared create flow for the picked kind (sheet closes first). */
   onCreate: (kind: CreateModalKind) => void;
+  isAdmin: boolean;
 }
 
 /**
@@ -41,6 +42,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   externalAppLink,
   externalAppLabel,
   onCreate,
+  isAdmin,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -93,6 +95,7 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
         onCreate={onCreate}
+        isAdmin={isAdmin}
       />
     </Drawer>
   );

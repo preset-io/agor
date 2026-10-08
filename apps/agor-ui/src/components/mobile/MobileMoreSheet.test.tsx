@@ -1,6 +1,6 @@
 /**
- * The mobile "More" sheet exposes all four create flows via a "Create new"
- * accordion (parity with the desktop navbar "+").
+ * The mobile "More" sheet exposes the shared create flows via a "Create new"
+ * row (parity with the desktop navbar "+").
  */
 
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -12,7 +12,7 @@ vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({ themeMode: 'dark', setThemeMode: vi.fn() }),
 }));
 
-function renderSheet(onCreate = vi.fn(), onClose = vi.fn()) {
+function renderSheet(isAdmin: boolean, onCreate = vi.fn(), onClose = vi.fn()) {
   render(
     <MemoryRouter>
       <MobileMoreSheet
@@ -25,6 +25,7 @@ function renderSheet(onCreate = vi.fn(), onClose = vi.fn()) {
         onOpenWorkspaceSettings={vi.fn()}
         onOpenUserSettings={vi.fn()}
         onCreate={onCreate}
+        isAdmin={isAdmin}
       />
     </MemoryRouter>
   );
@@ -32,17 +33,27 @@ function renderSheet(onCreate = vi.fn(), onClose = vi.fn()) {
 }
 
 describe('MobileMoreSheet — Create new', () => {
-  it('expands to the four options and opens the picked flow (closing the sheet first)', () => {
-    const { onCreate, onClose } = renderSheet();
+  it('expands in place and opens the picked flow, closing the sheet first', () => {
+    const { onCreate, onClose } = renderSheet(false);
 
     fireEvent.click(screen.getByText('Create new'));
 
-    for (const label of ['New AI teammate', 'New branch', 'New board', 'New repository']) {
+    for (const label of ['Teammate', 'Branch', 'Board']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+    expect(screen.queryByText('Repository')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText('New board'));
+    fireEvent.click(screen.getByText('Board'));
     expect(onClose).toHaveBeenCalled();
     expect(onCreate).toHaveBeenCalledWith('board');
+    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onCreate.mock.invocationCallOrder[0]);
+  });
+
+  it('lists Repository for admins', () => {
+    const { onCreate } = renderSheet(true);
+
+    fireEvent.click(screen.getByText('Create new'));
+    fireEvent.click(screen.getByText('Repository'));
+    expect(onCreate).toHaveBeenCalledWith('repository');
   });
 });

@@ -86,7 +86,7 @@ interface MobileAppProps {
     boardId: string
   ) => Promise<SessionCreationResult | null>;
   // Create seams for the shared create flows (New teammate / branch / board /
-  // repo), reached from the "More" sheet's "Create new" accordion.
+  // repo), reached from the "More" sheet's "Create new" row.
   onCreateBranch?: CreateBranchFn;
   onCreateBoard?: (board: Partial<Board>) => Promise<Board | null>;
   onCreateRepo: (data: CreateRepoRequest) => unknown;
@@ -485,6 +485,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onBranchClick={openHomeBranch}
                 onSessionClick={openHomeSession}
                 onCreateSession={canCreateSessions ? createSession : undefined}
+                onOpenCreateDialog={createFlows.openCreate}
                 onOpenSettings={onOpenWorkspaceSettings}
                 onAllBoards={openBoardList}
                 onSeeAllSessions={openSessionList}
@@ -703,6 +704,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
         onCreate={createFlows.openCreate}
+        isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
       />
 
       <CreateModals {...createFlows.createModalsProps} fullScreen />

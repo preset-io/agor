@@ -21,7 +21,7 @@ import { mapToArray } from '@/utils/mapHelpers';
 import { getSessionDisplayTitle } from '@/utils/sessionTitle';
 import { BoardCollapse } from '../BoardCollapse';
 import { getBoardEmoji } from '../BoardTile';
-import { CREATE_MENU_ITEMS, type CreateModalKind } from '../CreateMenu';
+import { type CreateModalKind, createMenuItems } from '../CreateMenu';
 
 /** Prefix for the "Create new" submenu's leaf keys, e.g. `create:board`. */
 const CREATE_KEY_PREFIX = 'create:';
@@ -42,6 +42,8 @@ interface MobileNavTreeProps {
   externalAppLabel?: string;
   /** Opens the shared create flow for the picked kind (drawer closes first). */
   onCreate: (kind: CreateModalKind) => void;
+  /** Shows the admin-only Repository create item. */
+  isAdmin: boolean;
 }
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -56,6 +58,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
   externalAppLink,
   externalAppLabel,
   onCreate,
+  isAdmin,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -148,7 +151,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
       key: 'create',
       label: 'Create new',
       icon: <PlusOutlined />,
-      children: CREATE_MENU_ITEMS.map((item) => ({
+      children: createMenuItems(isAdmin).map((item) => ({
         key: `${CREATE_KEY_PREFIX}${item.key}`,
         label: item.label,
         icon: item.icon,

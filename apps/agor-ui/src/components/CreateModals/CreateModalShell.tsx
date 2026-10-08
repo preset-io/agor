@@ -1,12 +1,26 @@
-import type { ModalProps } from 'antd';
-import { Alert, Button, Modal } from 'antd';
+import type { GlobalToken, ModalProps } from 'antd';
+import { Alert, Button, Modal, theme } from 'antd';
 
-// Full-screen (mobile) surface: edge-to-edge content with a scrollable body
-// that clears the device safe area.
-const FULLSCREEN_STYLES: ModalProps['styles'] = {
-  container: { height: '100dvh', borderRadius: 0, display: 'flex', flexDirection: 'column' },
-  body: { flex: 1, overflow: 'auto', paddingBottom: 'env(safe-area-inset-bottom)' },
-};
+// Screen-height surface: header and footer stay pinned while only the body
+// scrolls. Desktop keeps the standard margin above and below; full-screen
+// (mobile) runs edge to edge and clears the device safe area.
+const shellStyles = (token: GlobalToken, fullScreen: boolean): ModalProps['styles'] => ({
+  container: {
+    display: 'flex',
+    flexDirection: 'column',
+    height: fullScreen ? '100dvh' : `calc(100dvh - ${token.marginXL * 2}px)`,
+    ...(fullScreen ? { borderRadius: 0 } : {}),
+  },
+  body: {
+    flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
+    // Room for focus rings, which the scroll container would otherwise clip.
+    paddingInline: token.paddingXXS,
+    marginInline: -token.paddingXXS,
+    ...(fullScreen ? { paddingBottom: 'env(safe-area-inset-bottom)' } : {}),
+  },
+});
 
 export interface CreateModalShellProps {
   open: boolean;
@@ -47,47 +61,56 @@ export const CreateModalShell: React.FC<CreateModalShellProps> = ({
   width = 640,
   fullScreen = false,
   children,
-}) => (
-  <Modal
-    title={title}
-    open={open}
-    onCancel={() => {
-      if (!isSubmitting) onCancel();
-    }}
-    destroyOnHidden
-    width={fullScreen ? '100vw' : width}
-    style={fullScreen ? { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 } : undefined}
-    styles={fullScreen ? FULLSCREEN_STYLES : undefined}
-    closable={!isSubmitting}
-    maskClosable={false}
-    keyboard={!isSubmitting}
-    footer={[
-      <Button key="cancel" onClick={onCancel} disabled={isSubmitting}>
-        Cancel
-      </Button>,
-      <Button
-        key="submit"
-        type="primary"
-        onClick={onSubmit}
-        disabled={submitDisabled}
-        loading={isSubmitting}
-      >
-        {isSubmitting && submitStatus ? submitStatus : submitLabel}
-      </Button>,
-    ]}
-  >
-    {description && (
-      <Alert type="info" showIcon description={description} style={{ marginBottom: 16 }} />
-    )}
-    {children}
-    {submitError && (
-      <Alert
-        type="error"
-        showIcon
-        message="Couldn't finish creating this item"
-        description={submitError}
-        style={{ marginTop: 16 }}
-      />
-    )}
-  </Modal>
-);
+}) => {
+  const { token } = theme.useToken();
+  return (
+    <Modal
+      title={title}
+      open={open}
+      onCancel={() => {
+        if (!isSubmitting) onCancel();
+      }}
+      destroyOnHidden
+      width={fullScreen ? '100vw' : width}
+      style={fullScreen ? { top: 0, maxWidth: '100vw', margin: 0, paddingBottom: 0 } : undefined}
+      centered={!fullScreen}
+      styles={shellStyles(token, fullScreen)}
+      closable={!isSubmitting}
+      maskClosable={false}
+      keyboard={!isSubmitting}
+      footer={[
+        <Button key="cancel" onClick={onCancel} disabled={isSubmitting}>
+          Cancel
+        </Button>,
+        <Button
+          key="submit"
+          type="primary"
+          onClick={onSubmit}
+          disabled={submitDisabled}
+          loading={isSubmitting}
+        >
+          {isSubmitting && submitStatus ? submitStatus : submitLabel}
+        </Button>,
+      ]}
+    >
+      {description && (
+        <Alert
+          type="info"
+          showIcon
+          description={description}
+          style={{ marginBottom: token.margin }}
+        />
+      )}
+      {children}
+      {submitError && (
+        <Alert
+          type="error"
+          showIcon
+          message="Couldn't finish creating this item"
+          description={submitError}
+          style={{ marginTop: token.margin }}
+        />
+      )}
+    </Modal>
+  );
+};

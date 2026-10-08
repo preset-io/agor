@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { CreateBoardModal } from './CreateBoardModal';
+import { CreateModalShell } from './CreateModalShell';
 import { CreateTeammateModal } from './CreateTeammateModal';
 
 // TeammateFormFields renders the TeammateGallery, whose antd `Card` border
@@ -115,7 +116,7 @@ describe('CreateBoardModal', { timeout: 60_000 }, () => {
     fireEvent.change(await screen.findByPlaceholderText('My Board', undefined, ASYNC), {
       target: { value: 'Launch Board' },
     });
-    const button = screen.getByRole('button', { name: /Create Board/i });
+    const button = screen.getByRole('button', { name: /Create board/ });
     await waitFor(() => expect(button).not.toBeDisabled(), ASYNC);
     fireEvent.click(button);
 
@@ -127,4 +128,35 @@ describe('CreateBoardModal', { timeout: 60_000 }, () => {
       ASYNC
     );
   });
+});
+
+describe('CreateModalShell', () => {
+  it.each([false, true])(
+    'pins the header and footer and scrolls only the body (fullScreen=%s)',
+    (fullScreen) => {
+      render(
+        <CreateModalShell
+          open
+          title="New thing"
+          submitLabel="Create"
+          onCancel={vi.fn()}
+          onSubmit={vi.fn()}
+          fullScreen={fullScreen}
+        >
+          <p>Long form</p>
+        </CreateModalShell>
+      );
+
+      const body = screen.getByText('Long form').closest('.ant-modal-body') as HTMLElement;
+      expect(body.style.overflowY).toBe('auto');
+      expect(body.style.minHeight).toBe('0');
+
+      const container = body.parentElement as HTMLElement;
+      expect(container.style.display).toBe('flex');
+      expect(container.style.flexDirection).toBe('column');
+      // Title and footer buttons are siblings of the scroller, not inside it.
+      expect(body.contains(screen.getByText('New thing'))).toBe(false);
+      expect(body.contains(screen.getByRole('button', { name: 'Create' }))).toBe(false);
+    }
+  );
 });

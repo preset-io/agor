@@ -4,7 +4,6 @@ import {
   FolderOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import type { MenuProps } from 'antd';
 import { Dropdown } from 'antd';
 
 /** The four focused creation flows, reached from one shared menu. */
@@ -17,41 +16,44 @@ export interface CreateMenuItem {
 }
 
 /**
- * Single source of truth for the "New" menu items (label + icon + order).
- * Reused by the desktop dropdown and the mobile "More" accordion so they can't
- * drift.
+ * Single source of truth for the create menu items (label + icon + order).
+ * Reused by the navbar dropdown and the mobile "Create new" row so they can't
+ * drift. Repository is admin-only; use `createMenuItems` to apply that rule.
  */
 export const CREATE_MENU_ITEMS: CreateMenuItem[] = [
-  { key: 'teammate', label: 'New AI teammate', icon: <RobotOutlined /> },
-  { key: 'branch', label: 'New branch', icon: <BranchesOutlined /> },
-  { key: 'board', label: 'New board', icon: <AppstoreOutlined /> },
-  { key: 'repository', label: 'New repository', icon: <FolderOutlined /> },
+  { key: 'teammate', label: 'Teammate', icon: <RobotOutlined /> },
+  { key: 'branch', label: 'Branch', icon: <BranchesOutlined /> },
+  { key: 'board', label: 'Board', icon: <AppstoreOutlined /> },
+  { key: 'repository', label: 'Repository', icon: <FolderOutlined /> },
 ];
 
-const MENU_ITEMS: MenuProps['items'] = CREATE_MENU_ITEMS.map(({ key, label, icon }) => ({
-  key,
-  label,
-  icon,
-}));
+export const createMenuItems = (isAdmin: boolean): CreateMenuItem[] =>
+  isAdmin ? CREATE_MENU_ITEMS : CREATE_MENU_ITEMS.filter((item) => item.key !== 'repository');
 
 export interface CreateMenuProps {
   /** Fired with the picked flow; the host opens the matching modal directly. */
   onSelect: (kind: CreateModalKind) => void;
+  /** Shows the admin-only Repository item. */
+  isAdmin: boolean;
   disabled?: boolean;
-  /** The trigger element (button/pill/circle). */
+  /** The trigger element. */
   children: React.ReactNode;
 }
 
 /**
- * Shared dropdown behind every "New" entry point (homepage header + board).
- * Owns the menu items so both surfaces stay identical; hosts supply their own
- * trigger via `children`.
+ * Shared dropdown behind the navbar "+". Owns the menu items; the
+ * host supplies the trigger via `children`.
  */
-export const CreateMenu: React.FC<CreateMenuProps> = ({ onSelect, disabled, children }) => (
+export const CreateMenu: React.FC<CreateMenuProps> = ({
+  onSelect,
+  isAdmin,
+  disabled,
+  children,
+}) => (
   <Dropdown
     disabled={disabled}
     menu={{
-      items: MENU_ITEMS,
+      items: createMenuItems(isAdmin).map(({ key, label, icon }) => ({ key, label, icon })),
       onClick: ({ key }) => onSelect(key as CreateModalKind),
     }}
     trigger={['click']}
