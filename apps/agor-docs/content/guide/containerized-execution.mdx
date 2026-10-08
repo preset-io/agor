@@ -373,7 +373,8 @@ start as proof of death, but means a pre-connect kill still needs intervention.
 
 **Reopen anyway…** releases the session, not the remote workload or the
 launcher's admission capacity. If the old run is still alive or its containment
-is unknown, it may continue to count against the team's concurrent-run limit.
+is unknown, it may continue to count against any concurrent-run cap the launcher
+enforces.
 The next prompt can consequently be refused even though the session accepts
 prompts. Prefer **Retry cleanup**; operators must resolve the old workload
 rather than bypass admission limits.
