@@ -216,6 +216,8 @@ export async function executeOpenCodeTask(params: {
       tool_uses: result.finalMessage.toolUses.length > 0 ? result.finalMessage.toolUses : undefined,
       metadata: result.finalMessage.metadata,
     });
+    // Stop can win while the final message is persisted; never publish completion then.
+    if (params.abortController.signal.aborted) return;
     const completion = {
       status: 'completed' as const,
       completed_at: new Date().toISOString(),
@@ -238,11 +240,18 @@ export async function executeOpenCodeTask(params: {
       return;
     }
     if (!params.abortController.signal.aborted) {
-      await settleTaskFailure(client, sessionId, taskId, failure, {
-        status: 'failed',
-        completed_at: new Date().toISOString(),
-        error_message: failure.message,
-      });
+      await settleTaskFailure(
+        client,
+        sessionId,
+        taskId,
+        failure,
+        {
+          status: 'failed',
+          completed_at: new Date().toISOString(),
+          error_message: failure.message,
+        },
+        () => params.abortController.signal.aborted
+      );
     }
     throw failure;
   } finally {

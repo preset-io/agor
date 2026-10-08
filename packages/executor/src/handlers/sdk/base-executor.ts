@@ -94,21 +94,26 @@ async function appendTaskFailureMessage(
   }
 }
 
+/** Returns false when a signal took ownership of terminality before the patch. */
 export async function settleTaskFailure(
   client: AgorClient,
   sessionId: SessionID,
   taskId: TaskID,
   failure: Error,
-  patch: Partial<Task>
-): Promise<void> {
+  patch: Partial<Task>,
+  shouldSkipTerminal: () => boolean = () => false
+): Promise<boolean> {
   // Terminal task hooks may drain the next queued turn, so reserve the current
   // transcript index before publishing terminality. Message failure stays best-effort.
   await appendTaskFailureMessage(client, sessionId, taskId, failure);
+  // A signal can arrive during the message RPCs; it then owns STOPPING→terminal.
+  if (shouldSkipTerminal()) return false;
   await client.service('tasks').patch(taskId, {
     ...patch,
     ...(patch.error_message ? { error_message: formatExecutorFailure(failure) } : {}),
   });
   markTaskFailurePersisted(failure);
+  return true;
 }
 
 /**
@@ -783,7 +788,15 @@ export async function executeToolTask(params: {
     }
 
     if (daemonOwnsTerminality()) return;
-    await settleTaskFailure(client, sessionId, taskId, err, patchData);
+    const persisted = await settleTaskFailure(
+      client,
+      sessionId,
+      taskId,
+      err,
+      patchData,
+      daemonOwnsTerminality
+    );
+    if (!persisted) return;
 
     throw err;
   } finally {

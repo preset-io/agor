@@ -510,6 +510,75 @@ describe('executeToolTask provider-failure settlement', () => {
   );
 });
 
+describe('executeToolTask failure settlement race', () => {
+  it('does not publish failure when a signal claims terminality during message persistence', async () => {
+    const taskPatch = vi.fn().mockResolvedValue(undefined);
+    const abortController = new AbortController();
+    let releaseMessages!: () => void;
+    const messagesHeld = new Promise<void>((resolve) => {
+      releaseMessages = resolve;
+    });
+    let messagesReached!: () => void;
+    const reachedMessages = new Promise<void>((resolve) => {
+      messagesReached = resolve;
+    });
+    const client = {
+      service(name: string) {
+        if (name === 'config/resolve-api-key') {
+          return {
+            create: vi.fn().mockResolvedValue({
+              apiKey: 'daemon-key',
+              source: 'user',
+              useNativeAuth: false,
+            }),
+          };
+        }
+        if (name === 'sessions') return { get: vi.fn().mockResolvedValue({}) };
+        if (name === 'tasks') return { patch: taskPatch };
+        if (name === 'messages') {
+          return {
+            find: vi.fn(async () => {
+              messagesReached();
+              await messagesHeld;
+              return { total: 0, data: [] };
+            }),
+            create: vi.fn().mockResolvedValue(undefined),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+    const failure = new Error('provider failed');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const execution = executeToolTask({
+        client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: 'hello',
+        abortController,
+        apiKeyEnvVar: 'ANTHROPIC_API_KEY',
+        toolName: 'claude-code',
+        createTool: vi.fn(() => ({
+          executePromptWithStreaming: vi.fn().mockRejectedValue(failure),
+          stopTask: vi.fn().mockResolvedValue({ success: true }),
+        })),
+      });
+      await reachedMessages;
+      markCoordinatorTerminationAbort(abortController);
+      abortController.abort();
+      releaseMessages();
+      await expect(execution).resolves.toBeUndefined();
+    } finally {
+      errorSpy.mockRestore();
+    }
+
+    expect(taskPatch).not.toHaveBeenCalled();
+    expect(isTaskFailurePersisted(failure)).toBe(false);
+  });
+});
+
 describe('installProviderConnection', () => {
   // Regression tests for the 2026-07-13 incident: the pre-install strip was
   // tool-agnostic and deleted user-configured env vars (GITHUB_TOKEN in

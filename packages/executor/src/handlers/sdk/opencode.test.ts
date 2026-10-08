@@ -295,6 +295,35 @@ describe('OpenCode executor adapter', () => {
     expect(state.services.tasks.patch).not.toHaveBeenCalled();
     expect(state.services.messages.create).not.toHaveBeenCalled();
   });
+
+  it('does not complete when Stop wins during final message persistence', async () => {
+    const state = client();
+    const abortController = new AbortController();
+    mocks.messagesCreate.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {};
+    });
+
+    await expect(execute(state.value, abortController)).resolves.toBeUndefined();
+
+    expect(mocks.messagesCreate).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
+
+  it('does not fail the task when Stop wins during failure message persistence', async () => {
+    const state = client();
+    const abortController = new AbortController();
+    mocks.runTurn.mockRejectedValue(new Error('provider failed'));
+    state.services.messages.create.mockImplementationOnce(async () => {
+      abortController.abort();
+      return {};
+    });
+
+    await expect(execute(state.value, abortController)).rejects.toThrow('provider failed');
+
+    expect(state.services.messages.create).toHaveBeenCalledOnce();
+    expect(state.services.tasks.patch).not.toHaveBeenCalled();
+  });
 });
 
 describe('hosted OpenCode executor adapter', () => {
