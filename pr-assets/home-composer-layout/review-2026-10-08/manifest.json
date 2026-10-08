@@ -1,0 +1,202 @@
+[
+  {
+    "file": "default-desktop-dark.png",
+    "kind": "image",
+    "title": "Composer default, Chromium 1280x800, dark",
+    "caption": "Bordered picker sits level with both send buttons, and Continue sits underneath at text width.",
+    "viewport": "Chromium 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "default-desktop-light.png",
+    "kind": "image",
+    "title": "Composer default, Chromium 1280x800, light",
+    "caption": "Bordered picker sits level with both send buttons, and Continue sits underneath at text width.",
+    "viewport": "Chromium 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "default-iphone15-dark.png",
+    "kind": "image",
+    "title": "Composer default, WebKit iPhone 15 (393x659), dark",
+    "caption": "Chip, Send and its menu arrow share one 44px row, and Continue sits alone underneath, left aligned.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "dark"
+  },
+  {
+    "file": "default-iphone15-light.png",
+    "kind": "image",
+    "title": "Composer default, WebKit iPhone 15 (393x659), light",
+    "caption": "Chip, Send and its menu arrow share one 44px row, and Continue sits alone underneath, left aligned.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "light"
+  },
+  {
+    "file": "default-m360-dark.png",
+    "kind": "image",
+    "title": "Composer default, Chromium 360x780, dark",
+    "caption": "Chip, Send and its menu arrow share one 44px row, and Continue sits alone underneath, left aligned.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "default-m360-light.png",
+    "kind": "image",
+    "title": "Composer default, Chromium 360x780, light",
+    "caption": "Chip, Send and its menu arrow share one 44px row, and Continue sits alone underneath, left aligned.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "truncation-desktop-dark.png",
+    "kind": "image",
+    "title": "Long name and long title, Chromium 1280x800, dark",
+    "caption": "The picker cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "Chromium 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "truncation-desktop-light.png",
+    "kind": "image",
+    "title": "Long name and long title, Chromium 1280x800, light",
+    "caption": "The picker cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "Chromium 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "truncation-iphone15-dark.png",
+    "kind": "image",
+    "title": "Long name and long title, WebKit iPhone 15 (393x659), dark",
+    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "dark"
+  },
+  {
+    "file": "truncation-iphone15-light.png",
+    "kind": "image",
+    "title": "Long name and long title, WebKit iPhone 15 (393x659), light",
+    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "light"
+  },
+  {
+    "file": "truncation-m360-dark.png",
+    "kind": "image",
+    "title": "Long name and long title, Chromium 360x780, dark",
+    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "truncation-m360-light.png",
+    "kind": "image",
+    "title": "Long name and long title, Chromium 360x780, light",
+    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "picker-open-desktop-dark.png",
+    "kind": "image",
+    "title": "Picker open, Chromium 1280x800, dark",
+    "caption": "The picker opens a searchable list with each teammate and its board.",
+    "viewport": "Chromium 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "picker-open-desktop-light.png",
+    "kind": "image",
+    "title": "Picker open, Chromium 1280x800, light",
+    "caption": "The picker opens a searchable list with each teammate and its board.",
+    "viewport": "Chromium 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "picker-open-iphone15-dark.png",
+    "kind": "image",
+    "title": "Picker open, WebKit iPhone 15 (393x659), dark",
+    "caption": "The chip opens the bottom sheet listing each teammate with its board.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "dark"
+  },
+  {
+    "file": "picker-open-iphone15-light.png",
+    "kind": "image",
+    "title": "Picker open, WebKit iPhone 15 (393x659), light",
+    "caption": "The chip opens the bottom sheet listing each teammate with its board.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "light"
+  },
+  {
+    "file": "picker-open-m360-dark.png",
+    "kind": "image",
+    "title": "Picker open, Chromium 360x780, dark",
+    "caption": "The chip opens the bottom sheet listing each teammate with its board.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "picker-open-m360-light.png",
+    "kind": "image",
+    "title": "Picker open, Chromium 360x780, light",
+    "caption": "The chip opens the bottom sheet listing each teammate with its board.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "send-menu-open-iphone15-dark.png",
+    "kind": "image",
+    "title": "Send menu open, WebKit iPhone 15 (393x659), dark",
+    "caption": "The arrow half of the split Send button opens a menu with Send & open; desktop has no menu because it shows two separate send buttons, as agreed with Kasia.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "dark"
+  },
+  {
+    "file": "send-menu-open-iphone15-light.png",
+    "kind": "image",
+    "title": "Send menu open, WebKit iPhone 15 (393x659), light",
+    "caption": "The arrow half of the split Send button opens a menu with Send & open; desktop has no menu because it shows two separate send buttons, as agreed with Kasia.",
+    "viewport": "WebKit iPhone 15 (393x659)",
+    "theme": "light"
+  },
+  {
+    "file": "send-menu-open-m360-dark.png",
+    "kind": "image",
+    "title": "Send menu open, Chromium 360x780, dark",
+    "caption": "The arrow half of the split Send button opens a menu with Send & open; desktop has no menu because it shows two separate send buttons, as agreed with Kasia.",
+    "viewport": "Chromium 360x780",
+    "theme": "dark"
+  },
+  {
+    "file": "send-menu-open-m360-light.png",
+    "kind": "image",
+    "title": "Send menu open, Chromium 360x780, light",
+    "caption": "The arrow half of the split Send button opens a menu with Send & open; desktop has no menu because it shows two separate send buttons, as agreed with Kasia.",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "video-desktop-pick-and-continue-dark.webm",
+    "kind": "video",
+    "title": "Desktop: picker and continue, 1280x800, dark",
+    "caption": "Open the picker, choose Mira, switch back to Pianka so Continue returns, then click Continue to land in the session.",
+    "viewport": "Chromium 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "video-mobile-continue-iphone15-dark.webm",
+    "kind": "video",
+    "title": "Mobile: continue the latest session, iPhone 15, dark",
+    "caption": "Tap the Continue row under the composer and land in that session.",
+    "viewport": "WebKit iPhone 15 (390x844)",
+    "theme": "dark"
+  },
+  {
+    "file": "video-mobile-pick-and-send-iphone15-dark.webm",
+    "kind": "video",
+    "title": "Mobile: pick a teammate and send, iPhone 15, dark",
+    "caption": "Tap the chip, pick Mira in the sheet, type, and Send: the chip shows Mira while asking her, then resets to Pianka after the send.",
+    "viewport": "WebKit iPhone 15 (390x844)",
+    "theme": "dark"
+  }
+]
