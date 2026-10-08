@@ -51,7 +51,7 @@
     "file": "truncation-desktop-dark.png",
     "kind": "image",
     "title": "Long name and long title, Chromium 1280x800, dark",
-    "caption": "The picker cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the picker cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "Chromium 1280x800",
     "theme": "dark"
   },
@@ -59,7 +59,7 @@
     "file": "truncation-desktop-light.png",
     "kind": "image",
     "title": "Long name and long title, Chromium 1280x800, light",
-    "caption": "The picker cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the picker cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "Chromium 1280x800",
     "theme": "light"
   },
@@ -67,7 +67,7 @@
     "file": "truncation-iphone15-dark.png",
     "kind": "image",
     "title": "Long name and long title, WebKit iPhone 15 (393x659), dark",
-    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the chip cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "WebKit iPhone 15 (393x659)",
     "theme": "dark"
   },
@@ -75,7 +75,7 @@
     "file": "truncation-iphone15-light.png",
     "kind": "image",
     "title": "Long name and long title, WebKit iPhone 15 (393x659), light",
-    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the chip cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "WebKit iPhone 15 (393x659)",
     "theme": "light"
   },
@@ -83,7 +83,7 @@
     "file": "truncation-m360-dark.png",
     "kind": "image",
     "title": "Long name and long title, Chromium 360x780, dark",
-    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the chip cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   },
@@ -91,7 +91,7 @@
     "file": "truncation-m360-light.png",
     "kind": "image",
     "title": "Long name and long title, Chromium 360x780, light",
-    "caption": "The chip cuts the long teammate name at 200px with an ellipsis and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
+    "caption": "The placeholder stays on one line as Ask Pianka…, the chip cuts the long teammate name at 200px with an ellipsis, and Continue cuts the long title while keeping its chevron, with no sideways scroll.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -195,7 +195,7 @@
     "file": "video-mobile-pick-and-send-iphone15-dark.webm",
     "kind": "video",
     "title": "Mobile: pick a teammate and send, iPhone 15, dark",
-    "caption": "Tap the chip, pick Mira in the sheet, type, and Send: the chip shows Mira while asking her, then resets to Pianka after the send.",
+    "caption": "Tap the chip, pick Mira in the sheet, type, and Send: the chip shows Mira while asking her, resets to Pianka after the send, and no tooltip is left on screen.",
     "viewport": "WebKit iPhone 15 (390x844)",
     "theme": "dark"
   }
