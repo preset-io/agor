@@ -5,7 +5,7 @@ import {
   listTeamsChannelPosts,
   TeamsChannelHistoryError,
 } from './teams-channel-history';
-import { fetchTeamsTeamChannels, resetTeamsGraphCaches } from './teams-graph';
+import { fetchTeamsTeamChannels, isTeamsRscDenied, resetTeamsGraphCaches } from './teams-graph';
 
 const CHANNEL_ID = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
 const GROUP_ID = 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b';
@@ -179,17 +179,16 @@ describe('Teams thread history', () => {
     expect(result.messages[1].text_truncated).toBeUndefined();
   });
 
-  it('reports a Graph 403 as RSC not granted and stops asking for that team', async () => {
+  it('reports a Graph 403 as RSC not granted without marking the whole team denied', async () => {
     const fetchImpl = fakeFetch(() => json({ error: { code: 'Forbidden' } }, 403));
-    const read = () =>
+    await expect(
       fetchTeamsThreadHistory(
         config,
         { team, channelId: CHANNEL_ID, rootMessageId: ROOT_ID, cacheScope },
         { fetchImpl }
-      );
-    await expect(read()).rejects.toMatchObject({ code: 'rsc_not_granted' });
-    await expect(read()).rejects.toMatchObject({ code: 'rsc_not_granted' });
-    expect(graphUrls(fetchImpl)).toHaveLength(1);
+      )
+    ).rejects.toMatchObject({ code: 'rsc_not_granted' });
+    expect(isTeamsRscDenied({ fetchImpl, config, cacheScope }, GROUP_ID)).toBe(false);
   });
 
   it('waits out a short Retry-After but fails as rate limited past the budget', async () => {

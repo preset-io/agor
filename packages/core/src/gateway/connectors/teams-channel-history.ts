@@ -13,8 +13,6 @@ import {
   GRAPH_ORIGIN,
   GRAPH_SCOPE,
   graphNextLink,
-  isTeamsRscDenied,
-  markTeamsRscDenied,
   type ParsedGraphChatMessage,
   parseGraphChatMessage,
   resolveTeamGroupId,
@@ -151,12 +149,11 @@ async function withGraphRead<T>(
   let groupId: string | undefined;
   try {
     groupId = await resolveTeamGroupId(runtime, req.team);
-    if (isTeamsRscDenied(runtime, groupId)) throw rscNotGranted();
     const channelBase = `${GRAPH_ORIGIN}/v1.0/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(req.channelId)}/messages`;
     return await read(runtime, channelBase);
   } catch (error) {
+    // Not cached team-wide: a 403 here may be specific to this channel, and catch-up shares that cache.
     if (groupId && error instanceof TeamsGraphHttpError && error.status === 403) {
-      markTeamsRscDenied(runtime, groupId);
       throw rscNotGranted();
     }
     throw sanitized(error, signal);

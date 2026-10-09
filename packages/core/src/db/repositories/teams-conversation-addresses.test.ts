@@ -220,21 +220,54 @@ describe('TeamsConversationAddressRepository', () => {
     async ({ db }) => {
       const channel = await seedChannel(db);
       const addresses = new TeamsConversationAddressRepository(db);
-      await addresses.refresh(input(channel, { teamsChannelType: 'private' }));
-      await addresses.refresh(
-        input(channel, { threadId: '19:general@thread.tacv2|root-2', rootMessageId: 'root-2' })
-      );
+      await addresses.refresh(input(channel, { teamsChannelType: 'Private' }));
+      // The marked thread stays decisive however many newer, unmarked threads follow it.
+      for (let index = 0; index < 21; index += 1) {
+        await addresses.refresh(
+          input(channel, {
+            threadId: `19:general@thread.tacv2|root-${index + 2}`,
+            rootMessageId: `r${index}`,
+          })
+        );
+      }
       expect(
         await addresses.loadFencedByConversation({
           channel,
           conversationId: '19:general@thread.tacv2',
         })
       ).toEqual({ ok: false, code: 'conversation_not_standard_channel' });
-      expect(await addresses.loadFencedTeamAnchors({ channel, limit: 5 })).toEqual([
-        expect.objectContaining({
-          row: expect.objectContaining({ thread_id: '19:general@thread.tacv2|root-2' }),
-        }),
-      ]);
+      expect(await addresses.loadFencedTeamAnchors({ channel, limit: 5 })).toEqual([]);
     }
   );
+
+  ownedDbTest('picks one anchor per allowlisted team beyond a busy team', async ({ db }) => {
+    const channel = await seedChannel(db);
+    const addresses = new TeamsConversationAddressRepository(db);
+    await addresses.refresh(
+      input(channel, {
+        threadId: '19:quiet@thread.tacv2|root-1',
+        conversationId: '19:quiet@thread.tacv2',
+        teamId: '19:quiet-team@thread.tacv2',
+      })
+    );
+    for (let index = 0; index < 25; index += 1) {
+      await addresses.refresh(
+        input(channel, {
+          threadId: `19:general@thread.tacv2|busy-${index}`,
+          rootMessageId: `busy-${index}`,
+        })
+      );
+    }
+    const anchors = await addresses.loadFencedTeamAnchors({
+      channel,
+      limit: 1,
+      allowedTeamIds: ['19:quiet-team@thread.tacv2'],
+    });
+    expect(anchors.map((anchor) => anchor.row.team_id)).toEqual(['19:quiet-team@thread.tacv2']);
+    expect(
+      (await addresses.loadFencedTeamAnchors({ channel, limit: 5 }))
+        .map((a) => a.row.team_id)
+        .sort()
+    ).toEqual(['19:general@thread.tacv2', '19:quiet-team@thread.tacv2']);
+  });
 });

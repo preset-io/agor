@@ -368,7 +368,7 @@ const TEAMS_FILE_DOWNLOAD_INFO = 'application/vnd.microsoft.teams.file.download.
 /** Readable files (token-host images, SharePoint personal files) and named skips; URLs stay in the encrypted payload. */
 export function partitionTeamsInboundFiles(
   attachments: unknown,
-  options: { filesEnabled: boolean; activityId: string }
+  options: { filesEnabled: boolean; activityId: string; personalChat: boolean }
 ): { files: InboundFile[]; skipped: InboundSkippedFile[] } {
   const files: InboundFile[] = [];
   const skipped: InboundSkippedFile[] = [];
@@ -385,7 +385,11 @@ export function partitionTeamsInboundFiles(
       (isImage ? `image-${files.length + skipped.length + 1}` : 'attachment')
     ).slice(0, 200);
     const skip = (reason: InboundSkippedFile['reason']) => skipped.push({ name, reason });
-    if (contentType === 'reference') {
+    // Only personal chats carry pre-authenticated file URLs; elsewhere files live in SharePoint.
+    if (
+      contentType === 'reference' ||
+      (contentType === TEAMS_FILE_DOWNLOAD_INFO && !options.personalChat)
+    ) {
       skip('channel_file');
       continue;
     }
@@ -515,6 +519,7 @@ export function normalizeTeamsActivity(
   const { files, skipped: skippedFiles } = partitionTeamsInboundFiles(activityRecord.attachments, {
     filesEnabled: config.files === true,
     activityId,
+    personalChat: normalizedConversationType === 'personal',
   });
 
   return {

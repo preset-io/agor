@@ -11,7 +11,7 @@ import type {
   TeamsConversationAddressID,
   TenantID,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, isNotNull, isNull, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
 import { isAllowedTeamsServiceUrl } from '../../gateway/teams-service-url';
 import { generateId } from '../../lib/ids';
 import { TEAMS_ADDRESS_REVOCATION_REASONS } from '../../types/gateway';
@@ -121,12 +121,11 @@ function requireTenant(db: Database): TenantID | undefined {
 
 // Newest rows checked per lookup; older siblings of a live conversation add nothing.
 const LOOKUP_LIMIT = 20;
-const ANCHOR_SCAN_LIMIT = 200;
+const NON_STANDARD_CHANNEL_TYPES = ['private', 'shared'] as const;
 
 /** Private and shared channels are refused; an absent type is a standard channel. */
 export function isStandardChannelType(type: string | null | undefined): boolean {
-  const normalized = type?.toLowerCase();
-  return normalized !== 'private' && normalized !== 'shared';
+  return !(NON_STANDARD_CHANNEL_TYPES as readonly string[]).includes(type?.toLowerCase() ?? '');
 }
 
 export class TeamsConversationAddressRepository {
@@ -165,7 +164,8 @@ export class TeamsConversationAddressRepository {
           root_message_id: input.rootMessageId ?? null,
           team_id: input.teamId ?? existing.team_id ?? null,
           team_aad_group_id: input.teamAadGroupId ?? existing.team_aad_group_id ?? null,
-          teams_channel_type: input.teamsChannelType ?? existing.teams_channel_type ?? null,
+          teams_channel_type:
+            input.teamsChannelType?.toLowerCase() ?? existing.teams_channel_type ?? null,
           encrypted_address: encryptedAddress,
           verified_app_id: input.verifiedAppId,
           verified_tenant_id: input.verifiedTenantId,
@@ -187,7 +187,7 @@ export class TeamsConversationAddressRepository {
       root_message_id: input.rootMessageId ?? null,
       team_id: input.teamId ?? null,
       team_aad_group_id: input.teamAadGroupId ?? null,
-      teams_channel_type: input.teamsChannelType ?? null,
+      teams_channel_type: input.teamsChannelType?.toLowerCase() ?? null,
       encrypted_address: encryptedAddress,
       verified_app_id: input.verifiedAppId,
       verified_tenant_id: input.verifiedTenantId,
@@ -323,6 +323,9 @@ export class TeamsConversationAddressRepository {
     channel: GatewayChannel;
     conversationId: string;
   }): Promise<FencedTeamsAddress> {
+    if ((await this.nonStandardConversationIds(input.channel.id, input.conversationId)).size > 0) {
+      return { ok: false, code: 'conversation_not_standard_channel' };
+    }
     const rows = await select(this.db)
       .from(teamsConversationAddresses)
       .where(
@@ -334,45 +337,70 @@ export class TeamsConversationAddressRepository {
       .orderBy(desc(teamsConversationAddresses.refreshed_at))
       .limit(LOOKUP_LIMIT)
       .all();
-    // Teams sends the channel type on some activities only, so one marked thread speaks for the channel.
-    const addresses: TeamsConversationAddress[] = rows.map(rowToAddress);
-    if (addresses.some((row) => !isStandardChannelType(row.teams_channel_type))) {
-      return { ok: false, code: 'conversation_not_standard_channel' };
-    }
-    return this.firstFenced(input.channel, addresses);
+    return this.firstFenced(input.channel, rows.map(rowToAddress));
   }
 
-  /** The newest usable standard-channel address per team, at most `limit` teams; anchors for proactive posts. */
-  async loadFencedTeamAnchors(input: {
-    channel: GatewayChannel;
-    limit: number;
-  }): Promise<Array<Extract<FencedTeamsAddress, { ok: true }>>> {
-    const rows = await select(this.db)
+  /** Conversations any thread of which Teams marked private or shared; one marked thread speaks for its channel. */
+  async nonStandardConversationIds(
+    gatewayChannelId: string,
+    conversationId?: string
+  ): Promise<Set<string>> {
+    const rows = (await select(this.db, {
+      conversation_id: teamsConversationAddresses.conversation_id,
+    })
       .from(teamsConversationAddresses)
       .where(
         and(
-          eq(teamsConversationAddresses.gateway_channel_id, input.channel.id),
-          isNotNull(teamsConversationAddresses.team_id),
-          isNull(teamsConversationAddresses.revoked_at)
+          eq(teamsConversationAddresses.gateway_channel_id, gatewayChannelId),
+          inArray(teamsConversationAddresses.teams_channel_type, [...NON_STANDARD_CHANNEL_TYPES]),
+          conversationId
+            ? eq(teamsConversationAddresses.conversation_id, conversationId)
+            : undefined
         )
       )
-      .orderBy(desc(teamsConversationAddresses.refreshed_at))
-      .limit(ANCHOR_SCAN_LIMIT)
-      .all();
-    const anchors = new Map<string, Extract<FencedTeamsAddress, { ok: true }>>();
-    for (const row of rows.map(rowToAddress)) {
-      if (anchors.size >= input.limit) break;
-      if (
-        !row.team_id ||
-        anchors.has(row.team_id) ||
-        !isStandardChannelType(row.teams_channel_type)
-      ) {
-        continue;
-      }
-      const fenced = this.fenceRow(input.channel, row);
-      if (fenced.ok) anchors.set(row.team_id, fenced);
+      .all()) as Array<{ conversation_id: string }>;
+    return new Set(rows.map((row) => row.conversation_id));
+  }
+
+  /** The newest usable standard-channel address in each of the most recently active teams. */
+  async loadFencedTeamAnchors(input: {
+    channel: GatewayChannel;
+    limit: number;
+    /** Only these teams, when the channel restricts them. */
+    allowedTeamIds?: string[];
+  }): Promise<Array<Extract<FencedTeamsAddress, { ok: true }>>> {
+    const live = and(
+      eq(teamsConversationAddresses.gateway_channel_id, input.channel.id),
+      isNotNull(teamsConversationAddresses.team_id),
+      isNull(teamsConversationAddresses.revoked_at),
+      input.allowedTeamIds?.length
+        ? inArray(teamsConversationAddresses.team_id, input.allowedTeamIds)
+        : undefined
+    );
+    const latest = sql`max(${teamsConversationAddresses.refreshed_at})`;
+    const teams = (await select(this.db, { team_id: teamsConversationAddresses.team_id })
+      .from(teamsConversationAddresses)
+      .where(live)
+      .groupBy(teamsConversationAddresses.team_id)
+      .orderBy(desc(latest))
+      .limit(input.limit)
+      .all()) as Array<{ team_id: string }>;
+    const excluded = await this.nonStandardConversationIds(input.channel.id);
+    const anchors: Array<Extract<FencedTeamsAddress, { ok: true }>> = [];
+    for (const { team_id: teamId } of teams) {
+      const rows = await select(this.db)
+        .from(teamsConversationAddresses)
+        .where(and(live, eq(teamsConversationAddresses.team_id, teamId)))
+        .orderBy(desc(teamsConversationAddresses.refreshed_at))
+        .limit(LOOKUP_LIMIT)
+        .all();
+      const standard = rows
+        .map(rowToAddress)
+        .filter((row: TeamsConversationAddress) => !excluded.has(row.conversation_id));
+      const fenced = this.firstFenced(input.channel, standard);
+      if (fenced.ok) anchors.push(fenced);
     }
-    return [...anchors.values()];
+    return anchors;
   }
 
   private firstFenced(
