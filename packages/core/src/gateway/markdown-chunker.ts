@@ -114,15 +114,18 @@ export function chunkMarkdown(text: string, options: MarkdownChunkOptions): stri
 
     // Prefer a readable cut after whitespace, but only at token boundaries and
     // only when the following token still fits with its full fence prefix.
-    let softOffset = startOffset;
+    let newlineOffset = startOffset;
+    let spaceOffset = startOffset;
     let scanned = 0;
     for (let index = startOffset; index < maxOffset; index += 1) {
       const token = tokens[index];
       scanned += token.size;
-      if ((token.text === '\n' || token.text === ' ') && scanned >= Math.floor(limit * 0.6)) {
-        softOffset = index + 1;
-      }
+      if (scanned < Math.floor(limit * 0.6)) continue;
+      if (token.text === '\n') newlineOffset = index + 1;
+      else if (token.text === ' ') spaceOffset = index + 1;
     }
+    // A line break beats a later space, so a chunk never ends mid-line when it can avoid it.
+    const softOffset = newlineOffset > startOffset ? newlineOffset : spaceOffset;
     let endOffset = maxOffset;
     let nextState: FenceState | null = maxState;
     if (softOffset > startOffset && softOffset < maxOffset) {

@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { chunkMarkdown, codePointLength, utf16Length } from './markdown-chunker';
 
 describe('chunkMarkdown', () => {
+  it('ends a chunk at a line break rather than a later space', () => {
+    // Live QA: a long listing split mid-line because the last space won over the last newline.
+    const text = Array.from({ length: 40 }, (_, i) => `line ${i} ${'x'.repeat(20)} tail`).join(
+      '\n'
+    );
+    const chunks = chunkMarkdown(text, { limit: 200, measure: codePointLength });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join('')).toBe(text);
+    for (const chunk of chunks.slice(1)) expect(chunk.startsWith('line ')).toBe(true);
+  });
+
   it('measures UTF-16 units when asked, so astral text uses two units each', () => {
     const text = '😀'.repeat(100);
     const chunks = chunkMarkdown(text, { limit: 64, measure: utf16Length });
