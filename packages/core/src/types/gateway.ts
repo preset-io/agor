@@ -302,7 +302,7 @@ export interface TeamsGatewayConfig {
   /** Read inline images and personal-chat files; needs `supportsFiles` in the app manifest. */
   files?: boolean;
   agent_tools?: TeamsAgentToolsConfig;
-  /** False turns off every Teams post: replies, notices, and typing. */
+  /** Allows proactive channel posts (off by default); replies, notices, and typing are always on. */
   outbound_enabled?: boolean;
   /** `channel:<19:…@thread.tacv2>` used when a proactive send names no target. */
   default_outbound_target?: string | null;
@@ -478,7 +478,7 @@ export function withTeamsConfigDefaults(raw: Record<string, unknown>): Record<st
     ...raw,
     align_teams_users: raw.align_teams_users ?? false,
     catch_up: catchUp,
-    outbound_enabled: raw.outbound_enabled ?? true,
+    outbound_enabled: raw.outbound_enabled ?? false,
   };
 }
 

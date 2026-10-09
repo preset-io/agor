@@ -1,7 +1,7 @@
 /** Shared Microsoft Graph and Bot Connector reads for Teams: app tokens, team group IDs, bounded JSON. */
 
 import { createHash } from 'node:crypto';
-import type { TeamsGatewayConfig } from '../../types/gateway';
+import { TEAMS_CHANNEL_ID_PATTERN, type TeamsGatewayConfig } from '../../types/gateway';
 import { isTeamsTokenHost } from '../teams-service-url';
 import { parseRetryAfterMs } from './teams-send';
 
@@ -373,4 +373,40 @@ export function parseGraphChatMessage(
           : {}),
       })),
   };
+}
+
+export interface TeamsTeamChannel {
+  id: string;
+  name: string;
+}
+
+const TEAM_CHANNELS_TIMEOUT_MS = 5_000;
+
+/** A team's channels from the Bot Connector (the bot only needs to be installed); one bounded request. */
+export async function fetchTeamsTeamChannels(
+  config: TeamsGatewayConfig,
+  req: { teamId: string; serviceUrl: string; cacheScope?: TeamsGraphCacheScope | null },
+  options: { fetchImpl?: typeof fetch } = {}
+): Promise<TeamsTeamChannel[]> {
+  const runtime: TeamsGraphRuntime = {
+    fetchImpl: options.fetchImpl ?? fetch,
+    config,
+    cacheScope: req.cacheScope,
+    signal: AbortSignal.timeout(TEAM_CHANNELS_TIMEOUT_MS),
+    retry: { maxRetries: 0, maxDelayMs: 0 },
+  };
+  const body = await authorizedJson(
+    runtime,
+    BOT_FRAMEWORK_SCOPE,
+    `${teamsServiceUrlBase(req.serviceUrl)}v3/teams/${encodeURIComponent(req.teamId)}/conversations`
+  );
+  const channels: TeamsTeamChannel[] = [];
+  for (const raw of Array.isArray(body.conversations) ? body.conversations : []) {
+    const record = asRecord(raw);
+    const id = text(record.id);
+    if (!id || !TEAMS_CHANNEL_ID_PATTERN.test(id)) continue;
+    // The General channel shares the team's ID and has no name.
+    channels.push({ id, name: (text(record.name) ?? 'General').slice(0, 100) });
+  }
+  return channels.slice(0, 200);
 }

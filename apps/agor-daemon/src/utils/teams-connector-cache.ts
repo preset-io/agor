@@ -5,8 +5,24 @@ import type { GatewayChannel } from '@agor/core/types';
 /** The Teams connector surface outbound sends need. */
 export type TeamsSendConnector = Pick<
   TeamsConnector,
-  'prepareSend' | 'formatMessage' | 'invalidateTokens' | 'downloadToken'
+  | 'prepareSend'
+  | 'formatMessage'
+  | 'invalidateTokens'
+  | 'downloadToken'
+  | 'startChannelThread'
+  | 'listTeamChannels'
 >;
+
+/** Graph and Bot Connector caches key on trusted tenant, channel, and generation; none without a tenant. */
+export function teamsGraphCacheScope(channel: GatewayChannel, tenantId: string | undefined) {
+  return tenantId
+    ? {
+        agorTenantId: tenantId,
+        gatewayChannelId: channel.id,
+        providerConfigGeneration: channel.provider_config_generation,
+      }
+    : null;
+}
 
 const MAX_CACHED_CONNECTORS = 256;
 

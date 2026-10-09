@@ -22,6 +22,10 @@ ALTER TABLE `thread_session_map` ADD `teams_last_admitted_activity_id` text;
 -- Existing configurations require explicit admin opt-in after review.
 UPDATE `gateway_channels` SET `enabled` = 0 WHERE `channel_type` = 'teams' AND `enabled` = 1;
 --> statement-breakpoint
+-- outbound_enabled now opts in to proactive posts only; existing Teams channels start opted out.
+UPDATE `gateway_channels` SET `config` = json_set(`config`, '$.outbound_enabled', json('false'))
+  WHERE `channel_type` = 'teams' AND json_valid(`config`) AND json_type(`config`) = 'object';
+--> statement-breakpoint
 CREATE UNIQUE INDEX `gateway_channels_teams_installation_unique` ON `gateway_channels` (`channel_type`,`provider_installation_id`) WHERE `gateway_channels`.`channel_type` = 'teams' AND `gateway_channels`.`enabled` = 1 AND `gateway_channels`.`provider_installation_id` IS NOT NULL;
 --> statement-breakpoint
 CREATE TABLE `teams_conversation_addresses` (

@@ -36,6 +36,19 @@ it('upgrades current-main SQLite online, disables Teams only and preserves old i
     ).toEqual([{ enabled: 0 }, { enabled: 0 }]);
     expect(
       rawRows(
+        await executeRaw(
+          db,
+          sql`SELECT json_extract(config, '$.outbound_enabled') AS outbound FROM gateway_channels WHERE channel_type='teams'`
+        )
+      )
+    ).toEqual([{ outbound: 0 }, { outbound: 0 }]);
+    expect(
+      rawRows(
+        await executeRaw(db, sql`SELECT config FROM gateway_channels WHERE id=${fixture.slack}`)
+      )
+    ).toEqual([{ config: '{}' }]);
+    expect(
+      rawRows(
         await executeRaw(db, sql`SELECT enabled FROM gateway_channels WHERE id=${fixture.slack}`)
       )
     ).toEqual([{ enabled: 1 }]);

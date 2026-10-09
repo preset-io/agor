@@ -6,7 +6,7 @@
 
 import { Activity, type ConversationReference } from '@microsoft/agents-activity';
 import { ConnectorClient } from '@microsoft/agents-hosting';
-import type { TeamsAddressRevocationReason } from '../../types/gateway';
+import { TEAMS_CHANNEL_ID_PATTERN, type TeamsAddressRevocationReason } from '../../types/gateway';
 import { isTeamsTokenHost } from '../teams-service-url';
 
 /** Text budget per Teams message in UTF-16 units; the hard activity limit is ~100 KB. */
@@ -226,4 +226,97 @@ export async function prepareTeamsSend(
       await post({ type: 'typing' }, signal);
     },
   };
+}
+
+/** A proactive channel post: the new thread's root post and how many chunks landed. */
+export interface TeamsChannelThreadResult {
+  rootMessageId: string;
+  sentChunks: number;
+  /** A later chunk failed after the thread already existed. */
+  error?: TeamsSendError;
+}
+
+function createdRootMessageId(created: { id?: unknown; activityId?: unknown }): string | null {
+  if (typeof created.activityId === 'string' && /^\d{1,20}$/.test(created.activityId)) {
+    return created.activityId;
+  }
+  const match = typeof created.id === 'string' ? /;messageid=(\d{1,20})$/.exec(created.id) : null;
+  return match?.[1] ?? null;
+}
+
+// The first chunk creates the post directly (the SDK adapter drops `activityId`); later chunks reply into it.
+export async function startTeamsChannelThread(
+  anchor: Record<string, unknown>,
+  tokens: TeamsAccessTokenProvider,
+  input: {
+    channelId: string;
+    tenantId: string;
+    appId: string;
+    chunks: string[];
+    signal?: AbortSignal;
+  }
+): Promise<TeamsChannelThreadResult> {
+  const reference = anchor as unknown as ConversationReference;
+  if (!TEAMS_CHANNEL_ID_PATTERN.test(input.channelId) || input.chunks.length === 0) {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
+  }
+  if (!isTeamsTokenHost(reference.serviceUrl)) {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
+  }
+  const serviceUrl = reference.serviceUrl;
+  let token: string;
+  try {
+    token = await tokens.getAccessToken(botFrameworkScope(serviceUrl));
+  } catch {
+    throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
+  }
+  if (!token) throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
+  const client = ConnectorClient.createClientWithToken(serviceUrl, token);
+  let created: { id?: unknown; activityId?: unknown };
+  try {
+    const response = await client.httpClient.request<{ id?: unknown; activityId?: unknown }>({
+      method: 'post',
+      url: 'v3/conversations',
+      data: {
+        isGroup: true,
+        bot: { id: `28:${input.appId}` },
+        tenantId: input.tenantId,
+        channelData: { channel: { id: input.channelId }, tenant: { id: input.tenantId } },
+        activity: { type: 'message', text: input.chunks[0], textFormat: 'markdown' },
+      },
+      signal: input.signal,
+    });
+    created = response.data ?? {};
+  } catch (error) {
+    throw sendFailure(error);
+  }
+  const rootMessageId = createdRootMessageId(created);
+  // Accepted but unaddressable: the post may exist, so it is never resent.
+  if (!rootMessageId) throw new TeamsSendError({ phase: 'send', reason: 'root_message_unknown' });
+  if (input.chunks.length === 1) return { rootMessageId, sentChunks: 1 };
+  let sentChunks = 1;
+  try {
+    const thread = await prepareTeamsSend(
+      {
+        channelId: 'msteams',
+        serviceUrl,
+        conversation: {
+          id: `${input.channelId};messageid=${rootMessageId}`,
+          isGroup: true,
+          conversationType: 'channel',
+          tenantId: input.tenantId,
+        },
+        ...(reference.agent ? { agent: reference.agent } : {}),
+        activityId: rootMessageId,
+      },
+      tokens
+    );
+    for (const chunk of input.chunks.slice(1)) {
+      await thread.send(chunk, input.signal);
+      sentChunks += 1;
+    }
+  } catch (error) {
+    return { rootMessageId, sentChunks, error: sendFailure(error) };
+  }
+  return { rootMessageId, sentChunks };
 }

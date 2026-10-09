@@ -33,6 +33,10 @@ SELECT set_config('agor.system_scope', 'teams_cutover_0117', true);
 --> statement-breakpoint
 UPDATE "gateway_channels" SET "enabled" = false WHERE "channel_type" = 'teams' AND "enabled" = true;
 --> statement-breakpoint
+-- outbound_enabled now opts in to proactive posts only; existing Teams channels start opted out.
+UPDATE "gateway_channels" SET "config" = jsonb_set("config", '{outbound_enabled}', 'false'::jsonb)
+  WHERE "channel_type" = 'teams' AND jsonb_typeof("config") = 'object';
+--> statement-breakpoint
 DROP POLICY "teams_cutover_select" ON "gateway_channels";
 --> statement-breakpoint
 DROP POLICY "teams_cutover_update" ON "gateway_channels";

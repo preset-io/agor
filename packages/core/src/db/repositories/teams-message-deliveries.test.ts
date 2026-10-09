@@ -1,6 +1,7 @@
 import { MessageRole } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
+import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { update } from '../database-wrapper';
 import { teamsMessageDeliveries } from '../schema';
@@ -14,6 +15,7 @@ import {
   TeamsChunkPlanChangedError,
   TeamsMessageDeliveryClaimLostError,
 } from './teams-message-deliveries';
+import { ThreadSessionMapRepository } from './thread-session-map';
 
 async function seed(db: Database) {
   return { ...(await seedTeamsGateway(db)), ...teamsDeliveryWriters(db) };
@@ -50,6 +52,17 @@ describe('TeamsMessageDeliveryRepository', () => {
     );
     expect(await deliveries.findByMessageId(thinking.message_id)).toBeNull();
     expect(await deliveries.findByMessageId(user.message_id)).toBeNull();
+  });
+
+  ownedDbTest('enqueues replies in a proactively seeded thread', async ({ db }) => {
+    const { session, mapping, messages, deliveries } = await seed(db);
+    await new ThreadSessionMapRepository(db).update(mapping.id, {
+      metadata: { ...(mapping.metadata ?? {}), outbound_seed_id: generateId() },
+    });
+    const reply = await messages.create(assistantMessage(session.session_id));
+    expect(await deliveries.findByMessageId(reply.message_id)).toMatchObject({
+      thread_session_map_id: mapping.id,
+    });
   });
 
   ownedDbTest('resumes after a crash at the first chunk without a receipt', async ({ db }) => {

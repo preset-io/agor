@@ -71,14 +71,23 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
               )
             )
           ).toEqual([{ enabled: false }, { enabled: false }]);
+          // Every tenant's Teams rows start opted out of proactive posts; Slack is untouched.
           expect(
             rawRows(
               await executeRaw(
                 scoped,
-                sql`SELECT enabled FROM gateway_channels WHERE id=${fixture.slack}`
+                sql`SELECT config->'outbound_enabled' AS outbound FROM gateway_channels WHERE channel_type='teams'`
               )
             )
-          ).toEqual([{ enabled: true }]);
+          ).toEqual([{ outbound: false }, { outbound: false }]);
+          expect(
+            rawRows(
+              await executeRaw(
+                scoped,
+                sql`SELECT enabled, config FROM gateway_channels WHERE id=${fixture.slack}`
+              )
+            )
+          ).toEqual([{ enabled: true, config: {} }]);
           expect(await insertLegacyInbound(scoped, fixture.slack)).toMatchObject({
             next_attempt_at: expect.any(String),
             payload_encrypted: null,

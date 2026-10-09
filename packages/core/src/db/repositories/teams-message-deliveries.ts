@@ -284,7 +284,7 @@ export class TeamsMessageDeliveryRepository {
   /**
    * Fence one chunk's provider effect. Configuration mutations lock the
    * channel first, so take the channel lock before the delivery row and
-   * re-check installation, generation, and outbound policy under both.
+   * re-check installation and generation under both.
    */
   async markEffectStarted(
     input: TeamsClaimRef & { chunkIndex?: number }
@@ -297,7 +297,6 @@ export class TeamsMessageDeliveryRepository {
         if (
           !channel?.enabled ||
           channel.channel_type !== 'teams' ||
-          (channel.config as Record<string, unknown>).outbound_enabled === false ||
           channel.provider_installation_id !== row.provider_installation_id ||
           channel.provider_config_generation !== row.provider_config_generation
         ) {

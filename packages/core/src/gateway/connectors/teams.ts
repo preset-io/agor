@@ -31,12 +31,19 @@ import {
   type TeamsChannelPostsRequest,
   type TeamsThreadHistoryRequest,
 } from './teams-channel-history';
+import {
+  fetchTeamsTeamChannels,
+  type TeamsGraphCacheScope,
+  type TeamsTeamChannel,
+} from './teams-graph';
 import { fetchTeamsProviderHistory } from './teams-history';
 import {
   botFrameworkScope,
   type PreparedTeamsSend,
   prepareTeamsSend,
+  startTeamsChannelThread,
   type TeamsAccessTokenProvider,
+  type TeamsChannelThreadResult,
   TeamsSendError,
 } from './teams-send';
 
@@ -590,6 +597,27 @@ export class TeamsConnector implements GatewayConnector {
     req: GatewayProviderHistoryRequest
   ): Promise<GatewayProviderHistoryResult> {
     return fetchTeamsProviderHistory(this.config, req);
+  }
+
+  /** Start a new channel thread from a fenced anchor address; targeting checks belong to the caller. */
+  startChannelThread(
+    anchor: Record<string, unknown>,
+    input: { channelId: string; chunks: string[]; signal?: AbortSignal }
+  ): Promise<TeamsChannelThreadResult> {
+    return startTeamsChannelThread(anchor, this.tokens, {
+      ...input,
+      appId: this.config.app_id as string,
+      tenantId: this.config.microsoft_tenant_id ?? '',
+    });
+  }
+
+  /** A team's channels through a fenced anchor's service URL. */
+  listTeamChannels(req: {
+    teamId: string;
+    serviceUrl: string;
+    cacheScope?: TeamsGraphCacheScope | null;
+  }): Promise<TeamsTeamChannel[]> {
+    return fetchTeamsTeamChannels(this.config, req);
   }
 
   /** Agent read of one standard-channel thread page; access checks belong to the caller. */

@@ -182,7 +182,7 @@ class FakeDeliveryRepository {
   }
 }
 
-function channel(): GatewayChannel {
+function channel(config: Record<string, unknown> = {}): GatewayChannel {
   return {
     id: 'channel-1',
     channel_key: 'channel-key',
@@ -194,6 +194,7 @@ function channel(): GatewayChannel {
       app_password: 'secret',
       microsoft_tenant_id: 'tenant-1',
       outbound_enabled: true,
+      ...config,
     },
     provider_installation_id: 'teams-app',
     provider_config_generation: 3,
@@ -210,6 +211,8 @@ function harness(
     maxChunks?: number;
     providerCallTimeoutMs?: number;
     onReplyPosted?: (sessionId: string) => void;
+    channelConfig?: Record<string, unknown>;
+    mappingMetadata?: Record<string, unknown>;
   } = {}
 ) {
   const repository = new FakeDeliveryRepository(options.delivery);
@@ -254,7 +257,7 @@ function harness(
     channel_id: 'channel-1',
     session_id: 'session-1',
     thread_id: '19:channel|root-1',
-    metadata: {},
+    metadata: options.mappingMetadata ?? {},
   } as unknown as ThreadSessionMap;
   const worker = new TeamsMessageDeliveryWorker({} as never, {
     tenantId: 'tenant-1',
@@ -272,7 +275,7 @@ function harness(
     onReplyPosted: options.onReplyPosted,
     repositories: {
       delivery: repository as never,
-      channel: { findById: vi.fn(async () => channel()) },
+      channel: { findById: vi.fn(async () => channel(options.channelConfig)) },
       mapping: { findById: vi.fn(async () => mapping) },
       message: { findById: vi.fn(async () => message) },
       address: { loadFenced, revokeThread },
@@ -316,6 +319,16 @@ describe('TeamsMessageDeliveryWorker chunking', () => {
       'mark:2',
       'receipt:2',
     ]);
+    expect(setup.repository.row.status).toBe('completed');
+  });
+
+  it('delivers replies in a seeded thread and with proactive sends off', async () => {
+    const setup = harness({
+      channelConfig: { outbound_enabled: false },
+      mappingMetadata: { outbound_seed_id: 'seed-1' },
+    });
+    await setup.worker.checkOnce();
+    expect(setup.sent).toEqual(['A durable reply']);
     expect(setup.repository.row.status).toBe('completed');
   });
 

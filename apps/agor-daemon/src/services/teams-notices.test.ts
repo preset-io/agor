@@ -89,7 +89,7 @@ describe('sendTeamsNotice', () => {
     );
   });
 
-  it('sends typing through the same fenced address, and nothing when outbound is off', async () => {
+  it('sends typing through the same fenced address, also with proactive sends off', async () => {
     const { connector, addresses, sendMock, typingMock } = setup();
     await expect(
       sendTeamsTyping({ channel, threadId: 'a:personal', addresses, connector: () => connector })
@@ -102,6 +102,7 @@ describe('sendTeamsNotice', () => {
       ...channel,
       config: { ...(channel.config as Record<string, unknown>), outbound_enabled: false },
     } as GatewayChannel;
+    // outbound_enabled opts in to proactive posts only; replies, notices, and typing stay on.
     for (const send of [sendTeamsTyping, sendTeamsNotice]) {
       await expect(
         send({
@@ -111,8 +112,8 @@ describe('sendTeamsNotice', () => {
           addresses,
           connector: () => connector,
         })
-      ).resolves.toBe('skipped');
+      ).resolves.toBe('sent');
     }
-    expect(addresses.loadFenced).toHaveBeenCalledOnce();
+    expect(addresses.loadFenced).toHaveBeenCalledTimes(3);
   });
 });
