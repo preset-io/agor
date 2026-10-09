@@ -395,7 +395,7 @@ it.each([390, 220])(
       expect(conversation().clientHeight).toBeGreaterThan(100);
       expect(queueList().clientHeight).toBeGreaterThan(25);
     });
-    const composer = screen.getByPlaceholderText('Prompt here… @ for mentions, : for emoji');
+    const composer = screen.getByPlaceholderText(/^Prompt here…/);
     // Position the pointer once. userEvent.wheel() re-hovers before every input,
     // scrolling the queue back into view and potentially undoing outer scrolling.
     // Keep native wheel input at that point while observing asynchronous scrolling;
