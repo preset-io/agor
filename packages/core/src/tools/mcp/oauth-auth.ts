@@ -66,9 +66,33 @@ export interface OAuthDebugInfo {
 }
 
 import { createHash } from 'node:crypto';
+import type { MCPOAuthTokenEndpointAuthMethod } from '../../types/mcp';
 import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError, sanitizeMCPExternalError } from './external-error';
 import { resolveTokenExpiry } from './oauth-token-expiry';
+
+/**
+ * Put client credentials on a token request: HTTP Basic or form-body for a
+ * confidential client, `client_id` alone for a public (PKCE) client. Shared by
+ * the authorization-code exchange and refresh so they cannot disagree.
+ */
+export function applyTokenEndpointClientAuth(
+  request: { headers: Record<string, string>; body: Record<string, string> },
+  client: {
+    clientId: string;
+    clientSecret?: string;
+    method?: MCPOAuthTokenEndpointAuthMethod;
+  }
+): void {
+  if (!client.clientSecret) {
+    request.body.client_id = client.clientId;
+  } else if (client.method === 'client_secret_post') {
+    request.body.client_id = client.clientId;
+    request.body.client_secret = client.clientSecret;
+  } else {
+    request.headers.Authorization = `Basic ${Buffer.from(`${client.clientId}:${client.clientSecret}`).toString('base64')}`;
+  }
+}
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
 const oauthTokenCache = new Map<string, CachedToken>();

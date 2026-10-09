@@ -2,8 +2,10 @@ import { loadCatalog } from '@agor/core/mcp-catalog';
 import type { MCPCatalogEntry, MCPCatalogServerCandidate, MCPServer } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { compatibleCatalogOAuthPeers } from './mcp-catalog-credential-match.js';
+import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 import {
-  configuredCatalogIssuer,
+  catalogInstallRelayIssuer,
+  catalogTokenEndpointAuthMethod,
   presentMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -225,12 +227,21 @@ describe('resolveMCPOAuthCompatibilityPolicy', () => {
 });
 
 it('resolves actual hidden saved installs through the full runtime catalog, without mutation', async () => {
-  const definitions = (await loadCatalog()).filter((entry) => entry.hidden);
-  expect(definitions).toHaveLength(7);
+  const definitions = (await loadCatalog()).filter(
+    (entry) => entry.hidden && entry.auth_type === 'oauth'
+  );
+  // Five 2026-09 provider holds plus Shortcut (2026-10-07).
+  expect(definitions).toHaveLength(6);
   for (const definition of definitions) {
     const server = catalogServer({
       catalog_entry_name: definition.name,
       url: definition.remote_url,
+      auth: {
+        ...catalogOAuthConfig(definition),
+        ...(definition.oauth?.configured_client
+          ? { oauth_client_id: 'customer-app', oauth_client_secret: 'test-secret' }
+          : {}),
+      },
     });
     const before = structuredClone(server);
     expect(await resolveMCPOAuthCompatibilityPolicy(server)).toEqual(
@@ -262,15 +273,33 @@ it('pins reviewed configured-client issuer and refuses recipe drift', async () =
       oauth_client_secret: 'test-secret',
     },
   });
-  await expect(configuredCatalogIssuer(server, [configured])).resolves.toBe(
+  await expect(catalogInstallRelayIssuer(server, true, [configured])).resolves.toBe(
     'https://issuer.example'
   );
   await expect(
-    configuredCatalogIssuer({ ...server, url: 'https://other.example/mcp' }, [configured])
+    catalogInstallRelayIssuer({ ...server, url: 'https://other.example/mcp' }, true, [configured])
   ).rejects.toThrow('reviewed recipe');
   await expect(
-    configuredCatalogIssuer({ ...server, source: 'user' }, [configured])
+    catalogInstallRelayIssuer({ ...server, source: 'user' }, true, [configured])
   ).resolves.toBeUndefined();
+});
+
+it('uses an allowlisted DCR issuer only with the relay, and only for a current install', async () => {
+  const allowlisted = {
+    ...entry,
+    oauth: { stable_callback: { issuer: 'https://issuer.example' } },
+  };
+  const server = catalogServer();
+  await expect(catalogInstallRelayIssuer(server, true, [allowlisted])).resolves.toBe(
+    'https://issuer.example'
+  );
+  // Relay off: the direct callback, exactly as before the flag existed.
+  await expect(catalogInstallRelayIssuer(server, false, [allowlisted])).resolves.toBeUndefined();
+  // A drifted row is an ordinary server: direct callback, not a hard failure.
+  await expect(
+    catalogInstallRelayIssuer({ ...server, url: 'https://other.example/mcp' }, true, [allowlisted])
+  ).resolves.toBeUndefined();
+  await expect(catalogInstallRelayIssuer(server, true, [entry])).resolves.toBeUndefined();
 });
 
 it.each(['per_user', 'shared'] as const)(
@@ -290,7 +319,9 @@ it.each(['per_user', 'shared'] as const)(
         oauth_client_secret: 'test-secret',
       },
     });
-    await expect(configuredCatalogIssuer(server)).resolves.toBe('https://app.asana.com');
+    await expect(catalogInstallRelayIssuer(server, true)).resolves.toBe('https://app.asana.com');
+    // The customer app pins its issuer whether or not the cell runs the relay.
+    await expect(catalogInstallRelayIssuer(server, false)).resolves.toBe('https://app.asana.com');
     await expect(resolveMCPOAuthCompatibilityPolicy(server)).resolves.toMatchObject({
       catalogEntryName: asana.name,
       reason: 'current_catalog_marketplace',
@@ -300,9 +331,56 @@ it.each(['per_user', 'shared'] as const)(
       { auth: { ...server.auth!, oauth_dcr_mode: 'advertised' as const } },
       { auth: { ...server.auth!, oauth_token_url: 'https://attacker.example/token' } },
     ]) {
-      await expect(configuredCatalogIssuer({ ...server, ...drift })).rejects.toThrow(
+      await expect(catalogInstallRelayIssuer({ ...server, ...drift }, true)).rejects.toThrow(
         'reviewed recipe'
       );
     }
   }
 );
+
+describe('catalogTokenEndpointAuthMethod', () => {
+  const recipe = {
+    name: 'com.example/post-only',
+    remote_url: 'https://mcp.example.com/mcp',
+    oauth: { token_endpoint_auth_method: 'client_secret_post' },
+  } as unknown as MCPCatalogEntry;
+  const install = {
+    source: 'catalog' as const,
+    catalog_entry_name: recipe.name,
+    url: 'https://mcp.example.com/mcp/',
+  };
+
+  it('returns the recipe method for an install of the entry', async () => {
+    await expect(catalogTokenEndpointAuthMethod(install, [recipe])).resolves.toBe(
+      'client_secret_post'
+    );
+  });
+
+  it.each([
+    ['a manual server', { ...install, source: 'user' as const }],
+    ['a row whose entry is gone', { ...install, catalog_entry_name: 'com.example/removed' }],
+    ['a row pointed elsewhere', { ...install, url: 'https://other.example.com/mcp' }],
+    ['no server', undefined],
+  ])('keeps HTTP Basic (undefined) for %s', async (_label, server) => {
+    await expect(catalogTokenEndpointAuthMethod(server, [recipe])).resolves.toBeUndefined();
+  });
+
+  it('names the two shipped recipes whose token endpoint requires form-body auth', async () => {
+    const entries = await loadCatalog();
+    const methods = await Promise.all(
+      entries.map(async (entry) => ({
+        name: entry.name,
+        method: await catalogTokenEndpointAuthMethod(
+          { source: 'catalog', catalog_entry_name: entry.name, url: entry.remote_url },
+          entries
+        ),
+      }))
+    );
+    expect(
+      methods
+        .filter(({ method }) => method === 'client_secret_post')
+        .map(({ name }) => name)
+        .sort()
+    ).toEqual(['com.hubspot/mcp', 'com.slack/mcp']);
+  });
+});

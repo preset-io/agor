@@ -24,12 +24,13 @@ import {
 import { feathers } from '@agor/core/feathers';
 import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
 import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@agor/core/types';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { safeMcpServerConfigReadback } from '../mcp/tools/mcp-servers.js';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
 import { MCPCatalogReadinessService } from './mcp-catalog-readiness.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -134,14 +135,17 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
     })),
   };
 });
-vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
-  // Preserve the pure recipe lookup now used by configured-app issuer pinning.
-  findCatalogEntry: (await importOriginal<typeof import('@agor/core/mcp-catalog')>())
-    .findCatalogEntry,
-  loadCatalog: vi.fn().mockResolvedValue([]),
-  probeRemoteAuthType,
-  probeRemoteBearerToken,
-}));
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@agor/core/mcp-catalog')>();
+  return {
+    // Preserve the pure recipe lookups used by configured-app issuer pinning.
+    findCatalogEntry: original.findCatalogEntry,
+    catalogRelayIssuer: original.catalogRelayIssuer,
+    loadCatalog: vi.fn().mockResolvedValue([]),
+    probeRemoteAuthType,
+    probeRemoteBearerToken,
+  };
+});
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -196,22 +200,26 @@ function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
     beforeAll: [] as unknown[],
     beforeFind: [] as unknown[],
     beforeCreate: [] as unknown[],
+    beforePatch: [] as unknown[],
     afterFind: [] as unknown[],
     afterGet: [] as unknown[],
+    afterPatch: [] as unknown[],
   };
   const app = {
     service(path: string) {
       return {
         hooks(hooks: {
           around?: { all?: unknown[] };
-          before?: { all?: unknown[]; find?: unknown[]; create?: unknown[] };
-          after?: { find?: unknown[]; get?: unknown[] };
+          before?: { all?: unknown[]; find?: unknown[]; create?: unknown[]; patch?: unknown[] };
+          after?: { find?: unknown[]; get?: unknown[]; patch?: unknown[] };
         }) {
           if (path.replace(/^\//, '') !== 'mcp-servers') return;
           captured.aroundAll.push(...(hooks.around?.all ?? []));
           captured.beforeAll.push(...(hooks.before?.all ?? []));
           captured.beforeFind.push(...(hooks.before?.find ?? []));
           captured.beforeCreate.push(...(hooks.before?.create ?? []));
+          captured.beforePatch.push(...(hooks.before?.patch ?? []));
+          captured.afterPatch.push(...(hooks.after?.patch ?? []));
           captured.afterFind.push(...(hooks.after?.find ?? []));
           captured.afterGet.push(...(hooks.after?.get ?? []));
         },
@@ -360,7 +368,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     }
 
-    function connectApp(entry: MCPCatalogEntry = ENTRY) {
+    function connectApp(entry: MCPCatalogEntry = ENTRY, options: { patchHooks?: boolean } = {}) {
       const hooks = registeredMcpServerHooks(db);
       const app = feathers();
       app.use('mcp-servers', createMCPServersService(db));
@@ -370,8 +378,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           all: hooks.beforeAll,
           find: hooks.beforeFind,
           create: hooks.beforeCreate,
+          // Opt-in: the production write authorizer for a Settings-style edit.
+          ...(options.patchHooks ? { patch: hooks.beforePatch } : {}),
         },
-        after: { find: hooks.afterFind, get: hooks.afterGet },
+        after: {
+          find: hooks.afterFind,
+          get: hooks.afterGet,
+          ...(options.patchHooks ? { patch: hooks.afterPatch } : {}),
+        },
       } as never);
       app.use('mcp-catalog', {
         async get() {
@@ -921,6 +935,104 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       } finally {
         await replica.close();
       }
+    });
+
+    it('lets the owner replace a configured app Client ID and secret in place; others cannot', async () => {
+      // The repository seals a configured app's secret only when the row's
+      // catalog entry really is one, so the catalog must know this recipe.
+      const { loadCatalog } = await import('@agor/core/mcp-catalog');
+      vi.mocked(loadCatalog).mockResolvedValue([BYO_ENTRY]);
+      onTestFinished(() => {
+        vi.mocked(loadCatalog).mockResolvedValue([]);
+      });
+      const owner = await buildTenant('byo-edit');
+      const other = await runWithTenantDatabaseScope(db, owner.tenantId, (scoped) =>
+        buildUser(scoped, 'byo-edit-other')
+      );
+      const app = connectApp(BYO_ENTRY, { patchHooks: true });
+      const service = createRegisteredMCPCatalogConnectService(app, db);
+      const created = await service.create(
+        {
+          ...REQUEST,
+          catalog_key: BYO_ENTRY.name,
+          oauth_client: { client_id: 'byo-app', client_secret: 'byo-app-secret' },
+        },
+        params(owner.user, owner.tenantId)
+      );
+      const serverId = created.mcp_server.mcp_server_id;
+      const replica = await oauthReplica();
+      try {
+        await replica.connectGrant(owner.user, owner.tenantId, serverId);
+      } finally {
+        await replica.close();
+      }
+      // The production grant authority (Connect reuse, hydration) verifies the
+      // grant's configuration binding against the saved row.
+      const ownerGrantAuthorized = () =>
+        runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+          const server = await new MCPServerRepository(scoped).findById(serverId);
+          const grant = await new UserMCPOAuthTokenRepository(
+            scoped,
+            SECRET
+          ).getCatalogGrantAuthority(owner.user.user_id, serverId);
+          return Boolean(
+            server &&
+              grant?.has_access_token &&
+              (await isMCPOAuthGrantAuthorizedForServer(scoped, server, grant))
+          );
+        });
+      const readAsOwner = () =>
+        runWithTenantDatabaseScope(db, owner.tenantId, () =>
+          app.service('mcp-servers').get(serverId, params(owner.user, owner.tenantId))
+        );
+      expect(await ownerGrantAuthorized()).toBe(true);
+
+      // Another member cannot edit the owner's private install.
+      await expect(
+        runWithTenantDatabaseScope(db, owner.tenantId, () =>
+          app
+            .service('mcp-servers')
+            .patch(
+              serverId,
+              { auth: { type: 'oauth', oauth_client_id: 'hijack', oauth_client_secret: 'x' } },
+              params(other, owner.tenantId)
+            )
+        )
+      ).rejects.toThrow("You cannot modify another user's private MCP server");
+
+      // The owner replaces both through the ordinary Settings patch path.
+      const patched = await runWithTenantDatabaseScope(db, owner.tenantId, () =>
+        app.service('mcp-servers').patch(
+          serverId,
+          {
+            auth: {
+              type: 'oauth',
+              oauth_client_id: 'byo-app-2',
+              oauth_client_secret: 'byo-app-secret-2',
+            },
+          },
+          params(owner.user, owner.tenantId)
+        )
+      );
+      expect(JSON.stringify(patched)).not.toContain('byo-app-secret-2');
+      const read = await readAsOwner();
+      expect(read.auth).toMatchObject({
+        oauth_client_id: 'byo-app-2',
+        oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+      });
+      expect(JSON.stringify(read)).not.toContain('byo-app-secret');
+      // Sealed at rest, still the current catalog install, and the old grant
+      // no longer authorizes (the owner must reconnect).
+      const stored = await runWithTenantDatabaseScope(db, owner.tenantId, (scoped) =>
+        executeRaw(scoped, sql`SELECT data FROM mcp_servers WHERE mcp_server_id = ${serverId}`)
+      );
+      expect(JSON.stringify(rowsOf(stored))).not.toContain('byo-app-secret-2');
+      const internal = await runWithTenantDatabaseScope(db, owner.tenantId, (scoped) =>
+        new MCPServerRepository(scoped).findById(serverId)
+      );
+      expect(internal?.auth?.oauth_client_secret).toBe('byo-app-secret-2');
+      // Users must reconnect: the old grant no longer authorizes.
+      expect(await ownerGrantAuthorized()).toBe(false);
     });
 
     it("lets members reuse a Shared-mode app grant, but never another user's per-user grant", async () => {

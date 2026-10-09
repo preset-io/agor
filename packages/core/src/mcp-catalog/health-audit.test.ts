@@ -148,6 +148,48 @@ describe('auditCatalogHealth', () => {
     expect(oauthMetadataReady).toHaveBeenCalledWith(datadog, undefined);
   });
 
+  it('audits a declared-OAuth recipe from metadata when the endpoint answers without a challenge', async () => {
+    const google = {
+      ...entry('oauth'),
+      name: 'com.googleapis.gmailmcp/mcp',
+      remote_url: 'https://gmailmcp.googleapis.com/mcp/v1',
+      oauth: {
+        dcr_mode: 'disabled' as const,
+        configured_client: {
+          setup_url: 'https://developers.google.com/workspace/guides/configure-mcp-servers',
+          issuer: 'https://accounts.google.com',
+          secret_required: true,
+        },
+      },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({
+      kind: 'resource-metadata',
+      metadataUrl: 'https://gmailmcp.googleapis.com/.well-known/oauth-protected-resource/mcp/v1',
+      source: 'well-known',
+    });
+    // The resource names the issuer with a trailing slash; the recipe states
+    // the AS metadata spelling, which is what the audit pins exactly.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer: 'https://accounts.google.com/',
+      authServerMetadata: { issuer: 'https://accounts.google.com' },
+    });
+
+    const [declared, undeclared] = await auditCatalogHealth([google, entry('oauth')], {
+      probe: async () => ({ authType: 'none' }),
+    });
+
+    expect(declared).toMatchObject({
+      status: 'credential-required',
+      reason: 'configured_client_not_verified',
+      observedAuth: 'oauth',
+    });
+    expect(oauthMocks.resolveMCPOAuthDiscovery).toHaveBeenCalledWith(null, google.remote_url, {
+      compatibilityMode: 'marketplace',
+    });
+    // Without a reviewed client recipe, `none` is still drift.
+    expect(undeclared).toMatchObject({ status: 'auth-drift', observedAuth: 'none' });
+  });
+
   it('does not call a public credential challenge fully verified without a credential', async () => {
     const [result] = await auditCatalogHealth([entry('credentials')], {
       probe: async () => ({ authType: 'credentials' }),
@@ -239,7 +281,70 @@ describe('auditCatalogHealth', () => {
   });
 });
 
-it.each(['https://issuer.example', 'https://wrong.example'])(
+it.each([
+  // [declared method, advertised list, expected status]
+  ['client_secret_post', ['client_secret_post'], 'credential-required'],
+  ['client_secret_post', ['client_secret_basic'], 'oauth-metadata-not-ready'],
+  ['client_secret_post', undefined, 'oauth-metadata-not-ready'],
+  ['client_secret_basic', ['client_secret_post'], 'oauth-metadata-not-ready'],
+  ['client_secret_basic', ['client_secret_basic', 'client_secret_post'], 'credential-required'],
+  // Omitted recipe method is HTTP Basic; an omitted list is Basic only.
+  [undefined, ['client_secret_post'], 'oauth-metadata-not-ready'],
+  [undefined, undefined, 'credential-required'],
+] as const)(
+  'checks the effective token auth method %s against advertised %j',
+  async (method, supported, status) => {
+    const configured = {
+      ...entry('oauth'),
+      oauth: {
+        dcr_mode: 'disabled' as const,
+        ...(method ? { token_endpoint_auth_method: method } : {}),
+        configured_client: {
+          issuer: 'https://issuer.example',
+          setup_url: 'https://issuer.example/apps',
+          secret_required: true,
+        },
+      },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer: 'https://issuer.example',
+      authServerMetadata: {
+        issuer: 'https://issuer.example',
+        ...(supported ? { token_endpoint_auth_methods_supported: [...supported] } : {}),
+      },
+    });
+    const [result] = await auditCatalogHealth([configured], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject(
+      status === 'credential-required'
+        ? { status, reason: 'configured_client_not_verified' }
+        : { status, reason: 'metadata_incompatible' }
+    );
+  }
+);
+
+it('does not apply the HTTP Basic default to a DCR entry, which has no client secret', async () => {
+  oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+  oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+    issuer: 'https://issuer.example',
+    authServerMetadata: {
+      issuer: 'https://issuer.example',
+      token_endpoint_auth_methods_supported: ['none'],
+    },
+    registrationEndpoint: 'https://issuer.example/register',
+  });
+  const [result] = await auditCatalogHealth([entry('oauth')], {
+    probe: async () => ({ authType: 'oauth' }),
+  });
+  // The method check runs before the DCR endpoint checks; whatever those
+  // conclude, a DCR entry is never refused for the client authentication.
+  expect(result.reason).not.toBe('metadata_incompatible');
+  expect(result.status).not.toBe('oauth-metadata-not-ready');
+});
+
+it.each(['https://issuer.example', 'https://wrong.example', 'https://issuer.example/'])(
   'audits configured BYO without DCR or claiming the customer credential works (%s)',
   async (issuer) => {
     const configured = {
@@ -254,7 +359,12 @@ it.each(['https://issuer.example', 'https://wrong.example'])(
       },
     };
     oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
-    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({ issuer });
+    // The pin is the AS metadata issuer, exactly: a slash-only difference
+    // would break the hosted relay's callback binding.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer,
+      authServerMetadata: { issuer },
+    });
     const [result] = await auditCatalogHealth([configured], {
       probe: async () => ({ authType: 'oauth' }),
     });
@@ -263,5 +373,30 @@ it.each(['https://issuer.example', 'https://wrong.example'])(
         ? { status: 'credential-required', reason: 'configured_client_not_verified' }
         : { status: 'oauth-metadata-not-ready', reason: 'issuer_mismatch' }
     );
+  }
+);
+
+it.each([
+  ['https://issuer.example', 'metadata_incompatible'],
+  ['https://wrong.example', 'issuer_mismatch'],
+])(
+  'pins a stable-callback issuer and still audits its DCR endpoint (%s)',
+  async (issuer, reason) => {
+    const allowlisted = {
+      ...entry('oauth'),
+      oauth: { stable_callback: { issuer: 'https://issuer.example' } },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+    // A private-host endpoint fails before any DNS lookup, proving the issuer
+    // check passed through to the ordinary DCR checks.
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer,
+      authServerMetadata: { issuer },
+      registrationEndpoint: 'https://127.0.0.1/register',
+    });
+    const [result] = await auditCatalogHealth([allowlisted], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject({ status: 'oauth-metadata-not-ready', reason });
   }
 );

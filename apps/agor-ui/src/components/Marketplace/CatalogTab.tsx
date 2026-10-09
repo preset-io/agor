@@ -524,11 +524,13 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     async ({
       acknowledgedDisclosure,
       bearerToken,
+      credentialFields,
       oauthClient,
       oauthPopup,
     }: {
       acknowledgedDisclosure: string;
       bearerToken?: string;
+      credentialFields?: Record<string, string>;
       oauthClient?: { client_id: string; client_secret?: string };
       oauthPopup?: MarketplaceOAuthPopup;
     }) => {
@@ -550,6 +552,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
           sharing,
           acknowledged_disclosure: acknowledgedDisclosure,
           ...(bearerToken ? { bearer_token: bearerToken } : {}),
+          ...(bearerToken && credentialFields ? { credential_fields: credentialFields } : {}),
           ...(oauthClient ? { oauth_client: oauthClient } : {}),
         });
         if (!operation.isCurrent()) {

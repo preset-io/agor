@@ -126,12 +126,12 @@ describe('mergeGoalIntegrationRecs', () => {
     // Hidden Figma is not offered; the existing GitLab choice fills the kit.
     expect(findOnboardingGoal('hand-off-build')?.integrationRecs).not.toContain('figma');
     expect(names(['hand-off-build'])).toEqual(['GitHub', 'Supabase', 'Context7', 'GitLab']);
-    // status-updates: Connect [Linear, Notion, Atlassian, Asana] + Ask [Slack].
+    // status-updates: Connect [Linear, Notion, Granola, Atlassian] + Ask [Slack].
     expect(names(['status-updates'])).toEqual([
       'Linear',
       'Notion',
+      'Granola',
       'Atlassian',
-      'Asana',
       'Slack gateway messaging',
     ]);
   });
@@ -175,8 +175,8 @@ describe('mergeGoalIntegrationRecs', () => {
     expect(connectNames(['status-updates', 'team-teammate'])).toEqual([
       'Linear',
       'Notion',
+      'Granola',
       'Atlassian',
-      'Asana',
     ]);
     // Slack (Ask) still flows through as an extra beyond the four.
     expect(askNames(['status-updates', 'team-teammate'])).toEqual(['Slack gateway messaging']);

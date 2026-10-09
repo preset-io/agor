@@ -5,9 +5,10 @@ import {
   resolveMCPOAuthDiscovery,
   validateMCPOAuthMetadata,
 } from '../tools/mcp/oauth-mcp-transport';
+import { catalogEntryDeclaresOAuth } from '../types/mcp-catalog';
 import { assertSafeOutboundUrl, UnsafeOutboundUrlError } from '../utils/safe-outbound-fetch';
 import { probeRemoteAuth, type RemoteAuthProbeResult } from './auth-probe';
-import { isCatalogEntryVisible } from './query';
+import { catalogRelayIssuer, isCatalogEntryVisible } from './query';
 
 export type CatalogHealthStatus =
   | 'skipped-hidden'
@@ -77,14 +78,32 @@ async function assertOAuthMetadataReady(
   const validated = await validateMCPOAuthMetadata(discovery, entry.remote_url, {
     compatibilityMode,
   });
-  if (entry.oauth?.configured_client) {
-    if (validated.issuer !== entry.oauth.configured_client.issuer)
-      throw new OAuthConfigurationError(
-        'issuer_mismatch',
-        'Configured app issuer no longer matches its reviewed recipe'
-      );
-    return; // Customer app input is required; the audit never registers a client.
-  }
+  // Exactly the AS metadata `issuer` for every pinned issuer (configured app or
+  // stable relay callback): the runtime pin, the flow context and the hosted
+  // relay callback all use that string.
+  const relayIssuer = catalogRelayIssuer(entry);
+  if (relayIssuer && validated.authServerMetadata.issuer !== relayIssuer)
+    throw new OAuthConfigurationError(
+      'issuer_mismatch',
+      'Catalog OAuth issuer no longer matches its reviewed recipe'
+    );
+  // A customer-owned app authenticates at the token endpoint with the recipe's
+  // effective method (declared, else HTTP Basic). It has to be one the token
+  // endpoint advertises (an omitted list means RFC 8414's default, Basic only),
+  // or every exchange and refresh for the entry would be refused as
+  // invalid_client. Only these recipes carry a client secret.
+  if (
+    entry.oauth?.configured_client &&
+    !(
+      validated.authServerMetadata.token_endpoint_auth_methods_supported ?? ['client_secret_basic']
+    ).includes(entry.oauth.token_endpoint_auth_method ?? 'client_secret_basic')
+  )
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Token endpoint no longer advertises the client authentication the recipe declares'
+    );
+  // Customer app input is required; the audit never registers a client.
+  if (entry.oauth?.configured_client) return;
   if (entry.oauth?.client_id) return;
   if (entry.oauth?.dcr_mode === 'disabled' || !validated.registrationEndpoint) {
     throw new OAuthConfigurationError(
@@ -161,9 +180,15 @@ export async function auditCatalogHealth(
         reason: 'catalog_entry_hidden',
       };
     }
-    const observed = entry.remote_url
+    const answered = entry.remote_url
       ? await probe(entry.remote_url)
       : ({ authType: 'unknown' } satisfies RemoteAuthProbeResult);
+    // Mirrors Connect: a declared-OAuth recipe on an endpoint that answers
+    // without a challenge is checked as OAuth, from its published metadata.
+    const observed =
+      answered.authType === 'none' && catalogEntryDeclaresOAuth(entry)
+        ? ({ authType: 'oauth' } satisfies RemoteAuthProbeResult)
+        : answered;
     const base = {
       name: entry.name,
       expectedAuth: entry.auth_type,

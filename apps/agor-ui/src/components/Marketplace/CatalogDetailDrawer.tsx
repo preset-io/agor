@@ -147,6 +147,8 @@ export interface CatalogDetailDrawerProps {
   onConnect: (input: {
     acknowledgedDisclosure: string;
     bearerToken?: string;
+    /** Values for the entry's declared `credentials.fields`, keyed by field key. */
+    credentialFields?: Record<string, string>;
     oauthClient?: { client_id: string; client_secret?: string };
     oauthPopup?: MarketplaceOAuthPopup;
   }) => void;
@@ -325,7 +327,13 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   // vendor's key sitting in the field for a connect to another vendor's
   // endpoint. Pairing it with the entry it was typed for means the field is
   // empty for any entry it was not.
-  const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
+  // The token and any extra credential fields the entry declares are one
+  // credential, held and discarded together.
+  const [pastedKey, setPastedKey] = useState<{
+    entryId: string;
+    value: string;
+    fields?: Record<string, string>;
+  } | null>(null);
   const [popupBlocked, setPopupBlocked] = useState(false);
   const [appCredentials, setAppCredentials] = useState<{
     entryId: string;
@@ -349,6 +357,19 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   const needsApiKey = runtimeStatus?.readiness === 'api-key';
   const keyField = pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.value : '';
   const bearerToken = keyField.trim();
+  const credentialFieldDefs = entry?.credentials?.fields ?? [];
+  // "Bearer" is only accurate for the default recipe; a vendor scheme
+  // (`Authorization: Token`, `api-key:`) is named by its own label.
+  const tokenNoun =
+    entry?.credentials?.header || entry?.credentials?.prefix
+      ? (entry.credentials.label?.trim() ?? 'API key')
+      : 'bearer access token';
+  const heldFields =
+    pastedKey !== null && pastedKey.entryId === entryId ? pastedKey.fields : undefined;
+  const credentialFields = Object.fromEntries(
+    credentialFieldDefs.map((field) => [field.key, heldFields?.[field.key]?.trim() ?? ''])
+  );
+  const credentialFieldsComplete = Object.values(credentialFields).every(Boolean);
 
   // Discard the key when the interaction that needed it ends — the drawer
   // closing, or a different entry being shown.
@@ -419,7 +440,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       !policyRefusal &&
       acknowledged &&
       !connecting &&
-      (!needsApiKey || bearerToken) &&
+      (!needsApiKey || (bearerToken && credentialFieldsComplete)) &&
       (!appForm ||
         (readiness?.catalog_key === entryId &&
           readiness.redirect_uri &&
@@ -431,8 +452,10 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     : !acknowledged
       ? 'Review the access disclosure and acknowledge it to continue.'
       : needsApiKey && !bearerToken
-        ? `Enter your ${title} bearer access token to continue.`
-        : undefined;
+        ? `Enter your ${title} ${tokenNoun} to continue.`
+        : needsApiKey && !credentialFieldsComplete
+          ? `Enter every ${title} credential field to continue.`
+          : undefined;
 
   return (
     <CatalogDrawer
@@ -778,8 +801,8 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // would rot silently.
                     extra={
                       <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                        Your own {title} bearer access token. It is stored for you alone and never
-                        shown again.
+                        Your own {title} {tokenNoun}. It is stored for you alone and never shown
+                        again.
                         {entry.credentials?.acquisition_url && (
                           <>
                             {' '}
@@ -799,10 +822,12 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                       value={keyField}
                       onChange={(event) =>
                         setPastedKey(
-                          entryId === undefined ? null : { entryId, value: event.target.value }
+                          entryId === undefined
+                            ? null
+                            : { entryId, value: event.target.value, fields: heldFields }
                         )
                       }
-                      placeholder={`Paste your ${title} bearer access token`}
+                      placeholder={`Paste your ${title} ${tokenNoun}`}
                       autoComplete="off"
                       // The browser is the one place this drawer cannot promise
                       // anything about: an autofilled or remembered value here
@@ -810,6 +835,35 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                       spellCheck={false}
                     />
                   </Form.Item>
+                  {credentialFieldDefs.map((field) => {
+                    const FieldInput = field.secret ? Input.Password : Input;
+                    return (
+                      <Form.Item
+                        key={field.key}
+                        label={field.label}
+                        required
+                        style={{ marginTop: token.marginSM, marginBottom: 0 }}
+                      >
+                        <FieldInput
+                          value={heldFields?.[field.key] ?? ''}
+                          onChange={(event) =>
+                            setPastedKey(
+                              entryId === undefined
+                                ? null
+                                : {
+                                    entryId,
+                                    value: keyField,
+                                    fields: { ...heldFields, [field.key]: event.target.value },
+                                  }
+                            )
+                          }
+                          placeholder={`Enter your ${title} ${field.label}`}
+                          autoComplete="off"
+                          spellCheck={false}
+                        />
+                      </Form.Item>
+                    );
+                  })}
                 </Form>
               )}
 
@@ -866,6 +920,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                         rules still apply. These are app credentials, not a personal access token.
                         Each user signs in separately. Enter the secret only here, never in agent
                         chat.
+                        {appForm.credentials_hint && (
+                          <Paragraph style={{ marginTop: token.marginXS, marginBottom: 0 }}>
+                            {appForm.credentials_hint}
+                          </Paragraph>
+                        )}
                       </>
                     }
                   />
@@ -912,6 +971,21 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
+              {!appForm &&
+                entry.oauth?.stable_callback &&
+                readiness?.redirect_uri &&
+                readiness.catalog_key === entryId && (
+                  <Form layout="vertical">
+                    <Form.Item
+                      label="Callback URL"
+                      extra="This provider accepts only callback URLs it has approved."
+                    >
+                      <Text code copyable>
+                        {readiness.redirect_uri}
+                      </Text>
+                    </Form.Item>
+                  </Form>
+                )}
               {connectError && <Alert type="error" showIcon title={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
@@ -949,6 +1023,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
+                    ...(needsApiKey && credentialFieldDefs.length > 0 ? { credentialFields } : {}),
                     ...(appForm && appFields
                       ? {
                           oauthClient: {

@@ -200,3 +200,34 @@ describe('mergeMCPAuth', () => {
     ).toEqual({ type: 'oauth' });
   });
 });
+
+describe('bearer token header and prefix', () => {
+  it('accepts a vendor header and literal prefix on bearer auth only', () => {
+    expect(() =>
+      assertValidMCPAuthPatch(
+        { type: 'bearer', token: 'k', token_header: 'Authorization', token_prefix: 'Token token=' },
+        { create: true }
+      )
+    ).not.toThrow();
+    expect(() =>
+      assertValidMCPAuthPatch({ type: 'oauth', token_prefix: 'Token ' }, { create: true })
+    ).toThrow(/does not apply/);
+  });
+
+  it.each([
+    [{ token_header: 'Host' }, /token_header/],
+    [{ token_header: 'bad header' }, /token_header/],
+    [{ token_prefix: ' Token' }, /token_prefix/],
+    [{ token_prefix: 'Token\n' }, /control characters|token_prefix/],
+  ])('refuses %o', (fields, message) => {
+    expect(() =>
+      assertValidMCPAuthPatch({ type: 'bearer', token: 'k', ...fields }, { create: true })
+    ).toThrow(message);
+  });
+
+  it('keeps header and prefix through a token-only patch', () => {
+    expect(
+      mergeMCPAuth({ type: 'bearer', token: 'old', token_header: 'api-key' }, { token: 'new' })
+    ).toEqual({ type: 'bearer', token: 'new', token_header: 'api-key' });
+  });
+});

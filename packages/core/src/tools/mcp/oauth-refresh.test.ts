@@ -194,6 +194,25 @@ describe('refreshMCPToken', () => {
     expect(body.get('client_id')).toBeNull();
   });
 
+  it('sends the secret in the form body when the grant recorded client_secret_post', async () => {
+    mockFetchOnce({ access_token: 'new-a', token_type: 'Bearer', expires_in: 3600 });
+
+    await refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'rt-abc',
+      clientId: 'client-123',
+      clientSecret: 'secret-xyz',
+      tokenEndpointAuthMethod: 'client_secret_post',
+    });
+
+    const [, init] = (globalThis.fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.headers.Authorization).toBeUndefined();
+    const body = new URLSearchParams(init.body as string);
+    expect(body.get('client_id')).toBe('client-123');
+    expect(body.get('client_secret')).toBe('secret-xyz');
+    expect(body.get('refresh_token')).toBe('rt-abc');
+  });
+
   it('puts client_id in the body for public clients (no secret)', async () => {
     mockFetchOnce({ access_token: 'new-a', expires_in: 3600 });
 

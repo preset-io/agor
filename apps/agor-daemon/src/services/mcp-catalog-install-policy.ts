@@ -64,10 +64,35 @@ export function catalogOAuthConfig(entry: MCPCatalogEntry): MCPAuth {
 }
 
 /**
+ * The bearer-type auth a catalog credential recipe prescribes for `token`.
+ * Vendor header/scheme are stated only when the entry states them, so the
+ * ordinary `Authorization: Bearer` recipe stays the plain `{ type, token }`.
+ */
+export function catalogCredentialAuth(entry: MCPCatalogEntry, token: string): MCPAuth {
+  const recipe = entry.credentials;
+  return {
+    type: 'bearer',
+    token,
+    ...(recipe?.header ? { token_header: recipe.header } : {}),
+    ...(recipe?.prefix ? { token_prefix: recipe.prefix } : {}),
+  };
+}
+
+/**
+ * Whether a current install of `entry` carries custom headers: exactly when a
+ * credential recipe declares extra fields. Values (and, on candidate
+ * projections, names) are redacted, so presence is the comparable fact; every
+ * credential connect rewrites the full set anyway.
+ */
+function expectsCatalogHeaders(entry: MCPCatalogEntry, prescribed: MCPAuth): boolean {
+  return prescribed.type === 'bearer' && Boolean(entry.credentials?.fields?.length);
+}
+
+/**
  * Canonical current-install predicate shared by Connect reuse and OAuth policy.
  * Historical source/stamp alone is never authority: the row must still match
- * the current entry's endpoint, transport, credential routing, and no-header
- * policy. Imported/edited/removed rows therefore fail closed.
+ * the current entry's endpoint, transport, credential routing, and header
+ * policy (none, unless its credential recipe declares extra fields). Imported/edited/removed rows therefore fail closed.
  */
 export function isCurrentCatalogInstall(
   server: Pick<
@@ -106,6 +131,6 @@ export function isCurrentCatalogInstall(
       prescribed,
       options.reconcileMissingCompatibilityMode === true
     ) &&
-    Object.keys(server.headers ?? {}).length === 0
+    Object.keys(server.headers ?? {}).length > 0 === expectsCatalogHeaders(entry, prescribed)
   );
 }

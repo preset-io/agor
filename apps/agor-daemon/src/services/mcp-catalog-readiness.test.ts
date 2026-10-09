@@ -49,8 +49,12 @@ function peer(overrides: Partial<MCPServer> = {}): MCPServer {
   } as MCPServer;
 }
 
-function build(servers: MCPServer[]) {
-  const catalogGet = vi.fn(async () => ENTRY);
+function build(
+  servers: MCPServer[],
+  entry: MCPCatalogEntry = ENTRY,
+  redirectUri?: (entry: MCPCatalogEntry) => string | undefined
+) {
+  const catalogGet = vi.fn(async () => entry);
   const listCandidates = vi.fn(
     async (): Promise<MCPCatalogServerCandidate[]> =>
       servers.map((server) => ({
@@ -83,7 +87,11 @@ function build(servers: MCPServer[]) {
   };
   const isGrantAuthorized = vi.fn(async () => true);
   return {
-    service: new MCPCatalogReadinessService(app, { listCandidates, isGrantAuthorized }),
+    service: new MCPCatalogReadinessService(app, {
+      redirectUri,
+      listCandidates,
+      isGrantAuthorized,
+    }),
     catalogGet,
     listCandidates,
     isGrantAuthorized,
@@ -101,6 +109,19 @@ describe('MCPCatalogReadinessService', () => {
     expect(registration).not.toMatch(
       /getCatalogGrantAuthority|getToken|oauth_client_secret|openMCPOAuthSecret/
     );
+  });
+
+  it('shows the stable callback for an allowlisted DCR entry, and none for a plain one', async () => {
+    const redirectUri = vi.fn(() => 'https://cloud.example/mcp/oauth/callback/abc');
+    const allowlisted = { ...ENTRY, oauth: { stable_callback: { issuer: 'https://id.example' } } };
+    await expect(
+      build([], allowlisted, redirectUri).service.get(ENTRY.name, PARAMS)
+    ).resolves.toMatchObject({ redirect_uri: 'https://cloud.example/mcp/oauth/callback/abc' });
+    expect(redirectUri).toHaveBeenCalledWith(allowlisted);
+    redirectUri.mockClear();
+    const plain = await build([], ENTRY, redirectUri).service.get(ENTRY.name, PARAMS);
+    expect(plain).not.toHaveProperty('redirect_uri');
+    expect(redirectUri).not.toHaveBeenCalled();
   });
 
   it('reports reusable OAuth without returning peer or grant metadata', async () => {

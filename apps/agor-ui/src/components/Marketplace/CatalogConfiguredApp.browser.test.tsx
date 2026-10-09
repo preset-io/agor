@@ -120,6 +120,30 @@ it('shows Asana app setup without a bearer field, keeps IDs and secrets in the s
   await expect.element(button).toBeDisabled();
 });
 
+it('shows a recipe credentials hint beside the app credential fields', async () => {
+  const hinted: MCPCatalogEntry = {
+    ...entry,
+    oauth: {
+      ...entry.oauth,
+      configured_client: {
+        ...entry.oauth!.configured_client!,
+        credentials_hint: "Use the connector's Client ID, not the numeric App ID.",
+      },
+    },
+  };
+  render(
+    <ConfigProvider>
+      <App>
+        <CatalogDetailDrawer {...makeProps(hinted, vi.fn())} />
+      </App>
+    </ConfigProvider>
+  );
+  await expect
+    .element(page.getByText("Use the connector's Client ID, not the numeric App ID."))
+    .toBeVisible();
+  await expect.element(page.getByLabelText('OAuth app Client ID')).toBeVisible();
+});
+
 it('reuses an existing shared app install without asking for or sending app credentials', async () => {
   const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
     input.oauthPopup?.close()
@@ -138,6 +162,35 @@ it('reuses an existing shared app install without asking for or sending app cred
   );
   await expect
     .element(page.getByText('Uses the OAuth app already configured for this shared installation.'))
+    .toBeVisible();
+  await expect
+    .element(page.getByLabelText('OAuth app Client ID', { exact: true }))
+    .not.toBeInTheDocument();
+  await page.getByRole('checkbox').click();
+  await page.getByRole('button', { name: 'Connect', exact: true }).click();
+  expect(connect).toHaveBeenCalledOnce();
+  expect(connect.mock.calls[0][0]).not.toHaveProperty('oauthClient');
+});
+
+it('shows an allowlisted DCR entry its stable callback without asking for app credentials', async () => {
+  const allowlisted: MCPCatalogEntry = {
+    ...entry,
+    name: 'com.squareup/mcp',
+    title: 'Square',
+    oauth: { stable_callback: { issuer: 'https://mcp.squareup.com' } },
+  };
+  const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
+    input.oauthPopup?.close()
+  );
+  render(
+    <ConfigProvider>
+      <App>
+        <CatalogDetailDrawer {...makeProps(allowlisted, connect)} />
+      </App>
+    </ConfigProvider>
+  );
+  await expect
+    .element(page.getByText('https://relay.example.test/callback', { exact: true }))
     .toBeVisible();
   await expect
     .element(page.getByLabelText('OAuth app Client ID', { exact: true }))

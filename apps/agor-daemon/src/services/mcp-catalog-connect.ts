@@ -31,9 +31,16 @@
 import { isDatabaseUniqueConstraintError } from '@agor/core/db';
 import { BadRequest, NotAuthenticated, NotFound } from '@agor/core/feathers';
 import { sanitizeMCPExternalError } from '@agor/core/mcp';
-import { probeRemoteAuthType, probeRemoteBearerToken } from '@agor/core/mcp-catalog';
+import {
+  probeRemoteAuthType,
+  probeRemoteBearerToken,
+  probeRemoteCredentialHeaders,
+} from '@agor/core/mcp-catalog';
 import { MCP_AUTH_SECRET_FIELDS, redactMCPAuthSecrets } from '@agor/core/tools/mcp/auth-secrets';
-import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers';
+import {
+  MCP_HEADER_REDACTED_SENTINEL,
+  renderMCPTokenHeader,
+} from '@agor/core/tools/mcp/http-headers';
 import type {
   AuthenticatedParams,
   CreateMCPServerInput,
@@ -49,7 +56,12 @@ import type {
   MCPServerID,
   UserID,
 } from '@agor/core/types';
-import { catalogDisplayName, catalogServerSlug, isCanonicalFullUuid } from '@agor/core/types';
+import {
+  catalogDisplayName,
+  catalogEntryDeclaresOAuth,
+  catalogServerSlug,
+  isCanonicalFullUuid,
+} from '@agor/core/types';
 import { readCatalogSharing } from './mcp-catalog-access.js';
 import {
   hasLiveCallerOAuthGrant,
@@ -57,6 +69,7 @@ import {
   selectCatalogCandidate,
 } from './mcp-catalog-credential-match.js';
 import {
+  catalogCredentialAuth,
   catalogOAuthConfig,
   catalogServerTransport,
   isCurrentCatalogInstall,
@@ -348,9 +361,15 @@ function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAu
 async function resolveAuthRequirement(
   entry: MCPCatalogEntry & { remote_url: string },
   bearerToken: string | undefined,
-  sharing: MCPCatalogSharing
+  sharing: MCPCatalogSharing,
+  credentialHeaders?: Record<string, string>
 ): Promise<MCPAuth> {
-  const probed = await probeRemoteAuthType(entry.remote_url);
+  const answered = await probeRemoteAuthType(entry.remote_url);
+  // An entry that declares OAuth up front (a reviewed client recipe) is
+  // installed for OAuth even when the endpoint answers `initialize` without a
+  // challenge, as Google Workspace does; sign-in discovers from the server's
+  // own metadata. Only `none` is reinterpreted — a refusal stays a refusal.
+  const probed = answered === 'none' && catalogEntryDeclaresOAuth(entry) ? 'oauth' : answered;
   logProbeDisagreement(entry, probed);
   if (
     sharing === 'shared' &&
@@ -373,7 +392,7 @@ async function resolveAuthRequirement(
     entry.credentials?.scheme === 'bearer' &&
     entry.credentials.oauth_challenge_compatible
   ) {
-    return resolveBearerTokenAuth(entry, bearerToken);
+    return resolveBearerTokenAuth(entry, bearerToken, credentialHeaders);
   }
 
   if (probed === 'none' || probed === 'oauth') {
@@ -399,7 +418,7 @@ async function resolveAuthRequirement(
         'unsupported'
       );
     }
-    return resolveBearerTokenAuth(entry, bearerToken);
+    return resolveBearerTokenAuth(entry, bearerToken, credentialHeaders);
   }
 
   // `probeRemoteAuthType` deliberately retains no provider exception or body,
@@ -445,7 +464,8 @@ async function resolveAuthRequirement(
  */
 async function resolveBearerTokenAuth(
   entry: MCPCatalogEntry & { remote_url: string },
-  bearerToken: string | undefined
+  bearerToken: string | undefined,
+  credentialHeaders?: Record<string, string>
 ): Promise<MCPAuth> {
   const name = catalogDisplayName(entry);
   if (bearerToken === undefined) {
@@ -459,8 +479,17 @@ async function resolveBearerTokenAuth(
     );
   }
 
-  const verdict = await probeRemoteBearerToken(entry.remote_url, bearerToken);
-  if (verdict === 'accepted') return { type: 'bearer', token: bearerToken };
+  // Tried exactly as it will be sent: the entry's header and scheme word, plus
+  // any extra fields it declares.
+  const auth = catalogCredentialAuth(entry, bearerToken);
+  const verdict =
+    auth.token_header === undefined && auth.token_prefix === undefined && !credentialHeaders
+      ? await probeRemoteBearerToken(entry.remote_url, bearerToken)
+      : await probeRemoteCredentialHeaders(entry.remote_url, {
+          ...credentialHeaders,
+          ...renderMCPTokenHeader({ ...auth, token: bearerToken }),
+        });
+  if (verdict === 'accepted') return auth;
   if (verdict === 'rejected') {
     // Still `required` — the endpoint wants a key, this one was just wrong. A
     // client that has already revealed the field keeps it revealed, which is
@@ -528,6 +557,69 @@ function readBearerToken(value: unknown, entry: MCPCatalogEntry): string | undef
   }
 
   return trimmed;
+}
+
+/**
+ * The entry's declared extra credential fields as request headers, or
+ * `undefined` for an entry (or request) without any.
+ *
+ * They travel only with a bearer token: they complete a credential, they are
+ * not one. Every declared field is required, and nothing undeclared is
+ * accepted, so a request can fill in values but never name a header. Values
+ * get the token's input rules — trimmed, bounded, no control characters, and
+ * never the redaction sentinel — because a field may be a secret too.
+ */
+function readCredentialFields(
+  value: unknown,
+  entry: MCPCatalogEntry,
+  bearerToken: string | undefined
+): Record<string, string> | undefined {
+  const name = catalogDisplayName(entry);
+  const fields = entry.credentials?.fields ?? [];
+  if (value === undefined || value === null) {
+    if (bearerToken !== undefined && fields.length > 0) {
+      throw new BadRequest(
+        `${name} also needs ${fields.map((field) => field.label).join(', ')} to connect`
+      );
+    }
+    return undefined;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new BadRequest(`credential_fields must be an object to connect ${name}`);
+  }
+  if (bearerToken === undefined || fields.length === 0) {
+    throw new BadRequest(`${name} does not take extra credential fields with this request`);
+  }
+  const record = value as Record<string, unknown>;
+  const declared = new Set(fields.map((field) => field.key));
+  if (Object.keys(record).some((key) => !declared.has(key))) {
+    throw new BadRequest(`credential_fields names a field ${name} does not declare`);
+  }
+  const headers: Record<string, string> = {};
+  for (const field of fields) {
+    const raw = record[field.key];
+    if (raw !== undefined && typeof raw !== 'string') {
+      throw new BadRequest(`${field.label} must be a string to connect ${name}`);
+    }
+    const trimmed = raw?.trim() ?? '';
+    if (!trimmed) throw new BadRequest(`Enter ${field.label} to connect ${name}`);
+    if (
+      trimmed.length > 4096 ||
+      [...trimmed].some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 31 || code === 127;
+      })
+    ) {
+      throw new BadRequest(`${field.label} is too long or contains control characters`);
+    }
+    if (trimmed === MCP_HEADER_REDACTED_SENTINEL) {
+      throw new BadRequest(
+        `That is the placeholder Agor shows in place of a hidden value. Enter the real ${field.label}.`
+      );
+    }
+    headers[field.header] = trimmed;
+  }
+  return headers;
 }
 
 export interface MCPCatalogConnectService {
@@ -875,11 +967,16 @@ export function createMCPCatalogConnectService(
           transport: createInput.transport,
           scope: createInput.scope,
           url: createInput.url,
-          headers: {},
+          headers: createInput.headers ?? {},
           auth: reconciledAuth,
           replace_auth: true,
         }
-      : { auth: prescribed, replace_auth: true };
+      : {
+          auth: prescribed,
+          replace_auth: true,
+          // Extra credential fields rotate with the token they accompany.
+          ...(createInput.headers ? { headers: createInput.headers } : {}),
+        };
     if (!generation) {
       await service('mcp-servers').patch(server.mcp_server_id, updates, {
         ...params,
@@ -928,6 +1025,7 @@ export function createMCPCatalogConnectService(
       const sharing = readCatalogSharing(data.sharing);
       params = await deps.authorizeCaller(params, sharing);
       const bearerToken = readBearerToken(data.bearer_token, entry);
+      const credentialHeaders = readCredentialFields(data.credential_fields, entry, bearerToken);
       // Pin a pre-existing shared identity across the external probe. A deleted
       // or replaced row is not permission to publish a replacement (even for
       // a publisher), nor to adopt a different installation mid-request.
@@ -1004,7 +1102,7 @@ export function createMCPCatalogConnectService(
         bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
-        auth = await resolveAuthRequirement(entry, bearerToken, sharing);
+        auth = await resolveAuthRequirement(entry, bearerToken, sharing, credentialHeaders);
         if (configuredClient) {
           if (auth.type !== 'oauth')
             throw new BadRequest(
@@ -1043,6 +1141,9 @@ export function createMCPCatalogConnectService(
         transport: catalogServerTransport(entry),
         url: entry.remote_url,
         auth,
+        // Only a credential recipe's extra fields, and only once the endpoint
+        // accepted them with the token.
+        ...(credentialHeaders && auth.type === 'bearer' ? { headers: credentialHeaders } : {}),
         // Session scope keeps this caller-owned install out of the global
         // defaults. It remains unattached until the caller explicitly starts
         // or configures a session with it.

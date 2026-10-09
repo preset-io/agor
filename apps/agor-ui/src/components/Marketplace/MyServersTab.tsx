@@ -38,6 +38,7 @@ import {
   policyPendingState,
 } from '../MCPServer/memberPolicy';
 import { useMCPServerOAuthStart } from '../MCPServer/useMCPServerOAuthStart';
+import { ConfiguredAppCredentialsModal } from './ConfiguredAppCredentialsModal';
 import {
   MARKETPLACE_ACTION_COLUMN_WIDTH,
   MARKETPLACE_DRAWER_FOCUS_FALLBACK_MS,
@@ -201,6 +202,14 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const autoDiscoveryAttempts = useRef(new Set<string>());
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editingCredentialServer, setEditingCredentialServer] = useState<MCPServer | null>(null);
+  /** Catalog entry name -> its customer-owned app recipe (`null`: not one). */
+  const [appRecipes, setAppRecipes] = useState<
+    ReadonlyMap<string, { secretRequired: boolean } | null>
+  >(() => new Map());
+  const [editingApp, setEditingApp] = useState<{
+    server: MCPServer;
+    secretRequired: boolean;
+  } | null>(null);
   const drawerTrigger = useRef<HTMLElement | null>(null);
   const drawerFocusTimer = useRef<number | undefined>(undefined);
   useEffect(
@@ -237,6 +246,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     drawerTrigger.current = null;
     setSelectedServerId(null);
     setEditingCredentialServer(null);
+    setEditingApp(null);
     setDiscoveryErrors(new Map());
   }, [active, clearRemovalFocusAuthority]);
 
@@ -663,6 +673,60 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     );
   }, [restoreDrawerFocus, selectedServerId]);
 
+  // Only a catalog OAuth install whose recipe brings a customer-owned app gets
+  // the in-place Client ID / secret editor. Looked up once per catalog entry.
+  const selectedEntryName =
+    selectedServer?.source === 'catalog' && selectedCredential?.method === 'oauth'
+      ? selectedServer.catalog_entry_name
+      : undefined;
+  useEffect(() => {
+    if (!client || !selectedEntryName || appRecipes.has(selectedEntryName)) return;
+    let current = true;
+    client
+      .service('mcp-catalog')
+      .get(selectedEntryName)
+      .then((entry) => {
+        const app = entry.oauth?.configured_client;
+        if (current)
+          setAppRecipes((map) =>
+            new Map(map).set(
+              selectedEntryName,
+              app ? { secretRequired: app.secret_required } : null
+            )
+          );
+      })
+      .catch(() => {
+        if (current) setAppRecipes((map) => new Map(map).set(selectedEntryName, null));
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, selectedEntryName, appRecipes]);
+  const selectedAppRecipe = selectedEntryName ? appRecipes.get(selectedEntryName) : undefined;
+
+  const openAppEditor = async (server: MCPMarketplaceServer, secretRequired: boolean) => {
+    const operation = guard.begin();
+    if (!client || !canChangeTools || !operation.isCurrent()) return;
+    const key = `oauth-app:${server.mcp_server_id}`;
+    setBusy((current) => new Set(current).add(key));
+    try {
+      const fullServer = await client.service('mcp-servers').get(server.mcp_server_id);
+      if (operation.isCurrent()) setEditingApp({ server: fullServer, secretRequired });
+    } catch (cause) {
+      if (operation.isCurrent()) {
+        message.error(cause instanceof Error ? cause.message : 'Could not open the OAuth app');
+      }
+    } finally {
+      if (operation.isCurrent()) {
+        setBusy((current) => {
+          const next = new Set(current);
+          next.delete(key);
+          return next;
+        });
+      }
+    }
+  };
+
   const openCredentialEditor = async (server: MCPMarketplaceServer) => {
     const operation = guard.begin();
     if (!client || !canChangeTools || !operation.isCurrent()) return;
@@ -939,6 +1003,14 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             ? () => void openCredentialEditor(selectedServer)
             : undefined
         }
+        editingOAuthApp={Boolean(
+          selectedServer && busy.has(`oauth-app:${selectedServer.mcp_server_id}`)
+        )}
+        onEditOAuthApp={
+          selectedServer && selectedAppRecipe && canChangeTools
+            ? () => void openAppEditor(selectedServer, selectedAppRecipe.secretRequired)
+            : undefined
+        }
         onRefreshTools={(server) => void discoverTools(server, canRefresh, true)}
         onToggleTool={(server, tool, checked) =>
           void toggleTool(server, tool, checked, canChangeTools)
@@ -975,6 +1047,18 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             }
           )
         }
+      />
+      <ConfiguredAppCredentialsModal
+        server={editingApp?.server ?? null}
+        secretRequired={editingApp?.secretRequired ?? true}
+        client={client}
+        onClose={(saved) => {
+          setEditingApp(null);
+          if (saved) {
+            message.success('OAuth app updated. Users must reconnect.');
+            void refresh();
+          }
+        }}
       />
       <MCPServerEditModal
         server={editingCredentialServer}

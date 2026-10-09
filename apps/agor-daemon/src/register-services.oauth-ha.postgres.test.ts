@@ -22,6 +22,7 @@ import {
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, MCPServerID, User, UserID } from '@agor/core/types';
+import { MCP_OAUTH_RELAY } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
@@ -38,18 +39,24 @@ const oauthFixture = vi.hoisted(() => ({
   beforeExchangeReturn: undefined as undefined | (() => Promise<void>),
   /** Servers treated as current installs of a configured_client catalog entry. */
   configuredIssuers: new Map<string, string>(),
+  /** Servers treated as current installs of a stable_callback (allowlisted DCR) entry. */
+  stableCallbackIssuers: new Map<string, string>(),
 }));
 
 vi.mock('./services/mcp-oauth-compatibility.js', async (importOriginal) => {
   const original = await importOriginal<typeof import('./services/mcp-oauth-compatibility.js')>();
   return {
     ...original,
-    configuredCatalogIssuer: async (
-      server: Parameters<typeof original.configuredCatalogIssuer>[0],
-      entries?: Parameters<typeof original.configuredCatalogIssuer>[1]
-    ) =>
-      oauthFixture.configuredIssuers.get(server.mcp_server_id) ??
-      original.configuredCatalogIssuer(server, entries),
+    catalogInstallRelayIssuer: async (
+      ...args: Parameters<typeof original.catalogInstallRelayIssuer>
+    ) => {
+      const [server, relayEnabled] = args;
+      const fixture = oauthFixture.configuredIssuers.get(server.mcp_server_id);
+      if (fixture) return fixture;
+      const allowlisted = oauthFixture.stableCallbackIssuers.get(server.mcp_server_id);
+      if (allowlisted) return relayEnabled ? allowlisted : undefined;
+      return original.catalogInstallRelayIssuer(...args);
+    },
   };
 });
 
@@ -1232,9 +1239,24 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           a.app
             .service('mcp-servers/oauth-start')
             .create({ mcp_server_id: server.mcp_server_id }, params(owner, tenant));
+        // A relay recipe issuer differing from the AS metadata issuer only by a
+        // trailing slash is refused before any relay work, with a recipe
+        // error rather than a `prepare` binding failure.
+        oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test/');
+        expect(await start()).toMatchObject({
+          success: false,
+          recovery: { category: 'metadata_incompatible', failure_reason: 'issuer_mismatch' },
+        });
+        expect(prepare).not.toHaveBeenCalled();
+        oauthFixture.configuredIssuers.set(server.mcp_server_id, 'https://provider.example.test');
         expect(await start()).toMatchObject({
           success: true,
           authorizationUrl: 'https://cloud.test/start/opaque',
+        });
+        // The exact recipe issuer is the one string bound into the relay.
+        expect(preparations.at(-1)).toMatchObject({
+          issuer: 'https://provider.example.test',
+          redirect_uri: `https://cloud.test${MCP_OAUTH_RELAY.callbackPrefix}${relayBodyHash('https://provider.example.test')}`,
         });
         const deliver = async (replica: Replica, overrides: Record<string, unknown> = {}) => {
           const { authorization_url: _authorization, ...binding } = preparations.at(-1)!;
@@ -1384,6 +1406,76 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         }
         expect(preparations).toHaveLength(prepared);
 
+        // An allowlisted DCR entry (stable_callback) keeps DCR but registers and
+        // authorizes with the relay callback, under every relay-only check.
+        const allowlisted = await runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
+          new MCPServerRepository(scoped).create({
+            name: `relay-dcr-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: owner.user_id,
+            auth: { type: 'oauth', oauth_mode: 'per_user', oauth_compatibility_mode: 'strict' },
+          })
+        );
+        oauthFixture.stableCallbackIssuers.set(
+          allowlisted.mcp_server_id,
+          'https://provider.example.test'
+        );
+        const relayRedirect = new MCPOAuthRelay(relayConfig).redirectUri(
+          'https://provider.example.test'
+        );
+        const registrationsBefore = oauthFixture.registrations;
+        expect(
+          await a.app
+            .service('mcp-servers/oauth-start')
+            .create({ mcp_server_id: allowlisted.mcp_server_id }, params(owner, tenant))
+        ).toMatchObject({ success: true, authorizationUrl: 'https://cloud.test/start/opaque' });
+        expect(oauthFixture.registrations).toBe(registrationsBefore + 1);
+        expect(preparations.at(-1)).toMatchObject({
+          server_id: allowlisted.mcp_server_id,
+          redirect_uri: relayRedirect,
+          issuer: 'https://provider.example.test',
+        });
+        expect(
+          new URL(preparations.at(-1)!.authorization_url).searchParams.get('redirect_uri')
+        ).toBe(relayRedirect);
+        // The direct callback cannot complete a relay-bound attempt.
+        const allowlistedState = preparations.at(-1)!.state;
+        expect(
+          (
+            await b.callback({
+              code: 'fake-code',
+              state: allowlistedState,
+              iss: 'https://provider.example.test',
+            })
+          ).status
+        ).not.toBe(200);
+        await a.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: allowlisted.mcp_server_id }, params(owner, tenant));
+        // The sealed relay binding (v4 envelope) completes via signed delivery,
+        // reusing the relay-callback registration.
+        expect(oauthFixture.registrations).toBe(registrationsBefore + 1);
+        expect((await deliver(b)).result).toEqual({ outcome: 'connected' });
+        // A cell without the relay uses the direct callback, and does not reuse
+        // the registration made for the relay callback.
+        const preparedBeforeDirect = preparations.length;
+        const directStart = (await replicaA.app
+          .service('mcp-servers/oauth-start')
+          .create({ mcp_server_id: allowlisted.mcp_server_id }, params(owner, tenant))) as {
+          success: boolean;
+          authorizationUrl: string;
+        };
+        expect(directStart.success).toBe(true);
+        expect(new URL(directStart.authorizationUrl).searchParams.get('redirect_uri')).toBe(
+          'https://agor.example.test/mcp-servers/oauth-callback'
+        );
+        expect(oauthFixture.registrations).toBe(registrationsBefore + 2);
+        expect(preparations).toHaveLength(preparedBeforeDirect);
+
         // Shared OAuth mode also runs through the relay, bound to the
         // initiating admin; the grant is stored shared and usable by others.
         const shared = await runWithTenantDatabaseScope(a.db, tenant, (scoped) =>
@@ -1501,6 +1593,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(preparations).toHaveLength(beforeUnbound);
       } finally {
         oauthFixture.configuredIssuers.clear();
+        oauthFixture.stableCallbackIssuers.clear();
         prepare.mockRestore();
         for (const key of Object.keys(relayEnv)) delete process.env[key];
         await Promise.all(

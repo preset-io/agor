@@ -79,6 +79,24 @@ export type MCPOAuthMode = 'per_user' | 'shared';
  */
 export const MCP_OAUTH_DCR_MODES = ['disabled', 'advertised', 'fallback'] as const;
 
+/** Confidential-client token endpoint authentication methods Agor can send. */
+export const MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS = [
+  'client_secret_basic',
+  'client_secret_post',
+] as const;
+
+export type MCPOAuthTokenEndpointAuthMethod =
+  (typeof MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS)[number];
+
+export function isMCPOAuthTokenEndpointAuthMethod(
+  value: unknown
+): value is MCPOAuthTokenEndpointAuthMethod {
+  return (
+    typeof value === 'string' &&
+    (MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS as readonly string[]).includes(value)
+  );
+}
+
 export type MCPOAuthDCRMode = (typeof MCP_OAUTH_DCR_MODES)[number];
 
 export const MCP_OAUTH_DEFAULT_DCR_MODE = 'advertised' satisfies MCPOAuthDCRMode;
@@ -473,6 +491,18 @@ export interface MCPAuth {
   type: 'none' | 'bearer' | 'jwt' | 'oauth';
   // Bearer token
   token?: string;
+  /**
+   * Header that carries `token`; defaults to `Authorization`. Non-secret.
+   * Some vendors take an API key as e.g. `api-key: <key>`.
+   */
+  token_header?: string;
+  /**
+   * Literal text sent before `token`, spacing included: `Token ` for
+   * `Authorization: Token <key>`. Defaults to `Bearer ` only when
+   * `token_header` is omitted; with an explicit header, omission sends the
+   * bare token. Non-secret.
+   */
+  token_prefix?: string;
   // JWT config
   api_url?: string;
   api_token?: string;

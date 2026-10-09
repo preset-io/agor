@@ -53,6 +53,17 @@ to whatever a redirect names.
   claims the caller's generation for that install so an older concurrent
   request can't overwrite a newer key. The row is written only after the key
   is accepted.
+- A reviewed entry may change how the key is sent: `credentials.header`
+  (default `Authorization`) and a literal `credentials.prefix` (default
+  `Bearer ` only when `header` is omitted; e.g. PagerDuty's `Token token=`).
+  These persist as non-secret `auth.token_header` / `auth.token_prefix` and are
+  rendered by `renderMCPTokenHeader` for the probe and every runtime.
+- `credentials.fields` declares extra user values sent as headers alongside the
+  key (e.g. dbt's `x-dbt-prod-environment-id`). They arrive as
+  `credential_fields`, only with `bearer_token`, all required, and are stored
+  in the row's custom `headers` (redacted on every read). The request fills
+  values; only the entry names headers. A current install of such an entry
+  carries headers; every other catalog install carries none.
 - Rows holding a secret in their own columns are reusable only by their owner:
   two users get two rows; reconnecting with a new key rotates the existing row.
 
@@ -74,10 +85,37 @@ to whatever a redirect names.
   mode wins; edited/imported installs, removed entries, or any drift fall back
   to `strict`. Monday, Cloudflare, ClickUp, and Preset are pinned `strict`
   (Preset defensively, pending production validation).
-- **Excluded providers.** Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and
-  Kagi are off the shelf because no safely bound client-registration/issuer path
-  exists (reasons at the bottom of `curated.yaml`). Don't re-add one just
-  because its endpoint returns an OAuth challenge.
+- **Excluded providers.** Prisma, MongoDB, and Kagi are off the shelf because
+  no safely bound client-registration/issuer path exists (reasons at the bottom
+  of `curated.yaml`). Box, HubSpot, Slack, and Google Workspace are offered only
+  as customer-owned app recipes; PagerDuty only via its user API token. Don't
+  re-add a DCR entry just because its endpoint returns an OAuth challenge.
+- **Declared OAuth.** An `auth_type: oauth` entry with a reviewed client
+  (`configured_client` or `client_id`, see `catalogEntryDeclaresOAuth`) is
+  installed for OAuth even when the endpoint answers `initialize` with no
+  challenge (Google Workspace), and oauth-start then discovers from the
+  server's well-known metadata. Only current installs of such entries skip the
+  401 requirement; manual and drifted rows keep the challenge-driven contract.
+- **Recipe issuer.** State the authorization server metadata `issuer` in
+  `configured_client.issuer`. The health audit and hosted-relay flows require
+  the recipe issuer to equal that metadata issuer exactly; the relay's callback
+  hash and `prepare` binding both use that one string. Only direct (non-relay)
+  flows tolerate a single trailing-slash difference
+  (`oauthIssuerIdentifiersMatch`). A mismatch fails as an `issuer_mismatch`
+  configuration error before registration or relay work.
+- **Token endpoint client auth** is HTTP Basic unless a configured-app recipe
+  declares `oauth.token_endpoint_auth_method: client_secret_post` (Slack,
+  HubSpot). The daemon resolves it from the install's catalog provenance
+  (`catalogTokenEndpointAuthMethod`) for both the code exchange and every
+  refresh; nothing is stored per grant, and manual servers always use Basic.
+  The health audit flags a recipe whose effective method (declared, else Basic)
+  the token endpoint doesn't advertise. The field describes the provider and
+  should almost never change: changing or removing it after grants exist makes
+  their next refresh use the new method, and a provider that refuses it drops
+  the grant, so users reconnect. **Rolling upgrade:** replicas that predate the field refresh
+  with Basic, so a Slack/HubSpot grant issued mid-rollout can fail an old
+  replica's refresh with `invalid_client` and need reconnecting. Finish the
+  rollout before connecting those providers.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its
   OAuth challenge; the health audit flags if its OAuth metadata becomes usable.
 - **Sign-in completion.** Connect pre-opens the provider window during user

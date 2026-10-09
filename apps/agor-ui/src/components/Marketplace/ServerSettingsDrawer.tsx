@@ -54,6 +54,9 @@ export interface ServerSettingsDrawerProps {
   onReconnectOAuth?: () => void;
   onDisconnectOAuth?: () => void;
   onEditCredential?: () => void;
+  /** Present only for a customer-owned OAuth app install the caller may edit. */
+  onEditOAuthApp?: () => void;
+  editingOAuthApp?: boolean;
   onRefreshTools: (server: MCPMarketplaceServer) => void;
   onToggleTool: (
     server: MCPMarketplaceServer,
@@ -83,6 +86,8 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   onReconnectOAuth,
   onDisconnectOAuth,
   onEditCredential,
+  onEditOAuthApp,
+  editingOAuthApp = false,
   onRefreshTools,
   onToggleTool,
   onRemove,
@@ -198,6 +203,16 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                       Edit credential
                     </Button>
                   )}
+                  {credential.method === 'oauth' && onEditOAuthApp && (
+                    <Button
+                      disabled={!canChangeTools || toolWorkActive}
+                      loading={editingOAuthApp}
+                      onClick={onEditOAuthApp}
+                      aria-label={`Edit ${marketplaceServerTitle(server)} OAuth app credentials`}
+                    >
+                      Edit OAuth app
+                    </Button>
+                  )}
                   {credential.method === 'oauth' && onDisconnectOAuth && (
                     <Popconfirm
                       title={`Disconnect ${marketplaceServerTitle(server)}?`}
@@ -226,7 +241,8 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
             </Text>
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Credential values are never displayed here. OAuth recovery uses the existing secure
-              provider flow; API keys and JWT credentials open the existing secure editor.
+              provider flow; API keys, JWT credentials, and your own OAuth app's Client ID and
+              secret open a secure editor.
             </Text>
           </Flex>
 
