@@ -215,7 +215,9 @@ describe('CardModal permission gating', () => {
       });
       expect(patch).not.toHaveBeenCalled();
       expect(remove).not.toHaveBeenCalled();
-      expect(showWarning).toHaveBeenCalledWith(expect.stringMatching(/was not (archived|deleted)/));
+      expect(showWarning).toHaveBeenCalledWith(
+        `Couldn't ${action.toLowerCase()} the card, because the board reloaded or the connection dropped.`
+      );
     }
   );
 

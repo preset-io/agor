@@ -53,3 +53,31 @@ describe('UserAvatarsTab authority fencing', () => {
     ).not.toBeChecked();
   });
 });
+
+describe('UserAvatarsTab failures', () => {
+  it('shows a load failure inline and retries on Try again', async () => {
+    const getAvatarSettings = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce({ enabled: true, provider: 'slack', gateway_channel_id: null });
+    const client = {
+      service: () => ({ getAvatarSettings, updateAvatarSettings: vi.fn(), syncAvatars: vi.fn() }),
+    } as unknown as AgorClient;
+    render(
+      <AntApp>
+        <UserAvatarsTab
+          client={client}
+          gatewayChannelById={new Map()}
+          identityKey="admin-a:admin"
+          operationScope={['admin-a:admin', 1]}
+        />
+      </AntApp>
+    );
+    expect(await screen.findByText("Couldn't load avatar settings.")).toBeInTheDocument();
+    act(() => screen.getByRole('button', { name: 'Try again' }).click());
+    await waitFor(() =>
+      expect(screen.getByRole('checkbox', { name: /Enable Slack-synced avatars/i })).toBeChecked()
+    );
+    expect(screen.queryByText("Couldn't load avatar settings.")).toBeNull();
+  });
+});

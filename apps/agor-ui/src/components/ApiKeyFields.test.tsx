@@ -70,7 +70,7 @@ describe('ApiKeyFields authority fencing', () => {
     const input = screen.getByPlaceholderText('AIza...');
     fireEvent.change(input, { target: { value: 'secret-example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not save');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save this field.");
     expect(screen.queryByText(/upstream rejected/)).toBeNull();
     expect(input).toHaveValue('secret-example');
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -94,7 +94,7 @@ describe('ApiKeyFields authority fencing', () => {
       </AntApp>
     );
     fireEvent.click(screen.getByRole('button', { name: /Clear$/ }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not clear');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't clear this field.");
     expect(screen.getByText('Set')).toBeVisible();
   });
 });

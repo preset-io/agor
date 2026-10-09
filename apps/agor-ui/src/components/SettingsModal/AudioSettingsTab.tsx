@@ -38,10 +38,11 @@ interface AudioSettingsTabProps {
 
 export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValuesChange }) => {
   const { token } = theme.useToken();
-  const { showError, showWarning, showInfo } = useThemedMessage();
+  const { showInfo } = useThemedMessage();
   const [isPlaying, setIsPlaying] = useState(false);
   const [audioBlocked, setAudioBlocked] = useState<boolean | null>(null);
   const [showPermissionAlert, setShowPermissionAlert] = useState(false);
+  const [previewFailed, setPreviewFailed] = useState(false);
 
   // Check audio permission on mount
   useEffect(() => {
@@ -60,8 +61,8 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValu
       setAudioBlocked(false);
     } catch (_error) {
       setAudioBlocked(true);
+      setPreviewFailed(true);
       setShowPermissionAlert(true);
-      showError('Audio blocked by browser. See instructions below to enable.');
     } finally {
       // Reset after a short delay (chimes are ~1-2 seconds)
       setTimeout(() => setIsPlaying(false), 2000);
@@ -74,8 +75,8 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValu
       const blocked = await checkAudioPermission();
       setAudioBlocked(blocked);
       if (blocked) {
+        setPreviewFailed(false);
         setShowPermissionAlert(true);
-        showWarning('Audio may be blocked. Click Preview to test and grant permissions.');
       } else {
         showInfo('Audio notifications enabled. Use the preview button to test.');
       }
@@ -101,12 +102,14 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValu
           type="warning"
           showIcon
           icon={<InfoCircleOutlined />}
-          title="Browser Audio Permissions Required"
+          title={
+            previewFailed
+              ? "Couldn't play the sound, because your browser may be blocking it. Follow the steps below."
+              : 'Your browser may block sounds. Use Preview to check.'
+          }
           description={
             <div>
-              <p style={{ marginBottom: 8 }}>
-                Your browser is blocking audio playback. To enable chimes:
-              </p>
+              <p style={{ marginBottom: 8 }}>To allow sounds:</p>
               <ol style={{ marginLeft: 16, marginBottom: 8 }}>
                 <li>
                   Click the <strong>lock icon</strong> (🔒) or <strong>site info icon</strong> in

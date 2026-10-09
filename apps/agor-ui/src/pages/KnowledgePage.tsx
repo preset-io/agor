@@ -109,6 +109,7 @@ import { useUserLocalStorage } from '../hooks/useUserLocalStorage';
 import { knowledgeAttributionDisplay } from '../knowledgeAttributionDisplay';
 import { useAgorStore } from '../store/agorStore';
 import { selectUserById } from '../store/selectors';
+import { formatActionError } from '../utils/connectionErrors';
 import {
   buildKnowledgeRoutePath,
   decodeKnowledgeRoutePath,
@@ -2457,8 +2458,8 @@ export function KnowledgePage({
   const archiveActiveDocument = async () => {
     if (!client || !activeDoc || !canArchiveActiveDocument) return;
     setArchiveSaving(true);
+    const archived = !activeDoc.archived;
     try {
-      const archived = !activeDoc.archived;
       const updated = await client.service('kb/documents').patch(activeDoc.document_id, {
         archived,
         expected_archived: activeDoc.archived,
@@ -2477,7 +2478,11 @@ export function KnowledgePage({
       await loadDocuments();
       showSuccess(archived ? 'Page archived' : 'Page restored');
     } catch (err) {
-      showError(err instanceof Error ? err.message : 'Failed to change archive state');
+      showError(
+        formatActionError(archived ? 'archive the page' : 'restore the page', err, {
+          idempotent: true,
+        })
+      );
     } finally {
       setArchiveSaving(false);
     }

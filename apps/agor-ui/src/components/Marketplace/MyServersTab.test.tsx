@@ -8,11 +8,19 @@ import {
   waitFor,
   within,
 } from '@testing-library/react';
-import { ConfigProvider, message } from 'antd';
+import { ConfigProvider } from 'antd';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyServersTab } from './MyServersTab';
 import { marketplaceCredentialPresentation } from './marketplacePresentation';
 import { ServerSettingsDrawer } from './ServerSettingsDrawer';
+
+const toast = vi.hoisted(() => ({
+  showSuccess: vi.fn(),
+  showError: vi.fn(),
+  showInfo: vi.fn(),
+  showWarning: vi.fn(),
+}));
+vi.mock('@/utils/message', () => ({ useThemedMessage: () => toast }));
 
 // All mounts use the same motion policy. Mixing animated mounts with one
 // motion:false mount leaves cached AntD motion styles in jsdom (no animationend).
@@ -143,11 +151,7 @@ async function confirmServerRemoval(title: string): Promise<void> {
 
 describe('Marketplace server inventory and settings', () => {
   beforeEach(() => {
-    // Static messages mount a separate animated React root outside our provider
-    // and RTL cleanup. Assert feedback calls without leaking that root/styles.
-    for (const method of ['success', 'error', 'info'] as const) {
-      vi.spyOn(message, method).mockImplementation(() => undefined as never);
-    }
+    for (const show of Object.values(toast)) show.mockClear();
   });
   it('warns with the attachment count, cancels without writes, and sends explicit confirmed deletion', async () => {
     const value = { ...overview, servers: [{ ...overview.servers[0], session_count: 2 }] };
@@ -170,6 +174,39 @@ describe('Marketplace server inventory and settings', () => {
       detach: true,
       expected_session_count: 2,
     });
+  });
+
+  it('names the failed removal and refreshes the confirmed count', async () => {
+    const { create, refresh } = renderTab();
+    create.mockRejectedValueOnce(
+      new Error('Session attachments changed. Review the current count and confirm deletion again.')
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
+    await confirmServerRemoval('GitHub');
+    await waitFor(() =>
+      expect(toast.showError).toHaveBeenCalledWith(
+        "Couldn't remove the server. The sessions using it changed, so check the count and confirm again."
+      )
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  it('names a failed OAuth disconnect', async () => {
+    const { create } = renderTab();
+    create.mockResolvedValueOnce({ success: false, error: 'Token revocation was refused' });
+    fireEvent.click(settingsAction('server-1'));
+    fireEvent.click(await screen.findByLabelText('Disconnect GitHub OAuth connection'));
+    const prompt = await screen.findByText('Disconnect GitHub?');
+    const confirm = Array.from(
+      prompt.closest('.ant-popover')?.querySelectorAll<HTMLButtonElement>('button') ?? []
+    ).find((button) => button.textContent?.trim() === 'Disconnect');
+    if (!confirm) throw new Error('OAuth disconnect confirmation not found');
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(toast.showError).toHaveBeenCalledWith(
+        "Couldn't disconnect. (Token revocation was refused)"
+      )
+    );
   });
 
   it('offers Delete without detachment wording for a server with no attachments', async () => {
@@ -544,7 +581,7 @@ describe('Marketplace server inventory and settings', () => {
 
   it('updates one tool locally without remounting, losing focus, or reloading the overview', async () => {
     // Keep static AntD notifications out of jsdom teardown; tool updates stay local.
-    const success = vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
+    const success = toast.showSuccess;
     const { service, create, refresh } = renderTab();
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const drawer = await screen.findByRole('dialog');
@@ -556,7 +593,7 @@ describe('Marketplace server inventory and settings', () => {
     const optimistic = await screen.findByRole('switch', { name: 'GitHub: issues.create off' });
     expect(optimistic).toBe(control);
     expect(optimistic).not.toBeDisabled();
-    await waitFor(() => expect(success).toHaveBeenCalledWith('issues.create is off'));
+    await waitFor(() => expect(success).toHaveBeenCalledWith('issues.create is off.'));
     expect(screen.getByRole('dialog')).toBe(drawer);
 
     await waitFor(() => expect(service).toHaveBeenCalledWith('mcp-marketplace/tool-permission'));
@@ -570,7 +607,7 @@ describe('Marketplace server inventory and settings', () => {
   });
 
   it('rolls back a failed optimistic tool change without remounting the drawer or switch', async () => {
-    const error = vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
+    const error = toast.showError;
     const mocked = renderTab();
     mocked.create.mockRejectedValueOnce(new Error('Permission write failed'));
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
@@ -581,7 +618,11 @@ describe('Marketplace server inventory and settings', () => {
     fireEvent.click(control);
     expect(await screen.findByRole('switch', { name: 'GitHub: issues.create off' })).toBe(control);
 
-    await waitFor(() => expect(error).toHaveBeenCalledWith('Permission write failed'));
+    await waitFor(() =>
+      expect(error).toHaveBeenCalledWith(
+        "Couldn't change the tool's permission. (Permission write failed)"
+      )
+    );
     const rolledBack = screen.getByRole('switch', { name: 'GitHub: issues.create on' });
     expect(rolledBack).toBe(control);
     expect(rolledBack).not.toBeDisabled();
@@ -641,7 +682,7 @@ describe('Marketplace server inventory and settings', () => {
   });
 
   it('keeps multiple tool switches focusable while serializing permission writes with feedback', async () => {
-    const info = vi.spyOn(message, 'info').mockImplementation(() => undefined as never);
+    const info = toast.showInfo;
     let resolveMutation!: (value: unknown) => void;
     const mutation = new Promise((resolve) => {
       resolveMutation = resolve;
@@ -704,7 +745,7 @@ describe('Marketplace server inventory and settings', () => {
   });
 
   it('does not start a tool toggle while automatic discovery is in flight', async () => {
-    const info = vi.spyOn(message, 'info').mockImplementation(() => undefined as never);
+    const info = toast.showInfo;
     const discovery = new Promise(() => undefined);
     const value: MCPMarketplaceOverview = {
       ...overview,
@@ -729,7 +770,7 @@ describe('Marketplace server inventory and settings', () => {
     fireEvent.click(control);
     fireEvent.click(within(drawer).getByRole('button', { name: 'Refresh tools' }));
     expect(mocked.create).toHaveBeenCalledTimes(1);
-    expect(info).toHaveBeenCalledWith('Wait for tool discovery to finish before changing a tool');
+    expect(info).toHaveBeenCalledWith('Wait for tool discovery to finish before changing a tool.');
     expect(within(drawer).getByRole('switch', { name: 'GitHub: issues.create on' })).toBe(control);
     expect(control).toHaveFocus();
     expect(within(drawer).getByRole('button', { name: 'Refresh tools' })).toHaveClass(
@@ -821,7 +862,8 @@ describe('Marketplace server inventory and settings', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const drawer = await screen.findByRole('dialog');
-    expect(await within(drawer).findByText('Could not discover tools')).toBeVisible();
+    expect(await within(drawer).findByText("Couldn't refresh tools.")).toBeVisible();
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Details' }));
     expect(within(drawer).getByText('Provider is unavailable')).toBeVisible();
     expect(within(drawer).getByText('issues.create')).toBeVisible();
     expect(mocked.create).toHaveBeenCalledOnce();
@@ -830,7 +872,7 @@ describe('Marketplace server inventory and settings', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'Settings for GitHub' }));
     const reopened = await screen.findByRole('dialog');
-    expect(within(reopened).queryByText('Could not discover tools')).not.toBeInTheDocument();
+    expect(within(reopened).queryByText("Couldn't refresh tools.")).not.toBeInTheDocument();
     expect(within(reopened).queryByText('Provider is unavailable')).not.toBeInTheDocument();
   });
 
@@ -937,9 +979,9 @@ describe('Marketplace server inventory and settings', () => {
     expect(screen.getByRole('dialog')).toBe(drawer);
   });
 
-  it('surfaces tool discovery failures without claiming success', async () => {
-    const error = vi.spyOn(message, 'error').mockImplementation(() => undefined as never);
-    const success = vi.spyOn(message, 'success').mockImplementation(() => undefined as never);
+  it('shows a manual tool refresh failure inline with Try again, not as a toast', async () => {
+    const error = toast.showError;
+    const success = toast.showSuccess;
     const mocked = client();
     mocked.create.mockResolvedValue({ success: false, error: 'Provider is unavailable' });
     const refresh = vi.fn(async () => undefined);
@@ -961,9 +1003,12 @@ describe('Marketplace server inventory and settings', () => {
     await waitFor(() => expect(refreshTools).toBeEnabled());
     fireEvent.click(refreshTools);
 
-    await waitFor(() => expect(error).toHaveBeenCalledWith('Provider is unavailable'));
+    expect(await screen.findByText("Couldn't refresh tools.")).toBeVisible();
+    expect(error).not.toHaveBeenCalled();
     expect(success).not.toHaveBeenCalled();
     expect(refresh).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(mocked.create).toHaveBeenCalledTimes(2));
   });
 
   it('fails closed when member policy permits reuse but not configuration', async () => {

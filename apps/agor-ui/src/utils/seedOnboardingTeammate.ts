@@ -235,7 +235,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     // the bootstrap session below.
     if (!input.client) {
       warn(
-        `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant yet.`
+        `${teammateName}'s workspace is ready, but it couldn't be set as your primary assistant yet.`
       );
     } else {
       try {
@@ -245,9 +245,9 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
         });
       } catch (error) {
         warn(
-          `${teammateName}'s workspace is saved, but it could not be saved as your primary assistant: ${
+          `${teammateName}'s workspace is ready, but it couldn't be set as your primary assistant. (${
             error instanceof Error ? error.message : String(error)
-          }.`
+          })`
         );
       }
     }
@@ -324,12 +324,12 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
     };
   } catch (error) {
     const recovery = branch
-      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an admin to check template setup and Git access, then use Retry on that same teammate.'
+      ? 'Your teammate is saved. Open it on the board for details. If provisioning failed, ask an administrator to check template setup and Git access, then use Retry on that same teammate.'
       : 'You can create one from the board anytime.';
     warn(
-      `Your board is ready, but we couldn't start your AI teammate. ${recovery} Details: ${
+      `Your board is ready, but your AI teammate didn't start. ${recovery} (${
         error instanceof Error ? error.message : String(error)
-      }`
+      })`
     );
     return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
   }

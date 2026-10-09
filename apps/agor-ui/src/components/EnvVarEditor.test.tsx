@@ -76,3 +76,26 @@ describe('EnvVarEditor', () => {
     expect(screen.getByPlaceholderText('Value')).toHaveValue('');
   });
 });
+
+describe('EnvVarEditor failures', () => {
+  it('keeps the draft and shows the save failure inline', async () => {
+    render(
+      <AntApp>
+        <EnvVarEditor
+          envVars={{}}
+          onSave={vi.fn().mockRejectedValue(new Error('boom'))}
+          onDelete={vi.fn(async () => {})}
+          identityKey="user-a:member"
+          operationScope={['user-a:member', 1]}
+        />
+      </AntApp>
+    );
+    fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
+      target: { value: 'MY_TOKEN' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Value'), { target: { value: 'secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+    expect(await screen.findByText("Couldn't save the variable.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/variable name/i)).toHaveValue('MY_TOKEN');
+  });
+});

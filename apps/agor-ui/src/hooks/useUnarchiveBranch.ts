@@ -1,12 +1,22 @@
 import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef } from 'react';
 import { isTransientConnectionError } from '../utils/authErrors';
-import { isInFlightConnectionLossError } from '../utils/connectionErrors';
+import {
+  CLIENT_NOT_CONNECTED_ERROR,
+  formatActionError,
+  isAlreadyDoneError,
+  isInFlightConnectionLossError,
+  notConnectedMessage,
+} from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 
 const ACKNOWLEDGEMENT_WAIT_MS = 30_000;
-const UNKNOWN_OUTCOME =
-  'Unarchive outcome unknown: no acknowledgement received. Refresh the page to check the branch and filesystem status before trying again. The request has not been replayed.';
+const ACTION = 'unarchive the branch';
+const UNKNOWN_OUTCOME = `The connection to Agor dropped before this was confirmed. If it didn't go through, try to ${ACTION} again once the connection is back.`;
+const UNARCHIVED = 'Branch unarchived. Agor is restoring its files.';
+/** The UI wait ran out on a live connection, so no cause is claimed. */
+const NOT_CONFIRMED_YET =
+  "Agor hasn't confirmed the unarchive yet. Refresh to check the branch before you try again.";
 
 /** Bound this UI wait, not the mutation. A late acknowledgement is still useful. */
 export function useUnarchiveBranch(client: AgorClient | null | undefined) {
@@ -28,14 +38,17 @@ export function useUnarchiveBranch(client: AgorClient | null | undefined) {
 
   return useCallback(
     (branchId: string, options?: { boardId?: string }): Promise<void> => {
-      if (!client) return Promise.reject(new Error('Not connected to daemon'));
+      if (!client) {
+        showError(notConnectedMessage(ACTION));
+        return Promise.reject(new Error(CLIENT_NOT_CONNECTED_ERROR));
+      }
       // Even after timeout, another click must not replay an uncertain mutation.
       const existing = operations.current.get(branchId);
       if (existing) return existing.promise;
 
       const key = `unarchive:${branchId}`;
       toastKeys.current.add(key);
-      showLoading('Unarchiving branch...', { key });
+      showLoading('Unarchiving the branch…', { key });
       let disposed = false;
       let resolve!: () => void;
       let reject!: (error: unknown) => void;
@@ -44,9 +57,9 @@ export function useUnarchiveBranch(client: AgorClient | null | undefined) {
         reject = no;
       });
       const timer = setTimeout(() => {
-        showWarning(UNKNOWN_OUTCOME, { key, duration: 10 });
+        showWarning(NOT_CONFIRMED_YET, { key, duration: 0 });
         // Settings must not optimistically clear archive state on uncertainty.
-        reject(new Error(UNKNOWN_OUTCOME));
+        reject(new Error(NOT_CONFIRMED_YET));
       }, ACKNOWLEDGEMENT_WAIT_MS);
       operations.current.set(branchId, {
         promise,
@@ -61,20 +74,19 @@ export function useUnarchiveBranch(client: AgorClient | null | undefined) {
         try {
           await client.service(`branches/${branchId}/unarchive`).create(options || {});
           if (disposed) return;
-          showSuccess(
-            'Unarchive accepted; wait for filesystem recovery to finish before starting work. Refresh the page to check status.',
-            { key }
-          );
+          showSuccess(UNARCHIVED, { key });
           resolve();
         } catch (error) {
           if (disposed) return;
+          if (isAlreadyDoneError(ACTION, error)) {
+            showSuccess(UNARCHIVED, { key });
+            resolve();
+            return;
+          }
           if (isTransientConnectionError(error) || isInFlightConnectionLossError(error)) {
-            showWarning(UNKNOWN_OUTCOME, { key, duration: 10 });
+            showWarning(UNKNOWN_OUTCOME, { key, duration: 0 });
           } else {
-            showError(
-              `Unarchive request returned an error: ${error instanceof Error ? error.message : String(error)}. Refresh the page to check current status.`,
-              { key }
-            );
+            showError(formatActionError(ACTION, error, { idempotent: true }), { key });
           }
           reject(error);
         } finally {

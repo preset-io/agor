@@ -4,12 +4,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 const oauthAttempt = vi.hoisted(() => ({
+  failureMessage: vi.fn(),
   refetch: vi.fn(),
   wait: vi.fn(),
 }));
 
 vi.mock('@/utils/mcpOAuthAttempt', () => ({
-  oauthAttemptFailureMessage: vi.fn(),
+  oauthAttemptFailureMessage: oauthAttempt.failureMessage,
   refetchMCPOAuthDurableState: oauthAttempt.refetch,
   waitForMCPOAuthAttempt: oauthAttempt.wait,
 }));
@@ -17,6 +18,7 @@ vi.mock('@/utils/mcpOAuthAttempt', () => ({
 const showError = vi.fn();
 const showInfo = vi.fn();
 const showSuccess = vi.fn();
+const showWarning = vi.fn();
 
 function oauthClient(startOAuth: ReturnType<typeof vi.fn>) {
   return {
@@ -350,5 +352,93 @@ describe('useMCPServerOAuthStart', () => {
     await refetchPending;
     expect(showSuccess).not.toHaveBeenCalled();
     windowOpen.mockRestore();
+  });
+
+  describe('failure copy', () => {
+    const started = {
+      success: true,
+      authorizationUrl: 'https://provider.example/authorize',
+      attempt_id: 'attempt-1',
+    };
+    const render = (
+      client: AgorClient | null,
+      extra: Partial<Parameters<typeof useMCPServerOAuthStart>[0]> = {}
+    ) =>
+      renderHook(() =>
+        useMCPServerOAuthStart({
+          client,
+          authorityKey: 'user-a:admin:1',
+          onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+          showError,
+          showInfo,
+          showSuccess,
+          showWarning,
+          ...extra,
+        })
+      ).result;
+
+    it('shows an unfinished sign-in inline only, as a warning', async () => {
+      oauthAttempt.failureMessage.mockReturnValue('Sign-in expired. Start a new sign-in.');
+      oauthAttempt.wait.mockResolvedValue({ status: 'expired' });
+      const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const result = render(oauthClient(vi.fn().mockResolvedValue(started)), {
+        rendersFailureInline: true,
+      });
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      await waitFor(() =>
+        expect(result.current.oauthFailure).toEqual({
+          message: 'Sign-in expired. Start a new sign-in.',
+          recovery: undefined,
+          redirectUri: undefined,
+          severity: 'warning',
+        })
+      );
+      expect(showError).not.toHaveBeenCalled();
+      windowOpen.mockRestore();
+    });
+
+    it('warns, without claiming failure, when the attempt status cannot be read', async () => {
+      oauthAttempt.wait.mockRejectedValue(new Error('socket has been disconnected'));
+      const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const result = render(oauthClient(vi.fn().mockResolvedValue(started)));
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      await waitFor(() =>
+        expect(showWarning).toHaveBeenCalledWith(
+          "Couldn't confirm the sign-in. Check this server's status before you sign in again. (socket has been disconnected)"
+        )
+      );
+      expect(showError).not.toHaveBeenCalled();
+      windowOpen.mockRestore();
+    });
+
+    it('puts the raw start error under Details', async () => {
+      const result = render(oauthClient(vi.fn().mockRejectedValue(new Error('fictional-boom'))));
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      expect(result.current.oauthFailure).toEqual({
+        message: "Couldn't start sign-in. If it keeps happening, ask an administrator.",
+        detail: 'fictional-boom',
+      });
+    });
+
+    it('says the connection dropped when there is no client', async () => {
+      const result = render(null);
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      expect(showError).toHaveBeenCalledWith(
+        "Couldn't start sign-in. The connection to Agor dropped. Try again once it's back."
+      );
+    });
+
+    it('leaves a blocked start to the disabled control', async () => {
+      const startOAuth = vi.fn();
+      const result = render(oauthClient(startOAuth), { startAllowed: false });
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      expect(startOAuth).not.toHaveBeenCalled();
+      expect(showError).not.toHaveBeenCalled();
+    });
   });
 });

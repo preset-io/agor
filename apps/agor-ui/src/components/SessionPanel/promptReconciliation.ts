@@ -1,5 +1,6 @@
 import type { AgorClient, Task } from '@agor-live/client';
 import {
+  formatActionError,
   isInFlightConnectionLossError,
   withConnectionErrorDetail,
 } from '../../utils/connectionErrors';
@@ -106,12 +107,9 @@ export async function sendPromptWithReconciliation({
     await send();
     return isCurrent();
   } catch (error) {
-    console.error('Prompt error:', error);
     if (!isInFlightConnectionLossError(error)) {
       if (isCurrent()) {
-        showError(
-          `Failed to send prompt: ${error instanceof Error ? error.message : String(error)}`
-        );
+        showError(formatActionError('send your message', error, { idempotent: false }));
       }
       return false;
     }

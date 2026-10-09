@@ -112,7 +112,9 @@ describe('saved MCP form connection flow', () => {
   it('does not probe after a save conflict', async () => {
     const h = harness({ patch: vi.fn().mockRejectedValue({ code: 409 }) });
     fireEvent.click(button('Save & Test Connection'));
-    await screen.findByText('Newer MCP settings are available');
+    await screen.findByText(
+      'This MCP server was changed somewhere else. Load the latest version before you save again.'
+    );
     expect(h.discover).not.toHaveBeenCalled();
     expect(button('Save')).toBeDisabled();
     expect(button('Save & Test Connection')).toBeDisabled();

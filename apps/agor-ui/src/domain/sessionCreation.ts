@@ -92,7 +92,9 @@ export async function runSessionCreationStages({
 
 /** Safe, identity-free warning returned only by the authoritative create boundary. */
 export function getSessionCreationWarning(session: Session): string | undefined {
-  return session.mcp_defaults_skipped
-    ? `Session created. ${session.mcp_defaults_skipped} unavailable default MCP server(s) were skipped. Review MCP Servers in branch settings or your user defaults.`
-    : undefined;
+  const skipped = session.mcp_defaults_skipped;
+  if (!skipped) return undefined;
+  return skipped === 1
+    ? "Session started without 1 default MCP server because it isn't available. Check MCP servers in branch settings."
+    : `Session started without ${skipped} default MCP servers because they aren't available. Check MCP servers in branch settings.`;
 }

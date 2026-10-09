@@ -452,7 +452,9 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       expect(await screen.findByText('(details unavailable)')).toBeInTheDocument();
       fireEvent.click(screen.getByText('Advanced'));
       const field = (await screen.findByTestId('custom-context')) as HTMLTextAreaElement;
-      expect(screen.getByText(/Could not load full session details: offline/)).toBeInTheDocument();
+      expect(
+        screen.getByText("Couldn't load this session's details. (offline)")
+      ).toBeInTheDocument();
       expect(field.readOnly).toBe(true);
 
       // Saving other settings while degraded never sends the lean context.
@@ -460,7 +462,7 @@ describe('SessionSettingsModal configuration', { timeout: 10_000 }, () => {
       await waitFor(() => expect(onUpdate).toHaveBeenCalled());
       expect(onUpdate.mock.calls[0][1]).not.toHaveProperty('custom_context');
 
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
       await waitFor(() => expect(field.readOnly).toBe(false));
       expect(JSON.parse(field.value)).toEqual(fullContext);
       expect(screen.queryByText('(details unavailable)')).not.toBeInTheDocument();

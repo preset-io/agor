@@ -231,6 +231,34 @@ describe('ZoneTriggerModal action snapshot', () => {
     expect(context.session?.custom_context).toEqual(fullContext);
   });
 
+  it('says when the template could not be filled in, and keeps it editable and runnable', async () => {
+    renderTemplateMock.mockRejectedValue(new Error('templates service unavailable'));
+    render(
+      <ZoneTriggerModal
+        actionId={1}
+        open
+        onCancel={() => {}}
+        client={{ service: () => ({ get: vi.fn() }) } as unknown as AgorClient}
+        branch={undefined}
+        sessions={[]}
+        zoneName="Review"
+        trigger={{ template: 'Review {{branch.name}}', behavior: 'show_picker' }}
+        availableAgents={[]}
+        mcpServerById={new Map()}
+        onExecute={async () => {}}
+      />
+    );
+
+    expect(
+      await screen.findByText("Couldn't fill in the template. Check the prompt before you run it.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Prompt (editable)' })).toHaveValue(
+      'Review {{branch.name}}'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('templates service unavailable')).toBeInTheDocument();
+  });
+
   describe('when the full session record cannot load', () => {
     const leanRow = {
       ...makeSession('s-1', 'completed', '2026-06-01T00:00:00.000Z', 'Session'),
@@ -283,20 +311,25 @@ describe('ZoneTriggerModal action snapshot', () => {
       const onExecute = vi.fn().mockResolvedValue(undefined);
       render(modal({ service: () => ({ get }) } as unknown as AgorClient, onExecute));
 
+      expect(await screen.findByText("Couldn't load this session's details.")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Details' }));
       expect(
-        await screen.findByText(/Could not load full session details: timeout/)
+        screen.getByText(
+          'The template needs the full session. You can run the trigger once it loads.'
+        )
       ).toBeInTheDocument();
+      expect(screen.getByText('timeout')).toBeInTheDocument();
       const execute = screen.getByRole('button', { name: 'Execute Trigger' });
       expect(execute).toBeDisabled();
       fireEvent.click(execute);
       expect(onExecute).not.toHaveBeenCalled();
       expect(renderTemplateMock).not.toHaveBeenCalled();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
       const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
       await waitFor(() => expect(prompt).toHaveValue('Run 3'));
       expect(execute).toBeEnabled();
-      expect(screen.queryByText(/Could not load full session details/)).toBeNull();
+      expect(screen.queryByText("Couldn't load this session's details.")).toBeNull();
       const context = renderTemplateMock.mock.calls[0][2] as {
         session?: { custom_context?: unknown };
       };
@@ -318,9 +351,7 @@ describe('ZoneTriggerModal action snapshot', () => {
         await act(async () => {
           vi.advanceTimersByTime(FULL_SESSION_DETAILS_TIMEOUT_MS);
         });
-        expect(
-          screen.getByText('Could not load full session details: the request timed out after 15 s')
-        ).toBeInTheDocument();
+        expect(screen.getByText("Couldn't load this session's details.")).toBeInTheDocument();
         expect(screen.queryByText('Rendering template…')).toBeNull();
         expect(screen.getByRole('button', { name: 'Execute Trigger' })).toBeDisabled();
 
@@ -329,13 +360,15 @@ describe('ZoneTriggerModal action snapshot', () => {
           hung.resolve(fullRow);
           await hung.promise;
         });
-        expect(screen.getByText(/the request timed out/)).toBeInTheDocument();
+        expect(screen.getByText("Couldn't load this session's details.")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+        expect(screen.getByText('the request timed out after 15 s')).toBeInTheDocument();
         expect(renderTemplateMock).not.toHaveBeenCalled();
       } finally {
         vi.useRealTimers();
       }
 
-      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
       const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
       await waitFor(() => expect(prompt).toHaveValue('Run 3'));
       expect(get).toHaveBeenCalledTimes(2);
@@ -350,7 +383,7 @@ describe('ZoneTriggerModal action snapshot', () => {
         .mockResolvedValueOnce(fullRow);
       const client = { service: () => ({ get }) } as unknown as AgorClient;
       const { rerender } = render(withConnection(1, modal(client)));
-      expect(await screen.findByText(/socket closed/)).toBeInTheDocument();
+      expect(await screen.findByText("Couldn't load this session's details.")).toBeInTheDocument();
 
       rerender(withConnection(2, modal(client)));
       const prompt = screen.getByRole('textbox', { name: 'Prompt (editable)' });
@@ -537,7 +570,11 @@ describe('ZoneTriggerModal smart-default session selection', () => {
       />
     );
 
-    expect(screen.getByText('This zone uses a removed agentic tool')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This zone's agent is no longer available. Choose another agent to start a new session."
+      )
+    ).toBeInTheDocument();
     const execute = screen.getByRole('button', { name: 'Execute Trigger' });
     expect(execute).toBeDisabled();
 

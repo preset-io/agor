@@ -20,3 +20,8 @@ export function openUploadBlob(blob: Blob, filename: string, download: boolean):
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
+
+/** A failed upload request; `code` lets the action formatter name 403/404 plainly. */
+export function uploadHttpError(response: Response): Error & { code: number } {
+  return Object.assign(new Error(`HTTP ${response.status}`), { code: response.status });
+}

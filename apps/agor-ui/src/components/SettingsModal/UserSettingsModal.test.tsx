@@ -1,5 +1,5 @@
 import type { AgenticToolName, AgorClient, UpdateUserInput, User } from '@agor-live/client';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -349,7 +349,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
@@ -500,7 +501,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
           },
           default_mcp_server_ids: [],
         },
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -534,7 +536,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
         expect.objectContaining({ password: 'new-secure-password' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
 
@@ -646,8 +649,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -675,8 +682,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledTimes(1);
-      expect(screen.getByRole('alert')).toHaveTextContent('save failed');
+      expect(screen.getByRole('alert')).toHaveTextContent("Couldn't save your settings.");
     }, ASYNC);
+    fireEvent.click(within(screen.getByRole('alert')).getByText('Details'));
+    expect(screen.getByRole('region', { name: 'Technical details' })).toHaveTextContent(
+      'save failed'
+    );
     expect(onClose).not.toHaveBeenCalled();
   });
 
@@ -1304,7 +1315,8 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
       expect(onUpdate).toHaveBeenCalledWith(
         user.user_id,
         expect.objectContaining({ primary_agentic_tool: 'gemini' }),
-        expect.any(Function)
+        expect.any(Function),
+        { errorShownInline: true }
       );
     }, ASYNC);
     const [, , shouldApply] = onUpdate.mock.calls[0] as unknown as [string, unknown, () => boolean];

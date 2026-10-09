@@ -22,8 +22,7 @@ import type { NewSessionConfig } from '../domain/sessionCreation';
 import { captureSessionPatchCommit } from '../store/realtimeBatch';
 import { CLIENT_NOT_CONNECTED_ERROR, formatActionError } from '../utils/connectionErrors';
 
-export const ARCHIVE_REFRESH_WARNING =
-  'Session and same-branch children archived; refresh required to update the session list.';
+export const ARCHIVE_REFRESH_WARNING = 'Session archived. Refresh to update the list.';
 
 type ArchiveSessionResult = {
   session: Session;
@@ -33,9 +32,9 @@ type ArchiveSessionResult = {
 interface UseSessionActionsResult {
   createSession: (config: NewSessionConfig) => Promise<Session>;
   updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session>;
-  deleteSession: (sessionId: SessionID) => Promise<boolean>;
-  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult | null>;
-  unarchiveSession: (sessionId: SessionID) => Promise<Session | null>;
+  deleteSession: (sessionId: SessionID) => Promise<void>;
+  archiveSession: (sessionId: SessionID) => Promise<ArchiveSessionResult>;
+  unarchiveSession: (sessionId: SessionID) => Promise<Session>;
   // Throw on failure (do NOT return null) so callers can preserve the user's
   // typed prompt in the compose box. See SessionPanel.handleFork / handleBtwSend
   // and ForkSpawnModal.handleOk for the preserved-on-failure invariants.
@@ -117,7 +116,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create session';
       setError(message);
-      console.error('Failed to create session:', err);
       throw err;
     } finally {
       setCreating(false);
@@ -149,7 +147,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fork session';
       setError(message);
-      console.error('Failed to fork session:', err);
       // Re-throw so callers (and modals) can distinguish failure from success
       // and keep the user's typed prompt from being silently discarded.
       throw err instanceof Error ? err : new Error(message);
@@ -187,7 +184,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to create btw fork';
       setError(message);
-      console.error('Failed to create btw fork:', err);
       throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
@@ -221,7 +217,6 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to spawn session';
       setError(message);
-      console.error('Failed to spawn session:', err);
       throw err instanceof Error ? err : new Error(message);
     } finally {
       setCreating(false);
@@ -242,35 +237,32 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       const updatedSession = await client.service('sessions').patch(sessionId, updates);
       return updatedSession;
     } catch (err) {
-      setError(formatActionError('update session', err, { idempotent: true }));
+      setError(formatActionError('update the session', err, { idempotent: true }));
       // Let the request-local notification boundary report the actual failure;
       // shared hook state cannot identify which overlapping request failed.
       throw err;
     }
   };
 
-  const deleteSession = async (sessionId: SessionID): Promise<boolean> => {
+  const deleteSession = async (sessionId: SessionID): Promise<void> => {
     if (!client) {
-      setError('Client not connected');
-      return false;
+      setError(CLIENT_NOT_CONNECTED_ERROR);
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
       setError(null);
       await client.service('sessions').remove(sessionId);
-      return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to delete session';
-      setError(message);
-      console.error('Failed to delete session:', err);
-      return false;
+      setError(formatActionError('delete the session', err, { idempotent: true }));
+      throw err;
     }
   };
 
-  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult | null> => {
+  const archiveSession = async (sessionId: SessionID): Promise<ArchiveSessionResult> => {
     if (!client) {
-      setError('Client not connected');
-      return null;
+      setError(CLIENT_NOT_CONNECTED_ERROR);
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -299,17 +291,15 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       }
       return { session: result.session, reconciliation: 'confirmed' };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to archive session';
-      setError(message);
-      console.error('Failed to archive session:', err);
-      return null;
+      setError(formatActionError('archive the session', err, { idempotent: true }));
+      throw err;
     }
   };
 
-  const unarchiveSession = async (sessionId: SessionID): Promise<Session | null> => {
+  const unarchiveSession = async (sessionId: SessionID): Promise<Session> => {
     if (!client) {
-      setError('Client not connected');
-      return null;
+      setError(CLIENT_NOT_CONNECTED_ERROR);
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
 
     try {
@@ -319,10 +309,8 @@ export function useSessionActions(client: AgorClient | null): UseSessionActionsR
       };
       return result.session;
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to unarchive session';
-      setError(message);
-      console.error('Failed to unarchive session:', err);
-      return null;
+      setError(formatActionError('unarchive the session', err, { idempotent: true }));
+      throw err;
     }
   };
 

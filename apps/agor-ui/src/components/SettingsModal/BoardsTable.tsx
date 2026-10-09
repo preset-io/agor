@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons';
 import { App, Button, Form, Input, Popconfirm, Select, Space, Tooltip, Typography } from 'antd';
 import { useMemo, useState } from 'react';
+import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -102,19 +103,20 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       ),
       onOk: () => {
         if (!client) {
-          showError('Not connected to daemon');
-          return Promise.reject(new Error('Not connected to daemon'));
+          const message = notConnectedMessage('clone the board');
+          showError(message);
+          return Promise.reject(new Error(message));
         }
 
         const boardsService = client.service('boards');
         return boardsService
           .clone({ id: board.board_id, name: newName })
           .then((clonedBoard) => {
-            showSuccess(`Board cloned: ${clonedBoard.name}`);
+            showSuccess(`Board cloned as ${clonedBoard.name}.`);
             onCreate?.(clonedBoard);
           })
           .catch((error) => {
-            showError(`Clone failed: ${error instanceof Error ? error.message : String(error)}`);
+            showError(formatActionError('clone the board', error, { idempotent: false }));
             return Promise.reject(error);
           });
       },
@@ -123,7 +125,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
 
   const handleExport = async (board: Board) => {
     if (!client) {
-      showError('Not connected to daemon');
+      showError(notConnectedMessage('export the board'));
       return;
     }
     try {
@@ -138,9 +140,9 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
       a.click();
       URL.revokeObjectURL(url);
 
-      showSuccess('Board exported');
+      showSuccess('Board exported.');
     } catch (error) {
-      showError(`Export failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('export the board', error, { idempotent: true }));
     }
   };
 
@@ -155,27 +157,40 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   const handleImportFile = async (file: File | undefined) => {
     if (!file) return;
     if (!client) {
-      showError('Not connected to daemon');
+      showError(notConnectedMessage('import the board'));
       return;
     }
 
     const content = await file.text();
+    const isJson = file.name.endsWith('.json');
+    let blob: unknown;
+    if (isJson) {
+      try {
+        blob = JSON.parse(content);
+      } catch {
+        showError("Couldn't import the board. The file isn't valid JSON.");
+        return;
+      }
+    }
 
     try {
       const boardsService = client.service('boards');
-      const board = file.name.endsWith('.json')
-        ? await boardsService.fromBlob(JSON.parse(content))
+      const board = isJson
+        ? await boardsService.fromBlob(blob as Parameters<typeof boardsService.fromBlob>[0])
         : await boardsService.fromYaml({ yaml: content });
 
       const skippedSummary = summarizeBoardImportSkips(board.import_skipped);
       if (skippedSummary) {
-        showWarning(`Board imported: ${board.name}. ${skippedSummary}`, { duration: 8 });
+        // Persistent so the skipped list stays readable.
+        showWarning(`Imported ${board.name}, but not everything came across: ${skippedSummary}`, {
+          duration: 0,
+        });
       } else {
-        showSuccess(`Board imported: ${board.name}`);
+        showSuccess(`Board imported as ${board.name}.`);
       }
       onCreate?.(board);
     } catch (error) {
-      showError(`Import failed: ${error instanceof Error ? error.message : String(error)}`);
+      showError(formatActionError('import the board', error, { idempotent: false }));
     }
   };
 

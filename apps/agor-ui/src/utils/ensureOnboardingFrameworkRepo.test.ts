@@ -62,7 +62,9 @@ describe('required onboarding repository step', () => {
   it('a failed retry is blocking, not best-effort success', async () => {
     const h = harness('failed');
     h.options.createRepo.mockImplementation(async () => {});
-    await expect(ensureOnboardingFrameworkRepo(h.options)).rejects.toThrow('could not be prepared');
+    await expect(ensureOnboardingFrameworkRepo(h.options)).rejects.toThrow(
+      "The repository couldn't be prepared, but your existing work wasn't removed. Try again, or ask an administrator if it keeps happening."
+    );
   });
   it('a still-running clone is not restarted or declared ready at the deadline', async () => {
     vi.useFakeTimers();
@@ -82,7 +84,7 @@ describe('required onboarding repository step', () => {
       if (phase === 'read') h.options.fetchRepos.mockReturnValue(new Promise(() => {}));
       else h.options.createRepo.mockReturnValue(new Promise(() => {}));
       const check = expect(ensureOnboardingFrameworkRepo(h.options)).rejects.toThrow(
-        'may still be running'
+        "Agor hasn't confirmed repository setup yet. Check Repository settings before you try again."
       );
       await vi.advanceTimersByTimeAsync(120);
       await check;

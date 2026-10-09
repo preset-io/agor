@@ -129,8 +129,50 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     // rebase this draft onto their CAS revision and overwrite their changes.
     patch.mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: 409 }));
     fireEvent.click(screen.getByRole('button', { name: 'Start OAuth Flow' }));
-    await screen.findByText('Newer MCP settings are available');
+    await screen.findByText(
+      'This MCP server was changed somewhere else. Load the latest version before you save again.'
+    );
     expect(patch.mock.calls[1]?.[1]?.expected_config_version).toBe(2);
+  });
+
+  it('keeps the form open with the reason in it when a save fails', async () => {
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000097',
+      name: 'save-failure',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      config_version: 1,
+      auth: { type: 'none' },
+    } as MCPServer;
+    const patch = vi.fn().mockRejectedValue(new Error('fictional-save-error'));
+    const onClose = vi.fn();
+    const client = {
+      service: vi.fn(() => ({ patch, get: vi.fn() })),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={onClose}
+      />
+    );
+    fireEvent.change(await screen.findByLabelText('Description'), {
+      target: { value: 'unsaved description' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText("Couldn't save the MCP server.")).toBeInTheDocument();
+    expect(screen.getByLabelText('Description')).toHaveValue('unsaved description');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
   });
 
   it('shows the daemon storage-policy rejection without replacing it with retry advice', async () => {
@@ -696,8 +738,10 @@ describe('MCPServerEditModal legacy DCR compatibility', () => {
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await screen.findByText('Newer MCP settings are available');
-    fireEvent.click(screen.getByRole('button', { name: 'Reload latest' }));
+    await screen.findByText(
+      'This MCP server was changed somewhere else. Load the latest version before you save again.'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Load latest' }));
     await waitFor(() =>
       expect(screen.getByLabelText('Description')).toHaveValue('edited elsewhere')
     );

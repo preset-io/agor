@@ -1,4 +1,4 @@
-import { Button, Spin, Typography, theme } from 'antd';
+import { Spin, Typography, theme } from 'antd';
 import { memo, useMemo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -6,8 +6,9 @@ import {
   makeBoardReadySelector,
   retryBoardPartition,
 } from '../../store/boardPartitions';
+import { CompactNotice } from '../CompactNotice';
 
-/** A failed partition load, with a Retry that loads it again (`retryBoardPartition`). */
+/** A failed partition load, with a Try again that loads it again (`retryBoardPartition`). */
 export function BoardPartitionError({
   boardId,
   style,
@@ -15,15 +16,17 @@ export function BoardPartitionError({
   boardId: string;
   style?: React.CSSProperties;
 }) {
-  const { token } = theme.useToken();
+  const partition = useAgorStore(useMemo(() => makeBoardPartitionSelector(boardId), [boardId]));
+  const raw = partition?.status === 'error' ? partition.error : undefined;
   return (
-    <div role="alert" style={style} data-testid="board-partition-error">
-      <Typography.Text type="danger" style={{ fontSize: token.fontSizeSM }}>
-        Couldn't load this board.
-      </Typography.Text>
-      <Button size="small" type="link" onClick={() => retryBoardPartition(boardId)}>
-        Retry
-      </Button>
+    <div style={style} data-testid="board-partition-error">
+      <CompactNotice
+        type="error"
+        role="alert"
+        message="Couldn't load this board."
+        details={raw ? [{ label: 'Error', value: raw, code: true }] : undefined}
+        actions={[{ label: 'Try again', onClick: () => retryBoardPartition(boardId) }]}
+      />
     </div>
   );
 }
@@ -65,7 +68,19 @@ export const BoardPartitionStatus = memo(function BoardPartitionStatus({
   };
 
   if (partition?.status === 'error')
-    return <BoardPartitionError boardId={boardId} style={pillStyle} />;
+    return (
+      <BoardPartitionError
+        boardId={boardId}
+        style={{
+          position: 'absolute',
+          top: token.marginSM,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 5,
+          maxWidth: `calc(100% - ${token.marginLG * 2}px)`,
+        }}
+      />
+    );
 
   if (!hasPlacements) {
     return (

@@ -14,7 +14,7 @@
  */
 
 import type { AgorClient } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -180,5 +180,43 @@ describe('GatewayTokenWidget — secure multi-line (GitHub PEM)', () => {
     const reopened = screen.getByLabelText(/Value for Private key/i) as HTMLTextAreaElement;
     expect(reopened.tagName).toBe('TEXTAREA');
     expect(reopened.value).toBe('');
+  });
+});
+
+describe('GatewayTokenWidget — failed save', () => {
+  beforeEach(() => {
+    currentUser = { user_id: 'user-1' };
+    currentRole = 'admin';
+  });
+
+  it('keeps the form and shows the reason inline with the raw error under Details', async () => {
+    const client = {
+      service() {
+        return {
+          async create() {
+            throw Object.assign(new Error('Only admins can set gateway channel tokens'), {
+              name: 'Forbidden',
+              code: 403,
+            });
+          },
+        };
+      },
+    } as unknown as AgorClient;
+    renderWithApp(<PendingForm widgetId="wid-1" params={PARAMS} client={client} />);
+    fireEvent.change(screen.getByLabelText(/Value for Bot token/i), {
+      target: { value: 'xoxb-123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(
+      await screen.findByText(
+        "Couldn't save the tokens. Only administrators can set channel tokens."
+      )
+    ).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await waitFor(() =>
+      expect(screen.getByText('Only admins can set gateway channel tokens')).toBeTruthy()
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
+    expect(document.querySelector('.ant-message-notice')).toBeNull();
   });
 });

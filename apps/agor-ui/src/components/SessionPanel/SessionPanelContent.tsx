@@ -13,6 +13,7 @@ import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectRepoById, selectUserById } from '../../store/selectors';
 import { copyToClipboard } from '../../utils/clipboard';
+import { formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { canSessionStartTurn } from '../../utils/sessionTurn';
 import { BranchHeaderPill } from '../BranchHeaderPill';
@@ -71,9 +72,7 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
         await client.service('sessions').patch(session.session_id, { ready_for_prompt: true });
         showSuccess('Resuming queued prompts');
       } catch (error) {
-        showError(
-          `Failed to resume queue: ${error instanceof Error ? error.message : String(error)}`
-        );
+        showError(formatActionError('resume the queue', error, { idempotent: true }));
       } finally {
         setResumeQueueInFlight(false);
       }
@@ -273,7 +272,9 @@ export const SessionPanelContent = React.memo<SessionPanelContentProps>(
                               await client.service('tasks').remove(task.task_id);
                             } catch (error) {
                               showError(
-                                `Failed to remove queued task: ${error instanceof Error ? error.message : String(error)}`
+                                formatActionError('remove the queued message', error, {
+                                  idempotent: true,
+                                })
                               );
                             } finally {
                               setRemovingQueuedTaskId(null);

@@ -22,6 +22,8 @@ import {
   theme,
 } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
+import type { describeActionError } from '../../utils/connectionErrors';
+import { ActionErrorNotice } from '../CompactNotice';
 import { MARKETPLACE_SERVER_DRAWER_WIDTH } from './marketplaceLayout';
 import {
   type MarketplaceCredentialPresentation,
@@ -45,7 +47,7 @@ export interface ServerSettingsDrawerProps {
   canReconnect: boolean;
   canRemove: boolean;
   busy: ReadonlySet<string>;
-  toolDiscoveryError?: string;
+  toolDiscoveryError?: ReturnType<typeof describeActionError>;
   onClose: () => void;
   onAfterOpenChange: (open: boolean) => void;
   reconnectingOAuth?: boolean;
@@ -267,11 +269,13 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
               />
             )}
             {toolDiscoveryError && (
-              <Alert
-                type="error"
-                showIcon
-                title="Could not discover tools"
-                description={toolDiscoveryError}
+              <ActionErrorNotice
+                error={toolDiscoveryError}
+                action={
+                  canRefresh && !toolMutationActive
+                    ? { label: 'Try again', onClick: () => onRefreshTools(server) }
+                    : undefined
+                }
               />
             )}
             {server.tools.length ? (

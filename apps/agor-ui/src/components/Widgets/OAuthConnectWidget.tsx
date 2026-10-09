@@ -54,6 +54,7 @@ import {
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
+import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { oauthAttemptFailureMessage, waitForMCPOAuthAttempt } from '@/utils/mcpOAuthAttempt';
 import { useThemedMessage } from '@/utils/message';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
@@ -202,7 +203,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
   const connect = async () => {
     if (state === 'starting' || state === 'pending' || state === 'connected') return;
     if (!client) {
-      setFailure('Not connected to Agor — refresh and try again.');
+      setFailure(notConnectedMessage('connect'));
       return;
     }
     // Reserve the popup synchronously, while the click still has user
@@ -265,10 +266,8 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       popup.close();
       if (!isCurrent()) return;
       if (err instanceof DOMException && err.name === 'AbortError') return;
-      const message = err instanceof Error ? err.message : String(err);
       setState('idle');
-      setFailure(message);
-      showError(`Connect failed: ${message}`);
+      setFailure(formatActionError('connect', err, { idempotent: true }));
     }
   };
 
@@ -278,9 +277,7 @@ const PendingCard: React.FC<PendingCardProps> = ({ widgetId, params, client }) =
       await client.service(`widgets/${encodeURIComponent(widgetId)}/dismiss`).create({});
       setState('declined');
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setFailure(`Dismiss failed: ${message}`);
-      showError(`Dismiss failed: ${message}`);
+      setFailure(formatActionError('dismiss', err, { idempotent: true }));
     }
   };
 

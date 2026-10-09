@@ -30,6 +30,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CLIENT_NOT_CONNECTED_ERROR } from '../../utils/connectionErrors';
 
 /** Patchable subset of `Branch` writable from the modal form. */
 export type BranchUpdate = Omit<
@@ -58,6 +59,11 @@ export interface TeammateFormState {
   description: string;
 }
 
+/** `notReady`: the branch hadn't loaded, so nothing was sent; `permissionsSaved`: only the policy write landed. */
+export type BranchModalSaveResult =
+  | { ok: true }
+  | { ok: false; error: Error; notReady?: true; permissionsSaved?: true };
+
 export interface BranchModalFormApi {
   // General slice
   general: GeneralFormState;
@@ -80,6 +86,7 @@ export interface BranchModalFormApi {
   permissionsLoading: boolean;
   canViewPermissions: boolean;
   permissionsLoadError: Error | null;
+  reloadPermissions: () => void;
 
   // Permissions used for gating UI
   canEditGeneral: boolean;
@@ -99,7 +106,7 @@ export interface BranchModalFormApi {
   saving: boolean;
 
   // Actions
-  save: () => Promise<{ ok: true } | { ok: false; error: Error }>;
+  save: () => Promise<BranchModalSaveResult>;
   reset: () => void;
 }
 
@@ -146,6 +153,8 @@ export function useBranchModalForm({
   const [workspacePreferences, setWorkspacePreferences] =
     useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
   const [permissionsLoadError, setPermissionsLoadError] = useState<Error | null>(null);
+  const [permissionsLoadAttempt, setPermissionsLoadAttempt] = useState(0);
+  const reloadPermissions = useCallback(() => setPermissionsLoadAttempt((n) => n + 1), []);
   const [boardAttachChecking, setBoardAttachChecking] = useState(false);
   const [boardAttachError, setBoardAttachError] = useState<string | null>(null);
 
@@ -224,6 +233,7 @@ export function useBranchModalForm({
   const branchId = branch?.branch_id;
 
   // Load the normalized permission package and its principal directory.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: permissionsLoadAttempt re-runs the load for Try again
   useEffect(() => {
     if (!open || !client || !branchId) return;
     let cancelled = false;
@@ -270,7 +280,7 @@ export function useBranchModalForm({
     return () => {
       cancelled = true;
     };
-  }, [open, client, branchId]);
+  }, [open, client, branchId, permissionsLoadAttempt]);
 
   // Validate a newly-selected target board once it's actually picked, rather
   // than trying to pre-filter the Select's options: the board list is scoped
@@ -378,12 +388,14 @@ export function useBranchModalForm({
     permissionsTouchedRef.current = false;
   }, [branch]);
 
-  const save = useCallback(async (): Promise<{ ok: true } | { ok: false; error: Error }> => {
-    if (!branch || !client) return { ok: false, error: new Error('Modal not ready') };
+  const save = useCallback(async (): Promise<BranchModalSaveResult> => {
+    if (!branch) return { ok: false, error: new Error('Modal not ready'), notReady: true };
+    if (!client) return { ok: false, error: new Error(CLIENT_NOT_CONNECTED_ERROR) };
     // Belt-and-suspenders: the Save button is already disabled while this is
     // set, but save() is also exported directly, so re-check here too.
     if (boardAttachError) return { ok: false, error: new Error(boardAttachError) };
     setSaving(true);
+    let permissionsSaved = false;
     try {
       const updates: BranchUpdate = {};
       if (generalChanged && canEditGeneral) {
@@ -419,6 +431,7 @@ export function useBranchModalForm({
           .patch(null, capabilityPolicy, { route: { id: branch.branch_id } });
         setCapabilityPolicyState(saved);
         initialCapabilityPolicyRef.current = structuredClone(saved);
+        permissionsSaved = true;
       }
       if (Object.keys(updates).length > 0) {
         await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
@@ -428,7 +441,10 @@ export function useBranchModalForm({
       permissionsTouchedRef.current = false;
       return { ok: true };
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
+      const failure = error instanceof Error ? error : new Error(String(error));
+      return permissionsSaved
+        ? { ok: false, error: failure, permissionsSaved: true }
+        : { ok: false, error: failure };
     } finally {
       setSaving(false);
     }
@@ -462,6 +478,7 @@ export function useBranchModalForm({
     permissionsLoading,
     canViewPermissions,
     permissionsLoadError,
+    reloadPermissions,
     canEditGeneral,
     canManagePolicy,
     canEditPermissions,

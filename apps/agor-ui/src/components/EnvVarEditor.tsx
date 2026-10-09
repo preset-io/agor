@@ -1,8 +1,10 @@
 import { ENV_VAR_SCOPES_V05, type EnvVarMetadata, type EnvVarScope } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
+import { Button, Input, Select, Space, Table, Tooltip, Typography } from 'antd';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError } from '@/utils/connectionErrors';
+import { ActionErrorNotice } from './CompactNotice';
 import { Tag } from './Tag';
 
 const { Text } = Typography;
@@ -76,7 +78,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
   const [newScope, setNewScope] = useState<EnvVarScope>('global');
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof describeActionError> | null>(null);
   const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey is the caller-private draft lifecycle key
@@ -102,8 +104,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
       setNewScope('global');
     } catch (err) {
       if (!operation.isCurrent()) return;
-      const message = err instanceof Error ? err.message : 'Failed to save environment variable';
-      setError(message);
+      setError(describeActionError('save the variable', err, { idempotent: true }));
     }
   };
 
@@ -119,8 +120,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
       setEditingValue('');
     } catch (err) {
       if (!operation.isCurrent()) return;
-      const message = err instanceof Error ? err.message : 'Failed to update environment variable';
-      setError(message);
+      setError(describeActionError('save the variable', err, { idempotent: true }));
     }
   };
 
@@ -133,8 +133,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
       if (!operation.isCurrent()) return;
     } catch (err) {
       if (!operation.isCurrent()) return;
-      const message = err instanceof Error ? err.message : 'Failed to update scope';
-      setError(message);
+      setError(describeActionError('change the scope', err, { idempotent: true }));
     }
   };
 
@@ -147,8 +146,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
       if (!operation.isCurrent()) return;
     } catch (err) {
       if (!operation.isCurrent()) return;
-      const message = err instanceof Error ? err.message : 'Failed to delete environment variable';
-      setError(message);
+      setError(describeActionError('delete the variable', err, { idempotent: true }));
     }
   };
 
@@ -284,7 +282,7 @@ export const EnvVarEditor: React.FC<EnvVarEditorProps> = ({
         select them (configure per-session under Session → Settings → Env vars).
       </Text>
 
-      {error && <Alert type="error" showIcon title={error} />}
+      {error && <ActionErrorNotice error={error} />}
 
       {/* Existing Variables Table */}
       <Table

@@ -36,4 +36,24 @@ describe('SessionUploadControls', () => {
     expect(screen.getByTitle('Attach files')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Advanced upload' })).toBeDisabled();
   });
+
+  it('says the connection to Agor is lost, never "daemon", while disconnected', async () => {
+    render(
+      <SessionUploadControls
+        connectionDisabled
+        composerAttachmentUploading={false}
+        onAttachFiles={vi.fn()}
+        onOpenAdvancedUpload={vi.fn()}
+      />
+    );
+
+    const advanced = screen.getByRole('button', { name: 'Advanced upload' });
+    expect(advanced).toBeDisabled();
+    const trigger = advanced.closest('span') ?? advanced;
+    fireEvent.pointerEnter(trigger);
+    fireEvent.mouseEnter(trigger);
+    fireEvent.mouseOver(trigger);
+    expect(await screen.findByText('Lost connection to Agor.')).toBeInTheDocument();
+    expect(screen.queryByText(/daemon/)).toBeNull();
+  });
 });

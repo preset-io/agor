@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadsTab } from './UploadsTab';
 
@@ -9,6 +9,18 @@ vi.mock('../../utils/authHeaders', () => ({
   getAuthHeaders: () => ({ Authorization: 'Bearer test-token' }),
 }));
 vi.mock('../../utils/message', () => ({ useThemedMessage: () => ({ showError }) }));
+
+function row(ref: string, displayName: string) {
+  return {
+    ref,
+    displayName,
+    mimeType: 'application/octet-stream',
+    size: 1,
+    provenance: 'browser',
+    createdAt: '2026-01-01T12:00:00.000Z',
+    expiresAt: null,
+  };
+}
 
 describe('UploadsTab', () => {
   beforeEach(() => {
@@ -103,16 +115,82 @@ describe('UploadsTab', () => {
     expect(screen.getByRole('button', { name: 'Download page.html' })).toBeInTheDocument();
   });
 
-  it('reports response parsing failures through the themed message component', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response('<!doctype html>', { status: 200 }))
-    );
+  it('shows a load failure in the tab with Try again', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('<!doctype html>', { status: 502 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ uploads: [row('upl_1', 'kept.txt')] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
 
-    await waitFor(() => expect(showError).toHaveBeenCalledOnce());
-    expect(showError.mock.calls[0]?.[0]).toMatch(/Unexpected token|JSON/);
+    expect(await screen.findByText("Couldn't load uploads.")).toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('HTTP 502')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('kept.txt')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load uploads.")).not.toBeInTheDocument();
+  });
+
+  it('names a deleted or inaccessible upload plainly when delete gets a 404', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ uploads: [row('upl_1', 'gone.txt')] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ name: 'NotFound', message: 'Upload unavailable', code: 404 }),
+            {
+              status: 404,
+            }
+          )
+        )
+    );
+
+    render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete gone.txt' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }));
+
+    await waitFor(() =>
+      expect(showError).toHaveBeenCalledWith(
+        "Couldn't delete the upload. It may have been deleted, or you may not have access."
+      )
+    );
+  });
+
+  it('keeps the HTTP status when opening an upload fails without a plain reason', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ uploads: [row('upl_1', 'file.bin')] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+        .mockResolvedValueOnce(new Response('', { status: 500 }))
+    );
+
+    render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Download file.bin' }));
+
+    await waitFor(() =>
+      expect(showError).toHaveBeenCalledWith("Couldn't open the upload. (HTTP 500)")
+    );
   });
 
   it('discards an older generation response while allowing the reauthenticated reload', async () => {

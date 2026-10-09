@@ -1,3 +1,4 @@
+export { ActionErrorNotice } from './ActionErrorNotice';
 export type {
   CompactNoticeAction,
   CompactNoticeDetail,

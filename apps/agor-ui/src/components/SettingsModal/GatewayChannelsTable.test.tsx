@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App as AntdApp } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 
@@ -705,6 +706,27 @@ describe('GatewayChannelsTable Slack edit mode', () => {
     expect(onUpdate.mock.calls[0][1].config).toMatchObject(tokens);
   });
 
+  it('keeps the edit form open with its edits when the save is rejected', async () => {
+    const { client } = makeClient();
+    // authorization.ts via register-hooks.ts
+    const onUpdate = vi
+      .fn()
+      .mockRejectedValue(new Error('You need admin access to update gateway channels'));
+    renderEditTable(client, makeSlackChannel(), { onUpdate });
+    expandPanel('Credentials');
+    fireEvent.change(screen.getByPlaceholderText('xapp-...'), {
+      target: { value: 'xapp-kept' },
+    });
+
+    clickButton(/^Save$/);
+
+    expect(
+      await screen.findByText("Couldn't save the channel. Only administrators can change channels.")
+    ).toBeVisible();
+    expect(screen.getByText('Edit Gateway Channel')).toBeVisible();
+    expect(screen.getByPlaceholderText('xapp-...')).toHaveValue('xapp-kept');
+  });
+
   it('derives the Message Sources scope/event list (no stale message.* events)', async () => {
     renderEditTable(null, makeSlackChannel());
     expandPanel('Message Sources');
@@ -898,7 +920,11 @@ describe('GatewayChannelsTable Slack edit mode', () => {
 
     renderEditTable(null, channel, { onUpdate });
 
-    expect(screen.getByText('This channel uses a removed agentic tool')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "This channel's agent is no longer available. Choose another agent before you save."
+      )
+    ).toBeInTheDocument();
     expect(queryButton(/^Save$/)).toBeDisabled();
     expect(onUpdate).not.toHaveBeenCalled();
 
@@ -1064,6 +1090,52 @@ describe('GatewayChannelsTable socket authority generations', () => {
 });
 
 describe('GatewayChannelsTable GitHub create wizard', () => {
+  async function openGithubCreateApp() {
+    renderTable(makeClient().client);
+    clickButton(/Add Channel/);
+    selectChannelType('GitHub');
+    await waitForAvailableStep('Credentials');
+    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
+      target: { value: 'My GH' },
+    });
+    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
+    clickButton(/^Continue$/);
+    await waitForStep('Create app');
+  }
+
+  it('asks the user to sign in again when the install has no access token', async () => {
+    localStorage.removeItem(ACCESS_TOKEN_KEY);
+    await openGithubCreateApp();
+    clickButton(/Create GitHub App on GitHub/);
+    expect(
+      await screen.findByText("Couldn't start the GitHub App install. Sign in again first.")
+    ).toBeInTheDocument();
+  });
+
+  it('explains a refused install state request', async () => {
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'token');
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ error: 'Admin role required to initiate GitHub App install' }),
+        {
+          status: 403,
+        }
+      )
+    );
+    try {
+      await openGithubCreateApp();
+      clickButton(/Create GitHub App on GitHub/);
+      expect(
+        await screen.findByText(
+          "Couldn't start the GitHub App install. Only administrators can install the GitHub App."
+        )
+      ).toBeInTheDocument();
+    } finally {
+      fetchMock.mockRestore();
+      localStorage.removeItem(ACCESS_TOKEN_KEY);
+    }
+  });
+
   it('walks Channel → Create app → Credentials → Configure and builds a github payload', async () => {
     const { client, channelCreate } = makeClient();
     renderTable(client);

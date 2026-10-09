@@ -169,7 +169,7 @@ describe('updateObject', () => {
     await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
 
     expect(patch).toHaveBeenCalledTimes(1);
-    expect(showError).toHaveBeenCalledWith('Failed to save board object');
+    expect(showError).toHaveBeenCalledWith("Couldn't save your change. (network down)");
   });
 
   it('blocks stale update and delete callbacks after permission revocation', async () => {
@@ -430,7 +430,7 @@ describe('reorderObject', () => {
     // Must resolve (swallow the rejection), not throw out of reorderObject.
     await expect(result.current.reorderObject('a', 'front')).resolves.toBeUndefined();
     expect(patch).toHaveBeenCalledTimes(1);
-    expect(showError).toHaveBeenCalledWith('Failed to reorder zone');
+    expect(showError).toHaveBeenCalledWith("Couldn't reorder the zone. (network down)");
   });
 
   it('coerces a non-finite base zIndex via sanitizeZIndex before computing (NaN → default 100 → 101)', async () => {

@@ -81,14 +81,14 @@ describe('runSessionUpdateWithLatestNotification', () => {
 
     await retry;
     expect(showError).toHaveBeenCalledExactlyOnceWith(
-      'Failed to update session: Permission denied'
+      "Couldn't update the session. (Permission denied)"
     );
     expect(showSuccess).not.toHaveBeenCalled();
 
     first.resolve(session('session-1'));
     await firstRun;
     expect(showError).toHaveBeenCalledExactlyOnceWith(
-      'Failed to update session: Permission denied'
+      "Couldn't update the session. (Permission denied)"
     );
     expect(showSuccess).not.toHaveBeenCalled();
   });

@@ -20,22 +20,12 @@ import type {
 import { readCredentialRequirement } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES, sessionPath } from '@agor-live/client';
-import {
-  Alert,
-  Button,
-  Card,
-  Col,
-  Empty,
-  Flex,
-  message,
-  Pagination,
-  Row,
-  Skeleton,
-  theme,
-} from 'antd';
+import { Alert, Button, Card, Col, Empty, Flex, Pagination, Row, Skeleton, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError, formatActionError } from '@/utils/connectionErrors';
+import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { stagePromptDraftSeed } from '../../utils/promptDrafts';
 import { type MCPServerCapabilityContext, policyPendingState } from '../MCPServer/memberPolicy';
@@ -169,7 +159,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
   const [sessionSetupRequested, setSessionSetupRequested] = useState(false);
   const [startingSession, setStartingSession] = useState(false);
   const [startSessionError, setStartSessionError] = useState<string | null>(null);
-  const [connectError, setConnectError] = useState<string | null>(null);
+  const [connectError, setConnectError] = useState<ReturnType<typeof describeActionError> | null>(
+    null
+  );
+  const { showError, showWarning } = useThemedMessage();
   const [connectSuccess, setConnectSuccess] = useState<{
     catalogKey: string;
     serverId: string;
@@ -569,10 +562,11 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               });
               if (!launched && operation.isCurrent()) {
                 authentication = 'failed';
-                message.warning(
+                showWarning(
                   onboarding
-                    ? 'Sign-in could not start automatically. Retry here when ready.'
-                    : 'Sign-in could not start automatically. Retry from My Servers when ready.'
+                    ? "Sign-in didn't open. Try again here when you're ready."
+                    : "Sign-in didn't open. Try again from My Servers when you're ready.",
+                  { duration: 0 }
                 );
               }
               oauthAttemptId = launched?.attemptId;
@@ -585,12 +579,10 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
               oauthPopup.close();
               if (!operation.isCurrent()) return;
               authentication = 'failed';
-              message.error(
+              showError(
                 onboarding
-                  ? 'Sign-in could not open. Return to onboarding or retry here.'
-                  : cause instanceof Error
-                    ? cause.message
-                    : 'Sign-in could not open. Retry from My Servers when ready.'
+                  ? "Couldn't open sign-in. Go back to onboarding or try again here."
+                  : formatActionError('open sign-in', cause, { idempotent: true })
               );
             }
           } else if (result.mcp_server.auth?.type === 'oauth') {
@@ -614,20 +606,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
       } catch (err: unknown) {
         oauthPopup?.close();
         if (!operation.isCurrent()) return;
-        setConnectError(
-          onboarding
-            ? 'Could not connect this server. Check your credentials and try again.'
-            : err instanceof Error
-              ? err.message
-              : 'Could not connect this server'
-        );
+        const failure = describeActionError('connect this server', err, { idempotent: false });
+        // Onboarding never shows provider text, which can echo submitted secrets.
+        setConnectError(onboarding ? { ...failure, raw: null } : failure);
         const requirement = readCredentialRequirement(err);
         if (requirement) setKeyRequirement(requirement);
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, selected, onboarding, sharing]
+    [client, operationGuard, selected, onboarding, sharing, showError, showWarning]
   );
 
   const continueSurpriseOAuth = useCallback(
@@ -683,18 +671,16 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
             ? { ...value, authentication: 'failed' }
             : value
         );
-        message.error(
+        showError(
           onboarding
-            ? 'Sign-in could not open. Return to onboarding or retry here.'
-            : cause instanceof Error
-              ? cause.message
-              : 'Sign-in could not open. Retry from My Servers when ready.'
+            ? "Couldn't open sign-in. Go back to onboarding or try again here."
+            : formatActionError('open sign-in', cause, { idempotent: true })
         );
       } finally {
         if (operation.isCurrent()) setConnecting(false);
       }
     },
-    [client, operationGuard, onboarding]
+    [client, operationGuard, onboarding, showError]
   );
 
   const handleStartSession = useCallback(

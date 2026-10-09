@@ -4,8 +4,10 @@ import { Button, Checkbox, Input, Modal, Space, Typography, Upload } from 'antd'
 import type { RcFile, UploadFile } from 'antd/es/upload/interface';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useRef, useState } from 'react';
+import { describeActionError, unconfirmedMessage } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { openUploadBlob } from '../../utils/uploadBlob';
+import { ActionErrorNotice, CompactNotice } from '../CompactNotice';
 import type { UploadedFile } from './upload';
 import { uploadFilesToSession } from './upload';
 
@@ -36,11 +38,15 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   onInsertMention,
   initialFiles,
 }) => {
-  const { showSuccess, showWarning, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [fileList, setFileList] = useState<UploadFile[]>([]);
   const [notifyAgent, setNotifyAgent] = useState(true);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_UPLOAD_MESSAGE);
   const [uploading, setUploading] = useState(false);
+  const [noFiles, setNoFiles] = useState(false);
+  const [uploadError, setUploadError] = useState<ReturnType<typeof describeActionError> | null>(
+    null
+  );
 
   // Mirror fileList in a ref so cleanup (unmount/reset) can revoke object URLs
   // without re-running effects on every keystroke.
@@ -72,6 +78,8 @@ export const FileUpload: React.FC<FileUploadProps> = ({
   const resetFileList = useCallback(() => {
     fileListRef.current.forEach(revokeThumb);
     setFileList([]);
+    setNoFiles(false);
+    setUploadError(null);
   }, [revokeThumb]);
 
   // Revoke any outstanding object URLs when the modal unmounts.
@@ -87,11 +95,12 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
   const handleUpload = async () => {
     if (fileList.length === 0) {
-      showWarning('Please select at least one file');
+      setNoFiles(true);
       return;
     }
 
     setUploading(true);
+    setUploadError(null);
 
     try {
       const files = fileList.flatMap((file) => {
@@ -110,9 +119,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
 
       // Show success message with final filename(s) so user knows what to reference
       if (result.files.length === 1) {
-        showSuccess(`Uploaded as: ${result.files[0].filename}`);
+        showSuccess(`Uploaded as ${result.files[0].filename}.`);
       } else {
-        showSuccess(`Uploaded ${result.files.length} files successfully`);
+        showSuccess(`Uploaded ${result.files.length} files.`);
       }
 
       // Call completion callback
@@ -133,8 +142,15 @@ export const FileUpload: React.FC<FileUploadProps> = ({
       setAgentMessage(DEFAULT_AGENT_UPLOAD_MESSAGE);
       onClose();
     } catch (error) {
-      console.error('Upload error:', error);
-      showError(error instanceof Error ? error.message : 'Failed to upload files');
+      // fetch rejects with a TypeError when the connection drops, possibly after the upload landed.
+      setUploadError(
+        error instanceof TypeError
+          ? {
+              message: unconfirmedMessage('upload the files', { idempotent: false }),
+              raw: error.message,
+            }
+          : describeActionError('upload the files', error, { idempotent: false })
+      );
     } finally {
       setUploading(false);
     }
@@ -170,6 +186,7 @@ export const FileUpload: React.FC<FileUploadProps> = ({
             if (file.originFileObj) openUploadBlob(file.originFileObj, file.name, false);
           }}
           beforeUpload={(file) => {
+            setNoFiles(false);
             setFileList((prev) => [...prev, buildUploadFile(file)]);
             return false; // Prevent auto upload
           }}
@@ -180,6 +197,9 @@ export const FileUpload: React.FC<FileUploadProps> = ({
         >
           <Button icon={<UploadOutlined />}>Select Files</Button>
         </Upload>
+
+        {noFiles && <CompactNotice type="warning" message="Select at least one file." />}
+        {uploadError && <ActionErrorNotice error={uploadError} />}
 
         <Text type="secondary" style={{ fontSize: '12px' }}>
           Files are held in temporary session-scoped staging. When notified, the agent receives an

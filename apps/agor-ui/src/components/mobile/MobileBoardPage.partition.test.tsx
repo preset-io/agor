@@ -42,7 +42,7 @@ function MobileBoardRoute({ client }: { client: AgorClient }) {
 
 withTestAuthority();
 
-it('a cold mobile board whose partition fails offers Retry, and Retry loads it', async () => {
+it('a cold mobile board whose partition fails offers Try again, and Try again loads it', async () => {
   window.history.pushState({}, '', `/m/board/${BOARD}`);
   onTestFinished(() => window.history.pushState({}, '', '/'));
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -70,7 +70,7 @@ it('a cold mobile board whose partition fails offers Retry, and Retry loads it',
   expect(document.querySelector('.ant-skeleton')).toBeNull();
 
   partitionDown = false;
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
   await waitFor(() => expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true));
   expect(screen.queryByRole('alert')).toBeNull();
   expect(document.querySelector('.ant-skeleton')).toBeNull();

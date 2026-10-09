@@ -1,7 +1,14 @@
 import type { AgorClient, CapabilityPolicyWorkspacePreferences, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, App, Button, Card, Flex, Skeleton, Switch, Typography, theme } from 'antd';
+import { Button, Card, Flex, Skeleton, Switch, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
+import {
+  describeActionError,
+  formatActionError,
+  notConnectedMessage,
+} from '../../utils/connectionErrors';
+import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 
 const DEFAULT_PREFERENCES: CapabilityPolicyWorkspacePreferences = {
   session_sharing_enabled: false,
@@ -16,22 +23,24 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
   client,
   currentUser,
 }) => {
-  const { message } = App.useApp();
+  const { showSuccess, showError } = useThemedMessage();
   const { token } = theme.useToken();
   const [value, setValue] = useState(DEFAULT_PREFERENCES);
   const [saved, setSaved] = useState(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ReturnType<typeof describeActionError> | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt re-runs the load on Try again
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     if (!client) {
       setLoading(false);
-      setError('Workspace preferences are unavailable while disconnected.');
+      setError({ message: notConnectedMessage('load workspace preferences'), raw: null });
       return;
     }
     client
@@ -44,9 +53,7 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
-          setError(
-            reason instanceof Error ? reason.message : 'Could not load workspace preferences.'
-          );
+          setError(describeActionError('load workspace preferences', reason, { idempotent: true }));
         }
       })
       .finally(() => {
@@ -55,7 +62,7 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
     return () => {
       cancelled = true;
     };
-  }, [client]);
+  }, [client, loadAttempt]);
 
   const dirty = value.session_sharing_enabled !== saved.session_sharing_enabled;
 
@@ -66,11 +73,9 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
       const next = await client.service('workspace-preferences').patch(null, value);
       setValue(next);
       setSaved(next);
-      message.success('Workspace preferences saved');
+      showSuccess('Workspace preferences saved.');
     } catch (reason) {
-      message.error(
-        reason instanceof Error ? reason.message : 'Could not save workspace preferences'
-      );
+      showError(formatActionError('save workspace preferences', reason, { idempotent: true }));
     } finally {
       setSaving(false);
     }
@@ -88,7 +93,12 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
       {loading ? (
         <Skeleton active paragraph={{ rows: 3 }} />
       ) : error ? (
-        <Alert type="error" showIcon description={error} />
+        <ActionErrorNotice
+          error={error}
+          action={
+            client ? { label: 'Try again', onClick: () => setLoadAttempt((n) => n + 1) } : undefined
+          }
+        />
       ) : (
         <Card size="small">
           <Flex justify="space-between" align="flex-start" gap={token.paddingLG} wrap>
@@ -111,7 +121,7 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
               type="secondary"
               style={{ display: 'block', marginTop: token.marginSM }}
             >
-              Only workspace admins can change this setting.
+              Only administrators can change this setting.
             </Typography.Text>
           )}
         </Card>

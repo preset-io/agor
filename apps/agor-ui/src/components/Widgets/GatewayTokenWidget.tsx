@@ -32,8 +32,10 @@ import { Button, Card, Input, Space, Typography, theme } from 'antd';
 import { useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks';
 import { useAgorStore } from '@/store/agorStore';
+import { CLIENT_NOT_CONNECTED_ERROR, describeActionError } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
+import { ActionErrorNotice } from '../CompactNotice';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
 const { Text } = Typography;
@@ -236,7 +238,7 @@ interface PendingFormProps {
 
 const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const fields = useMemo(() => params.fields, [params.fields]);
 
   const [values, setValues] = useState<Record<string, string>>(() => {
@@ -247,6 +249,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ReturnType<typeof describeActionError> | null>(
+    null
+  );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [localResolution, setLocalResolution] = useState<'submitted' | 'dismissed' | null>(null);
   const resolvingRef = useRef(false);
@@ -286,7 +291,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
 
   const post = async (path: 'submit' | 'dismiss', body: unknown) => {
     if (!client) {
-      throw new Error('No client available — refresh and try again');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
     return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
   };
@@ -302,6 +307,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     resolvingRef.current = true;
     setSubmitting(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
     for (const field of fields) {
@@ -315,9 +321,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
       showSuccess('Tokens submitted');
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Check the tokens and try again.`);
-      showError(message);
+      setActionError(describeActionError('save the tokens', err, { idempotent: true }));
     } finally {
       setSubmitting(false);
     }
@@ -328,15 +332,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     resolvingRef.current = true;
     setDismissing(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     try {
       await post('dismiss', {});
       setLocalResolution('dismissed');
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Try again.`);
-      showError(message);
+      setActionError(describeActionError('dismiss', err, { idempotent: true }));
     } finally {
       setDismissing(false);
     }
@@ -421,6 +424,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
             {validationMessage}
           </Text>
         ) : null}
+        {actionError ? <ActionErrorNotice error={actionError} /> : null}
 
         <Space style={{ width: '100%', justifyContent: 'flex-end' }} size="small">
           {/* Dismiss is the admin-only decline action, so only surface it to a

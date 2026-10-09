@@ -654,7 +654,7 @@ describe('connect', () => {
     fireEvent.click(connect);
     const keyInput = await drawer.findByPlaceholderText(/bearer access token/i);
     fireEvent.change(keyInput, { target: { value: 'admin-a-private-key' } });
-    expect(drawer.getByText(/Endpoint now requires/)).toBeVisible();
+    expect(drawer.getByText("Couldn't connect this server.")).toBeVisible();
 
     rendered.rerender(view(REPLACEMENT_ADMIN, 2));
 
@@ -663,7 +663,7 @@ describe('connect', () => {
     drawer = await findDrawer();
     expect(drawer.getByRole('checkbox')).not.toBeChecked();
     expect(drawer.queryByPlaceholderText(/bearer access token/i)).not.toBeInTheDocument();
-    expect(drawer.queryByText(/Endpoint now requires/)).not.toBeInTheDocument();
+    expect(drawer.queryByText("Couldn't connect this server.")).not.toBeInTheDocument();
     expect(await findNoAuthConnect(drawer)).toBeDisabled();
     expect(connectCalls).toHaveLength(1);
   });
@@ -745,9 +745,7 @@ describe('connect', () => {
     };
     expect(popup.location?.replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(
-      screen.queryByText(
-        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
-      )
+      screen.queryByText("Sign-in didn't open. Try again from My Servers when you're ready.")
     ).not.toBeInTheDocument();
     expect(drawer.queryByText('Connection status: Connected and ready.')).not.toBeInTheDocument();
   });
@@ -880,7 +878,9 @@ describe('connect', () => {
 
     fireEvent.click(connect);
 
-    expect(await drawer.findByText(/temporarily unavailable/)).toBeVisible();
+    expect(await drawer.findByText("Couldn't connect this server.")).toBeVisible();
+    fireEvent.click(drawer.getByRole('button', { name: 'Details' }));
+    expect(drawer.getByText('DeepWiki is temporarily unavailable')).toBeVisible();
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -938,7 +938,7 @@ describe('connect capability reaches the drawer', () => {
     const connect = await findNoAuthConnect(drawer);
 
     expect(connect).toBeDisabled();
-    expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
+    expect(drawer.getByText(/doesn't let you add servers/)).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
   });
 

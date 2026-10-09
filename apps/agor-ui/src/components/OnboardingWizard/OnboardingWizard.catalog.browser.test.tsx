@@ -263,7 +263,7 @@ describe('onboarding-owned Catalog in Chromium', () => {
       drawer.getByRole('checkbox', { name: 'I understand what this server can access' })
     );
     await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
-    await drawer.findByText('Could not connect this server. Check your credentials and try again.');
+    await drawer.findByText("Couldn't connect this server.");
     await userEvent.fill(input, 'test-only-retry');
     await userEvent.click(drawer.getByRole('button', { name: 'Connect' }));
     await drawer.findByText('Connected and ready');

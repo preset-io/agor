@@ -15,6 +15,7 @@ import {
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatActionError } from '../../../utils/connectionErrors';
 import { useThemedMessage } from '../../../utils/message';
 import { getSessionStatusTone } from '../../../utils/sessionStatus';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
@@ -214,13 +215,13 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
           void loadActiveSessions();
         }
 
-        showSuccess(
-          archive
-            ? 'Session and same-branch children archived'
-            : 'Session and same-branch children unarchived'
-        );
+        showSuccess(archive ? 'Session archived.' : 'Session unarchived.');
       } catch (err) {
-        showError(err instanceof Error ? err.message : 'Failed to update session');
+        showError(
+          formatActionError(archive ? 'archive the session' : 'unarchive the session', err, {
+            idempotent: true,
+          })
+        );
       } finally {
         setArchivingIds((prev) => {
           const next = new Set(prev);
@@ -358,11 +359,11 @@ const SessionsTabInner: React.FC<SessionsTabProps> = ({
         const nextArchived = !session.archived;
         const actionLabel = nextArchived ? 'archive' : 'unarchive';
         const title = nextArchived
-          ? 'Archive session and same-branch children?'
-          : 'Unarchive session and same-branch children?';
+          ? 'Archive this session and its subsessions?'
+          : 'Unarchive this session and its subsessions?';
         const description = nextArchived
-          ? 'This will archive this session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.'
-          : 'This will restore this session and same-branch descendants archived because of their parent. Remote-created sessions are unchanged.';
+          ? 'Sessions started from it on this branch are archived too. Sessions on other branches stay active.'
+          : 'Sessions on this branch that were archived with it are restored too. Sessions on other branches are unchanged.';
         const tooltip = nextArchived
           ? 'Archive session and child sessions'
           : 'Archived • Click to unarchive session and child sessions';
