@@ -7018,6 +7018,15 @@ describe('GatewayService Teams proactive sends', () => {
     await expect(emit()).rejects.toThrow('Teams posted the message');
   });
 
+  it('reports a live post as sent when the channel bookkeeping write fails', async () => {
+    const { emit, channelRepo } = emitHarness({ direct: fenced() });
+    channelRepo.updateLastMessage.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(emit()).resolves.toMatchObject({
+      success: true,
+      gateway_outbound_message_id: 'seed-1',
+    });
+  });
+
   it('never admits a seed for personal chats', async () => {
     const { service, outboundRepo } = makeGatewayHarness({
       channel,

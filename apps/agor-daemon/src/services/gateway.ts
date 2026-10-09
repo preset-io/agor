@@ -5075,10 +5075,15 @@ export class GatewayService {
         `[gateway.teams.proactive] event=seed_not_recorded channel_id=${channel.id} code=${gatewayFailureCode(error)}`
       );
       throw new Error(
-        'Teams posted the message, but Agor could not record it, so replies to it will not start a session. Do not send it again.'
+        'Teams posted the message, but Agor could not record it, so a mention in its thread starts a session without this post as context. Do not send it again.'
       );
     }
-    await this.channelRepo.updateLastMessage(channel.id);
+    // Bookkeeping only: the post is live, so this must never fail the send.
+    await this.channelRepo.updateLastMessage(channel.id).catch((error: unknown) => {
+      console.warn(
+        `[gateway.teams.proactive] event=last_message_not_recorded channel_id=${channel.id} code=${gatewayFailureCode(error)}`
+      );
+    });
     console.log(
       `[gateway] Proactive teams outbound ${shortId(row.id)} sent via ${shortId(channel.id)}${partial ? ' partial=true' : ''}`
     );
