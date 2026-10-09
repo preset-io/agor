@@ -551,12 +551,12 @@
     "@slack/web-api": "^7.19.0",
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.10.1",
-    "cronstrue": "^3.26.0",
-    "discord-api-types": "^0.38.55",
+    "cronstrue": "^3.29.0",
+    "discord-api-types": "^0.38.56",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
     "js-yaml": "^4.3.2",
-    "mdast-util-from-markdown": "^2.0.2",
+    "mdast-util-from-markdown": "^2.1.0",
     "postgres": "^3.4.9",
     "simple-git": "^4.0.2",
     "slackify-markdown": "^5.0.0",
@@ -579,7 +579,7 @@
     "botbuilder": "^4.23.3",
     "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.11",
-    "handlebars": "^4.7.8",
+    "handlebars": "^4.7.10",
     "open": "^11.0.4",
     "tsup": "^8.5.1",
     "tsx": "4.23.15",
@@ -587,6 +587,6 @@
     "vitest": "^5.0.1"
   },
   "peerDependencies": {
-    "handlebars": "^4.7.8"
+    "handlebars": "^4.7.10"
   }
 }
