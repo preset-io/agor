@@ -120,7 +120,10 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           expect(getCurrentTenantDatabaseScope()).toBeUndefined();
           expect(getCurrentTenantId()).toBe(a.tenantId);
           // Another connection must already see the authoritative mutation.
-          expect((await observer.get(a.user.user_id, a.params)).email).toBe(email);
+          expect(await observer.get(a.user.user_id, a.params)).toMatchObject({
+            email,
+            preferences: { use_slack_avatar: true },
+          });
           return {
             slackUserId: 'U_AVATAR',
             email,
@@ -129,7 +132,8 @@ describe.skipIf(!postgresUrl || process.env.AGOR_DB_DIALECT !== 'postgresql')(
           };
         });
       await runWithTenantDatabaseTransaction(db, a.tenantId, async () => {
-        await service.patch(a.user.user_id, { email: 'committed@example.test' }, a.params);
+        // Preferences are Agor-owned even when email/account lifecycle is external.
+        await service.patch(a.user.user_id, { preferences: { use_slack_avatar: true } }, a.params);
         await nextTurn();
         expect(lookup).not.toHaveBeenCalled();
       });
