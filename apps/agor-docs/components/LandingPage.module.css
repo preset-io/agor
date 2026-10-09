@@ -2685,9 +2685,8 @@ a.radarBlip .blipName {
 }
 
 /* --- Home hero (design handoff 2a) ----------------------------------------
- * The pitch sits directly on the full-bleed video (no glass card), with one
- * primary CTA, a text link, a copyable install command, and the landing
- * pages as a quiet hairline row along the bottom edge. */
+ * A borderless, content-width veil separates the pitch from the product loop;
+ * the landing pages remain a quiet hairline row along the bottom edge. */
 .homeHero {
   position: relative;
   display: flex;
@@ -2826,13 +2825,37 @@ a.radarBlip .blipName {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 28px;
-  padding: 136px 24px 40px;
+  padding: 108px 24px 28px;
   text-align: center;
 }
 
-.homeBadge {
-  /* The Agor mark (HeroLogo) sits here now; spacing only. */
+.homePitchContent {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 40px 24px;
+  border-radius: 24px;
+  /* Brand-dark tint, without an outline or shadow: a veil, not a raised card. */
+  background: rgba(7, 16, 15, 0.65);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+/* Without local blur, suppress the video's competing UI text with tint alone. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .homePitchContent {
+    background: rgba(7, 16, 15, 0.86);
+  }
+}
+
+.homePitch .homeBadge {
+  /* Give the open-line mark enough presence beside the large headline, without
+   * enlarging the shared HeroLogo on other pages or crowding small screens. */
+  width: clamp(72px, 6.2vw, 88px);
+  height: clamp(72px, 6.2vw, 88px);
   margin-bottom: -4px;
 }
 
@@ -2852,7 +2875,7 @@ a.radarBlip .blipName {
 }
 
 .homeSub {
-  max-width: 58ch;
+  max-width: 48ch;
   margin: 0;
   color: #cfd8d9;
   font: 300 clamp(1.2rem, 2vw, 1.5rem) / 1.4 var(--font-body-stack);
@@ -2958,7 +2981,7 @@ a.radarBlip .blipName {
 }
 
 .homeKickerMuted {
-  color: #5f7d7a;
+  color: #a1b9b5;
   font-size: 12px;
 }
 
@@ -3136,13 +3159,27 @@ a.radarBlip .blipName {
 /* Short laptop screens: keep the bottom row above the fold. */
 @media (max-height: 780px) and (min-width: 640px) {
   .homePitch {
-    gap: 20px;
-    padding-top: 108px;
-    padding-bottom: 24px;
+    padding-top: 84px;
+    padding-bottom: 16px;
+  }
+
+  .homePitchContent {
+    gap: 12px;
+    padding-top: 18px;
+    padding-bottom: 18px;
+  }
+
+  .homePitch .homeBadge {
+    width: 64px;
+    height: 64px;
+  }
+
+  .homePitch h1 {
+    font-size: clamp(2.9rem, 6vw, 4.5rem);
   }
 
   .homeTiers {
-    gap: 28px;
+    gap: 20px;
   }
 
   .homeHero a.homePrimary,
@@ -3154,8 +3191,13 @@ a.radarBlip .blipName {
 
 @media (max-width: 639px) {
   .homePitch {
+    padding: 88px 16px 28px;
+  }
+
+  .homePitchContent {
     gap: 22px;
-    padding-top: 112px;
+    padding: 24px 16px;
+    border-radius: 20px;
   }
 
   .homePitch h1 {
@@ -3178,8 +3220,8 @@ a.radarBlip .blipName {
     width: 100%;
   }
 
-  /* Tiers span the column; Cloud buttons stack full width (above), the
-   * Community Edition pair stays side by side. */
+  /* Cloud buttons stack full width; keep the quieter CE pair together where
+   * space permits, and let it wrap naturally on the smallest phones. */
   .homeTiers {
     align-self: stretch;
     align-items: stretch;
@@ -3189,6 +3231,11 @@ a.radarBlip .blipName {
   .homeTier {
     align-items: stretch;
     text-align: center;
+  }
+
+  .homeHero a.homeCeBtn {
+    padding: 10px 12px;
+    font-size: 14px;
   }
 
   .homeHero a.homePrimary,

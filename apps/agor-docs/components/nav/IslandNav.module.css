@@ -47,6 +47,12 @@
   box-shadow: 0 0 0 rgba(0, 0, 0, 0);
 }
 
+/* Only the home page sits over the detailed product video. Match its pitch
+ * veil without adding weight to other marketing pages or changing open menus. */
+.island[data-home="true"][data-scrolled="false"][data-open="false"] {
+  background: rgba(7, 16, 15, 0.65);
+}
+
 .island[data-scrolled="true"] {
   /* Hug the bar's measured content (--bar-w, set by IslandNav) so nothing
    * overlaps; open menus get at least 780px for the panels. */
