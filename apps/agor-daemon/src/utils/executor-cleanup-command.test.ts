@@ -188,6 +188,31 @@ describe('optional cleanup result on stdout', () => {
     ).toEqual({ confirmed: true, diagnostic: 'Cleanup command exited with code 0.' });
     expect(Date.now() - started).toBeLessThan(2000);
   });
+  it('keeps an exit 0 observed just before the deadline confirmed', async () => {
+    const timeoutMs = 300;
+    const started = Date.now();
+    const realSetTimeout = globalThis.setTimeout;
+    // Hold the loop past the deadline as the grace timer is armed, so the main
+    // timeout is already due; it must no longer override the observed exit.
+    const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      callback: () => void,
+      ms?: number
+    ) => {
+      if (callback.name === 'finishWithOutput') {
+        while (Date.now() - started < timeoutMs + 50) {
+          /* Busy-wait. */
+        }
+      }
+      return realSetTimeout(callback, ms);
+    }) as typeof setTimeout);
+    try {
+      expect(
+        await runExecutorCleanupCommand('sleep 0.15; (sleep 3 &); exit 0', context, timeoutMs)
+      ).toEqual({ confirmed: true, diagnostic: 'Cleanup command exited with code 0.' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
 });
 
 describe('parseExecutorCleanupResult', () => {

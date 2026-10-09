@@ -116,7 +116,9 @@ export function runExecutorCleanupCommand(
     );
     // `exit` alone decides containment. The cause is read only once stdout closes,
     // within a short grace; after that the exit result stands without a cause.
+    // Once exit is observed the timeout can no longer override it or kill the group.
     child.once('exit', (code, signal) => {
+      clearTimeout(timer);
       exitResult = {
         confirmed: code === 0 && signal === null,
         diagnostic: signal
