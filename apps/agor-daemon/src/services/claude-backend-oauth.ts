@@ -165,12 +165,19 @@ export class ClaudeBackendOAuth {
         hint: 'Claude login needs reconnection. A previous refresh may have been consumed.',
       };
     }
+    // Idle tokens routinely expire; resolve() refreshes them unless the last refresh failed.
     if (!row.expires_at || row.expires_at.getTime() <= this.now()) {
-      return {
-        saved: true,
-        usable: false,
-        hint: 'Saved Claude access token has expired. A new task can attempt a safe refresh.',
-      };
+      return row.failure_code
+        ? {
+            saved: true,
+            usable: false,
+            hint: 'The last Claude login refresh did not complete. Reconnect if new tasks fail.',
+          }
+        : {
+            saved: true,
+            usable: true,
+            hint: 'Saved Claude access token has expired; the next task will refresh it.',
+          };
     }
     return {
       saved: true,
