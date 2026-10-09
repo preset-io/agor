@@ -374,8 +374,9 @@ export function extractQuotedReplyText(
     if (attachment.contentType !== 'text/html' || !attachment.content) continue;
     if (!attachment.content.includes('schema.skype.com/Reply')) continue;
     const afterQuote = attachment.content.split('</blockquote>').pop();
-    const text = afterQuote ? decodeHtmlEntities(stripHtmlTags(afterQuote)).trim() : '';
-    if (text) return text;
+    // Entities stay encoded; normalization decodes them once.
+    const text = afterQuote ? stripHtmlTags(afterQuote).trim() : '';
+    if (decodeHtmlEntities(text).trim()) return text;
   }
   return null;
 }
