@@ -209,6 +209,11 @@ export function validateTeamsVerifiedIdentity(
   return null;
 }
 
+function metadataString(activity: NormalizedTeamsActivity, key: string): string | null {
+  const value = activity.metadata[key];
+  return typeof value === 'string' && value ? value : null;
+}
+
 function allowlisted(
   config: Record<string, unknown>,
   activity: Record<string, unknown>
@@ -453,10 +458,9 @@ export function registerTeamsGatewayIngressRoute(input: {
             address: {
               conversationId: normalized.conversationId,
               rootMessageId: normalized.rootMessageId,
-              teamId:
-                typeof normalized.metadata.teams_team_id === 'string'
-                  ? normalized.metadata.teams_team_id
-                  : null,
+              teamId: metadataString(normalized, 'teams_team_id'),
+              teamAadGroupId: metadataString(normalized, 'teams_team_aad_group_id'),
+              teamsChannelType: metadataString(normalized, 'teams_channel_type'),
               address: normalized.address,
             },
             providerConfigGeneration: channel!.provider_config_generation,

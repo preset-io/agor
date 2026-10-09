@@ -2655,6 +2655,10 @@ export const teamsConversationAddresses = sqliteTable(
     root_message_id: text('root_message_id'),
     /** Plaintext team thread id, so team-wide removal events revoke every channel address. */
     team_id: text('team_id'),
+    /** Plaintext M365 group GUID of the team when Teams sent it; Graph addresses teams by it. */
+    team_aad_group_id: text('team_aad_group_id'),
+    /** `channelData.channel.type` when Teams sent it; history and proactive sends are standard-only. */
+    teams_channel_type: text('teams_channel_type'),
     encrypted_address: text('encrypted_address').notNull(),
     verified_app_id: text('verified_app_id').notNull(),
     verified_tenant_id: text('verified_tenant_id').notNull(),

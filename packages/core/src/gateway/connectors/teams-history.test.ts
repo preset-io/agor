@@ -2,11 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { TeamsGatewayConfig } from '../../types/gateway';
 import type { GatewayProviderHistoryRequest } from '../connector';
 import { TeamsConnector } from './teams';
-import {
-  fetchTeamsProviderHistory,
-  resetTeamsHistoryCaches,
-  type TeamsProviderHistoryContext,
-} from './teams-history';
+import { resetTeamsGraphCaches } from './teams-graph';
+import { fetchTeamsProviderHistory, type TeamsProviderHistoryContext } from './teams-history';
 
 // Real-format identifiers: Teams thread IDs for teams/channels, an M365 group GUID, epoch-ms message IDs.
 const TEAM_THREAD_ID = '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2';
@@ -130,7 +127,7 @@ function tokenCalls(fetchImpl: ReturnType<typeof fakeFetch>) {
 }
 
 afterEach(() => {
-  resetTeamsHistoryCaches();
+  resetTeamsGraphCaches();
   vi.unstubAllGlobals();
 });
 

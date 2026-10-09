@@ -169,4 +169,21 @@ describe('TeamsConversationAddressRepository', () => {
       code: 'conversation_address_revoked',
     });
   });
+
+  ownedDbTest(
+    'keeps the team group ID and channel type when a later activity omits them',
+    async ({ db }) => {
+      const channel = await seedChannel(db);
+      const addresses = new TeamsConversationAddressRepository(db);
+      const groupId = 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b';
+      await addresses.refresh(
+        input(channel, { teamAadGroupId: groupId, teamsChannelType: 'standard' })
+      );
+      const refreshed = await addresses.refresh(input(channel));
+      expect(refreshed).toMatchObject({
+        team_aad_group_id: groupId,
+        teams_channel_type: 'standard',
+      });
+    }
+  );
 });

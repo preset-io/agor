@@ -41,6 +41,10 @@ export interface TeamsConversationAddressInput {
   rootMessageId?: string | null;
   /** Team thread id (`channelData.team.id`) for team-wide removal events. */
   teamId?: string | null;
+  /** `channelData.team.aadGroupId` when the activity carried it. */
+  teamAadGroupId?: string | null;
+  /** `channelData.channel.type` when the activity carried it. */
+  teamsChannelType?: string | null;
   address: Record<string, unknown>;
   verifiedAppId: string;
   verifiedTenantId: string;
@@ -67,6 +71,8 @@ function rowToAddress(row: TeamsConversationAddressRow): TeamsConversationAddres
     conversation_id: row.conversation_id,
     root_message_id: row.root_message_id ?? null,
     team_id: row.team_id ?? null,
+    team_aad_group_id: row.team_aad_group_id ?? null,
+    teams_channel_type: row.teams_channel_type ?? null,
     encrypted_address: row.encrypted_address,
     verified_app_id: row.verified_app_id,
     verified_tenant_id: row.verified_tenant_id,
@@ -147,6 +153,8 @@ export class TeamsConversationAddressRepository {
           conversation_id: input.conversationId,
           root_message_id: input.rootMessageId ?? null,
           team_id: input.teamId ?? existing.team_id ?? null,
+          team_aad_group_id: input.teamAadGroupId ?? existing.team_aad_group_id ?? null,
+          teams_channel_type: input.teamsChannelType ?? existing.teams_channel_type ?? null,
           encrypted_address: encryptedAddress,
           verified_app_id: input.verifiedAppId,
           verified_tenant_id: input.verifiedTenantId,
@@ -167,6 +175,8 @@ export class TeamsConversationAddressRepository {
       conversation_id: input.conversationId,
       root_message_id: input.rootMessageId ?? null,
       team_id: input.teamId ?? null,
+      team_aad_group_id: input.teamAadGroupId ?? null,
+      teams_channel_type: input.teamsChannelType ?? null,
       encrypted_address: encryptedAddress,
       verified_app_id: input.verifiedAppId,
       verified_tenant_id: input.verifiedTenantId,
@@ -291,17 +301,25 @@ export class TeamsConversationAddressRepository {
     threadId: string;
     expected?: { provider_installation_id: string };
   }): Promise<FencedTeamsAddress> {
-    const { channel } = input;
-    const row = await this.findByChannelAndThread(channel.id, input.threadId);
+    const row = await this.findByChannelAndThread(input.channel.id, input.threadId);
     if (!row) return { ok: false, code: 'conversation_address_missing' };
+    if (row.thread_id !== input.threadId) return { ok: false, code: 'conversation_address_stale' };
+    return this.fenceRow(input.channel, row, input.expected);
+  }
+
+  // One identity fence for every lookup: channel, verified app and tenant, revocation, then host.
+  private fenceRow(
+    channel: GatewayChannel,
+    row: TeamsConversationAddress,
+    expected?: { provider_installation_id: string }
+  ): FencedTeamsAddress {
     const config = channel.config as Record<string, unknown>;
     if (
       row.gateway_channel_id !== channel.id ||
-      row.thread_id !== input.threadId ||
       row.verified_app_id !== channel.provider_installation_id ||
       row.verified_app_id !== config.app_id ||
       row.verified_tenant_id !== config.microsoft_tenant_id ||
-      (input.expected && row.verified_app_id !== input.expected.provider_installation_id)
+      (expected && row.verified_app_id !== expected.provider_installation_id)
     ) {
       return { ok: false, code: 'conversation_address_stale' };
     }

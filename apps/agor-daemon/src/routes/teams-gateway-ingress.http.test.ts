@@ -361,6 +361,24 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   }
 
+  ownedDbTest('stores the team group ID and channel type on the address', async ({ db }) => {
+    await withRoute(db, async ({ sign, post }) => {
+      const message = channelMessage('1616990000003', true);
+      message.channelData = {
+        ...(message.channelData as Record<string, unknown>),
+        team: { id: '19:team@thread.tacv2', aadGroupId: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b' },
+        channel: { id: '19:channel@thread.tacv2', type: 'standard' },
+      };
+      expect((await post(sign(), message)).status).toBe(200);
+      const [address] = await select(db).from(teamsConversationAddresses).all();
+      expect(address).toMatchObject({
+        team_id: '19:team@thread.tacv2',
+        team_aad_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+        teams_channel_type: 'standard',
+      });
+    });
+  });
+
   ownedDbTest('acknowledges unmentioned channel traffic without storing it', async ({ db }) => {
     await withRoute(db, async ({ sign, post, wakeWorker }) => {
       expect((await post(sign(), channelMessage('1616990000001', false))).status).toBe(200);

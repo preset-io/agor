@@ -26,3 +26,8 @@ export function isAllowedTeamsServiceUrl(value: unknown): value is string {
     (allowed) => host === allowed || host.endsWith(`.${allowed}`)
   );
 }
+
+/** The one check before a Bot Framework token is attached to any request: Bot Connector hosts only. */
+export function isTeamsTokenHost(value: unknown): value is string {
+  return isAllowedTeamsServiceUrl(value);
+}
