@@ -237,6 +237,8 @@ export async function ingestProviderInboundFiles(args: {
   downloadTimeoutMs?: number;
   /** One deadline shared by every file of the message. */
   signal?: AbortSignal;
+  /** Stage a text file served as `application/octet-stream` under its name's type (SharePoint does this). */
+  textFromOctetStream?: boolean;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const store = args.store ?? getUploadStagingStore();
@@ -313,7 +315,13 @@ export async function ingestProviderInboundFiles(args: {
         controller.signal
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const contentType = discordImageMime(response.headers.get('content-type') ?? '');
+      const servedType = discordImageMime(response.headers.get('content-type') ?? '');
+      const contentType =
+        args.textFromOctetStream &&
+        servedType === 'application/octet-stream' &&
+        !file.mimetype.startsWith('image/')
+          ? discordImageMime(file.mimetype)
+          : servedType;
       if (!isAllowedIngestMime(contentType)) {
         throw new Error(`unexpected content-type ${contentType || 'unknown'}`);
       }

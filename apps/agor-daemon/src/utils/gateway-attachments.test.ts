@@ -1286,4 +1286,27 @@ describe('ingestProviderInboundFiles for Teams', () => {
     await expect(pending).resolves.toMatchObject({ uploads: [], failed: 1 });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  it('stages a SharePoint text file served as octet-stream under its own type', async () => {
+    const fetchImpl = vi.fn(async () =>
+      makeImageResponse(Buffer.from('# notes\n'), { 'content-type': 'application/octet-stream' })
+    );
+    const files = [{ ...personalFile, name: 'notes.md', mimetype: 'text/markdown' }];
+    const read = (textFromOctetStream: boolean) =>
+      ingestProviderInboundFiles({
+        files,
+        label: 'Teams',
+        provenance: 'gateway-teams',
+        requestFor,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        store,
+        textFromOctetStream,
+        ...owner,
+      });
+    expect((await read(true)).uploads).toEqual([
+      expect.objectContaining({ mimeType: 'text/markdown' }),
+    ]);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(await read(false)).toMatchObject({ uploads: [], failed: 1 });
+  });
 });

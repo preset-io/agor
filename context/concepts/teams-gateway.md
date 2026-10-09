@@ -238,8 +238,11 @@ target. The send is synchronous and not durable, as on Slack and Discord.
   normalization gives every activity in that reply chain, so admission needs no
   alias. Only channel conversations reach the seed gate.
 - A reply must still @mention the bot (the post says so); the mention rule is
-  unchanged. A seeded session skips catch-up and moves the cursor to the reply,
-  and its answers go through the outbox like any other mapping.
+  unchanged. The reply that opens a seeded session skips catch-up and moves the
+  cursor to itself; later mentions read catch-up as usual. Answers go through
+  the outbox like any other mapping. The reply hint closes the first chunk, and
+  a seed that cannot be recorded after the post is live is reported as posted,
+  never as a failure that invites a resend.
 
 ## Migration
 

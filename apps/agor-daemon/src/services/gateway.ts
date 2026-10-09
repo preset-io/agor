@@ -4991,10 +4991,13 @@ export class GatewayService {
     if (allowedTeams.length > 0 && !allowedTeams.includes(teamId)) {
       throw new Error("Teams channel's team is not in this gateway channel's allowed_team_ids");
     }
-    const chunks = chunkMarkdown(
-      `${connector.formatMessage(data.message)}\n\n${TEAMS_PROACTIVE_REPLY_HINT}`,
-      { limit: TEAMS_MESSAGE_TEXT_BUDGET, measure: utf16Length, label: 'Teams' }
-    );
+    // The reply hint closes the first chunk, so even a partial post tells people to mention the bot.
+    const chunks = chunkMarkdown(connector.formatMessage(data.message), {
+      limit: TEAMS_MESSAGE_TEXT_BUDGET - TEAMS_PROACTIVE_REPLY_HINT.length - 2,
+      measure: utf16Length,
+      label: 'Teams',
+    });
+    chunks[0] = `${chunks[0] ?? ''}\n\n${TEAMS_PROACTIVE_REPLY_HINT}`.trim();
     if (chunks.length > TEAMS_PROACTIVE_MAX_CHUNKS) {
       throw new Error(
         'Message is too long for a proactive Teams post; shorten it or link to the details.'
@@ -5042,28 +5045,39 @@ export class GatewayService {
       : null;
     const partial = sent.error !== undefined;
     // The thread exists even when a later chunk failed, so its seed is stored either way.
-    const row = await this.outboundRepo.create({
-      gateway_channel_id: channel.id,
-      channel_type: channel.channel_type,
-      platform_channel_id: channelId,
-      platform_message_id: rootId,
-      platform_thread_id: `${channelId}|${rootId}`,
-      platform_permalink: permalink,
-      target_branch_id: channel.target_branch_id,
-      emitted_by_user_id: data.emittedByUserId,
-      emitted_by_session_id: data.emittedBySessionId ?? null,
-      emitted_by_task_id:
-        (data.emittedByTaskId as GatewayOutboundMessage['emitted_by_task_id']) ?? null,
-      emitted_by_schedule_id:
-        (data.emittedByScheduleId as GatewayOutboundMessage['emitted_by_schedule_id']) ?? null,
-      message_text: data.message,
-      message_preview: previewText(data.message),
-      metadata: {
-        target,
-        ...(data.purpose ? { purpose: data.purpose } : {}),
-        ...(partial ? { partial: true, sent_chunks: sent.sentChunks } : {}),
-      },
-    });
+    let row: GatewayOutboundMessage;
+    try {
+      row = await this.outboundRepo.create({
+        gateway_channel_id: channel.id,
+        channel_type: channel.channel_type,
+        platform_channel_id: channelId,
+        platform_message_id: rootId,
+        platform_thread_id: `${channelId}|${rootId}`,
+        platform_permalink: permalink,
+        target_branch_id: channel.target_branch_id,
+        emitted_by_user_id: data.emittedByUserId,
+        emitted_by_session_id: data.emittedBySessionId ?? null,
+        emitted_by_task_id:
+          (data.emittedByTaskId as GatewayOutboundMessage['emitted_by_task_id']) ?? null,
+        emitted_by_schedule_id:
+          (data.emittedByScheduleId as GatewayOutboundMessage['emitted_by_schedule_id']) ?? null,
+        message_text: data.message,
+        message_preview: previewText(data.message),
+        metadata: {
+          target,
+          ...(data.purpose ? { purpose: data.purpose } : {}),
+          ...(partial ? { partial: true, sent_chunks: sent.sentChunks } : {}),
+        },
+      });
+    } catch (error) {
+      // The post is live: an error that invites a resend would duplicate it.
+      console.warn(
+        `[gateway.teams.proactive] event=seed_not_recorded channel_id=${channel.id} code=${gatewayFailureCode(error)}`
+      );
+      throw new Error(
+        'Teams posted the message, but Agor could not record it, so replies to it will not start a session. Do not send it again.'
+      );
+    }
     await this.channelRepo.updateLastMessage(channel.id);
     console.log(
       `[gateway] Proactive teams outbound ${shortId(row.id)} sent via ${shortId(channel.id)}${partial ? ' partial=true' : ''}`
@@ -6447,7 +6461,9 @@ export class GatewayService {
         }
       }
       let teamsCursorToWrite: string | undefined;
-      if (channel.channel_type === 'teams' && !outboundSeed) {
+      // Only the reply that opens a seeded session skips catch-up; later mentions read what followed.
+      const teamsSeedOpening = !!outboundSeed && created;
+      if (channel.channel_type === 'teams' && !teamsSeedOpening) {
         const teamsCatchUp = await prepareTeamsCatchUp({
           channel,
           connector: () =>
@@ -6466,7 +6482,7 @@ export class GatewayService {
         channel.channel_type === 'teams' &&
         TEAMS_MESSAGE_ID.test(data.teams_catch_up?.activity_id ?? '')
       ) {
-        // A seed reply skips catch-up; the next mention reads only what follows it.
+        // The next mention's catch-up starts after this opening reply.
         teamsCursorToWrite = data.teams_catch_up?.activity_id;
       }
       if (channel.channel_type === 'slack' && !outboundSeed) {
@@ -6632,6 +6648,7 @@ export class GatewayService {
             files: data.files,
             label: 'Teams',
             provenance: 'gateway-teams',
+            textFromOctetStream: true,
             requestFor: async (file): Promise<ProviderFileRequest> =>
               file.auth === 'provider_token'
                 ? {

@@ -123,11 +123,6 @@ function requireTenant(db: Database): TenantID | undefined {
 const LOOKUP_LIMIT = 20;
 const NON_STANDARD_CHANNEL_TYPES = ['private', 'shared'] as const;
 
-/** Private and shared channels are refused; an absent type is a standard channel. */
-export function isStandardChannelType(type: string | null | undefined): boolean {
-  return !(NON_STANDARD_CHANNEL_TYPES as readonly string[]).includes(type?.toLowerCase() ?? '');
-}
-
 export class TeamsConversationAddressRepository {
   constructor(private readonly db: Database) {}
 

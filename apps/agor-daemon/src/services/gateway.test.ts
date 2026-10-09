@@ -6929,6 +6929,95 @@ describe('GatewayService Teams proactive sends', () => {
     );
   });
 
+  it('reads catch-up on later mentions in a seeded thread', async () => {
+    const seed = {
+      id: 'seed-1',
+      platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      message_text: 'Release notes are ready',
+      emitted_by_user_id: 'user-1',
+      metadata: {},
+    } as unknown as GatewayOutboundMessage;
+    const fetchProviderHistory = vi.fn(async () => ({
+      threadId: `${TEAMS_CHANNEL}|${ROOT}`,
+      complete: true,
+      messages: [],
+    }));
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      outboundSeed: seed,
+      existingMapping: makeMapping({
+        channel_id: channel.id,
+        thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        session_id: 'sess-new' as never,
+        teams_last_admitted_activity_id: '1616990000009',
+        metadata: { outbound_seed_id: 'seed-1', teams_conversation_type: 'channel' },
+      }),
+      connector: { sendMessage: vi.fn(), fetchProviderHistory },
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      text: 'what do you think?',
+      user_name: 'Bob',
+      metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+      teams_catch_up: {
+        activity_id: '1616990000020',
+        timestamp: '2021-03-29T03:55:32.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: '19:team@thread.tacv2',
+        team_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b3' as never,
+    };
+    await service.create(
+      withVerifiedHttpGatewayAuthority(data, {
+        id: data.gateway_inbound_event_id,
+        gateway_channel_id: channel.id,
+        processing_token: 'claim-token',
+        provider_config_generation: 3,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'tenant-a',
+        thread_id: data.thread_id,
+      })
+    );
+    expect(fetchProviderHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ afterProviderCursor: '1616990000009' })
+    );
+    expect(String(promptCreate.mock.calls[0][0].prompt)).not.toContain(
+      'began from a proactive Agor gateway message'
+    );
+  });
+
+  it('puts the reply hint in the first chunk of a long post', async () => {
+    const { startChannelThread, service } = emitHarness({ direct: fenced() });
+    await runWithTenantContext('tenant-channel', () =>
+      service.emitMessage({
+        gatewayChannelId: channel.id,
+        message: `${'a'.repeat(39_000)}\n\n${'b'.repeat(10_000)}`,
+        target: `channel:${TEAMS_CHANNEL}`,
+        emittedByUserId: 'user-1' as UserID,
+        userRole: 'admin',
+      })
+    );
+    const { chunks } = (
+      startChannelThread.mock.calls[0] as unknown as [unknown, { chunks: string[] }]
+    )[1];
+    expect(chunks).toHaveLength(2);
+    expect(chunks[0]).toContain('_To reply, @mention Agor in this thread._');
+    expect(chunks[1]).not.toContain('@mention Agor');
+    expect(chunks.every((chunk) => chunk.length <= 40_000)).toBe(true);
+  });
+
+  it('says the post is live when its seed cannot be recorded', async () => {
+    const { emit, create } = emitHarness({ direct: fenced() });
+    create.mockRejectedValueOnce(new Error('connection terminated'));
+    await expect(emit()).rejects.toThrow('Teams posted the message');
+  });
+
   it('never admits a seed for personal chats', async () => {
     const { service, outboundRepo } = makeGatewayHarness({
       channel,
