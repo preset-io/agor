@@ -677,7 +677,7 @@ const TEAMS_CODE_SEGMENT = /(`{3,}|~{3,})[\s\S]*?(?:\1|$)|(`+)[^\n]*?(?<!`)\2(?!
  * `<details>` collapses to a bold summary; code passes through unchanged.
  */
 export function formatTeamsMarkdown(markdown: string): string {
-  const formatProse = (prose: string) => {
+  const formatProse = (prose: string, afterInline: boolean, beforeInline: boolean) => {
     const stripped = stripTeamsMarkup(
       prose
         .replace(/<details>\s*<summary>([\s\S]*?)<\/summary>\s*/gi, (_match, summary: string) => {
@@ -685,15 +685,20 @@ export function formatTeamsMarkdown(markdown: string): string {
         })
         .replace(/\s*<\/details>/gi, '')
     );
-    // Teams markdown drops a lone newline; a hard break keeps the line.
-    return stripped.replace(/([^\n])\n(?=[^\n])/g, '$1  \n');
+    // Teams markdown drops a lone newline; a hard break keeps the line, also next to inline code.
+    const edged = `${afterInline ? '\0' : ''}${stripped}${beforeInline ? '\0' : ''}`;
+    const broken = edged.replace(/([^\n])\n(?=[^\n])/g, '$1  \n');
+    return broken.slice(afterInline ? 1 : 0, beforeInline ? -1 : undefined);
   };
 
   let formatted = '';
   let offset = 0;
+  let afterInline = false;
   for (const match of markdown.matchAll(TEAMS_CODE_SEGMENT)) {
-    formatted += formatProse(markdown.slice(offset, match.index)) + match[0];
+    const inline = match[2] !== undefined;
+    formatted += formatProse(markdown.slice(offset, match.index), afterInline, inline) + match[0];
     offset = match.index + match[0].length;
+    afterInline = inline;
   }
-  return (formatted + formatProse(markdown.slice(offset))).trim();
+  return (formatted + formatProse(markdown.slice(offset), afterInline, false)).trim();
 }
