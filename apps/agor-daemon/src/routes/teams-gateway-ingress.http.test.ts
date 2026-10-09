@@ -407,7 +407,7 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
       expect((await post(sign(), body)).status).toBe(200);
       const [event] = await select(db).from(gatewayInboundEvents).all();
       const payload = new GatewayInboundEventRepository(db).decryptQueuedPayload(event as never);
-      expect(payload.skippedFiles).toEqual([{ name: 'report.pdf', reason: 'files_disabled' }]);
+      expect(payload.skippedFiles).toEqual([{ name: 'report.pdf', reason: 'unsupported_type' }]);
       expect(JSON.stringify(payload)).not.toContain('tempauth');
     });
   });
@@ -421,7 +421,7 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
           const imageUrl = 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original';
           const body = activity({
             text: '',
-            attachments: [{ contentType: 'image/png', contentUrl: imageUrl }],
+            attachments: [{ contentType: 'image/*', contentUrl: imageUrl }],
           });
           expect((await post(sign(), body)).status).toBe(200);
           const [event] = await select(db).from(gatewayInboundEvents).all();

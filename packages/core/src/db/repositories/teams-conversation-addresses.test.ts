@@ -214,4 +214,27 @@ describe('TeamsConversationAddressRepository', () => {
       })
     ).toEqual({ ok: false, code: 'conversation_address_missing' });
   });
+
+  ownedDbTest(
+    'refuses a conversation any of whose threads Teams marked private',
+    async ({ db }) => {
+      const channel = await seedChannel(db);
+      const addresses = new TeamsConversationAddressRepository(db);
+      await addresses.refresh(input(channel, { teamsChannelType: 'private' }));
+      await addresses.refresh(
+        input(channel, { threadId: '19:general@thread.tacv2|root-2', rootMessageId: 'root-2' })
+      );
+      expect(
+        await addresses.loadFencedByConversation({
+          channel,
+          conversationId: '19:general@thread.tacv2',
+        })
+      ).toEqual({ ok: false, code: 'conversation_not_standard_channel' });
+      expect(await addresses.loadFencedTeamAnchors({ channel, limit: 5 })).toEqual([
+        expect.objectContaining({
+          row: expect.objectContaining({ thread_id: '19:general@thread.tacv2|root-2' }),
+        }),
+      ]);
+    }
+  );
 });

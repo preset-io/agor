@@ -3,11 +3,10 @@
 import { createHash } from 'node:crypto';
 import { TEAMS_CHANNEL_ID_PATTERN, type TeamsGatewayConfig } from '../../types/gateway';
 import { isTeamsTokenHost } from '../teams-service-url';
-import { parseRetryAfterMs } from './teams-send';
+import { botFrameworkScope, parseRetryAfterMs } from './teams-send';
 
 export const GRAPH_ORIGIN = 'https://graph.microsoft.com';
 export const GRAPH_SCOPE = 'https://graph.microsoft.com/.default';
-const BOT_FRAMEWORK_SCOPE = 'https://api.botframework.com/.default';
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const TOKEN_EXPIRY_SKEW_MS = 5 * 60_000;
 const RSC_DENIED_TTL_MS = 5 * 60_000;
@@ -270,7 +269,7 @@ export async function resolveTeamGroupId(
   if (cached) return cached;
   const details = await authorizedJson(
     runtime,
-    BOT_FRAMEWORK_SCOPE,
+    `${botFrameworkScope(serviceUrl)}/.default`,
     `${teamsServiceUrlBase(serviceUrl)}v3/teams/${encodeURIComponent(teamId)}`
   );
   const resolved = text(details.aadGroupId);
@@ -397,7 +396,7 @@ export async function fetchTeamsTeamChannels(
   };
   const body = await authorizedJson(
     runtime,
-    BOT_FRAMEWORK_SCOPE,
+    `${botFrameworkScope(req.serviceUrl)}/.default`,
     `${teamsServiceUrlBase(req.serviceUrl)}v3/teams/${encodeURIComponent(req.teamId)}/conversations`
   );
   const channels: TeamsTeamChannel[] = [];

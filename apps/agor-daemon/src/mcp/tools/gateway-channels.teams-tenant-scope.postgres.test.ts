@@ -5,6 +5,7 @@ import {
   createTenantScopedDatabaseProxy,
   type Database,
   GatewayChannelRepository,
+  getCurrentTenantDatabaseScope,
   initializeDatabase,
   isPostgresDatabase,
   RepoRepository,
@@ -209,7 +210,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantB = `teams-targets-b-${generateId()}` as TenantID;
       const a = await seedTenant(tenantA, db, true);
       const b = await seedTenant(tenantB, db, false);
-      const listTeamChannels = vi.fn(async () => [{ id: TEAMS_CHANNEL, name: 'General' }]);
+      // Teams is asked only after the tenant database transaction has closed.
+      const listTeamChannels = vi.fn(async () => {
+        expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+        return [{ id: TEAMS_CHANNEL, name: 'General' }];
+      });
       vi.mocked(getConnector).mockReset();
       vi.mocked(getConnector).mockReturnValue({ listTeamChannels } as never);
       const targets = 'agor_gateway_outbound_targets_list';

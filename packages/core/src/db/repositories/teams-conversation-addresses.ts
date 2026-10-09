@@ -104,7 +104,8 @@ export type TeamsAddressFenceCode =
   | 'conversation_address_revoked'
   | 'conversation_address_suspended'
   | 'conversation_address_invalid'
-  | 'conversation_service_url_not_allowed';
+  | 'conversation_service_url_not_allowed'
+  | 'conversation_not_standard_channel';
 
 export type FencedTeamsAddress =
   | { ok: true; row: TeamsConversationAddress; address: Record<string, unknown> }
@@ -317,7 +318,7 @@ export class TeamsConversationAddressRepository {
     return this.fenceRow(input.channel, row, input.expected);
   }
 
-  /** The newest usable address in one base conversation; proof a verified activity arrived there. */
+  /** The newest usable address in one base conversation; any private or shared marking refuses it. */
   async loadFencedByConversation(input: {
     channel: GatewayChannel;
     conversationId: string;
@@ -333,7 +334,12 @@ export class TeamsConversationAddressRepository {
       .orderBy(desc(teamsConversationAddresses.refreshed_at))
       .limit(LOOKUP_LIMIT)
       .all();
-    return this.firstFenced(input.channel, rows.map(rowToAddress));
+    // Teams sends the channel type on some activities only, so one marked thread speaks for the channel.
+    const addresses: TeamsConversationAddress[] = rows.map(rowToAddress);
+    if (addresses.some((row) => !isStandardChannelType(row.teams_channel_type))) {
+      return { ok: false, code: 'conversation_not_standard_channel' };
+    }
+    return this.firstFenced(input.channel, addresses);
   }
 
   /** The newest usable standard-channel address per team, at most `limit` teams; anchors for proactive posts. */

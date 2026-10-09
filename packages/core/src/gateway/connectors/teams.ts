@@ -389,7 +389,19 @@ export function partitionTeamsInboundFiles(
       skip('channel_file');
       continue;
     }
-    if (!isImage && contentType !== TEAMS_FILE_DOWNLOAD_INFO) {
+    const content = asRecord(record.content);
+    // Pasted images arrive as `image/*`; the downloaded body's own type decides what is staged.
+    const mimetype = isImage
+      ? contentType === 'image/*'
+        ? 'image/png'
+        : GATEWAY_READABLE_MIMES.has(contentType)
+          ? contentType
+          : undefined
+      : contentType === TEAMS_FILE_DOWNLOAD_INFO
+        ? (readableMimeForFilename(name) ??
+          readableMimeForFilename(`.${stringValue(content.fileType) ?? ''}`))
+        : undefined;
+    if (!mimetype) {
       skip('unsupported_type');
       continue;
     }
@@ -401,30 +413,21 @@ export function partitionTeamsInboundFiles(
       .update(JSON.stringify([options.activityId, index]))
       .digest('hex')
       .slice(0, 16);
-    if (isImage) {
-      const url = stringValue(record.contentUrl);
-      if (!GATEWAY_READABLE_MIMES.has(contentType)) skip('unsupported_type');
-      else if (!isTeamsTokenHost(url)) skip('invalid');
-      else {
-        files.push({
-          id,
-          name,
-          mimetype: contentType,
-          size: -1,
-          url_private_download: url,
-          auth: 'provider_token',
-        });
-      }
-      continue;
+    const url = stringValue(isImage ? record.contentUrl : content.downloadUrl);
+    if (isImage && isTeamsTokenHost(url)) {
+      files.push({
+        id,
+        name,
+        mimetype,
+        size: -1,
+        url_private_download: url,
+        auth: 'provider_token',
+      });
+    } else if (!isImage && isTeamsFileDownloadUrl(url)) {
+      files.push({ id, name, mimetype, size: -1, url_private_download: url });
+    } else {
+      skip('invalid');
     }
-    const content = asRecord(record.content);
-    const url = stringValue(content.downloadUrl);
-    const mimetype =
-      readableMimeForFilename(name) ??
-      readableMimeForFilename(`.${stringValue(content.fileType) ?? ''}`);
-    if (!mimetype) skip('unsupported_type');
-    else if (!isTeamsFileDownloadUrl(url)) skip('invalid');
-    else files.push({ id, name, mimetype, size: -1, url_private_download: url });
   }
   return { files, skipped };
 }
@@ -535,7 +538,10 @@ export function normalizeTeamsActivity(
     address,
     metadata: {
       teams_conversation_type: conversationType,
-      teams_channel_type: stringValue(channel.type) ?? stringValue(channelData.channelType),
+      teams_channel_type:
+        stringValue(channel.type) ??
+        stringValue(channel.membershipType) ??
+        stringValue(channelData.channelType),
       teams_channel_name: stringValue(channel.name),
       teams_team_name: stringValue(team.name),
       teams_team_id: stringValue(team.id),

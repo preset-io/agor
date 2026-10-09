@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveTeamsAgentTools,
+  teamsAttachmentDeadlineMs,
   teamsOutboundChannelTarget,
   validateTeamsConfig,
   withTeamsConfigDefaults,
@@ -77,5 +78,18 @@ describe('Teams parity config', () => {
     ).toEqual(['default_outbound_target must target an allowed channel']);
     expect(teamsOutboundChannelTarget(`channel:${channelId}`)).toBe(channelId);
     expect(teamsOutboundChannelTarget('channel:C123')).toBeNull();
+  });
+});
+
+describe('Teams attachment deadline', () => {
+  it('leaves the inbound lease room for member lookup, catch-up, and admission', () => {
+    const deadline = (catchUp: Record<string, unknown>) =>
+      teamsAttachmentDeadlineMs({ catch_up: catchUp });
+    expect(deadline({ mode: 'best_effort', request_timeout_ms: 8_000 })).toBe(7_000);
+    expect(deadline({ mode: 'best_effort', request_timeout_ms: 12_000 })).toBe(3_000);
+    expect(deadline({ mode: 'off', request_timeout_ms: 12_000 })).toBe(12_000);
+    expect(
+      5_000 + 12_000 + deadline({ mode: 'best_effort', request_timeout_ms: 12_000 })
+    ).toBeLessThan(30_000);
   });
 });
