@@ -35,7 +35,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
-import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
 import { useAgorStore } from '../../store/agorStore';
 import {
   MAX_ONBOARDING_GOALS,
@@ -510,11 +509,6 @@ export function OnboardingWizard({
     client,
     user ? `${user.user_id}:${user.role}` : null
   );
-
-  // On phone-width viewports the footer's disabled-reason tooltip is placed below
-  // its button instead of the default `top`, where it floated up over the option
-  // cards (hiding the last one) on the short onboarding modal.
-  const isCompactViewport = useIsMobileViewport();
 
   // ── Token-derived styles (live, theme-aware) ────────────────────────────
   const PRIMARY = token.colorPrimary;
@@ -2218,13 +2212,7 @@ export function OnboardingWizard({
             Skip for now
           </Button>
         )}
-        <Tooltip
-          // On phones the reason renders below the button (into the footer's own
-          // band) instead of the default `top`, where it floated up over the
-          // option cards and hid the last one. Desktop keeps the hover default.
-          placement={isCompactViewport ? 'bottom' : 'top'}
-          title={!effectivePrimaryEnabled ? disabledReason : undefined}
-        >
+        <Tooltip title={!effectivePrimaryEnabled ? disabledReason : undefined}>
           <Button
             type="primary"
             disabled={!effectivePrimaryEnabled}

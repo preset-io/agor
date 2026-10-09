@@ -5,7 +5,7 @@ import { page } from 'vitest/browser';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { MobileApp } from './MobileApp';
 
-// Home renders deliberately over-wide AND over-tall content: the fixed shell must
+// Home renders deliberately over-wide AND over-tall content: the viewport-high shell must
 // clip the width, keep the document from scrolling, and keep the nav flush.
 vi.mock('../HomePage', () => ({
   HomePage: () => <div style={{ width: 2000, height: 3000 }}>too big on purpose</div>,
@@ -42,7 +42,7 @@ afterEach(async () => {
   await page.viewport(originalViewport.width, originalViewport.height);
 });
 
-describe('MobileApp shell is fixed to the viewport with a flush tab bar', () => {
+describe('MobileApp shell fills the viewport with a flush tab bar', () => {
   for (const width of [320, 360, 390, 430, 540, 600, 667, 720, 760]) {
     it(`does not overflow or scroll the document at ${width}px`, async () => {
       await page.viewport(width, 780);
@@ -59,7 +59,6 @@ describe('MobileApp shell is fixed to the viewport with a flush tab bar', () => 
       const nav = container.querySelector<HTMLElement>('nav[aria-label="Primary"]')!;
       const doc = document.scrollingElement!;
 
-      expect(getComputedStyle(shell).position).toBe('fixed');
       expect(shell.scrollWidth, `shell scrollWidth at ${width}px`).toBeLessThanOrEqual(width + 1);
       expect(doc.scrollHeight, 'document must not scroll').toBeLessThanOrEqual(doc.clientHeight);
       expect(nav.getBoundingClientRect().width).toBeCloseTo(width, 0);

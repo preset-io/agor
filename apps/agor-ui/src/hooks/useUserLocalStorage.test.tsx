@@ -56,3 +56,19 @@ it('syncs only the current user/key across tabs and handles storage clearing', (
   act(() => window.dispatchEvent(new StorageEvent('storage', { key: null })));
   expect(result.current[0]).toBe(0);
 });
+
+it('syncs other readers of the same key in this tab, without echoing to the writer', () => {
+  const initial = { x: 1 };
+  const writer = renderHook(() => useUserLocalStorage('a', 'opened', initial));
+  const reader = renderHook(() => useUserLocalStorage('a', 'opened', initial));
+  const other = renderHook(() => useUserLocalStorage('a', 'other', 0));
+  const otherBefore = other.result.current[0];
+
+  const next = { x: 2 };
+  act(() => writer.result.current[1](next));
+
+  expect(reader.result.current[0]).toEqual({ x: 2 });
+  // The writer keeps the value it wrote rather than re-parsing a copy.
+  expect(writer.result.current[0]).toBe(next);
+  expect(other.result.current[0]).toBe(otherBefore);
+});

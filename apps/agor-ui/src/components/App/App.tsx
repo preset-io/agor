@@ -54,12 +54,10 @@ import {
   makeBoardSelector,
   makeBranchesForBoardSelector,
   makeBranchSelector,
-  makeCommentMentionSelector,
   makeRepoSelector,
   makeSessionExistsSelector,
   makeSessionSelector,
   makeSessionsForBranchSelector,
-  makeUnreadCommentCountSelector,
   selectArtifactById,
   selectBoardById,
   selectBoardCount,
@@ -79,6 +77,7 @@ import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPi
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
+import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateModals } from '../CreateModals';
@@ -1049,22 +1048,20 @@ export const App: React.FC<AppProps> = ({
   const sessionSettingsSession =
     useAgorStore(useMemo(() => makeSessionSelector(sessionSettingsId), [sessionSettingsId])) ??
     null;
-  const primaryTeammateId = currentBoard?.primary_teammate_id ?? null;
-  const primaryTeammateBranch = useAgorStore(
-    useMemo(() => makeBranchSelector(primaryTeammateId), [primaryTeammateId])
-  );
-  const primaryTeammateRepoId = primaryTeammateBranch?.repo_id;
-  const primaryTeammateRepo = useAgorStore(
-    useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
-  );
-  // Load the displayed board's partition when it is not complete yet. Until it
-  // is, a missing teammate branch means "not loaded", not "no access" (I1).
+  // Load the displayed board's partition when it is not complete yet.
   const { boardReady } = useBoardPartition(client, isHomeSurface ? null : currentBoardId, {
     canUseMemberWorkspaceServices: hasMinimumRole(user?.role, ROLES.MEMBER),
   });
-  const primaryTeammateInaccessible = Boolean(
-    primaryTeammateId && !primaryTeammateBranch && boardReady
-  );
+  // Shared with the mobile board page. The comment badges are shared between
+  // the expanded panel's Comments tab and the collapsed rail's Comments item.
+  const {
+    primaryTeammateId,
+    primaryTeammateBranch,
+    primaryTeammateRepo,
+    primaryTeammateInaccessible,
+    unreadCommentsCount,
+    hasUserMentions,
+  } = useBoardTeammatePanelData(currentBoard, user, boardReady);
 
   // Preserve the historical board-switch behavior now that the panel itself
   // no longer pushes a default tab into controlled parent state on mount.
@@ -1110,22 +1107,6 @@ export const App: React.FC<AppProps> = ({
     useMemo(() => makeBranchesForBoardSelector(currentBoardId), [currentBoardId]),
     shallow
   );
-  // Comment-derived header scalars. Subscribing to the derived number/boolean
-  // (instead of the comment map) keeps comment edits that don't change them —
-  // and all comments on other boards — from waking the shell. Shared between
-  // the expanded panel's Comments tab and the collapsed rail's Comments item
-  // so both surfaces carry the same badge.
-  const currentUserName = user?.name || user?.email?.split('@')[0] || '';
-  const unreadCommentsCount = useAgorStore(
-    useMemo(() => makeUnreadCommentCountSelector(currentBoardId), [currentBoardId])
-  );
-  const hasUserMentions = useAgorStore(
-    useMemo(
-      () => makeCommentMentionSelector(currentBoardId, currentUserName || undefined, user?.email),
-      [currentBoardId, currentUserName, user?.email]
-    )
-  );
-
   // Web terminal is gated by both the instance-level feature flag and the
   // user's role (`WEB_TERMINAL_MIN_ROLE`, shared with TerminalModal so the
   // threshold lives in one place). When disabled, we pass `undefined` so

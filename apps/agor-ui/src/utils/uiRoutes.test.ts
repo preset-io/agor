@@ -112,14 +112,10 @@ describe('responsiveRoutePath', () => {
     ).toBe('/b/01a012d899997909b6f42024/');
   });
 
-  // Marketplace and search are desktop modals with no route, so hand off a flag
-  // the workspace opens on arrival instead of dumping the user on a bare Home.
-  it('hands the marketplace and search tabs to the matching desktop surface', () => {
-    expect(responsiveRoutePath('/m/marketplace', 'desktop', entities)).toBe('/?open=mcp-catalog');
-    expect(responsiveRoutePath('/m/search', 'desktop', entities)).toBe('/?open=search');
-  });
-
-  it('still sends other mobile-only tabs (e.g. sessions) to desktop Home', () => {
+  // Search and the MCP catalog are desktop modals with no route; Home is enough.
+  it('sends mobile-only tabs (search, marketplace, sessions) to desktop Home', () => {
+    expect(responsiveRoutePath('/m/search', 'desktop', entities)).toBe('/');
+    expect(responsiveRoutePath('/m/marketplace', 'desktop', entities)).toBe('/');
     expect(responsiveRoutePath('/m/sessions', 'desktop', entities)).toBe('/');
     expect(responsiveRoutePath('/m', 'desktop', entities)).toBe('/');
   });

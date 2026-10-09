@@ -24,7 +24,7 @@ describe('MobileTabBar fits narrow viewports', () => {
       const { container } = render(
         <ConfigProvider theme={{ token: { motion: false } }}>
           <div style={{ width, boxSizing: 'border-box' }} data-testid="vp">
-            <MobileTabBar activeTab="marketplace" onSelect={vi.fn()} sessionsBadge={12} />
+            <MobileTabBar activeTab="marketplace" onSelect={vi.fn()} homeBadge={12} />
           </div>
         </ConfigProvider>
       );

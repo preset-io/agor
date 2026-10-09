@@ -7,7 +7,7 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { Alert, Button, Flex, Spin } from 'antd';
+import { Alert, Button, Flex, Spin, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
@@ -75,6 +75,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   onOpenAgenticToolSettings,
 }) => {
   const { sessionId } = useParams<{ sessionId: string }>();
+  const { token } = theme.useToken();
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const resolvedSessionId = sessionId
@@ -142,7 +143,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
 
   if (!sessionId) {
     return (
-      <div style={{ padding: 16 }}>
+      <div style={{ padding: token.padding }}>
         <Alert type="error" title="No session ID provided" />
       </div>
     );
@@ -161,7 +162,7 @@ export const SessionPage: React.FC<SessionPageProps> = ({
           align="center"
           justify="center"
           gap="middle"
-          style={{ flex: 1, minHeight: 0, padding: 16 }}
+          style={{ flex: 1, minHeight: 0, padding: token.padding }}
         >
           {waiting ? (
             <Spin size="large" />

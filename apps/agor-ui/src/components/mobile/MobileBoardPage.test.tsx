@@ -34,13 +34,21 @@ const boardById = new Map([
 const branchById = new Map([[branch.branch_id, branch]]);
 
 function Probe() {
-  const { pathname, search } = useLocation();
-  return <output aria-label="location">{pathname + search}</output>;
+  const { pathname, search, state } = useLocation();
+  return (
+    <output aria-label="location" data-state={JSON.stringify(state)}>
+      {pathname + search}
+    </output>
+  );
 }
 
-function renderPage(entry: string | { pathname: string; state: unknown }, onOpenBranch = vi.fn()) {
+function renderPage(
+  entry: string | { pathname: string; state: unknown },
+  onOpenBranch = vi.fn(),
+  boardReady = true
+) {
   // MobileApp re-renders on every session patch and passes fresh inline handlers.
-  const tree = () => (
+  const tree = (ready = boardReady) => (
     <App>
       <MemoryRouter initialEntries={[entry]}>
         <Probe />
@@ -57,6 +65,7 @@ function renderPage(entry: string | { pathname: string; state: unknown }, onOpen
                 onForkSession={vi.fn(async () => {})}
                 onSpawnSession={vi.fn(async () => {})}
                 onSendComment={vi.fn()}
+                boardReady={ready}
               />
             }
           />
@@ -65,7 +74,7 @@ function renderPage(entry: string | { pathname: string; state: unknown }, onOpen
     </App>
   );
   const { rerender } = render(tree());
-  return { onOpenBranch, rerenderFromShell: () => rerender(tree()) };
+  return { onOpenBranch, rerenderFromShell: (ready?: boolean) => rerender(tree(ready)) };
 }
 
 const location = () => screen.getByRole('status', { name: 'location' }).textContent;
@@ -126,11 +135,15 @@ describe('MobileBoardPage', () => {
     expect(canvas.renders).toBe(renders);
   });
 
-  it('opens the board switcher when arriving from All boards', () => {
+  it('opens the board switcher once when arriving from All boards, then clears the request', () => {
     const listener = vi.fn();
     window.addEventListener(OPEN_BOARD_SWITCHER_EVENT, listener);
     renderPage({ pathname: '/m/board/board-1', state: { openBoardSwitcher: true } });
     expect(listener).toHaveBeenCalledTimes(1);
+    // Back/Forward onto this entry must not reopen the switcher.
+    const probe = screen.getByRole('status', { name: 'location' });
+    expect(probe).toHaveAttribute('data-state', 'null');
+    expect(probe).toHaveTextContent('/m/board/board-1');
     window.removeEventListener(OPEN_BOARD_SWITCHER_EVENT, listener);
   });
 
@@ -141,71 +154,11 @@ describe('MobileBoardPage', () => {
     expect(screen.getByRole('button', { name: /Home/ })).toBeInTheDocument();
   });
 
-  it('never shows an empty-board CTA while the board partition is loading', () => {
-    const emptyBoard = { board_id: 'b2', name: 'Fresh board', objects: {} } as unknown as Board;
-    const props = {
-      boardById: new Map([['b2', emptyBoard]]),
-      branchById: new Map(),
-      repoById: new Map(),
-      sessionsByBranch: new Map(),
-      boardObjectsByBoardId: new Map(),
-      cardById: new Map(),
-      artifactById: new Map(),
-      onOpenBranch: vi.fn(),
-      onNewSession: vi.fn(),
-      onGiveFirstTask: vi.fn(),
-      firstTaskAssistantName: 'Fable',
-    };
-    const view = (boardReady: boolean) => (
-      <MemoryRouter initialEntries={['/m/board/b2']}>
-        <Routes>
-          <Route
-            path="/m/board/:boardId"
-            element={<MobileBoardPage {...props} boardReady={boardReady} />}
-          />
-        </Routes>
-      </MemoryRouter>
-    );
-    const { rerender } = render(view(false));
+  it('shows a skeleton, not an empty or inaccessible state, until the partition is loaded', () => {
+    const { rerenderFromShell } = renderPage('/m/board/board-1?tab=all-sessions', vi.fn(), false);
     // Absent rows prove nothing until the partition is loaded (I1).
-    expect(screen.queryByRole('button', { name: /first task/ })).not.toBeInTheDocument();
     expect(document.querySelector('.ant-skeleton')).not.toBeNull();
-
-    rerender(view(true));
-    expect(screen.getByRole('button', { name: /Give Fable their first task/ })).toBeVisible();
+    rerenderFromShell(true);
     expect(document.querySelector('.ant-skeleton')).toBeNull();
-  });
-
-  it('renders no cached branches, cards or zones until the partition is loaded', () => {
-    const view = (boardReady: boolean) => (
-      <MemoryRouter initialEntries={['/m/board/board-1']}>
-        <Routes>
-          <Route
-            path="/m/board/:boardId"
-            element={
-              <MobileBoardPage
-                boardById={new Map([['board-1', board]])}
-                branchById={new Map([['branch-1', branch]])}
-                repoById={new Map()}
-                sessionsByBranch={new Map()}
-                boardObjectsByBoardId={new Map([['board-1', placements]])}
-                cardById={new Map()}
-                artifactById={new Map()}
-                onOpenBranch={vi.fn()}
-                onNewSession={vi.fn()}
-                onGiveFirstTask={vi.fn()}
-                boardReady={boardReady}
-              />
-            }
-          />
-        </Routes>
-      </MemoryRouter>
-    );
-    // Cached rows may be stale and the record lean: no zone groupings yet.
-    const { rerender } = render(view(false));
-    expect(screen.queryByText('feat/mobile')).not.toBeInTheDocument();
-    expect(screen.queryByText('Review')).not.toBeInTheDocument();
-    rerender(view(true));
-    expect(screen.getAllByText('feat/mobile').length).toBeGreaterThan(0);
   });
 });

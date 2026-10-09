@@ -51,7 +51,6 @@ import { buildPromptWithAttachments } from './components/SessionPanel/composerAt
 import { sendPromptWithReconciliation } from './components/SessionPanel/promptReconciliation';
 import { SettingsModal } from './components/SettingsModal';
 import { StreamdownPortalApp } from './components/StreamdownPortalApp';
-import { WorkspaceHandoffOpener } from './components/WorkspaceHandoffOpener';
 import { getDaemonUrl } from './config/daemon';
 import { CanvasNavigationProvider } from './contexts/CanvasNavigationContext';
 import { ConnectionProvider } from './contexts/ConnectionContext';
@@ -2057,9 +2056,6 @@ function AppContent() {
           authGeneration={authGeneration}
           currentUser={currentUser}
         />
-        {/* Opens the catalog / global search when a mobile tab hands off across
-            the shell breakpoint (see responsiveRoutePath). Inert without the flag. */}
-        <WorkspaceHandoffOpener />
         {/* Force Password Change Modal - shown when user.must_change_password is true */}
         <ForcePasswordChangeModal
           open={!!currentUser?.must_change_password && passwordWriteAvailable}

@@ -101,6 +101,11 @@ export interface HomePageProps {
   onSeeAllSessions?: () => void;
   /** Opens the teammates directory; the rail's "See all" hides without it. */
   onSeeAllTeammates?: () => void;
+  /**
+   * The shell's "need you" session count (`useHomeNeedsCount`), so Home and the
+   * mobile tab bar badge show one number. Home counts its own without it.
+   */
+  needsCount?: number;
 }
 
 const scrollToSection = (id: string) =>
@@ -207,6 +212,7 @@ export const HomePage = memo(function HomePage({
   onAllBoards,
   onSeeAllSessions,
   onSeeAllTeammates,
+  needsCount: shellNeedsCount,
 }: HomePageProps) {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -308,7 +314,7 @@ export const HomePage = memo(function HomePage({
       ).slice(0, needsLimit),
     [needsFilter, comments, buckets.needs, needsLimit]
   );
-  const needsCount = buckets.needsCount + comments.length;
+  const needsCount = (shellNeedsCount ?? buckets.needsCount) + comments.length;
   const newUser = hydrated && !buckets.hasSessions && comments.length === 0;
 
   useEffect(() => {
