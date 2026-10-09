@@ -38,27 +38,54 @@ describe('MCP create primary tool configuration materialization', () => {
   for (const source of ['inline', 'preset', 'workspace_default'] as const) {
     dbTest(`materializes the primary tool's ${source} configuration`, async ({ db }) => {
       const f = await childAdmissionFixture(db);
-      const configuration: DefaultAgenticToolConfig = {
+      const configuration = {
         permissionMode: 'allow-all',
         modelConfig: { mode: 'alias', model: DEFAULT_CODEX_MODEL, effort: 'high' },
         codexSandboxMode: 'danger-full-access',
         codexApprovalPolicy: 'never',
         codexNetworkAccess: false,
         codexIncludePlugins: true,
-      };
-      const preset = await runWithTenantDatabaseScope(f.db, f.tenantId, async () => {
-        const preset = await new AgenticToolPresetRepository(f.db).create(
-          { tool: 'codex', name: 'Primary tool defaults', is_default: true, configuration },
+      } satisfies DefaultAgenticToolConfig;
+      // Distinct values and preset IDs make a wrong-source resolution observable.
+      const configurations = {
+        inline: configuration,
+        preset: {
+          ...configuration,
+          modelConfig: { ...configuration.modelConfig, effort: 'medium' },
+        },
+        workspace_default: {
+          ...configuration,
+          modelConfig: { ...configuration.modelConfig, effort: 'low' },
+        },
+      } satisfies Record<typeof source, DefaultAgenticToolConfig>;
+      const presets = await runWithTenantDatabaseScope(f.db, f.tenantId, async () => {
+        const repository = new AgenticToolPresetRepository(f.db);
+        const selected = await repository.create(
+          {
+            tool: 'codex',
+            name: 'Selected preset',
+            is_default: false,
+            configuration: configurations.preset,
+          },
+          f.owner.user_id
+        );
+        const workspace = await repository.create(
+          {
+            tool: 'codex',
+            name: 'Workspace default',
+            is_default: true,
+            configuration: configurations.workspace_default,
+          },
           f.owner.user_id
         );
         await new UsersRepository(f.db).update(f.owner.user_id, {
           primary_agentic_tool: 'codex',
           default_agentic_config: { codex: configuration },
           default_agentic_selection: {
-            codex: source === 'preset' ? { source, preset_id: preset.preset_id } : { source },
+            codex: source === 'preset' ? { source, preset_id: selected.preset_id } : { source },
           },
         });
-        return preset;
+        return { selected, workspace };
       });
       const { handlers } = f.toolsFor();
       // The caller session uses Claude; fresh create must not inherit its tool/config.
@@ -70,7 +97,7 @@ describe('MCP create primary tool configuration materialization', () => {
       expect(session).toMatchObject({
         agentic_tool: 'codex',
         created_by: f.owner.user_id,
-        model_config: { model: DEFAULT_CODEX_MODEL, effort: 'high' },
+        model_config: configurations[source].modelConfig,
         permission_config: {
           mode: 'allow-all',
           codex: {
@@ -82,7 +109,11 @@ describe('MCP create primary tool configuration materialization', () => {
         },
       });
       expect(session.agentic_tool_preset_id ?? null).toBe(
-        source === 'inline' ? null : preset.preset_id
+        source === 'inline'
+          ? null
+          : source === 'preset'
+            ? presets.selected.preset_id
+            : presets.workspace.preset_id
       );
       expect((await f.count()).find((row) => row.session_id === session.session_id)).toMatchObject({
         agentic_tool: session.agentic_tool,
