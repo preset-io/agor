@@ -112,7 +112,6 @@ import {
 import { ensureOnboardingFrameworkRepo } from './utils/ensureOnboardingFrameworkRepo';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
-import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import {
   buildDeferredOnboardingPreferences,
   buildRestartedOnboardingPreferences,
@@ -120,7 +119,7 @@ import {
   isOnboardingDeferred,
   type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
-import { resolveOnboardingSlackIntent } from './utils/onboardingSlack';
+import { buildCompletedOnboardingPreferences } from './utils/onboardingPreferences';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -728,12 +727,6 @@ function AppContent() {
       : undefined;
     if (!isCurrentUser()) return;
 
-    const slackGatewayIntent = await resolveOnboardingSlackIntent(
-      client,
-      currentUser,
-      result.slackGatewayIntent
-    );
-    if (!isCurrentUser()) return;
     const retainedSeed = onboardingSeedResultRef.current.get(result.boardId);
     // Always end onboarding inside the first-task composer: if the user skipped
     // the LLM step, fall back to their governed default agent so the pre-seeded
@@ -747,7 +740,6 @@ function AppContent() {
         AVAILABLE_AGENTS
       );
     const seeded = await seedOnboardingTeammate({
-      slackGatewayIntent,
       connectedMcpServerIds: result.connectedMcpServerIds,
       frameworkRepo: readyFrameworkRepo,
       boardId: result.boardId,
@@ -757,10 +749,6 @@ function AppContent() {
       sourceRemoteUrl: result.sourceRemoteUrl,
       agent: bootstrapAgent,
       startInitialTurn: result.agent != null,
-      suggestedIntegrations: result.suggestedIntegrations,
-      // Goals drive the first-session prompt; [] (skipped) yields the generic
-      // follow-the-user guidance. Passed straight from the wizard.
-      goals: result.goals,
       // Template persona for the first-session opener.
       templateId: result.templateId,
       user: {

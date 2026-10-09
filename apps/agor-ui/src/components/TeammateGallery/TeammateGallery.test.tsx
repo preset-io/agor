@@ -11,7 +11,7 @@ import {
   TEAMMATE_TEMPLATES,
   TEMPLATE_CATEGORIES,
 } from '../../utils/teammateTemplates';
-import { TeammateGallery } from './TeammateGallery';
+import { TeammateGallery, TeammateGalleryCards } from './TeammateGallery';
 
 function cardFor(title: string): HTMLElement {
   const card = screen.getByText(title).closest('[role="button"]');
@@ -157,39 +157,31 @@ describe('TeammateGallery', () => {
     expect(onChange).toHaveBeenLastCalledWith(null);
   });
 
-  it('badges up to two goal-recommended templates and never the blank card', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
+  it('compact variant leads with the recommended Team assistant, then emoji + title templates', () => {
+    render(<TeammateGalleryCards value="blank" onChange={vi.fn()} compact />);
 
-    // dig-into-anything → competitive + financial analyst. Scope to the grid so
-    // the "Recommended" filter chip isn't counted as a badge.
-    const grid = screen.getByRole('group', { name: 'Teammate template' });
-    expect(within(grid).getAllByText('Recommended')).toHaveLength(2);
-    expect(cardFor('Competitive Analyst')).toHaveTextContent('Recommended');
-    expect(cardFor('Financial Analyst')).toHaveTextContent('Recommended');
-    expect(cardFor('Product Manager')).not.toHaveTextContent('Recommended');
-    expect(cardFor('Start blank')).not.toHaveTextContent('Recommended');
+    const assistant = cardFor('Team assistant');
+    expect(assistant).toHaveAttribute('aria-pressed', 'true');
+    expect(assistant).toHaveTextContent('Recommended');
+    expect(assistant).toHaveTextContent('Works with you and your team. A good place to start.');
+    expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
+    expect(screen.getByText('Or start from a template')).toBeInTheDocument();
+
+    // Template cards are compact: no category pill, description only in a tooltip.
+    const template = cardFor('Legal Analyst');
+    expect(template).toHaveTextContent('⚖️');
+    expect(within(template).queryByText('Operate')).not.toBeInTheDocument();
+    expect(template).not.toHaveTextContent('Reads the redline');
+    expect(cardOrder()[0]).toBe('Team assistant');
   });
 
-  it('shows no badge when the selected goals map to no template', () => {
-    // Every real goal now maps to a template; only unknown goal ids resolve to nothing.
-    render(<TeammateGallery goals={['not-a-goal']} value={null} onChange={vi.fn()} />);
-    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
-  });
-
-  it('shows no badge when no goals are supplied', () => {
+  it('renders exactly the All/Grow/Build/Operate chips and no Recommended badge', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
-    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
-  });
-
-  it('renders exactly the All/Grow/Build/Operate chips — no Recommended chip', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
     const chips = chipRow();
     for (const label of ['All', 'Grow', 'Build', 'Operate']) {
       expect(within(chips).getByText(label)).toBeInTheDocument();
     }
-    // The redundant Recommended filter chip is gone, even when goals produce recs
-    // (recommended templates still sort first and keep their badge in the grid).
-    expect(within(chips).queryByText('Recommended')).not.toBeInTheDocument();
+    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
   });
 
   it('models category filtering as one exclusive radio control with arrow-key navigation', () => {
@@ -211,12 +203,6 @@ describe('TeammateGallery', () => {
     expect(cardOrder()).toEqual(['Competitive Analyst', 'Deal Desk Analyst', 'Outbound Analyst']);
     expect(screen.queryByText('Product Manager')).not.toBeInTheDocument();
     expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
-  });
-
-  it('leads the All view with blank, then sorts recommended cards to the front', () => {
-    render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
-    const order = cardOrder();
-    expect(order.slice(0, 3)).toEqual(['Start blank', 'Competitive Analyst', 'Financial Analyst']);
   });
 
   it('shows a category pill per card in the category color (no icon tile); blank has none', () => {

@@ -44,7 +44,7 @@ issue or PR; git history keeps deleted docs.
 - [`toasts.md`](guidelines/toasts.md) — always `useThemedMessage()`.
 - [`logging.md`](guidelines/logging.md) — safe, bounded operational logging.
 - [`testing.md`](guidelines/testing.md) — Vitest patterns.
-- [`onboarding-design.md`](guidelines/onboarding-design.md) — onboarding wizard: goal-over-role framing.
+- [`onboarding-design.md`](guidelines/onboarding-design.md) — onboarding wizard: flow, templates, tools wall, Catalog/auth rules.
 
 Product copy, voice, and positioning live in the Agor team Knowledge base
 ([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md)),

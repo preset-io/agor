@@ -1,11 +1,11 @@
-import { Button, Card, Flex, Segmented, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { TeamOutlined } from '@ant-design/icons';
+import { Button, Card, Flex, Segmented, Tooltip, Typography, theme } from 'antd';
+import { Fragment, useState } from 'react';
 import {
   BLANK_TEMPLATE_ID,
   type GalleryFilter,
   galleryCardsForFilter,
   getCategory,
-  recommendedTemplateIds,
   TEMPLATE_CATEGORIES,
   type TeammateGalleryCardId,
   type TeammateTemplate,
@@ -16,8 +16,6 @@ import { Tag } from '../Tag';
 const { Text, Paragraph } = Typography;
 
 export interface TeammateGalleryProps {
-  /** Selected goal ids (onboarding). Drives which cards get a Recommended badge. */
-  goals?: readonly string[];
   /** Currently selected template id, or null when nothing is chosen yet. */
   value: TeammateGalleryCardId | null;
   /**
@@ -30,9 +28,8 @@ export interface TeammateGalleryProps {
 
 /**
  * Shared pointer/keyboard handlers for a single-select card that can also be
- * deselected. Selection is a single-click toggle (matching the step-1 goal
- * cards): clicking an unselected card selects it, clicking the already-selected
- * card clears it. Enter/Space toggles the focused card the same way.
+ * deselected. Selection is a single-click toggle: clicking an unselected card
+ * selects it, clicking the already-selected card clears it. Enter/Space toggles the focused card the same way.
  */
 function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => void) {
   const toggle = () => (selected ? onClear() : onSelect());
@@ -49,7 +46,7 @@ function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => v
 interface GalleryCardProps {
   template: TeammateTemplate;
   selected: boolean;
-  recommended: boolean;
+  compact?: boolean;
   onSelect: () => void;
   onClear: () => void;
 }
@@ -57,7 +54,7 @@ interface GalleryCardProps {
 const GalleryCard: React.FC<GalleryCardProps> = ({
   template,
   selected,
-  recommended,
+  compact,
   onSelect,
   onClear,
 }) => {
@@ -78,7 +75,7 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
 
   const toggleHandlers = useCardToggle(selected, onSelect, onClear);
 
-  return (
+  const card = (
     <Card
       hoverable
       role="button"
@@ -96,20 +93,31 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
         background,
         cursor: 'pointer',
       }}
-      styles={{ body: { padding: token.paddingSM } }}
+      styles={{
+        body: compact
+          ? { padding: token.paddingXS, height: '100%', display: 'flex', alignItems: 'center' }
+          : { padding: token.paddingSM },
+      }}
     >
-      {/* Tight internal rhythm (marginXXS) so the card is no taller than its
-          content — keeps the gallery fitting without unnecessary scroll. */}
-      <Flex vertical gap={token.marginXXS}>
-        {/* Tidy top row: the colored category pill on the left carries the category
-            hue (the icon tile was removed); the distinct Recommended badge (blue
-            "processing") sits on the right. */}
-        <Flex align="center" justify="space-between" gap={token.marginXXS}>
-          {category && accent ? (
-            // Category pill in the category hue. Fills solid when the card is
-            // selected (an extra, quiet selection cue).
+      {compact ? (
+        <Flex align="center" gap={token.marginXS}>
+          <span aria-hidden="true" style={{ fontSize: token.fontSizeLG }}>
+            {template.emoji}
+          </span>
+          <Text strong style={{ fontSize: token.fontSize }}>
+            {template.title}
+          </Text>
+        </Flex>
+      ) : (
+        // Tight internal rhythm (marginXXS) so the card is no taller than its
+        // content — keeps the gallery fitting without unnecessary scroll.
+        <Flex vertical gap={token.marginXXS}>
+          {/* Category pill in the category hue. Fills solid when the card is
+            selected (an extra, quiet selection cue). */}
+          {category && accent && (
             <Tag
               style={{
+                alignSelf: 'flex-start',
                 margin: 0,
                 fontSize: token.fontSizeSM,
                 color: selected ? getContrastingTextColor(accent, token) : accent,
@@ -119,26 +127,25 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
             >
               {category.label}
             </Tag>
-          ) : (
-            // Keep the badge right-aligned even when there's no category pill.
-            <span />
           )}
-          {recommended && (
-            <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
-              Recommended
-            </Tag>
-          )}
+          {/* Title + description flow at their natural height — no ellipsis/clamp, so
+            the full copy is always shown. */}
+          <Text strong style={{ fontSize: token.fontSize }}>
+            {template.title}
+          </Text>
+          <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
+            {template.description}
+          </Paragraph>
         </Flex>
-        {/* Title + description flow at their natural height — no ellipsis/clamp, so
-            the full copy is always shown (matches the step-1 goal cards). */}
-        <Text strong style={{ fontSize: token.fontSize }}>
-          {template.title}
-        </Text>
-        <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
-          {template.description}
-        </Paragraph>
-      </Flex>
+      )}
     </Card>
+  );
+  return compact ? (
+    <Tooltip title={template.description} trigger={['hover', 'focus']}>
+      {card}
+    </Tooltip>
+  ) : (
+    card
   );
 };
 
@@ -151,15 +158,23 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
  * copy) since it's wide. Still single-selectable with the same softened,
  * no-layout-shift selected state (constant 1px dashed border, only its color
  * changes, plus a faint neutral wash).
+ *
+ * `recommended` (onboarding) presents the same starter as the default
+ * "Team assistant" with a solid border and a Recommended tag.
  */
 const BlankCard: React.FC<{
   template: TeammateTemplate;
   selected: boolean;
+  recommended?: boolean;
   onSelect: () => void;
   onClear: () => void;
-}> = ({ template, selected, onSelect, onClear }) => {
+}> = ({ template, selected, recommended, onSelect, onClear }) => {
   const { token } = theme.useToken();
-  const Icon = template.icon;
+  const Icon = recommended ? TeamOutlined : template.icon;
+  const title = recommended ? 'Team assistant' : template.title;
+  const description = recommended
+    ? 'Works with you and your team. A good place to start.'
+    : template.description;
 
   const borderColor = selected ? token.colorText : token.colorBorderSecondary;
   const background = selected ? token.colorFillQuaternary : undefined;
@@ -171,7 +186,7 @@ const BlankCard: React.FC<{
       hoverable
       role="button"
       aria-pressed={selected}
-      aria-label={template.title}
+      aria-label={title}
       tabIndex={0}
       {...toggleHandlers}
       style={{
@@ -180,7 +195,7 @@ const BlankCard: React.FC<{
         // Constant 1px dashed border in both states — only the color changes on
         // select, so no layout shift. Dashed + neutral reads as "build your own".
         borderWidth: 1,
-        borderStyle: 'dashed',
+        borderStyle: recommended ? 'solid' : 'dashed',
         borderColor,
         background,
         cursor: 'pointer',
@@ -203,11 +218,18 @@ const BlankCard: React.FC<{
           <Icon style={{ fontSize: token.fontSizeHeading3, color: token.colorTextSecondary }} />
         </span>
         <Flex vertical gap={token.marginXXS}>
-          <Text strong style={{ fontSize: token.fontSize }}>
-            {template.title}
-          </Text>
+          <Flex align="center" wrap gap={token.marginXS}>
+            <Text strong style={{ fontSize: token.fontSize }}>
+              {title}
+            </Text>
+            {recommended && (
+              <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
+                Recommended
+              </Tag>
+            )}
+          </Flex>
           <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
-            {template.description}
+            {description}
           </Paragraph>
         </Flex>
       </Flex>
@@ -263,27 +285,30 @@ export const TeammateGalleryFilters: React.FC<TeammateGalleryFiltersProps> = ({
 };
 
 export interface TeammateGalleryCardsProps extends TeammateGalleryProps {
-  filter: GalleryFilter;
+  filter?: GalleryFilter;
+  /** Onboarding variant: recommended blank starter, then emoji + title template cards. */
+  compact?: boolean;
 }
 
-/** Card grid and recommendation ordering, independent of host-specific chrome. */
+/** Card grid, independent of host-specific chrome. */
 export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
-  goals,
   value,
   onChange,
-  filter,
+  filter = 'all',
+  compact,
 }) => {
   const { token } = theme.useToken();
-  const goalList = useMemo(() => goals ?? [], [goals]);
-  const recommendedIds = useMemo(() => new Set(recommendedTemplateIds(goalList)), [goalList]);
-  const cards = useMemo(() => galleryCardsForFilter(goalList, filter), [goalList, filter]);
+  const cards = galleryCardsForFilter(filter);
 
   return (
     <fieldset
       aria-label="Teammate template"
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        // Compact cards keep two per row on phones.
+        gridTemplateColumns: compact
+          ? `repeat(auto-fit, minmax(min(150px, calc(50% - ${token.marginXS / 2}px)), 1fr))`
+          : 'repeat(auto-fit, minmax(190px, 1fr))',
         gap: token.marginXS,
         padding: token.paddingXXS,
         border: 0,
@@ -293,19 +318,26 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
     >
       {cards.map((template) =>
         template.id === BLANK_TEMPLATE_ID ? (
-          <BlankCard
-            key={template.id}
-            template={template}
-            selected={value === template.id}
-            onSelect={() => onChange(template.id)}
-            onClear={() => onChange(null)}
-          />
+          <Fragment key={template.id}>
+            <BlankCard
+              template={template}
+              selected={value === template.id}
+              recommended={compact}
+              onSelect={() => onChange(template.id)}
+              onClear={() => onChange(null)}
+            />
+            {compact && (
+              <Text type="secondary" style={{ gridColumn: '1 / -1', marginTop: token.marginXS }}>
+                Or start from a template
+              </Text>
+            )}
+          </Fragment>
         ) : (
           <GalleryCard
             key={template.id}
             template={template}
             selected={value === template.id}
-            recommended={recommendedIds.has(template.id)}
+            compact={compact}
             onSelect={() => onChange(template.id)}
             onClear={() => onChange(null)}
           />
@@ -316,10 +348,10 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
 };
 
 /**
- * Reusable teammate-template picker. It owns filtering, recommendation order,
- * and optional single-selection, while hosts own navigation chrome and scroll
- * behavior. Onboarding composes the same filter and card regions in its own
- * step wrapper so wizard focus/layout concerns do not leak into this API.
+ * Reusable teammate-template picker. It owns filtering and optional
+ * single-selection, while hosts own navigation chrome and scroll behavior.
+ * Onboarding renders the compact card region in its own step wrapper so wizard
+ * focus/layout concerns do not leak into this API.
  */
 export const TeammateGallery: React.FC<TeammateGalleryProps> = (props) => {
   const { token } = theme.useToken();

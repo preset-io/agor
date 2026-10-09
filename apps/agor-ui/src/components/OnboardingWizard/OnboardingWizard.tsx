@@ -1,11 +1,11 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass first-run surface — bespoke gradient/particle/glass values with no semantic-token equivalent; semantic text/primary/border already use theme tokens
 import { ToolBetaBadge } from '../ToolIcon/ToolBetaBadge';
 /**
- * OnboardingWizard — 5-step first-run flow.
+ * OnboardingWizard — 4-step first-run flow.
  *
- * Steps: goals → workspace (name + template gallery) → llm → tools → done
+ * Steps: workspace (name + template gallery) → llm → tools → done
  *
- * Tools use the existing Catalog controller and secure drawer in context.
+ * Tools is a browsable Catalog wall; each tile opens the existing Catalog drawer.
  * Explicit Connect saves only the MCP connection, without provisioning a workspace;
  * ordinary Back/Skip never create resources or discard completed connections.
  */
@@ -23,6 +23,7 @@ import type {
   User,
   UserPreferences,
 } from '@agor-live/client';
+import { isCanonicalTeammateFrameworkRepo } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   CheckOutlined,
@@ -35,14 +36,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
+import { findFrameworkRepo } from '../../hooks/useFrameworkRepo';
 import { useAgorStore } from '../../store/agorStore';
-import {
-  MAX_ONBOARDING_GOALS,
-  mergeGoalIntegrationRecs,
-  ONBOARDING_GOALS,
-  type OnboardingIntegrationRecommendation,
-} from '../../utils/onboardingGoals';
-import type { OnboardingSlackGatewayIntent } from '../../utils/onboardingSlack';
 import {
   BLANK_TEMPLATE_ID,
   getTeammateTemplate,
@@ -58,6 +53,7 @@ import {
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { ToolIcon } from '../ToolIcon';
+import { OnboardingSetupTips } from './OnboardingSetupTips';
 import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
 import { OnboardingToolsStep } from './OnboardingToolsStep';
 
@@ -67,7 +63,7 @@ const openCodeOnboarding = getAgenticToolUIIntegration('opencode').onboardingOpt
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-export type WizardStep = 'goals' | 'workspace' | 'llm' | 'tools' | 'done';
+export type WizardStep = 'workspace' | 'llm' | 'tools' | 'done';
 type AuthMethod =
   | 'api-key'
   | 'claude-oauth'
@@ -109,17 +105,14 @@ const AUTH_METHOD_OPTIONS: Partial<
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
-const STEPS: WizardStep[] = ['goals', 'workspace', 'llm', 'tools', 'done'];
+const STEPS: WizardStep[] = ['workspace', 'llm', 'tools', 'done'];
 
 const STEP_META: Record<WizardStep, { number: number; label: string; skippable: boolean }> = {
-  goals: { number: 1, label: 'Goals', skippable: true },
-  workspace: { number: 2, label: 'Teammate', skippable: true },
-  llm: { number: 3, label: 'AI', skippable: true },
-  tools: { number: 4, label: 'Tools', skippable: true },
-  done: { number: 5, label: "You're ready", skippable: false },
+  workspace: { number: 1, label: 'Teammate', skippable: true },
+  llm: { number: 2, label: 'AI', skippable: true },
+  tools: { number: 3, label: 'Tools', skippable: true },
+  done: { number: 4, label: "You're ready", skippable: false },
 };
-
-const GOALS = ONBOARDING_GOALS;
 
 interface LlmOption {
   id: string;
@@ -177,11 +170,6 @@ const LLM_OPTIONS: LlmOption[] = [
     keyLinkLabel: null,
   },
 ];
-
-// Why an unselected goal card is disabled once two are picked. Surfaced both as
-// an AntD Tooltip (hover/focus) and as visually-hidden text inside the card, so
-// the reason isn't a hover-only affordance (see frontend.md a11y guidance).
-const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
   const k = sanitizeSecretValue(key);
@@ -320,18 +308,10 @@ const ONB_ANIM_CSS = `
   .onb-glow  { animation: onb-glow 0.5s ease-out both; }
   .onb-ring  { animation: onb-ring 1.1s cubic-bezier(0.16,1,0.3,1) 0.15s both; }
 
-  /* Glass hover — only on unselected cards; no transform (per UX preference) */
-  button.onb-card[aria-pressed='false']:hover {
-    background: linear-gradient(135deg, rgba(255,255,255,0.14) 0%, rgba(255,255,255,0.07) 100%) !important;
-    border-color: rgba(255,255,255,0.24) !important;
-    box-shadow: 0 6px 28px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.18) !important;
-  }
-
-  /* Inline layout cannot switch the goal grid at the narrow-phone boundary or
-     trim nonessential workspace help on short landscape screens. These rules
-     target only wizard-owned classes; no AntD internals are overridden. */
+  /* Inline layout cannot switch the auth-method grid at the narrow-phone
+     boundary or trim nonessential workspace help on short landscape screens.
+     These rules target only wizard-owned classes; no AntD internals are overridden. */
   @media (max-width: 480px) {
-    .onb-goal-grid { grid-template-columns: minmax(0, 1fr) !important; }
     .onb-auth-methods { grid-template-columns: minmax(0, 1fr) !important; }
     .onb-auth-methods > button {
       border-left: none !important;
@@ -393,14 +373,7 @@ export interface OnboardingCompletionResult {
   templateId?: string | null;
   /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
   agent?: AgenticToolName | null;
-  /** Goal-tailored tools/connections with their real Agor setup surface. */
-  suggestedIntegrations?: OnboardingIntegrationRecommendation[];
-  slackGatewayIntent?: OnboardingSlackGatewayIntent;
   connectedMcpServerIds?: string[];
-  /** Goal ids chosen in step 1 (order-preserving, primary first; [] if
-   * skipped), threaded straight through so the completion handler never has
-   * to wait on the async preference save. */
-  goals?: string[];
   // May run async (teammate creation) — the wizard awaits it and shows a
   // loading state until it resolves, so the modal covers the whole operation.
 }
@@ -473,7 +446,7 @@ const GLASS_CARD_SHADOW = '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,25
 const WIZARD_SELECTED_BG =
   'linear-gradient(135deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 100%)';
 const WIZARD_SELECTED_BORDER = '1.5px solid rgba(46,154,146,0.95)';
-// Unselected border for *selectable* cards (goals, LLM providers). Same 1.5px
+// Unselected border for *selectable* cards (LLM providers). Same 1.5px
 // width as WIZARD_SELECTED_BORDER so selecting only changes the border COLOR,
 // never the width — no box-model change, no layout shift on select/deselect.
 const SELECTABLE_CARD_BORDER = '1.5px solid rgba(255,255,255,0.16)';
@@ -505,6 +478,15 @@ export function OnboardingWizard({
   const savedBoard = useAgorStore((state) =>
     savedBoardId ? state.boardById.get(savedBoardId) : undefined
   );
+  // Same framework choice as completion (ensureOnboardingFrameworkRepo) and the same
+  // public-starter check as the Create teammate dialog. No repo yet means completion
+  // registers the public framework.
+  const usesPublicStarter = useAgorStore((state) => {
+    const repo =
+      findFrameworkRepo(state.repoById, { readyOnly: true })?.[1] ??
+      findFrameworkRepo(state.repoById)?.[1];
+    return !repo || isCanonicalTeammateFrameworkRepo(repo);
+  });
   const onboardingAuthority = useAuthenticatedAuthorityScope(
     client,
     user ? `${user.user_id}:${user.role}` : null
@@ -521,37 +503,13 @@ export function OnboardingWizard({
   const CARD_SELECTED_SHADOW = WIZARD_SELECTED_SHADOW;
 
   // ── Step state ──────────────────────────────────────────────────────────
-  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'goals');
+  const [currentStep, setCurrentStep] = useState<WizardStep>(initialStep || 'workspace');
 
-  // ── Step 1: goals — multi-select, order-preserving (primary first), max 2 ──
-  const [selectedGoals, setSelectedGoals] = useState<string[]>([]);
-  const toggleGoal = useCallback((id: string) => {
-    setSelectedGoals((prev) => {
-      if (prev.includes(id)) return prev.filter((goalId) => goalId !== id);
-      if (prev.length >= MAX_ONBOARDING_GOALS) return prev;
-      return [...prev, id];
-    });
-  }, []);
-
-  // Selection is not authorization or a connection. Catalog owns policy and secrets.
-  const [deselectedToolIds, setDeselectedToolIds] = useState<Set<string>>(new Set());
-  const [toolsSkipped, setToolsSkipped] = useState(false);
-  const [toolsConfirmed, setToolsConfirmed] = useState(false);
-  const [slackGatewayIntent, setSlackGatewayIntent] =
-    useState<OnboardingSlackGatewayIntent>('prefer-existing');
+  // Connections made in the Catalog drawer. Catalog owns policy and secrets.
   const [connectedMcpServerIds, setConnectedMcpServerIds] = useState<string[]>([]);
   const createdBoardIdRef = useRef<string | null>(null);
-  const toggleTool = useCallback((id: string) => {
-    setToolsSkipped(false);
-    setDeselectedToolIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }, []);
 
-  // ── Step 3: LLM ─────────────────────────────────────────────────────────
+  // ── Step 2: LLM ─────────────────────────────────────────────────────────
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
@@ -569,14 +527,16 @@ export function OnboardingWizard({
   const effectiveAuthMethod =
     authMethod === 'claude-oauth' && !allowClaudeOAuthSignIn ? 'api-key' : authMethod;
 
-  // ── Step 2: workspace — name the user's first AI teammate ─────────────────
+  // ── Step 1: workspace — name the user's first AI teammate ─────────────────
   // The teammate's name/emoji also names the board the wizard creates for them,
   // which the teammate is later seeded onto (see App.handleOnboardingComplete).
   const [teammateName, setTeammateName] = useState('');
   const [teammateEmoji, setTeammateEmoji] = useState('🤖');
-  // Chosen gallery template id (null = nothing picked yet). Sets the default
-  // avatar and the teammate's framework source branch — never the name.
-  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(null);
+  // Chosen gallery template id; the blank "Team assistant" is the default. Sets
+  // the default avatar and the teammate's framework source branch — never the name.
+  const [selectedTemplateId, setSelectedTemplateId] = useState<TeammateGalleryCardId | null>(
+    BLANK_TEMPLATE_ID
+  );
   const [invalidSavedTemplateId, setInvalidSavedTemplateId] = useState<string | null>(null);
   // Final completion owns the resumable board saga. Connecting tools creates no workspace.
   const [boardError, setBoardError] = useState<string | null>(null);
@@ -596,12 +556,7 @@ export function OnboardingWizard({
   // always fresh. Excludes `user` to avoid resetting mid-flow on live user refreshes.
   useEffect(() => {
     if (!open) return;
-    setCurrentStep(initialStep || 'goals');
-    setSelectedGoals([]);
-    setDeselectedToolIds(new Set());
-    setToolsSkipped(false);
-    setToolsConfirmed(false);
-    setSlackGatewayIntent('prefer-existing');
+    setCurrentStep(initialStep || 'workspace');
     setConnectedMcpServerIds([]);
     createdBoardIdRef.current = null;
     setSelectedAgent(null);
@@ -613,7 +568,7 @@ export function OnboardingWizard({
     setLlmAuthVerified({});
     setTeammateName('');
     setTeammateEmoji('🤖');
-    setSelectedTemplateId(null);
+    setSelectedTemplateId(BLANK_TEMPLATE_ID);
     setInvalidSavedTemplateId(null);
     setBoardError(null);
     setCreatedBoardId(null);
@@ -662,12 +617,11 @@ export function OnboardingWizard({
       setSelectedAgent(null);
     }
     // Dismissal saves selections even before the final step allocates a board.
-    setSelectedGoals(savedOnboarding?.goals ?? []);
     setTeammateName(savedOnboarding?.teammateDisplayName ?? '');
     setTeammateEmoji(savedOnboarding?.teammateEmoji ?? savedBoard?.icon ?? '🤖');
     const savedTemplateId = savedOnboarding?.teammateTemplateId;
     const savedTemplate = getTeammateTemplate(savedTemplateId);
-    setSelectedTemplateId(savedTemplate?.id ?? null);
+    setSelectedTemplateId(savedTemplate?.id ?? BLANK_TEMPLATE_ID);
     setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
     if (savedBoardId) {
       setCreatedBoardId(savedBoardId);
@@ -796,8 +750,6 @@ export function OnboardingWizard({
 
   const primaryEnabled = useMemo(() => {
     switch (currentStep) {
-      case 'goals':
-        return selectedGoals.length > 0;
       case 'llm': {
         if (!selectedAgent) return false;
         if (agentIsVerifiedConnected(selectedAgent)) return true;
@@ -827,14 +779,13 @@ export function OnboardingWizard({
         // A teammate name is required — it names the new board we always create.
         return teammateName.trim().length > 0;
       case 'tools':
-        // Curating tools is optional; Continue is always available.
+        // Connecting tools is optional; Continue is always available.
         return true;
       case 'done':
         return true;
     }
   }, [
     currentStep,
-    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasUsableStoredKey,
@@ -848,8 +799,6 @@ export function OnboardingWizard({
   const disabledReason = useMemo((): string | null => {
     if (llmSaving || completing) return null;
     switch (currentStep) {
-      case 'goals':
-        return selectedGoals.length > 0 ? null : 'Pick up to two, or skip for now';
       case 'llm': {
         if (!selectedAgent) return 'Choose an AI model first';
         if (agentIsVerifiedConnected(selectedAgent)) return null;
@@ -881,7 +830,6 @@ export function OnboardingWizard({
     }
   }, [
     currentStep,
-    selectedGoals,
     selectedAgent,
     agentIsVerifiedConnected,
     agentHasUsableStoredKey,
@@ -896,8 +844,6 @@ export function OnboardingWizard({
 
   const primaryLabel = useMemo(() => {
     switch (currentStep) {
-      case 'goals':
-        return 'Continue →';
       case 'llm': {
         if (
           selectedAgent &&
@@ -981,7 +927,6 @@ export function OnboardingWizard({
     const progressSaved = await saveOnboardingProgress({
       path: 'teammate',
       boardId,
-      goals: selectedGoals,
       teammateDisplayName: name || undefined,
       teammateEmoji: name ? teammateEmoji : undefined,
       teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
@@ -1018,7 +963,6 @@ export function OnboardingWizard({
     isCurrent,
     createdBoardId,
     saveOnboardingProgress,
-    selectedGoals,
     teammateName,
     teammateEmoji,
     selectedTemplateId,
@@ -1062,12 +1006,6 @@ export function OnboardingWizard({
     if (currentStep === 'done') return;
     // Skip means "decide later", even if the user experimented with a card
     // first. Do not silently submit a selection they explicitly skipped.
-    if (currentStep === 'goals') setSelectedGoals([]);
-    if (currentStep === 'tools') {
-      setDeselectedToolIds(new Set(mergeGoalIntegrationRecs(selectedGoals).map((rec) => rec.id)));
-      setToolsSkipped(true);
-      setSlackGatewayIntent('prefer-existing');
-    }
     // The teammate step is optional. Skip is authoritative: do not carry a
     // typed name or an experimental template into completion after the user
     // explicitly chose to continue without creating a teammate.
@@ -1088,7 +1026,7 @@ export function OnboardingWizard({
       setLlmError(null);
     }
     goToStep(STEPS[stepIndex + 1]);
-  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasUsableStoredKey, selectedGoals]);
+  }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasUsableStoredKey]);
 
   const handleDismiss = useCallback(() => {
     if (!onDismiss) return;
@@ -1098,23 +1036,15 @@ export function OnboardingWizard({
     const name = teammateName.trim();
     onDismiss({
       ...(createdBoardId ? { boardId: createdBoardId } : {}),
-      goals: selectedGoals,
       teammateDisplayName: name || undefined,
       teammateEmoji: name ? teammateEmoji : undefined,
       teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
     });
-  }, [createdBoardId, onDismiss, selectedGoals, selectedTemplateId, teammateEmoji, teammateName]);
+  }, [createdBoardId, onDismiss, selectedTemplateId, teammateEmoji, teammateName]);
 
   const handlePrimary = useCallback(async () => {
     if (!isCurrent()) return;
     switch (currentStep) {
-      case 'goals': {
-        // Goals are persisted once, authoritatively and awaited, by the
-        // completion handler. An intermediate whole-preferences write here can
-        // race later onboarding saves and resurrect stale data.
-        goToStep('workspace');
-        break;
-      }
       case 'llm': {
         if (!selectedAgent) return;
         if (agentIsVerifiedConnected(selectedAgent)) {
@@ -1201,8 +1131,6 @@ export function OnboardingWizard({
         break;
       }
       case 'tools': {
-        setToolsConfirmed(true);
-        // Suggestions are separate from connections already made in the drawer.
         goToStep('done');
         break;
       }
@@ -1220,12 +1148,6 @@ export function OnboardingWizard({
             isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
         };
         const name = teammateName.trim();
-        const suggestedIntegrations =
-          !toolsConfirmed || toolsSkipped
-            ? []
-            : mergeGoalIntegrationRecs(selectedGoals).filter(
-                (rec) => !deselectedToolIds.has(rec.id)
-              );
         // Keep the modal up in a loading state until creation + navigation
         // finish (onComplete may run async), then it closes from the parent.
         setCompleting(true);
@@ -1254,15 +1176,7 @@ export function OnboardingWizard({
                   sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
                   templateId: selectedTemplateId,
                   agent: selectedAgent,
-                  suggestedIntegrations,
                   connectedMcpServerIds,
-                  slackGatewayIntent:
-                    toolsConfirmed &&
-                    !toolsSkipped &&
-                    suggestedIntegrations.some((rec) => rec.id === 'slack')
-                      ? slackGatewayIntent
-                      : undefined,
-                  goals: selectedGoals,
                 },
                 completionAttempt
               )
@@ -1298,11 +1212,6 @@ export function OnboardingWizard({
   }, [
     currentStep,
     isCurrent,
-    selectedGoals,
-    deselectedToolIds,
-    toolsSkipped,
-    toolsConfirmed,
-    slackGatewayIntent,
     connectedMcpServerIds,
     ensureBoard,
     selectedAgent,
@@ -1437,127 +1346,6 @@ export function OnboardingWizard({
       </Title>
     </div>
   );
-
-  const renderGoals = () => {
-    const firstName = user?.name?.split(' ')[0];
-    const goalsTitle = firstName
-      ? `${firstName}, what do you want to get done?`
-      : 'What do you want to get done?';
-    const atCap = selectedGoals.length >= MAX_ONBOARDING_GOALS;
-    return (
-      <div>
-        {renderStepBadge(goalsTitle)}
-        <Paragraph style={{ color: TEXT_SECONDARY, marginBottom: 18 }}>
-          Pick up to two, and we'll shape your first session around them. You can skip this.
-        </Paragraph>
-
-        <div
-          className="onb-goal-grid"
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 10,
-          }}
-        >
-          {GOALS.map((goal) => {
-            const isSelected = selectedGoals.includes(goal.id);
-            // At the cap, unselected cards can't be added until one is dropped.
-            const isDisabled = !isSelected && atCap;
-            const GoalIcon = goal.icon;
-            // aria-disabled (not the native `disabled` attribute) keeps the card
-            // focusable and lets the Tooltip trigger on hover AND keyboard focus;
-            // the click is guarded to a no-op instead.
-            return (
-              <Tooltip key={goal.id} title={isDisabled ? GOAL_CAP_HINT : undefined}>
-                <button
-                  type="button"
-                  aria-pressed={isSelected}
-                  aria-disabled={isDisabled || undefined}
-                  className="onb-card"
-                  onClick={() => {
-                    if (!isDisabled) toggleGoal(goal.id);
-                  }}
-                  style={{
-                    position: 'relative',
-                    background: isSelected ? CARD_SELECTED_BG : GLASS_CARD_BG,
-                    // Constant 1.5px width in both states — only the color changes
-                    // on select, so the card never resizes/shifts (no re-click bait).
-                    border: isSelected ? CARD_SELECTED_BORDER : SELECTABLE_CARD_BORDER,
-                    backdropFilter: 'blur(20px)',
-                    WebkitBackdropFilter: 'blur(20px)',
-                    borderRadius: 12,
-                    // Tightened vertical rhythm (esp. the bottom) so all six cards
-                    // fit above the footer without internal scroll; sides unchanged.
-                    padding: '13px 13px 11px',
-                    cursor: isDisabled ? 'not-allowed' : 'pointer',
-                    opacity: isDisabled ? 0.45 : 1,
-                    textAlign: 'left',
-                    boxShadow: isSelected ? CARD_SELECTED_SHADOW : GLASS_CARD_SHADOW,
-                    transition: 'all 0.15s ease',
-                    width: '100%',
-                  }}
-                >
-                  {/* Selection is shown by the border + background highlight alone
-                      (no checkmark) — the border/highlight already read clearly. */}
-                  {/* A single subtle accent tile — goals have no category, so it's an
-                      understated neutral glass chip (no per-goal color), rendered as a
-                      <span> so the title stays the card's first <div>. */}
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: 30,
-                      height: 30,
-                      borderRadius: 8,
-                      marginBottom: 8,
-                      background: 'rgba(255,255,255,0.06)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                    }}
-                  >
-                    <GoalIcon style={{ fontSize: 15, color: 'rgba(255,255,255,0.72)' }} />
-                  </span>
-                  {/* Title flows at its natural height (one or two lines) with a
-                      single consistent gap to the description below. No min-height:
-                      reserving a blank second line made one-line-title cards show a
-                      larger title→description gap than two-line ones. Equal card
-                      height comes from the grid, not from padding the title. */}
-                  <div
-                    style={{
-                      color: TEXT_PRIMARY,
-                      fontWeight: 600,
-                      fontSize: 14,
-                      lineHeight: 1.3,
-                      marginBottom: 5,
-                    }}
-                  >
-                    {goal.title}
-                  </div>
-                  {/* One-line floor (not two): every goal description now fits on a
-                      single line at the 2-col modal width, so reserving a second
-                      line only added dead space below and clipped the bottom row.
-                      Row-mates still equalize via the grid's default stretch. */}
-                  <div
-                    style={{
-                      color: TEXT_MUTED,
-                      fontSize: 11.5,
-                      lineHeight: 1.4,
-                      minHeight: '1.4em',
-                    }}
-                  >
-                    {goal.description}
-                  </div>
-                  {/* Screen-reader-only cap reason — joins the disabled card's
-                      accessible name so it isn't a hover-only affordance. */}
-                  {isDisabled && <span style={VISUALLY_HIDDEN_STYLE}>{GOAL_CAP_HINT}</span>}
-                </button>
-              </Tooltip>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   const renderLlm = () => {
     return (
@@ -1956,17 +1744,18 @@ export function OnboardingWizard({
   };
 
   // Selecting a template sets the default avatar (and later the source branch),
-  // but never the name — the name stays personal and user-chosen. Passing null
-  // clears the pick (deselect) and restores the default avatar.
+  // but never the name — the name stays personal and user-chosen. Clearing a
+  // pick (deselect) falls back to the default Team assistant and avatar.
   const applyTemplate = (templateId: TeammateGalleryCardId | null) => {
-    setSelectedTemplateId(templateId);
+    setSelectedTemplateId(templateId ?? BLANK_TEMPLATE_ID);
     setInvalidSavedTemplateId(null);
     setTeammateEmoji(getTeammateTemplate(templateId)?.emoji || '🤖');
   };
 
   const renderWorkspace = () => (
     <OnboardingTeammateGalleryStep
-      goals={selectedGoals}
+      firstName={user?.name?.trim().split(/\s+/)[0]}
+      showPublicStarterNote={usesPublicStarter}
       selectedTemplateId={selectedTemplateId}
       onTemplateChange={applyTemplate}
       teammateName={teammateName}
@@ -1978,23 +1767,18 @@ export function OnboardingWizard({
   );
 
   const renderTools = () => (
-    <div>
-      {renderStepBadge('Choose your tools')}
+    <>
+      {renderStepBadge('Connect your teammate')}
       <OnboardingToolsStep
         client={client}
         user={user}
         connected={onboardingAuthority.connectionReady && isCurrent()}
         authGeneration={onboardingAuthority.authGeneration}
-        kit={mergeGoalIntegrationRecs(selectedGoals)}
-        isSelected={(id) => !toolsSkipped && !deselectedToolIds.has(id)}
-        onToggle={toggleTool}
         onConnected={(serverId) =>
           setConnectedMcpServerIds((ids) => (ids.includes(serverId) ? ids : [...ids, serverId]))
         }
-        gatewayIntent={slackGatewayIntent}
-        onGatewayIntent={setSlackGatewayIntent}
       />
-    </div>
+    </>
   );
 
   const renderDone = () => {
@@ -2007,25 +1791,25 @@ export function OnboardingWizard({
         : undefined;
     const roleTitle = template?.title;
 
-    // Adaptive, teammate-centric copy. An unnamed teammate can't be heroed, so it
-    // keeps the warm generic headline; a named one is celebrated by name (+ role).
+    // Nothing is created until the primary click, so the copy says "almost
+    // ready" first and names what completion will do.
     let headline: string;
-    let subline: string;
+    let subline: string | null;
     if (completionError) {
       headline = name ? `${name} needs one more try.` : 'Setup needs one more try.';
       subline = 'Nothing was lost. Review the error below, then try again.';
+    } else if (completing) {
+      headline = name ? `Setting up ${name}…` : 'Setting up your board…';
+      subline = null;
     } else if (name && repositorySetupNotice) {
       headline = `${name} needs workspace setup.`;
       subline = 'Continue to retry setup, or close this wizard and finish later.';
-    } else if (!name) {
-      headline = completing ? 'Almost ready…' : "You're ready to build.";
-      subline = "Your board is ready. Open it and start whenever you're ready.";
+    } else if (name) {
+      headline = `${name} is almost ready.`;
+      subline = `Next, we'll set up ${name}'s board and open your first chat.`;
     } else {
-      // One warm line for every named variant — the headline (${name} is ready.)
-      // and the role pill already carry the specifics, so the subline just lands
-      // "the teammate is yours; shape it by talking to it." No goal-listing.
-      headline = completing ? `${name} is almost ready.` : `${name} is ready.`;
-      subline = `${name} is all yours. Start a chat and tell them what you need. You'll shape how they work as you go.`;
+      headline = 'Your teammate is almost ready.';
+      subline = "Next, we'll set up your board.";
     }
 
     return (
@@ -2130,9 +1914,12 @@ export function OnboardingWizard({
         >
           {headline}
         </Title>
-        <Paragraph style={{ color: TEXT_SECONDARY, maxWidth: 400, margin: '0 auto' }}>
-          {subline}
-        </Paragraph>
+        {subline && (
+          <Paragraph style={{ color: TEXT_SECONDARY, maxWidth: 400, margin: '0 auto' }}>
+            {subline}
+          </Paragraph>
+        )}
+        {completing && <OnboardingSetupTips teammateName={name} />}
 
         {completionSlow && (
           <Alert
@@ -2244,9 +2031,7 @@ export function OnboardingWizard({
           handleDismiss();
         }}
         footer={null}
-        // Widened from 600 → 730 so step-2's gallery fits 3 cards per row while
-        // the step-1 goal cards (explicit 2-col grid) simply get more room, keeping
-        // their titles on one line.
+        // Wide enough for the template gallery and the 3-column tools wall.
         width={730}
         // Vertically center instead of antd's default fixed top:100 so the
         // footer stays on-screen on shorter laptop viewports (the content
@@ -2326,25 +2111,24 @@ export function OnboardingWizard({
               // Fixed height keeps the modal from jumping between steps; the viewport
               // cap + scroll keeps it usable on short/mobile viewports. The cap is
               // high enough that the fixed height is honored on typical laptop
-              // viewports so the goals grid + footer are never clipped.
+              // viewports so the step content + footer are never clipped.
               boxSizing: 'border-box',
               height: 'min(620px, calc(100dvh - 192px))',
               position: 'relative',
               zIndex: 1,
-              // Step 2 owns its scrolling via an inner two-region layout (fixed
-              // header + a card region that is the only scroller), so this
-              // container must NOT scroll — it becomes a flex column that clips.
-              // Step 4 (done) is a flex column too, so the success hero can center
+              // Teammate and tools own their scrolling via an inner two-region
+              // layout (fixed header + a card region that is the only scroller), so
+              // this container must NOT scroll — it becomes a flex column that clips.
+              // Done is a flex column too, so the success hero can center
               // vertically via auto margins (and still scroll if it ever overflows).
               // Every other step scrolls as one block here.
-              ...(currentStep === 'workspace'
+              ...(currentStep === 'workspace' || currentStep === 'tools'
                 ? { display: 'flex', flexDirection: 'column', overflow: 'hidden' }
                 : currentStep === 'done'
                   ? { display: 'flex', flexDirection: 'column', overflowY: 'auto' }
                   : { overflowY: 'auto' }),
             }}
           >
-            {currentStep === 'goals' && renderGoals()}
             {currentStep === 'llm' && renderLlm()}
             {currentStep === 'workspace' && renderWorkspace()}
             {currentStep === 'tools' && renderTools()}

@@ -8,7 +8,6 @@ import {
   getTeammateTemplate,
   getTemplateBySourceBranch,
   getTemplateForFrameworkSource,
-  recommendedTemplateIds,
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
   TEAMMATE_GALLERY_CARDS,
@@ -107,29 +106,14 @@ describe('categories', () => {
 });
 
 describe('galleryCardsForFilter', () => {
-  it('All view leads with blank, then recommended cards (in rec order)', () => {
-    const ids = galleryCardsForFilter(['dig-into-anything'], 'all').map((t) => t.id);
-    // dig-into-anything → blank, then competitive-analyst, financial-analyst.
-    expect(ids.slice(0, 3)).toEqual([
-      BLANK_TEMPLATE_ID,
-      'competitive-analyst',
-      'financial-analyst',
-    ]);
-    // All nine cards present, no dupes.
-    expect(ids).toHaveLength(9);
-    expect(new Set(ids).size).toBe(9);
-  });
-
-  it('All view keeps default order (blank first) when there are no recommendations', () => {
-    const ids = galleryCardsForFilter([], 'all').map((t) => t.id);
+  it('All view leads with blank, then every template in default order', () => {
+    const ids = galleryCardsForFilter('all').map((t) => t.id);
     expect(ids).toEqual([BLANK_TEMPLATE_ID, ...TEAMMATE_TEMPLATES.map((t) => t.id)]);
   });
 
   it('a category filter returns only that category in default order, no blank', () => {
-    const ids = galleryCardsForFilter(['dig-into-anything'], 'grow').map((t) => t.id);
-    // Recommendations do NOT reorder within a category filter.
+    const ids = galleryCardsForFilter('grow').map((t) => t.id);
     expect(ids).toEqual(['competitive-analyst', 'deal-desk', 'sales-outbound']);
-    expect(ids).not.toContain(BLANK_TEMPLATE_ID);
   });
 });
 
@@ -199,58 +183,5 @@ describe('getTemplateForFrameworkSource', () => {
         frameworkRepoId: undefined,
       })
     ).toBeUndefined();
-  });
-});
-
-describe('recommendedTemplateIds', () => {
-  it('returns [] when no goal is picked', () => {
-    expect(recommendedTemplateIds([])).toEqual([]);
-  });
-
-  it('returns [] for an unknown goal that maps to no template', () => {
-    // Every real goal now maps to a template; only unknown ids resolve to nothing.
-    expect(recommendedTemplateIds(['not-a-goal'])).toEqual([]);
-  });
-
-  it('recommends Chief of Staff for the personal-teammate goal', () => {
-    expect(recommendedTemplateIds(['personal-teammate'])).toEqual(['chief-of-staff']);
-  });
-
-  it('recommends Builder for the hand-off-build goal', () => {
-    expect(recommendedTemplateIds(['hand-off-build'])).toEqual(['builder']);
-  });
-
-  it('returns a single goal’s recommended templates (capped at two)', () => {
-    expect(recommendedTemplateIds(['status-updates'])).toEqual(['product-manager']);
-    expect(recommendedTemplateIds(['dig-into-anything'])).toEqual([
-      'competitive-analyst',
-      'financial-analyst',
-    ]);
-  });
-
-  it('returns both when two goals map to different templates', () => {
-    expect(recommendedTemplateIds(['dig-into-anything', 'status-updates'])).toEqual([
-      'competitive-analyst',
-      'product-manager',
-    ]);
-  });
-
-  it('dedups when two goals map to the same template', () => {
-    expect(recommendedTemplateIds(['status-updates', 'ship-without-busywork'])).toEqual([
-      'product-manager',
-    ]);
-  });
-
-  it('takes each goal’s top rec when two mapping goals are supplied', () => {
-    // hand-off-build → builder; dig-into-anything's top rec is competitive-analyst.
-    expect(recommendedTemplateIds(['hand-off-build', 'dig-into-anything'])).toEqual([
-      'builder',
-      'competitive-analyst',
-    ]);
-  });
-
-  it('ignores unknown goal ids', () => {
-    expect(recommendedTemplateIds(['not-a-goal'])).toEqual([]);
-    expect(recommendedTemplateIds(['not-a-goal', 'status-updates'])).toEqual(['product-manager']);
   });
 });

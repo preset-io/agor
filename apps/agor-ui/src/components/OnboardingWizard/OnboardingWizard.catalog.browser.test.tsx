@@ -66,9 +66,9 @@ function Harness({
 async function click(name: RegExp | string) {
   await userEvent.click(await screen.findByRole('button', { name }));
 }
+const githubTile = () => screen.findByRole('button', { name: 'GitHub: view details' });
 async function openGitHub() {
-  const card = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
-  await userEvent.click(within(card).getByRole('button', { name: /^Sign in through Catalog/ }));
+  await userEvent.click(await githubTile());
   const input = await screen.findByPlaceholderText('Paste your GitHub bearer access token');
   const dialog = input.closest<HTMLElement>('[role="dialog"]')!;
   await waitFor(() => {
@@ -153,8 +153,8 @@ describe('onboarding-owned Catalog in Chromium', () => {
       standard.unmount();
 
       render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
-      const row = screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!;
-      await userEvent.click(within(row).getByRole('button', { name: /^Sign in through Catalog/ }));
+      const tile = await githubTile();
+      await userEvent.click(tile);
       const onboardingDialog = await screen.findByRole('dialog', { name: /GitHub/ });
       await within(onboardingDialog).findByRole('button', {
         name: 'Connect',
@@ -180,19 +180,17 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(api.connect).not.toHaveBeenCalled();
       await userEvent.click(within(onboardingDialog).getByRole('button', { name: 'Close' }));
       await waitFor(() => expect(onboardingDialog).not.toBeInTheDocument());
-      await waitFor(() =>
-        expect(within(row).getByRole('button', { name: /^Sign in through Catalog/ })).toHaveFocus()
-      );
+      await waitFor(() => expect(tile).toHaveFocus());
     }
   );
 
-  it('supports keyboard selection, Back, PAT cancellation and focus restoration without provisioning', async () => {
+  it('opens a tile from the keyboard, cancels PAT input and restores focus without provisioning', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     const complete = vi.fn();
     const update = vi.fn();
     render(<Harness api={api} complete={complete} update={update} />);
     await waitFor(() =>
-      expect(screen.getByRole('heading', { name: 'Choose your tools' })).toHaveFocus()
+      expect(screen.getByRole('heading', { name: 'Connect your teammate' })).toHaveFocus()
     );
     for (const name of [/Back$/, /Skip for now/, /^Continue/]) {
       const button = screen.getByRole('button', { name });
@@ -200,15 +198,12 @@ describe('onboarding-owned Catalog in Chromium', () => {
       expect(rect.left).toBeGreaterThanOrEqual(0);
       expect(rect.right).toBeLessThanOrEqual(window.innerWidth);
     }
-    const suggestion = screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' });
-    suggestion.focus();
-    await userEvent.keyboard(' ');
-    expect(suggestion).not.toBeChecked();
-    await click(/^Continue/);
-    await click(/Back$/);
-    expect(
-      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
-    ).not.toBeChecked();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    (await githubTile()).focus();
+    await userEvent.keyboard('{Enter}');
+    await screen.findByPlaceholderText('Paste your GitHub bearer access token');
+    await userEvent.keyboard('{Escape}');
+    await waitFor(async () => expect(await githubTile()).toHaveFocus());
     const { input, drawer } = await openGitHub();
     expect(input).toHaveAttribute('type', 'password');
     for (const action of document.querySelectorAll<HTMLElement>(
@@ -235,17 +230,11 @@ describe('onboarding-owned Catalog in Chromium', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText(/bearer access token/)).not.toBeInTheDocument()
     );
-    expect(screen.getByRole('heading', { name: 'Choose your tools' })).toBeInTheDocument();
-    await waitFor(() =>
-      expect(
-        within(screen.getByText('GitHub').closest<HTMLElement>('.ant-card')!).getByRole('button', {
-          name: /^Sign in through Catalog/,
-        })
-      ).toHaveFocus()
-    );
+    expect(screen.getByRole('heading', { name: 'Connect your teammate' })).toBeInTheDocument();
+    await waitFor(async () => expect(await githubTile()).toHaveFocus());
     await click(/Skip for now/);
     await click(/Meet QA/);
-    expect(complete).toHaveBeenCalledWith(expect.objectContaining({ suggestedIntegrations: [] }));
+    expect(complete).toHaveBeenCalledWith(expect.objectContaining({ connectedMcpServerIds: [] }));
     expect(JSON.stringify(update.mock.calls)).not.toContain('test-only-not-a-provider-credential');
   });
 

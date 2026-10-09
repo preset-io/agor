@@ -445,8 +445,8 @@ export interface OnboardingState {
    */
   deferredAt?: string;
   /**
-   * Onboarding goal ids the user selected, order-preserving (primary first),
-   * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
+   * @deprecated Legacy onboarding goal ids. The goals step was removed; no
+   * longer written or read, retained only for existing records.
    */
   goals?: string[];
   /**
