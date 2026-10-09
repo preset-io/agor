@@ -378,18 +378,25 @@ describe('NavbarComposeButton', () => {
   });
 
   it('gives both send buttons an explanatory tooltip', async () => {
+    // A mouse pointer: the tooltips only show where hover exists.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === '(hover: hover)',
+    }));
     renderCompose({ primary: primaryBranch });
     openPopover();
     // Enable the buttons first; AntD tooltips don't fire on disabled controls.
     fireEvent.change(await screen.findByTestId('compose-prompt'), { target: { value: 'hi' } });
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send & open' }));
-    expect(await screen.findByText(/takes you there now, on Ada's board/)).toBeInTheDocument();
+    expect(await screen.findByText(/takes you there now on Ada's board\./)).toBeInTheDocument();
 
     fireEvent.mouseEnter(screen.getByRole('button', { name: 'Send in background' }));
     expect(
       await screen.findByText(/in the background on Ada's board\. Check on it anytime\./)
     ).toBeInTheDocument();
+    vi.mocked(window.matchMedia).mockRestore();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {

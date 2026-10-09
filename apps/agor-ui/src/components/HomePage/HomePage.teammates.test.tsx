@@ -179,10 +179,10 @@ describe('HomePage teammates', () => {
     expect(within(resume).getByText(/^Continue/)).toHaveStyle({ textOverflow: 'ellipsis' });
   });
 
-  it('shortens the placeholder to the name before a comma, keeping the full name as the label', async () => {
+  it('keeps the placeholder generic, with the full name in the accessible label', async () => {
     const named = {
       ...primary,
-      custom_context: { teammate: { kind: 'teammate', displayName: 'Pianka, planning assistant' } },
+      custom_context: { teammate: { kind: 'teammate', displayName: 'Smith, Jones & Co' } },
     };
     seed({ branches: [named] });
     renderHome({
@@ -190,8 +190,8 @@ describe('HomePage teammates', () => {
         service: () => ({ getPrimaryTeammate: async () => named, find: async () => [] }),
       } as unknown as AgorClient,
     });
-    const input = await screen.findByRole('textbox', { name: 'Ask Pianka, planning assistant' });
-    expect(input).toHaveAttribute('placeholder', 'Ask Pianka…');
+    const input = await screen.findByRole('textbox', { name: 'Ask Smith, Jones & Co' });
+    expect(input).toHaveAttribute('placeholder', 'Ask anything…');
   });
 
   it('puts both send buttons in the toolbar on desktop, primary last', async () => {

@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, User } from '@agor-live/client';
 import { DownOutlined, RightOutlined } from '@ant-design/icons';
-import { Button, ConfigProvider, Flex, Input, Select, Typography, theme } from 'antd';
+import { Button, Flex, Input, Select, Typography, theme } from 'antd';
 import type { TextAreaRef } from 'antd/es/input/TextArea';
 import { memo, useMemo, useRef, useState } from 'react';
 import { useConnectionState } from '../../contexts/ConnectionContext';
@@ -113,39 +113,25 @@ function AskTargetSelect({
     onChange(branch);
   };
   const label = value ? `${teammateEmoji(value) ?? '🤖'} ${teammateLabel(value)}` : undefined;
-  // A quieter border than the default, so the chip reads as clickable without competing with Send.
-  const chipTheme = useMemo(
-    () => ({
-      components: {
-        Button: { defaultBorderColor: token.colorBorderSecondary },
-        Select: { colorBorder: token.colorBorderSecondary },
-      },
-    }),
-    [token.colorBorderSecondary]
-  );
 
   if (compact) {
     return (
       <>
-        <ConfigProvider theme={chipTheme}>
-          <Button
-            aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
-            icon={
-              <DownOutlined
-                style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }}
-              />
-            }
-            iconPlacement="end"
-            onClick={() => {
-              openList();
-              setSheetOpen(true);
-            }}
-            styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
-            style={{ flex: '0 1 auto', minWidth: 0, maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
-          >
-            {label ?? 'Pick an assistant'}
-          </Button>
-        </ConfigProvider>
+        <Button
+          aria-label={value ? `Teammate to ask: ${teammateLabel(value)}` : 'Pick an assistant'}
+          icon={
+            <DownOutlined style={{ fontSize: token.fontSizeSM, color: token.colorTextTertiary }} />
+          }
+          iconPlacement="end"
+          onClick={() => {
+            openList();
+            setSheetOpen(true);
+          }}
+          styles={{ content: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' } }}
+          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
+        >
+          {label ?? 'Pick an assistant'}
+        </Button>
         <HomeSheet open={sheetOpen} title="Ask" onClose={() => setSheetOpen(false)}>
           <HomeList
             items={options}
@@ -169,23 +155,21 @@ function AskTargetSelect({
     );
   }
   return (
-    <ConfigProvider theme={chipTheme}>
-      <Select
-        showSearch
-        value={value?.branch_id}
-        placeholder="Pick an assistant"
-        aria-label="Teammate to ask"
-        options={options}
-        optionFilterProp="searchText"
-        popupMatchSelectWidth={false}
-        notFoundContent={emptyText}
-        onOpenChange={(open) => open && openList()}
-        onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
-        labelRender={() => label}
-        optionRender={({ data }) => <TeammateOptionLabel option={data} />}
-        style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
-      />
-    </ConfigProvider>
+    <Select
+      showSearch
+      value={value?.branch_id}
+      placeholder="Pick an assistant"
+      aria-label="Teammate to ask"
+      options={options}
+      optionFilterProp="searchText"
+      popupMatchSelectWidth={false}
+      notFoundContent={emptyText}
+      onOpenChange={(open) => open && openList()}
+      onChange={(id) => pick(options.find((o) => o.value === id)?.branch ?? null)}
+      labelRender={() => label}
+      optionRender={({ data }) => <TeammateOptionLabel option={data} />}
+      style={{ flex: '0 0 auto', maxWidth: HOME_ASK_TARGET_MAX_WIDTH }}
+    />
   );
 }
 
@@ -309,8 +293,8 @@ export const HomeAskBox = memo(function HomeAskBox({
             e.preventDefault();
             send(e.metaKey || e.ctrlKey ? 'open' : 'background');
           }}
-          // The name before any comma keeps the placeholder on one line on phones.
-          placeholder={`Ask ${name.split(',')[0]}…`}
+          // The chip names the teammate, so the placeholder stays short enough for one line.
+          placeholder="Ask anything…"
           aria-label={`Ask ${name}`}
           style={{ fontSize: token.fontSizeLG, paddingInline: 0 }}
         />
