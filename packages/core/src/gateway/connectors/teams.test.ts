@@ -517,6 +517,39 @@ describe('normalizeTeamsActivity', () => {
     );
   });
 
+  it('decodes quoted-reply entities once, so typed entity text survives', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        text: 'ignored',
+        attachments: [
+          {
+            contentType: 'text/html',
+            content:
+              '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1">' +
+              '<p itemprop="preview">quoted</p></blockquote>\n<p>x &amp;lt;br&amp;gt; &amp;amp; y</p>',
+          },
+        ],
+      }),
+      config
+    );
+    expect(normalized.text).toBe('x &lt;br&gt; &amp; y');
+    const blankQuote = normalizeTeamsActivity(
+      activity({
+        text: 'fallback text',
+        attachments: [
+          {
+            contentType: 'text/html',
+            content:
+              '<blockquote itemscope itemtype="http://schema.skype.com/Reply" itemid="1">' +
+              '<p itemprop="preview">quoted</p></blockquote>\n<p>&nbsp;</p>',
+          },
+        ],
+      }),
+      config
+    );
+    expect(blankQuote.text).toBe('fallback text');
+  });
+
   it('maps channel replies to the root reply chain and strips a structured mention', () => {
     const normalized = normalizeTeamsActivity(
       activity({
