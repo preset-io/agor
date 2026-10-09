@@ -14,10 +14,23 @@ import { runSessionUpdateWithLatestNotification } from '../utils/sessionUpdateNo
 import { useSessionActions } from './useSessionActions';
 
 describe('session update failure feedback', () => {
-  it.each([
+  const failures = [
     new Error('Preset-backed session configuration can only be changed by selecting a preset'),
     { message: 'Permission denied', data: { diagnostic: 'not toast content' } },
-  ])(
+  ];
+
+  it.each(failures)('rejects with the original PATCH failure object', async (failure) => {
+    const patch = vi.fn().mockRejectedValue(failure);
+    const { result } = renderHook(() => useSessionActions(makeClient({ sessions: { patch } })));
+
+    await act(async () => {
+      await expect(
+        result.current.updateSession('session-1' as Session['session_id'], { title: 'New title' })
+      ).rejects.toBe(failure);
+    });
+  });
+
+  it.each(failures)(
     'preserves the PATCH failure message through the hook and notification boundary',
     async (failure) => {
       const patch = vi.fn().mockRejectedValue(failure);
