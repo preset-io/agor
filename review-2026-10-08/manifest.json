@@ -331,7 +331,7 @@
     "file": "iphone-dark-more-create-new.png",
     "kind": "image",
     "title": "More sheet, Create new open, iPhone dark",
-    "caption": "Create new lists the shared create flows from the desktop menu (Repository for admins only).",
+    "caption": "Create new lists the shared create flows (Repository for admins only). The sheet stops at 85% of the screen, so the header stays visible and the list scrolls.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "dark"
   },
@@ -339,7 +339,7 @@
     "file": "iphone-light-more-create-new.png",
     "kind": "image",
     "title": "More sheet, Create new open, iPhone light",
-    "caption": "Create new lists the shared create flows from the desktop menu (Repository for admins only).",
+    "caption": "Create new lists the shared create flows (Repository for admins only). The sheet stops at 85% of the screen, so the header stays visible and the list scrolls.",
     "viewport": "iPhone 15 WebKit 393x659",
     "theme": "light"
   }
