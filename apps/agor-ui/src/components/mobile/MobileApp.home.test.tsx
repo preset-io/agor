@@ -209,6 +209,41 @@ describe('MobileApp Home wiring', () => {
     }
   });
 
+  it('expires a failure from the badge and Home when the hourly clock passes the window', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    const clearIntervalSpy = vi.spyOn(window, 'clearInterval');
+    try {
+      const settled = Date.now() - (7 * 24 * 60 - 30) * 60 * 1000;
+      seed({
+        sessions: [
+          session('failed', { status: 'failed', last_updated: new Date(settled).toISOString() }),
+        ],
+      });
+      const { unmount } = renderPhoneHome();
+      const nav = screen.getByRole('navigation', { name: 'Primary' });
+      expect(within(nav).getByRole('button', { name: 'Home' })).toHaveTextContent('1');
+      expect(screen.getByText(/need you/)).toHaveTextContent('1 need you');
+
+      // An hour later the clock refreshes and the failure is past the 7-day window.
+      act(() => vi.advanceTimersByTime(60 * 60 * 1000));
+      expect(within(nav).getByRole('button', { name: 'Home' })).not.toHaveTextContent('1');
+      expect(screen.queryByText(/need you/)).not.toBeInTheDocument();
+      expect(screen.getByText('All caught up')).toBeInTheDocument();
+
+      const clock = setIntervalSpy.mock.results.find(
+        (_, i) => setIntervalSpy.mock.calls[i][1] === 60 * 60 * 1000
+      )?.value;
+      expect(clock).toBeDefined();
+      unmount();
+      expect(clearIntervalSpy).toHaveBeenCalledWith(clock);
+    } finally {
+      vi.useRealTimers();
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    }
+  });
+
   it('opens Needs you on Comments from More', async () => {
     seed({
       sessions: [session('perm', { status: 'awaiting_permission' })],

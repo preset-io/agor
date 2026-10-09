@@ -26,7 +26,7 @@ import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
-import { useAgorStore } from '../../store/agorStore';
+import { type AgorState, useAgorStore } from '../../store/agorStore';
 import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   selectBranchById,
@@ -312,9 +312,13 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch, sessionsByBranch]
   );
 
-  const boardFailed =
-    useAgorStore(useMemo(() => makeBoardPartitionSelector(board?.board_id), [board?.board_id]))
-      ?.status === 'error';
+  // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
+  const boardFailed = useAgorStore(
+    useMemo(() => {
+      const selectPartition = makeBoardPartitionSelector(board?.board_id);
+      return (s: AgorState) => selectPartition(s)?.status === 'error';
+    }, [board?.board_id])
+  );
   /** A board still loading; a failed load offers Retry instead of loading forever. */
   const boardLoading = (failedBoardId?: string) =>
     failedBoardId ? (

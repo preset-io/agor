@@ -289,6 +289,7 @@ export const HomePage = memo(function HomePage({
         makeHomeBucketsSelector({
           userId,
           now,
+          // With the shell's needs, Home only counts (no need items): My work still needs the split.
           needsLimit: hasShellNeeds ? 0 : needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
           boardsLimit: visitedBoardIds.length ? 0 : HOME_RECENT_BOARDS,
