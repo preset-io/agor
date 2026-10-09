@@ -55,7 +55,7 @@ describe('session update failure feedback', () => {
 
       expect(patch).toHaveBeenCalledExactlyOnceWith('session-1', updates);
       expect(showError).toHaveBeenCalledExactlyOnceWith(
-        `Failed to update session: ${failure.message}`
+        `Couldn't update the session. (${failure.message})`
       );
       expect(showSuccess).not.toHaveBeenCalled();
     }
@@ -77,7 +77,7 @@ describe('session update failure feedback', () => {
       });
     });
     expect(showError).toHaveBeenCalledExactlyOnceWith(
-      "Couldn't update session. The connection to Agor dropped. Try again once it's back. (Client not connected)"
+      "Couldn't update the session. The connection to Agor dropped. Try again once it's back. (Client not connected)"
     );
     expect(showSuccess).not.toHaveBeenCalled();
   });
@@ -367,10 +367,10 @@ describe('archive response reconciliation', () => {
     expectActive(sessions);
     await act(async () => {
       reject(new Error('Archive denied'));
-      expect(await request).toBeNull();
+      await expect(request).rejects.toThrow('Archive denied');
     });
     expectActive(sessions);
-    expect(result.current.error).toBe('Archive denied');
+    expect(result.current.error).toBe("Couldn't archive the session. (Archive denied)");
     consoleError.mockRestore();
   });
 

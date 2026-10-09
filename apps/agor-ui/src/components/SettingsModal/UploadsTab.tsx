@@ -5,8 +5,10 @@ import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { getAuthHeaders } from '../../utils/authHeaders';
+import { describeActionError, formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
-import { openUploadBlob } from '../../utils/uploadBlob';
+import { openUploadBlob, uploadHttpError } from '../../utils/uploadBlob';
+import { ActionErrorNotice } from '../CompactNotice';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface UploadRow {
@@ -33,7 +35,7 @@ async function fetchContent(upload: UploadRow): Promise<Blob> {
   const response = await fetch(uploadsUrl(`/${encodeURIComponent(upload.ref)}/content`), {
     headers: getAuthHeaders(),
   });
-  if (!response.ok) throw new Error('Upload is unavailable');
+  if (!response.ok) throw uploadHttpError(response);
   return response.blob();
 }
 
@@ -47,12 +49,14 @@ export function UploadsTab({
   const { showError } = useThemedMessage();
   const [uploads, setUploads] = useState<UploadRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<ReturnType<typeof describeActionError> | null>(null);
   const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the caller-private list
   useLayoutEffect(() => {
     setUploads([]);
     setLoading(false);
+    setLoadError(null);
   }, [identityKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
@@ -64,20 +68,21 @@ export function UploadsTab({
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const response = await fetch(uploadsUrl(), { headers: getAuthHeaders() });
       if (!operation.isCurrent()) return;
-      if (!response.ok) throw new Error('Unable to load uploads');
+      if (!response.ok) throw uploadHttpError(response);
       const body = (await response.json()) as { uploads?: UploadRow[] };
       if (!operation.isCurrent()) return;
       setUploads([...(body.uploads ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(error instanceof Error ? error.message : 'Unable to load uploads');
+      setLoadError(describeActionError('load uploads', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setLoading(false);
     }
-  }, [operationGuard, showError]);
+  }, [operationGuard]);
 
   useEffect(() => {
     void refresh();
@@ -92,7 +97,7 @@ export function UploadsTab({
       openUploadBlob(blob, upload.displayName, download);
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(error instanceof Error ? error.message : 'Upload is unavailable');
+      showError(formatActionError('open the upload', error, { idempotent: true }));
     }
   };
 
@@ -105,11 +110,11 @@ export function UploadsTab({
         headers: getAuthHeaders(),
       });
       if (!operation.isCurrent()) return;
-      if (!response.ok) throw new Error('Unable to delete upload');
+      if (!response.ok) throw uploadHttpError(response);
       setUploads((current) => current.filter((item) => item.ref !== upload.ref));
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(error instanceof Error ? error.message : 'Unable to delete upload');
+      showError(formatActionError('delete the upload', error, { idempotent: true }));
     }
   };
 
@@ -123,13 +128,13 @@ export function UploadsTab({
         body: JSON.stringify({ displayName }),
       });
       if (!operation.isCurrent()) return;
-      if (!response.ok) throw new Error('Unable to rename upload');
+      if (!response.ok) throw uploadHttpError(response);
       setUploads((current) =>
         current.map((item) => (item.ref === upload.ref ? { ...item, displayName } : item))
       );
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(error instanceof Error ? error.message : 'Unable to rename upload');
+      showError(formatActionError('rename the upload', error, { idempotent: true }));
     }
   };
 
@@ -139,6 +144,13 @@ export function UploadsTab({
         Uploads are immutable and expire after the configured retention period. Preview loads the
         original file; Agor does not generate thumbnails.
       </Typography.Paragraph>
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => void refresh() }}
+          style={{ marginBottom: 12 }}
+        />
+      )}
       <Table
         rowKey="ref"
         size="small"

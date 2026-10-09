@@ -4,12 +4,6 @@ import { Button } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 
-const showError = vi.fn();
-
-vi.mock('@/utils/message', () => ({
-  useThemedMessage: () => ({ showError }),
-}));
-
 vi.mock('../MCPServer', () => ({
   MCPServerEditModal: () => null,
   MCPServerFormFields: ({
@@ -135,6 +129,56 @@ describe('MCPServersTable OAuth creation', () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId('prepared-server-id')).toHaveTextContent('server-2');
     expect(patch).toHaveBeenCalledTimes(2);
-    expect(showError).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  }, 30_000);
+
+  it('keeps the form open with the reason in it when the save before OAuth fails', async () => {
+    const create = vi.fn().mockRejectedValue(new Error('socket has been disconnected'));
+    const client = {
+      service: vi.fn((path: string) =>
+        path === 'mcp-member-policy'
+          ? {
+              find: vi.fn().mockResolvedValue({ policy: 'use_existing_only', can_configure: true }),
+            }
+          : { create, patch: vi.fn(), on: vi.fn(), removeListener: vi.fn() }
+      ),
+    } as unknown as AgorClient;
+
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={new Map()}
+          client={client}
+          userById={new Map([[ADMIN.user_id, ADMIN]])}
+          currentUser={ADMIN}
+          onCreate={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </ConnectionProvider>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /New MCP Server/ })).toBeEnabled()
+    );
+    fireEvent.click(screen.getByRole('button', { name: /New MCP Server/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Configure OAuth' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare OAuth' }));
+
+    // Nothing was saved yet, so a lost reply gets the create wording.
+    expect(
+      await screen.findByText(
+        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to save the MCP server again.'
+      )
+    ).toBeVisible();
+    expect(screen.getByTestId('prepared-server-id')).toHaveTextContent('none');
   }, 30_000);
 });

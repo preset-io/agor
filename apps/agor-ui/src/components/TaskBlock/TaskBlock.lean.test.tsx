@@ -423,10 +423,8 @@ it('resumes instead of replaying a prompt the viewer did not type', async () => 
   expect(prompt.mock.calls[0][1]).not.toBe('Retained prompt');
 });
 
-it('tells the user when Resume fails instead of failing silently', async () => {
-  const prompt = vi.fn().mockRejectedValue(new Error('busy'));
-  const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-  render(
+function resumeView(prompt: ReturnType<typeof vi.fn>) {
+  return (
     <App>
       {view({
         task: {
@@ -445,10 +443,26 @@ it('tells the user when Resume fails instead of failing silently', async () => {
       })}
     </App>
   );
+}
+
+it('tells the user when Resume fails instead of failing silently', async () => {
+  const prompt = vi.fn().mockRejectedValue(new Error('busy'));
+  render(resumeView(prompt));
   fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
-  expect(await screen.findByText("Couldn't resume. Try again.")).toBeVisible();
+  expect(await screen.findByText("Couldn't resume. (busy)")).toBeVisible();
   expect(screen.getByRole('button', { name: 'Resume' })).toBeVisible();
-  consoleError.mockRestore();
+});
+
+it('hides Resume after a lost reply, since the run may have started', async () => {
+  const prompt = vi.fn().mockRejectedValue(new Error('socket has been disconnected'));
+  render(resumeView(prompt));
+  fireEvent.click(screen.getByRole('button', { name: 'Resume' }));
+  expect(
+    await screen.findByText(
+      'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to resume again. (socket has been disconnected)'
+    )
+  ).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Resume' })).toBeNull();
 });
 
 it('opens the agent settings from a not-connected outcome with the existing handler', () => {

@@ -550,7 +550,7 @@ export const SessionSettingsModal: React.FC<SessionSettingsModalProps> = ({
             description="Custom context stays read-only: this view omits scheduled-run and SDK command/skill fields until the full record loads."
             action={
               <Button size="small" onClick={fullDetails.retry}>
-                Retry
+                Try again
               </Button>
             }
           />

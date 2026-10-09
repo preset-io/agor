@@ -7,9 +7,10 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { Tooltip } from 'antd';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
+import { formatActionError } from '@/utils/connectionErrors';
 import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
@@ -57,24 +58,21 @@ function formatExpiresIn(expiresAtMs: number): { verb: 'Expires' | 'Expired'; ph
     : { verb: 'Expired', phrase: `${value} ago` };
 }
 
-function formatRefreshError(error?: string): string {
+const REFRESH_ACTION = 'refresh the sign-in';
+
+/** Copy for a refresh the server refused; `needs_reauth` and `missing_client_id` start a new sign-in. */
+export function formatRefreshError(error?: string): string {
   switch (error) {
-    case 'missing_token_endpoint':
-      return (
-        'missing OAuth token endpoint — re-authenticate, or ask an admin to save the token URL ' +
-        'in this MCP server’s OAuth settings'
-      );
-    case 'missing_client_id':
-      return (
-        'missing OAuth client ID for this grant — re-authenticate, or ask an admin to check ' +
-        'the MCP server OAuth settings'
-      );
     case 'needs_reauth':
-      return 'refresh token is no longer valid — sign in again';
+      return 'Your sign-in to this server expired. Sign in again.';
+    case 'missing_client_id':
+      return "This sign-in has no OAuth client ID. Sign in again, or ask an administrator to check the server's OAuth settings.";
+    case 'missing_token_endpoint':
+      return `Couldn't ${REFRESH_ACTION}. This server has no token URL, so sign in again or ask an administrator to add it.`;
     case 'token_refresh_failed':
-      return 'provider token refresh failed — try again, or sign in again if it keeps failing';
+      return `Couldn't ${REFRESH_ACTION}. The provider refused it, so try again or sign in again if it keeps happening.`;
     default:
-      return 'credential refresh failed — retry, or sign in again if it keeps failing';
+      return error ? `Couldn't ${REFRESH_ACTION}. (${error})` : `Couldn't ${REFRESH_ACTION}.`;
   }
 }
 
@@ -119,6 +117,10 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
     setExpiresAtOverride(undefined);
   }, [actionAllowed, authorityKey]);
 
+  const showPersistentWarning = useCallback(
+    (warning: string) => showWarning(warning, { duration: 0 }),
+    [showWarning]
+  );
   const isOAuthServer = server.auth?.type === 'oauth';
   const needsConfiguration = needsAuth && !isOAuthServer;
   const expiresAt = expiresAtOverride ?? server.auth?.oauth_token_expires_at;
@@ -128,12 +130,13 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
     authorityKey,
     onPrepareOAuthStart: async () => server.mcp_server_id,
     onOAuthAttemptStarted,
-    onOAuthSucceeded: () => showSuccess(`${server.display_name || server.name} authenticated!`),
+    onOAuthSucceeded: () => showSuccess(`Signed in to ${server.display_name || server.name}.`),
     showError,
     showInfo,
     showSuccess,
+    showWarning: showPersistentWarning,
+    rendersFailureInline: true,
     startAllowed: actionAllowed,
-    startBlockedReason: actionBlockedReason,
   });
 
   const handleRefreshClick = async () => {
@@ -153,8 +156,8 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
         setExpiresAtOverride(result.expires_at);
         showSuccess(
           result.expires_at
-            ? `${server.display_name || server.name} refreshed — expires ${formatExpiresIn(result.expires_at).phrase}`
-            : `${server.display_name || server.name} refreshed`
+            ? `${server.display_name || server.name} refreshed. It expires ${formatExpiresIn(result.expires_at).phrase}.`
+            : `${server.display_name || server.name} refreshed.`
         );
       } else if (result.error === 'needs_reauth' || result.error === 'missing_client_id') {
         setExpiresAtOverride(undefined);
@@ -162,11 +165,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
         // Fall through to full OAuth flow so the user can re-auth in one click.
         await handleStartOAuthFlow();
       } else {
-        showError(`Refresh failed: ${formatRefreshError(result.error)}`);
+        showError(formatRefreshError(result.error));
       }
-    } catch {
+    } catch (error) {
       if (!shouldApply()) return;
-      showError('Credential refresh failed. Check the connection and try again.');
+      showError(formatActionError(REFRESH_ACTION, error, { idempotent: true }));
     } finally {
       if (shouldApply()) setRefreshing(false);
     }
@@ -381,7 +384,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       {oauthFailure && (
         <MCPOAuthRecoveryAlert
           failure={oauthFailure}
-          onRetry={() => void handleStartOAuthFlow()}
+          onRetry={actionAllowed ? () => void handleStartOAuthFlow() : undefined}
           onConfigure={configureAllowed && onEdit ? () => onEdit(server) : undefined}
         />
       )}

@@ -11,7 +11,9 @@ import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
 } from '../../hooks/useAuthorityOperationGuard';
+import { describeActionError, formatActionError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 
 interface UserAvatarsTabProps {
   client: AgorClient | null;
@@ -52,6 +54,8 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [lastResult, setLastResult] = useState<UserAvatarSyncResult | null>(null);
+  const [loadError, setLoadError] = useState<ReturnType<typeof describeActionError> | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const operationGuard = useAuthorityOperationGuard(operationScope);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases caller-specific status
@@ -62,6 +66,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     setLoading(false);
     setSyncing(false);
     setLastResult(null);
+    setLoadError(null);
   }, [identityKey]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
@@ -78,10 +83,12 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     [gatewayChannelById]
   );
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: loadAttempt re-runs the load on Try again
   useEffect(() => {
     const operation = operationGuard.begin();
     if (!client || !operation.isCurrent()) return;
     setLoading(true);
+    setLoadError(null);
     usersAvatarClient(client)
       .getAvatarSettings({})
       .then((value) => {
@@ -93,13 +100,15 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
         setLastResult(next.last_sync_result ?? null);
       })
       .catch((error) => {
-        if (operation.isCurrent()) showError(`Failed to load avatar settings: ${error.message}`);
+        if (operation.isCurrent()) {
+          setLoadError(describeActionError('load avatar settings', error, { idempotent: true }));
+        }
       })
       .finally(() => {
         if (operation.isCurrent()) setLoading(false);
       });
     return () => operation.cancel();
-  }, [client, operationGuard, showError]);
+  }, [client, operationGuard, loadAttempt]);
 
   const save = async (
     operation: AuthorityOperation,
@@ -131,9 +140,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return;
       setEnabled(previousEnabled);
-      showError(
-        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update avatar settings', error, { idempotent: true }));
     }
   };
 
@@ -150,9 +157,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     } catch (error) {
       if (!operation.isCurrent()) return;
       setGatewayId(previousGatewayId);
-      showError(
-        `Failed to update avatar settings: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('update avatar settings', error, { idempotent: true }));
     }
   };
 
@@ -161,7 +166,14 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
     if (!client || !gatewayId || !operation.isCurrent()) return;
     setSyncing(true);
     try {
-      await save(operation, true, gatewayId);
+      try {
+        await save(operation, true, gatewayId);
+      } catch (error) {
+        if (operation.isCurrent()) {
+          showError(formatActionError('save avatar settings', error, { idempotent: true }));
+        }
+        return;
+      }
       if (!operation.isCurrent()) return;
       const result = (await usersAvatarClient(client).syncAvatars({
         gateway_channel_id: gatewayId,
@@ -174,9 +186,7 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
       );
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(
-        `Slack avatar sync failed: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('sync Slack avatars', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setSyncing(false);
     }
@@ -193,6 +203,13 @@ export const UserAvatarsTab: React.FC<UserAvatarsTabProps> = ({
           Agor prefers avatar_url when present and falls back to each user’s emoji tile.
         </Typography.Text>
       </div>
+
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => setLoadAttempt((n) => n + 1) }}
+        />
+      )}
 
       <Card loading={loading} size="small">
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>

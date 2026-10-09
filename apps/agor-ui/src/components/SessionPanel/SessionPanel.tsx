@@ -68,6 +68,11 @@ import {
   selectUserAuthenticatedMcpServerIds,
   selectUserById,
 } from '../../store/selectors';
+import {
+  formatActionError,
+  notConnectedMessage,
+  withConnectionErrorDetail,
+} from '../../utils/connectionErrors';
 import { getContextWindowGradient, selectLatestContextWindow } from '../../utils/contextWindow';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
@@ -91,8 +96,8 @@ import { getUrlDisplayLabel } from '../Pill/url-helpers';
 import { ToolIcon } from '../ToolIcon';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import {
+  BlockingAttachmentError,
   buildPromptWithAttachments,
-  getComposerAttachmentFailureMessage,
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
@@ -369,7 +374,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const mobileHeaderButtonStyle: React.CSSProperties | undefined = isMobileShell
     ? { minWidth: MOBILE_TOUCH_TARGET, minHeight: MOBILE_TOUCH_TARGET }
     : undefined;
-  const { showSuccess, showInfo, showError } = useThemedMessage();
+  const { showSuccess, showInfo, showError, showWarning } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
 
@@ -946,7 +951,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleArchive = () => {
     if (!client || connectionDisabled) {
-      showError('Cannot archive while disconnected from the daemon.');
+      showError(notConnectedMessage('archive the session'));
       return;
     }
 
@@ -1043,14 +1048,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
       const blockingAttachment = attachmentsAtSendStart.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
-        showError(
-          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
-        );
+        showError(new BlockingAttachmentError(blockingAttachment).message);
         return;
       }
 
       if (!onSendPrompt) {
-        showError('Cannot send prompt from this view.');
+        showError("You can't send messages from this view.");
         return;
       }
 
@@ -1114,8 +1117,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
       if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
-      console.error('Composer send failed — keeping prompt and files in composer:', error);
-      showError(error instanceof Error ? error.message : 'Failed to send prompt');
+      // The message and files stay in the composer.
+      showError(
+        error instanceof BlockingAttachmentError
+          ? error.message
+          : formatActionError('send your message', error, { idempotent: false })
+      );
     } finally {
       if (composerSendInFlightRef.current === sendStartComposerIdentity) {
         composerSendInFlightRef.current = null;
@@ -1212,7 +1219,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.status === TaskStatus.AWAITING_INPUT
       );
     if (!stopTarget) {
-      showError('Execution state is still syncing. Try again.');
+      showInfo("Couldn't find running work to stop. Refresh to see the latest state.");
       return;
     }
 
@@ -1227,7 +1234,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
-      console.error('Failed to stop execution:', error);
       const reconciliation = isStopTransportAmbiguous(error)
         ? await reconcileStopTransportFailure(
             () => currentClientRef.current,
@@ -1238,7 +1244,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
         showInfo(reconciliation.reason);
       } else {
-        showError('Failed to stop execution. You can try again.');
+        showError(formatActionError('stop the agent', error, { idempotent: true }));
       }
     } finally {
       setStopRequestInFlight(false);
@@ -1267,9 +1273,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       setForceFailTarget(null);
       setForceFailConfirmation('');
     } catch (error) {
-      console.error('Failed to force-fail execution:', error);
       setRecoveryError(
-        'Could not reopen this session. You may need the branch owner or an administrator to help.'
+        withConnectionErrorDetail(
+          "Couldn't reopen this session. Ask a branch owner or administrator to help.",
+          error
+        )
       );
     } finally {
       setStopRequestInFlight(false);
@@ -1279,9 +1287,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const handleFork = async () => {
     if (!session) return;
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to fork.'
-      );
+      showWarning('Remove attachments to fork. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1295,8 +1301,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       // Only clear the compose box + draft on success, so a failed fork
       // leaves the typed prompt intact for the user to retry.
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('Fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The fork handler shows why; the message stays in the compose box.
     }
   };
 
@@ -1309,9 +1315,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   const handleBtwSend = async () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to send BTW.'
-      );
+      showWarning('Remove attachments to ask a side question. Attachments only work with Send.');
       return;
     }
     const value = promptRef.current?.getValue() ?? '';
@@ -1320,16 +1324,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     try {
       await onBtwFork?.(session.session_id, promptToSend);
       promptRef.current?.clear();
-    } catch (error) {
-      console.error('BTW fork failed — keeping prompt in compose box:', error);
+    } catch {
+      // The side-question handler shows why; the message stays in the compose box.
     }
   };
 
   const handleSpawnOpen = () => {
     if (composerAttachmentsRef.current.length > 0) {
-      showError(
-        'Attachments are only supported for normal Send for now. Remove attachments to spawn.'
-      );
+      showWarning('Remove attachments to start a subsession. Attachments only work with Send.');
       return;
     }
     setSpawnModalOpen(true);

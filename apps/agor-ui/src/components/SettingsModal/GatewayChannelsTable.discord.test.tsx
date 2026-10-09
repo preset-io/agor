@@ -413,4 +413,24 @@ describe('GatewayChannelsTable Discord edit', () => {
     expect(checked).toBe(false);
     expect(updates.config.agent_tools).toEqual({ channel_history: false });
   }, 30_000);
+  it('keeps the edit open and names a non-numeric Discord ID', async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const invalid = {
+      ...storedChannel,
+      config: { ...storedChannel.config, application_id: 'my-app' },
+    } as unknown as GatewayChannel;
+    renderTable(makeClient().client, { channels: [invalid], onUpdate });
+    fireEvent.click(screen.getByTitle('Edit'));
+    await screen.findByLabelText(/Let session agents read channel history/);
+    clickButton(/^Save$/);
+    expect(
+      await screen.findByText(
+        "Couldn't save the channel. Use the numeric Discord ID for Application ID.",
+        undefined,
+        ASYNC
+      )
+    ).toBeVisible();
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^Save$/ })).toBeVisible();
+  }, 30_000);
 });

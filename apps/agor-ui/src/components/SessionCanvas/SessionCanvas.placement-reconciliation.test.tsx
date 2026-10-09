@@ -715,7 +715,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     // Still open, with the draft and the reason; the note shows what is saved.
     expect(screen.getByText('Edit Markdown Note')).toBeTruthy();
     expect(screen.getByDisplayValue('My careful draft')).toBeTruthy();
-    expect(screen.getByText(/You do not have permission to edit this board/)).toBeTruthy();
+    expect(screen.getByText("Couldn't save the note.")).toBeTruthy();
     expect(
       (currentNode('markdown-1') as FlowNode & { data: { content: string } }).data.content
     ).toBe('Old note');
@@ -750,9 +750,51 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     expect(boardPatches(patch)).toHaveLength(1);
     expect(screen.getByText('Add Markdown Note', { selector: '.ant-modal-title' })).toBeTruthy();
     expect(screen.getByDisplayValue('A fresh note')).toBeTruthy();
-    expect(screen.getByText(/Forbidden/)).toBeTruthy();
+    expect(screen.getByText("Couldn't save the note.")).toBeTruthy();
     // The optimistic note is rolled back.
     expect(flowProps?.nodes.some((candidate) => candidate.type === 'markdown')).toBe(false);
+  });
+
+  it('keeps a new note after a lost reply, shows the server state, and saves again as an update', async () => {
+    const patch = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('socket has been disconnected'))
+      .mockResolvedValue({});
+    // The server never got the note.
+    const get = vi.fn(async () => board);
+    const client = { service: vi.fn(() => ({ patch, get })) } as unknown as AgorClient;
+    renderCanvas(client);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Add Markdown Note' }));
+    act(() => {
+      (flowProps as unknown as { onPaneClick: (event: unknown) => void }).onPaneClick({
+        clientX: 50,
+        clientY: 60,
+      });
+    });
+    fireEvent.change(await screen.findByPlaceholderText(/# Title/), {
+      target: { value: 'A fresh note' },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    });
+    expect(
+      screen.getByText(
+        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to save the note again.'
+      )
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue('A fresh note')).toBeTruthy();
+    // Redrawn from the server's board, not restored from local state.
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(flowProps?.nodes.some((candidate) => candidate.type === 'markdown')).toBe(false)
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    });
+    const [first, second] = boardPatches(patch);
+    expect(second.objectId).toBe(first.objectId);
   });
 
   const noteBoard = {
@@ -790,7 +832,7 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
     // The editor stays open with the draft and says why; Save stays refused.
     expect(screen.getByText('Edit Markdown Note')).toBeTruthy();
     expect(screen.getByDisplayValue('My careful draft')).toBeTruthy();
-    expect(screen.getByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(screen.getByText(/The board reloaded, so your changes weren't saved\./)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Re-apply to reloaded board' })).toBeNull();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
@@ -1358,7 +1400,9 @@ describe('SessionCanvas authoritative zone placement reconciliation', () => {
         if (behavior === 'always_new') {
           expect(create).toHaveBeenCalledTimes(1);
           expect(
-            screen.getByText(/2 unavailable default MCP server\(s\) were skipped/)
+            screen.getByText(
+              /Session started without 2 default MCP servers because they aren't available/
+            )
           ).toBeTruthy();
         } else expect(screen.getByTestId('zone-trigger-picker')).toBeTruthy();
       } else {

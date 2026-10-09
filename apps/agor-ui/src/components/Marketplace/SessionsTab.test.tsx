@@ -1,10 +1,12 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { message } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SessionsTab } from './SessionsTab';
+
+const toast = vi.hoisted(() => ({ showSuccess: vi.fn(), showError: vi.fn() }));
+vi.mock('@/utils/message', () => ({ useThemedMessage: () => toast }));
 
 const overview: MCPMarketplaceOverview = {
   servers: [
@@ -42,11 +44,9 @@ describe('Marketplace session attachments', () => {
   afterEach(async () => {
     await act(async () => {
       cleanup();
-      // Static antd messages live outside RTL's roots. Dispose their timers and
-      // flush React work before jsdom removes window at worker teardown.
-      message.destroy();
     });
-    expect(document.querySelector('.ant-message-notice')).not.toBeInTheDocument();
+    toast.showSuccess.mockClear();
+    toast.showError.mockClear();
   });
 
   it('renders a dedicated empty state when no visible session uses a server', () => {
@@ -168,7 +168,40 @@ describe('Marketplace session attachments', () => {
     fireEvent.click(confirm);
     await waitFor(() => expect(remove).toHaveBeenCalledWith('server-1'));
     await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
-    expect(await screen.findByText('Server detached')).toBeVisible();
+    expect(toast.showSuccess).toHaveBeenCalledWith('Server detached.');
+  });
+
+  it('names a failed detach', async () => {
+    const remove = vi.fn(async () => {
+      throw Object.assign(new Error('Session not found: session-1'), {
+        name: 'NotFound',
+        code: 404,
+      });
+    });
+    const client = { service: vi.fn(() => ({ remove })) } as unknown as AgorClient;
+    render(
+      <MemoryRouter>
+        <SessionsTab
+          client={client}
+          authorityKey={['alice', 'member', 1, client]}
+          overview={overview}
+          loading={false}
+          error={null}
+          refresh={vi.fn(async () => undefined)}
+        />
+      </MemoryRouter>
+    );
+    const trigger = screen.getByRole('button', {
+      name: 'Detach GitHub from session Triage bugs',
+    });
+    fireEvent.click(trigger);
+    await waitFor(() => expect(trigger).toHaveClass('ant-popover-open'));
+    fireEvent.click(screen.getByRole('button', { name: 'Detach', hidden: true }));
+    await waitFor(() =>
+      expect(toast.showError).toHaveBeenCalledWith(
+        "Couldn't detach the server. It may have been deleted, or you may not have access."
+      )
+    );
   });
 
   it('closes confirmation and fails closed when session-write authority is lost', async () => {

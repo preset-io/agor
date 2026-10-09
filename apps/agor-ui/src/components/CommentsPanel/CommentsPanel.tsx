@@ -7,7 +7,7 @@ import type {
   ReactionSummary,
   User,
 } from '@agor-live/client';
-import { groupReactions, isThreadRoot } from '@agor-live/client';
+import { groupReactions, hasMinimumRole, isThreadRoot, ROLES } from '@agor-live/client';
 import {
   AppstoreOutlined,
   BranchesOutlined,
@@ -175,9 +175,11 @@ const ReplyItem: React.FC<{
   reply: BoardComment;
   userById: Map<string, User>;
   currentUserId: string;
+  /** Administrators pass the server's comment-author check. */
+  isAdmin: boolean;
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDelete?: (commentId: string) => void;
-}> = ({ reply, userById, currentUserId, onToggleReaction, onDelete }) => {
+}> = ({ reply, userById, currentUserId, isAdmin, onToggleReaction, onDelete }) => {
   const { token } = theme.useToken();
   const [replyHovered, setReplyHovered] = useState(false);
   const replyUser = userById.get(reply.created_by);
@@ -250,7 +252,7 @@ const ReplyItem: React.FC<{
                   onToggle={(emoji) => onToggleReaction(reply.comment_id, emoji)}
                 />
               )}
-              {onDelete && isReplyCurrentUser && (
+              {onDelete && (isReplyCurrentUser || isAdmin) && (
                 <Button
                   type="text"
                   size="small"
@@ -277,6 +279,7 @@ const CommentThread: React.FC<{
   replies: BoardComment[];
   userById: Map<string, User>;
   currentUserId: string;
+  isAdmin: boolean;
   onReply?: (parentId: string, content: string) => void;
   onResolve?: (commentId: string) => void;
   onToggleReaction?: (commentId: string, emoji: string) => void;
@@ -290,6 +293,7 @@ const CommentThread: React.FC<{
   replies,
   userById,
   currentUserId,
+  isAdmin,
   onReply,
   onResolve,
   onToggleReaction,
@@ -306,6 +310,8 @@ const CommentThread: React.FC<{
   const showActions = isHovered || alwaysShowActions;
   const user = userById.get(comment.created_by);
   const isCurrentUser = comment.created_by === currentUserId;
+  // Resolve, reopen and delete follow the server's rule: the author or an administrator.
+  const canModerate = isCurrentUser || isAdmin;
 
   return (
     <div
@@ -413,7 +419,7 @@ const CommentThread: React.FC<{
                   style={{ color: token.colorTextSecondary }}
                 />
               )}
-              {onResolve && !comment.resolved && (
+              {onResolve && canModerate && !comment.resolved && (
                 <Button
                   type="text"
                   size="small"
@@ -423,7 +429,7 @@ const CommentThread: React.FC<{
                   style={{ color: token.colorTextSecondary }}
                 />
               )}
-              {onResolve && comment.resolved && (
+              {onResolve && canModerate && comment.resolved && (
                 <Button
                   type="text"
                   size="small"
@@ -433,7 +439,7 @@ const CommentThread: React.FC<{
                   style={{ color: token.colorTextSecondary }}
                 />
               )}
-              {onDelete && isCurrentUser && (
+              {onDelete && canModerate && (
                 <Button
                   type="text"
                   size="small"
@@ -464,6 +470,7 @@ const CommentThread: React.FC<{
                 reply={reply}
                 userById={userById}
                 currentUserId={currentUserId}
+                isAdmin={isAdmin}
                 onToggleReaction={onToggleReaction}
                 onDelete={onDelete}
               />
@@ -576,6 +583,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
 
   // Get current user's name and email for mention detection
   const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const currentUserName = currentUser?.name;
   const currentUserEmail = currentUser?.email;
 
@@ -841,6 +849,7 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
                         replies={repliesByParent[thread.comment_id] || []}
                         userById={userById}
                         currentUserId={currentUserId}
+                        isAdmin={isAdmin}
                         onReply={replyComment}
                         onResolve={resolveComment}
                         onToggleReaction={toggleReaction}

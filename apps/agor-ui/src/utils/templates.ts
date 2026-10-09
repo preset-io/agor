@@ -17,7 +17,7 @@ import type { AgorClient, TemplateRenderRequest } from '@agor-live/client';
  * @param onError     `'empty'` (default) returns '' on render error;
  *                    `'raw'` returns the unrendered template (good for
  *                    user-facing previews).
- * @returns The rendered string, or `''` on transport failure.
+ * @returns The rendered string; rejects when the request itself fails.
  */
 export async function renderTemplate(
   client: AgorClient,
@@ -26,11 +26,6 @@ export async function renderTemplate(
   onError: TemplateRenderRequest['onError'] = 'empty'
 ): Promise<string> {
   if (!template || typeof template !== 'string') return '';
-  try {
-    const result = await client.service('templates').create({ template, context, onError });
-    return result.rendered;
-  } catch (err) {
-    console.error('Template render failed:', err);
-    return onError === 'raw' ? template : '';
-  }
+  const result = await client.service('templates').create({ template, context, onError });
+  return result.rendered;
 }

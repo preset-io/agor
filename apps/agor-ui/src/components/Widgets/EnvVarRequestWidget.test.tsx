@@ -290,7 +290,7 @@ describe('EnvVarRequestWidget — pending state', () => {
     await waitFor(() => {
       expect(saveBtn.disabled).toBe(false);
     });
-    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Couldn't save the variables.")).toBeTruthy();
     expect(calls.length).toBe(1);
   });
 
@@ -309,7 +309,38 @@ describe('EnvVarRequestWidget — pending state', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText(/Only global saved values/i)).toBeTruthy();
-    expect(screen.getAllByText(/Save failed: Invalid env var/i).length).toBeGreaterThan(0);
+    expect(screen.getByText("Couldn't save the variables.")).toBeTruthy();
+  });
+
+  it('says the connection dropped when there is no client to save with', async () => {
+    const widget = makeWidget();
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={null} />
+    );
+    fireEvent.change(screen.getByLabelText(/Value for HUBSPOT_API_KEY/i), {
+      target: { value: 'shh' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(
+      await screen.findByText(
+        "Couldn't save the variables. The connection to Agor dropped. Try again once it's back."
+      )
+    ).toBeTruthy();
+  });
+
+  it('shows a failed dismiss inline and keeps the form', async () => {
+    const widget = makeWidget();
+    const { client } = makeStubClient({ shouldFail: true });
+    renderWithApp(
+      <EnvVarRequestWidget message={makeMessage(widget)} widget={widget} client={client} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(await screen.findByText("Couldn't dismiss.")).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('Invalid env var')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeTruthy();
   });
 
   it('shows a local submitted summary after save so duplicate clicks cannot resubmit', async () => {

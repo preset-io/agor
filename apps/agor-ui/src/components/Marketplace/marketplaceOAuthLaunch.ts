@@ -31,7 +31,7 @@ export class MarketplaceOAuthPopupNavigationError extends Error {
 
 export class MarketplaceOAuthStartError extends Error {
   constructor(message?: string) {
-    super(message || 'Sign-in could not start automatically. Retry from My Servers when ready.');
+    super(message || 'Agor returned no sign-in link.');
     this.name = 'MarketplaceOAuthStartError';
   }
 }

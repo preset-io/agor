@@ -18,11 +18,12 @@ import React, { useMemo } from 'react';
 import { defaultRehypePlugins, type LinkSafetyConfig, Streamdown } from 'streamdown';
 import { getDaemonUrl } from '../../config/daemon';
 import { getAuthHeaders } from '../../utils/authHeaders';
+import { formatActionError } from '../../utils/connectionErrors';
 import { rehypeHeadingAnchors } from '../../utils/headingAnchors';
 import { highlightMentionsInMarkdown } from '../../utils/highlightMentions';
 import { useThemedMessage } from '../../utils/message';
 import { isDarkTheme } from '../../utils/theme';
-import { openUploadBlob } from '../../utils/uploadBlob';
+import { openUploadBlob, uploadHttpError } from '../../utils/uploadBlob';
 import {
   streamdownRemarkPlugins,
   streamdownRichContentPlugins,
@@ -314,10 +315,10 @@ function UploadAttachmentLink({
         `${getDaemonUrl().replace(/\/$/, '')}/uploads/${encodeURIComponent(uploadRef)}/content`,
         { headers: getAuthHeaders() }
       );
-      if (!response.ok) throw new Error('Upload is unavailable');
+      if (!response.ok) throw uploadHttpError(response);
       openUploadBlob(await response.blob(), filename, download);
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Upload is unavailable');
+      showError(formatActionError('open the upload', error, { idempotent: true }));
     }
   };
 

@@ -16,11 +16,13 @@ import {
 import { useMemo, useState } from 'react';
 import { useAgorStore } from '@/store/agorStore';
 import { selectBranchById } from '@/store/selectors';
+import { describeActionError, formatActionError } from '@/utils/connectionErrors';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
+import { ActionErrorNotice } from '../CompactNotice';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
@@ -61,6 +63,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   const [createTypeModalOpen, setCreateTypeModalOpen] = useState(false);
   const [createTypeModalMounted, setCreateTypeModalMounted] = useState(false);
   const [editTypeModalOpen, setEditTypeModalOpen] = useState(false);
+  const [typeError, setTypeError] = useState<ReturnType<typeof describeActionError> | null>(null);
   const [editingType, setEditingType] = useState<CardType | null>(null);
   const [cardModalCard, setCardModalCard] = useState<CardWithType | null>(null);
   const [cardModalOpen, setCardModalOpen] = useState(false);
@@ -126,6 +129,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   // Card type CRUD handlers
   const handleCreateType = async () => {
     if (!client) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
       const colorValue =
@@ -139,16 +143,16 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
       setCreateTypeModalOpen(false);
-      showSuccess('Card type created');
+      showSuccess('Card type created.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return; // validation error
-      console.error('Failed to create card type:', err);
-      showError('Failed to create card type');
+      setTypeError(describeActionError('create the card type', err, { idempotent: false }));
     }
   };
 
   const handleUpdateType = async () => {
     if (!client || !editingType) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
       const colorValue =
@@ -162,11 +166,10 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
       setEditTypeModalOpen(false);
-      showSuccess('Card type updated');
+      showSuccess('Card type updated.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
-      console.error('Failed to update card type:', err);
-      showError('Failed to update card type');
+      setTypeError(describeActionError('update the card type', err, { idempotent: true }));
     }
   };
 
@@ -175,10 +178,9 @@ export const CardsTable: React.FC<CardsTableProps> = ({
     try {
       await client.service('card-types').remove(cardTypeId);
       if (selectedTypeId === cardTypeId) setSelectedTypeId(null);
-      showSuccess('Card type deleted');
+      showSuccess('Card type deleted.');
     } catch (err) {
-      console.error('Failed to delete card type:', err);
-      showError('Failed to delete card type');
+      showError(formatActionError('delete the card type', err, { idempotent: true }));
     }
   };
 
@@ -279,8 +281,15 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       <Form.Item
         name="json_schema"
         label="JSON Schema (optional)"
-        help="Define a JSON Schema to validate card data"
-        rules={[{ validator: validateJSON }]}
+        extra="Define a JSON Schema to validate card data"
+        rules={[
+          {
+            validator: (rule, value: string) =>
+              validateJSON(rule, value).catch(() =>
+                Promise.reject(new Error("The schema isn't valid JSON."))
+              ),
+          },
+        ]}
       >
         <JSONEditor placeholder='{"type": "object", "properties": {...}}' rows={4} />
       </Form.Item>
@@ -529,10 +538,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           }}
           afterClose={() => {
             form.resetFields();
+            setTypeError(null);
             setCreateTypeModalMounted(false);
           }}
           okText="Create"
         >
+          {typeError && <ActionErrorNotice error={typeError} />}
           {typeFormContent}
         </AdaptiveSettingsModal>
       )}
@@ -548,10 +559,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           }}
           afterClose={() => {
             form.resetFields();
+            setTypeError(null);
             setEditingType(null);
           }}
           okText="Save"
         >
+          {typeError && <ActionErrorNotice error={typeError} />}
           {typeFormContent}
         </AdaptiveSettingsModal>
       )}

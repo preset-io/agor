@@ -3,11 +3,13 @@ import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import { Button, Form, Input, Popconfirm, Select, Space, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { describeActionError, formatActionError } from '@/utils/connectionErrors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
 import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
@@ -34,26 +36,34 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   const createSlugEditedRef = useRef(false);
   const editSlugEditedRef = useRef(false);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  type ActionError = ReturnType<typeof describeActionError>;
+  const [loadError, setLoadError] = useState<ActionError | null>(null);
+  const [createError, setCreateError] = useState<ActionError | null>(null);
+  const [saveError, setSaveError] = useState<ActionError | null>(null);
 
   const load = useCallback(async () => {
     if (!client || !isAdmin) {
       setGroups([]);
       setMemberships([]);
+      setLoadError(null);
       return;
     }
-    const [nextGroups, nextMemberships] = await Promise.all([
-      client.service('groups').findAll({ query: { archived: false } }),
-      client.service('group-memberships').findAll({}),
-    ]);
-    setGroups(nextGroups as Group[]);
-    setMemberships(nextMemberships as GroupMembership[]);
+    try {
+      const [nextGroups, nextMemberships] = await Promise.all([
+        client.service('groups').findAll({ query: { archived: false } }),
+        client.service('group-memberships').findAll({}),
+      ]);
+      setGroups(nextGroups as Group[]);
+      setMemberships(nextMemberships as GroupMembership[]);
+      setLoadError(null);
+    } catch (error) {
+      setLoadError(describeActionError('load groups', error, { idempotent: true }));
+    }
   }, [client, isAdmin]);
 
   useEffect(() => {
-    load().catch((error) =>
-      showError(`Failed to load groups: ${error instanceof Error ? error.message : String(error)}`)
-    );
-  }, [load, showError]);
+    void load();
+  }, [load]);
 
   const membershipsByGroup = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -67,10 +77,17 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const createGroup = async () => {
     if (!client) return;
-    const values = await form.validateFields();
-    await client.service('groups').create(values);
+    const values = await form.validateFields().catch(() => null);
+    if (!values) return;
+    setCreateError(null);
+    try {
+      await client.service('groups').create(values);
+    } catch (error) {
+      setCreateError(describeActionError('create the group', error, { idempotent: false }));
+      return;
+    }
     closeCreateModal();
-    showSuccess('Group created');
+    showSuccess('Group created.');
     await load();
   };
 
@@ -82,6 +99,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const closeCreateModal = () => {
     createSlugEditedRef.current = false;
+    setCreateError(null);
     form.resetFields();
     setCreateOpen(false);
   };
@@ -114,19 +132,33 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
 
   const saveGroup = async () => {
     if (!client || !editingGroup) return;
-    const values = await editForm.validateFields();
-    await client.service('groups').patch(editingGroup.group_id, values);
-    await syncGroupMembers(editingGroup, editingMemberIds);
+    const values = await editForm.validateFields().catch(() => null);
+    if (!values) return;
+    setSaveError(null);
+    try {
+      await client.service('groups').patch(editingGroup.group_id, values);
+      await syncGroupMembers(editingGroup, editingMemberIds);
+    } catch (error) {
+      setSaveError(describeActionError('save the group', error, { idempotent: true }));
+      // A partial save may have changed members, so the next attempt diffs against fresh data.
+      await load();
+      return;
+    }
     setEditingGroup(null);
     setEditingMemberIds([]);
-    showSuccess('Group updated');
+    showSuccess('Group updated.');
     await load();
   };
 
   const archiveGroup = async (group: Group) => {
     if (!client) return;
-    await client.service('groups').patch(group.group_id, { archived: true });
-    showSuccess('Group archived');
+    try {
+      await client.service('groups').patch(group.group_id, { archived: true });
+    } catch (error) {
+      showError(formatActionError('archive the group', error, { idempotent: true }));
+      return;
+    }
+    showSuccess('Group archived.');
     await load();
   };
 
@@ -141,7 +173,11 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   };
 
   const setGroupMembers = async (group: Group, nextUserIds: string[]) => {
-    await syncGroupMembers(group, nextUserIds);
+    try {
+      await syncGroupMembers(group, nextUserIds);
+    } catch (error) {
+      showError(formatActionError('update the members', error, { idempotent: true }));
+    }
     await load();
   };
 
@@ -188,6 +224,14 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           </Space>
         )}
       />
+
+      {loadError && (
+        <ActionErrorNotice
+          error={loadError}
+          action={{ label: 'Try again', onClick: () => void load() }}
+          style={{ marginBottom: 8 }}
+        />
+      )}
 
       <ResponsiveTable
         rowKey="group_id"
@@ -240,6 +284,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
                   icon={<EditOutlined />}
                   onClick={() => {
                     editSlugEditedRef.current = false;
+                    setSaveError(null);
                     setEditingGroup(group);
                     setEditingMemberIds(membershipsByGroup.get(group.group_id) || []);
                     editForm.setFieldsValue(group);
@@ -261,6 +306,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
         onOk={createGroup}
         onCancel={closeCreateModal}
       >
+        {createError && <ActionErrorNotice error={createError} style={{ marginBottom: 8 }} />}
         <Form form={form} layout="vertical" onValuesChange={handleCreateValuesChange}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
@@ -280,8 +326,10 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
         onCancel={() => {
           setEditingGroup(null);
           setEditingMemberIds([]);
+          setSaveError(null);
         }}
       >
+        {saveError && <ActionErrorNotice error={saveError} style={{ marginBottom: 8 }} />}
         <Form form={editForm} layout="vertical" onValuesChange={handleEditValuesChange}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />

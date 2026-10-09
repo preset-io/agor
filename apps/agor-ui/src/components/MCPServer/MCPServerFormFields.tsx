@@ -21,10 +21,12 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { formatActionError, notConnectedMessage } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
+import { CompactNotice, type CompactNoticeProps } from '../CompactNotice';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import {
@@ -32,9 +34,12 @@ import {
   validateEnvJSON,
   validateHeadersJSON,
 } from './mcp-oauth-utils';
+import { connectionTestErrorMessage } from './useMCPServerDiscovery';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
 const { TextArea } = Input;
+
+type AuthTestNotice = Pick<CompactNoticeProps, 'type' | 'message' | 'details'>;
 
 function isRemoteTransportValue(transport?: MCPTransport): boolean {
   return transport !== 'stdio';
@@ -127,8 +132,8 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   onPrepareOAuthStart,
   mutationAllowed = true,
   mutationBlockedReason = 'You can no longer change this MCP server.',
-  // Consumed by re-rendering, not by reading — see `formRevision` above.
-  formRevision: _formRevision,
+  // Re-renders on every edit (see `formRevision` above) and dates the auth test notice.
+  formRevision,
   managedOAuthCompatibilityMode,
 }) => {
   const { showSuccess, showError, showWarning, showInfo } = useThemedMessage();
@@ -137,6 +142,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
   const [oauthAdvancedOpen, setOauthAdvancedOpen] = useState(false);
 
   const [disconnectingOAuth, setDisconnectingOAuth] = useState(false);
+  // Tied to the draft it tested, like `testResult`: an edit clears it.
+  const [authTest, setAuthTest] = useState<{ notice: AuthTestNotice; revision?: number } | null>(
+    null
+  );
+  const setAuthTestNotice = (notice: AuthTestNotice | null) =>
+    setAuthTest(notice && { notice, revision: formRevision });
+  const authTestNotice = authTest && authTest.revision === formRevision ? authTest.notice : null;
+  const showPersistentWarning = useCallback(
+    (warning: string) => showWarning(warning, { duration: 0 }),
+    [showWarning]
+  );
   const oauthStartAllowed = mutationAllowed && authorityKey !== null;
   const operationGuard = useAuthorityOperationGuard(
     oauthStartAllowed ? [authorityKey, client, mutationAllowed] : null
@@ -166,8 +182,9 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     showError,
     showInfo,
     showSuccess,
+    showWarning: showPersistentWarning,
+    rendersFailureInline: true,
     startAllowed: oauthStartAllowed,
-    startBlockedReason: mutationBlockedReason,
   });
 
   // Watch advanced OAuth field values so we can show a "customized" dot on
@@ -202,17 +219,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
 
   const handleDisconnectOAuth = async () => {
     const operation = operationGuard.begin();
-    if (!operation.isCurrent()) return;
-    if (!mutationAllowed) {
-      showError(mutationBlockedReason);
-      return;
-    }
+    // Disconnect is disabled while blocked and hidden until the server is saved.
+    if (!operation.isCurrent() || !mutationAllowed || !serverId) return;
     if (!client) {
-      showError('Client not available');
-      return;
-    }
-    if (!serverId) {
-      showError('Cannot disconnect: MCP server must be saved first');
+      showError(notConnectedMessage('disconnect'));
       return;
     }
 
@@ -224,14 +234,18 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       if (!operation.isCurrent()) return;
 
       if (data.success) {
-        showSuccess(data.message || 'OAuth connection removed');
+        showSuccess(data.message || 'Sign-in removed.');
         setOauthBrowserFlowAvailable(true);
       } else {
-        showError(data.error || 'Failed to disconnect OAuth');
+        showError(
+          data.error
+            ? formatActionError('disconnect', new Error(data.error), { idempotent: true })
+            : "Couldn't disconnect."
+        );
       }
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      showError('OAuth disconnect failed. Check the connection and try again.');
+      showError(formatActionError('disconnect', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setDisconnectingOAuth(false);
     }
@@ -241,9 +255,10 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     const operation = operationGuard.begin();
     if (!operation.isCurrent()) return;
     if (!client) {
-      showError('Client not available');
+      showError(notConnectedMessage('test authentication'));
       return;
     }
+    setAuthTestNotice(null);
 
     const values = form.getFieldsValue(true);
     const currentAuthType = values.auth_type || authType;
@@ -263,7 +278,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             : values.jwt_api_secret;
 
         if (!apiUrl || !apiToken || !apiSecret) {
-          showError('Please fill in all JWT authentication fields');
+          setAuthTestNotice({ type: 'warning', message: 'Fill in all the JWT fields to test.' });
           return;
         }
 
@@ -271,13 +286,23 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           api_url: apiUrl,
           api_token: apiToken,
           api_secret: apiSecret,
-        })) as { success: boolean; error?: string };
+        })) as { success: boolean; error?: string; category?: string };
         if (!operation.isCurrent()) return;
 
         if (data.success) {
           showSuccess('JWT authentication successful - token received');
+        } else if (data.category === 'provider_rejected') {
+          // The test uses the unsaved values, so the server's "saved credentials" wording is wrong here.
+          setAuthTestNotice({
+            type: 'error',
+            message: 'The provider rejected these credentials. Check them and test again.',
+          });
         } else {
-          showError(data.error || 'JWT authentication failed');
+          setAuthTestNotice({
+            type: 'error',
+            message: "Couldn't test the credentials.",
+            details: data.error ? [{ label: 'Error', value: data.error, code: true }] : undefined,
+          });
         }
       } else if (currentAuthType === 'oauth') {
         const requestData = extractOAuthConfigForTesting({
@@ -285,7 +310,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           ...(serverId && managedOAuthCompatibilityMode ? { mcp_server_id: serverId } : {}),
         });
         if (!requestData) {
-          showWarning('Please enter MCP URL first to test OAuth authentication');
+          setAuthTestNotice({ type: 'warning', message: 'Enter the server URL to test sign-in.' });
           return;
         }
 
@@ -317,7 +342,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             );
           } else if (data.oauthType === 'none') {
             setOauthBrowserFlowAvailable(false);
-            showSuccess('MCP server accessible without authentication');
+            showSuccess('This MCP server works without signing in.');
           } else {
             let message = data.message || 'OAuth authentication successful';
             if (data.tokenUrlSource === 'auto-detected') {
@@ -329,25 +354,29 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             showSuccess(message);
           }
         } else {
-          let errorMsg = data.error || 'OAuth authentication failed';
-          if (data.hint) {
-            errorMsg += `\n\nHint: ${data.hint}`;
-          }
-          showError(errorMsg);
+          const details = [
+            ...(data.error ? [{ label: 'Error', value: data.error, code: true }] : []),
+            ...(data.hint ? [{ label: 'Hint', value: data.hint }] : []),
+          ];
+          setAuthTestNotice({
+            type: 'error',
+            message: "Couldn't sign in to this server.",
+            details: details.length > 0 ? details : undefined,
+          });
         }
       } else if (currentAuthType === 'bearer') {
         const token = values.auth_token;
         if (token) {
           showSuccess('Bearer token configured');
         } else {
-          showWarning('No bearer token provided');
+          setAuthTestNotice({ type: 'warning', message: 'Enter a token to test.' });
         }
       } else {
         showInfo('No authentication required - ready to use');
       }
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      showError('Connection test failed. Check the saved configuration and try again.');
+      setAuthTestNotice({ type: 'error', message: connectionTestErrorMessage(error) });
     } finally {
       if (operation.isCurrent()) setTestingAuth(false);
     }
@@ -739,6 +768,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             )}
           </Space>
         </Form.Item>
+      )}
+
+      {authTestNotice && (
+        <CompactNotice
+          {...authTestNotice}
+          role={authTestNotice.type === 'error' ? 'alert' : 'status'}
+          style={{ marginBottom: 16 }}
+        />
       )}
 
       {/* Test connection result alerts (shown directly under the action buttons) */}

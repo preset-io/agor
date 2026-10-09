@@ -5,7 +5,19 @@ import {
   type AuthorityOperation,
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError, formatActionError } from '@/utils/connectionErrors';
 import { useOAuthBrowserEventAttempt } from './useOAuthBrowserEventAttempt';
+
+const TEST_ACTION = 'test the connection';
+
+/** A thrown connection test can carry provider text, so only fixed connection copy keeps its raw bracket. */
+export function connectionTestErrorMessage(error: unknown): string {
+  const options = { idempotent: true };
+  const { message } = describeActionError(TEST_ACTION, error, options);
+  return message === `Couldn't ${TEST_ACTION}.`
+    ? message
+    : formatActionError(TEST_ACTION, error, options);
+}
 
 /** One discovery lifecycle for create/edit: bind results and browser events to the exact draft and caller. */
 export function useMCPServerDiscovery(options: {
@@ -57,14 +69,14 @@ export function useMCPServerDiscovery(options: {
       })) as MCPDiscoveryResult;
       if (!operation.isCurrent()) return;
       setState({ scope: guard, testing: false, result });
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
       setState({
         scope: guard,
         testing: false,
         result: {
           success: false,
-          error: 'Connection test failed. Check the saved configuration and try again.',
+          error: connectionTestErrorMessage(error),
         },
       });
     } finally {

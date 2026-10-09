@@ -38,12 +38,12 @@ export async function runSessionUpdateWithLatestNotification({
   try {
     await updateSession(sessionId, updates);
   } catch (error) {
-    errorMessage = formatActionError('update session', error, { idempotent: true });
+    errorMessage = formatActionError('update the session', error, { idempotent: true });
   }
 
   if (!authority.isCurrent() || latestRequests.get(sessionId) !== request) return;
   latestRequests.delete(sessionId);
 
   if (errorMessage) showError(errorMessage);
-  else showSuccess('Session updated successfully!');
+  else showSuccess('Session updated.');
 }

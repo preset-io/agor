@@ -36,6 +36,7 @@ import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
+import { describeActionError } from '../../utils/connectionErrors';
 import {
   MAX_ONBOARDING_GOALS,
   mergeGoalIntegrationRecs,
@@ -56,6 +57,7 @@ import {
   ClaudeOAuthSignIn,
 } from '../ClaudeAuth';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
+import { ActionErrorNotice } from '../CompactNotice';
 import { GlassPanelHighlights } from '../GlassSurface/GlassPanel';
 import { ToolIcon } from '../ToolIcon';
 import { OnboardingTeammateGalleryStep } from './OnboardingTeammateGalleryStep';
@@ -556,7 +558,10 @@ export function OnboardingWizard({
   const [apiKey, setApiKey] = useState('');
   const [authMethod, setAuthMethod] = useState<AuthMethod>('api-key');
   const [llmSaving, setLlmSaving] = useState(false);
-  const [llmError, setLlmError] = useState<string | null>(null);
+  // A string is a validation hint; a failed save carries its raw error for Details.
+  const [llmError, setLlmError] = useState<string | ReturnType<typeof describeActionError> | null>(
+    null
+  );
   const [llmAuthChecking, setLlmAuthChecking] = useState<AgenticToolName | null>(null);
   const [llmAuthVerified, setLlmAuthVerified] = useState<Partial<Record<AgenticToolName, boolean>>>(
     {}
@@ -1185,9 +1190,7 @@ export function OnboardingWizard({
           goToStep('tools');
         } catch (err) {
           if (isCurrent()) {
-            setLlmError(
-              `Failed to save API key: ${err instanceof Error ? err.message : String(err)}`
-            );
+            setLlmError(describeActionError('save the API key', err, { idempotent: true }));
           }
         } finally {
           if (isCurrent()) setLlmSaving(false);
@@ -1937,13 +1940,16 @@ export function OnboardingWizard({
                         Encrypted at rest and not added to prompt transcripts or logs.
                       </Text>
                     )}
-                    {llmError && (
+                    {typeof llmError === 'string' && (
                       <Alert
                         type="error"
                         title={llmError}
                         showIcon
                         style={{ marginTop: 10, fontSize: 12 }}
                       />
+                    )}
+                    {llmError && typeof llmError !== 'string' && (
+                      <ActionErrorNotice error={llmError} style={{ marginTop: 10 }} />
                     )}
                   </div>
                 )}

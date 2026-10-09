@@ -40,17 +40,40 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
+const UNKNOWN_OUTCOME =
+  "The connection to Agor dropped before this was confirmed. If it didn't go through, try to unarchive the branch again once the connection is back.";
+
 describe('unarchive acknowledgement', () => {
+  it('counts a replay of an unarchive that already went through as done', async () => {
+    const f = fixture();
+    // branches.ts
+    await act(async () => f.reject(new Error('Branch feature-x is not archived')));
+    expect(await f.outcome).toBe('accepted');
+    expect(messages.showSuccess).toHaveBeenCalledWith(
+      'Branch unarchived. Agor is restoring its files.',
+      { key: 'unarchive:branch' }
+    );
+    expect(messages.showError).not.toHaveBeenCalled();
+  });
+
+  it('says nothing was sent when there is no connection', async () => {
+    const { result } = renderHook(() => useUnarchiveBranch(null));
+    await expect(result.current('branch')).rejects.toThrow('Client not connected');
+    expect(messages.showError).toHaveBeenCalledWith(
+      "Couldn't unarchive the branch. The connection to Agor dropped. Try again once it's back."
+    );
+  });
+
   it('bounds lost acknowledgements, never replays, and never reports ready', async () => {
     const f = fixture();
-    expect(messages.showLoading).toHaveBeenCalledWith('Unarchiving branch...', {
+    expect(messages.showLoading).toHaveBeenCalledWith('Unarchiving the branch…', {
       key: 'unarchive:branch',
     });
     await act(() => vi.advanceTimersByTimeAsync(30_000));
     expect(await f.outcome).toBe('not-confirmed');
     expect(messages.showWarning).toHaveBeenCalledWith(
-      expect.stringMatching(/outcome unknown.*Refresh the page/),
-      { key: 'unarchive:branch', duration: 10 }
+      "Agor hasn't confirmed the unarchive yet. Refresh to check the branch before you try again.",
+      { key: 'unarchive:branch', duration: 0 }
     );
     expect(messages.showError).not.toHaveBeenCalled();
     expect(messages.showSuccess).not.toHaveBeenCalled();
@@ -68,7 +91,7 @@ describe('unarchive acknowledgement', () => {
     await act(async () => f.resolve({ archived: false, filesystem_status: 'creating' }));
     expect(await f.outcome).toBe(late ? 'not-confirmed' : 'accepted');
     expect(messages.showSuccess).toHaveBeenCalledWith(
-      expect.stringContaining('accepted; wait for filesystem recovery'),
+      'Branch unarchived. Agor is restoring its files.',
       { key: 'unarchive:branch' }
     );
     expect(vi.getTimerCount()).toBe(0);
@@ -82,7 +105,7 @@ describe('unarchive acknowledgement', () => {
       await act(async () => f.reject(new Error('Recovery blocked by unfinished tasks')));
       expect(await f.outcome).toBe('not-confirmed');
       expect(messages.showError).toHaveBeenCalledWith(
-        expect.stringContaining('Recovery blocked by unfinished tasks'),
+        "Couldn't unarchive the branch. (Recovery blocked by unfinished tasks)",
         { key: 'unarchive:branch' }
       );
       expect(messages.showSuccess).not.toHaveBeenCalled();
@@ -96,10 +119,7 @@ describe('unarchive acknowledgement', () => {
       const f = fixture();
       await act(async () => f.reject(new Error(message)));
       expect(await f.outcome).toBe('not-confirmed');
-      expect(messages.showWarning).toHaveBeenCalledWith(
-        expect.stringContaining('outcome unknown'),
-        expect.anything()
-      );
+      expect(messages.showWarning).toHaveBeenCalledWith(UNKNOWN_OUTCOME, expect.anything());
       expect(messages.showError).not.toHaveBeenCalled();
       expect(f.create).toHaveBeenCalledTimes(1);
     }

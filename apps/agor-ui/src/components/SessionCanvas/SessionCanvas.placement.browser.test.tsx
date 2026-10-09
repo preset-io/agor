@@ -254,6 +254,10 @@ it('shows skipped-default warnings from an always_new drop response', async () =
   );
   await waitFor(() => expect(create).toHaveBeenCalledWith({ zoneId: 'review' }));
   await waitFor(() =>
-    expect(screen.getByText(/2 unavailable default MCP server\(s\) were skipped/)).toBeVisible()
+    expect(
+      screen.getByText(
+        /Session started without 2 default MCP servers because they aren't available/
+      )
+    ).toBeVisible()
   );
 });

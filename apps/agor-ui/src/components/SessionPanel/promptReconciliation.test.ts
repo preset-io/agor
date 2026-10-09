@@ -170,7 +170,7 @@ describe('sendPromptWithReconciliation', () => {
       })
     ).resolves.toBe(false);
     expect(find).toHaveBeenCalledOnce();
-    expect(showError).toHaveBeenCalledWith('Failed to send prompt: Session is archived');
+    expect(showError).toHaveBeenCalledWith("Couldn't send your message. (Session is archived)");
   });
 
   it('stays silent when the caller is no longer current', async () => {

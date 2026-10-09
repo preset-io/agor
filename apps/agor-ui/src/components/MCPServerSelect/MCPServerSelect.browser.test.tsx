@@ -423,7 +423,9 @@ it('creates with inherited defaults, displays the nonblocking warning, and opens
   await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
   expect(create).toHaveBeenCalledWith(expect.objectContaining({ mcpServerIds: undefined }));
   expect(
-    await screen.findByText(/Session created. 1 unavailable default MCP server/)
+    await screen.findByText(
+      /Session started without 1 default MCP server because it isn't available/
+    )
   ).toBeVisible();
   expect(await screen.findByRole('status', { name: 'Created session' })).toHaveTextContent(
     'Opened session created-with-valid-server'

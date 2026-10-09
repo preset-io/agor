@@ -23,25 +23,11 @@ import type {
 // shape.
 import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Collapse,
-  Form,
-  Input,
-  Modal,
-  Radio,
-  Select,
-  Space,
-  Spin,
-  Typography,
-} from 'antd';
+import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  fullSessionDetailsErrorMessage,
-  useFullSessionDetails,
-} from '../../../hooks/useFullSessionDetails';
+import { useFullSessionDetails } from '../../../hooks/useFullSessionDetails';
 import type { AgenticToolOption } from '../../../types';
+import { errorMessage } from '../../../utils/connectionErrors';
 import { resolveSessionMcpServerIds } from '../../../utils/resolveQuickStartMcpServerIds';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 // Async server-side renderer — keeps Handlebars out of the browser bundle so
@@ -53,6 +39,7 @@ import {
   INLINE_AGENTIC_CONFIGURATION,
 } from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
+import { CompactNotice } from '../../CompactNotice';
 
 interface ZoneTriggerModalProps {
   /** Stable for one drop action; changes only when a new trigger action opens. */
@@ -167,8 +154,10 @@ const ZoneTriggerModalAction = ({
   const templateRenderRequestRef = useRef<{
     target: string;
     editRevision: number;
-    promise: Promise<string>;
+    promise: Promise<{ rendered: string; error?: unknown }>;
   } | null>(null);
+  // The render request failed for this target: the prompt holds the unfilled template.
+  const [renderError, setRenderError] = useState<{ target: string; error: unknown } | null>(null);
 
   // Explicit state for session config (survives form mount/unmount cycles)
   const [sessionConfig, setSessionConfig] = useState<{
@@ -305,6 +294,9 @@ const ZoneTriggerModalAction = ({
             : undefined,
         }),
         'raw'
+      ).then(
+        (rendered) => ({ rendered }),
+        (error: unknown) => ({ rendered: initial.trigger.template, error })
       );
 
     let request = templateRenderRequestRef.current;
@@ -321,8 +313,9 @@ const ZoneTriggerModalAction = ({
 
     let active = true;
     const activeRequest = request;
-    void activeRequest.promise.then((rendered) => {
+    void activeRequest.promise.then(({ rendered, error }) => {
       if (!active || templateRenderRequestRef.current !== activeRequest) return;
+      setRenderError(error === undefined ? null : { target: templateTarget, error });
       setTemplateState((current) => ({
         target: templateTarget,
         value:
@@ -481,8 +474,7 @@ const ZoneTriggerModalAction = ({
             <div>
               {requiresSupportedToolSelection && (
                 <Alert
-                  title="This zone uses a removed agentic tool"
-                  description="Choose a supported tool before creating a new session. Existing sessions remain available for reuse."
+                  title="This zone's agent is no longer available. Choose another agent to start a new session."
                   type="warning"
                   showIcon
                   style={{ marginBottom: 12 }}
@@ -557,17 +549,35 @@ const ZoneTriggerModalAction = ({
             Prompt (editable)
           </Typography.Text>
           {sessionDetails.status === 'error' && sessionDetailsFailed && (
-            <Alert
+            <CompactNotice
               type="error"
-              showIcon
+              role="alert"
               style={{ marginBottom: 8 }}
-              title={fullSessionDetailsErrorMessage(sessionDetails.error)}
-              description="The template is not rendered from partial session data. Retry to render it and enable execution."
-              action={
-                <Button size="small" onClick={sessionDetails.retry}>
-                  Retry
-                </Button>
-              }
+              message="Couldn't load this session's details."
+              detailsLead="The template needs the full session. You can run the trigger once it loads."
+              details={[
+                {
+                  label: 'Error',
+                  value: errorMessage(sessionDetails.error),
+                  code: true,
+                },
+              ]}
+              actions={[{ label: 'Try again', onClick: sessionDetails.retry }]}
+            />
+          )}
+          {renderError?.target === templateTarget && !isRendering && (
+            <CompactNotice
+              type="warning"
+              role="alert"
+              style={{ marginBottom: 8 }}
+              message="Couldn't fill in the template. Check the prompt before you run it."
+              details={[
+                {
+                  label: 'Error',
+                  value: errorMessage(renderError.error),
+                  code: true,
+                },
+              ]}
             />
           )}
           <Spin spinning={isRendering} delay={200} description="Rendering template…">

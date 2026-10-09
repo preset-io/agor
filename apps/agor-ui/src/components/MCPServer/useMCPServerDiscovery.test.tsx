@@ -94,7 +94,7 @@ describe('MCP discovery form lifecycle', () => {
     );
     expect(h.result.current.testResult).toEqual({
       success: false,
-      error: 'Connection test failed. Check the saved configuration and try again.',
+      error: "Couldn't test the connection.",
     });
   });
 });

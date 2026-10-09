@@ -229,7 +229,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
       // Never echo provider/server errors here: they can contain credential values.
       setFieldErrors((previous) => ({
         ...previous,
-        [field]: 'Could not save this field. Please try again.',
+        [field]: "Couldn't save this field.",
       }));
     }
   };
@@ -244,7 +244,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
       if (!operation.isCurrent()) return;
       setFieldErrors((previous) => ({
         ...previous,
-        [field]: 'Could not clear this field. Please try again.',
+        [field]: "Couldn't clear this field.",
       }));
     }
   };

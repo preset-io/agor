@@ -16,7 +16,6 @@ import {
   Empty,
   Flex,
   Grid,
-  message,
   Space,
   Spin,
   Table,
@@ -27,6 +26,8 @@ import {
 } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError, formatActionError } from '@/utils/connectionErrors';
+import { useThemedMessage } from '@/utils/message';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import { mcpServerRemoved } from '../../store/agorRealtimeActions';
 import { MCPServerEditModal } from '../MCPServer/MCPServerEditModal';
@@ -186,6 +187,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     ]
   );
   const guard = useAuthorityOperationGuard(mutationAuthorityKey);
+  const { showError, showInfo, showSuccess } = useThemedMessage();
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const busyRef = useRef<ReadonlySet<string>>(busy);
   busyRef.current = busy;
@@ -195,9 +197,9 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   const [localDiscoveries, setLocalDiscoveries] = useState<ReadonlyMap<string, LocalToolDiscovery>>(
     () => new Map()
   );
-  const [discoveryErrors, setDiscoveryErrors] = useState<ReadonlyMap<string, string>>(
-    () => new Map()
-  );
+  const [discoveryErrors, setDiscoveryErrors] = useState<
+    ReadonlyMap<string, ReturnType<typeof describeActionError>>
+  >(() => new Map());
   const autoDiscoveryAttempts = useRef(new Set<string>());
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [editingCredentialServer, setEditingCredentialServer] = useState<MCPServer | null>(null);
@@ -357,9 +359,9 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     startAllowed: canReconnect,
     onPrepareOAuthStart: async () => selectedServer?.mcp_server_id ?? null,
     onOAuthSucceeded: () => void refresh(),
-    showError: (value) => message.error(value),
-    showInfo: (value) => message.info(value),
-    showSuccess: (value) => message.success(value),
+    showError,
+    showInfo,
+    showSuccess,
   });
 
   useEffect(() => {
@@ -377,6 +379,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
   }, [onRequestedServerOpened, overview.servers, requestedServerId]);
 
   const mutate = async (
+    action: string,
     key: string,
     allowed: boolean,
     work: () => Promise<unknown>,
@@ -389,13 +392,13 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
     try {
       await work();
       if (!operation.isCurrent()) return false;
-      message.success(success);
+      showSuccess(success);
       beforeRefresh?.();
       await refresh();
       return operation.isCurrent();
     } catch (cause) {
       if (operation.isCurrent()) {
-        message.error(cause instanceof Error ? cause.message : 'Action failed');
+        showError(formatActionError(action, cause, { idempotent: true }));
         // A concurrent attachment may have invalidated the confirmed count.
         if (key.startsWith('remove:')) await Promise.resolve(refresh()).catch(() => undefined);
       }
@@ -416,10 +419,10 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       if (!client || !allowed) return;
       if (hasServerToolWork(busyRef.current, server.mcp_server_id)) {
         if (manual) {
-          message.info(
+          showInfo(
             busyRef.current.has(key)
               ? 'Tool discovery is already in progress'
-              : 'Wait for the current tool change to finish before refreshing tools'
+              : 'Wait for the current tool change to finish before refreshing tools.'
           );
         }
         return;
@@ -466,12 +469,11 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
             tools,
           })
         );
-        if (manual) message.success('Tools refreshed');
+        if (manual) showSuccess('Tools refreshed.');
       } catch (cause) {
         if (!operation.isCurrent()) return;
-        const error = cause instanceof Error ? cause.message : 'Tool discovery failed';
+        const error = describeActionError('refresh tools', cause, { idempotent: true });
         setDiscoveryErrors((current) => new Map(current).set(server.mcp_server_id, error));
-        if (manual) message.error(error);
       } finally {
         if (operation.isCurrent()) {
           const next = new Set(busyRef.current);
@@ -483,7 +485,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         }
       }
     },
-    [client, guard, refresh]
+    [client, guard, refresh, showInfo, showSuccess]
   );
 
   const toggleTool = useCallback(
@@ -497,13 +499,13 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       const overrideKey = toolMutationKey(server.mcp_server_id, tool.name);
       if (!client || !allowed) return;
       if (busyRef.current.has(`discover:${server.mcp_server_id}`)) {
-        message.info('Wait for tool discovery to finish before changing a tool');
+        showInfo('Wait for tool discovery to finish before changing a tool.');
         return;
       }
       if (
         Array.from(busyRef.current).some((key) => key.startsWith(`tool:${server.mcp_server_id}:`))
       ) {
-        message.info('Wait for the current tool change to finish before changing another tool');
+        showInfo('Wait for the current tool change to finish before changing another tool');
         return;
       }
       const operation = guard.begin();
@@ -530,8 +532,8 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           return;
         }
         setToolOverrides((current) => new Map(current).set(overrideKey, result.permission));
-        message.success(
-          result.permission === 'deny' ? `${tool.name} is off` : `${tool.name} uses the default`
+        showSuccess(
+          result.permission === 'deny' ? `${tool.name} is off.` : `${tool.name} uses the default.`
         );
         // The daemon emits one caller-targeted `marketplace:changed` hint for
         // cross-device convergence. Do not issue a second overview request
@@ -543,7 +545,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
           next.delete(overrideKey);
           return next;
         });
-        message.error(cause instanceof Error ? cause.message : 'Could not change tool permission');
+        showError(formatActionError("change the tool's permission", cause, { idempotent: true }));
       } finally {
         if (operation.isCurrent()) {
           const next = new Set(busyRef.current);
@@ -553,7 +555,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         }
       }
     },
-    [client, guard]
+    [client, guard, showError, showInfo, showSuccess]
   );
 
   const selectedCredentialSignature = selectedCredential
@@ -673,9 +675,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
       if (operation.isCurrent()) setEditingCredentialServer(fullServer);
     } catch (cause) {
       if (operation.isCurrent()) {
-        message.error(
-          cause instanceof Error ? cause.message : 'Could not open credential settings'
-        );
+        showError(formatActionError('open credential settings', cause, { idempotent: true }));
       }
     } finally {
       if (operation.isCurrent()) {
@@ -701,12 +701,12 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         mcp_server_id: server.mcp_server_id,
       })) as { success?: boolean; message?: string; error?: string };
       if (!operation.isCurrent()) return;
-      if (result.success !== true) throw new Error(result.error || 'OAuth disconnect failed');
-      message.success(result.message || 'OAuth connection removed');
+      if (result.success !== true) throw new Error(result.error || 'No reason was returned.');
+      showSuccess(result.message || 'Sign-in removed.');
       await refresh();
     } catch (cause) {
       if (operation.isCurrent())
-        message.error(cause instanceof Error ? cause.message : 'OAuth disconnect failed');
+        showError(formatActionError('disconnect', cause, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) {
         const next = new Set(busyRef.current);
@@ -945,6 +945,7 @@ export const MyServersTab: React.FC<MyServersTabProps> = ({
         }
         onRemove={(server) =>
           void mutate(
+            'remove the server',
             `remove:${server.mcp_server_id}`,
             canRemove,
             () =>

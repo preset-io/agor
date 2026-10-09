@@ -5,8 +5,8 @@ import { getDaemonUrl } from '../../config/daemon';
 import type { UploadedFile } from '../FileUpload';
 import { uploadFilesToSession } from '../FileUpload/upload';
 import {
+  BlockingAttachmentError,
   type ComposerAttachment,
-  getComposerAttachmentFailureMessage,
   isBlockingComposerAttachment,
   isPreviewableComposerImage,
   summarizeComposerFileRejections,
@@ -145,9 +145,7 @@ export function useComposerAttachments({
 
       const blockingAttachment = current.find(isBlockingComposerAttachment);
       if (blockingAttachment) {
-        throw new Error(
-          `${getComposerAttachmentFailureMessage(blockingAttachment)}. Remove failed files before sending.`
-        );
+        throw new BlockingAttachmentError(blockingAttachment);
       }
 
       const reusableUploaded = current.flatMap((attachment) =>

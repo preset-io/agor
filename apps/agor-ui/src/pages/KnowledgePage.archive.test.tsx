@@ -131,6 +131,23 @@ describe('Knowledge archived direct links', () => {
     );
   });
 
+  it('names the action when a restore is rejected', async () => {
+    const { patch } = setup();
+    patch.mockRejectedValueOnce(
+      new Error('Knowledge document archive state changed; reload before retrying')
+    );
+    await screen.findByText('Archived page');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore' }));
+    expect(
+      (
+        await screen.findByText(
+          "Couldn't restore the page. It changed since you opened it, so refresh and try again."
+        )
+      ).isConnected
+    ).toBe(true);
+    expect(screen.getByText('Archived page').isConnected).toBe(true);
+  });
+
   it('offers archived-only discovery and restoration in the same simple browser', async () => {
     const { findAll } = setup();
     await screen.findByText('Archived page');

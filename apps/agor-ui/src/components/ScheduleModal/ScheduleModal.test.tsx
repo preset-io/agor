@@ -90,23 +90,27 @@ function makeSchedule(): Schedule {
 function renderModal(
   patch: ReturnType<typeof vi.fn>,
   onClose = vi.fn(),
-  schedule = makeSchedule()
+  schedule: Schedule | null = makeSchedule(),
+  {
+    create = vi.fn(),
+    noClient = false,
+  }: { create?: ReturnType<typeof vi.fn>; noClient?: boolean } = {}
 ) {
   const client = {
     service: () => ({
       patch,
-      create: vi.fn(),
+      create,
     }),
   } as unknown as AgorClient;
   render(
     <ScheduleModal
       open
       onClose={onClose}
-      branchId={schedule.branch_id}
+      branchId={schedule?.branch_id ?? ('00000000-0000-7000-8000-000000000002' as BranchID)}
       branchName="Feature"
       schedule={schedule}
       mcpServerById={new Map()}
-      client={client}
+      client={noClient ? null : client}
     />
   );
   return { schedule, onClose };
@@ -145,7 +149,7 @@ describe('ScheduleModal agentic configuration payload', () => {
     renderModal(vi.fn(), vi.fn(), historicalSchedule);
 
     expect(
-      await screen.findByText('This schedule uses a removed agentic tool')
+      await screen.findByText("This schedule uses an agent that's no longer available")
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
     expect(screen.queryByTestId('configuration-picker')).not.toBeInTheDocument();
@@ -194,16 +198,67 @@ describe('ScheduleModal agentic configuration payload', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Choose workspace default' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-    await waitFor(() =>
-      expect(messageMocks.showError).toHaveBeenCalledWith(
-        'Selected agentic configuration is not available'
-      )
-    );
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save the schedule.");
+    expect(messageMocks.showError).not.toHaveBeenCalled();
     expect(patch).toHaveBeenCalledOnce();
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByTestId('configuration-selection')).toHaveTextContent(
       WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION
     );
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('shows the not-connected copy in the form when there is no client', async () => {
+    const onClose = vi.fn();
+    renderModal(vi.fn(), onClose, makeSchedule(), { noClient: true });
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Couldn't save the schedule. The connection to Agor dropped. Try again once it's back."
+    );
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('tells a create whose reply was lost to refresh before saving again', async () => {
+    const create = vi.fn(async () => {
+      throw new Error('socket has been disconnected');
+    });
+    const onClose = vi.fn();
+    renderModal(vi.fn(), onClose, null, { create });
+
+    fireEvent.change(await screen.findByPlaceholderText('Hourly heartbeat'), {
+      target: { value: 'Nightly' },
+    });
+    fireEvent.change(
+      screen.getByPlaceholderText(
+        'Review the current state of {{branch.name}} and post a status update.'
+      ),
+      { target: { value: 'Summarize' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(
+      await screen.findByText(
+        'The connection to Agor dropped before this was confirmed. Refresh to see if it went through before you try to save the schedule again.'
+      )
+    ).toBeInTheDocument();
+    expect(create).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('asks for a timezone on the field instead of a toast', async () => {
+    const patch = vi.fn();
+    renderModal(patch, vi.fn(), {
+      ...makeSchedule(),
+      timezone_mode: 'local',
+      timezone: '   ',
+    } as Schedule);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('Choose a timezone.')).toBeInTheDocument();
+    expect(patch).not.toHaveBeenCalled();
+    expect(messageMocks.showError).not.toHaveBeenCalled();
   });
 });

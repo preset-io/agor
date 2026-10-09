@@ -40,7 +40,9 @@ import {
 } from 'antd';
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
+import type { describeActionError } from '../../utils/connectionErrors';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import { ActionErrorNotice } from '../CompactNotice';
 import {
   canAddMcpServer,
   canAddSharedMcpServer,
@@ -96,7 +98,7 @@ export interface CatalogDetailDrawerProps {
   connecting: boolean;
   startingSession: boolean;
   startSessionError: string | null;
-  connectError: string | null;
+  connectError: ReturnType<typeof describeActionError> | null;
   /**
    * What the live endpoint said it wanted, if a previous connect was refused
    * over the bearer access token. Overrides the entry's `auth_type` for deciding whether
@@ -912,7 +914,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   </Form.Item>
                 </Form>
               )}
-              {connectError && <Alert type="error" showIcon title={connectError} />}
+              {connectError && <ActionErrorNotice error={connectError} />}
               {policyRefusal && <Alert type="info" showIcon title={policyRefusal} />}
 
               <Button

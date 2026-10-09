@@ -64,7 +64,7 @@ describe('MCPOAuthRecoveryAlert', () => {
   it('does not recommend manual client settings for unrelated failures', () => {
     render(<MCPOAuthRecoveryAlert failure={{ message: 'The MCP server did not return 401' }} />);
 
-    expect(screen.getByText('OAuth flow could not start')).toBeVisible();
+    expect(screen.getByText('The MCP server did not return 401')).toBeVisible();
     expect(
       screen.queryByText('https://agor.example.com/mcp-servers/oauth-callback')
     ).not.toBeInTheDocument();
@@ -117,5 +117,34 @@ describe('MCPOAuthRecoveryAlert', () => {
       />
     );
     expect(screen.getByRole('button', { name: 'Sign in again' })).toBeVisible();
+  });
+
+  it('leads with the message and keeps the raw error under it', () => {
+    render(
+      <MCPOAuthRecoveryAlert
+        failure={{
+          message: "Couldn't start sign-in. If it keeps happening, ask an administrator.",
+          detail: 'fictional-boom',
+        }}
+      />
+    );
+
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveClass('ant-alert-error');
+    expect(
+      screen.getByText("Couldn't start sign-in. If it keeps happening, ask an administrator.")
+    ).toBeVisible();
+    expect(screen.getByText('fictional-boom')).toBeVisible();
+  });
+
+  it('shows an unfinished sign-in as a warning', () => {
+    render(
+      <MCPOAuthRecoveryAlert
+        failure={{ message: 'Sign-in expired. Start a new sign-in.', severity: 'warning' }}
+      />
+    );
+
+    expect(screen.getByRole('alert')).toHaveClass('ant-alert-warning');
+    expect(screen.getByText('Sign-in expired. Start a new sign-in.')).toBeVisible();
   });
 });

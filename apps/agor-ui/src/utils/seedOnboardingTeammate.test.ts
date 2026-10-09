@@ -354,7 +354,9 @@ describe('seedOnboardingTeammate', () => {
 
     expect(startTeammateBootstrapSessionMock).not.toHaveBeenCalled();
     expect(onWarn).toHaveBeenCalledTimes(1);
-    expect(onWarn.mock.calls[0][0]).toMatch(/couldn't start your AI teammate/i);
+    expect(onWarn.mock.calls[0][0]).toBe(
+      "Your board is ready, but your AI teammate didn't start. You can create one from the board anytime. (boom)"
+    );
     expect(result).toEqual({});
   });
 

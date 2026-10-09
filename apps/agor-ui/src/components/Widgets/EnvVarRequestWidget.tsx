@@ -25,7 +25,9 @@ import {
 } from '@ant-design/icons';
 import { Button, Card, Checkbox, Input, Select, Space, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { CLIENT_NOT_CONNECTED_ERROR, describeActionError } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 import { Tag } from '../Tag';
 
@@ -197,7 +199,7 @@ interface PendingFormProps {
 
 const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, client }) => {
   const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const orderedNames = useMemo(() => orderedEnvVarNames(params.names), [params.names]);
   const [existingByName, setExistingByName] = useState<Record<string, EnvVarExistingStatus>>({});
 
@@ -214,6 +216,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
   const [submitting, setSubmitting] = useState(false);
   const [dismissing, setDismissing] = useState(false);
   const [validationMessage, setValidationMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ReturnType<typeof describeActionError> | null>(
+    null
+  );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [useExisting, setUseExisting] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
@@ -275,7 +280,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
   // on token expiry rather than a raw 401 surfacing as a save failure.
   const post = async (path: 'submit' | 'dismiss', body: unknown) => {
     if (!client) {
-      throw new Error('No client available — refresh and try again');
+      throw new Error(CLIENT_NOT_CONNECTED_ERROR);
     }
     return client.service(`widgets/${encodeURIComponent(widgetId)}/${path}`).create(body ?? {});
   };
@@ -303,6 +308,7 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     resolvingRef.current = true;
     setSubmitting(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     const useExistingNames = orderedNames.filter((name) => useExisting[name]);
     const valueNames = orderedNames.filter((name) => !useExisting[name]);
@@ -329,10 +335,8 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
       );
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Save failed: ${err instanceof Error ? err.message : String(err)}`;
       setFieldErrors(extractFieldErrors(err));
-      setValidationMessage(`${message}. Check the requested names and try again.`);
-      showError(message);
+      setActionError(describeActionError('save the variables', err, { idempotent: true }));
     } finally {
       setSubmitting(false);
     }
@@ -343,15 +347,14 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
     resolvingRef.current = true;
     setDismissing(true);
     setValidationMessage(null);
+    setActionError(null);
     setFieldErrors({});
     try {
       await post('dismiss', {});
       setLocalResolution({ kind: 'dismissed', names: orderedNames });
     } catch (err) {
       resolvingRef.current = false;
-      const message = `Dismiss failed: ${err instanceof Error ? err.message : String(err)}`;
-      setValidationMessage(`${message}. Try again.`);
-      showError(message);
+      setActionError(describeActionError('dismiss', err, { idempotent: true }));
     } finally {
       setDismissing(false);
     }
@@ -430,7 +433,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, message, params, cl
           />
         ))}
 
-        {validationMessage ? (
+        {actionError ? (
+          <ActionErrorNotice error={actionError} />
+        ) : validationMessage ? (
           <Text type="danger" style={{ fontSize: token.fontSizeSM }}>
             {validationMessage}
           </Text>

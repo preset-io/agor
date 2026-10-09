@@ -529,7 +529,9 @@ describe('SessionPanel composer send', () => {
     expect(await screen.findByText(`chart.png: ${reason}`)).toBeVisible();
     fireEvent.click(sendButton as HTMLButtonElement);
     expect(
-      await screen.findByText(`chart.png: ${reason}. Remove failed files before sending.`)
+      await screen.findByText(
+        "Couldn't send, because chart.png didn't upload. Remove it, then send again."
+      )
     ).toBeVisible();
     expect(uploadMockState.uploadFilesToSession).toHaveBeenCalledTimes(1);
     expect(onSendPrompt).not.toHaveBeenCalled();

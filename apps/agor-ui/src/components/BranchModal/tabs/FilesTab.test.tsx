@@ -7,6 +7,7 @@ const messageApi = vi.hoisted(() => ({
   showLoading: vi.fn(),
   showSuccess: vi.fn(),
   showError: vi.fn(),
+  showInfo: vi.fn(),
 }));
 
 vi.mock('../../../utils/message', () => ({
@@ -83,7 +84,6 @@ describe('FilesTab', () => {
   });
 
   it('uses one key for loading, failure, and retry success replacements', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     get
       .mockRejectedValueOnce(new Error('download failed'))
       .mockResolvedValueOnce({ path: 'archive.bin', encoding: 'utf8', content: 'safe file' });
@@ -93,20 +93,39 @@ describe('FilesTab', () => {
 
     fireEvent.click(download);
     await waitFor(() => expect(messageApi.showError).toHaveBeenCalledTimes(1));
-    expect(messageApi.showLoading).toHaveBeenNthCalledWith(1, 'Downloading file...', {
+    expect(messageApi.showLoading).toHaveBeenNthCalledWith(1, 'Downloading file…', {
       key: 'download',
     });
-    expect(messageApi.showError).toHaveBeenCalledWith('Failed to download file', {
-      key: 'download',
-    });
+    expect(messageApi.showError).toHaveBeenCalledWith(
+      "Couldn't download the file. (download failed)",
+      {
+        key: 'download',
+      }
+    );
 
     fireEvent.click(download);
     await waitFor(() => expect(messageApi.showSuccess).toHaveBeenCalledTimes(1));
-    expect(messageApi.showLoading).toHaveBeenNthCalledWith(2, 'Downloading file...', {
+    expect(messageApi.showLoading).toHaveBeenNthCalledWith(2, 'Downloading file…', {
       key: 'download',
     });
-    expect(messageApi.showSuccess).toHaveBeenCalledWith('Downloaded!', { key: 'download' });
-    expect(consoleError).toHaveBeenCalledTimes(1);
+    expect(messageApi.showSuccess).toHaveBeenCalledWith('File downloaded.', { key: 'download' });
+  });
+
+  it('names the failed preview and keeps the raw error', async () => {
+    findAll.mockResolvedValueOnce([
+      { path: 'notes.md', title: 'notes.md', size: 10, isText: true },
+    ]);
+    get.mockRejectedValueOnce(new Error('File not found: notes.md'));
+
+    render(<FilesTab branch={branch} client={client} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open notes.md' }));
+
+    await waitFor(() =>
+      expect(messageApi.showError).toHaveBeenCalledWith(
+        "Couldn't open the file. (File not found: notes.md)"
+      )
+    );
+    expect(screen.queryByTestId('preview')).not.toBeInTheDocument();
   });
 
   it('refreshes the files and git statuses without remounting the tab', async () => {

@@ -186,7 +186,7 @@ export function canRefreshMcpServer(
 }
 
 const READ_ONLY_RESTRICTION =
-  'Your account has read-only access, so it cannot configure MCP servers. An admin can change your role.';
+  'Your account has read-only access, so it cannot configure MCP servers. An administrator can change your role.';
 
 /**
  * Why a refused action is refused, phrased so the reader can act on it — ask an
@@ -196,13 +196,13 @@ const READ_ONLY_RESTRICTION =
  * policy: the policy is not what is stopping them, and changing it would not
  * help.
  */
-export function explainAddRestriction({ role, policy }: MCPServerCapabilityContext): string {
+export function explainAddRestriction({ role }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you add or change MCP servers. An admin can configure one, or change the policy.`;
+  return "Your workspace's MCP policy doesn't let you add servers. Ask an administrator to add one or change the policy.";
 }
 
 /** Why changing or removing this particular server is refused. */
-export function explainManageRestriction({ role, policy }: MCPServerCapabilityContext): string {
+export function explainManageRestriction({ role }: MCPServerCapabilityContext): string {
   if (!isAtLeastMemberRole(role)) return READ_ONLY_RESTRICTION;
-  return `This workspace's MCP policy — "${MCP_MEMBER_POLICY_DESCRIPTIONS[policy].label}" — does not let you change this server. An admin can change it, or change the policy.`;
+  return "Your workspace's MCP policy doesn't let you change this server.";
 }

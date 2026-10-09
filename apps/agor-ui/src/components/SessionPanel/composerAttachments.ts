@@ -150,6 +150,16 @@ export function isBlockingComposerAttachment(attachment: ComposerAttachment): bo
   return attachment.status === 'failed';
 }
 
+/** Thrown when a send is refused because an attachment didn't upload; its message is already user copy. */
+export class BlockingAttachmentError extends Error {
+  constructor(attachment: ComposerAttachment) {
+    super(
+      `Couldn't send, because ${attachment.file.name} didn't upload. Remove it, then send again.`
+    );
+    this.name = 'BlockingAttachmentError';
+  }
+}
+
 export function getComposerAttachmentFailureMessage(attachment: ComposerAttachment): string {
   return `${attachment.file.name}: ${attachment.error?.trim() || 'Upload failed'}`;
 }

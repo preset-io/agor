@@ -11,6 +11,7 @@ import {
   useBoardMutationGuard,
 } from '../../../hooks/useBoardMutationGuard';
 import type { BoardWriteTicket } from '../../../store/boardMutationGuard';
+import { formatActionError, isInFlightConnectionLossError } from '../../../utils/connectionErrors';
 import { useThemedMessage } from '../../../utils/message';
 import {
   computeLayerChanges,
@@ -82,6 +83,36 @@ export const useBoardObjects = ({
 
   const { showError } = useThemedMessage();
 
+  const buildObjectNodeRef = useRef<(objectId: string, objectData: BoardObject) => Node>(null);
+  /**
+   * After a failed write, show these objects as the server has them: read the
+   * board and redraw each one it still holds, drop the rest. Never restores
+   * from local state. If the read fails too, the reconnect resync redraws.
+   */
+  const reconcileObjects = useCallback(
+    async (boardId: string, objectIds: readonly string[]) => {
+      if (!client) return;
+      let saved: Record<string, BoardObject>;
+      try {
+        saved = ((await client.service('boards').get(boardId)) as Board).objects ?? {};
+      } catch {
+        return;
+      }
+      if (boardRef.current?.board_id !== boardId) return;
+      setNodes((nodes) => {
+        const ids = new Set(objectIds);
+        const rest = nodes.filter((n) => !ids.has(n.id));
+        const redrawn = objectIds.flatMap((id) => {
+          const object = saved[id];
+          const build = buildObjectNodeRef.current;
+          return object && build ? [build(id, object)] : [];
+        });
+        return [...rest, ...redrawn];
+      });
+    },
+    [client, setNodes]
+  );
+
   // Use the board object's reference directly. The store already preserves
   // unchanged board references, and serializing every object on every canvas
   // render is prohibitively expensive on large boards.
@@ -113,8 +144,7 @@ export const useBoardObjects = ({
         } as unknown as Partial<Board>);
         return true;
       } catch (error) {
-        console.error('Failed to update object:', error);
-        showError('Failed to save board object');
+        showError(formatActionError('save your change', error, { idempotent: true }));
         return false;
       }
     },
@@ -185,8 +215,7 @@ export const useBoardObjects = ({
           } as unknown as Partial<Board>)
         );
       } catch (error) {
-        console.error('Failed to reorder object:', error);
-        showError('Failed to reorder zone');
+        showError(formatActionError('reorder the zone', error, { idempotent: true }));
       }
     },
     [client, showError]
@@ -226,13 +255,12 @@ export const useBoardObjects = ({
           deletedObjectsRef.current.delete(objectId);
         }, 1000);
       } catch (error) {
-        console.error('Failed to delete zone:', error);
-        // Rollback: remove from deleted set
         deletedObjectsRef.current.delete(objectId);
-        // Note: WebSocket update should restore the actual state
+        showError(formatActionError('delete the zone', error, { idempotent: true }));
+        await reconcileObjects(ticket.boardId, [objectId]);
       }
     },
-    [client, setNodes, deletedObjectsRef]
+    [client, setNodes, deletedObjectsRef, showError, reconcileObjects]
   );
 
   /**
@@ -247,6 +275,10 @@ export const useBoardObjects = ({
         return;
       }
 
+      const action =
+        boardRef.current?.objects?.[objectId]?.type === 'markdown'
+          ? 'delete the note'
+          : 'delete the artifact';
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
 
@@ -265,12 +297,12 @@ export const useBoardObjects = ({
           deletedObjectsRef.current.delete(objectId);
         }, 1000);
       } catch (error) {
-        console.error('Failed to delete object:', error);
-        // Rollback: remove from deleted set
         deletedObjectsRef.current.delete(objectId);
+        showError(formatActionError(action, error, { idempotent: true }));
+        await reconcileObjects(ticket.boardId, [objectId]);
       }
     },
-    [client, setNodes, deletedObjectsRef] // Removed board dependency
+    [client, setNodes, deletedObjectsRef, showError, reconcileObjects]
   );
 
   /**
@@ -301,11 +333,12 @@ export const useBoardObjects = ({
           deletedObjectsRef.current.delete(objectId);
         }, 1000);
       } catch (error) {
-        console.error('Failed to delete artifact:', error);
         deletedObjectsRef.current.delete(objectId);
+        showError(formatActionError('delete the artifact', error, { idempotent: true }));
+        await reconcileObjects(ticket.boardId, [objectId]);
       }
     },
-    [client, setNodes, deletedObjectsRef]
+    [client, setNodes, deletedObjectsRef, showError, reconcileObjects]
   );
 
   /**
@@ -535,6 +568,7 @@ export const useBoardObjects = ({
       ),
     [buildNode]
   );
+  buildObjectNodeRef.current = buildObjectNode;
 
   /**
    * Add a zone node at the specified position
@@ -566,12 +600,16 @@ export const useBoardObjects = ({
           objectData,
         } as unknown as Partial<Board>);
       } catch (error) {
-        console.error('Failed to add zone node:', error);
-        // Rollback
-        setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+        showError(formatActionError('add the zone', error, { idempotent: false }));
+        // A lost reply may still have created it, so only the server can tell.
+        if (isInFlightConnectionLossError(error)) {
+          await reconcileObjects(ticket.boardId, [objectId]);
+        } else {
+          setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
+        }
       }
     },
-    [client, setNodes, buildObjectNode] // Removed board dependency
+    [client, setNodes, buildObjectNode, showError, reconcileObjects]
   );
 
   /**
@@ -619,11 +657,15 @@ export const useBoardObjects = ({
           objects,
         } as unknown as Partial<Board>);
       } catch (error) {
-        console.error('Failed to persist object positions:', error);
+        showError(formatActionError('save the new layout', error, { idempotent: true }));
+        await reconcileObjects(
+          currentBoard.board_id,
+          Object.keys(updates).filter((id) => !deletedObjectsRef.current.has(id))
+        );
       }
       return true;
     },
-    [client, deletedObjectsRef] // Removed board dependency
+    [client, deletedObjectsRef, showError, reconcileObjects]
   );
 
   return {
@@ -634,5 +676,6 @@ export const useBoardObjects = ({
     deleteZone,
     reorderObject,
     batchUpdateObjectPositions,
+    reconcileObjects,
   };
 };

@@ -11,7 +11,9 @@ import {
   type AuthorityOperationGuard,
   useAuthorityOperationGuard,
 } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError } from '@/utils/connectionErrors';
 import { useThemedMessage } from '@/utils/message';
+import { ActionErrorNotice } from '../CompactNotice';
 import { MCPOAuthPolicySummary } from './MCPOAuthPolicySummary';
 import { MCPServerFormFields } from './MCPServerFormFields';
 import {
@@ -76,7 +78,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   afterClose,
   focusTriggerAfterClose,
 }) => {
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess } = useThemedMessage();
   const [modal, modalContextHolder] = Modal.useModal();
   const [form] = Form.useForm();
   const [policySnapshot, setPolicySnapshot] = useState<MCPServer | null>(null);
@@ -101,6 +103,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   // animates in.
   const [formHydrated, setFormHydrated] = useState(false);
   const [configConflict, setConfigConflict] = useState(false);
+  const [saveError, setSaveError] = useState<ReturnType<typeof describeActionError> | null>(null);
   const [reloadScope, setReloadScope] = useState<AuthorityOperationGuard | null>(null);
   const [managedOAuthCompatibilityMode, setManagedOAuthCompatibilityMode] = useState<
     'strict' | 'marketplace' | undefined
@@ -148,6 +151,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
 
     setPolicySnapshot(null);
     setConfigConflict(false);
+    setSaveError(null);
     configVersionRef.current = server.config_version ?? 1;
     setPreserveAbsentDcrMode(false);
     setPreserveAbsentCompatibilityMode(false);
@@ -220,6 +224,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     setPreserveAbsentGrantType(false);
     setFormHydrated(false);
     setConfigConflict(false);
+    setSaveError(null);
     setReloadScope(null);
     setManagedOAuthCompatibilityMode(undefined);
     onClose();
@@ -236,19 +241,14 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
   const saveFormValues = async (
     operation: ReturnType<typeof operationGuard.begin>
   ): Promise<boolean> => {
+    // A lost edit permission shows as the form's policy notice and a disabled Save.
     if (!server || !client || configConflict || !operation.isCurrent()) return false;
-    if (!mutationStateRef.current.allowed) {
-      showError(mutationStateRef.current.reason);
-      return false;
-    }
+    if (!mutationStateRef.current.allowed) return false;
+    setSaveError(null);
 
     try {
       await form.validateFields();
-      if (!operation.isCurrent()) return false;
-      if (!mutationStateRef.current.allowed) {
-        showError(mutationStateRef.current.reason);
-        return false;
-      }
+      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return false;
       const values = form.getFieldsValue(true);
 
       const updates: UpdateMCPServerInput = {
@@ -277,11 +277,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         forPatch: true,
       });
 
-      if (!operation.isCurrent()) return false;
-      if (!mutationStateRef.current.allowed) {
-        showError(mutationStateRef.current.reason);
-        return false;
-      }
+      if (!operation.isCurrent() || !mutationStateRef.current.allowed) return false;
       const updated = await client.service('mcp-servers').patch(server.mcp_server_id, updates);
       if (!operation.isCurrent()) return false;
       setPolicySnapshot(updated);
@@ -293,17 +289,15 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
         ?.data;
       if ((error as { code?: number })?.code === 409 || conflictData?.current_config_version) {
         setConfigConflict(true);
-        showError(
-          'This MCP server changed on another device. Reload the latest version before saving again.'
-        );
         return false;
       }
-      // Name the field, rather than letting a rejected validation surface as
-      // the generic message its non-Error shape would produce.
-      const errorMessage =
-        firstFormErrorMessage(error) ??
-        (error instanceof Error ? error.message : 'Failed to update server');
-      showError(errorMessage);
+      // Name the field: some sit in collapsed panels. The patch is version-fenced, so a retry is safe.
+      const fieldError = firstFormErrorMessage(error);
+      setSaveError(
+        fieldError
+          ? { message: `Couldn't save the MCP server. ${fieldError}`, raw: null }
+          : describeActionError('save the MCP server', error, { idempotent: true })
+      );
       return false;
     }
   };
@@ -338,7 +332,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     const operation = operationGuard.begin();
     if (await saveFormValues(operation)) {
       if (!operation.isCurrent()) return;
-      showSuccess('MCP server updated successfully');
+      showSuccess('MCP server saved.');
       closeAndReset();
     }
   };
@@ -347,6 +341,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
     const operation = operationGuard.begin();
     if (!client || !server || !operation.isCurrent()) return;
     setReloadScope(operationGuard);
+    setSaveError(null);
     try {
       const latest = await client.service('mcp-servers').get(server.mcp_server_id);
       if (!operation.isCurrent()) return;
@@ -401,7 +396,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
       bumpFormRevision();
     } catch (error) {
       if (!operation.isCurrent()) return;
-      showError(error instanceof Error ? error.message : 'Failed to reload the latest MCP server');
+      setSaveError(describeActionError('load the latest version', error, { idempotent: true }));
     } finally {
       if (operation.isCurrent()) setReloadScope(null);
     }
@@ -433,7 +428,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
                 !mutationAllowed
                   ? mutationBlockedReason
                   : configConflict
-                    ? 'Reload the latest settings before saving again.'
+                    ? 'Load the latest version before you save again.'
                     : testing || reloadingLatest
                       ? 'Wait for the current connection operation to finish.'
                       : !authorityKey
@@ -482,16 +477,17 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
           <Alert
             type="warning"
             showIcon
-            title="Newer MCP settings are available"
-            description="Reloading fetches the current server and discards your unsaved edits."
+            title="This MCP server was changed somewhere else. Load the latest version before you save again."
+            description="Loading it discards your unsaved edits."
             action={
               <Button loading={reloadingLatest} onClick={() => void reloadLatest()}>
-                Reload latest
+                Load latest
               </Button>
             }
             style={{ marginTop: 16 }}
           />
         )}
+        {saveError && <ActionErrorNotice error={saveError} style={{ marginTop: 16 }} />}
         <Form
           form={form}
           layout="vertical"
@@ -525,7 +521,7 @@ const MCPServerEditModalForIdentity: React.FC<MCPServerEditModalProps> = ({
             mutationAllowed={mutationAllowed && !configConflict && !reloadingLatest}
             mutationBlockedReason={
               configConflict
-                ? 'Reload the latest settings before trying again.'
+                ? 'Load the latest version before you try again.'
                 : reloadingLatest
                   ? 'Wait for the latest settings to load.'
                   : mutationBlockedReason

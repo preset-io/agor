@@ -103,7 +103,11 @@ describe('ZoneConfigModal historical tool migration', () => {
       'aria-selected',
       'true'
     );
-    expect(await screen.findByText('This zone uses a removed agentic tool')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "This zone's agent is no longer available. Its trigger is kept, so choose another agent to use it again."
+      )
+    ).toBeInTheDocument();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
     expect(onUpdate).not.toHaveBeenCalled();
@@ -457,7 +461,9 @@ describe('ZoneConfigModal draft and save lifecycle', () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onCancel).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Prompt template')).toHaveValue('Kept draft');
-    expect(await screen.findByText(/Board reloaded — changes not saved/)).toBeTruthy();
+    expect(
+      await screen.findByText(/The board reloaded, so your changes weren't saved\./)
+    ).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Re-apply to reloaded board' })).toBeNull();
     // Save stays refused under the open-time ticket.
     const save = screen.getByRole('button', { name: 'Save' });

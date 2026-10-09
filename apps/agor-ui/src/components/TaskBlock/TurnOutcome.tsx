@@ -2,6 +2,7 @@ import { isTerminalTaskStatus } from '@agor/core/types';
 import type { AgorClient, SessionID, Task } from '@agor-live/client';
 import { theme } from 'antd';
 import { useState } from 'react';
+import { formatActionError, isInFlightConnectionLossError } from '../../utils/connectionErrors';
 import { useThemedMessage } from '../../utils/message';
 import { CompactNotice } from '../CompactNotice';
 import type { TurnOutcomeCopy } from './describeTurnOutcome';
@@ -58,8 +59,13 @@ export function TurnOutcome({
       );
       setResumed(true);
     } catch (error) {
-      console.error('Failed to resume after runtime interruption:', error);
-      showError("Couldn't resume. Try again.");
+      showError(
+        formatActionError(action === 'retry' ? 'run it again' : 'resume', error, {
+          idempotent: false,
+        })
+      );
+      // It may have started a run: no second click until a refresh shows whether it did.
+      if (isInFlightConnectionLossError(error)) setResumed(true);
     } finally {
       setSubmitting(false);
     }

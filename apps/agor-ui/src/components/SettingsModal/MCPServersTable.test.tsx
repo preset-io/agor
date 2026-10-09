@@ -257,7 +257,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_LOADING_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/doesn't let you add servers/i)).not.toBeInTheDocument();
 
     // The pane must not name the restrictive value it is falling back to either.
     openPolicyPane();
@@ -348,7 +348,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     fireEvent.mouseOver(add);
 
     expect(await screen.findByText(POLICY_UNREADABLE_HINT)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/doesn't let you add servers/i)).not.toBeInTheDocument();
 
     openPolicyPane();
 
@@ -453,6 +453,20 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
     expect(actions.map((button) => button.disabled)).toEqual([false, true, true]);
   });
 
+  it('tells a member the policy blocks adding servers, as a tooltip rather than a toast', async () => {
+    const { find } = renderTable({ policy: 'use_existing_only', currentUser: MEMBER });
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+
+    const add = screen.getByText('New MCP Server').closest('button') as HTMLButtonElement;
+    expect(add.disabled).toBe(true);
+    fireEvent.mouseOver(add.parentElement as HTMLElement);
+    expect(
+      await screen.findByText(
+        "Your workspace's MCP policy doesn't let you add servers. Ask an administrator to add one or change the policy."
+      )
+    ).toBeInTheDocument();
+  });
+
   it('tells a read-only account about its role, not about the workspace policy', async () => {
     const { find } = renderTable({ policy: 'allow_crud', currentUser: VIEWER });
     await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
@@ -461,7 +475,7 @@ describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOU
 
     // Naming the policy would be a false lead: changing it would not help.
     expect(await screen.findByText(/read-only access/i)).toBeInTheDocument();
-    expect(screen.queryByText(/does not let you add MCP servers/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/doesn't let you add servers/i)).not.toBeInTheDocument();
   });
 
   it('reads the policy once, not once per server row', async () => {
@@ -978,5 +992,32 @@ describe('MCPServersTable unfinished installs', () => {
 
     expect(await screen.findByText('1 tool')).toBeVisible();
     expect(screen.queryByText('Not signed in')).not.toBeInTheDocument();
+  });
+});
+
+describe('MCPServersTable failed create', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
+  it('keeps the form open with its input and shows why the save failed', async () => {
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      onCreate: async () => {
+        // mcp-server-authorization.ts
+        throw new Error(
+          'Only admins can configure stdio MCP servers; members can configure remote (http/sse) servers'
+        );
+      },
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(
+      await screen.findByText(
+        "Couldn't add the MCP server. Only administrators can add servers that run a command, but members can add servers by URL."
+      )
+    ).toBeVisible();
+    expect(screen.getByLabelText('Name (Internal ID)')).toHaveValue('transition-server');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeVisible();
   });
 });

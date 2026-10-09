@@ -3,6 +3,11 @@ import type { AgorClient } from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import {
+  describeActionError,
+  notConnectedMessage,
+  withConnectionErrorDetail,
+} from '@/utils/connectionErrors';
+import {
   oauthAttemptFailureMessage,
   refetchMCPOAuthDurableState,
   waitForMCPOAuthAttempt,
@@ -12,7 +17,13 @@ export interface MCPServerOAuthFailure {
   message: string;
   recovery?: MCPAuthRecovery;
   redirectUri?: string;
+  /** Raw error, shown under Details. */
+  detail?: string;
+  /** An unfinished sign-in needs the user rather than signalling a fault. */
+  severity?: 'warning';
 }
+
+const START_ACTION = 'start sign-in';
 
 interface OAuthStartSuccess {
   success: true;
@@ -30,9 +41,12 @@ interface UseMCPServerOAuthStartOptions {
   showError: (message: string) => void;
   showInfo: (message: string) => void;
   showSuccess: (message: string) => void;
+  /** Falls back to `showError`. */
+  showWarning?: (message: string) => void;
+  /** The caller renders `oauthFailure`, so an unfinished sign-in needs no toast as well. */
+  rendersFailureInline?: boolean;
   /** Current authority to persist/start this OAuth configuration. */
   startAllowed?: boolean;
-  startBlockedReason?: string;
 }
 
 export function useMCPServerOAuthStart({
@@ -44,8 +58,9 @@ export function useMCPServerOAuthStart({
   showError,
   showInfo,
   showSuccess,
+  showWarning = showError,
+  rendersFailureInline = false,
   startAllowed = true,
-  startBlockedReason = 'You can no longer change this MCP server.',
 }: UseMCPServerOAuthStartOptions) {
   const [startingOAuthFlow, setStartingOAuthFlow] = useState(false);
   const [oauthFailure, setOauthFailure] = useState<MCPServerOAuthFailure | null>(null);
@@ -99,14 +114,12 @@ export function useMCPServerOAuthStart({
   const handleStartOAuthFlow = useCallback(async () => {
     if (oauthStartInFlightRef.current) return;
     if (!client) {
-      showError('Client not available');
+      showError(notConnectedMessage(START_ACTION));
       return;
     }
+    // A blocked start is shown by the caller's disabled sign-in control and its tooltip.
     const startAuthorityKey = authorityKeyRef.current;
-    if (!startAllowedRef.current || !startAuthorityKey) {
-      showError(startBlockedReason);
-      return;
-    }
+    if (!startAllowedRef.current || !startAuthorityKey) return;
 
     const startClient = client;
     const authorityOperation = operationGuard.begin();
@@ -121,17 +134,18 @@ export function useMCPServerOAuthStart({
       clientRef.current === startClient;
     setStartingOAuthFlow(true);
     setOauthFailure(null);
+    // Callers that don't render `oauthFailure` still need to see why sign-in didn't start.
+    const failStart = (failure: MCPServerOAuthFailure) => {
+      if (!rendersFailureInline) showError(failure.message);
+      setOauthFailure(failure);
+    };
 
     try {
       const targetServerId = await onPrepareOAuthStart();
       if (!isCurrentStart()) return;
-      if (!targetServerId) return;
-      if (!startAllowedRef.current) {
-        showError(startBlockedReason);
-        return;
-      }
+      if (!targetServerId || !startAllowedRef.current) return;
 
-      showInfo('Starting OAuth authentication flow...');
+      showInfo('Starting sign-in…');
       if (!isCurrentStart()) return;
       const data = (await client.service('mcp-servers/oauth-start').create({
         mcp_server_id: targetServerId,
@@ -149,7 +163,7 @@ export function useMCPServerOAuthStart({
         if (!isCurrentStart()) return;
         window.open(data.authorizationUrl, '_blank', 'noopener,noreferrer');
         setOauthCallbackModalVisible(true);
-        showInfo('Authenticating... complete sign-in in the new tab.');
+        showInfo('Finish signing in in the new tab.');
 
         const controller = new AbortController();
         const cleanup = () => {
@@ -169,7 +183,7 @@ export function useMCPServerOAuthStart({
                 if (isCurrentStart()) console.warn('[OAuth] Durable completion refetch failed');
               }
               if (!isCurrentStart()) return;
-              showSuccess('OAuth authentication successful!');
+              showSuccess('Signed in.');
               setOauthCallbackModalVisible(false);
               setOauthFailure(null);
               onOAuthSucceeded?.();
@@ -177,11 +191,12 @@ export function useMCPServerOAuthStart({
               if (!isCurrentStart()) return;
               const message =
                 attempt.recovery?.message ?? oauthAttemptFailureMessage(attempt.status);
-              showError(message);
+              if (!rendersFailureInline) showError(message);
               setOauthFailure({
                 message,
                 recovery: attempt.recovery,
                 redirectUri: attempt.recovery?.redirect_uri,
+                ...(attempt.recovery ? {} : { severity: 'warning' as const }),
               });
               setOauthCallbackModalVisible(false);
             }
@@ -189,27 +204,38 @@ export function useMCPServerOAuthStart({
           .catch((error) => {
             if (!isCurrentStart()) return;
             if (error instanceof DOMException && error.name === 'AbortError') return;
-            showError('Could not confirm OAuth status. Check the connection and try again.');
+            // The attempt may still have succeeded, so this is not a failed sign-in.
+            showWarning(
+              withConnectionErrorDetail(
+                "Couldn't confirm the sign-in. Check this server's status before you sign in again.",
+                error
+              )
+            );
           })
           .finally(() => {
             if (!controller.signal.aborted && isCurrentStart()) cleanup();
           });
       } else if (!data.success) {
         if (!isCurrentStart()) return;
-        setOauthFailure({
-          message: data.error || 'Failed to start OAuth flow',
+        failStart({
+          message: data.error || "Couldn't start sign-in.",
           recovery: data.recovery,
           redirectUri: data.recovery?.redirect_uri ?? data.redirect_uri,
         });
       } else {
         if (!isCurrentStart()) return;
-        setOauthFailure({ message: 'Failed to start OAuth flow' });
+        failStart({ message: "Couldn't start sign-in." });
       }
-    } catch {
+    } catch (error) {
       if (isCurrentStart()) {
-        setOauthFailure({
+        // A retry starts a fresh attempt, so the connection copy may invite one.
+        const { message, raw } = describeActionError(START_ACTION, error, { idempotent: true });
+        failStart({
           message:
-            'OAuth could not start. Check the connection and retry; ask an administrator to review the secure daemon logs if it continues.',
+            message === `Couldn't ${START_ACTION}.`
+              ? `${message} If it keeps happening, ask an administrator.`
+              : message,
+          ...(raw ? { detail: raw } : {}),
         });
       }
     } finally {
@@ -227,7 +253,8 @@ export function useMCPServerOAuthStart({
     showError,
     showInfo,
     showSuccess,
-    startBlockedReason,
+    showWarning,
+    rendersFailureInline,
   ]);
 
   return {
