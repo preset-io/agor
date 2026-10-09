@@ -11,7 +11,7 @@ import type {
   TeamsConversationAddressID,
   TenantID,
 } from '@agor/core/types';
-import { and, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
 import { isAllowedTeamsServiceUrl } from '../../gateway/teams-service-url';
 import { generateId } from '../../lib/ids';
 import { TEAMS_ADDRESS_REVOCATION_REASONS } from '../../types/gateway';
@@ -117,6 +117,9 @@ function requireTenant(db: Database): TenantID | undefined {
     throw new RepositoryError('Teams conversation address requires explicit tenant identity');
   return tenantId as TenantID;
 }
+
+// Newest rows checked per lookup; older siblings of a live conversation add nothing.
+const LOOKUP_LIMIT = 20;
 
 export class TeamsConversationAddressRepository {
   constructor(private readonly db: Database) {}
@@ -305,6 +308,38 @@ export class TeamsConversationAddressRepository {
     if (!row) return { ok: false, code: 'conversation_address_missing' };
     if (row.thread_id !== input.threadId) return { ok: false, code: 'conversation_address_stale' };
     return this.fenceRow(input.channel, row, input.expected);
+  }
+
+  /** The newest usable address in one base conversation; proof a verified activity arrived there. */
+  async loadFencedByConversation(input: {
+    channel: GatewayChannel;
+    conversationId: string;
+  }): Promise<FencedTeamsAddress> {
+    const rows = await select(this.db)
+      .from(teamsConversationAddresses)
+      .where(
+        and(
+          eq(teamsConversationAddresses.gateway_channel_id, input.channel.id),
+          eq(teamsConversationAddresses.conversation_id, input.conversationId)
+        )
+      )
+      .orderBy(desc(teamsConversationAddresses.refreshed_at))
+      .limit(LOOKUP_LIMIT)
+      .all();
+    return this.firstFenced(input.channel, rows.map(rowToAddress));
+  }
+
+  private firstFenced(
+    channel: GatewayChannel,
+    rows: TeamsConversationAddress[]
+  ): FencedTeamsAddress {
+    let first: FencedTeamsAddress = { ok: false, code: 'conversation_address_missing' };
+    for (const [index, row] of rows.entries()) {
+      const fenced = this.fenceRow(channel, row);
+      if (fenced.ok) return fenced;
+      if (index === 0) first = fenced;
+    }
+    return first;
   }
 
   // One identity fence for every lookup: channel, verified app and tenant, revocation, then host.

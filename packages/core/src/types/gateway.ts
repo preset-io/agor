@@ -328,6 +328,56 @@ export function resolveTeamsAgentTools(raw: unknown): Record<TeamsAgentToolCapab
   return resolveAgentToolToggles(raw, TEAMS_AGENT_TOOL_DEFAULTS);
 }
 
+/** File metadata on a Teams history message; download URLs are never returned. */
+export interface TeamsChannelHistoryAttachment {
+  name: string;
+  content_type?: string;
+}
+
+export interface TeamsChannelHistoryMessage {
+  id: string;
+  iso_time: string;
+  actor_label: string;
+  author_aad_id?: string;
+  text: string;
+  /** Set when the text was cut to fit the read's byte budget. */
+  text_truncated?: true;
+  is_bot: boolean;
+  is_system: boolean;
+  is_mention: boolean;
+  attachments?: TeamsChannelHistoryAttachment[];
+}
+
+/** One page of a standard-channel reply chain; the first page also carries the root post. */
+export interface TeamsThreadHistoryResult {
+  channelId: string;
+  rootMessageId: string;
+  /** Chronological order. */
+  messages: TeamsChannelHistoryMessage[];
+  has_more: boolean;
+  /** Opaque Graph page token for the next page; never a URL. */
+  next_cursor: string | null;
+}
+
+export interface TeamsChannelPost {
+  id: string;
+  created_at: string;
+  last_modified_at: string;
+  actor_label: string;
+  subject?: string;
+  text_preview: string;
+  is_bot: boolean;
+  attachments?: TeamsChannelHistoryAttachment[];
+}
+
+export interface TeamsChannelPostsResult {
+  channelId: string;
+  /** Graph order: most recently active reply chain first. */
+  posts: TeamsChannelPost[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
 /** A Teams channel conversation ID, the same string in Bot Framework and Graph. */
 export const TEAMS_CHANNEL_ID_PATTERN = /^19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)$/;
 

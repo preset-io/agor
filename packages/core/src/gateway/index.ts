@@ -116,6 +116,17 @@ export {
 } from './connectors/teams';
 export type { TeamsAddressRevocationEvent } from './connectors/teams-address-events';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export type {
+  TeamsChannelHistoryErrorCode,
+  TeamsChannelPostsRequest,
+  TeamsThreadHistoryRequest,
+} from './connectors/teams-channel-history';
+export {
+  TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT,
+  TEAMS_HISTORY_MAX_LIMIT,
+  TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
+  TeamsChannelHistoryError,
+} from './connectors/teams-channel-history';
 export { resetTeamsGraphCaches } from './connectors/teams-graph';
 export type { TeamsProviderHistoryContext } from './connectors/teams-history';
 export { fetchTeamsProviderHistory } from './connectors/teams-history';

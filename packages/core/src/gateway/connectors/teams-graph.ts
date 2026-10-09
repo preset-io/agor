@@ -311,3 +311,66 @@ export function graphNextLink(value: unknown): string | null {
   if (new URL(link).origin !== GRAPH_ORIGIN) throw new Error('Unexpected Graph pagination origin');
   return link;
 }
+
+/** The fields Agor reads from a Graph `chatMessage`; attachment URLs are dropped here. */
+export interface ParsedGraphChatMessage {
+  id: string;
+  createdAt: string;
+  lastModifiedAt: string;
+  actorLabel: string;
+  authorAadId: string | null;
+  subject: string | null;
+  text: string;
+  isBot: boolean;
+  isSystem: boolean;
+  isRich: boolean;
+  isMention: boolean;
+  attachments: Array<{ name: string; content_type?: string }>;
+}
+
+export function parseGraphChatMessage(
+  raw: unknown,
+  appId: string | undefined
+): ParsedGraphChatMessage | null {
+  const message = asRecord(raw);
+  const id = text(message.id);
+  if (!id || !TEAMS_MESSAGE_ID.test(id)) return null;
+  const from = asRecord(message.from);
+  const user = asRecord(from.user);
+  const application = asRecord(from.application);
+  const body = asRecord(message.body);
+  const content = typeof body.content === 'string' ? body.content : '';
+  const rawAttachments = (Array.isArray(message.attachments) ? message.attachments : []).map(
+    asRecord
+  );
+  const mentions = Array.isArray(message.mentions) ? message.mentions : [];
+  const userId = text(user.id);
+  const isCard = (attachment: Record<string, unknown>) =>
+    String(attachment.contentType ?? '').startsWith('application/vnd.microsoft.card');
+  const createdAt = text(message.createdDateTime) ?? '';
+  return {
+    id,
+    createdAt,
+    lastModifiedAt: text(message.lastModifiedDateTime) ?? createdAt,
+    actorLabel: text(user.displayName) ?? text(application.displayName) ?? 'Teams participant',
+    authorAadId: userId,
+    subject: text(message.subject),
+    text: body.contentType === 'html' ? stripHtml(content) : content.trim(),
+    isBot: Object.keys(application).length > 0 || !userId,
+    isSystem: message.messageType !== 'message' || message.deletedDateTime != null,
+    isRich: rawAttachments.some(isCard),
+    isMention:
+      !!appId &&
+      mentions.some(
+        (mention) => asRecord(asRecord(asRecord(mention).mentioned).application).id === appId
+      ),
+    attachments: rawAttachments
+      .filter((attachment) => !isCard(attachment))
+      .map((attachment) => ({
+        name: (text(attachment.name) ?? 'attachment').slice(0, 200),
+        ...(text(attachment.contentType)
+          ? { content_type: (text(attachment.contentType) as string).slice(0, 100) }
+          : {}),
+      })),
+  };
+}

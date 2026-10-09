@@ -694,6 +694,17 @@ requests and a team owner grants when installing the app. Without it, the bot
 still answers the mention, without the earlier replies. Set **Catch-up mode** to
 **Off** to turn it off.
 
+**Agent channel history (off by default).** Turn on **Let session agents read
+channel history** (`agent_tools.channel_history: true`) to let agents on the
+channel's branch use `agor_gateway_teams_thread_history_get` (one page of a thread:
+the post and its replies) and `agor_gateway_teams_channel_posts_list` (a channel's
+posts, without replies). From a channel session they default to that session's
+own thread and channel. They read only standard channels in which the bot has
+received a message, within the allowlists, and need the same
+`ChannelMessage.Read.Group` permission as catch-up; private and shared channels,
+personal chats, and group chats are refused. Nothing they read is stored outside
+the reading session's transcript.
+
 ### 5. Use it
 
 In a personal chat, just message the bot. In a channel, post
@@ -874,6 +885,10 @@ authoritative mutation transaction.
   on and that the `ChannelMessage.Read.Group` permission was granted in that team.
   The bot still answers the mention without it. Personal and group chats have no
   catch-up.
+- **A history tool says resource-specific consent is missing.** A team owner must
+  grant `ChannelMessage.Read.Group` when installing the app in that team. If it
+  says Agor has not received an activity from the channel, mention the bot there
+  once.
 - **A reply shows as `ambiguous`.** Agor could not confirm whether Teams accepted
   it. Check the conversation in Teams before resending anything yourself; Agor
   does not resend it automatically.

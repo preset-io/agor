@@ -186,4 +186,32 @@ describe('TeamsConversationAddressRepository', () => {
       });
     }
   );
+
+  ownedDbTest('finds the newest usable address in a channel conversation', async ({ db }) => {
+    const channel = await seedChannel(db);
+    const addresses = new TeamsConversationAddressRepository(db);
+    await addresses.refresh(input(channel));
+    await addresses.refresh(
+      input(channel, { threadId: '19:general@thread.tacv2|root-2', rootMessageId: 'root-2' })
+    );
+    await addresses.revokeThread(channel.id, '19:general@thread.tacv2|root-2', 'bot_removed');
+    const found = await addresses.loadFencedByConversation({
+      channel,
+      conversationId: '19:general@thread.tacv2',
+    });
+    expect(found).toMatchObject({ ok: true, row: { thread_id: input(channel).threadId } });
+    expect(
+      await addresses.loadFencedByConversation({
+        channel,
+        conversationId: '19:unseen@thread.tacv2',
+      })
+    ).toEqual({ ok: false, code: 'conversation_address_missing' });
+    const other = (await seedTeamsGateway(db, { appId: 'other-app' })).channel;
+    expect(
+      await addresses.loadFencedByConversation({
+        channel: other,
+        conversationId: '19:general@thread.tacv2',
+      })
+    ).toEqual({ ok: false, code: 'conversation_address_missing' });
+  });
 });

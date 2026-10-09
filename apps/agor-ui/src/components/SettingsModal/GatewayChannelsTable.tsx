@@ -58,6 +58,7 @@ import {
   ROLES,
   resolveDiscordAgentTools,
   resolveSlackAgentTools,
+  resolveTeamsAgentTools,
   SLACK_AGENT_TOOL_DEFAULTS,
 } from '@agor-live/client';
 import {
@@ -2600,6 +2601,18 @@ const ChannelFormFields: React.FC<{
             </Form.Item>
           </Space.Compact>
 
+          <Form.Item name="teams_channel_history" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Let session agents read channel history (<code>agent_tools.channel_history</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Agents on this channel's branch can read threads and list posts in standard channels
+            this bot has been mentioned in, through tools that never expose a token. It uses the
+            same resource-specific consent as catch-up. This content is untrusted and is kept only
+            in the reading session's transcript.
+          </Typography.Text>
+
           <Form.Item
             label="Enable outbound replies"
             name="teams_outbound_enabled"
@@ -4305,6 +4318,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       }
       config.outbound_enabled = values.teams_outbound_enabled ?? true;
+      config.agent_tools = { channel_history: values.teams_channel_history === true };
       // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.
       const storedCatchUp =
         config.catch_up && typeof config.catch_up === 'object' && !Array.isArray(config.catch_up)
@@ -4704,6 +4718,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.teams_catch_up_max_messages = catchUp?.max_messages ?? 50;
       formValues.teams_catch_up_max_prompt_bytes = catchUp?.max_prompt_bytes ?? 16 * 1024;
       formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;
+      formValues.teams_channel_history = resolveTeamsAgentTools(
+        config?.agent_tools
+      ).channel_history;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;
       formValues.shortcut_mention_name = config?.mention_name;

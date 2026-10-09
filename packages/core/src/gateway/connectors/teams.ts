@@ -7,12 +7,13 @@
 
 import { Activity } from '@microsoft/agents-activity';
 import { type AuthConfiguration, MsalTokenProvider } from '@microsoft/agents-hosting';
-
 import type {
   ChannelType,
   GatewayConnectionTestFailure,
   GatewayConnectionTestResult,
+  TeamsChannelPostsResult,
   TeamsGatewayConfig,
+  TeamsThreadHistoryResult,
 } from '../../types/gateway';
 import type {
   GatewayConnector,
@@ -21,6 +22,12 @@ import type {
   InboundSkippedFile,
 } from '../connector';
 import { isTeamsTokenHost } from '../teams-service-url';
+import {
+  fetchTeamsThreadHistory,
+  listTeamsChannelPosts,
+  type TeamsChannelPostsRequest,
+  type TeamsThreadHistoryRequest,
+} from './teams-channel-history';
 import { fetchTeamsProviderHistory } from './teams-history';
 import {
   type PreparedTeamsSend,
@@ -522,6 +529,16 @@ export class TeamsConnector implements GatewayConnector {
     req: GatewayProviderHistoryRequest
   ): Promise<GatewayProviderHistoryResult> {
     return fetchTeamsProviderHistory(this.config, req);
+  }
+
+  /** Agent read of one standard-channel thread page; access checks belong to the caller. */
+  fetchThreadHistory(req: TeamsThreadHistoryRequest): Promise<TeamsThreadHistoryResult> {
+    return fetchTeamsThreadHistory(this.config, req);
+  }
+
+  /** Agent list of a standard channel's posts; access checks belong to the caller. */
+  listChannelPosts(req: TeamsChannelPostsRequest): Promise<TeamsChannelPostsResult> {
+    return listTeamsChannelPosts(this.config, req);
   }
 
   /** Prove the configured app credentials; see {@link probeTeamsCredentials}. */
