@@ -3,6 +3,7 @@ import {
   DAEMON_RESTART_RELEASED_MESSAGE,
   failureMessageBase,
   isConnectionLossMessage,
+  isExecutorOutOfMemoryMessage,
   isMissingCredentialMessage,
   isTerminalTaskStatus,
   LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
@@ -28,6 +29,7 @@ export type TurnOutcomeCause =
   | 'approval_timeout'
   | 'not_connected'
   | 'never_started'
+  | 'out_of_memory'
   | 'lost_connection'
   | 'stalled'
   | 'usage_limit'
@@ -263,6 +265,10 @@ export function describeTurnOutcome(
       message: `${agentName ?? 'Your agent'} isn't connected, so nothing ran.`,
       action: 'settings',
     };
+  }
+  // The cleanup command reported why the executor died; that beats any heuristic below.
+  if (isExecutorOutOfMemoryMessage(error)) {
+    return { cause: 'out_of_memory', type: 'error', message: `${error} ${work}`, action: 'resume' };
   }
   const startupFailed =
     reason === 'startup_timeout' ||

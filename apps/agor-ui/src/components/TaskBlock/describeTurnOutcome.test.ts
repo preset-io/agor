@@ -2,6 +2,7 @@ import {
   CODEX_LIFECYCLE_MESSAGES,
   DAEMON_RESTART_RELEASED_MESSAGE,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  executorOutOfMemoryMessage,
   missingScopedCredentialMessage,
   permissionTimeoutMessage,
   SAFE_MISSING_PROVIDER_RESULT_MESSAGE,
@@ -511,6 +512,7 @@ describe('describeTurnOutcome v3', () => {
       SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
       ...Object.values(CODEX_LIFECYCLE_MESSAGES),
       missingScopedCredentialMessage('codex'),
+      executorOutOfMemoryMessage(6 * 1024 ** 3),
     ];
     const statuses = Object.values(TaskStatus);
     const contexts: TurnOutcomeContext[] = [
@@ -556,6 +558,27 @@ describe('describeTurnOutcome v3', () => {
       'Executor heartbeat lost; the executor may have crashed or disconnected.',
       lost,
       'lost_connection',
+      'error',
+      'resume',
+    ],
+    [
+      'Executor heartbeat lost; the executor may have crashed or disconnected. This can happen when the agent hits its memory limit.',
+      lost,
+      'lost_connection',
+      'error',
+      'resume',
+    ],
+    [
+      'The agent went over its 6 GiB memory limit and was stopped.',
+      lost,
+      'out_of_memory',
+      'error',
+      'resume',
+    ],
+    [
+      'The agent went over its memory limit and was stopped.',
+      { ...lost, executor_connected_at: undefined },
+      'out_of_memory',
       'error',
       'resume',
     ],
@@ -652,5 +675,22 @@ describe('describeTurnOutcome v3', () => {
     const copy = describe3({ ...connected, ...fields, error_message } as Partial<Task>);
     expect(copy).toMatchObject({ cause: expectedCause, type });
     expect(copy?.action).toBe(action);
+  });
+});
+
+describe('out-of-memory outcome', () => {
+  it('leads with the reported memory limit instead of a lost connection', () => {
+    expect(
+      describe3({
+        ...cause('heartbeat_lost'),
+        sdk_failure: sdkFailure(),
+        error_message: executorOutOfMemoryMessage(6 * 1024 ** 3),
+      })
+    ).toEqual({
+      cause: 'out_of_memory',
+      type: 'error',
+      message: `The agent went over its 6 GiB memory limit and was stopped. ${EDITS_KEPT}`,
+      action: 'resume',
+    });
   });
 });

@@ -336,11 +336,28 @@ hand-maintained list in core.
   remain idempotent because manual retry can follow an ambiguous prior attempt.
 
 The helper uses the launcher's minimal environment plus the launcher's reserved
-deployment credential variables. Never put secrets in the command string. Raw stdout/stderr
-are discarded to prevent leaking credentials or unbounded output; Agor persists
-safe exit/timeout diagnostics and recovery state. Detailed platform diagnostics
+deployment credential variables. Never put secrets in the command string. Raw
+stderr is discarded and raw stdout is never stored or shown; Agor persists safe
+exit/timeout diagnostics and recovery state. Detailed platform diagnostics
 belong in the helper's secured operational logging. Exit 137 alone is not OOM
 attribution.
+
+On exit 0, a helper may optionally print one JSON line on stdout to report why
+the executor stopped:
+
+```json
+{"version":1,"contained":true,"cause":"oom_killed","memoryLimitBytes":6442450944}
+```
+
+`cause` and `memoryLimitBytes` are optional. Only `version: 1`, `contained: true`
+and `cause: "oom_killed"` are recognized; `memoryLimitBytes`, when present, must
+be a positive integer. The task then fails with *"The agent went over its 6 GiB
+memory limit and was stopped."* (or without the size when no limit is given)
+instead of the generic heartbeat-loss message. Stdout is parsed only after the
+helper exits 0, is capped at 4 KiB, and anything else (empty, longer, malformed,
+another version, wrong types) is ignored. The result never changes containment:
+the exit code alone decides that. Helpers that print nothing keep today's
+behavior.
 
 Failed containment emits the `executor.cleanup_failures` metric and structured
 termination logs, including `mode`, `helper_configured`, and

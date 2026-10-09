@@ -142,3 +142,26 @@ export function parsePermissionTimeoutMs(text: string): number | undefined {
   const ms = Number(value.slice(prefix.length, value.length - suffix.length));
   return Number.isInteger(ms) && ms > 0 ? ms : undefined;
 }
+
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+
+/** `6 GiB`, `7.5 GiB` (one decimal, trailing `.0` dropped), or whole MiB under 1 GiB. */
+export function formatMemoryLimit(bytes: number): string {
+  if (bytes < GIB) return `${Math.round(bytes / MIB)} MiB`;
+  return `${(bytes / GIB).toFixed(1).replace(/\.0$/, '')} GiB`;
+}
+
+/** The executor was killed for exceeding its memory limit, as reported by the cleanup command. */
+export function executorOutOfMemoryMessage(memoryLimitBytes?: number): string {
+  return memoryLimitBytes === undefined
+    ? 'The agent went over its memory limit and was stopped.'
+    : `The agent went over its ${formatMemoryLimit(memoryLimitBytes)} memory limit and was stopped.`;
+}
+
+const OUT_OF_MEMORY_PATTERN =
+  /^The agent went over its (?:\d+(?:\.\d)? GiB |\d+ MiB )?memory limit and was stopped\.$/;
+
+export function isExecutorOutOfMemoryMessage(text: string): boolean {
+  return OUT_OF_MEMORY_PATTERN.test(failureMessageBase(text));
+}

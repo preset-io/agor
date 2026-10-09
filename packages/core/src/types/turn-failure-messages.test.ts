@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   CODEX_LIFECYCLE_MESSAGES,
   EXECUTOR_LAUNCH_REFUSED_MESSAGE,
+  executorOutOfMemoryMessage,
   failureMessageBase,
+  formatMemoryLimit,
   GEMINI_API_KEY_REQUIRED_MESSAGE,
   isConnectionLossMessage,
+  isExecutorOutOfMemoryMessage,
   isMissingCredentialMessage,
   missingOpenCodeApiKeyMessage,
   missingScopedCredentialMessage,
@@ -48,7 +51,7 @@ describe('isConnectionLossMessage', () => {
   it.each([
     'socket disconnected',
     'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
-    'Executor heartbeat lost; the executor may have crashed or disconnected.',
+    'Executor heartbeat lost; the executor may have crashed or disconnected. This can happen when the agent hits its memory limit.',
   ])('rejects other text: %s', (text) => {
     expect(isConnectionLossMessage(text)).toBe(false);
   });
@@ -90,5 +93,47 @@ describe('launch refused message', () => {
     );
     expect(isMissingCredentialMessage(EXECUTOR_LAUNCH_REFUSED_MESSAGE)).toBe(false);
     expect(isConnectionLossMessage(EXECUTOR_LAUNCH_REFUSED_MESSAGE)).toBe(false);
+  });
+});
+
+describe('executor out-of-memory message', () => {
+  const MIB = 1024 ** 2;
+  const GIB = 1024 ** 3;
+  it.each([
+    [6 * GIB, '6 GiB'],
+    [8 * GIB, '8 GiB'],
+    [7.5 * GIB, '7.5 GiB'],
+    [GIB, '1 GiB'],
+    [1.25 * GIB, '1.3 GiB'],
+    [512 * MIB, '512 MiB'],
+    [700.4 * MIB, '700 MiB'],
+  ])('formats %s bytes as %s', (bytes, text) => {
+    expect(formatMemoryLimit(bytes)).toBe(text);
+  });
+  it('names the limit when the cleanup command reported one', () => {
+    expect(executorOutOfMemoryMessage(6 * GIB)).toBe(
+      'The agent went over its 6 GiB memory limit and was stopped.'
+    );
+    expect(executorOutOfMemoryMessage(512 * MIB)).toBe(
+      'The agent went over its 512 MiB memory limit and was stopped.'
+    );
+  });
+  it('omits the limit when none was reported', () => {
+    expect(executorOutOfMemoryMessage()).toBe(
+      'The agent went over its memory limit and was stopped.'
+    );
+  });
+  it('recognizes every produced form and nothing else', () => {
+    for (const bytes of [undefined, 6 * GIB, 7.5 * GIB, 512 * MIB]) {
+      expect(isExecutorOutOfMemoryMessage(executorOutOfMemoryMessage(bytes))).toBe(true);
+    }
+    expect(
+      isExecutorOutOfMemoryMessage(
+        'Executor heartbeat lost; the executor may have crashed or disconnected. This can happen when the agent hits its memory limit.'
+      )
+    ).toBe(false);
+    expect(isExecutorOutOfMemoryMessage('The agent went over its budget and was stopped.')).toBe(
+      false
+    );
   });
 });
