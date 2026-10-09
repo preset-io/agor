@@ -1249,7 +1249,7 @@ export function OnboardingWizard({
                   teammateName: name || undefined,
                   teammateEmoji,
                   // Framework source branch from the chosen gallery template; undefined
-                  // (blank / no pick) falls back to the repo default branch.
+                  // (blank / no pick) defers to createTeammateBranch's default.
                   sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
                   sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
                   templateId: selectedTemplateId,

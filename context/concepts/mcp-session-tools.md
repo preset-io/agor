@@ -38,7 +38,7 @@ into SDK-private registration state.
 ## Three workflow tools
 
 1. **`agor_sessions_prompt`** — continue, fork, or spawn from an existing session. `mode: 'continue' | 'fork' | 'subsession'`.
-2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt`, agent override, permission mode.
+2. **`agor_sessions_create`** — new session in a specified branch. Optional `initialPrompt` and `agenticTool` override. Omitting `agenticTool` uses the authenticated caller’s saved primary coding agent; an unset preference fails rather than falling back to Claude Code. Configuration still resolves through the session service’s normal per-tool user/preset/workspace defaults.
 3. **`agor_sessions_update`** — rename, change status, refresh description. Archive state is rejected here; use `agor_sessions_archive` or `agor_sessions_unarchive` so branch-local descendant and permission rules are applied.
 
 `agor_sessions_bulk_archive` is dry-run-first. Its filters select roots; callers

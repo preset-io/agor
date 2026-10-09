@@ -925,6 +925,7 @@ export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 /** Public framework repository that owns Agor's built-in teammate templates. */
 export const TEAMMATE_FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
 export const TEAMMATE_FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
+export const TEAMMATE_FRAMEWORK_DEFAULT_BRANCH = 'main';
 
 /** Exact public template identity, never a name/slug substring match. */
 export function isCanonicalTeammateFrameworkRepo(repo: Pick<Repo, 'remote_url'>): boolean {
@@ -936,6 +937,18 @@ export function isCanonicalTeammateFrameworkRepo(repo: Pick<Repo, 'remote_url'>)
     `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}.git`,
     `ssh://git@github.com/${TEAMMATE_FRAMEWORK_REPO_SLUG}`,
   ].includes(repo.remote_url ?? '');
+}
+
+export const TEAMMATE_FRAMEWORK_PRIVATE_FORK_NAMES = [
+  'agor-teammate-private',
+  'agor-assistant-private',
+] as const;
+
+/** Loose name match for repo selection; the content rule is the exact defaultsToPublicTeammateTemplate. */
+export function isPrivateTeammateFrameworkFork(repo: Pick<Repo, 'slug' | 'remote_url'>): boolean {
+  return TEAMMATE_FRAMEWORK_PRIVATE_FORK_NAMES.some(
+    (name) => !!repo.slug?.includes(name) || !!repo.remote_url?.includes(name)
+  );
 }
 
 export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';

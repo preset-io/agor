@@ -734,6 +734,8 @@ export function categorizeGitError(stderr: string): RepoCloneErrorCategory {
     s.includes('authentication failed') ||
     s.includes('could not read username') ||
     s.includes('could not read password') ||
+    // Git with credential.interactive=false and no credential, e.g. a private remote without a token.
+    s.includes('unable to get password from user') ||
     s.includes('terminal prompts disabled') ||
     s.includes('fatal: authentication') ||
     s.includes('http basic') ||

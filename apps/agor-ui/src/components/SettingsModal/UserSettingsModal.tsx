@@ -1925,13 +1925,13 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
               label="Primary coding agent"
               help={
                 user?.primary_agentic_tool
-                  ? 'Preselected for new sessions. Choosing another agent while composing affects only that session.'
-                  : 'Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
+                  ? 'Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent.'
+                  : 'Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent. Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
               }
               style={{ maxWidth: 560, marginBottom: 0 }}
             >
               <Select
-                placeholder="Not set — Claude Code is used initially"
+                placeholder="Not set"
                 loading={!tenantToolSettingsHydrated}
                 disabled={!tenantToolSettingsHydrated || saving}
                 options={AGENTIC_TOOL_TABS.map((tool) => ({

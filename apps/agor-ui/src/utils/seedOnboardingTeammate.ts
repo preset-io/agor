@@ -23,8 +23,9 @@ export interface SeedOnboardingTeammateInput {
   teammateEmoji?: string;
   /**
    * Framework source branch from the chosen gallery template. Undefined falls
-   * back to the framework repo's default branch (createTeammateBranch). A
-   * missing template branch leaves setup incomplete and retryable.
+   * back to the framework repo's default branch, or the public template's for a
+   * github.com private fork (createTeammateBranch). A missing template branch
+   * leaves setup incomplete and retryable.
    */
   sourceBranch?: string;
   /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
@@ -204,6 +205,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
             displayName: teammateName,
             emoji: input.teammateEmoji,
             repoId: input.frameworkRepo.repo_id,
+            repo: input.frameworkRepo,
             sourceBranch: input.sourceBranch,
             sourceRemoteUrl: input.sourceRemoteUrl,
             boardId: input.boardId,

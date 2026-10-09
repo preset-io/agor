@@ -671,6 +671,171 @@ describe('agor_sessions_create', () => {
     vi.clearAllMocks();
   });
 
+  it('makes the tool optional in discovery while rejecting invalid explicit choices', async () => {
+    const { agor_sessions_create: tool } = await registerAndCaptureTools(
+      { app: makeFakeApp({}), userId: 'user-1' },
+      ['agor_sessions_create']
+    );
+    expect(tool.cfg.inputSchema?.safeParse({ branchId: 'wt-1' }).success).toBe(true);
+    for (const agenticTool of [null, '', 'unknown', 'claude-code-cli']) {
+      expect(tool.cfg.inputSchema?.safeParse({ branchId: 'wt-1', agenticTool }).success).toBe(
+        false
+      );
+    }
+    expect(tool.cfg.description).toContain('Prefer omitting agenticTool');
+    expect(tool.cfg.description).toContain('If no primary coding agent is set, creation fails');
+  });
+
+  it.each(['inline', 'preset', 'workspace_default'] as const)(
+    'uses the caller primary tool and leaves %s configuration resolution to the service',
+    async (source) => {
+      const baseServiceParams = {
+        provider: 'mcp',
+        tenant: { tenant_id: 'tenant-b' },
+        user: { user_id: 'user-b', role: 'member' },
+      };
+      const getUser = vi.fn(async () => ({
+        ...baseUser,
+        user_id: 'user-b',
+        unix_username: 'bob',
+        primary_agentic_tool: 'codex',
+        default_agentic_selection: {
+          codex: source === 'preset' ? { source, preset_id: 'preset-b' } : { source },
+        },
+      }));
+      const create = vi.fn(async (data: Record<string, unknown>) => ({
+        ...data,
+        session_id: 'new',
+      }));
+      const app = makeFakeApp({
+        users: { get: getUser },
+        branches: { get: async () => baseBranch },
+        sessions: {
+          create,
+          get: async () => ({
+            session_id: 'parent',
+            branch_id: 'wt-1',
+            created_by: 'user-a',
+            agentic_tool: 'claude-code',
+            genealogy: { children: [] },
+          }),
+          patch: async () => ({}),
+        },
+      });
+      const { agor_sessions_create } = await registerAndCaptureHandlers(
+        { app, userId: 'user-b', sessionId: 'parent', baseServiceParams },
+        ['agor_sessions_create']
+      );
+
+      await agor_sessions_create({ branchId: 'wt-1' });
+
+      expect(getUser).toHaveBeenCalledWith('user-b', baseServiceParams);
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentic_tool: 'codex',
+          created_by: 'user-b',
+          unix_username: 'bob',
+        }),
+        baseServiceParams
+      );
+      const data = create.mock.calls[0][0];
+      // No parent config or inline snapshot may bypass user/preset resolution.
+      expect(data).not.toHaveProperty('model_config');
+      expect(data).not.toHaveProperty('permission_config');
+      expect(data).not.toHaveProperty('agentic_tool_preset_id');
+    }
+  );
+
+  it.each([undefined, null, 'claude-code-cli'])(
+    'fails before creation when the omitted tool has no usable saved preference (%s)',
+    async (primaryAgenticTool) => {
+      const getBranch = vi.fn();
+      const create = vi.fn();
+      const app = makeFakeApp({
+        users: { get: async () => ({ ...baseUser, primary_agentic_tool: primaryAgenticTool }) },
+        branches: { get: getBranch },
+        sessions: { create },
+      });
+      const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+        'agor_sessions_create',
+      ]);
+
+      await expect(agor_sessions_create({ branchId: 'wt-1' })).rejects.toThrow(
+        'No primary coding agent is set. Specify agenticTool'
+      );
+      expect(getBranch).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { primaryAgenticTool: undefined, agenticTool: 'codex' },
+    { primaryAgenticTool: 'gemini', agenticTool: 'codex' },
+    { primaryAgenticTool: 'codex', agenticTool: undefined },
+  ])(
+    'honors model overrides with primary $primaryAgenticTool and explicit tool $agenticTool',
+    async ({ primaryAgenticTool, agenticTool }) => {
+      const create = vi.fn(async (data: Record<string, unknown>) => ({
+        ...data,
+        session_id: 'new',
+      }));
+      const app = makeFakeApp({
+        users: { get: async () => ({ ...baseUser, primary_agentic_tool: primaryAgenticTool }) },
+        branches: { get: async () => baseBranch },
+        sessions: { create },
+      });
+      const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+        'agor_sessions_create',
+      ]);
+      await agor_sessions_create({
+        branchId: 'wt-1',
+        agenticTool,
+        modelConfig: 'gpt-5.4',
+      });
+      expect(create).toHaveBeenCalledWith(
+        expect.objectContaining({ agentic_tool: 'codex', model_config: { model: 'gpt-5.4' } }),
+        expect.anything()
+      );
+    }
+  );
+
+  it('does not retry a foreign-tenant user lookup without the caller tenant context', async () => {
+    const baseServiceParams = { provider: 'mcp', tenant: { tenant_id: 'tenant-b' } };
+    const get = vi.fn(async (_id: string, params: unknown) => {
+      if (params === baseServiceParams) throw new Error('User not found');
+      return { ...baseUser, primary_agentic_tool: 'codex' };
+    });
+    const create = vi.fn();
+    const app = makeFakeApp({ users: { get }, sessions: { create } });
+    const { agor_sessions_create } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', baseServiceParams },
+      ['agor_sessions_create']
+    );
+
+    await expect(agor_sessions_create({ branchId: 'wt-1' })).rejects.toThrow('User not found');
+    expect(get).toHaveBeenCalledExactlyOnceWith('user-1', baseServiceParams);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('preserves service policy rejection for an implicitly selected disabled tool', async () => {
+    const create = vi.fn(async () => {
+      throw new Error('codex is disabled for this workspace');
+    });
+    const app = makeFakeApp({
+      users: { get: async () => ({ ...baseUser, primary_agentic_tool: 'codex' }) },
+      branches: { get: async () => baseBranch },
+      sessions: { create },
+    });
+    const { agor_sessions_create } = await registerAndCaptureHandlers({ app, userId: 'user-1' }, [
+      'agor_sessions_create',
+    ]);
+
+    await expect(agor_sessions_create({ branchId: 'wt-1' })).rejects.toThrow(
+      'codex is disabled for this workspace'
+    );
+    expect(create).toHaveBeenCalledOnce();
+  });
+
   it.each([false, true])(
     'transports explicit Codex plugin preference %s on create',
     async (codexIncludePlugins) => {

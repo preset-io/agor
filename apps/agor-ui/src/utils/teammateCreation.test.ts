@@ -205,6 +205,131 @@ it.each([undefined, 'main', 'refs/heads/main', 'custom-start'])(
   }
 );
 
+it.each([
+  ['acme/agor-teammate-private', 'https://github.com/acme/agor-teammate-private.git', undefined],
+  ['acme/agor-assistant-private', 'git@github.com:acme/agor-assistant-private.git', undefined],
+  ['acme/agor-teammate-private', 'https://github.com/acme/agor-teammate-private.git', ''],
+  ['acme/agor-teammate-private', 'https://github.com/acme/agor-teammate-private.git', '  '],
+])(
+  'Blank on private fork %s (source %j) reads the public template and keeps the fork as destination',
+  async (slug, remote_url, sourceBranch) => {
+    const repo = makeRepo({ slug, remote_url });
+    const onCreateBranch = vi
+      .fn()
+      .mockResolvedValue(makeBranch({ board_id: 'board-1' as BoardID }));
+    const boards = { ensureTeammateWelcomeNote: vi.fn(), setPrimaryTeammate: vi.fn() };
+    await createTeammateBranch(
+      { displayName: 'Blank', repoId: repo.repo_id, boardId: 'board-1', sourceBranch },
+      {
+        client: { service: () => boards } as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch: vi.fn(),
+      }
+    );
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({
+        sourceBranch: 'main',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+      })
+    );
+  }
+);
+
+it.each(['acme-start', 'main', 'refs/heads/main'])(
+  'keeps an explicit source ref on a private fork instead of reading the public template: %s',
+  async (sourceBranch) => {
+    const repo = makeRepo({
+      slug: 'acme/agor-teammate-private',
+      remote_url: 'https://github.com/acme/agor-teammate-private.git',
+    });
+    const onCreateBranch = vi
+      .fn()
+      .mockResolvedValue(makeBranch({ board_id: 'board-1' as BoardID }));
+    const boards = { ensureTeammateWelcomeNote: vi.fn(), setPrimaryTeammate: vi.fn() };
+    await createTeammateBranch(
+      { displayName: 'Blank', repoId: repo.repo_id, boardId: 'board-1', sourceBranch },
+      {
+        client: { service: () => boards } as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch: vi.fn(),
+      }
+    );
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({ sourceBranch })
+    );
+    expect(onCreateBranch.mock.calls[0][1]).not.toHaveProperty('sourceRemoteUrl');
+  }
+);
+
+it('uses a caller-resolved private fork even when the repo map lacks it', async () => {
+  const repo = makeRepo({
+    slug: 'acme/agor-teammate-private',
+    remote_url: 'https://github.com/acme/agor-teammate-private.git',
+  });
+  const onCreateBranch = vi.fn().mockResolvedValue(makeBranch({ board_id: 'board-1' as BoardID }));
+  const boards = { ensureTeammateWelcomeNote: vi.fn(), setPrimaryTeammate: vi.fn() };
+  await createTeammateBranch(
+    { displayName: 'Blank', repoId: repo.repo_id, repo, boardId: 'board-1' },
+    {
+      client: { service: () => boards } as never,
+      repoById: new Map(),
+      onCreateBranch,
+      onUpdateBranch: vi.fn(),
+    }
+  );
+  expect(onCreateBranch).toHaveBeenCalledWith(
+    repo.repo_id,
+    expect.objectContaining({
+      sourceBranch: 'main',
+      sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+    })
+  );
+});
+
+it.each([
+  [
+    'a self-hosted fork',
+    {
+      slug: 'acme/agor-teammate-private',
+      remote_url: 'https://git.acme.internal/acme/agor-teammate-private.git',
+    },
+    undefined,
+  ],
+  [
+    'a repo mismatched with repoId',
+    { slug: 'own/handbook', remote_url: 'https://github.com/own/handbook.git' },
+    {
+      repo_id: 'other' as UUID,
+      slug: 'acme/agor-teammate-private',
+      remote_url: 'https://github.com/acme/agor-teammate-private.git',
+    },
+  ],
+])('keeps the destination default for %s', async (_case, overrides, callerRepo) => {
+  const repo = makeRepo(overrides);
+  const onCreateBranch = vi.fn().mockResolvedValue(makeBranch({ board_id: 'board-1' as BoardID }));
+  const boards = { ensureTeammateWelcomeNote: vi.fn(), setPrimaryTeammate: vi.fn() };
+  await createTeammateBranch(
+    {
+      displayName: 'Blank',
+      repoId: repo.repo_id,
+      boardId: 'board-1',
+      ...(callerRepo ? { repo: makeRepo(callerRepo) } : {}),
+    },
+    {
+      client: { service: () => boards } as never,
+      repoById: new Map([[repo.repo_id, repo]]),
+      onCreateBranch,
+      onUpdateBranch: vi.fn(),
+    }
+  );
+  expect(onCreateBranch.mock.calls[0][1].sourceBranch).toBeUndefined();
+  expect(onCreateBranch.mock.calls[0][1]).not.toHaveProperty('sourceRemoteUrl');
+});
+
 it('keeps the registered private-name preference over the public starter', () => {
   const publicRepo = makeRepo({
     repo_id: 'public' as UUID,

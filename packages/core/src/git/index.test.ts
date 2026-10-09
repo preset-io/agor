@@ -1894,6 +1894,7 @@ describe('categorizeGitError', () => {
     expect(categorizeGitError('remote: HTTP Basic: Access denied')).toBe('auth_failed');
     expect(categorizeGitError('Permission denied (publickey).')).toBe('auth_failed');
     expect(categorizeGitError('terminal prompts disabled')).toBe('auth_failed');
+    expect(categorizeGitError('fatal: unable to get password from user')).toBe('auth_failed');
   });
 
   it('categorizes missing Git as git_unavailable', () => {
