@@ -5,6 +5,11 @@ import { buildTrustedLauncherEnvironment } from './trusted-launcher-environment.
 export const DEFAULT_CLEANUP_TIMEOUT_MS = 30_000;
 /** Upper bound for the optional stdout result. Longer output is drained and ignored. */
 export const MAX_CLEANUP_RESULT_BYTES = 4096;
+/**
+ * How long to keep reading stdout after exit 0. A background descendant can hold
+ * the pipe open; its output is ignored rather than delaying confirmation.
+ */
+export const CLEANUP_RESULT_GRACE_MS = 250;
 
 /** Why the executor stopped, as reported by the helper's optional stdout result. */
 export type ExecutorCleanupCause = 'oom_killed';
@@ -59,12 +64,17 @@ export function runExecutorCleanupCommand(
       stdio: ['pipe', 'pipe', 'ignore'],
     });
     let settled = false;
+    let graceTimer: NodeJS.Timeout | undefined;
     const finish = (result: ExecutorCleanupCommandResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
+      // Stop reading; an escaped descendant may still hold the pipe.
+      child.stdout.destroy();
       resolve(result);
     };
+    const started = Date.now();
     const timer = setTimeout(() => {
       // Only this invocation's owned group. Killing the helper is NOT remote containment.
       if (child.pid) {
@@ -79,6 +89,17 @@ export function runExecutorCleanupCommand(
     // Keep draining past the cap so a chatty helper never blocks on a full pipe.
     const chunks: Buffer[] = [];
     let stdoutBytes = 0;
+    let stdoutClosed = false;
+    let exitResult: ExecutorCleanupCommandResult | undefined;
+    // Raw output never reaches diagnostics; only the strict result is used.
+    const finishWithOutput = () => {
+      if (!exitResult) return;
+      finish(
+        exitResult.confirmed && stdoutClosed && stdoutBytes <= MAX_CLEANUP_RESULT_BYTES
+          ? { ...exitResult, ...parseExecutorCleanupResult(Buffer.concat(chunks).toString('utf8')) }
+          : exitResult
+      );
+    };
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutBytes += chunk.length;
       if (stdoutBytes <= MAX_CLEANUP_RESULT_BYTES) chunks.push(chunk);
@@ -86,24 +107,30 @@ export function runExecutorCleanupCommand(
     child.stdout.on('error', () => {
       /* The exit code still decides containment; output is optional. */
     });
+    child.stdout.once('close', () => {
+      stdoutClosed = true;
+      finishWithOutput();
+    });
     child.once('error', () =>
       finish({ confirmed: false, diagnostic: 'Cleanup command could not start.' })
     );
-    // `close` (not `exit`) guarantees stdout has been fully read.
-    child.once('close', (code, signal) => {
-      const confirmed = code === 0 && signal === null;
-      // Raw output never reaches diagnostics; only the strict result is used.
-      const result =
-        confirmed && stdoutBytes <= MAX_CLEANUP_RESULT_BYTES
-          ? parseExecutorCleanupResult(Buffer.concat(chunks).toString('utf8'))
-          : {};
-      finish({
-        confirmed,
+    // `exit` alone decides containment. The cause is read only once stdout closes,
+    // within a short grace; after that the exit result stands without a cause.
+    child.once('exit', (code, signal) => {
+      exitResult = {
+        confirmed: code === 0 && signal === null,
         diagnostic: signal
           ? `Cleanup command ended with ${signal}.`
           : `Cleanup command exited with code ${code ?? 'unknown'}.`,
-        ...result,
-      });
+      };
+      if (stdoutClosed || !exitResult.confirmed) {
+        finishWithOutput();
+        return;
+      }
+      graceTimer = setTimeout(
+        finishWithOutput,
+        Math.max(0, Math.min(CLEANUP_RESULT_GRACE_MS, timeoutMs - (Date.now() - started)))
+      );
     });
     child.stdin.on('error', () => {
       /* EPIPE is diagnosed by the command's exit. */

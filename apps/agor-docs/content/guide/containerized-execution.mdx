@@ -357,7 +357,8 @@ instead of the generic heartbeat-loss message. Stdout is parsed only after the
 helper exits 0, is capped at 4 KiB, and anything else (empty, longer, malformed,
 another version, wrong types) is ignored. The result never changes containment:
 the exit code alone decides that. Helpers that print nothing keep today's
-behavior.
+behavior. Agor reads stdout only briefly after exit, so a result may be ignored
+if background processes keep stdout open; redirect their stdout.
 
 Failed containment emits the `executor.cleanup_failures` metric and structured
 termination logs, including `mode`, `helper_configured`, and

@@ -693,4 +693,22 @@ describe('out-of-memory outcome', () => {
       action: 'resume',
     });
   });
+  it('beats the interruption and restart explanations', () => {
+    const error_message = executorOutOfMemoryMessage(6 * 1024 ** 3);
+    expect(describe3({ ...cause('executor_interrupted'), error_message })).toMatchObject({
+      cause: 'out_of_memory',
+    });
+    expect(
+      describe3({ sdk_failure: sdkFailure(), error_message }, { restarted: true })
+    ).toMatchObject({ cause: 'out_of_memory' });
+  });
+  it('never hides a user stop', () => {
+    expect(
+      describe3({
+        status: TaskStatus.STOPPED,
+        ...cause('user_stop'),
+        error_message: executorOutOfMemoryMessage(),
+      })
+    ).toMatchObject({ cause: 'stopped' });
+  });
 });

@@ -171,6 +171,23 @@ describe('optional cleanup result on stdout', () => {
       diagnostic: 'Cleanup command exited with code 0.',
     });
   });
+  // A background descendant inherits stdout, so the pipe stays open past exit 0.
+  it('confirms on exit 0 without waiting for a descendant holding stdout', async () => {
+    const started = Date.now();
+    expect(await runExecutorCleanupCommand('(sleep 3 &); exit 0', context, 10_000)).toEqual({
+      confirmed: true,
+      diagnostic: 'Cleanup command exited with code 0.',
+    });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+  it('ignores a result whose stdout is still held open after the grace period', async () => {
+    const line = JSON.stringify({ version: 1, contained: true, cause: 'oom_killed' });
+    const started = Date.now();
+    expect(
+      await runExecutorCleanupCommand(`echo ${quote(line)}; (sleep 3 &); exit 0`, context, 10_000)
+    ).toEqual({ confirmed: true, diagnostic: 'Cleanup command exited with code 0.' });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
 });
 
 describe('parseExecutorCleanupResult', () => {
