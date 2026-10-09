@@ -1,3 +1,4 @@
+import { Forbidden } from '@agor/core/feathers';
 import type { GatewayChannel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { isVerifiedHttpGatewayCreate, verifiedHttpGatewayAuthority } from './gateway-authority';
@@ -335,6 +336,21 @@ describe('TeamsGatewayWorker inbound admission', () => {
         errorCode: 'teams_gateway_service_unavailable',
         retryDelayMs: 1_000,
       })
+    );
+  });
+
+  it('dead-letters an access refusal instead of retrying it', async () => {
+    const setup = makeWorker({
+      activity: activity(),
+      gatewayCreate: async () => {
+        throw new Forbidden('Gateway inbound denied: Collaborator access is required');
+      },
+    });
+
+    await setup.worker.checkOnce();
+    expect(setup.complete).not.toHaveBeenCalled();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'dead_letter', errorCode: 'teams_admission_forbidden' })
     );
   });
 

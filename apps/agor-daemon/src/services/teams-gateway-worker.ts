@@ -6,6 +6,7 @@ import {
   runWithSystemDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { Forbidden } from '@agor/core/feathers';
 import type { NormalizedTeamsActivity } from '@agor/core/gateway';
 import { gatewayFailureCode, safeTeamsMetadata } from '@agor/core/gateway';
 import {
@@ -58,6 +59,7 @@ type TeamsInboundFailureCode =
   | 'teams_payload_identity_mismatch'
   | 'teams_inbound_completion_fence_lost'
   | 'teams_gateway_service_unavailable'
+  | 'teams_admission_forbidden'
   | 'teams_worker_failure';
 
 /** A classified admission failure; only a retryable one is re-queued. */
@@ -239,6 +241,10 @@ export class TeamsGatewayWorker {
           )
         );
       } catch (error) {
+        // An access refusal is final for this activity; retrying only stalls its thread and repeats notices.
+        if (error instanceof Forbidden) {
+          throw new TeamsInboundError('teams_admission_forbidden', false, error);
+        }
         throw new TeamsInboundError('teams_gateway_service_unavailable', true, error);
       }
     }
