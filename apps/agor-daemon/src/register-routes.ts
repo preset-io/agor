@@ -1,5 +1,7 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
+import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
+import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -4410,6 +4412,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     requireAuth
   );
+
+  registerAuthenticatedRoute(
+    app,
+    BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+    new BranchWorkspaceNotificationService(db),
+    { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
+    requireAuth
+  );
+  app.service(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE).hooks({
+    after: {
+      create: [
+        async (context: HookContext) => {
+          emitServiceEvent(app, {
+            path: 'branches',
+            event: 'patched',
+            data: context.result,
+            params: context.params,
+            id: (context.result as import('@agor/core/types').Branch).branch_id,
+          });
+          return context;
+        },
+      ],
+    },
+  });
 
   app.use('/branches/:id/clean', {
     async create(data: unknown, params: RouteParams) {

@@ -23,6 +23,10 @@ afterEach(() => {
 /** The board's partition, loaded under the current lifetime: it holds the board's rows. */
 const loadedPartition = () => boardCoverage('loaded', captureLoadLifetime() ?? undefined);
 
+// CSS (and the PATCH JSON transport) serializes -0 as 0. Keep exact coordinate
+// equality without treating that serialization difference as a lost drag.
+const normalizeSignedZero = ({ x, y }: { x: number; y: number }) => ({ x: x + 0, y: y + 0 });
+
 it('persists two real pointer drags when the first PATCH completes during the second debounce', async () => {
   const user = { user_id: 'placement-owner', role: 'member' } as User;
   const board: Board = {
@@ -128,10 +132,12 @@ it('persists two real pointer drags when the first PATCH completes during the se
   expect(expected).not.toEqual(patch.mock.calls[0][1].position);
   await act(async () => release());
   await waitFor(() => expect(patch).toHaveBeenCalledTimes(2));
-  expect(patch.mock.calls[1][1].position).toEqual(expected);
-  expect(agorStore.getState().boardObjectsByBoardId.get(board.board_id)?.[0].position).toEqual(
-    expected
-  );
+  expect(normalizeSignedZero(patch.mock.calls[1][1].position!)).toEqual(expected);
+  const storedPosition = agorStore
+    .getState()
+    .boardObjectsByBoardId.get(board.board_id)?.[0].position;
+  expect(storedPosition).toBeDefined();
+  expect(normalizeSignedZero(storedPosition!)).toEqual(expected);
   await waitFor(() =>
     expect(node.style.transform).toBe(`translate(${expected.x}px, ${expected.y}px)`)
   );

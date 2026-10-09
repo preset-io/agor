@@ -1,6 +1,7 @@
 import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
+  BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
@@ -270,6 +271,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'branches/:id/retire-teammate': {
     audience: 'none',
     why: 'Retirement admission response; archived branch state publishes through branches.',
+  },
+  [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
+    audience: 'none',
+    why: 'Acknowledgement response; updated branch publishes through branches.',
   },
   'branches/:id/clean': {
     audience: 'none',

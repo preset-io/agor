@@ -6,6 +6,7 @@ import { feathers } from '@agor/core/feathers';
 import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
+  BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   KNOWLEDGE_TRANSFER,
   MCP_OAUTH_RELAY,
@@ -167,6 +168,10 @@ describe('source scan: every registered path is declared', () => {
         JSON.stringify(BRANCH_DELETION_REPORT_SERVICE)
       )
       .replace(/\bBRANCH_CLEANUP_REPORT_SERVICE\b/g, JSON.stringify(BRANCH_CLEANUP_REPORT_SERVICE))
+      .replace(
+        /\bBRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE\b/g,
+        JSON.stringify(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE)
+      )
       .replace(/\bKNOWLEDGE_TRANSFER\.path\b/g, JSON.stringify(KNOWLEDGE_TRANSFER.path))
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];
@@ -235,6 +240,14 @@ describe('source scan: every registered path is declared', () => {
       'multiline-receiver',
       'long-route',
     ]);
+  });
+
+  it('recognizes the shared notification dismissal service identifier', () => {
+    expect(
+      extractRegisteredPaths(
+        'registerAuthenticatedRoute(app, BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE, service);'
+      )
+    ).toEqual([{ path: BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE, line: 1 }]);
   });
 
   it('recognizes the shared deletion report service identifier', () => {

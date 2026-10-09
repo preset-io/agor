@@ -46,7 +46,7 @@ it('shows personas before Advanced and carries explicit selection; custom refs a
     sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
   });
   fireEvent.click(screen.getByText('Advanced Teammate Settings'));
-  fireEvent.change(await screen.findByPlaceholderText('trunk'), {
+  fireEvent.change(await screen.findByPlaceholderText('Public template default'), {
     target: { value: 'my-custom-ref' },
   });
   expect(fields!.form.getFieldsValue(true)).toMatchObject({
@@ -60,4 +60,31 @@ it('shows personas before Advanced and carries explicit selection; custom refs a
     sourceBranch: undefined,
     sourceRemoteUrl: undefined,
   });
+});
+
+it('shows the repository default branch as the source placeholder for a non-fork repo', async () => {
+  const repo = {
+    repo_id: 'own-repo',
+    default_branch: 'trunk',
+    remote_url: 'https://github.com/acme/handbook.git',
+  } as Repo;
+  function Harness() {
+    const fields = useTeammateForm(repo);
+    return (
+      <Form form={fields.form}>
+        <TeammateFormFields
+          form={fields.form}
+          repos={[repo]}
+          frameworkRepo={repo}
+          onTemplateChange={fields.handleTemplateChange}
+          onDisplayNameChange={fields.handleDisplayNameChange}
+          customRepoSelected={false}
+          onCustomRepoChange={fields.setCustomRepoSelected}
+        />
+      </Form>
+    );
+  }
+  render(<Harness />);
+  fireEvent.click(screen.getByText('Advanced Teammate Settings'));
+  expect(await screen.findByPlaceholderText('trunk')).toBeInTheDocument();
 });

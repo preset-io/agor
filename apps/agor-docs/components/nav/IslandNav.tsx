@@ -288,6 +288,7 @@ export function IslandNav() {
     'data-scrolled': scrolled ? 'true' : 'false',
     'data-open': openMenu && !narrow ? 'true' : 'false',
     'data-marketing': isMarketing ? 'true' : 'false',
+    'data-home': pathname === '/' ? 'true' : 'false',
   };
 
   return (

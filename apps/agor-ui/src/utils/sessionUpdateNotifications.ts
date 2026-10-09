@@ -1,5 +1,6 @@
 import type { Session, SessionID } from '@agor-live/client';
 import type { AuthorityOperation } from '../hooks/useAuthorityOperationGuard';
+import { formatActionError } from './connectionErrors';
 
 export type LatestSessionUpdateRequests = Map<SessionID, symbol>;
 
@@ -8,7 +9,7 @@ interface RunSessionUpdateWithLatestNotificationOptions {
   updates: Partial<Session>;
   latestRequests: LatestSessionUpdateRequests;
   authority: Pick<AuthorityOperation, 'isCurrent'>;
-  updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session | null>;
+  updateSession: (sessionId: SessionID, updates: Partial<Session>) => Promise<Session>;
   showSuccess: (message: string) => void;
   showError: (message: string) => void;
 }
@@ -33,11 +34,16 @@ export async function runSessionUpdateWithLatestNotification({
 
   const request = Symbol(sessionId);
   latestRequests.set(sessionId, request);
-  const session = await updateSession(sessionId, updates);
+  let errorMessage: string | undefined;
+  try {
+    await updateSession(sessionId, updates);
+  } catch (error) {
+    errorMessage = formatActionError('update session', error, { idempotent: true });
+  }
 
   if (!authority.isCurrent() || latestRequests.get(sessionId) !== request) return;
   latestRequests.delete(sessionId);
 
-  if (session) showSuccess('Session updated successfully!');
-  else showError('Failed to update session');
+  if (errorMessage) showError(errorMessage);
+  else showSuccess('Session updated successfully!');
 }

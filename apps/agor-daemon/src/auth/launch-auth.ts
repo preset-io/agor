@@ -1,6 +1,7 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import {
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
@@ -314,7 +315,12 @@ async function projectLaunchUser(
   ) {
     throw new NotAuthenticated('Invalid one-time launch assertion execution home');
   }
-  const avatar = claims.avatar || claims.picture;
+  // Avatar ownership is independent of external account/role authority. Do
+  // not rehydrate even a cleared Agor-owned avatar on a subsequent launch.
+  const avatar =
+    identityAuthority.avatarAuthority === AgorAvatarAuthority.EXTERNAL
+      ? claims.avatar || claims.picture
+      : undefined;
   const identity: StoredExternalIdentity = {
     key,
     provider,
@@ -387,8 +393,15 @@ async function projectLaunchUser(
         updated_at: now,
         data: {
           ...data,
-          avatar_url: avatar ?? data.avatar_url ?? data.avatar,
-          avatar_source: avatar ? 'launch-auth' : data.avatar_source,
+          ...(avatar
+            ? {
+                avatar_url: avatar,
+                avatar: undefined,
+                avatar_source: 'launch-auth',
+                avatar_source_id: undefined,
+                avatar_synced_at: undefined,
+              }
+            : {}),
           external_identities: nextIdentities,
         },
       })

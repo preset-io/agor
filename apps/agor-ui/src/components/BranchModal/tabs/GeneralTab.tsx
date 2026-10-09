@@ -24,6 +24,7 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
+import { useServerRead } from '../../../hooks/useServerRead';
 import { useAgorStore } from '../../../store/agorStore';
 import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
@@ -52,7 +53,10 @@ interface GeneralTabProps {
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   /** Verifying `board.attach_branch` on a newly-picked target board. */
   boardAttachChecking?: boolean;
   /** Set once verification finds the caller can't move a branch onto the picked board. */
@@ -78,6 +82,23 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const policy = resolveRepoCleanupPolicy(repo.cleanup_policy);
   const branchById = useAgorStore(selectBranchById);
+  // Settings retains an editing snapshot, and the canvas store excludes archived
+  // branches. Keep only this status projection live without resetting form drafts.
+  const { data: workspaceStatusBranch } = useServerRead(
+    client,
+    branch.branch_id,
+    (client) => client.service('branches').get(branch.branch_id),
+    {
+      subscribe: (client, { patch }) => {
+        const service = client.service('branches');
+        const onPatched = (updated: Branch) => {
+          if (updated.branch_id === branch.branch_id) patch(() => updated);
+        };
+        service.on('patched', onPatched);
+        return () => service.off('patched', onPatched);
+      },
+    }
+  );
 
   const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
     onArchiveOrDelete?.(branch.branch_id, options);
@@ -88,7 +109,12 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-        <BranchWorkspaceStatus branch={branch} />
+        <BranchWorkspaceStatus
+          branch={workspaceStatusBranch ?? branch}
+          client={client}
+          currentUser={currentUser}
+          detailed
+        />
         {branch.deletion_status && (
           <Alert
             type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
