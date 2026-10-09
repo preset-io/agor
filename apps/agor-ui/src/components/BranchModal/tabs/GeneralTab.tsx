@@ -52,7 +52,10 @@ interface GeneralTabProps {
   canEdit: boolean;
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   /** Verifying `board.attach_branch` on a newly-picked target board. */
   boardAttachChecking?: boolean;
   /** Set once verification finds the caller can't move a branch onto the picked board. */
@@ -78,6 +81,9 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const policy = resolveRepoCleanupPolicy(repo.cleanup_policy);
   const branchById = useAgorStore(selectBranchById);
+  // Settings retains the editing snapshot. Read live notification state without
+  // replacing that snapshot or resetting unsaved form fields.
+  const workspaceStatusBranch = branchById.get(branch.branch_id) ?? branch;
 
   const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
     onArchiveOrDelete?.(branch.branch_id, options);
@@ -88,7 +94,12 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-        <BranchWorkspaceStatus branch={branch} client={client} currentUser={currentUser} detailed />
+        <BranchWorkspaceStatus
+          branch={workspaceStatusBranch}
+          client={client}
+          currentUser={currentUser}
+          detailed
+        />
         {branch.deletion_status && (
           <Alert
             type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}

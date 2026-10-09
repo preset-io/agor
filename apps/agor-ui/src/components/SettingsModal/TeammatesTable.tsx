@@ -31,7 +31,10 @@ interface TeammatesTableProps {
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
   userById: Map<string, User>;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onRowClick?: (branch: Branch) => void;
   onCreateTeammate?: () => void;
   /** Close the parent Settings modal so the canvas isn't obscured by

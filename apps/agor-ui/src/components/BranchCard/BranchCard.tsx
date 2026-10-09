@@ -607,7 +607,9 @@ const BranchCardComponent = ({
           <EnvironmentPill
             repo={repo}
             branch={branch}
-            onEdit={onOpenSettings ? () => onOpenSettings(branch.branch_id) : undefined}
+            onEdit={
+              !isOperating && onOpenSettings ? () => onOpenSettings(branch.branch_id) : undefined
+            }
             onStartEnvironment={onStartEnvironment}
             onStopEnvironment={onStopEnvironment}
             onViewLogs={onViewLogs}

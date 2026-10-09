@@ -151,6 +151,10 @@ describe('BranchCard destructive operation states', () => {
         true
       );
       expect(screen.getByTitle('Edit branch').hasAttribute('disabled')).toBe(true);
+      const configureEnvironment = screen.getByLabelText('Configure environment');
+      expect(configureEnvironment.hasAttribute('disabled')).toBe(true);
+      fireEvent.click(configureEnvironment);
+      expect(props.onOpenSettings).not.toHaveBeenCalled();
       const spinner = mounted.container.querySelector('.ant-spin-spinning');
       expect(spinner).not.toBeNull();
       expect(onArchiveOrDelete).toHaveBeenCalledExactlyOnceWith(branch.branch_id, {
@@ -172,6 +176,8 @@ describe('BranchCard destructive operation states', () => {
       expect(mounted.container.querySelector('.ant-spin-spinning')).toBeNull();
       expect(screen.getByRole('region', { name: 'Branch sessions' })).not.toBeNull();
       expect(screen.getByTitle('Edit branch').hasAttribute('disabled')).toBe(false);
+      fireEvent.click(screen.getByLabelText('Configure environment'));
+      expect(props.onOpenSettings).toHaveBeenCalledWith(branch.branch_id);
     }
   );
 

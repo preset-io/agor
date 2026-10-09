@@ -124,7 +124,10 @@ interface MobileAppProps {
   // the controls render enabled and then do nothing when tapped.
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
 }
 
