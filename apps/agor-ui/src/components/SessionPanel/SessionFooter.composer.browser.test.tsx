@@ -108,7 +108,11 @@ it.each([
     expect(action.right).toBeLessThanOrEqual(window.innerWidth);
     if (isMobile) expect(action.height).toBeGreaterThanOrEqual(MOBILE_TOUCH_TARGET);
   }
-  for (const action of actions.slice(2)) expect(action.width).toBe(action.height);
+  // Phones show icon-only squares; desktop Stop/Queue keep text labels.
+  for (const action of actions.slice(2)) {
+    if (isMobile) expect(action.width).toBe(action.height);
+    else expect(action.width).toBeGreaterThan(action.height);
+  }
 
   await userEvent.click(screen.getByRole('button', { name: 'More options' }));
   const menu = await screen.findByRole('group', { name: 'More options' });

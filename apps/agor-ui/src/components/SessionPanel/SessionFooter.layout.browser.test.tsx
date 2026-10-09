@@ -148,8 +148,8 @@ it.each([false, true])(
     expect(activity).toBeVisible();
     expectCenteredActivity();
 
-    // Stopping retains both buttons; neither the longer recovery label nor
-    // removing activity may shift the controls while reading older messages.
+    // Stopping retains both buttons and removing activity never shifts them.
+    // Desktop Stop may widen to its "Recovering…" label, growing leftward.
     const stopBounds = stop.getBoundingClientRect();
     view.rerender(panel(SessionStatus.STOPPING, embedded));
     expect(screen.getByRole('button', { name: 'Recovering' })).toBe(stop);
@@ -161,8 +161,8 @@ it.each([false, true])(
       [stop, stopBounds],
     ] as const) {
       const current = control.getBoundingClientRect();
-      expect(current.left).toBe(previous.left);
-      expect(current.width).toBe(previous.width);
+      expect(current.right).toBe(previous.right);
+      if (phone || control === send) expect(current.width).toBe(previous.width);
       // Stop's own existing icon-to-Spin swap can change inline rounding.
       expect(Math.abs(current.top - previous.top)).toBeLessThanOrEqual(1);
     }

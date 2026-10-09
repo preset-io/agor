@@ -1286,7 +1286,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     }
                     onClick={onStop}
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
-                  />
+                  >
+                    {/* Desktop keeps text labels; phones are icon-only touch targets. */}
+                    {isMobile
+                      ? null
+                      : isStopping
+                        ? recoveryTask?.termination_request?.cause === 'user_stop'
+                          ? 'Stopping…'
+                          : 'Recovering…'
+                        : 'Stop'}
+                  </Button>
                 </Tooltip>
               )}
               <Tooltip title={hoverTooltip(sendTooltip)}>
@@ -1309,7 +1318,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     icon={<SendOutlined />}
                     onClick={onSendPrompt}
                     disabled={sendDisabled}
-                  />
+                  >
+                    {isMobile ? null : sendLabel}
+                  </Button>
                 </Badge>
               </Tooltip>
             </Flex>

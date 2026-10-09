@@ -690,14 +690,14 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     expect(screen.getByLabelText('Stop')).toBeEnabled();
   });
 
-  it('renders Send and Stop as icon-only buttons with accessible names', () => {
+  it('labels Send and Stop on desktop and keeps them icon-only on phones', () => {
     const view = render(<SessionFooter {...baseProps} isRunning />, { wrapper: Wrapper });
     for (const name of ['Stop', 'Send']) {
       expect(screen.getByLabelText(name).tagName).toBe('BUTTON');
-      expect(screen.getByLabelText(name).textContent).toBe('');
+      expect(screen.getByLabelText(name).textContent).toBe(width < 1024 ? '' : name);
     }
     view.rerender(<SessionFooter {...baseProps} isRunning hasInput />);
-    expect(screen.getByLabelText('Queue').textContent).toBe('');
+    expect(screen.getByLabelText('Queue').textContent).toBe(width < 1024 ? '' : 'Queue');
   });
 
   it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
@@ -715,6 +715,7 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     view.rerender(<SessionFooter {...baseProps} isRunning isStopping onStop={onStop} />);
     const recovering = screen.getByRole('button', { name: 'Recovering' });
     expect(recovering).toBeDisabled();
+    expect(recovering.textContent).toBe(width < 1024 ? '' : 'Recovering…');
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
     view.rerender(
@@ -731,7 +732,9 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
         onStop={onStop}
       />
     );
-    expect(screen.getByRole('button', { name: 'Stopping' })).toBeDisabled();
+    const stopping = screen.getByRole('button', { name: 'Stopping' });
+    expect(stopping).toBeDisabled();
+    expect(stopping.textContent).toBe(width < 1024 ? '' : 'Stopping…');
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);
