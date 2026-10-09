@@ -33,13 +33,45 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.11 (2026-10-09)
+
+Release preparation covers merged changes from `v0.26.10` (`cdb77a0a`) through `618cd933`: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.10...618cd9336ea9717cfa12e08cf314b8ed7cbd2c99). This entry does not imply publication or deployment.
+
+### Features
+
+- **Archive and restore Knowledge pages** — hide documents from active discovery without losing content, history or permissions, then restore them from the archived-page browser or MCP tools. Archived paths remain reserved; restore a document before editing or replacing it. ([#3031](https://github.com/preset-io/agor/pull/3031))
+- **Discord forum conversations** — connect forum channels, list their posts, and optionally answer posts without a mention. New-session links and follow-up notices now match the quieter Slack behavior. ([#3017](https://github.com/preset-io/agor/pull/3017), [#3032](https://github.com/preset-io/agor/pull/3032), [#3038](https://github.com/preset-io/agor/pull/3038))
+- **Customer-owned MCP OAuth apps** — configure your own provider OAuth app, with a stable callback option for supported managed deployments and per-user consent. ([#2799](https://github.com/preset-io/agor/pull/2799))
+- **Focused creation and recovery controls** — replaces the tabbed creation dialog with a menu and focused modals on desktop and mobile, and adds compact turn-outcome banners with cause-specific details and eligible recovery actions. ([#2652](https://github.com/preset-io/agor/pull/2652), [#2977](https://github.com/preset-io/agor/pull/2977))
+- **Primary coding agent for MCP-created sessions** — when a session-creation tool omits the agent choice, use the caller's configured primary coding agent. ([#3057](https://github.com/preset-io/agor/pull/3057))
+
 ### Fixes
 
 - **Resumable partial Knowledge transfers** — transfers retain successful per-document work and continue after independent document failures, with bounded sanitized summaries and receipt-backed resume; systemic and safety failures still stop the run. ([#3018](https://github.com/preset-io/agor/pull/3018))
+- **Faster, more resilient workspace loading** — prioritizes the user's sessions and the active board, uses server-reported task completeness, and recovers from slow or lost connections without discarding loaded state. Connection-loss messages distinguish unconfirmed actions from requests that were never sent. ([#2952](https://github.com/preset-io/agor/pull/2952), [#3002](https://github.com/preset-io/agor/pull/3002), [#2978](https://github.com/preset-io/agor/pull/2978), [#2992](https://github.com/preset-io/agor/pull/2992))
+- **Bounded interrupted-task recovery** — preserves cleanup uncertainty rather than declaring an executor stopped without evidence, and reports launch refusals clearly when executor admission rules reject a run. ([#3006](https://github.com/preset-io/agor/pull/3006), [#3019](https://github.com/preset-io/agor/pull/3019))
+- **Refreshable Claude logins stay usable** — an expired access token no longer triggers a disconnected banner when the stored grant can refresh at task launch; failed refreshes still require attention. ([#3048](https://github.com/preset-io/agor/pull/3048))
+- **Reliable branch and teammate creation** — resolves omitted source refs from the remote default branch, returns a created branch even if its readiness wait fails, and starts blank teammates on supported private framework forks from the public template without requiring private-fork credentials just to create them. ([#2986](https://github.com/preset-io/agor/pull/2986), [#2985](https://github.com/preset-io/agor/pull/2985), [#3003](https://github.com/preset-io/agor/pull/3003))
+- **Visible operation failures and recovery** — surfaces session-update errors, clarifies branch-operation states, persists notification dismissal, and reloads once after a stale lazy-loaded chunk crashes the app. ([#3055](https://github.com/preset-io/agor/pull/3055), [#3054](https://github.com/preset-io/agor/pull/3054), [#3053](https://github.com/preset-io/agor/pull/3053))
+- **Contained conversation rendering** — drops view bookkeeping for trimmed transcript turns, keeps positioned transcript content inside its scroller, and keeps the banner-dismiss tooltip inside the viewport. ([#3004](https://github.com/preset-io/agor/pull/3004), [#3039](https://github.com/preset-io/agor/pull/3039), [#3047](https://github.com/preset-io/agor/pull/3047))
+- **Discord attachments no longer silently discard messages** — admits messages with unreadable or disabled attachments and identifies those attachments to the agent; enabled file reading also supports GIF, WebP and common text formats. ([#3043](https://github.com/preset-io/agor/pull/3043))
+- **Early artifact payload validation** — rejects binary and oversized publish payloads before attempting publication. ([#2720](https://github.com/preset-io/agor/pull/2720))
+
+### Security
+
+- **Server-owned callback identity** — ignores client-supplied callback principals and binds callback delivery to an authorized caller rather than allowing a session write to select another user's execution identity. ([#3023](https://github.com/preset-io/agor/pull/3023))
+- **Task-specific gateway replies** — routes outbound replies using the task's originating thread mapping, avoiding arbitrary thread selection when a session has multiple mappings. ([#2892](https://github.com/preset-io/agor/pull/2892))
+- **Private teammate memory by default** — newly created daily memory documents default to private visibility and owner-only editing; existing documents retain their current settings. ([#2890](https://github.com/preset-io/agor/pull/2890))
+- **Scoped avatar synchronization** — separates avatar ownership from external identity and constrains Slack avatar synchronization. ([#3052](https://github.com/preset-io/agor/pull/3052))
 
 ### Breaking
 
 - **Git-friendly Knowledge repositories (format v2)** — exports now use readable folders, per-document YAML headers, a sorted `manifest.yaml` and relative internal links; `agor kb validate` checks repositories offline. V1 bundles are not imported or converted in place: keep them intact and export to a fresh directory; edited v2 repositories still require a new destination namespace rather than overwriting existing Knowledge. ([#3018](https://github.com/preset-io/agor/pull/3018))
+
+### Chores
+
+- **Executor model diagnostics** — adds informational model metadata to executor prompt payloads without changing runtime model selection. ([#3024](https://github.com/preset-io/agor/pull/3024))
+- **Public site updates** — improves homepage and navigation readability, adds privacy and terms pages with cookie consent, and preserves Google Ads click IDs on console links. ([#3015](https://github.com/preset-io/agor/pull/3015), [#3030](https://github.com/preset-io/agor/pull/3030), [#3056](https://github.com/preset-io/agor/pull/3056), [#3016](https://github.com/preset-io/agor/pull/3016), [#3028](https://github.com/preset-io/agor/pull/3028))
 
 ## 0.26.10 (2026-10-06)
 
