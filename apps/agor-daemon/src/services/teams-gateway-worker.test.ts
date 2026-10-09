@@ -108,7 +108,8 @@ function makeWorker(options: {
   const inbound = {
     findDueTeamsRefs: vi.fn(),
     claimQueued: vi.fn(async () => event),
-    decryptQueuedPayload: vi.fn(() => options.activity),
+    // Async like the production tenant unit-of-work proxy, which wraps every method.
+    decryptQueuedPayload: vi.fn(async () => options.activity),
     complete,
     failQueued: vi.fn(),
   };
