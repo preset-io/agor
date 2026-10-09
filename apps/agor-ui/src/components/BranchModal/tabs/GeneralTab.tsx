@@ -88,7 +88,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
-        <BranchWorkspaceStatus branch={branch} />
+        <BranchWorkspaceStatus branch={branch} client={client} currentUser={currentUser} detailed />
         {branch.deletion_status && (
           <Alert
             type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
