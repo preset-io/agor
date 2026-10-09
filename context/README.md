@@ -27,6 +27,7 @@ issue or PR; git history keeps deleted docs.
 | [`discord-gateway.md`](concepts/discord-gateway.md)                         | Discord gateway: provider-owned history, cursor, and admission contract.  |
 | [`opencode-hosted.md`](concepts/opencode-hosted.md)                         | Hosted OpenCode capability gate and checkpointed native state.            |
 | [`user-first-scoped-hydration.md`](concepts/user-first-scoped-hydration.md) | Browser data layers: user scope, board partitions, on-demand reads.       |
+| [`frontend-state.md`](concepts/frontend-state.md)                           | Browser stores and caches, persistence, writers, memory bounds and gaps.  |
 
 ## `guides/` — procedures
 

@@ -57,6 +57,18 @@ and narrow.
 - Details: [`rbac-and-unix-isolation.md`](context/guides/rbac-and-unix-isolation.md),
   [`session-sharing.md`](context/concepts/session-sharing.md).
 
+### Frontend state
+
+- One zustand store (`apps/agor-ui/src/store/agorStore.ts`) holds normalized entity rows. Only
+  `useAgorData` (fetches, Feathers realtime) and the store loaders write it. Transcripts live in
+  ref-counted handles (`retainReactiveSession`, `packages/client`), never in the store.
+- A reload keeps only the URL (board, session, branch), tokens, drafts, and UI preferences.
+- Memory: board rows are bounded (pins plus a 3-board LRU). Global collections (comments, users,
+  repos, boards) grow with the workspace. Session rows carry their full `tasks` id list. The
+  transcript trims to 30 turns only for a reader at the bottom. Give every new cache a bound.
+- Details: [`frontend-state.md`](context/concepts/frontend-state.md),
+  [`user-first-scoped-hydration.md`](context/concepts/user-first-scoped-hydration.md).
+
 ## Where to look first
 
 | Task                              | Start here                                                                                                                                                                                 |
