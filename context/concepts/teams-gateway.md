@@ -178,6 +178,33 @@ newest ones are kept (and trimmed oldest-first to the byte limit) with an
 omission note, and the cursor advances, as Slack does. Personal and group chats
 have no catch-up.
 
+## Agent history tools
+
+`agor_gateway_teams_thread_history_get` and `agor_gateway_teams_channel_posts_list`
+are a separate opt-in (`agent_tools: { channel_history: true }`); absent, `[]` or
+`false` refuse before any Teams call, and unknown keys or non-booleans fail
+validation.
+
+- Targets are standard channels this gateway channel has a fenced, unrevoked
+  address for (proof a verified activity arrived there), within the team and
+  channel allowlists. Private and shared channels, personal chats, and group
+  chats are refused. Another tenant's `gatewayChannelId` looks missing.
+- Session callers must be on the row's target branch; callers without session
+  context need admin or `all` branch permission.
+- The service URL comes only from the fenced address; Graph is the only other
+  origin. The cursor is the Graph `$skiptoken` value, never a URL, and the
+  request URL is rebuilt from validated IDs. A `nextLink` off the Graph origin
+  fails the read.
+- One Graph page per call under one 20 s deadline; `Retry-After` is waited out
+  only while short. A Graph 403 is `rsc_not_granted` for that team.
+- The tools never advance a cursor, admit a Task, or store Teams content.
+  Output is labeled untrusted and carries attachment names, never URLs or
+  tokens.
+
+The address row keeps the team ID, the team's M365 group ID, and the channel
+type in plaintext: non-secret routing facts Teams sends on some activities. The
+address itself stays encrypted.
+
 ## Migration
 
 `0118_teams_gateway_ha` (PostgreSQL) / `0117_teams_gateway_ha` (SQLite) runs

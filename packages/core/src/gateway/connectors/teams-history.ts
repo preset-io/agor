@@ -15,8 +15,8 @@ import {
   isTeamsRscDenied,
   TEAMS_MESSAGE_ID as MESSAGE_ID,
   markTeamsRscDenied,
+  parseGraphChatMessage,
   resolveTeamGroupId,
-  stripHtml,
   TEAMS_CATCH_UP_RETRY,
   type TeamsGraphCacheScope,
   TeamsGraphHttpError,
@@ -48,33 +48,22 @@ function toHistoryMessage(
   raw: unknown,
   config: TeamsGatewayConfig
 ): GatewayProviderHistoryMessage | null {
-  const message = asRecord(raw);
-  const id = text(message.id);
-  if (!id || !MESSAGE_ID.test(id)) return null;
-  const from = asRecord(message.from);
-  const user = asRecord(from.user);
-  const application = asRecord(from.application);
-  const body = asRecord(message.body);
-  const content = typeof body.content === 'string' ? body.content : '';
-  const attachments = Array.isArray(message.attachments) ? message.attachments : [];
-  const mentions = Array.isArray(message.mentions) ? message.mentions : [];
+  const message = parseGraphChatMessage(raw, config.app_id);
+  if (!message) return null;
   const allowlist = config.allowed_user_aad_object_ids ?? [];
-  const userId = text(user.id);
   return {
-    providerMessageId: id,
-    timestamp: text(message.createdDateTime) ?? '',
-    actorLabel: text(user.displayName) ?? text(application.displayName) ?? 'Teams participant',
-    text: body.contentType === 'html' ? stripHtml(content) : content.trim(),
-    isBot: Object.keys(application).length > 0 || !userId,
-    isSystem: message.messageType !== 'message' || message.deletedDateTime != null,
-    isRich: attachments.some((attachment) =>
-      String(asRecord(attachment).contentType ?? '').startsWith('application/vnd.microsoft.card')
-    ),
+    providerMessageId: message.id,
+    timestamp: message.createdAt,
+    actorLabel: message.actorLabel,
+    text: message.text,
+    isBot: message.isBot,
+    isSystem: message.isSystem,
+    isRich: message.isRich,
     isTrigger: false,
-    isMention: mentions.some(
-      (mention) => asRecord(asRecord(asRecord(mention).mentioned).application).id === config.app_id
-    ),
-    ...(allowlist.length > 0 ? { senderAllowlisted: !!userId && allowlist.includes(userId) } : {}),
+    isMention: message.isMention,
+    ...(allowlist.length > 0
+      ? { senderAllowlisted: !!message.authorAadId && allowlist.includes(message.authorAadId) }
+      : {}),
   };
 }
 
