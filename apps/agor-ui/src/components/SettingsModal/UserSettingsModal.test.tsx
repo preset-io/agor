@@ -1237,6 +1237,38 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     }, ASYNC);
   });
 
+  it.each(['codex', undefined] as const)(
+    'explains primary coding agent quick-start usage when the preference is %s',
+    async (primaryAgenticTool) => {
+      const user = makeUser({ primary_agentic_tool: primaryAgenticTool });
+      renderWithApp(
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={user}
+          currentUser={user}
+          client={null}
+          onUpdate={vi.fn()}
+          initialTab="preferences"
+        />
+      );
+
+      await screen.findByRole('combobox', { name: 'Primary coding agent' });
+      expect(
+        screen.getByText(
+          /Used to quick-start “Ask your primary assistant” and when an agent creates a session via MCP without specifying a coding agent\./
+        )
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/Preselected for new sessions/)).not.toBeInTheDocument();
+      if (!primaryAgenticTool) {
+        expect(screen.getByText('Not set')).toBeInTheDocument();
+        expect(
+          screen.getByText(/Once you successfully use a coding agent, Agor will remember it here\./)
+        ).toBeInTheDocument();
+      }
+    }
+  );
+
   it('shows and saves the primary coding agent from Preferences', async () => {
     const user = makeUser({ primary_agentic_tool: 'codex' });
     const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});

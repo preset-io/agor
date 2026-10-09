@@ -222,6 +222,23 @@ From there agents can:
 
 This self-awareness is what lets agents behave like team members instead of detached copilots.
 
+### Choosing a tool for a new session
+
+For `agor_sessions_create`, omit `agenticTool` unless the task needs a specific
+coding agent. Agor uses the **authenticated caller's Primary coding agent**
+from Settings → Preferences, not the calling session's tool or its owner's
+preference. If no primary coding agent is set, the call fails without creating
+a session. Set the preference or pass `agenticTool` explicitly.
+
+The selected tool follows the same configuration resolution as an explicit
+tool choice: the caller's saved configuration or selected preset, with workspace
+defaults and policies applied by the session service. Explicit overrides such as
+`modelConfig` retain their existing behavior. A disabled tool is rejected;
+Agor does not silently substitute another tool.
+
+This does not change the Add session picker or parent-tool inheritance for
+spawn and fork.
+
 ## Automation Examples
 
 Branch materialization is asynchronous by default. For the most discoverable one-call flow, an
