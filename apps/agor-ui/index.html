@@ -5,7 +5,7 @@
     <!-- Root-absolute so Vite rebases it to the configured base (/ui/ in prod);
          a relative href would 404 on deep-linked nested routes. -->
     <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Agor</title>
     <style>
       /* biome-ignore-all lint/plugin/noFirstPartyCss: pre-React viewport sizing must apply before the themed application mounts */
@@ -18,6 +18,12 @@
         height: 100vh;
         margin: 0;
         padding: 0;
+      }
+      /* iOS Safari sizes vh to the toolbar-hidden viewport, which leaves the document scrollable. */
+      @supports (height: 100dvh) {
+        #root {
+          height: 100dvh;
+        }
       }
     </style>
   </head>

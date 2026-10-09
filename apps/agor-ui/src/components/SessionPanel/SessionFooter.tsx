@@ -1365,9 +1365,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         // the bottom inset supplied by a padding shorthand in React.
         paddingTop: token.paddingXS,
         paddingInline: isMobile ? token.padding : token.paddingLG,
-        paddingBottom: isMobile
-          ? `max(${token.sizeUnit * 2}px, env(safe-area-inset-bottom))`
-          : token.sizeUnit * 2,
+        // On phones the tab bar below owns the bottom safe area.
+        paddingBottom: token.sizeUnit * 2,
         marginLeft: -token.sizeUnit * 6,
         marginRight: -token.sizeUnit * 6,
       }}

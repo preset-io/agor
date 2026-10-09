@@ -25,7 +25,6 @@ vi.mock('./SessionPage', () => ({
     return <div data-testid="session-page">{sessionId}</div>;
   },
 }));
-vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
 vi.mock('../../hooks/useIdleReady', () => ({ useIdleReady: () => false }));
 
@@ -159,8 +158,35 @@ beforeEach(() => {
   resetAccessCacheForTests();
 });
 
+/** Comments and mentions now live in More (the header bell is gone). */
+async function openCommentsFromMore() {
+  fireEvent.click(screen.getByRole('button', { name: 'More' }));
+  fireEvent.click(await screen.findByRole('button', { name: /^Comments and mentions/ }));
+}
+
 describe('MobileApp Home wiring', () => {
-  it('opens Needs you on Comments from the bell', async () => {
+  it('badges Home with the "need you" count and More with unread comments', async () => {
+    seed({
+      sessions: [
+        session('run', { status: 'running' }),
+        session('perm', { status: 'awaiting_permission' }),
+      ],
+      comments: [mention('c1')],
+    });
+    renderPhoneHome();
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    await waitFor(() =>
+      expect(within(nav).getByRole('button', { name: 'More' })).toHaveTextContent('1')
+    );
+    expect(screen.getByText(/need you/).textContent).toBe('2 need you');
+    expect(within(nav).getByRole('button', { name: 'Home' })).toHaveTextContent('2');
+    fireEvent.click(within(nav).getByRole('button', { name: 'More' }));
+    expect(
+      await screen.findByRole('button', { name: 'Comments and mentions, 1 unread' })
+    ).toBeInTheDocument();
+  });
+
+  it('opens Needs you on Comments from More', async () => {
     seed({
       sessions: [session('perm', { status: 'awaiting_permission' })],
       comments: [mention('c1')],
@@ -169,7 +195,7 @@ describe('MobileApp Home wiring', () => {
     const needs = screen.getByRole('region', { name: 'Needs you' });
     expect(within(needs).getByRole('button', { name: /Session perm/ })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
+    await openCommentsFromMore();
     await waitFor(() =>
       expect(within(needs).queryByRole('button', { name: /Session perm/ })).not.toBeInTheDocument()
     );
@@ -177,10 +203,10 @@ describe('MobileApp Home wiring', () => {
     expect(within(needs).getByRole('radio', { name: 'Comments 1' })).toBeChecked();
   });
 
-  it('keeps Back leaving Home when the bell is tapped on Home', async () => {
+  it('keeps Back leaving Home when comments are opened on Home', async () => {
     seed({ sessions: [session('idle')], comments: [mention('c1')] });
     renderPhoneHome(['/m/search', '/m']);
-    fireEvent.click(screen.getByRole('button', { name: 'Comments' }));
+    await openCommentsFromMore();
     expect(
       await within(screen.getByRole('region', { name: 'Needs you' })).findByRole('radio', {
         name: 'Comments 1',
