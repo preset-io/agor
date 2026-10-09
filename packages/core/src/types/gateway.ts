@@ -420,7 +420,7 @@ export const MAX_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
 /** Inbound claim lease; member lookup, catch-up, attachments, and admission all fit inside it. */
 export const TEAMS_INBOUND_LEASE_MS = 30_000;
 
-/** One deadline for all of a message's attachments: what the lease leaves after catch-up and 10 s of headroom. */
+/** One deadline for all of a message's attachments: the lease minus catch-up, the 5 s member lookup, and 10 s of headroom. */
 export function teamsAttachmentDeadlineMs(config: Record<string, unknown>): number {
   const catchUp = isRecord(config.catch_up) ? config.catch_up : {};
   const catchUpMs =
@@ -429,7 +429,7 @@ export function teamsAttachmentDeadlineMs(config: Record<string, unknown>): numb
       : typeof catchUp.request_timeout_ms === 'number'
         ? catchUp.request_timeout_ms
         : DEFAULT_TEAMS_CATCH_UP.request_timeout_ms;
-  return Math.max(5_000, Math.min(12_000, TEAMS_INBOUND_LEASE_MS - 10_000 - catchUpMs));
+  return Math.max(3_000, Math.min(12_000, TEAMS_INBOUND_LEASE_MS - 15_000 - catchUpMs));
 }
 
 export interface TeamsConfigValidationResult {

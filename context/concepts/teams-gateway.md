@@ -196,7 +196,9 @@ validation.
 - Targets are standard channels this gateway channel has a fenced, unrevoked
   address for (proof a verified activity arrived there), within the team and
   channel allowlists. Private and shared channels, personal chats, and group
-  chats are refused. Another tenant's `gatewayChannelId` looks missing.
+  chats are refused; Teams sends the channel type on some activities only, so
+  any stored thread marked private or shared refuses its whole channel. Another
+  tenant's `gatewayChannelId` looks missing.
 - Session callers must be on the row's target branch; callers without session
   context need admin or `all` branch permission.
 - The service URL comes only from the fenced address; Graph is the only other
@@ -228,7 +230,9 @@ target. The send is synchronous and not durable, as on Slack and Discord.
   the SDK adapter drops `activityId`); at most three chunks. A provider-proven
   non-acceptance with a short `Retry-After` is retried once. An unknown outcome
   stores no seed and is reported as possibly posted. A failure after the first
-  chunk keeps the seed and reports a partial post.
+  chunk keeps the seed and reports a partial post. A refused post never revokes
+  the addresses replies use. Channel listings run after the tenant database
+  unit closes, never inside its transaction.
 - The seed's `platform_thread_id` is exactly `channel|root`, the key
   normalization gives every activity in that reply chain, so admission needs no
   alias. Only channel conversations reach the seed gate.

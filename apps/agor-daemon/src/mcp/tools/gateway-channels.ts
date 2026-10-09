@@ -4,7 +4,6 @@ import {
   isStandardChannelType,
   SessionRepository,
   TeamsConversationAddressRepository,
-  type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
 } from '@agor/core/db';
 import {
@@ -32,7 +31,6 @@ import {
   TEAMS_HISTORY_MAX_LIMIT,
   TEAMS_RSC_APPLICATION_PERMISSIONS,
   TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
-  type TeamsChannelPostsRequest,
   type TeamsConnector,
   type TeamsThreadHistoryRequest,
   teamsGatewayCallbackUrl,
@@ -71,7 +69,6 @@ import {
   type SessionID,
   type SlackAgentToolCapability,
   TEAMS_CHANNEL_ID_PATTERN,
-  type TeamsChannelPostsResult,
   type TeamsGatewayConfig,
   type TeamsThreadHistoryResult,
   type UserID,
@@ -98,6 +95,10 @@ import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.j
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import {
+  listTeamsAnchoredChannels,
+  TEAMS_ANCHOR_TEAMS,
+} from '../../utils/teams-channel-anchors.js';
 import { teamsGraphCacheScope } from '../../utils/teams-connector-cache.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
@@ -849,21 +850,6 @@ const teamsChannelPostsSchema = z.strictObject({
   cursor: teamsCursorSchema,
   limit: teamsHistoryLimitSchema(TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT, 'posts'),
 });
-
-interface TeamsReadConnector {
-  fetchThreadHistory(req: TeamsThreadHistoryRequest): Promise<TeamsThreadHistoryResult>;
-  listChannelPosts(req: TeamsChannelPostsRequest): Promise<TeamsChannelPostsResult>;
-}
-
-function assertTeamsReadConnector<K extends keyof TeamsReadConnector>(
-  connector: unknown,
-  method: K
-): asserts connector is Pick<TeamsReadConnector, K> {
-  const candidate = connector as Partial<TeamsReadConnector> | null | undefined;
-  if (typeof candidate?.[method] !== 'function') {
-    throw new Error('Teams channel history is not available for this gateway connector.');
-  }
-}
 
 function teamsThreadHistoryMarkdown(history: TeamsThreadHistoryResult): string {
   const lines = [`# Teams thread ${history.rootMessageId} in ${history.channelId}`, ''];
@@ -1808,48 +1794,6 @@ interface TeamsKnownChannel {
   name: string;
 }
 
-const TEAMS_KNOWN_CHANNEL_TEAMS = 5;
-
-/** Standard channels the bot can post to, within the allowlists; empty when Teams cannot be asked. */
-async function teamsKnownChannels(
-  ctx: McpContext,
-  db: TenantScopeAwareDatabase,
-  channel: GatewayChannel
-): Promise<TeamsKnownChannel[]> {
-  const config = channel.config as TeamsGatewayConfig;
-  const allowedTeams = config.allowed_team_ids ?? [];
-  const allowedChannels = config.allowed_channel_ids ?? [];
-  try {
-    const anchors = await new TeamsConversationAddressRepository(db).loadFencedTeamAnchors({
-      channel,
-      limit: TEAMS_KNOWN_CHANNEL_TEAMS,
-    });
-    const connector = getConnector('teams', channel.config) as unknown as Pick<
-      TeamsConnector,
-      'listTeamChannels'
-    >;
-    const known: TeamsKnownChannel[] = [];
-    for (const anchor of anchors) {
-      const teamId = anchor.row.team_id as string;
-      if (allowedTeams.length > 0 && !allowedTeams.includes(teamId)) continue;
-      const channels = await connector
-        .listTeamChannels({
-          teamId,
-          serviceUrl: anchor.address.serviceUrl as string,
-          cacheScope: teamsCacheScope(ctx, channel),
-        })
-        .catch(() => []);
-      for (const candidate of channels) {
-        if (allowedChannels.length > 0 && !allowedChannels.includes(candidate.id)) continue;
-        known.push({ teams_channel_id: candidate.id, name: candidate.name });
-      }
-    }
-    return known;
-  } catch {
-    return [];
-  }
-}
-
 const TEAMS_CHANNEL_UNSEEN =
   'This gateway channel has not received an activity from that Teams channel, so Agor cannot read it.';
 
@@ -1922,10 +1866,6 @@ async function resolveTeamsReadToolTarget(
       ...(branch?.name ? { target_branch_name: branch.name } : {}),
     },
   };
-}
-
-function teamsCacheScope(ctx: McpContext, channel: GatewayChannel) {
-  return teamsGraphCacheScope(channel, ctx.baseServiceParams.tenant?.tenant_id);
 }
 
 /**
@@ -2447,18 +2387,21 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       }),
     },
     async (args) => {
-      return runWithMcpTenantDatabaseScope(ctx, async (db) => {
+      const scoped = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
         const channelRepo = new GatewayChannelRepository(db);
         const branchRepo = new BranchRepository(db);
         const callerSessionBranchId = await resolveCallerSessionBranchId(ctx);
         const branchFilter = args.branchId ? await branchRepo.findById(args.branchId) : null;
         const requestedBranchId = branchFilter?.branch_id;
         if (callerSessionBranchId && args.branchId && requestedBranchId !== callerSessionBranchId) {
-          return textResult({
-            channels: [],
-            binding:
-              "Results are scoped to the calling session's branch; the requested branchId targets a different branch, so this session cannot use its channels.",
-          });
+          return {
+            body: {
+              channels: [],
+              binding:
+                "Results are scoped to the calling session's branch; the requested branchId targets a different branch, so this session cannot use its channels.",
+            },
+            teams: [],
+          };
         }
         const branchFilterId = callerSessionBranchId ?? requestedBranchId;
         const allChannels = args.gatewayChannelId
@@ -2522,29 +2465,54 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         const offset = args.offset ?? 0;
         const page: Array<(typeof channels)[number] & { known_channels?: TeamsKnownChannel[] }> =
           channels.slice(offset, offset + limit);
-        // Teams IDs cannot be guessed, so list reachable channels for the returned page only.
+        // Teams IDs cannot be guessed: load anchors for the returned page here, list channels below.
+        const teams = [];
         for (const entry of page) {
-          if (entry.channel_type !== 'teams') continue;
           const channel = allChannels.find(
             (candidate) => candidate?.id === entry.gateway_channel_id
           );
-          if (channel) entry.known_channels = await teamsKnownChannels(ctx, db, channel);
+          if (entry.channel_type !== 'teams' || !channel) continue;
+          const anchors = await new TeamsConversationAddressRepository(db).loadFencedTeamAnchors({
+            channel,
+            limit: TEAMS_ANCHOR_TEAMS,
+          });
+          teams.push({ entry, channel, anchors });
         }
         const hasMore = offset + page.length < channels.length;
-        return textResult({
-          channels: page,
-          total: channels.length,
-          limit,
-          offset,
-          hasMore,
-          nextOffset: hasMore ? offset + page.length : null,
-          ...(callerSessionBranchId && page.length === 0
-            ? {
-                hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
-              }
-            : {}),
-        });
+        return {
+          body: {
+            channels: page,
+            total: channels.length,
+            limit,
+            offset,
+            hasMore,
+            nextOffset: hasMore ? offset + page.length : null,
+            ...(callerSessionBranchId && page.length === 0
+              ? {
+                  hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
+                }
+              : {}),
+          },
+          teams,
+        };
       });
+      // Provider calls run after the tenant database unit closes, never inside its transaction.
+      for (const { entry, channel, anchors } of scoped.teams) {
+        const connector = getConnector('teams', channel.config) as unknown as Pick<
+          TeamsConnector,
+          'listTeamChannels'
+        >;
+        const reachable = await listTeamsAnchoredChannels({
+          channel,
+          anchors,
+          connector,
+          tenantId: ctx.baseServiceParams.tenant?.tenant_id,
+        });
+        entry.known_channels = reachable.flatMap(({ channels }) =>
+          channels.map((candidate) => ({ teams_channel_id: candidate.id, name: candidate.name }))
+        );
+      }
+      return textResult(scoped.body);
     }
   );
 
@@ -2783,8 +2751,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'rootMessageId is required outside the calling session’s own thread; list posts with agor_gateway_teams_channel_posts_list.'
         );
       }
-      const connector = getConnector('teams', target.channel.config);
-      assertTeamsReadConnector(connector, 'fetchThreadHistory');
+      const connector = getConnector('teams', target.channel.config) as unknown as TeamsConnector;
       const limit = args.limit ?? TEAMS_THREAD_HISTORY_DEFAULT_LIMIT;
       const history = await connector.fetchThreadHistory({
         team: target.team,
@@ -2793,7 +2760,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         ...(args.cursor ? { cursor: args.cursor } : {}),
         limit,
         includeBotMessages: args.includeBotMessages === true,
-        cacheScope: teamsCacheScope(ctx, target.channel),
+        cacheScope: teamsGraphCacheScope(target.channel, ctx.baseServiceParams.tenant?.tenant_id),
       });
       return textResult({
         warning:
@@ -2823,15 +2790,14 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     },
     async (args) => {
       const target = await resolveTeamsReadToolTarget(ctx, args);
-      const connector = getConnector('teams', target.channel.config);
-      assertTeamsReadConnector(connector, 'listChannelPosts');
+      const connector = getConnector('teams', target.channel.config) as unknown as TeamsConnector;
       const limit = args.limit ?? TEAMS_CHANNEL_POSTS_DEFAULT_LIMIT;
       const result = await connector.listChannelPosts({
         team: target.team,
         channelId: target.teamsChannelId,
         ...(args.cursor ? { cursor: args.cursor } : {}),
         limit,
-        cacheScope: teamsCacheScope(ctx, target.channel),
+        cacheScope: teamsGraphCacheScope(target.channel, ctx.baseServiceParams.tenant?.tenant_id),
       });
       return textResult({
         warning:

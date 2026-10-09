@@ -182,11 +182,8 @@ import {
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { prepareTeamsCatchUp, type TeamsCatchUpTrigger } from '../utils/teams-catch-up.js';
-import {
-  type TeamsSendConnector,
-  teamsConnectorCache,
-  teamsGraphCacheScope,
-} from '../utils/teams-connector-cache.js';
+import { listTeamsAnchoredChannels, TEAMS_ANCHOR_TEAMS } from '../utils/teams-channel-anchors.js';
+import { type TeamsSendConnector, teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import {
   createTenantBoundDataAccess,
   type TenantBoundDataAccess,
@@ -835,7 +832,6 @@ const SLACK_GATEWAY_REPLY_NOTE =
 const TEAMS_PROACTIVE_REPLY_HINT = '_To reply, @mention Agor in this thread._';
 const TEAMS_PROACTIVE_MAX_CHUNKS = 3;
 const TEAMS_PROACTIVE_TIMEOUT_MS = 15_000;
-const TEAMS_PROACTIVE_ANCHOR_TEAMS = 5;
 
 const TEAMS_GATEWAY_REPLY_NOTE =
   'Note: Any assistant message you send in this current Agor session is posted back to the Microsoft Teams conversation it came from.';
@@ -5021,11 +5017,6 @@ export class GatewayService {
           await new Promise((resolve) => setTimeout(resolve, outcome.retryAfterMs ?? 250));
           continue;
         }
-        if (outcome.kind === 'revoked') {
-          await this.teamsAddressRepo
-            .revokeConversations(channel.id, [channelId], outcome.reason)
-            .catch(() => 0);
-        }
         console.warn(
           `[gateway.teams.proactive] event=send_failed channel_id=${channel.id} outcome=${outcome.kind} code=${outcome.code}`
         );
@@ -5114,18 +5105,13 @@ export class GatewayService {
     }
     const anchors = await this.teamsAddressRepo.loadFencedTeamAnchors({
       channel,
-      limit: TEAMS_PROACTIVE_ANCHOR_TEAMS,
+      limit: TEAMS_ANCHOR_TEAMS,
     });
-    for (const anchor of anchors) {
-      const channels = await connector
-        .listTeamChannels({
-          teamId: anchor.row.team_id as string,
-          serviceUrl: anchor.address.serviceUrl as string,
-          cacheScope: teamsGraphCacheScope(channel, tenantId),
-        })
-        .catch(() => []);
-      if (channels.some((candidate) => candidate.id === channelId)) return anchor;
-    }
+    const reachable = await listTeamsAnchoredChannels({ channel, anchors, connector, tenantId });
+    const match = reachable.find(({ channels }) =>
+      channels.some((candidate) => candidate.id === channelId)
+    );
+    if (match) return match.anchor;
     throw new Error(
       'Agor has not seen this Teams channel or its team yet; mention the bot in that team once, then try again.'
     );

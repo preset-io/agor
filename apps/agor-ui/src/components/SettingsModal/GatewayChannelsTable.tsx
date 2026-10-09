@@ -4351,8 +4351,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         typeof values.teams_default_outbound_target === 'string'
           ? values.teams_default_outbound_target.trim()
           : '';
-      if (teamsTarget) config.default_outbound_target = teamsTarget;
-      else delete config.default_outbound_target;
+      // Null, not delete: the stored config is merged shallowly, so a deleted key would survive.
+      config.default_outbound_target = teamsTarget || null;
       config.agent_tools = { channel_history: values.teams_channel_history === true };
       config.files = values.teams_files === true;
       // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.

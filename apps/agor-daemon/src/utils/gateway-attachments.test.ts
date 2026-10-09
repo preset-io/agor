@@ -1267,4 +1267,23 @@ describe('ingestProviderInboundFiles for Teams', () => {
     expect(result).toMatchObject({ uploads: [], failed: 2, failedNames: ['image-1', 'image-2'] });
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
+
+  it('bounds a stalled credential lookup by the shared deadline', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const deadline = new AbortController();
+    const fetchImpl = vi.fn();
+    const pending = ingestProviderInboundFiles({
+      files: [image()],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor: () => new Promise(() => undefined),
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      signal: deadline.signal,
+      ...owner,
+    });
+    deadline.abort();
+    await expect(pending).resolves.toMatchObject({ uploads: [], failed: 1 });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
 });

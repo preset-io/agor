@@ -1192,6 +1192,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
         agent_tools: { channel_history: false },
         files: false,
         outbound_enabled: false,
+        default_outbound_target: null,
       },
     });
     expect(channelCreate.mock.calls[0][0].config).not.toHaveProperty('require_mention');

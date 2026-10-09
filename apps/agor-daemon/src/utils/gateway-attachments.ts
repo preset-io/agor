@@ -282,7 +282,12 @@ export async function ingestProviderInboundFiles(args: {
     }
     let request: ProviderFileRequest | null = null;
     try {
-      request = isAllowedIngestMime(file.mimetype) ? await args.requestFor(file) : null;
+      // The shared deadline also bounds credential lookup, which has no abort signal of its own.
+      request = !isAllowedIngestMime(file.mimetype)
+        ? null
+        : args.signal
+          ? await withAbort(args.requestFor(file), args.signal)
+          : await args.requestFor(file);
     } catch (error) {
       fail(file, `credential unavailable code=${gatewayFailureCode(error)}`);
       continue;

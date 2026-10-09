@@ -632,7 +632,7 @@ describe('normalizeTeamsActivity', () => {
     );
     expect(normalized.skippedFiles).toEqual([
       { name: 'image-1', reason: 'files_disabled' },
-      { name: 'notes.docx', reason: 'files_disabled' },
+      { name: 'notes.docx', reason: 'unsupported_type' },
     ]);
     expect(JSON.stringify(normalized)).not.toContain('attachments/a1');
     expect(normalizeTeamsActivity(activity(), config)).not.toHaveProperty('skippedFiles');
@@ -645,7 +645,7 @@ describe('normalizeTeamsActivity', () => {
       activity({
         text: '',
         attachments: [
-          { contentType: 'image/png', contentUrl: imageUrl },
+          { contentType: 'image/*', contentUrl: imageUrl },
           { contentType: 'image/png', contentUrl: 'https://evil.example/a.png' },
           { contentType: 'image/svg+xml', contentUrl: imageUrl },
           {

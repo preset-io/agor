@@ -5,7 +5,7 @@ import {
   listTeamsChannelPosts,
   TeamsChannelHistoryError,
 } from './teams-channel-history';
-import { resetTeamsGraphCaches } from './teams-graph';
+import { fetchTeamsTeamChannels, resetTeamsGraphCaches } from './teams-graph';
 
 const CHANNEL_ID = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
 const GROUP_ID = 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b';
@@ -263,5 +263,39 @@ describe('Teams channel posts', () => {
       }),
     ]);
     expect(result).toMatchObject({ has_more: false, next_cursor: null });
+  });
+});
+
+describe('Teams team channel listing', () => {
+  it('lists a team through the Bot Connector with the token scope of its cloud', async () => {
+    const serviceUrl = 'https://smba.infra.gov.teams.microsoft.us/teams/';
+    const scopes: string[] = [];
+    const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('https://login.microsoftonline.com/')) {
+        scopes.push(String(new URLSearchParams(String(init?.body)).get('scope')));
+        return json({ token_type: 'Bearer', expires_in: 3599, access_token: 'bot-token' });
+      }
+      expect(url).toBe(
+        `${serviceUrl}v3/teams/${encodeURIComponent('19:team@thread.tacv2')}/conversations`
+      );
+      return json({
+        conversations: [
+          { id: '19:team@thread.tacv2', name: null },
+          { id: CHANNEL_ID, name: 'Releases' },
+          { id: 'not-a-channel', name: 'x' },
+        ],
+      });
+    });
+    const channels = await fetchTeamsTeamChannels(
+      config,
+      { teamId: '19:team@thread.tacv2', serviceUrl, cacheScope },
+      { fetchImpl: fetchImpl as unknown as typeof fetch }
+    );
+    expect(channels).toEqual([
+      { id: '19:team@thread.tacv2', name: 'General' },
+      { id: CHANNEL_ID, name: 'Releases' },
+    ]);
+    expect(scopes).toEqual(['https://api.botframework.us/.default']);
   });
 });

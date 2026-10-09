@@ -6822,6 +6822,22 @@ describe('GatewayService Teams proactive sends', () => {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
+  it('leaves reply addresses alone when Teams refuses a proactive post', async () => {
+    const { emit, addresses, create } = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => {
+        throw new TeamsSendError({
+          phase: 'send',
+          status: 403,
+          providerCode: 'BotNotInConversationRoster',
+        });
+      }),
+    });
+    await expect(emit()).rejects.toThrow('Teams API failure');
+    expect(addresses.revokeConversations).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('keeps the seed and reports a partial post when a later chunk fails', async () => {
     const { emit, create } = emitHarness({
       direct: fenced(),
