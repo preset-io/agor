@@ -326,5 +326,21 @@
     "caption": "Hatched bands mark simulated 59px top and 34px bottom insets: only the tab bar pads the bottom, and headers start below the top inset.",
     "viewport": "iPhone 15 WebKit 390x844",
     "theme": "dark"
+  },
+  {
+    "file": "iphone-dark-more-create-new.png",
+    "kind": "image",
+    "title": "More sheet, Create new open, iPhone dark",
+    "caption": "Create new lists the shared create flows from the desktop menu (Repository for admins only).",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone-light-more-create-new.png",
+    "kind": "image",
+    "title": "More sheet, Create new open, iPhone light",
+    "caption": "Create new lists the shared create flows from the desktop menu (Repository for admins only).",
+    "viewport": "iPhone 15 WebKit 393x659",
+    "theme": "light"
   }
 ]
