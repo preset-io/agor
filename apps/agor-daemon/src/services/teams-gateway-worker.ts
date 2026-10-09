@@ -172,7 +172,8 @@ export class TeamsGatewayWorker {
   private async admitInbound(event: GatewayInboundEvent): Promise<void> {
     let payload: Record<string, unknown>;
     try {
-      payload = this.inboundRepo.decryptQueuedPayload(event);
+      // The tenant unit-of-work proxy makes every repository method async.
+      payload = await this.inboundRepo.decryptQueuedPayload(event);
     } catch (error) {
       throw new TeamsInboundError('teams_payload_invalid', false, error);
     }
