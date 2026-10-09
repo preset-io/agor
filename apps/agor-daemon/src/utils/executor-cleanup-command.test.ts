@@ -189,9 +189,11 @@ describe('optional cleanup result on stdout', () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
   it('keeps an exit 0 observed just before the deadline confirmed', async () => {
-    const timeoutMs = 300;
+    // Exit lands well before the deadline; the busy-wait alone forces the race.
+    const timeoutMs = 1000;
     const started = Date.now();
     const realSetTimeout = globalThis.setTimeout;
+    let forced = false;
     // Hold the loop past the deadline as the grace timer is armed, so the main
     // timeout is already due; it must no longer override the observed exit.
     const spy = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
@@ -199,6 +201,7 @@ describe('optional cleanup result on stdout', () => {
       ms?: number
     ) => {
       if (callback.name === 'finishWithOutput') {
+        forced = true;
         while (Date.now() - started < timeoutMs + 50) {
           /* Busy-wait. */
         }
@@ -206,9 +209,12 @@ describe('optional cleanup result on stdout', () => {
       return realSetTimeout(callback, ms);
     }) as typeof setTimeout);
     try {
-      expect(
-        await runExecutorCleanupCommand('sleep 0.15; (sleep 3 &); exit 0', context, timeoutMs)
-      ).toEqual({ confirmed: true, diagnostic: 'Cleanup command exited with code 0.' });
+      expect(await runExecutorCleanupCommand('(sleep 3 &); exit 0', context, timeoutMs)).toEqual({
+        confirmed: true,
+        diagnostic: 'Cleanup command exited with code 0.',
+      });
+      // Fails loudly if the grace callback is renamed and the race is never forced.
+      expect(forced).toBe(true);
     } finally {
       spy.mockRestore();
     }
