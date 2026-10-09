@@ -7,7 +7,11 @@ describe('chunkMarkdown', () => {
     const text = Array.from({ length: 40 }, (_, i) => `line ${i} ${'x'.repeat(20)} tail`).join(
       '\n'
     );
-    const chunks = chunkMarkdown(text, { limit: 200, measure: codePointLength });
+    const chunks = chunkMarkdown(text, {
+      limit: 200,
+      measure: codePointLength,
+      preferLineBreaks: true,
+    });
     expect(chunks.length).toBeGreaterThan(1);
     expect(chunks.join('')).toBe(text);
     for (const chunk of chunks.slice(1)) expect(chunk.startsWith('line ')).toBe(true);

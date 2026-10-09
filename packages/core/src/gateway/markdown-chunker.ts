@@ -13,6 +13,8 @@ export interface MarkdownChunkOptions {
   measure?: (value: string) => number;
   /** Provider label used in limit errors, e.g. "Discord". */
   label?: string;
+  /** Prefer the last line break over a later space when choosing a soft cut. */
+  preferLineBreaks?: boolean;
 }
 
 interface FenceState {
@@ -124,8 +126,11 @@ export function chunkMarkdown(text: string, options: MarkdownChunkOptions): stri
       if (token.text === '\n') newlineOffset = index + 1;
       else if (token.text === ' ') spaceOffset = index + 1;
     }
-    // A line break beats a later space, so a chunk never ends mid-line when it can avoid it.
-    const softOffset = newlineOffset > startOffset ? newlineOffset : spaceOffset;
+    // Otherwise the last whitespace wins; Discord's index-keyed receipts depend on those cuts.
+    const softOffset =
+      options.preferLineBreaks && newlineOffset > startOffset
+        ? newlineOffset
+        : Math.max(newlineOffset, spaceOffset);
     let endOffset = maxOffset;
     let nextState: FenceState | null = maxState;
     if (softOffset > startOffset && softOffset < maxOffset) {
