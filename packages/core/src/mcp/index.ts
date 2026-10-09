@@ -43,6 +43,11 @@ export {
   mayMemberWriteMCPServers,
 } from './member-policy';
 export {
+  hasPreregisteredMCPOAuthClient,
+  MCPSignInNoticeCollector,
+  renderMCPSignInRequiredNotice,
+} from './oauth-sign-in';
+export {
   filterMCPServersForSession,
   isMCPServerNotUsableError,
   isMCPServerUsableBy,

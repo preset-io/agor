@@ -58,9 +58,10 @@ vi.mock('../base/permission-hooks.js', () => ({
   ),
 }));
 
-import { getMcpServersForSession } from '@agor/core/mcp';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import * as Claude from '@anthropic-ai/claude-agent-sdk';
+import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
 import { CLAUDE_CODE_DISALLOWED_TOOLS, CLAUDE_CODE_TODO_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -994,6 +995,195 @@ describe('setupQuery - Local Settings Support', () => {
       headers: { 'X-Tenant': 'tenant-1' },
     });
     expect(mcpServers.oauthRemote.alwaysLoad).toBeUndefined();
+  });
+
+  describe('OAuth servers without a grant', () => {
+    async function setupWith(servers: unknown[], setup: { lookupFails?: boolean } = {}) {
+      const deps = createMockDeps();
+      deps.sessionMCPRepo = {} as any;
+      deps.mcpServerRepo = {} as any;
+      if (setup.lookupFails) {
+        vi.mocked(resolveMCPAuthHeaders).mockRejectedValue(new Error('authority timed out'));
+      } else {
+        vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
+      }
+      vi.mocked(getMcpServersForSession).mockResolvedValue(
+        servers.map((server: any) => ({
+          server,
+          source: 'global',
+          oauthAuthResolution: 'unavailable',
+          configuredOAuthGrantType: server.auth?.oauth_grant_type,
+        }))
+      );
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const options = claudeQuery.mock.calls[0][0].options;
+      return {
+        mcpServers: options.mcpServers as Record<string, Record<string, unknown>>,
+        append: (options.systemPrompt as { append: string }).append,
+      };
+    }
+
+    it.each([
+      [
+        'per-user configured client',
+        { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' },
+      ],
+      // A Per User -> Shared switch invalidates the grant; the server stays configured.
+      [
+        'shared configured client after a mode switch',
+        {
+          type: 'oauth',
+          oauth_mode: 'shared',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'customer-app',
+        },
+      ],
+      ['DCR disabled without a visible client ID', { type: 'oauth', oauth_dcr_mode: 'disabled' }],
+    ])('withholds a %s from Claude Code and asks for sign-in', async (_label, auth) => {
+      const { mcpServers, append } = await setupWith([
+        {
+          mcp_server_id: 'asana-id',
+          name: 'asana',
+          display_name: 'Asana',
+          transport: 'http',
+          url: 'https://mcp.asana.test/mcp',
+          auth,
+        },
+      ]);
+
+      // Not handed to the CLI, so it cannot attempt its own OAuth / DCR.
+      expect(mcpServers.asana).toBeUndefined();
+      expect(append).toContain('## MCP servers that need sign-in');
+      expect(append).toContain('- mcpServerId: asana-id, label: "Asana"');
+      expect(append).toContain('agor_widgets_request_oauth');
+      expect(append).not.toMatch(/dynamic client registration/i);
+    });
+
+    it('keeps passing a DCR server through unchanged', async () => {
+      const { mcpServers, append } = await setupWith([
+        {
+          mcp_server_id: 'dcr-id',
+          name: 'dcrRemote',
+          transport: 'http',
+          url: 'https://mcp.dcr.test/mcp',
+          auth: { type: 'oauth' },
+        },
+      ]);
+
+      expect(mcpServers.dcrRemote).toMatchObject({
+        type: 'http',
+        url: 'https://mcp.dcr.test/mcp',
+      });
+      expect(mcpServers.dcrRemote.alwaysLoad).toBeUndefined();
+      expect(append).toContain('- mcpServerId: dcr-id, label: "dcrRemote"');
+      expect(append).not.toContain('tools are not loaded');
+    });
+
+    it('tells the agent what to do if a manual server turns out to need a client ID', async () => {
+      const { mcpServers, append } = await setupWith([
+        {
+          mcp_server_id: 'manual-id',
+          name: 'manual',
+          transport: 'http',
+          url: 'https://mcp.no-registration.test/mcp',
+          auth: { type: 'oauth', oauth_dcr_mode: 'advertised' },
+        },
+      ]);
+
+      expect(mcpServers.manual).toBeDefined();
+      expect(append).toContain('agor_widgets_request_oauth');
+      expect(append).toContain('an administrator must save one');
+    });
+
+    it('withholds a configured client whose credential lookup fails, asking to retry', async () => {
+      const { mcpServers, append } = await setupWith(
+        [
+          {
+            mcp_server_id: 'asana-id',
+            name: 'asana',
+            transport: 'http',
+            url: 'https://mcp.asana.test/mcp',
+            auth: { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' },
+          },
+          {
+            mcp_server_id: 'dcr-id',
+            name: 'dcrRemote',
+            transport: 'http',
+            url: 'https://mcp.dcr.test/mcp',
+            auth: { type: 'oauth' },
+          },
+        ],
+        { lookupFails: true }
+      );
+
+      expect(mcpServers.asana).toBeUndefined();
+      expect(append).toContain("couldn't load the sign-in");
+      expect(append).toContain('mcpServerId: asana-id');
+      // DCR keeps today's catch behavior: dispatched, no notice.
+      expect(mcpServers.dcrRemote).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+      expect(append).not.toContain('dcr-id');
+    });
+
+    it('gives a client-credentials server admin guidance instead of a browser sign-in', async () => {
+      const { mcpServers, append } = await setupWith([
+        {
+          mcp_server_id: 'm2m-id',
+          name: 'm2m',
+          transport: 'http',
+          url: 'https://mcp.m2m.test/mcp',
+          auth: { type: 'oauth', oauth_grant_type: 'client_credentials', oauth_client_id: 'svc' },
+        },
+      ]);
+
+      expect(mcpServers.m2m).toBeUndefined();
+      expect(append).toContain('machine (client-credentials)');
+      expect(append).not.toContain('agor_widgets_request_oauth');
+    });
+
+    it.each(['per_user', 'shared'] as const)(
+      'withholds the shipped Asana install (%s) through real scoping with the Connect notice',
+      async (mode) => {
+        const real = await realMcpScoping([await shippedAsanaInstall(mode)]);
+        vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+        vi.mocked(resolveScopedMCPAuthHeaders).mockImplementationOnce(
+          real.resolveScopedMCPAuthHeaders
+        );
+        vi.mocked(resolveMCPAuthHeaders).mockImplementationOnce(real.resolveMCPAuthHeaders);
+        const deps = createMockDeps();
+        deps.sessionMCPRepo = {} as any;
+        deps.mcpServerRepo = {} as any;
+
+        await setupQuery('test-session' as SessionID, 'test prompt', deps);
+
+        const options = claudeQuery.mock.calls[0][0].options;
+        expect(options.mcpServers.asana).toBeUndefined();
+        expect(options.systemPrompt.append).toContain('- mcpServerId: asana-id, label: "Asana"');
+        expect(options.systemPrompt.append).toContain('agor_widgets_request_oauth');
+        expect(options.systemPrompt.append).not.toContain('machine (client-credentials)');
+      }
+    );
+
+    it('adds no notice when every OAuth server has a grant', async () => {
+      const deps = createMockDeps();
+      deps.sessionMCPRepo = {} as any;
+      deps.mcpServerRepo = {} as any;
+      vi.mocked(resolveMCPAuthHeaders).mockResolvedValue({ Authorization: 'Bearer token' });
+      vi.mocked(getMcpServersForSession).mockResolvedValue([
+        {
+          server: {
+            mcp_server_id: 'asana-id',
+            name: 'asana',
+            transport: 'http',
+            url: 'https://mcp.asana.test/mcp',
+            auth: { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'customer-app' },
+          },
+        } as any,
+      ]);
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const options = claudeQuery.mock.calls[0][0].options;
+      expect(options.mcpServers.asana).toBeDefined();
+      expect(options.systemPrompt.append).not.toContain('need sign-in');
+    });
   });
 
   it('does not block gateway startup on remote Bearer or JWT servers without resolved auth', async () => {

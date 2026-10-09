@@ -4,6 +4,7 @@ import { shortId } from '@agor/core/db';
 import {
   getMcpServersForSession,
   listMcpToolsWithPermission,
+  MCPSignInNoticeCollector,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
   resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
@@ -454,6 +455,7 @@ export class GeminiPromptService {
       );
     // Fetch and configure MCP servers for this session (hierarchical scoping)
     const mcpServersConfig: Record<string, InstanceType<typeof Gemini.MCPServerConfig>> = {};
+    const signIn = new MCPSignInNoticeCollector();
 
     // Configure Agor MCP server (self-access to daemon) - only if MCP is enabled
     if (this.mcpEnabled !== false) {
@@ -517,9 +519,15 @@ export class GeminiPromptService {
               !authHeaders?.Authorization
             ) {
               authDiagnostics.recordUnavailable();
+              // A pre-registered OAuth client with no grant is withheld, so
+              // Gemini never runs its own OAuth discovery / Dynamic Client
+              // Registration against it.
+              if (signIn.recordMissingGrant(scoped)) continue;
             }
           } catch {
             authDiagnostics.recordResolutionFailure();
+            // Same withholding when the credential lookup itself failed.
+            if (server.transport !== 'stdio' && signIn.recordResolutionFailure(scoped)) continue;
           }
 
           const excludeTools = listMcpToolsWithPermission(
@@ -621,7 +629,7 @@ export class GeminiPromptService {
       agents: { overrides: { browser: { enabled: false } } },
       policyEngineConfig: buildGeminiPolicy(Gemini, approvalMode, mcpServersConfig),
       mcpServers: mcpServersConfig,
-      userMemory: await renderAgorSystemPrompt(),
+      userMemory: [await renderAgorSystemPrompt(), signIn.render()].filter(Boolean).join('\n\n'),
       fileFiltering: { respectGitIgnore: true, respectGeminiIgnore: true },
     });
   }

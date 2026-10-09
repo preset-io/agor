@@ -73,6 +73,11 @@ export interface MCPServerWithSource {
   source: 'session-assigned' | 'global';
   /** Non-persisted result from the tenant/user-scoped executor credential authority. */
   oauthAuthResolution: MCPOAuthAuthResolution;
+  /**
+   * `auth.oauth_grant_type` as stored, before template resolution defaults it
+   * to `client_credentials`. Absent when the server never set one.
+   */
+  configuredOAuthGrantType?: string;
 }
 
 export type MCPOAuthAuthResolution =
@@ -305,6 +310,9 @@ export async function getMcpServersForSession(
           servers[i] = {
             ...servers[i],
             server: result.server,
+            ...(original.auth?.oauth_grant_type
+              ? { configuredOAuthGrantType: original.auth.oauth_grant_type }
+              : {}),
           };
           if (hasTemplates) templatesResolved++;
 
