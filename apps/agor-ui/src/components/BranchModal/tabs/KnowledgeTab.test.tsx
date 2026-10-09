@@ -1,6 +1,6 @@
 import type { AgorClient, Branch, KnowledgeNamespace } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeBranch } from '../testUtils';
 
 vi.mock('../../../utils/message', () => ({
@@ -9,29 +9,38 @@ vi.mock('../../../utils/message', () => ({
 
 import { KnowledgeTab } from './KnowledgeTab';
 
-describe('KnowledgeTab', () => {
-  it('opens the home namespace under the router basename', async () => {
-    const namespace = {
-      namespace_id: 'ns-1',
-      slug: 'teammate-abc12345',
-    } as unknown as KnowledgeNamespace;
-    const client = {
-      service: () => ({
-        find: async () => [namespace],
-        get: async () => namespace,
-      }),
-    } as unknown as AgorClient;
-    const branch = makeBranch({
-      custom_context: {
-        teammate: { kind: 'teammate', kb: { primary_namespace_id: 'ns-1', grants: [] } },
-      },
-    } as Partial<Branch>);
+const SLUG = 'teammate-abc12345';
 
-    render(<KnowledgeTab branch={branch} client={client} canEdit={false} />);
+async function renderOpenLink(): Promise<string | null> {
+  const namespace = { namespace_id: 'ns-1', slug: SLUG } as unknown as KnowledgeNamespace;
+  const client = {
+    service: () => ({
+      find: async () => [namespace],
+      get: async () => namespace,
+    }),
+  } as unknown as AgorClient;
+  const branch = makeBranch({
+    custom_context: {
+      teammate: { kind: 'teammate', kb: { primary_namespace_id: 'ns-1', grants: [] } },
+    },
+  } as Partial<Branch>);
 
-    const link = await screen.findByRole('link', { name: /Open in Knowledge/ });
-    // Default test runtime has no /ui mount, so the href must be the plain
-    // knowledge route; production prepends /ui via uiRouteHref.
-    expect(link.getAttribute('href')).toMatch(/^(\/ui)?\/kb\/teammate-abc12345\/$/);
+  render(<KnowledgeTab branch={branch} client={client} canEdit={false} />);
+  const link = await screen.findByRole('link', { name: /Open in Knowledge/ });
+  return link.getAttribute('href');
+}
+
+describe('KnowledgeTab Open in Knowledge link', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prefixes the /ui mount when served by the daemon', async () => {
+    vi.stubEnv('BASE_URL', '/ui/');
+    expect(await renderOpenLink()).toBe(`/ui/kb/${SLUG}/`);
+  });
+
+  it('uses the plain route when mounted at the root', async () => {
+    expect(await renderOpenLink()).toBe(`/kb/${SLUG}/`);
   });
 });
