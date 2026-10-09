@@ -31,10 +31,13 @@ import {
   writeManifest,
 } from './tenant-archive';
 import { resolveTenantDatabaseIdentity } from './tenant-catalog';
-import { exportTenantTableRows } from './tenant-database-io';
+import { countTenantRowsWithValue, exportTenantTableRows } from './tenant-database-io';
 import { assertValidTenantId } from './tenant-deletion';
 import { copyTenantFilesystemInto, type TenantFilesystemEntry } from './tenant-filesystem';
-import { buildTenantInsertOrder } from './tenant-portability-manifest';
+import {
+  buildTenantInsertOrder,
+  TENANT_IN_FLIGHT_PAYLOAD_COLUMNS,
+} from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Bounded, secret-free summary returned by {@link exportTenant}. */
@@ -61,6 +64,14 @@ export interface TenantExportOptions {
   filesystemRoot?: string;
   /** Human-readable audit sink (secret-safe). Defaults to a no-op. */
   log?: (message: string) => void;
+}
+
+/** Export refused because queued provider payloads have not drained yet. */
+export class TenantExportInFlightError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TenantExportInFlightError';
+  }
 }
 
 async function assertEmptyArchiveDestination(archivePath: string): Promise<void> {
@@ -104,6 +115,14 @@ export async function exportTenant(
 
   log(`exporting tenant ${tenantId} (schemaVersion=${identity.schemaVersion})`);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    for (const { table, column } of TENANT_IN_FLIGHT_PAYLOAD_COLUMNS) {
+      const pending = await countTenantRowsWithValue(scoped, table, column, tenantId);
+      if (pending > 0) {
+        throw new TenantExportInFlightError(
+          `Refusing to export: ${pending} queued ${table} payload(s) are still in flight; retry after the gateway worker processes or expires them`
+        );
+      }
+    }
     for (const table of insertOrder) {
       const { jsonl, rowCount } = await exportTenantTableRows(
         scoped,

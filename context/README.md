@@ -25,6 +25,7 @@ issue or PR; git history keeps deleted docs.
 | [`mcp-catalog.md`](concepts/mcp-catalog.md)                                 | Curated catalog, Connect probes, OAuth/bearer reuse, disclosure contract. |
 | [`mcp-egress-gateway.md`](concepts/mcp-egress-gateway.md)                   | Daemon-owned MCP egress: credential boundary and admission contract.      |
 | [`discord-gateway.md`](concepts/discord-gateway.md)                         | Discord gateway: provider-owned history, cursor, and admission contract.  |
+| [`teams-gateway.md`](concepts/teams-gateway.md)                             | Teams gateway: verified ingress, admission fence, identity, delivery.     |
 | [`opencode-hosted.md`](concepts/opencode-hosted.md)                         | Hosted OpenCode capability gate and checkpointed native state.            |
 | [`user-first-scoped-hydration.md`](concepts/user-first-scoped-hydration.md) | Browser data layers: user scope, board partitions, on-demand reads.       |
 

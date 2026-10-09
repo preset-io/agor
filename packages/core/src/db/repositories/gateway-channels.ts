@@ -25,8 +25,11 @@ import {
   getRequiredSecretFields,
   isDiscordSnowflake,
   isGatewayProviderAuthorityPatch,
+  isTeamsCredentialOnlyConfigPatch,
   mergeGatewayChannelConfigPatch,
   validateDiscordConfig,
+  validateTeamsSetup,
+  validateTeamsUserMap,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import { lockBranchForAdmission } from '../branch-admission';
@@ -649,14 +652,27 @@ export class GatewayChannelRepository
    * An enabled channel can never exist without the secrets its type needs to
    * function. Runs on the post-merge, decrypted config so a patch that only
    * flips `enabled: true` on a channel with already-stored tokens passes.
-   * Disabled ("draft") channels are exempt.
+   * Disabled ("draft") channels are exempt from secret checks; identity
+   * configuration remains validated.
    */
   private assertRequiredSecretsWhenEnabled(channel: Partial<GatewayChannel>): void {
-    // Insert defaults `enabled` to true, so treat undefined as enabled here.
-    if (channel.enabled === false) return;
-
     const channelType = channel.channel_type ?? 'slack';
     const config = channel.config ?? {};
+
+    // Teams user mappings are identity configuration, not deferred secrets;
+    // validate them even on disabled drafts before the enabled-only checks.
+    if (channelType === 'teams') {
+      const validation = validateTeamsUserMap(config.user_map);
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot persist Teams gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+    }
+
+    // Creation normalizes the provider-specific default before validation.
+    if (channel.enabled === false) return;
+
     const missing = getRequiredSecretFields(channelType, config).filter((field) => {
       const value = config[field];
       return (
@@ -699,9 +715,37 @@ export class GatewayChannelRepository
         );
       }
     }
+
+    if (channelType === 'teams') {
+      const validation = validateTeamsSetup(config, channel.agor_user_id, {
+        requireAppPassword: true,
+      });
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot enable Teams gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+      // Only a credential probe of this exact app ID may bind the installation.
+      if (
+        typeof channel.provider_installation_id !== 'string' ||
+        channel.provider_installation_id !== config.app_id
+      ) {
+        throw new RepositoryError(
+          'Cannot enable Teams gateway channel: a verified Teams application binding is required'
+        );
+      }
+    }
   }
 
-  private isDiscordInstallationConflict(error: unknown): boolean {
+  /**
+   * The provider whose verified-installation uniqueness `error` violated, or
+   * null. SQLite names the columns rather than the index, so the caller's
+   * channel type decides there.
+   */
+  private async installationConflict(
+    error: unknown,
+    channelType: () => Promise<string | undefined>
+  ): Promise<string | null> {
     const messages: string[] = [];
     let current: unknown = error;
     for (let depth = 0; depth < 4 && current; depth += 1) {
@@ -712,17 +756,20 @@ export class GatewayChannelRepository
           : undefined;
     }
     const message = messages.join('\n');
-    return (
-      message.includes('gateway_channels_discord_installation_unique') ||
-      (message.toLowerCase().includes('unique') &&
-        message.includes('provider_installation_id') &&
-        message.includes('channel_type'))
-    );
+    if (message.includes('gateway_channels_teams_installation_unique')) return 'teams';
+    if (message.includes('gateway_channels_discord_installation_unique')) return 'discord';
+    const unique =
+      message.toLowerCase().includes('unique') &&
+      message.includes('provider_installation_id') &&
+      message.includes('channel_type');
+    return unique ? ((await channelType()) ?? 'discord') : null;
   }
 
-  private duplicateDiscordInstallationError(): RepositoryError {
+  private duplicateInstallationError(channelType: string): RepositoryError {
     return new RepositoryError(
-      'Cannot enable Discord gateway channel: this Discord application is already enabled'
+      channelType === 'teams'
+        ? 'Cannot enable Teams gateway channel: this Teams application is already enabled'
+        : 'Cannot enable Discord gateway channel: this Discord application is already enabled'
     );
   }
 
@@ -760,8 +807,8 @@ export class GatewayChannelRepository
    * Create a new gateway channel
    */
   async create(data: Partial<GatewayChannel>): Promise<GatewayChannel> {
+    const channelType = data.channel_type ?? 'slack';
     try {
-      const channelType = data.channel_type ?? 'slack';
       const prepared = {
         ...data,
         config: mergeGatewayChannelConfigPatch({}, data.config, channelType, data.enabled ?? true),
@@ -795,9 +842,8 @@ export class GatewayChannelRepository
 
       return await this.rowToChannel(row);
     } catch (error) {
-      if (this.isDiscordInstallationConflict(error)) {
-        throw this.duplicateDiscordInstallationError();
-      }
+      const conflict = await this.installationConflict(error, async () => channelType);
+      if (conflict) throw this.duplicateInstallationError(conflict);
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to create gateway channel: ${error instanceof Error ? error.message : String(error)}`,
@@ -894,24 +940,54 @@ export class GatewayChannelRepository
     );
   }
 
+  /**
+   * Generic verified-installation seam: the provider identity a connector
+   * probe proved for the exact configured application (Discord or Teams).
+   */
+  async updateWithVerifiedProviderInstallation(
+    id: string,
+    updates: Partial<GatewayChannel>,
+    providerInstallationId: string,
+    expectedProviderConfigGeneration: number
+  ): Promise<GatewayChannel> {
+    if (typeof providerInstallationId !== 'string' || !providerInstallationId.trim()) {
+      throw new RepositoryError('Verified provider application identity is invalid');
+    }
+    if (
+      !Number.isSafeInteger(expectedProviderConfigGeneration) ||
+      expectedProviderConfigGeneration < 1
+    ) {
+      throw new RepositoryError('Verified installation requires a valid config generation');
+    }
+    return this.updateInternal(
+      id,
+      updates,
+      providerInstallationId,
+      expectedProviderConfigGeneration
+    );
+  }
+
   private async updateInternal(
     id: string,
     updates: Partial<GatewayChannel>,
     verifiedProviderInstallationId?: string,
     expectedProviderConfigGeneration?: number
   ): Promise<GatewayChannel> {
+    let fullId: string | undefined;
     try {
-      const fullId = await this.resolveId(id);
+      fullId = await this.resolveId(id);
 
-      const updated = isGatewayProviderAuthorityPatch(updates)
-        ? await this.updateAuthority(
-            id,
-            fullId,
-            updates,
-            verifiedProviderInstallationId,
-            expectedProviderConfigGeneration
-          )
-        : await this.updateNonAuthority(id, fullId, updates);
+      const updated = isTeamsCredentialOnlyConfigPatch(updates)
+        ? await this.updateTeamsCredentialOnly(id, fullId, updates)
+        : isGatewayProviderAuthorityPatch(updates)
+          ? await this.updateAuthority(
+              id,
+              fullId,
+              updates,
+              verifiedProviderInstallationId,
+              expectedProviderConfigGeneration
+            )
+          : await this.updateNonAuthority(id, fullId, updates);
 
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated gateway channel');
@@ -920,9 +996,17 @@ export class GatewayChannelRepository
       return await this.rowToChannel(updated);
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
-      if (this.isDiscordInstallationConflict(error)) {
-        throw this.duplicateDiscordInstallationError();
-      }
+      const conflict = await this.installationConflict(error, async () =>
+        fullId
+          ? (
+              await select(this.db, { channel_type: gatewayChannels.channel_type })
+                .from(gatewayChannels)
+                .where(eq(gatewayChannels.id, fullId))
+                .one()
+            )?.channel_type
+          : undefined
+      );
+      if (conflict) throw this.duplicateInstallationError(conflict);
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`,
@@ -942,6 +1026,43 @@ export class GatewayChannelRepository
       listener_checkpoint: null,
       listener_checkpoint_updated_at: null,
     };
+  }
+
+  /** Rotate only the Teams app password without fencing active gateway work. */
+  private async updateTeamsCredentialOnly(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
+        const currentRow = await select(txDb)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, fullId))
+          .one();
+        if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+        if (currentRow.channel_type !== 'teams') {
+          throw new RepositoryError('Credential-only rotation requires a Teams gateway channel');
+        }
+
+        const current = await this.rowToChannel(currentRow);
+        const config = mergeGatewayChannelConfigPatch(
+          current.config,
+          updates.config,
+          'teams',
+          current.enabled
+        );
+        this.assertRequiredSecretsWhenEnabled({ ...current, config });
+        await update(txDb, gatewayChannels)
+          .set({ config: encryptConfig(config), updated_at: new Date() })
+          .where(eq(gatewayChannels.id, fullId))
+          .run();
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**
@@ -980,7 +1101,7 @@ export class GatewayChannelRepository
           current.provider_config_generation !== expectedProviderConfigGeneration
         ) {
           throw new RepositoryError(
-            'Discord verification became stale while the gateway configuration changed'
+            'Provider verification became stale while the gateway configuration changed'
           );
         }
 
@@ -993,20 +1114,26 @@ export class GatewayChannelRepository
         );
 
         if (verifiedProviderInstallationId !== undefined) {
-          if (merged.channel_type !== 'discord' || merged.enabled === false) {
+          if (!['discord', 'teams'].includes(merged.channel_type) || merged.enabled === false) {
             throw new RepositoryError(
-              'Verified Discord application identity requires an enabled Discord gateway channel'
+              'Verified provider identity requires an enabled Discord or Teams gateway channel'
             );
           }
-          if (merged.config.application_id !== verifiedProviderInstallationId) {
+          const configuredApplicationId =
+            merged.channel_type === 'discord' ? merged.config.application_id : merged.config.app_id;
+          if (configuredApplicationId !== verifiedProviderInstallationId) {
             throw new RepositoryError(
-              'Verified Discord application identity does not match the configured application'
+              'Verified provider identity does not match the configured application'
             );
           }
           merged.provider_installation_id = verifiedProviderInstallationId;
         } else if (merged.channel_type === 'discord' && merged.enabled !== false) {
           throw new RepositoryError(
             'verified Discord application binding is required for enabled authority changes'
+          );
+        } else if (merged.channel_type === 'teams' && merged.enabled !== false) {
+          throw new RepositoryError(
+            'verified Teams application binding is required for enabled authority changes'
           );
         } else {
           merged.provider_installation_id = null;
@@ -1055,7 +1182,7 @@ export class GatewayChannelRepository
 
         if (expectedProviderConfigGeneration !== undefined && result.rowsAffected !== 1) {
           throw new RepositoryError(
-            'Discord verification became stale while the gateway configuration changed'
+            'Provider verification became stale while the gateway configuration changed'
           );
         }
         if (result.rowsAffected !== 1) {

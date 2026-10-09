@@ -87,6 +87,86 @@ describe('GatewayChannelRepository', () => {
     }
   );
 
+  dbTest('enables Teams only through a verified application binding', async ({ db }) => {
+    const branch = await seedBranch(db);
+    const repo = new GatewayChannelRepository(db);
+    const input = {
+      name: 'Teams opt-in',
+      created_by: generateId() as UUID,
+      target_branch_id: branch.branch_id as UUID,
+      channel_type: 'teams' as const,
+      agor_user_id: generateId() as UUID,
+      config: {
+        app_id: 'teams-default-app',
+        app_password: 'test-secret',
+        microsoft_tenant_id: 'tenant-1',
+      },
+    };
+    // An unverified create cannot copy app_id into the installation binding.
+    await expect(repo.create(input)).rejects.toThrow('verified Teams application binding');
+    const draft = await repo.create({ ...input, enabled: false });
+    expect(draft.provider_installation_id).toBeNull();
+    await expect(repo.update(draft.id, { enabled: true })).rejects.toThrow(
+      'verified Teams application binding'
+    );
+    await expect(
+      repo.updateWithVerifiedProviderInstallation(
+        draft.id,
+        { enabled: true },
+        'another-app',
+        draft.provider_config_generation
+      )
+    ).rejects.toThrow('does not match the configured application');
+    const enabled = await repo.updateWithVerifiedProviderInstallation(
+      draft.id,
+      { enabled: true },
+      input.config.app_id,
+      draft.provider_config_generation
+    );
+    expect(enabled.enabled).toBe(true);
+    expect(enabled.provider_installation_id).toBe(input.config.app_id);
+  });
+
+  dbTest(
+    'rejects an enabled Teams channel that mixes aligned and fixed identity',
+    async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const base = {
+        name: 'Teams identity',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'teams' as const,
+        provider_installation_id: 'teams-identity-app',
+        config: {
+          app_id: 'teams-identity-app',
+          app_password: 'test-secret',
+          microsoft_tenant_id: 'tenant-1',
+        },
+      };
+      await expect(
+        repo.create({
+          ...base,
+          agor_user_id: generateId() as UUID,
+          config: { ...base.config, align_teams_users: true },
+        })
+      ).rejects.toThrow('aligned Teams identity cannot include agor_user_id');
+      await expect(repo.create(base)).rejects.toThrow('fixed Teams identity requires agor_user_id');
+      await expect(
+        repo.create({
+          ...base,
+          agor_user_id: generateId() as UUID,
+          config: { ...base.config, user_map: { aad: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' } },
+        })
+      ).rejects.toThrow('user_map is only allowed when align_teams_users is true');
+      const aligned = await repo.create({
+        ...base,
+        config: { ...base.config, align_teams_users: true },
+      });
+      expect(aligned).toMatchObject({ enabled: true, agor_user_id: null });
+    }
+  );
+
   dbTest('create throws when created_by is missing', async ({ db }) => {
     const repo = new GatewayChannelRepository(db);
     await expect(repo.create({ name: 'Test Channel' })).rejects.toThrow(
@@ -224,6 +304,52 @@ describe('GatewayChannelRepository', () => {
         );
         expect(enabled.enabled).toBe(true);
         expect(enabled.agor_user_id).toBeDefined();
+      }
+    );
+
+    dbTest(
+      'rejects noncanonical Teams user mappings on disabled create and patch',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const invalidMaps: unknown[] = [
+          { 'aad-object-1': 'user@example.com' },
+          { 'aad-object-1': 'not-a-uuid' },
+          { 'aad-object-1': '01933e4a' },
+          { 'aad-object-1': '01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f' },
+          { 'aad-object-1': '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F' },
+        ];
+
+        for (const userMap of invalidMaps) {
+          await expect(
+            repo.create({
+              name: 'Invalid Teams draft',
+              created_by: generateId() as UUID,
+              target_branch_id: branch.branch_id as UUID,
+              channel_type: 'teams',
+              enabled: false,
+              config: { user_map: userMap },
+            })
+          ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
+        }
+
+        const draft = await repo.create({
+          name: 'Teams draft',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'teams',
+          enabled: false,
+          config: {
+            user_map: {
+              'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+            },
+          },
+        });
+        await expect(
+          repo.update(draft.id, {
+            config: { user_map: { 'aad-object-1': 'user@example.com' } },
+          })
+        ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
       }
     );
 
@@ -617,6 +743,54 @@ describe('GatewayChannelRepository', () => {
       const rotated = await repo.update(channel.id, { config: { bot_token: 'new-token' } });
       expect(rotated.provider_installation_id).toBeNull();
       expect(rotated.provider_config_generation).toBe(3);
+    });
+
+    dbTest('rotates only a Teams app password without fencing provider work', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channel = await repo.create({
+        name: 'Teams credential rotation',
+        enabled: true,
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'teams',
+        agor_user_id: generateId() as UUID,
+        provider_installation_id: 'teams-app',
+        config: {
+          app_id: 'teams-app',
+          app_password: 'old-secret',
+          microsoft_tenant_id: 'tenant-1',
+        },
+      });
+      const claim = await repo.claimListener({
+        channelId: channel.id,
+        claimToken: 'teams-rotation-claim',
+        leaseDurationMs: 30_000,
+        instanceId: 'teams-rotation-instance',
+        bootId: 'teams-rotation-boot',
+      });
+      expect(claim.outcome).toBe('claimed');
+
+      const rotated = await repo.update(channel.id, { config: { app_password: 'new-secret' } });
+      expect(rotated.config.app_password).toBe('new-secret');
+      expect(rotated.provider_installation_id).toBe('teams-app');
+      expect(rotated.provider_config_generation).toBe(channel.provider_config_generation);
+      expect(await repo.listenerClaimIsCurrent(channel.id, 'teams-rotation-claim')).toBe(true);
+
+      await expect(repo.update(channel.id, { config: { app_id: 'new-app' } })).rejects.toThrow(
+        'verified Teams application binding'
+      );
+      const authorityChanged = await repo.updateWithVerifiedProviderInstallation(
+        channel.id,
+        { config: { app_id: 'new-app' } },
+        'new-app',
+        channel.provider_config_generation
+      );
+      expect(authorityChanged.config.app_id).toBe('new-app');
+      expect(authorityChanged.provider_installation_id).toBe('new-app');
+      expect(authorityChanged.provider_config_generation).toBe(
+        channel.provider_config_generation + 1
+      );
     });
 
     it('rejects unsupported capability requests and empty allowlists', () => {

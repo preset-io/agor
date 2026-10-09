@@ -26,17 +26,22 @@ import {
   type AuthenticatedParams,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
+  GATEWAY_USER_ALIGNMENT_CONFIG_KEYS,
   type GatewayChannel,
   type GatewayChannelCreateData,
   type GatewayChannelPatchData,
+  type GatewayConnectionTestResult,
   isGatewayProviderAuthorityPatch,
+  isTeamsCredentialOnlyConfigPatch,
   mergeGatewayChannelConfigPatch,
   type NullableId,
   type Params,
   type PersistedGatewayAgenticConfig,
   resolveSlackAgentTools,
+  teamsVerifiedInstallationId,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   type UserID,
+  validateTeamsSetup,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
 import { gatewaySlackUploadExecutorCommandId } from '../auth/executor-command-ids.js';
@@ -53,7 +58,37 @@ import { assertServiceWriteFields, pickWriteFields } from '../utils/write-data-b
 type PersistedGatewayChannelCreateData = Omit<GatewayChannelCreateData, 'agentic_config'> & {
   agentic_config?: PersistedGatewayAgenticConfig | null;
   created_by?: GatewayChannel['created_by'];
+  /** Set only from a passing provider credential probe, never from caller input. */
+  provider_installation_id?: string | null;
 };
+
+/**
+ * Probe Teams credentials before enabling. Runs outside any tenant database
+ * scope; the caller binds the returned app ID through the verified seam.
+ */
+async function verifyTeamsChannel(
+  config: Record<string, unknown>,
+  agorUserId: string | null | undefined
+): Promise<string> {
+  const validation = validateTeamsSetup(config, agorUserId, { requireAppPassword: true });
+  if (!validation.ok) {
+    throw new BadRequest(`Invalid Teams gateway configuration: ${validation.errors.join('; ')}`);
+  }
+  let result: GatewayConnectionTestResult | undefined;
+  try {
+    result = await getConnector('teams', config).testConnection?.();
+  } catch {
+    throw new BadRequest('Teams verification failed: the connector could not be created');
+  }
+  const installationId = teamsVerifiedInstallationId(result ?? null, config.app_id);
+  if (!installationId) {
+    const reason = result?.failures.map((failure) => failure.reason).join('; ');
+    throw new BadRequest(
+      `Teams verification failed: ${reason || 'credentials could not be verified'}. Save the channel disabled to keep a draft.`
+    );
+  }
+  return installationId;
+}
 
 type PersistedGatewayChannelPatchData = Omit<GatewayChannelPatchData, 'agentic_config'> & {
   agentic_config?: PersistedGatewayAgenticConfig | null;
@@ -62,6 +97,13 @@ type PersistedGatewayChannelPatchData = Omit<GatewayChannelPatchData, 'agentic_c
 type PersistedGatewayChannelWriteData =
   | PersistedGatewayChannelCreateData
   | PersistedGatewayChannelPatchData;
+
+function isTeamsCredentialOnlyPatch(
+  data: GatewayChannelPatchData,
+  channelType: GatewayChannel['channel_type']
+): boolean {
+  return channelType === 'teams' && isTeamsCredentialOnlyConfigPatch(data);
+}
 
 /**
  * Public GatewayChannel transport surface. `update` is deliberately absent so
@@ -115,10 +157,7 @@ export class GatewayChannelsService extends DrizzleService<
     const config = channel.config as Record<string, unknown>;
     return Boolean(
       channel.agor_user_id &&
-        config.align_slack_users !== true &&
-        config.align_github_users !== true &&
-        config.align_shortcut_users !== true &&
-        config.align_discord_users !== true
+        Object.values(GATEWAY_USER_ALIGNMENT_CONFIG_KEYS).every((key) => config[key] !== true)
     );
   }
 
@@ -202,6 +241,15 @@ export class GatewayChannelsService extends DrizzleService<
     );
     data = pickWriteFields<GatewayChannelCreateData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
+    // A Teams channel is enabled on creation only when its credentials verify.
+    const teamsInstallationId =
+      data.channel_type === 'teams' && data.enabled !== false
+        ? await verifyTeamsChannel(
+            mergeGatewayChannelConfigPatch({}, data.config, 'teams', true),
+            data.agor_user_id
+          )
+        : undefined;
+
     return this.withTenantDatabase(params, async () => {
       const materializedAgenticConfig = await this.validateConfig(data.agentic_config ?? null, {
         agor_user_id: data.agor_user_id as GatewayChannel['agor_user_id'],
@@ -214,6 +262,7 @@ export class GatewayChannelsService extends DrizzleService<
         ...data,
         agentic_config: materializedAgenticConfig,
         ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+        ...(teamsInstallationId ? { provider_installation_id: teamsInstallationId } : {}),
       };
       return super.create(persistedData, params);
     });
@@ -269,7 +318,7 @@ export class GatewayChannelsService extends DrizzleService<
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    const authorityPatch = isGatewayProviderAuthorityPatch(data);
+    let authorityPatch = isGatewayProviderAuthorityPatch(data);
     if ((id === null || Array.isArray(id)) && authorityPatch) {
       throw new BadRequest('Gateway provider-authority changes cannot be multi-patched');
     }
@@ -285,6 +334,9 @@ export class GatewayChannelsService extends DrizzleService<
       ? await this.withTenantDatabase(params, async () => {
           const current = await this.channelRepo.findById(String(id));
           if (!current) throw new BadRequest('Gateway channel was not found');
+          authorityPatch =
+            !isTeamsCredentialOnlyPatch(data, current.channel_type) &&
+            isGatewayProviderAuthorityPatch(data);
 
           let persistedData: PersistedGatewayChannelPatchData = data;
           if (
@@ -358,15 +410,41 @@ export class GatewayChannelsService extends DrizzleService<
         expectedProviderConfigGeneration = current.provider_config_generation;
       }
     }
+    // Any Teams change that leaves the channel enabled, rotation included, must pass a probe.
+    if (
+      current &&
+      verifiedProviderInstallationId === undefined &&
+      (data.channel_type ?? current.channel_type) === 'teams' &&
+      (data.enabled ?? current.enabled) &&
+      (authorityPatch || isTeamsCredentialOnlyPatch(data, current.channel_type))
+    ) {
+      const effectiveConfig = mergeGatewayChannelConfigPatch(
+        current.config,
+        data.config,
+        'teams',
+        true
+      );
+      const installationId = await verifyTeamsChannel(
+        effectiveConfig,
+        data.agor_user_id !== undefined ? data.agor_user_id : current.agor_user_id
+      );
+      if (authorityPatch) {
+        verifiedProviderInstallationId = installationId;
+        expectedProviderConfigGeneration = current.provider_config_generation;
+      }
+    }
     if (verifiedProviderInstallationId !== undefined) {
       if (id === null || Array.isArray(id)) {
-        throw new BadRequest('Discord installation verification requires one channel');
+        throw new BadRequest('Provider installation verification requires one channel');
       }
       if (expectedProviderConfigGeneration === undefined) {
-        throw new BadRequest('Discord installation verification requires a config generation');
+        throw new BadRequest('Provider installation verification requires a config generation');
       }
+      const verifiedTeams = (data.channel_type ?? current?.channel_type) === 'teams';
       return this.withTenantDatabase(params, () =>
-        this.channelRepo.updateWithVerifiedDiscordInstallation(
+        (verifiedTeams
+          ? this.channelRepo.updateWithVerifiedProviderInstallation.bind(this.channelRepo)
+          : this.channelRepo.updateWithVerifiedDiscordInstallation.bind(this.channelRepo))(
           String(id),
           persistedData,
           verifiedProviderInstallationId,

@@ -40,6 +40,7 @@ const gatewaySession = (channelType: ChannelType) =>
 
 const teamsSession = gatewaySession('teams');
 const shortcutSession = gatewaySession('shortcut');
+const whatsappSession = gatewaySession('whatsapp');
 
 const channel = (config: Record<string, unknown>) => async () => ({
   channel_type: 'slack',
@@ -107,16 +108,26 @@ describe('resolveGatewayPromptIdentity', () => {
   });
 
   it('is NOT aligned for a platform with no alignment switch', async () => {
-    // Teams is inbound via webhook and a Teams channel is multi-member, but it
-    // has no alignment flag at all — so `gateway.ts` falls through to
-    // `user = channel.agor_user_id` unconditionally. An earlier version of this
-    // guard read "no switch" as "no shared-account fallback to be caught by",
-    // which is the opposite of what the gateway actually does.
-    const verdict = await resolveGatewayPromptIdentity(teamsSession, channel({}));
+    // A platform without an alignment flag falls through to the channel's
+    // "Post messages as" account in `gateway.ts`, so it can never read as aligned.
+    const verdict = await resolveGatewayPromptIdentity(whatsappSession, channel({}));
     expect(verdict.aligned).toBe(false);
     // Nothing to name: there is no setting an admin could turn on.
     expect(verdict.configKey).toBeUndefined();
-    expect(verdict.source?.channel_type).toBe('teams');
+    expect(verdict.source?.channel_type).toBe('whatsapp');
+  });
+
+  it('aligns Teams only through align_teams_users, never through a user_map alone', async () => {
+    const mapOnly = await resolveGatewayPromptIdentity(
+      teamsSession,
+      channel({ user_map: { aad: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' } })
+    );
+    expect(mapOnly).toMatchObject({ aligned: false, configKey: 'align_teams_users' });
+    const on = await resolveGatewayPromptIdentity(
+      teamsSession,
+      channel({ align_teams_users: true })
+    );
+    expect(on.aligned).toBe(true);
   });
 
   it('is NOT aligned for shortcut until its own flag is on', async () => {
@@ -169,7 +180,7 @@ describe('gatewayIdentityRefusalMessage', () => {
   });
 
   it('names no setting when the platform has none, rather than inventing one', async () => {
-    const verdict = await resolveGatewayPromptIdentity(teamsSession, channel({}));
+    const verdict = await resolveGatewayPromptIdentity(whatsappSession, channel({}));
     const message = gatewayIdentityRefusalMessage(verdict);
     expect(message).toContain('ops');
     expect(message).not.toMatch(/align_\w+/);

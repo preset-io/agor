@@ -47,7 +47,22 @@ export const NON_PORTABLE_TENANT_TABLES: ReadonlySet<string> = new Set([
   'user_provider_oauth_grants',
   'user_mcp_oauth_tokens',
   'github_install_states',
+  // Encrypted provider addresses and live delivery authority are deployment-bound.
+  // Import must not replay effects or revive ciphertext under a different tenant.
+  'teams_conversation_addresses',
+  'teams_message_deliveries',
 ]);
+
+/** A movable column holding queued provider ciphertext; it never crosses an archive. */
+export interface TenantInFlightPayloadColumn {
+  readonly table: string;
+  readonly column: string;
+}
+
+// Queued Teams activities are encrypted for this deployment; restoring one would replay it.
+export const TENANT_IN_FLIGHT_PAYLOAD_COLUMNS: readonly TenantInFlightPayloadColumn[] = [
+  { table: 'gateway_inbound_events', column: 'payload_encrypted' },
+];
 
 function portableDeletionManifest() {
   return buildTenantDeletionManifest().filter(

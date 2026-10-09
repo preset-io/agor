@@ -1,5 +1,164 @@
-import { beforeAll, describe, expect, it } from 'vitest';
-import { extractQuotedReplyText, parseThreadId, stripMention, TeamsConnector } from './teams';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  createTeamsAuthConfiguration,
+  extractQuotedReplyText,
+  fetchTeamsMemberIdentity,
+  normalizeTeamsActivity,
+  parseThreadId,
+  probeTeamsCredentials,
+  stripMention,
+  TeamsConnector,
+  TeamsMemberLookupError,
+} from './teams';
+
+function jwt(claims: Record<string, unknown>): string {
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none' })}.${encode(claims)}.signature`;
+}
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const probeConfig = {
+  app_id: 'teams-app-id',
+  app_password: 'client-secret-value',
+  microsoft_tenant_id: 'tenant-guid',
+};
+
+describe('probeTeamsCredentials', () => {
+  it('verifies the exact app and tenant with an uncached client-credentials request', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse(200, {
+        access_token: jwt({ appid: 'teams-app-id', tid: 'tenant-guid' }),
+        expires_in: 3599,
+      })
+    );
+    const result = await probeTeamsCredentials(probeConfig, { fetchImpl });
+    expect(result).toMatchObject({
+      ok: true,
+      verifiedInstallationId: 'teams-app-id',
+      failures: [],
+      verification: { status: 'verified', warnings: [] },
+    });
+    expect(result.notVerifiable.length).toBeGreaterThan(0);
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('https://login.microsoftonline.com/tenant-guid/oauth2/v2.0/token');
+    const body = new URLSearchParams(String(init?.body));
+    expect(body.get('grant_type')).toBe('client_credentials');
+    expect(body.get('client_id')).toBe('teams-app-id');
+    expect(body.get('scope')).toBe('https://api.botframework.com/.default');
+    // The secret never appears in the result.
+    expect(JSON.stringify(result)).not.toContain('client-secret-value');
+  });
+
+  it('fails closed with operator guidance for a bad secret, unknown app, or tenant', async () => {
+    for (const [codes, reason] of [
+      [[7000215], 'app password is invalid or expired'],
+      [[700016], 'not registered in this Microsoft tenant'],
+      [[90002], 'tenant ID was not found'],
+    ] as const) {
+      const result = await probeTeamsCredentials(probeConfig, {
+        fetchImpl: async () =>
+          jsonResponse(400, {
+            error: 'invalid_client',
+            error_codes: codes,
+            error_description: 'x',
+          }),
+      });
+      expect(result.ok).toBe(false);
+      expect(result.verifiedInstallationId).toBeUndefined();
+      expect(result.failures[0]?.reason).toContain(reason);
+    }
+  });
+
+  it('rejects a token issued for another app or tenant, and unreachable identity endpoints', async () => {
+    const mismatched = await probeTeamsCredentials(probeConfig, {
+      fetchImpl: async () =>
+        jsonResponse(200, { access_token: jwt({ appid: 'other-app', tid: 'tenant-guid' }) }),
+    });
+    expect(mismatched).toMatchObject({ ok: false, failures: [{ capability: 'app_id' }] });
+    const offline = await probeTeamsCredentials(probeConfig, {
+      fetchImpl: async () => {
+        throw new TypeError('fetch failed');
+      },
+    });
+    expect(offline).toMatchObject({ ok: false, failures: [{ capability: 'app_password' }] });
+    const missing = await probeTeamsCredentials({ app_id: 'teams-app-id' });
+    expect(missing).toMatchObject({ ok: false, failures: [{ capability: 'config' }] });
+  });
+});
+
+describe('fetchTeamsMemberIdentity', () => {
+  const request = {
+    config: probeConfig,
+    serviceUrl: 'https://smba.trafficmanager.net/amer/',
+    conversationId: '19:team@thread.tacv2',
+    userId: '29:user-1',
+  };
+  const getToken = async () => 'bot-token';
+
+  it('reads the member email through the verified service URL with the bot token', async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) =>
+      jsonResponse(200, {
+        id: '29:user-1',
+        aadObjectId: 'aad-1',
+        email: 'ada@example.com',
+        userPrincipalName: 'ada@contoso.onmicrosoft.com',
+      })
+    );
+    await expect(fetchTeamsMemberIdentity(request, { fetchImpl, getToken })).resolves.toEqual({
+      email: 'ada@example.com',
+      userPrincipalName: 'ada@contoso.onmicrosoft.com',
+      aadObjectId: 'aad-1',
+    });
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe(
+      'https://smba.trafficmanager.net/amer/v3/conversations/19%3Ateam%40thread.tacv2/members/29%3Auser-1'
+    );
+    expect(init?.headers).toMatchObject({ Authorization: 'Bearer bot-token' });
+  });
+
+  it('returns the UPN when Teams omits email, and null for an unknown member', async () => {
+    const upnOnly = await fetchTeamsMemberIdentity(request, {
+      getToken,
+      fetchImpl: async () => jsonResponse(200, { userPrincipalName: 'guest#EXT#@contoso.com' }),
+    });
+    expect(upnOnly).toMatchObject({ email: null, userPrincipalName: 'guest#EXT#@contoso.com' });
+    await expect(
+      fetchTeamsMemberIdentity(request, {
+        getToken,
+        fetchImpl: async () => jsonResponse(404, { error: { code: 'MemberNotFound' } }),
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('classifies transient failures as retryable and never sends the token to a non-HTTPS URL', async () => {
+    for (const status of [429, 503]) {
+      const error = await fetchTeamsMemberIdentity(request, {
+        getToken,
+        fetchImpl: async () => jsonResponse(status, {}),
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(TeamsMemberLookupError);
+      expect((error as TeamsMemberLookupError).retryable).toBe(true);
+    }
+    const fetchImpl = vi.fn();
+    const insecure = await fetchTeamsMemberIdentity(
+      { ...request, serviceUrl: 'http://attacker.example/' },
+      { getToken, fetchImpl }
+    ).catch((caught: unknown) => caught);
+    expect(insecure).toMatchObject({ code: 'teams_service_url_invalid', retryable: false });
+    const foreign = await fetchTeamsMemberIdentity(
+      { ...request, serviceUrl: 'https://attacker.example/' },
+      { getToken, fetchImpl }
+    ).catch((caught: unknown) => caught);
+    expect(foreign).toMatchObject({ code: 'teams_service_url_invalid', retryable: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
 
 describe('parseThreadId', () => {
   it('parses a valid thread ID', () => {
@@ -247,5 +406,152 @@ describe('TeamsConnector', () => {
       expect(output).toContain('**Full diff**');
       expect(output).not.toContain('<details>');
     });
+  });
+});
+
+describe('createTeamsAuthConfiguration', () => {
+  it('builds a channel-local Agents SDK connection registry for authorizeJWT', () => {
+    const auth = createTeamsAuthConfiguration({
+      app_id: 'app-123',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-1',
+    });
+    expect(auth.connections?.get('teams')).toMatchObject({
+      clientId: 'app-123',
+      tenantId: 'tenant-1',
+      validateIssuer: true,
+    });
+    expect(auth.connectionsMap).toEqual([
+      { serviceUrl: '*', audience: 'app-123', connection: 'teams' },
+    ]);
+  });
+});
+
+describe('normalizeTeamsActivity', () => {
+  const config = { app_id: 'app-123' };
+
+  function activity(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      id: 'activity-1',
+      type: 'message',
+      channelId: 'msteams',
+      serviceUrl: 'https://smba.trafficmanager.net/teams/',
+      timestamp: '2026-08-27T12:00:00.000Z',
+      conversation: { id: '19:conversation@thread.v2', conversationType: 'personal' },
+      from: { id: '29:user-1', name: 'Ada', aadObjectId: 'aad-1' },
+      recipient: { id: '28:app-123', name: 'Agor' },
+      channelData: { tenant: { id: 'tenant-1' }, channel: { type: 'standard' } },
+      text: 'hello',
+      ...overrides,
+    };
+  }
+
+  it('maps personal and group chats to the whole conversation', () => {
+    expect(normalizeTeamsActivity(activity(), config).threadId).toBe('19:conversation@thread.v2');
+    expect(
+      normalizeTeamsActivity(
+        activity({
+          id: 'activity-2',
+          conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        }),
+        config
+      ).threadId
+    ).toBe('19:group@thread.v2');
+  });
+
+  it('maps channel replies to the root reply chain and strips a structured mention', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: {
+          id: '19:channel@thread.tacv2;messageid=1700000000000',
+          conversationType: 'channel',
+        },
+        replyToId: '1700000000000',
+        text: '<at>Agor</at> please review',
+        entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: 'app-123' } }],
+      }),
+      config
+    );
+    expect(normalized.threadId).toBe('19:channel@thread.tacv2|1700000000000');
+    expect(normalized.rootMessageId).toBe('1700000000000');
+    expect(normalized.hasMention).toBe(true);
+    expect(normalized.text).toBe('please review');
+    expect(normalized.metadata.teams_channel_type).toBe('standard');
+    expect(normalized.providerEventId).toBe(
+      'teams:activity:["19:channel@thread.tacv2","activity-1"]'
+    );
+  });
+
+  it('deduplicates by base conversation and activity, not activity alone or reply-chain suffix', () => {
+    const eventId = (conversationId: string, id = 'same-activity') =>
+      normalizeTeamsActivity(
+        activity({
+          id,
+          conversation: { id: conversationId, conversationType: 'channel' },
+          replyToId: 'root',
+        }),
+        config
+      ).providerEventId;
+    expect(eventId('first')).toBe(eventId('first'));
+    expect(eventId('first')).not.toBe(eventId('second'));
+    expect(eventId('first;messageid=root')).toBe(eventId('first'));
+    expect(eventId('first', 'next-activity')).not.toBe(eventId('first'));
+  });
+
+  it('does not collide when opaque IDs contain delimiters or JSON characters', () => {
+    const pairs = [
+      ['a|b', 'c'],
+      ['a', 'b|c'],
+      ['a:b', 'c'],
+      ['a', 'b:c'],
+      ['a"', 'b\\c'],
+    ];
+    const eventIds = pairs.map(
+      ([conversationId, id]) =>
+        normalizeTeamsActivity(
+          activity({ id, conversation: { id: conversationId, conversationType: 'personal' } }),
+          config
+        ).providerEventId
+    );
+    expect(new Set(eventIds).size).toBe(pairs.length);
+    expect(eventIds.map((id) => JSON.parse(id.slice('teams:activity:'.length)))).toEqual(pairs);
+  });
+
+  it('matches only the exact Teams app ID forms in structured mentions', () => {
+    for (const mentionedId of ['app-123', '28:app-123']) {
+      expect(
+        normalizeTeamsActivity(
+          activity({
+            text: '<at>Agor</at> please review',
+            entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: mentionedId } }],
+          }),
+          config
+        ).hasMention
+      ).toBe(true);
+    }
+    expect(
+      normalizeTeamsActivity(
+        activity({
+          text: '<at>Agor</at> please review',
+          entities: [
+            { type: 'mention', text: '<at>Someone</at>', mentioned: { id: 'prefix-app-123' } },
+          ],
+        }),
+        config
+      ).hasMention
+    ).toBe(false);
+  });
+
+  it('does not treat a display-name at-tag as a structured app mention', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        text: '<at>Agor</at> please review',
+      }),
+      config
+    );
+
+    expect(normalized.hasMention).toBe(false);
+    expect(normalized.text).toBe('Agor please review');
   });
 });

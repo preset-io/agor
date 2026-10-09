@@ -396,6 +396,20 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(String(teamsDraft.error)).toContain('config.app_id is required for Teams');
     expect(String(teamsDraft.error)).not.toContain('config.app_password is required for Teams');
 
+    const teamsDraftWithInvalidMap = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Teams with invalid map',
+      targetBranchId: 'branch-1',
+      channelType: 'teams',
+      enabled: false,
+      config: {
+        app_id: 'teams-app',
+        microsoft_tenant_id: 'tenant-1',
+        user_map: { 'aad-object-1': 'user@example.com' },
+      },
+    });
+    expect(teamsDraftWithInvalidMap.success).toBe(false);
+    expect(String(teamsDraftWithInvalidMap.error)).toContain('full lowercase UUIDv7 Agor User IDs');
+
     const slackDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
       name: 'Draft Slack',
       targetBranchId: 'branch-1',
@@ -512,6 +526,48 @@ describe('agor_gateway_channels MCP tools', () => {
       config: { align_slack_users: true },
     });
     expect(aligned.success).toBe(true);
+  });
+
+  it('creates Teams enabled by default and validates identity with the shared setup rules', async () => {
+    const create = vi.fn(async (data: Record<string, unknown>) => ({
+      ...data,
+      id: 'teams-channel',
+      config: data.config,
+    }));
+    const tools = await captureTools('admin', makeFakeApp({ 'gateway-channels': { create } }));
+    const input = {
+      name: 'Teams',
+      channelType: 'teams',
+      targetBranchId: 'branch-1',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-1',
+        align_teams_users: true,
+      },
+    };
+    const schema = tools.agor_gateway_channels_create.cfg.inputSchema;
+    expect(schema.safeParse(input).success).toBe(true);
+    // Enabled is the default, so the secret is required unless the caller saves a draft.
+    const missingSecret = schema.safeParse({
+      ...input,
+      config: { ...input.config, app_password: undefined },
+    });
+    expect(String(missingSecret.error)).toContain('config.app_password is required for Teams');
+    const mixedIdentity = schema.safeParse({ ...input, agorUserId: 'user-runner' });
+    expect(String(mixedIdentity.error)).toContain(
+      'aligned Teams identity cannot include agor_user_id'
+    );
+    const fixedWithoutUser = schema.safeParse({
+      ...input,
+      config: { ...input.config, align_teams_users: false },
+    });
+    expect(String(fixedWithoutUser.error)).toContain('fixed Teams identity requires agor_user_id');
+    await tools.agor_gateway_channels_create.handler(input);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ channel_type: 'teams', enabled: true }),
+      expect.anything()
+    );
   });
 
   it('creates through gateway-channels service and redacts returned secrets', async () => {

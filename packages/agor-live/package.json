@@ -65,6 +65,8 @@
     "@feathersjs/socketio-client": "^5.0.50",
     "@feathersjs/typebox": "^5.0.50",
     "@libsql/client": "^0.17.4",
+    "@microsoft/agents-activity": "1.8.1",
+    "@microsoft/agents-hosting": "1.8.1",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/sdk": "^1.30.0",

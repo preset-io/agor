@@ -25,6 +25,7 @@ import { executeRaw, insert, isPostgresDatabase, select, update } from './databa
 import { initializeDatabase } from './migrate';
 import { BoardRepository } from './repositories/boards';
 import { BranchRepository } from './repositories/branches';
+import { GatewayChannelRepository } from './repositories/gateway-channels';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
@@ -39,7 +40,7 @@ import {
   writeManifest,
 } from './tenant-archive';
 import { deleteTenantData } from './tenant-deletion';
-import { exportTenant } from './tenant-export';
+import { exportTenant, TenantExportInFlightError } from './tenant-export';
 import { importTenant } from './tenant-import';
 import { inspectTenant } from './tenant-inspect';
 import {
@@ -550,6 +551,66 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     await deleteTenantData(db, tenant);
   });
 
+  it('refuses to export a queued Teams payload and exports the drained row without it', async () => {
+    const tenant = `tpq-${generateId()}`;
+    const ownerId = await seedTenant(db, tenant);
+    const eventId = generateId();
+    await runWithTenantDatabaseScope(db, tenant, async (scoped) => {
+      const [branch] = await new BranchRepository(scoped).findAll();
+      const channel = await new GatewayChannelRepository(scoped).create({
+        name: 'Teams export fence',
+        created_by: ownerId,
+        target_branch_id: branch!.branch_id as UUID,
+        agor_user_id: ownerId,
+        channel_type: 'teams',
+        enabled: false,
+        config: {
+          app_id: `teams-app-${generateId()}`,
+          app_password: 'teams-secret',
+          microsoft_tenant_id: tenant,
+        },
+      });
+      const now = new Date();
+      await insert(scoped, pg.gatewayInboundEvents)
+        .values({
+          tenant_id: tenant,
+          id: eventId,
+          gateway_channel_id: channel.id,
+          provider_event_id: `teams:activity:${eventId}`,
+          thread_id: '19:export@thread.tacv2|1',
+          status: 'pending',
+          processing_token: generateId(),
+          processing_expires_at: now,
+          payload_encrypted: 'queued-ciphertext',
+          payload_expires_at: new Date(now.getTime() + 60_000),
+          received_at: now,
+        })
+        .run();
+    });
+
+    const archive = join(scratch, `${tenant}-queued-archive`);
+    await expect(exportTenant(db, tenant, { archivePath: archive })).rejects.toBeInstanceOf(
+      TenantExportInFlightError
+    );
+
+    await runWithTenantDatabaseScope(db, tenant, (scoped) =>
+      update(scoped, pg.gatewayInboundEvents)
+        .set({ status: 'completed', payload_encrypted: null, payload_expires_at: null })
+        .where(eq(pg.gatewayInboundEvents.id, eventId))
+        .run()
+    );
+    const drainedArchive = join(scratch, `${tenant}-drained-archive`);
+    await exportTenant(db, tenant, { archivePath: drainedArchive });
+    const archived = await readFile(
+      tableJsonlPath(drainedArchive, 'gateway_inbound_events'),
+      'utf8'
+    );
+    expect(archived).toContain(eventId);
+    expect(archived).not.toContain('queued-ciphertext');
+
+    await deleteTenantData(db, tenant);
+  });
+
   it('rolls back every imported row when a deferred cyclic reference is invalid', async () => {
     const tenant = `tpz-${generateId()}`;
     await seedBoardBranchCycle(db, tenant);
@@ -777,6 +838,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       'github_install_states',
       'mcp_oauth_client_registrations',
       'mcp_oauth_pending_flows',
+      'teams_conversation_addresses',
+      'teams_message_deliveries',
       'user_mcp_oauth_tokens',
       'user_provider_oauth_grants',
     ]);
@@ -814,6 +877,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'github_install_states'
     );
+
+    for (const table of ['teams_conversation_addresses', 'teams_message_deliveries']) {
+      expect(manifest.database.identity.tenantTables).not.toContain(table);
+      expect(manifest.database.tables.map((entry) => entry.name)).not.toContain(table);
+    }
 
     // A destination containing only non-portable authority is not empty. An
     // import must never retain that bearer policy beside newly restored rows.
