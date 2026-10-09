@@ -57,6 +57,13 @@ import {
   HOME_RAIL_BASIS,
 } from './homeLayout';
 import { OnboardingCard } from './OnboardingCard';
+import {
+  asOpenedFailures,
+  NO_OPENED_FAILURES,
+  OPENED_FAILURES_KEY,
+  openedAt,
+  openedRunsOf,
+} from './openedFailures';
 
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 // Longer than the 7-day failure window, since a later patch can keep an old failure in view.
@@ -64,22 +71,6 @@ const OPENED_FAILURES_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 /** Mark all as read patches a few sessions at a time, not the whole backlog at once. */
 const MARK_ALL_CONCURRENCY = 4;
 const NO_BOARD_IDS: string[] = [];
-/** Opened failure → the run it showed (server clock) and when it was opened; a bare number is the older click-time form. */
-type OpenedFailure = number | { run: number; at: number };
-const NO_OPENED_FAILURES: Record<string, OpenedFailure> = {};
-const openedField = (entry: unknown, field: 'run' | 'at'): number => {
-  if (typeof entry === 'number') return entry;
-  const value = entry && typeof entry === 'object' ? (entry as Record<string, unknown>)[field] : 0;
-  return typeof value === 'number' ? value : 0;
-};
-const openedAt = (entry: OpenedFailure) => openedField(entry, 'at');
-const openedRun = (entry: OpenedFailure) => openedField(entry, 'run');
-// A stored container that isn't a plain object (null, a list, a number) reads as empty.
-const asOpenedFailures = (stored: unknown): Record<string, OpenedFailure> =>
-  stored && typeof stored === 'object' && !Array.isArray(stored)
-    ? (stored as Record<string, OpenedFailure>)
-    : NO_OPENED_FAILURES;
-
 const isHomeWorkView = (value: unknown): value is HomeWorkView =>
   HOME_WORK_VIEWS.includes(value as HomeWorkView);
 
@@ -261,19 +252,10 @@ export const HomePage = memo(function HomePage({
   );
   const [storedOpenedFailures, setOpenedFailures] = useUserLocalStorage(
     userId,
-    'home-opened-failures',
+    OPENED_FAILURES_KEY,
     NO_OPENED_FAILURES
   );
-  const openedRuns = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(asOpenedFailures(storedOpenedFailures)).map(([id, entry]) => [
-          id,
-          openedRun(entry),
-        ])
-      ),
-    [storedOpenedFailures]
-  );
+  const openedRuns = useMemo(() => openedRunsOf(storedOpenedFailures), [storedOpenedFailures]);
   const [query, setQuery] = useState('');
   const deferredQuery = useDeferredValue(query);
   const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);

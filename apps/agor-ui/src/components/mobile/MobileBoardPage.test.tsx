@@ -1,207 +1,144 @@
-import type {
-  Artifact,
-  Board,
-  BoardEntityObject,
-  Branch,
-  CardWithType,
-  Repo,
-  Session,
-} from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import type { Board, BoardEntityObject, Branch } from '@agor-live/client';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { App } from 'antd';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EMPTY_MAPS } from '../../store/agorMaps';
+import { agorStore } from '../../store/agorStore';
+import { OPEN_BOARD_SWITCHER_EVENT } from '../../utils/shellEvents';
 import { MobileBoardPage } from './MobileBoardPage';
 
-vi.mock('../MarkdownRenderer/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content }: { content: string }) => <div>{content}</div>,
+type CanvasProps = {
+  readOnly?: boolean;
+  branches: Branch[];
+  onSessionClick: (id: string) => void;
+  onOpenBranch: (id: string) => void;
+};
+const canvas: { props?: CanvasProps; renders: number } = { renders: 0 };
+vi.mock('../SessionCanvas/SessionCanvas', () => ({
+  default: (props: CanvasProps) => {
+    canvas.props = props;
+    canvas.renders++;
+    return <div data-testid="canvas" />;
+  },
 }));
+vi.mock('../CommentsPanel', () => ({ CommentsPanel: () => <div data-testid="comments" /> }));
 
-const board = {
-  board_id: 'board-1',
-  name: 'Delivery board',
-  description: 'Everything shipping this week',
-  objects: {
-    zone: {
-      type: 'zone',
-      x: 0,
-      y: 0,
-      width: 500,
-      height: 500,
-      label: 'Review',
-      status: 'In progress',
-      trigger: { template: 'Review {{ branch.name }}', behavior: 'always_new' },
-    },
-    text: { type: 'text', x: 10, y: 10, content: 'Ship by Friday' },
-    markdown: { type: 'markdown', x: 20, y: 20, width: 300, content: '## Checklist' },
-    app: {
-      type: 'app',
-      x: 30,
-      y: 30,
-      width: 600,
-      height: 400,
-      title: 'Release dashboard',
-      template: 'react',
-      files: { '/App.tsx': 'export default function App() {}' },
-    },
-    artifact: {
-      type: 'artifact',
-      x: 40,
-      y: 40,
-      width: 600,
-      height: 400,
-      artifact_id: 'artifact-1',
-    },
-  },
-} as unknown as Board;
+const board = { board_id: 'board-1', name: 'Delivery', objects: {} } as unknown as Board;
+const other = { board_id: 'board-2', name: 'Ops', objects: {} } as unknown as Board;
+const branch = { branch_id: 'branch-1', name: 'feat/mobile', board_id: 'board-1' } as Branch;
+const boardById = new Map([
+  [board.board_id, board],
+  [other.board_id, other],
+]);
+const branchById = new Map([[branch.branch_id, branch]]);
 
-const branch = {
-  branch_id: 'branch-1',
-  board_id: 'board-1',
-  repo_id: 'repo-1',
-  name: 'feat/mobile',
-  filesystem_status: 'ready',
-} as unknown as Branch;
+function Probe() {
+  const { pathname, search } = useLocation();
+  return <output aria-label="location">{pathname + search}</output>;
+}
 
-const placements = [
-  {
-    object_id: 'branch-placement',
-    board_id: 'board-1',
-    entity_type: 'branch',
-    branch_id: 'branch-1',
-    position: { x: 100, y: 100 },
-    zone_id: 'zone',
-  },
-  {
-    object_id: 'card-placement',
-    board_id: 'board-1',
-    entity_type: 'card',
-    card_id: 'card-1',
-    position: { x: 200, y: 100 },
-    zone_id: 'zone',
-  },
-] as unknown as BoardEntityObject[];
+function renderPage(entry: string | { pathname: string; state: unknown }, onOpenBranch = vi.fn()) {
+  // MobileApp re-renders on every session patch and passes fresh inline handlers.
+  const tree = () => (
+    <App>
+      <MemoryRouter initialEntries={[entry]}>
+        <Probe />
+        <Routes>
+          <Route
+            path="/m/board/:boardId"
+            element={
+              <MobileBoardPage
+                client={null}
+                boardById={boardById}
+                branchById={branchById}
+                onOpenBranch={onOpenBranch}
+                onNewSession={() => {}}
+                onForkSession={vi.fn(async () => {})}
+                onSpawnSession={vi.fn(async () => {})}
+                onSendComment={vi.fn()}
+              />
+            }
+          />
+        </Routes>
+      </MemoryRouter>
+    </App>
+  );
+  const { rerender } = render(tree());
+  return { onOpenBranch, rerenderFromShell: () => rerender(tree()) };
+}
+
+const location = () => screen.getByRole('status', { name: 'location' }).textContent;
+
+beforeEach(() => {
+  canvas.props = undefined;
+  canvas.renders = 0;
+  agorStore.setState({
+    ...EMPTY_MAPS,
+    boardById,
+    branchById,
+    boardObjectsByBoardId: new Map([
+      [
+        board.board_id,
+        [{ board_id: board.board_id, branch_id: branch.branch_id } as BoardEntityObject],
+      ],
+    ]),
+  } as never);
+});
+afterEach(() => vi.restoreAllMocks());
 
 describe('MobileBoardPage', () => {
-  it('represents every supported board object and entity type', () => {
-    const onOpenBranch = vi.fn();
-    render(
-      <MemoryRouter initialEntries={['/m/board/board-1']}>
-        <Routes>
-          <Route
-            path="/m/board/:boardId"
-            element={
-              <MobileBoardPage
-                boardById={new Map([['board-1', board]])}
-                branchById={new Map([['branch-1', branch]])}
-                repoById={
-                  new Map([['repo-1', { repo_id: 'repo-1', slug: 'preset-io/agor' } as Repo]])
-                }
-                sessionsByBranch={
-                  new Map([
-                    [
-                      'branch-1',
-                      [
-                        {
-                          session_id: 'session-1',
-                          title: 'Polish mobile UI',
-                          status: 'running',
-                          last_updated: '2026-08-14T00:00:00Z',
-                          agentic_tool: 'codex',
-                        } as Session,
-                      ],
-                    ],
-                  ])
-                }
-                boardObjectsByBoardId={new Map([['board-1', placements]])}
-                cardById={
-                  new Map([
-                    [
-                      'card-1',
-                      {
-                        card_id: 'card-1',
-                        title: 'Customer ticket',
-                        note: 'Waiting on review',
-                        data: { priority: 'high' },
-                        effective_emoji: '🎫',
-                        archived: false,
-                      } as CardWithType,
-                    ],
-                  ])
-                }
-                artifactById={
-                  new Map([
-                    [
-                      'artifact-1',
-                      {
-                        artifact_id: 'artifact-1',
-                        name: 'Deploy preview',
-                        template: 'react',
-                        build_status: 'success',
-                        fullscreen_url: '/ui/a/artifact-1/fullscreen',
-                      } as Artifact,
-                    ],
-                  ])
-                }
-                onOpenBranch={onOpenBranch}
-                onNewSession={vi.fn()}
-                onGiveFirstTask={vi.fn()}
-              />
-            }
-          />
-        </Routes>
-      </MemoryRouter>
-    );
-
-    // Board identity lives in the header; only its description remains in the content.
-    expect(screen.getAllByText('Delivery board')).toHaveLength(1);
-    expect(screen.getByText('Everything shipping this week').closest('.ant-card')).toBeNull();
-    expect(
-      screen.queryByRole('button', { name: 'Open comments for Delivery board' })
-    ).not.toBeInTheDocument();
-
-    // Zone label appears as the collapsible zone header and on the card's zone tag.
-    expect(screen.getAllByText('Review')).toHaveLength(2);
-    expect(screen.getByText('Ship by Friday')).toBeInTheDocument();
-    expect(screen.getByText('## Checklist')).toBeInTheDocument();
-    expect(screen.getByText('Release dashboard')).toBeInTheDocument();
-    expect(screen.getByText('Deploy preview')).toBeInTheDocument();
-    expect(screen.getByText('Customer ticket')).toBeInTheDocument();
-    expect(screen.getByText('feat/mobile')).toBeInTheDocument();
-    expect(screen.getByText('Polish mobile UI')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Schedules/ }));
-    expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'schedule');
+  it('shows the board tabs, led by a read-only canvas of this board', async () => {
+    renderPage('/m/board/board-1');
+    const tabs = screen.getAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabs).toEqual(['Board', 'Teammate', 'Sessions', 'Comments']);
+    expect(screen.getByRole('tab', { name: 'Board' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByTestId('canvas')).toBeInTheDocument();
+    expect(canvas.props?.readOnly).toBe(true);
+    expect(canvas.props?.branches).toEqual([branch]);
+    expect(screen.getByText('Delivery')).toBeInTheDocument();
   });
 
-  it('offers a first-task CTA on an empty board', () => {
-    const onGiveFirstTask = vi.fn();
-    const emptyBoard = { board_id: 'b2', name: 'Fresh board', objects: {} } as unknown as Board;
-    render(
-      <MemoryRouter initialEntries={['/m/board/b2']}>
-        <Routes>
-          <Route
-            path="/m/board/:boardId"
-            element={
-              <MobileBoardPage
-                boardById={new Map([['b2', emptyBoard]])}
-                branchById={new Map()}
-                repoById={new Map()}
-                sessionsByBranch={new Map()}
-                boardObjectsByBoardId={new Map()}
-                cardById={new Map()}
-                artifactById={new Map()}
-                onOpenBranch={vi.fn()}
-                onNewSession={vi.fn()}
-                onGiveFirstTask={onGiveFirstTask}
-                firstTaskAssistantName="Fable"
-              />
-            }
-          />
-        </Routes>
-      </MemoryRouter>
-    );
+  it('keeps the selected tab in the URL', () => {
+    renderPage('/m/board/board-1?tab=comments');
+    expect(screen.getByRole('tab', { name: 'Comments' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Sessions' }));
+    expect(location()).toBe('/m/board/board-1?tab=all-sessions');
+    fireEvent.click(screen.getByRole('tab', { name: 'Board' }));
+    expect(location()).toBe('/m/board/board-1');
+  });
 
-    fireEvent.click(screen.getByRole('button', { name: /Give Fable their first task/ }));
-    expect(onGiveFirstTask).toHaveBeenCalled();
+  it('opens sessions and branches tapped on the canvas', async () => {
+    const { onOpenBranch } = renderPage('/m/board/board-1');
+    await screen.findByTestId('canvas');
+    act(() => canvas.props?.onOpenBranch('branch-1'));
+    expect(onOpenBranch).toHaveBeenCalledWith('branch-1', 'general');
+    act(() => canvas.props?.onSessionClick('session-1'));
+    expect(location()).toBe('/m/session/session-1');
+  });
+
+  it('does not re-render the canvas when the shell re-renders for a session patch', async () => {
+    const { rerenderFromShell } = renderPage('/m/board/board-1');
+    await screen.findByTestId('canvas');
+    const renders = canvas.renders;
+    act(() => agorStore.setState({ sessionById: new Map() } as never));
+    rerenderFromShell();
+    expect(canvas.renders).toBe(renders);
+  });
+
+  it('opens the board switcher when arriving from All boards', () => {
+    const listener = vi.fn();
+    window.addEventListener(OPEN_BOARD_SWITCHER_EVENT, listener);
+    renderPage({ pathname: '/m/board/board-1', state: { openBoardSwitcher: true } });
+    expect(listener).toHaveBeenCalledTimes(1);
+    window.removeEventListener(OPEN_BOARD_SWITCHER_EVENT, listener);
+  });
+
+  it('keeps the switcher on an unknown board', () => {
+    renderPage('/m/board/missing');
+    expect(screen.getByText('Board not found')).toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Home/ })).toBeInTheDocument();
   });
 
   it('never shows an empty-board CTA while the board partition is loading', () => {

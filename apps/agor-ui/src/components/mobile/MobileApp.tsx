@@ -14,11 +14,12 @@ import type {
 import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
 import { Alert, Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+import { readLocalStorageJson } from '../../hooks/localStorageJson';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBranchSessions } from '../../hooks/useBranchSessions';
@@ -29,23 +30,19 @@ import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePr
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
-import { agorStore, useAgorStore } from '../../store/agorStore';
+import { userStorageKey } from '../../hooks/useUserLocalStorage';
+import { type AgorState, agorStore, useAgorStore } from '../../store/agorStore';
 import {
-  makeUnreadCommentCountSelector,
-  selectArtifactById,
+  makeHomeBucketsSelector,
   selectBoardById,
   selectBoardObjectsByBoardId,
   selectBranchById,
-  selectCardById,
-  selectCommentById,
   selectRepoById,
   selectSessionById,
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
-import { isOwnActiveSession } from '../../utils/sessionSearch';
-import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -54,11 +51,11 @@ import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
+import { OPENED_FAILURES_KEY, openedRunsOf } from '../HomePage/openedFailures';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
-import { MobileBoardPage } from './MobileBoardPage';
-import { MobileCommentsPage } from './MobileCommentsPage';
+import { type MobileBoardLocationState, MobileBoardPage } from './MobileBoardPage';
 import { MobileHeader } from './MobileHeader';
 import { MobileMarketplacePage } from './MobileMarketplacePage';
 import { MobileMoreSheet } from './MobileMoreSheet';
@@ -129,7 +126,14 @@ interface MobileAppProps {
     options: BranchArchiveOrDeleteOptions
   ) => void | Promise<void>;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
+  onUpdateBoard?: (boardId: string, updates: Partial<Board>) => void;
 }
+
+/** Board comments are a tab of the board screen; keeps old `/m/comments/:boardId` links working. */
+const BoardCommentsRedirect: React.FC = () => {
+  const { boardId } = useParams<{ boardId: string }>();
+  return <Navigate to={`/m/board/${boardId}?tab=comments`} replace />;
+};
 
 export const MobileApp: React.FC<MobileAppProps> = ({
   client,
@@ -166,6 +170,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onUpdateRepo,
   onArchiveOrDeleteBranch,
   onExecuteScheduleNow,
+  onUpdateBoard,
 }) => {
   const navigate = useNavigate();
   const navigation = useAppNavigation();
@@ -180,9 +185,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const boardById = useAgorStore(selectBoardById);
   const boardObjectsByBoardId = useAgorStore(selectBoardObjectsByBoardId);
-  const cardById = useAgorStore(selectCardById);
-  const artifactById = useAgorStore(selectArtifactById);
-  const commentById = useAgorStore(selectCommentById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
@@ -225,9 +227,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     markCreating(false)
   );
 
-  // Track the board in view so the Board / Comments tabs have a target even from
-  // the Sessions tab. Falls back to the user's main board, then any board.
-  const boardToken = location.pathname.match(/^\/m\/(?:board|comments)\/([^/]+)/)?.[1];
+  // Track the board in view so the Board tab has a target from any screen.
+  // Falls back to the last visited board, the user's main board, then any board.
+  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
+  const boardToken = location.pathname.match(/^\/m\/board\/([^/]+)/)?.[1];
   const sessionToken = location.pathname.match(/^\/m\/session\/([^/]+)/)?.[1];
   const routedSessionId = sessionToken
     ? sessionById.has(sessionToken)
@@ -250,10 +253,12 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const effectiveBoardId = useMemo(() => {
     if (routeBoardId && boardById.has(routeBoardId)) return routeBoardId;
     if (currentBoardId && boardById.has(currentBoardId)) return currentBoardId;
+    const lastBoardId = recentBoardIds.find((id) => boardById.has(id));
+    if (lastBoardId) return lastBoardId;
     const mainBoardId = user?.preferences?.mainBoardId;
     if (mainBoardId && boardById.has(mainBoardId)) return mainBoardId;
     return boardById.keys().next().value as string | undefined;
-  }, [routeBoardId, currentBoardId, boardById, user?.preferences?.mainBoardId]);
+  }, [routeBoardId, currentBoardId, recentBoardIds, boardById, user?.preferences?.mainBoardId]);
 
   // Load the effective board's partition when it is not complete yet.
   const { boardReady } = useBoardPartition(client, effectiveBoardId, {
@@ -285,11 +290,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   });
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
-  // swallows `/m/sessions` (the Sessions tab). Comments open from the top-bar
-  // bell as a full-screen sub-view (like session detail), not a bottom tab.
-  const isSessionRoute = location.pathname.startsWith('/m/session/');
-  const isCommentsRoute = location.pathname.startsWith('/m/comments');
-  const isSubView = isSessionRoute || isCommentsRoute;
+  // swallows `/m/sessions` (the sessions list under Home).
+  const isSubView = location.pathname.startsWith('/m/session/');
   // Sessions folded into Home: /m and the sessions list both read as Home.
   const activeTab: MobileTab | null = location.pathname.startsWith('/m/board')
     ? 'board'
@@ -299,19 +301,24 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         ? null
         : 'home';
 
-  const sessionsBadge = useMemo(() => {
-    let count = 0;
-    for (const session of sessionById.values()) {
-      if (!isOwnActiveSession(session, user?.user_id)) continue;
-      if (getSessionStatusTone(session.status) === 'processing') count++;
-    }
-    return count;
-  }, [sessionById, user?.user_id]);
-
-  const boardCommentsBadge = useAgorStore(
-    useMemo(() => makeUnreadCommentCountSelector(effectiveBoardId), [effectiveBoardId])
-  );
   const commentsBadge = useCommentsForYou(client, user).length;
+
+  // Home's "need you" count. Opened failures and the clock are re-read per navigation, as Home does on mount.
+  const userId = user?.user_id;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on location.key to re-read on navigation.
+  const selectNeedsCount = useMemo(() => {
+    const selectBuckets = makeHomeBucketsSelector({
+      userId,
+      now: Date.now(),
+      needsLimit: 0,
+      recentLimit: 0,
+      openedFailures: openedRunsOf(
+        userId ? readLocalStorageJson(userStorageKey(userId, OPENED_FAILURES_KEY), null) : null
+      ),
+    });
+    return (s: AgorState) => selectBuckets(s).needsCount;
+  }, [userId, location.key]);
+  const homeBadge = useAgorStore(selectNeedsCount) + commentsBadge;
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
@@ -376,8 +383,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
           navigate('/m');
           break;
         case 'board':
-          if (effectiveBoardId) navigate(`/m/board/${effectiveBoardId}`);
-          else setMoreOpen(true);
+          navigate(effectiveBoardId ? `/m/board/${effectiveBoardId}` : '/m/board');
           break;
         case 'ask':
           void askPrimaryAssistant();
@@ -393,7 +399,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     [effectiveBoardId, navigate, askPrimaryAssistant]
   );
 
-  const { recentBoardIds } = useRecentBoards(NO_BOARDS, '', user?.user_id);
   const openHomeBoard = useCallback(
     (boardId: string) => navigate(`/m/board/${boardId}`),
     [navigate]
@@ -411,13 +416,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       openHomeBoard(agorStore.getState().branchById.get(branchId)?.board_id ?? boardId),
     [openHomeBoard]
   );
-  const openBoardList = useCallback(() => setMoreOpen(true), []);
+  const openBoardList = useCallback(
+    () =>
+      navigate(effectiveBoardId ? `/m/board/${effectiveBoardId}` : '/m/board', {
+        state: { openBoardSwitcher: true } satisfies MobileBoardLocationState,
+      }),
+    [effectiveBoardId, navigate]
+  );
   const openSessionList = useCallback(() => navigate('/m/sessions'), [navigate]);
   const openTeammates = useCallback(() => navigation.goToTeammates(), [navigation]);
   const createSession = useStableCallback(onCreateSession);
 
-  // The bell opens comments for you across boards (Home › Needs you); on a board
-  // page it opens that board's comments. Already on Home, it replaces the entry so Back still leaves.
+  // Comments for you across boards (Home › Needs you). Already on Home, it replaces the entry so Back still leaves.
   const onHome = location.pathname.replace(/\/$/, '') === '/m';
   const openComments = useCallback(
     () =>
@@ -427,38 +437,30 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       }),
     [navigate, onHome]
   );
-  const openBoardComments = useCallback(() => {
-    if (effectiveBoardId) navigate(`/m/comments/${effectiveBoardId}`);
-  }, [effectiveBoardId, navigate]);
 
   const canCreateSessions = hasMinimumRole(user?.role, ROLES.MEMBER);
 
-  const withHeader = (title: string, page: React.ReactNode, onBack?: () => void) => (
+  const withHeader = (title: string, page: React.ReactNode, onBack: () => void) => (
     <div style={mobilePageStyle}>
-      <MobileHeader
-        title={title}
-        onBack={onBack}
-        onSearch={() => navigate('/m/search')}
-        commentsBadge={commentsBadge}
-        onOpenComments={openComments}
-      />
+      <MobileHeader title={title} onBack={onBack} />
       <div style={{ flex: 1, minHeight: 0 }}>{page}</div>
     </div>
   );
 
   return (
-    // The shell root is pinned to exactly the viewport and clips horizontally,
-    // so no descendant on any tab can widen the document and clip the content
-    // AND the in-flow bottom nav at the same right edge. Content is laid out
-    // fluid (width:100%), so this never cuts anything legitimate.
+    // Fixed to the visible viewport, so the document never scrolls and iOS cannot
+    // lift the shell (and its tab bar) when the toolbar hides; only page content
+    // scrolls. Clipping horizontally keeps any wide descendant from widening it.
+    // Top and side insets apply here; the tab bar alone owns the bottom inset.
     <Layout
       style={{
-        height: '100dvh',
-        width: '100%',
-        maxWidth: '100%',
-        margin: 0,
+        position: 'fixed',
+        inset: 0,
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
         overflowX: 'hidden',
-        boxSizing: 'border-box',
+        overscrollBehavior: 'none',
       }}
     >
       {!connected && (
@@ -492,23 +494,24 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         <Routes>
           <Route
             index
-            element={withHeader(
-              'Home',
-              <HomePage
-                client={client}
-                currentUser={user}
-                recentBoardIds={recentBoardIds}
-                onBoardClick={openHomeBoard}
-                onBranchClick={openHomeBranch}
-                onSessionClick={openHomeSession}
-                onCreateSession={canCreateSessions ? createSession : undefined}
-                onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
-                onOpenSettings={onOpenWorkspaceSettings}
-                onAllBoards={openBoardList}
-                onSeeAllSessions={openSessionList}
-                onSeeAllTeammates={openTeammates}
-              />
-            )}
+            element={
+              <div style={{ flex: 1, minHeight: 0 }}>
+                <HomePage
+                  client={client}
+                  currentUser={user}
+                  recentBoardIds={recentBoardIds}
+                  onBoardClick={openHomeBoard}
+                  onBranchClick={openHomeBranch}
+                  onSessionClick={openHomeSession}
+                  onCreateSession={canCreateSessions ? createSession : undefined}
+                  onOpenCreateDialog={canCreateSessions ? createFlows.openCreate : undefined}
+                  onOpenSettings={onOpenWorkspaceSettings}
+                  onAllBoards={openBoardList}
+                  onSeeAllSessions={openSessionList}
+                  onSeeAllTeammates={openTeammates}
+                />
+              </div>
+            }
           />
           <Route
             path="teammates"
@@ -538,8 +541,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 onForkSession={onForkSession}
                 onSpawnSession={onSpawnSession}
                 onCreateSessionOnBranch={(branchId) => setNewSessionBranchId(branchId)}
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
+                onBack={goBackHome}
               />
             }
           />
@@ -550,8 +552,6 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                 client={client}
                 currentUser={user}
                 authGeneration={authGeneration}
-                commentsBadge={commentsBadge}
-                onOpenComments={openComments}
               />
             }
           />
@@ -581,18 +581,18 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               <MobileBoardPage
                 boardById={boardById}
                 branchById={branchById}
-                repoById={repoById}
-                sessionsByBranch={sessionsByBranch}
-                boardObjectsByBoardId={boardObjectsByBoardId}
-                cardById={cardById}
-                artifactById={artifactById}
                 onOpenBranch={(branchId, tab) => setBranchEditor({ branchId, tab })}
                 onNewSession={(branchId) => setNewSessionBranchId(branchId)}
-                onGiveFirstTask={() => void askPrimaryAssistant()}
-                firstTaskAssistantName={primaryTeammateName}
-                commentsBadge={boardCommentsBadge}
-                onOpenComments={openBoardComments}
-                userId={user?.user_id}
+                client={client}
+                currentUser={user}
+                onForkSession={onForkSession}
+                onSpawnSession={onSpawnSession}
+                onUpdateBoard={onUpdateBoard}
+                onSendComment={onSendComment}
+                onReplyComment={onReplyComment}
+                onResolveComment={onResolveComment}
+                onToggleReaction={onToggleReaction}
+                onDeleteComment={onDeleteComment}
                 boardReady={boardReady}
               />
             }
@@ -619,36 +619,20 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               />
             }
           />
-          <Route
-            path="comments/:boardId"
-            element={
-              <MobileCommentsPage
-                client={client}
-                boardById={boardById}
-                commentById={commentById}
-                branchById={branchById}
-                userById={userById}
-                currentUser={user}
-                onBack={goBackHome}
-                onSendComment={onSendComment}
-                onReplyComment={onReplyComment}
-                onResolveComment={onResolveComment}
-                onToggleReaction={onToggleReaction}
-                onDeleteComment={onDeleteComment}
-              />
-            }
-          />
+          <Route path="comments/:boardId" element={<BoardCommentsRedirect />} />
         </Routes>
       </div>
 
-      {!isSubView && (
-        <MobileTabBar
-          activeTab={activeTab}
-          onSelect={handleTabSelect}
-          sessionsBadge={sessionsBadge}
-          askPending={creatingSession}
-        />
-      )}
+      {/* Docked as the last flex child of the fixed shell on EVERY /m screen,
+          including session detail, so content (and the session composer) lays
+          out above it with no overlap. On sub-views no tab is highlighted. */}
+      <MobileTabBar
+        activeTab={activeTab}
+        onSelect={handleTabSelect}
+        sessionsBadge={homeBadge}
+        moreBadge={commentsBadge}
+        askPending={creatingSession}
+      />
 
       <Drawer
         open={askPickerOpen}
@@ -713,12 +697,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       <MobileMoreSheet
         open={moreOpen}
         onClose={() => setMoreOpen(false)}
-        client={client}
-        canUseMemberWorkspaceServices={hasMinimumRole(user?.role, ROLES.MEMBER)}
-        boardById={boardById}
-        branchById={branchById}
-        sessionsByBranch={sessionsByBranch}
-        commentById={commentById}
+        user={user}
+        commentsBadge={commentsBadge}
+        onOpenComments={openComments}
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onOpenUserSettings={onOpenUserSettings}
         onLogout={onLogout}

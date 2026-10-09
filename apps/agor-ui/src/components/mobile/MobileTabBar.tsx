@@ -14,8 +14,10 @@ export type MobileTab = 'home' | 'board' | 'ask' | 'marketplace' | 'more';
 export interface MobileTabBarProps {
   activeTab: MobileTab | null;
   onSelect: (tab: MobileTab) => void;
-  /** Count of sessions awaiting the user / running (0 hides the badge). */
+  /** Home's "need you" count (0 hides the badge). */
   sessionsBadge?: number;
+  /** Unread comments and mentions, shown on More (0 hides the badge). */
+  moreBadge?: number;
   /** Ask is creating a session; the action shows it and refuses a repeated tap. */
   askPending?: boolean;
 }
@@ -28,7 +30,7 @@ interface TabDef {
 }
 
 /**
- * Floating bottom tab bar (thumb zone): Home . Board . [Ask primary assistant]
+ * Full-width bottom tab bar (thumb zone), docked under the shell content: Home . Board . [Ask primary assistant]
  * . Marketplace . More. Icon-only: the active destination is marked by a rounded
  * highlight behind its icon plus colorPrimary (not text), so no label can wrap.
  * Ask is the flat solid-teal center action. Safe-area aware; every tab keeps an
@@ -38,6 +40,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
   onSelect,
   sessionsBadge,
+  moreBadge,
   askPending,
 }) => {
   const { token } = theme.useToken();
@@ -48,7 +51,7 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   ];
   const rightTabs: TabDef[] = [
     { key: 'marketplace', label: 'Marketplace', icon: <ShopOutlined /> },
-    { key: 'more', label: 'More', icon: <MenuOutlined /> },
+    { key: 'more', label: 'More', icon: <MenuOutlined />, badge: moreBadge },
   ];
 
   const renderTab = (tab: TabDef) => {
@@ -106,22 +109,14 @@ export const MobileTabBar: React.FC<MobileTabBarProps> = ({
       aria-label="Primary"
       style={{
         flexShrink: 0,
-        paddingInline: token.padding,
-        paddingTop: token.paddingXS,
-        paddingBottom: `calc(${token.paddingXS}px + env(safe-area-inset-bottom))`,
+        ...glassSurfaceStyle(token, 0.8),
+        borderTop: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
+        paddingInline: token.paddingXS,
+        paddingTop: token.paddingXXS,
+        paddingBottom: `calc(${token.paddingXXS}px + env(safe-area-inset-bottom))`,
       }}
     >
-      <Flex
-        align="center"
-        style={{
-          ...glassSurfaceStyle(token, 0.8),
-          borderRadius: token.borderRadiusLG * 2,
-          border: `${token.lineWidth}px solid ${token.colorBorderSecondary}`,
-          boxShadow: token.boxShadowSecondary,
-          paddingInline: token.paddingXS,
-          minHeight: TOUCH_TARGET + token.paddingXS * 2,
-        }}
-      >
+      <Flex align="center" style={{ minHeight: TOUCH_TARGET + token.paddingXS }}>
         {leftTabs.map(renderTab)}
 
         <div
