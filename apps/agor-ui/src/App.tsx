@@ -2260,6 +2260,7 @@ function AppContent() {
                   onUpdateRepo={handleUpdateRepo}
                   onArchiveOrDeleteBranch={handleArchiveOrDeleteBranch}
                   onExecuteScheduleNow={handleExecuteScheduleNow}
+                  onUpdateBoard={handleUpdateBoard}
                 />
               }
             />

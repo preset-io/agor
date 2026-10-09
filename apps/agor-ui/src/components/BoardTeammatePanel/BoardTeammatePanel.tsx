@@ -26,7 +26,8 @@ import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
-import { useAgorStore } from '../../store/agorStore';
+import { type AgorState, useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   selectBranchById,
   selectCommentById,
@@ -45,11 +46,22 @@ import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 
-export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
+export type BoardTeammatePanelTab =
+  | 'board'
+  | 'teammate'
+  | 'all-sessions'
+  | 'all-branches'
+  | 'comments';
 
 interface BoardTeammatePanelProps {
   board: Board | null;
+  /** Content of a leading "Board" tab (the mobile board view). */
+  boardTab?: React.ReactNode;
+  showBranchesTab?: boolean;
+  /** Touch-size tabs (44px, 14px labels) for the mobile board screen. */
+  touch?: boolean;
   activeTab?: BoardTeammatePanelTab;
   onTabChange?: (tab: BoardTeammatePanelTab) => void;
   primaryTeammateBranch?: Branch;
@@ -98,6 +110,9 @@ interface BoardTeammatePanelProps {
 
 const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
+  boardTab,
+  showBranchesTab = true,
+  touch = false,
   activeTab: controlledActiveTab,
   onTabChange,
   primaryTeammateBranch,
@@ -280,7 +295,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   // A primary teammate on another board: its sessions come with that board's
   // partition, loaded in the background (the shown board stays displayed).
   const teammateBoardId = primaryTeammateBranch?.board_id;
-  const { boardReady: teammateBoardReady } = useBoardPartition(
+  const { boardReady: teammateBoardReady, status: teammateBoardStatus } = useBoardPartition(
     client,
     teammateBoardId !== board?.board_id ? teammateBoardId : null,
     {
@@ -297,6 +312,28 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch, sessionsByBranch]
   );
 
+  // Subscribes to the failed flag only, so other partition entry changes don't re-render the panel.
+  const boardFailed = useAgorStore(
+    useMemo(() => {
+      const selectPartition = makeBoardPartitionSelector(board?.board_id);
+      return (s: AgorState) => selectPartition(s)?.status === 'error';
+    }, [board?.board_id])
+  );
+  /** A board still loading; a failed load offers Retry instead of loading forever. */
+  const boardLoading = (failedBoardId?: string) =>
+    failedBoardId ? (
+      <BoardPartitionError
+        boardId={failedBoardId}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.marginXS,
+          padding: token.padding,
+        }}
+      />
+    ) : (
+      boardLoadingSkeleton
+    );
   const boardLoadingSkeleton = (
     <div style={{ padding: 16 }} data-testid="board-partition-skeleton">
       <Space orientation="vertical" size={8} style={{ width: '100%' }}>
@@ -310,7 +347,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
 
   const teammateContent = (() => {
     // No board (or one that doesn't exist): nothing is loading.
-    if (board && !(boardReady && teammateBoardReady)) return boardLoadingSkeleton;
+    if (board && !boardReady) return boardLoading(boardFailed ? board.board_id : undefined);
+    if (board && !teammateBoardReady) {
+      return boardLoading(teammateBoardStatus === 'error' ? teammateBoardId : undefined);
+    }
 
     if (primaryTeammateBranch && primaryTeammateRepo) {
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
@@ -513,7 +553,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       style={{
         height: '100%',
         background: token.colorBgContainer,
-        borderRight: `1px solid ${token.colorBorderSecondary}`,
+        borderRight: touch ? undefined : `1px solid ${token.colorBorderSecondary}`,
         overflow: 'hidden',
       }}
     >
@@ -521,6 +561,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
         activeKey={activeTab}
         onChange={(key) => setActiveTab(key as BoardTeammatePanelTab)}
         items={[
+          ...(boardTab ? [{ key: 'board', label: 'Board', children: boardTab }] : []),
           {
             key: 'teammate',
             label: 'Teammate',
@@ -530,9 +571,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             key: 'all-sessions',
             label: 'Sessions',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
                 {!boardReady ? (
-                  boardLoadingSkeleton
+                  boardLoading(boardFailed ? board.board_id : undefined)
                 ) : sessionDetailsHydrated ? (
                   <BoardSessionList
                     board={board}
@@ -556,7 +597,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             key: 'all-branches',
             label: 'Branches',
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
+              <div style={{ height: '100%', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
                   <BoardBranchList board={board} repoById={repoById} client={client} />
                 ) : (
@@ -585,7 +626,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
                       top: -token.paddingXS,
                       // An empty badge still has a root; do not subtract from
                       // the measured label width after the unread count clears.
-                      marginInlineStart: unreadCommentsCount > 0 ? -token.marginXS : 0,
+                      // Touch tabs have room (no Branches tab), so the badge clears the label.
+                      marginInlineStart:
+                        unreadCommentsCount > 0 ? (touch ? token.marginXXS : -token.marginXS) : 0,
                     },
                     indicator: {
                       paddingInline: token.paddingXXS,
@@ -598,7 +641,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </span>
             ),
             children: board ? (
-              <div style={{ height: 'calc(100vh - 112px)' }}>
+              <div style={{ height: '100%' }}>
                 <CommentsPanel
                   client={client}
                   boardId={board.board_id}
@@ -620,14 +663,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No board selected" />
             ),
           },
-        ]}
+        ].filter((item) => showBranchesTab || item.key !== 'all-branches')}
         rootClassName="agor-panel-tabs"
         tabBarGutter={token.marginSM}
         style={{ height: '100%' }}
         styles={{
           body: { height: '100%' },
           content: { height: '100%' },
-          item: { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
+          item: touch
+            ? { fontSize: token.fontSize, padding: `${token.paddingSM}px 0` }
+            : { fontSize: token.fontSizeSM, padding: `${token.paddingXS}px 0` },
         }}
         tabBarStyle={{ margin: 0 }}
         // Insets live in the extra slots, not tab-bar padding: rc-tabs measures the bar

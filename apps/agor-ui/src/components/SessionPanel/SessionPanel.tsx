@@ -953,7 +953,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     confirmArchive(session.session_id, { onArchived: onClose });
   };
 
-  const hasBranchActions = !!branch;
+  // The mobile canvas lives on a separate Board tab, so there is no map to center from here.
+  const showCenterMap = !!branch && !isMobileShell;
+  const hasBranchActions = showCenterMap || !!(onOpenTerminal && branch);
   const canSwitchTool =
     hasActiveAgenticTool && !!branch && !!onChooseAgenticTool && (session.tasks?.length ?? 0) === 0;
   const handleSwitchTool = async (tool: string) => {
@@ -967,7 +969,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
   const moreMenuItems: MenuProps['items'] = [
-    ...(branch
+    ...(showCenterMap && branch
       ? [
           {
             key: 'center-map',
