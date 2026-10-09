@@ -133,8 +133,27 @@ is a serial lane.
   are terminal `ambiguous`, never resent. 500 and other 4xx dead-letter.
 
 Delivery failure never rolls back the Task or re-admits the prompt. System
-notices (denials, "not linked", session links) are best-effort direct sends
-through the same fenced address loader, outside the outbox.
+notices (denials, "not linked", the session link) and typing indicators are
+best-effort direct sends through the same fenced address loader and host
+allowlist, outside the outbox. `outbound_enabled: false` turns all of them off.
+
+## Notices, typing, and attachments
+
+- The session link is posted once, by the event that created the session, as
+  on Slack and Discord; follow-ups and a loser of the mapping race post
+  nothing. A redelivered first message that finds its own session announces it.
+- Typing is process-local and bounded (`teams-typing.ts`), and only in
+  personal and group chats until channel threads are verified live: admission
+  or a task-progress signal starts it on whichever replica sees it, every
+  refresh re-reads the Task and channel inside the tenant, and it ends on a
+  terminal Task, a posted reply, or shutdown. A failed or refused send or the
+  deadline ends it for that Task on that replica. Loops are capped per tenant.
+  Duplicate or missing indicators across replicas are acceptable.
+- Attachments are never downloaded. Ingress keeps only file names (no URLs,
+  which can carry tokens) in the bounded inbound payload, so an attachment-only
+  mention is admitted and the prompt names the files the agent cannot read.
+- The prompt carries the sender email only when aligned identity resolved it
+  from the member API for that prompt; it is not stored in mapping metadata.
 
 ## Conversation addresses
 
@@ -150,13 +169,14 @@ allowlist are refused before a token is attached.
 
 ## Catch-up
 
-Off by default. When enabled, a channel mention reads replies after the cursor
-through the shared provider-history path and formats them as an untrusted block.
-RSC is per team, so a Graph 403 means "not granted here", not a bad token. A
-failed read admits the current mention and leaves the cursor unchanged. When
-more replies arrived than the cap allows, the newest ones are kept (and trimmed
-oldest-first to the byte limit) with an omission note, and the cursor advances,
-as Slack does. Personal chats have no catch-up.
+On unless a stored setting turns it off. A channel mention
+reads replies after the cursor through the shared provider-history path and
+formats them as an untrusted block. RSC is per team, so a Graph 403 means "not
+granted here", not a bad token. A failed read admits the current mention and
+leaves the cursor unchanged. When more replies arrived than the cap allows, the
+newest ones are kept (and trimmed oldest-first to the byte limit) with an
+omission note, and the cursor advances, as Slack does. Personal and group chats
+have no catch-up.
 
 ## Migration
 
@@ -168,5 +188,5 @@ plain, as for Discord, while channel foreign keys stay tenant-composite.
 ## Non-goals
 
 Teams SDK 2.x or a global `serviceUrl`; multi-tenant bot registrations; Graph
-transcript mirrors; typing or progress indicators; replay or repair APIs for
-ambiguous deliveries; Tasks for messages that did not mention the bot.
+transcript mirrors; attachment download; replay or repair APIs for ambiguous
+deliveries; Tasks for messages that did not mention the bot.

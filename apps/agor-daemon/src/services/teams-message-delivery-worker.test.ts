@@ -209,6 +209,7 @@ function harness(
     prepare?: () => Promise<PreparedTeamsSend>;
     maxChunks?: number;
     providerCallTimeoutMs?: number;
+    onReplyPosted?: (sessionId: string) => void;
   } = {}
 ) {
   const repository = new FakeDeliveryRepository(options.delivery);
@@ -224,7 +225,7 @@ function harness(
     options.prepare ??
       (async () => {
         repository.calls.push('prepare');
-        return { send } satisfies PreparedTeamsSend;
+        return { send, sendTyping: vi.fn(async () => undefined) } satisfies PreparedTeamsSend;
       })
   );
   const invalidateTokens = vi.fn();
@@ -268,6 +269,7 @@ function harness(
     maxChunks: options.maxChunks,
     providerCallTimeoutMs: options.providerCallTimeoutMs,
     sessionUrl: async () => 'https://agor.example.test/s/session-1',
+    onReplyPosted: options.onReplyPosted,
     repositories: {
       delivery: repository as never,
       channel: { findById: vi.fn(async () => channel()) },
@@ -315,6 +317,20 @@ describe('TeamsMessageDeliveryWorker chunking', () => {
       'receipt:2',
     ]);
     expect(setup.repository.row.status).toBe('completed');
+  });
+
+  it('reports the reply as posted once, after its first chunk, so typing can stop', async () => {
+    const events: string[] = [];
+    const setup = harness({
+      text: SEVENTY_K_ASTRAL_TEXT,
+      send: async () => {
+        events.push('send');
+        return 'activity';
+      },
+      onReplyPosted: (sessionId) => events.push(`posted:${sessionId}`),
+    });
+    await setup.worker.checkOnce();
+    expect(events).toEqual(['send', 'posted:session-1', 'send', 'send']);
   });
 
   it('resumes at chunk 2 after a crash that checkpointed chunks 0 and 1', async () => {

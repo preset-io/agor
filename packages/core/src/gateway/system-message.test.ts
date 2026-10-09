@@ -34,6 +34,18 @@ describe('formatGatewaySystemMessage', () => {
     });
   });
 
+  it('formats Teams session-created messages as a markdown link', () => {
+    expect(formatGatewaySystemMessage('teams', `Session created: ${sessionUrl}`)).toBe(
+      `Agor: Session created: [View session](${sessionUrl}). Mention me again to follow up.`
+    );
+    expect(
+      formatGatewaySystemMessage('teams', `Session created: ${sessionUrl}`, {
+        followUpHint: false,
+      })
+    ).toBe(`Agor: Session created: [View session](${sessionUrl}).`);
+    expect(formatGatewaySystemPayload('teams', 'Not linked')).toEqual({ text: 'Agor: Not linked' });
+  });
+
   it('keeps generic Slack system messages plain', () => {
     expect(formatGatewaySystemMessage('slack', 'Creating new codex session...')).toBe(
       'Agor: Creating new codex session...'

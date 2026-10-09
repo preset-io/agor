@@ -92,18 +92,23 @@ function run(overrides: Partial<Parameters<typeof prepareTeamsCatchUp>[0]> = {})
 }
 
 describe('prepareTeamsCatchUp', () => {
-  it('reads nothing when catch-up is off (the default) or the chat is personal', async () => {
+  it('reads nothing when a stored setting turned catch-up off, or outside channels', async () => {
     const provider = connector(async () => history('x'));
     const off = await run({
-      channel: { ...channel(), config: { app_id: 'teams-app' } } as unknown as GatewayChannel,
-      connector: () => provider as unknown as GatewayConnector,
-    });
-    const personal = await run({
-      conversationType: 'personal',
+      channel: {
+        ...channel(),
+        config: { app_id: 'teams-app', catch_up: { mode: 'off' } },
+      } as unknown as GatewayChannel,
       connector: () => provider as unknown as GatewayConnector,
     });
     expect(off).toEqual({ prompt: 'what did we decide?' });
-    expect(personal).toEqual({ prompt: 'what did we decide?' });
+    for (const conversationType of ['personal', 'groupChat']) {
+      const chat = await run({
+        conversationType,
+        connector: () => provider as unknown as GatewayConnector,
+      });
+      expect(chat).toEqual({ prompt: 'what did we decide?' });
+    }
     expect(provider.fetchProviderHistory).not.toHaveBeenCalled();
   });
 

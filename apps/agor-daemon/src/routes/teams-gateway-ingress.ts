@@ -424,7 +424,7 @@ export function registerTeamsGatewayIngressRoute(input: {
       // Unmentioned group/channel traffic (RSC receive-all) and empty summons are never stored.
       if (
         (normalized.conversationType.toLowerCase() !== 'personal' && !normalized.hasMention) ||
-        !normalized.text.trim()
+        (!normalized.text.trim() && !normalized.skippedFiles?.length)
       ) {
         res.status(200).json({ ok: true });
         return;

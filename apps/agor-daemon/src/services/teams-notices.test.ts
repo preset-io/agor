@@ -2,7 +2,7 @@ import { TeamsSendError } from '@agor/core/gateway';
 import type { GatewayChannel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { TeamsSendConnector } from '../utils/teams-connector-cache.js';
-import { sendTeamsNotice } from './teams-notices.js';
+import { sendTeamsNotice, sendTeamsTyping } from './teams-notices.js';
 
 const channel = {
   id: 'channel-1',
@@ -15,8 +15,9 @@ const channel = {
 
 function setup(send: (text: string) => Promise<string> = async () => 'notice-1') {
   const sendMock = vi.fn(send);
+  const typingMock = vi.fn(async () => undefined);
   const connector: TeamsSendConnector = {
-    prepareSend: vi.fn(async () => ({ send: sendMock })),
+    prepareSend: vi.fn(async () => ({ send: sendMock, sendTyping: typingMock })),
     invalidateTokens: vi.fn(),
     formatMessage: (text: string) => text,
   };
@@ -28,7 +29,7 @@ function setup(send: (text: string) => Promise<string> = async () => 'notice-1')
     })),
     revokeThread: vi.fn(async () => 1),
   };
-  return { connector, addresses, sendMock };
+  return { connector, addresses, sendMock, typingMock };
 }
 
 describe('sendTeamsNotice', () => {
@@ -86,5 +87,32 @@ describe('sendTeamsNotice', () => {
       'a:personal',
       'conversation_blocked'
     );
+  });
+
+  it('sends typing through the same fenced address, and nothing when outbound is off', async () => {
+    const { connector, addresses, sendMock, typingMock } = setup();
+    await expect(
+      sendTeamsTyping({ channel, threadId: 'a:personal', addresses, connector: () => connector })
+    ).resolves.toBe('sent');
+    expect(addresses.loadFenced).toHaveBeenCalledWith({ channel, threadId: 'a:personal' });
+    expect(typingMock).toHaveBeenCalledOnce();
+    expect(sendMock).not.toHaveBeenCalled();
+
+    const quiet = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), outbound_enabled: false },
+    } as GatewayChannel;
+    for (const send of [sendTeamsTyping, sendTeamsNotice]) {
+      await expect(
+        send({
+          channel: quiet,
+          threadId: 'a:personal',
+          text: 'x',
+          addresses,
+          connector: () => connector,
+        })
+      ).resolves.toBe('skipped');
+    }
+    expect(addresses.loadFenced).toHaveBeenCalledOnce();
   });
 });

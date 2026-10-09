@@ -166,6 +166,8 @@ export interface TeamsAccessTokenProvider {
 /** A send target whose token and host were verified before any effect marker. */
 export interface PreparedTeamsSend {
   send(text: string, signal?: AbortSignal): Promise<string>;
+  /** Post a Bot Framework `typing` activity to the same conversation. */
+  sendTyping(signal?: AbortSignal): Promise<void>;
 }
 
 /** Validate the address and fetch a token; every failure here is pre-effect. */
@@ -192,29 +194,36 @@ export async function prepareTeamsSend(
   if (!token) throw new TeamsSendError({ phase: 'prepare', reason: 'token_unavailable' });
   const client = ConnectorClient.createClientWithToken(serviceUrl, token);
   const budget = options.textBudget ?? TEAMS_MESSAGE_TEXT_BUDGET;
+  const post = async (fields: Record<string, unknown>, signal?: AbortSignal) => {
+    const activity = Activity.fromObject(fields);
+    activity.applyConversationReference(reference);
+    const body = JSON.parse(activity.toJsonString()) as Record<string, unknown>;
+    const replyToId = activity.replyToId;
+    const url = replyToId
+      ? `v3/conversations/${conversationId}/activities/${encodeURIComponent(replyToId)}`
+      : `v3/conversations/${conversationId}/activities`;
+    try {
+      const response = await client.httpClient.request<{ id?: unknown }>({
+        method: 'post',
+        url,
+        data: body,
+        signal,
+      });
+      return typeof response.data?.id === 'string' ? response.data.id : '';
+    } catch (error) {
+      throw sendFailure(error);
+    }
+  };
   return {
     async send(text, signal) {
       if (text.length > budget) {
         throw new TeamsSendError({ phase: 'send', status: 413, reason: 'chunk_over_budget' });
       }
-      const activity = Activity.fromObject({ type: 'message', text, textFormat: 'markdown' });
-      activity.applyConversationReference(reference);
-      const body = JSON.parse(activity.toJsonString()) as Record<string, unknown>;
-      const replyToId = activity.replyToId;
-      const url = replyToId
-        ? `v3/conversations/${conversationId}/activities/${encodeURIComponent(replyToId)}`
-        : `v3/conversations/${conversationId}/activities`;
-      try {
-        const response = await client.httpClient.request<{ id?: unknown }>({
-          method: 'post',
-          url,
-          data: body,
-          signal,
-        });
-        return typeof response.data?.id === 'string' ? response.data.id : '';
-      } catch (error) {
-        throw sendFailure(error);
-      }
+      return post({ type: 'message', text, textFormat: 'markdown' }, signal);
+    },
+    async sendTyping(signal) {
+      // Same shape the Agents SDK typing timer sends: a bare `typing` activity on the reference.
+      await post({ type: 'typing' }, signal);
     },
   };
 }

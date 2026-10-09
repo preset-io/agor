@@ -39,9 +39,9 @@ export function formatGatewayFollowUpRoutingMessage(
 
 export interface GatewaySystemMessageOptions {
   /**
-   * Discord: append the follow-up guidance to a session-created notice.
-   * Defaults to true; false where follow-ups need no mention (DMs, forums in
-   * `all` response mode).
+   * Discord and Teams: append the follow-up guidance to a session-created
+   * notice. Defaults to true; false where follow-ups need no mention (DMs,
+   * Discord forums in `all` response mode, Teams personal chats).
    */
   followUpHint?: boolean;
 }
@@ -74,11 +74,11 @@ export function formatGatewaySystemMessage(
     return markdownToMrkdwn(markdown);
   }
 
-  if (channelType === 'discord' && sessionCreatedMatch) {
-    // A masked link like Slack's; the angle brackets stop Discord from
-    // expanding a link preview of the session page.
+  if ((channelType === 'discord' || channelType === 'teams') && sessionCreatedMatch) {
+    // A masked link like Slack's; on Discord the angle brackets stop a link preview.
+    const url = channelType === 'discord' ? `<${sessionCreatedMatch[1]}>` : sessionCreatedMatch[1];
     const guidance = options.followUpHint === false ? '' : ` ${mentionGuidance}`;
-    return `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](<${sessionCreatedMatch[1]}>).${guidance}`;
+    return `${GATEWAY_SYSTEM_PREFIX} Session created: [View session](${url}).${guidance}`;
   }
 
   return `${GATEWAY_SYSTEM_PREFIX} ${text}`;

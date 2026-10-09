@@ -198,7 +198,7 @@ export class TeamsGatewayWorker {
     // Rows queued before ingress filtering (non-message, empty, unmentioned) drain without a Task.
     const admissible =
       activity.activityType === 'message' &&
-      !!activity.text.trim() &&
+      (!!activity.text.trim() || !!activity.skippedFiles?.length) &&
       (activity.conversationType.toLowerCase() === 'personal' || activity.hasMention);
     let result: { sessionId?: string; taskId?: TaskID } = {};
     if (admissible) {
@@ -213,6 +213,7 @@ export class TeamsGatewayWorker {
               thread_id: activity.threadId,
               text: activity.text,
               user_name: activity.userName ?? activity.userId,
+              ...(activity.skippedFiles?.length ? { skipped_files: activity.skippedFiles } : {}),
               metadata: safeTeamsMetadata(activity.metadata),
               teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
               teams_catch_up: {

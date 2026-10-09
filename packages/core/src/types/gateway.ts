@@ -278,7 +278,11 @@ export function getRequiredSecretFields(
   }
 }
 
-/** Canonical Teams gateway configuration. Legacy per-port fields are ignored. */
+/**
+ * Canonical Teams gateway configuration. Legacy fields (per-port settings,
+ * `require_mention`, `allow_thread_replies_without_mention`) may stay in stored
+ * configs and are ignored.
+ */
 export type TeamsUserMap = Record<string, UserID>;
 
 export interface TeamsGatewayConfig {
@@ -292,9 +296,8 @@ export interface TeamsGatewayConfig {
   align_teams_users?: boolean;
   /** Alignment override: AAD object ID → tenant-owned immutable Agor User ID. */
   user_map?: TeamsUserMap;
-  require_mention?: boolean;
-  allow_thread_replies_without_mention?: boolean;
   catch_up?: TeamsCatchUpConfig;
+  /** False turns off every Teams post: replies, notices, and typing. */
   outbound_enabled?: boolean;
   /** Accepted during migration only; no runtime effect. */
   tenant_id?: string;
@@ -309,9 +312,9 @@ export interface TeamsCatchUpConfig {
   request_timeout_ms: number;
 }
 
-// Off until live validation proves Graph/RSC catch-up for a tenant.
+// On for new channels; without RSC consent a mention is admitted alone, as history unavailable.
 export const DEFAULT_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
-  mode: 'off',
+  mode: 'best_effort',
   max_messages: 50,
   max_prompt_bytes: 16 * 1024,
   request_timeout_ms: 8_000,
@@ -376,8 +379,6 @@ export function withTeamsConfigDefaults(raw: Record<string, unknown>): Record<st
     : { ...DEFAULT_TEAMS_CATCH_UP };
   return {
     ...raw,
-    require_mention: raw.require_mention ?? true,
-    allow_thread_replies_without_mention: raw.allow_thread_replies_without_mention ?? true,
     align_teams_users: raw.align_teams_users ?? false,
     catch_up: catchUp,
     outbound_enabled: raw.outbound_enabled ?? true,
@@ -424,10 +425,6 @@ export function validateTeamsConfig(
     Object.keys(raw.user_map).length > 0
   ) {
     errors.push('user_map is only allowed when align_teams_users is true');
-  }
-  if (typeof raw.require_mention !== 'boolean') errors.push('require_mention must be a boolean');
-  if (typeof raw.allow_thread_replies_without_mention !== 'boolean') {
-    errors.push('allow_thread_replies_without_mention must be a boolean');
   }
   if (typeof raw.outbound_enabled !== 'boolean') errors.push('outbound_enabled must be a boolean');
   if (!isRecord(raw.catch_up)) {
