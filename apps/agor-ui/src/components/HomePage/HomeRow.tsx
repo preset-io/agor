@@ -11,7 +11,7 @@ import {
 import type { FlexProps, MenuProps } from 'antd';
 import { Button, Dropdown, Flex, Tooltip, Typography, theme } from 'antd';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { useCanHover } from '../../hooks/useCanHover';
 import { useAgorStore } from '../../store/agorStore';
 import {
   type HomeCommentNeed,
@@ -353,7 +353,7 @@ export const HomeSessionRow = memo(function HomeSessionRow({
   const { token } = theme.useToken();
   const compact = useHomeCompact();
   // Without hover (phones, touch tablets) every row action lives in the ⋯ menu.
-  const canHover = useMediaQuery('(hover: hover)');
+  const canHover = useCanHover();
   const inMenu = compact || !canHover;
   const readDetail = useNeedDetail(client, session, reason);
   const detail = sharedDetail ?? readDetail;

@@ -1,4 +1,4 @@
-import type { Board, BoardComment, Branch, Session, User } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, Branch, Session, User } from '@agor-live/client';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, theme } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
@@ -10,11 +10,13 @@ import { agorStore } from '../../store/agorStore';
 import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { HomePage } from './HomePage';
+import { HOME_ASK_TARGET_MAX_WIDTH } from './homeLayout';
 
 afterEach(cleanup);
 
 const ME = 'u1';
 const LONG = 'Investigate the intermittently failing deployment pipeline on the staging cluster';
+const LONG_TEAMMATE = 'An assistant with a very long display name';
 const now = Date.now();
 const session = (id: string, extra: Partial<Session>) =>
   ({
@@ -42,7 +44,7 @@ const teammate = (id: string, name: string) =>
     custom_context: { teammate: { kind: 'teammate', displayName: name, emoji: '🦖' } },
   }) as unknown as Branch;
 
-function seed() {
+function seed(extra: Session[] = []) {
   agorStore.setState({
     ...EMPTY_MAPS,
     ...buildSessionMaps([
@@ -54,6 +56,7 @@ function seed() {
       session('fail2', { status: 'failed', branch_id: 'b1' }),
       session('run', { status: 'running', scheduled_from_branch: true }),
       session('idle', {}),
+      ...extra,
     ]),
     commentById: new Map(
       ['c1', 'c2', 'c3'].map((id) => [
@@ -82,7 +85,7 @@ function seed() {
         'b2',
         { branch_id: 'b2', name: 'fix-another-long-branch-name', board_id: 'board1' } as Branch,
       ],
-      ['tm1', teammate('tm1', 'An assistant with a very long display name')],
+      ['tm1', teammate('tm1', LONG_TEAMMATE)],
       ['tm2', teammate('tm2', 'Rexy')],
     ]),
     boardById: new Map([
@@ -107,9 +110,13 @@ function seed() {
   } as never);
 }
 
-async function renderHomeAt(width: number, dark: boolean) {
+async function renderHomeAt(
+  width: number,
+  dark: boolean,
+  { client = null, sessions = [] }: { client?: AgorClient | null; sessions?: Session[] } = {}
+) {
   await page.viewport(width, 900);
-  seed();
+  seed(sessions);
   render(
     <ConfigProvider
       theme={{
@@ -131,7 +138,7 @@ async function renderHomeAt(width: number, dark: boolean) {
           <MemoryRouter>
             <div data-testid="viewport" style={{ width: '100vw', height: '100vh' }}>
               <HomePage
-                client={null}
+                client={client}
                 currentUser={{ user_id: ME, name: 'Ada Lovelace', role: 'member' } as User}
                 recentBoardIds={['board1', 'board-tm']}
                 onBoardClick={vi.fn()}
@@ -261,6 +268,57 @@ describe('HomePage secondary links', () => {
       probe.style.color = token.colorTextSecondary;
       const link = within(viewport).getByRole('button', { name: 'See all sessions' });
       expect(getComputedStyle(link).color).toBe(getComputedStyle(probe).color);
+    });
+  }
+});
+
+describe('HomePage ask box truncation', () => {
+  // The client resolves tm1, the long-named teammate, as the caller's primary.
+  const primary = teammate('tm1', LONG_TEAMMATE);
+  const client = {
+    service: () => ({ getPrimaryTeammate: async () => primary, find: async () => [] }),
+  } as unknown as AgorClient;
+  // Long enough to cut even in the desktop card.
+  const title = [LONG, LONG, LONG].join(' / ');
+  const mine = session('mine', {
+    branch_id: 'tm1',
+    title,
+    last_updated: new Date(now).toISOString(),
+  });
+
+  for (const width of [360, 1440]) {
+    it(`clips a long teammate name and Continue title at ${width}px`, async () => {
+      const viewport = await renderHomeAt(width, false, { client, sessions: [mine] });
+      const resume = await screen.findByRole('button', { name: `Continue “${title}”` });
+      const bad = scrollingNodes(viewport);
+      expect(bad, `scroll overflow at ${width}px:\n${bad.join('\n')}`).toEqual([]);
+
+      const toolbar = viewport.querySelector<HTMLElement>('[data-home-ask-toolbar]') as HTMLElement;
+      const bar = toolbar.getBoundingClientRect();
+      const name = within(toolbar).getByText(new RegExp(LONG_TEAMMATE));
+      const chip = (
+        width < 768 ? name.closest('button') : name.closest('.ant-select')
+      ) as HTMLElement;
+      // The chip stays within its cap, ahead of Send, while the name inside runs longer.
+      const box = chip.getBoundingClientRect();
+      const send = within(toolbar).getAllByRole('button').at(-1)?.getBoundingClientRect();
+      expect(box.width).toBeLessThanOrEqual(HOME_ASK_TARGET_MAX_WIDTH + PX);
+      expect(box.right).toBeLessThanOrEqual((send?.left ?? 0) + PX);
+      expect(name.scrollWidth).toBeGreaterThan(box.width);
+      const tops = Array.from(toolbar.querySelectorAll<HTMLElement>('button, .ant-select')).map(
+        (el) => el.getBoundingClientRect().top
+      );
+      expect(spread(tops), `ask toolbar wraps at ${width}px`).toBeLessThanOrEqual(PX);
+
+      // Continue sits below the toolbar and cuts its title while keeping the chevron in view.
+      const row = resume.getBoundingClientRect();
+      expect(row.top).toBeGreaterThanOrEqual(bar.bottom);
+      expect(row.right).toBeLessThanOrEqual(bar.right + PX);
+      const text = within(resume).getByText(/^Continue/);
+      expect(text.scrollWidth).toBeGreaterThan(text.clientWidth);
+      expect(text.getBoundingClientRect().right).toBeLessThanOrEqual(row.right + PX);
+      const chevron = resume.querySelector('.anticon-right')?.getBoundingClientRect();
+      expect(chevron && chevron.width > 0 && chevron.right <= row.right + PX).toBe(true);
     });
   }
 });
