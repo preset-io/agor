@@ -28,6 +28,12 @@ export interface InboundFile {
   url_private_download: string;
 }
 
+/** An attachment the connector could not hand to the agent, kept so the user can be told. */
+export interface InboundSkippedFile {
+  name: string;
+  reason: 'unsupported_type' | 'files_disabled' | 'invalid';
+}
+
 /**
  * Inbound message from a messaging platform
  */
@@ -39,6 +45,8 @@ export interface InboundMessage {
   userId: string;
   timestamp: string;
   files?: InboundFile[];
+  /** Attachments that were not passed on; the daemon tells the agent to mention them. */
+  skippedFiles?: InboundSkippedFile[];
   metadata?: Record<string, unknown>;
   /**
    * Optional provider acknowledgement prepared only after Agor durably wins

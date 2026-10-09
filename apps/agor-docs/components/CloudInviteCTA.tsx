@@ -1,43 +1,78 @@
 'use client';
 
 import { useState } from 'react';
-import { AGOR_CLOUD_INVITE_URL } from '../lib/links';
+import { onCloudCtaClick, withCtaAttribution } from '../lib/cloudCtaAttribution';
+import { CloudCtaLink } from './CloudCtaLink';
 import styles from './CloudInviteCTA.module.css';
 import { HubSpotMeetingModal } from './HubSpotMeetingModal';
 
 interface CloudInviteCTAProps {
-  primaryLabel?: string;
+  /**
+   * Attribution slug for this spot: utm_content on the console link, and the
+   * reported click. The status-driven CTA falls back to `cloud-invite`; a
+   * fixed link is only tagged when this is set.
+   */
+  placement?: string;
   demoLabel?: string;
+  /**
+   * A fixed primary link instead of the status-driven Cloud CTA (e.g. the
+   * open beta post linking straight to the console). Both must be set.
+   */
+  primaryLabel?: string;
   primaryHref?: string;
+  /** Render the primary pill. Set false for a demo-only secondary CTA. */
+  showPrimary?: boolean;
+  /** Render the "Book a Demo" button. Set false for a primary-only CTA. */
+  showDemo?: boolean;
+  /** Ignored: buttons never carry arrows on this site. Kept for existing posts. */
+  arrow?: boolean;
 }
 
 export function CloudInviteCTA({
-  primaryLabel = 'Join the Private Beta',
+  placement,
   demoLabel = 'Book a Demo',
-  primaryHref = AGOR_CLOUD_INVITE_URL,
+  primaryLabel,
+  primaryHref,
+  showPrimary = true,
+  showDemo = true,
 }: CloudInviteCTAProps) {
-  const isInPageAnchor = primaryHref.startsWith('#') || primaryHref.startsWith('/');
   // The scheduler opens in an on-site modal instead of linking out to the
   // (Preset-branded) meetings.hubspot.com page.
   const [isDemoOpen, setIsDemoOpen] = useState(false);
+  const href = primaryHref && placement ? withCtaAttribution(primaryHref, placement) : primaryHref;
+  const isInPageAnchor = href?.startsWith('#') || href?.startsWith('/');
   return (
     <div className={styles.wrapper}>
-      <a
-        href={primaryHref}
-        {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
-        className={styles.primary}
-      >
-        {primaryLabel} →
-      </a>
-      <button
-        type="button"
-        className={styles.secondary}
-        style={{ cursor: 'pointer', font: 'inherit' }}
-        onClick={() => setIsDemoOpen(true)}
-      >
-        {demoLabel} →
-      </button>
-      <HubSpotMeetingModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
+      {showPrimary &&
+        (href && primaryLabel ? (
+          <a
+            href={href}
+            onClick={
+              placement
+                ? (event) => onCloudCtaClick(placement, 'console', event.currentTarget)
+                : undefined
+            }
+            {...(isInPageAnchor ? {} : { target: '_blank', rel: 'noopener noreferrer' })}
+            className={styles.primary}
+          >
+            {primaryLabel}
+          </a>
+        ) : (
+          <CloudCtaLink placement={placement ?? 'cloud-invite'} className={styles.primary} />
+        ))}
+      {showDemo && (
+        <>
+          <button
+            type="button"
+            className={styles.secondary}
+            style={{ cursor: 'pointer', font: 'inherit' }}
+            onClick={() => setIsDemoOpen(true)}
+          >
+            {demoLabel}
+          </button>
+          <HubSpotMeetingModal isOpen={isDemoOpen} onClose={() => setIsDemoOpen(false)} />
+        </>
+      )}
     </div>
   );
 }

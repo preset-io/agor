@@ -1,5 +1,6 @@
 import path from 'node:path';
 
+import { resolveOpenCodeCapabilities } from '@agor/agentic-tool-opencode/daemon';
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { AgorConfig, KeyResolutionContext } from '@agor/core/config';
 import { getBranchHomePath, resolveApiKey } from '@agor/core/config';
@@ -116,13 +117,23 @@ const ENV_VAR_SUBDIR: Readonly<Record<string, string>> = Object.freeze({
   COPILOT_CACHE_HOME: 'copilot-cache',
 });
 
+/** Hosted OpenCode keeps credentials and live state on Job scratch; only sealed checkpoints use a branch home. */
+export function isHostedOpenCode(
+  config: Parameters<typeof resolveOpenCodeCapabilities>[0]
+): boolean {
+  return resolveOpenCodeCapabilities(config).mode === 'managed-projection';
+}
+
 /** Why a tool must be refused before a branch adopts shared SDK state. */
-export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | undefined {
+export function branchSdkHomeUnsupportedReason(
+  tool: AgenticToolName,
+  hostedOpenCode = false
+): string | undefined {
   const integration = getAgenticToolIntegration(tool);
   if (!integration.capabilities.supportsConfigHomeOverride) {
     return 'its SDK cannot relocate its config/state directory';
   }
-  if (tool === 'opencode') {
+  if (tool === 'opencode' && !hostedOpenCode) {
     return 'its current XDG data home combines native credentials with relocatable state';
   }
   return undefined;
@@ -160,6 +171,8 @@ export function branchSdkHomeAuthUnsupportedReason(input: {
 export async function resolveBranchSdkHomeCompatibility(input: {
   tool: AgenticToolName;
   delegated: boolean;
+  /** See {@link isHostedOpenCode}. */
+  hostedOpenCode: boolean;
   secureLocalCredentialOverlay: boolean;
   userId?: UserID;
   db: NonNullable<KeyResolutionContext['db']>;
@@ -168,7 +181,7 @@ export async function resolveBranchSdkHomeCompatibility(input: {
   /** Launch must project this caller's native Codex auth file by pinned fd. */
   requiresLocalCodexAuthOverlay: boolean;
 }> {
-  const toolReason = branchSdkHomeUnsupportedReason(input.tool);
+  const toolReason = branchSdkHomeUnsupportedReason(input.tool, input.hostedOpenCode);
   if (toolReason) return { unsupportedReason: toolReason, requiresLocalCodexAuthOverlay: false };
 
   const localCodexAuth =

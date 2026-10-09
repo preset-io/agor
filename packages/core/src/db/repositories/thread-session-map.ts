@@ -16,7 +16,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
-import { and, eq, like, lt } from 'drizzle-orm';
+import { and, asc, eq, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
 import type { Database } from '../client';
@@ -298,22 +298,54 @@ export class ThreadSessionMapRepository
   }
 
   /**
-   * Find mapping by session ID (outbound routing lookup)
+   * Find mapping by session ID, reporting whether the answer was ambiguous.
+   *
+   * `(channel_id, thread_id)` is unique but `session_id` is only indexed, so a
+   * session may legitimately carry several mappings. This used to be a bare
+   * `.one()` — `.get()` on SQLite, an unordered `LIMIT 1` on PostgreSQL — which
+   * returned an arbitrary row with no signal that a choice had been made, and
+   * therefore no signal that a reply was about to be delivered into a thread
+   * nobody asked for.
+   *
+   * Two things fix that. The order is now explicit (oldest mapping first, tied
+   * on id) so the same input always yields the same row on both engines, and a
+   * second row is read purely so callers can be told the answer was a guess.
+   * Callers that can identify the intended mapping must do so; this remains a
+   * last-resort lookup.
    */
-  async findBySession(sessionId: string): Promise<ThreadSessionMap | null> {
+  async findBySessionAmbiguityAware(
+    sessionId: string
+  ): Promise<{ mapping: ThreadSessionMap | null; ambiguous: boolean }> {
     try {
-      const row = await select(this.db)
+      const rows = (await select(this.db)
         .from(threadSessionMap)
         .where(eq(threadSessionMap.session_id, sessionId))
-        .one();
+        .orderBy(asc(threadSessionMap.created_at), asc(threadSessionMap.id))
+        .limit(2)
+        .all()) as ThreadSessionMapRow[];
 
-      return row ? this.rowToMapping(row) : null;
+      return {
+        mapping: rows[0] ? this.rowToMapping(rows[0]) : null,
+        ambiguous: rows.length > 1,
+      };
     } catch (error) {
       throw new RepositoryError(
         `Failed to find mapping by session: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }
+  }
+
+  /**
+   * Find mapping by session ID (last-resort outbound routing lookup).
+   *
+   * See {@link findBySessionAmbiguityAware} for why the row is chosen the way
+   * it is. Prefer an identity-carrying lookup — `findById` on a stamped
+   * mapping, or `findByChannelAndThread` — wherever the caller knows which
+   * thread it means.
+   */
+  async findBySession(sessionId: string): Promise<ThreadSessionMap | null> {
+    return (await this.findBySessionAmbiguityAware(sessionId)).mapping;
   }
 
   /**

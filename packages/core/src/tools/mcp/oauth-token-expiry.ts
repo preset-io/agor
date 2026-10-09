@@ -2,9 +2,7 @@
  * MCP OAuth Token Expiry Resolution
  *
  * Replaces the previous `tokenResponse.expires_in ?? 3600` defaulting that
- * lived in two persist sites with different policies. See
- * `context/explorations/mcp-oauth-token-lifecycle.md` (Phase 3.5) for the
- * full rationale.
+ * lived in two persist sites with different policies.
  *
  * The resolver walks a deterministic precedence cascade and returns the
  * first hit, or `null` ("unknown") if no source can supply a TTL. `null` is

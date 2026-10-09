@@ -56,7 +56,14 @@ function fixture(status: Session['status'] = 'running') {
   const services = {
     sessions: {
       ...events('sessions'),
-      get: async (id: string) => ({ ...session, session_id: id, status }),
+      // Session.tasks lists dispatched Tasks only; the queue lives on the Tasks.
+      get: async (id: string) => ({
+        ...session,
+        session_id: id,
+        status,
+        tasks: [active.task_id],
+        tasks_complete: true,
+      }),
       patch,
     },
     tasks: {

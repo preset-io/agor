@@ -1,3 +1,27 @@
+/** Safe runtime support projection from branches.get; not admission or storage proof. */
+export interface BranchMaintenanceCapabilities {
+  archive_preserve: BranchMaintenanceCapability;
+  archive_clean: BranchMaintenanceCapability;
+  archive_remove: BranchMaintenanceCapability;
+  permanent_delete: BranchMaintenanceCapability;
+}
+export type BranchMaintenanceCapability =
+  | { supported: true }
+  | { supported: false; reason: string };
+
+/** Older daemons and missing diagnostics must not advertise destructive support. */
+export function getBranchMaintenanceBlockReason(
+  capabilities: BranchMaintenanceCapabilities | undefined,
+  operation: keyof BranchMaintenanceCapabilities
+): string | undefined {
+  const capability = capabilities?.[operation];
+  if (capability?.supported === true) return undefined;
+  return (
+    capability?.reason ||
+    'Runtime maintenance capability is unavailable. Refresh or ask an operator to upgrade the daemon; no operation was started.'
+  );
+}
+
 /** Repository-approved executable configuration; never loaded from a branch checkout. */
 export interface RepoCleanupPolicy {
   enabled: boolean;
@@ -62,6 +86,8 @@ export function getBranchCleanupBlockReason(
 }
 
 export const BRANCH_CLEANUP_REPORT_SERVICE = 'branch-cleanup-steps';
+export const BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE =
+  'branches/:id/dismiss-workspace-notification';
 export const branchCleanupCommandId = (executionId: string) =>
   `${BRANCH_CLEANUP_COMMAND}:${executionId}`;
 export const BRANCH_WORKSPACE_OPERATION_BUDGET_MS = BRANCH_CLEANUP_TIMEOUT_MS + 60_000;
@@ -90,7 +116,20 @@ export interface BranchWorkspaceSnapshot {
   repo_id: import('./id').UUID;
   path: string;
   repo_path: string;
+  storage_mode?: import('./branch').Branch['storage_mode'];
   policy?: RepoCleanupPolicy;
+}
+
+/** Daemon-selected clone storage for fixed operations on an external executor.
+ * Not public input or authority: the invocation claim and tenant-scoped records
+ * authorize the operation; the executor verifies these mounts before mutation.
+ */
+export interface DelegatedBranchWorkspaceStorage {
+  tenantDataRoot: string;
+  branchesRoot: string;
+  branchPath: string;
+  repoPath: string;
+  storageMode: 'clone';
 }
 /** Standalone cleanup has exactly one filesystem action; archive chooses explicitly. */
 export type BranchWorkspaceRequest =
@@ -122,7 +161,29 @@ export function projectBranchWorkspaceOperation(
   return operation;
 }
 
+/** A past outcome may be forgotten; an unresolved branch condition may not.
+ * The storage owner additionally checks its private maintenance claim under lock.
+ */
+export function canDismissBranchWorkspaceNotification(
+  branch: Pick<
+    import('./branch').Branch,
+    'workspace_operation' | 'filesystem_status' | 'deletion_status' | 'archived'
+  >
+): boolean {
+  const status = branch.workspace_operation?.status;
+  const filesystemReady =
+    branch.filesystem_status === undefined || branch.filesystem_status === 'ready';
+  const archivedWorkspace =
+    branch.archived && ['preserved', 'cleaned', 'deleted'].includes(branch.filesystem_status ?? '');
+  return (
+    (status === 'succeeded' || status === 'failed') &&
+    !branch.deletion_status &&
+    (filesystemReady || archivedWorkspace)
+  );
+}
+
 export const BRANCH_WORKSPACE_SERVER_FIELDS = [
+  'maintenance_capabilities',
   'workspace_snapshot',
   'workspace_operation',
   'cleanup_last_error',

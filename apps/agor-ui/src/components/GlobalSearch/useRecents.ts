@@ -1,14 +1,18 @@
+import type { AgorClient } from '@agor-live/client';
 import { isTeammate } from '@agor-live/client';
 import { useMemo } from 'react';
+import { useEnsureBranches } from '../../hooks/useEnsureRows';
 import {
   EMPTY_RESULTS,
   type GlobalSearchEntityMaps,
   RECENTS_SECTION_LIMIT,
   type ResultsByType,
 } from './types';
-import { byTimestamp } from './utils';
+import { byTimestamp, parentBranchIds } from './utils';
 
 type UseRecentsInput = GlobalSearchEntityMaps & {
+  /** Reads the shown rows' parent branches the maps lack. */
+  client?: AgorClient | null;
   currentUserId?: string;
 };
 
@@ -25,6 +29,7 @@ type UseRecentsInput = GlobalSearchEntityMaps & {
  * teammates, artifacts, boards, MCP servers.
  */
 export function useRecents({
+  client,
   currentUserId,
   sessionById,
   branchById,
@@ -32,7 +37,7 @@ export function useRecents({
   boardById,
   mcpServerById,
 }: UseRecentsInput): ResultsByType {
-  return useMemo(() => {
+  const recents = useMemo<ResultsByType>(() => {
     if (!currentUserId) return EMPTY_RESULTS;
 
     const sessions = Array.from(sessionById.values())
@@ -85,4 +90,7 @@ export function useRecents({
       mcp: mcpServers.map((m) => ({ type: 'mcp' as const, item: m })),
     };
   }, [currentUserId, sessionById, branchById, artifactById, boardById, mcpServerById]);
+  // Parent-branch labels come from the map: read the shown rows' parents it lacks.
+  useEnsureBranches(client, parentBranchIds(recents));
+  return recents;
 }

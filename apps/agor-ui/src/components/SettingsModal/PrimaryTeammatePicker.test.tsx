@@ -71,6 +71,31 @@ describe('PrimaryTeammatePicker', () => {
     const currently = await screen.findByText(/Currently/);
     expect(currently).toHaveTextContent('Ada');
     expect(currently).toHaveTextContent('Ambient');
+    expect(currently).toHaveTextContent(/\.$/);
+  });
+
+  it("omits the board from the current primary when it is just the teammate's name", async () => {
+    const current = teammate('branch-1', 'Ambient!');
+    seedStore([current]);
+    renderPicker(createClient(current).client);
+
+    const currently = await screen.findByText(/Currently/);
+    expect(currently).toHaveTextContent(/^Currently Ambient!$/);
+  });
+
+  it('labels each option with its emoji, name and board', async () => {
+    seedStore([
+      teammate('branch-1', 'Ada', {
+        custom_context: { teammate: { kind: 'teammate', displayName: 'Ada', emoji: '🎨' } },
+      } as Partial<Branch>),
+    ]);
+    renderPicker(createClient(null).client);
+
+    await screen.findByText(/No primary assistant set/);
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    const name = await screen.findByText('Ada');
+    const row = name.parentElement as HTMLElement;
+    expect(row).toHaveTextContent('🎨Ada📋 Ambient');
   });
 
   it('renders a primary that lives outside the listed teammates', async () => {

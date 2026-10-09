@@ -65,6 +65,7 @@ jobs:
       # This fails if a workspace gains a test script without being assigned
       # to a matrix group below. It also records browser-only ownership.
       - run: node --test scripts/ci-test-matrix.test.mjs
+      - run: node --test scripts/railway-image-inputs.test.mjs
       - run: pnpm check:ci-test-coverage
 
       - run: pnpm check:agor-live-deps
@@ -201,7 +202,9 @@ jobs:
   browser:
     name: Browser layout tests (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Cold Ubuntu dependency downloads can consume ten minutes before Chromium
+    # starts. Leave time for the full viewport shard and retention check too.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -221,7 +224,18 @@ jobs:
 
       - run: node scripts/ci-test-matrix.mjs install ui-1
       - run: pnpm --filter agor-ui exec playwright install --with-deps chromium
+      - name: Test production search retention and concurrency
+        run: |
+          if [[ "${{ matrix.shard }}" == "1" ]]; then
+            pnpm --filter agor-ui test:search-retention
+          fi
+      - name: Test production transcript retention
+        run: |
+          if [[ "${{ matrix.shard }}" == "2" ]]; then
+            pnpm --filter agor-ui test:transcript-retention
+          fi
       - run: pnpm --filter agor-ui test:browser --shard=${{ matrix.shard }}/2
+      - run: NODE_OPTIONS=--conditions=source pnpm exec tsx scripts/test-mcp-oauth-browser.mts
 
   # Do not rename this job: branch protection currently requires the generated
   # context `CI / Lint, typecheck, build, test (pull_request)`. `always()` makes

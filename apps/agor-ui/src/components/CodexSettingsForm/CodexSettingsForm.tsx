@@ -16,6 +16,7 @@ import type React from 'react';
 import { getEffectiveCodexFormValues } from '../AgenticToolConfigForm/agenticConfigHelpers';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
 import { CODEX_APPROVAL_POLICIES, CODEX_SANDBOX_MODES } from '../PermissionModeSelector';
+import { CodexPluginsField } from './CodexPluginsField';
 
 export interface CodexSettingsFormProps {
   showHelpText?: boolean;
@@ -89,6 +90,7 @@ export const CodexSettingsForm: React.FC<CodexSettingsFormProps> = ({
       >
         <CodexNetworkAccessToggle showWarning={showHelpText} />
       </Form.Item>
+      <CodexPluginsField showHelpText={showHelpText} />
     </>
   );
 };

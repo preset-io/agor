@@ -1,10 +1,10 @@
-# Security Headers & CORS
+# Security Headers, CORS & Git Config
 
 How Agor's daemon handles Content-Security-Policy (CSP) and Cross-Origin
 Resource Sharing (CORS), and how operators tune both from `~/.agor/config.yaml`.
 
 > This document is scoped to **web-layer hardening** (CSP / CORS / response
-> headers). For authentication, RBAC, and Unix isolation see
+> headers) plus the daemon-wide git config defaults. For authentication, RBAC, and Unix isolation see
 > [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](../../apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx)
 > and [`context/guides/rbac-and-unix-isolation.md`](../guides/rbac-and-unix-isolation.md).
 
@@ -276,6 +276,21 @@ mode: wildcard` combination, the daemon refuses to boot with an actionable
 error message.
 
 ---
+
+## Git config hardening (`security.git_config_parameters`)
+
+The daemon sets `GIT_CONFIG_PARAMETERS` at startup; every git invocation it or a
+local executor runs inherits it, and a `delegated` launcher must forward it
+explicitly. Defaults (`packages/core/src/config/security-resolver.ts`) refuse
+credential-bearing URLs (`transfer.credentialsInUrl=die`, git 2.41+), block the
+`file://` / `ext::` protocol families, and enable HFS/NTFS path protection.
+`fetch.fsckObjects` is deliberately not a default: it rejects legacy repos with
+technically broken commits.
+
+Same two-tier shape as CSP: `extras` appends (a same-key entry overrides the
+default value), `override` replaces the defaults wholesale (`[]` disables all),
+and setting both throws at load. Never put credential-bearing values such as
+`http.proxy=http://user:pass@…` here; logs are redacted but the env var is not.
 
 ## See also
 

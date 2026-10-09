@@ -33,6 +33,65 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+### Fixes
+
+- **Resumable partial Knowledge transfers** — transfers retain successful per-document work and continue after independent document failures, with bounded sanitized summaries and receipt-backed resume; systemic and safety failures still stop the run. ([#3018](https://github.com/preset-io/agor/pull/3018))
+
+### Breaking
+
+- **Git-friendly Knowledge repositories (format v2)** — exports now use readable folders, per-document YAML headers, a sorted `manifest.yaml` and relative internal links; `agor kb validate` checks repositories offline. V1 bundles are not imported or converted in place: keep them intact and export to a fresh directory; edited v2 repositories still require a new destination namespace rather than overwriting existing Knowledge. ([#3018](https://github.com/preset-io/agor/pull/3018))
+
+## 0.26.10 (2026-10-06)
+
+Release preparation covers merged changes from `v0.26.9` (`a59bc310`) through `ba19f73b`, plus the API-key authentication and Knowledge transfer fixes in this release: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.9...ba19f73bdf182e420dacfdaf46de71c21679686e). This entry does not imply publication or deployment.
+
+### Features
+
+- **Shared hosted OpenCode sessions** — eligible branch-home sessions now follow branch sharing permissions, with sealed checkpoints shared through the branch SDK home and each turn using the prompting user's own provider key. Execution-home sessions remain owner-only. ([#2969](https://github.com/preset-io/agor/pull/2969))
+- **Opt-in native Codex plugins** — sessions can explicitly enable native plugin support rather than inheriting it implicitly. ([#2966](https://github.com/preset-io/agor/pull/2966))
+
+### Fixes
+
+- **API-key Knowledge imports** — isolates the authentication user lookup so its validator no longer removes `namespace`, `bundle` or pagination fields from the caller's request. Fixes `Invalid Knowledge transfer request` during destination inventory, including resume and dry-run; transfer validation, tenant checks and conflict no-overwrite behavior remain intact. ([#3014](https://github.com/preset-io/agor/pull/3014))
+- **Actionable Knowledge transfer errors** — reports sanitized stage, HTTP method/route, status and invalid-field reasons without exposing credentials or document content. Failed planning no longer unconditionally recommends `--resume --apply`; resolve the error and review a `--resume --dry-run` plan first. ([#3014](https://github.com/preset-io/agor/pull/3014))
+- **Repository setup can recover in place** — retries interrupted bootstrap without deleting existing work and keeps onboarding readiness and progress aligned with repository state. ([#2979](https://github.com/preset-io/agor/pull/2979))
+- **Bounded conversation memory** — adds a byte budget for retained transcript detail, bounds Codex rollout usage reads and drops duplicate tool payloads. ([#2963](https://github.com/preset-io/agor/pull/2963), [#2962](https://github.com/preset-io/agor/pull/2962))
+- **Reliable environment and board updates** — clarifies environment log sources, makes Railway cleanup resumable, and emits board creation events only after the transaction commits. ([#2971](https://github.com/preset-io/agor/pull/2971), [#2972](https://github.com/preset-io/agor/pull/2972))
+- **Gemini task scratch stays ephemeral** — delegated launchers can keep per-task temporary files on launcher-owned scratch rather than a persistent SDK home; invalid scratch configuration fails closed. ([#2960](https://github.com/preset-io/agor/pull/2960))
+
+### Upgrade
+
+SDK pins and model defaults are unchanged. After publication and verification of all eight npm packages, packaged installations should drain active tasks, install `agor-live@0.26.10`, run `agor install --sync` and `agor doctor`, then restart according to [PUBLISH.md](PUBLISH.md). The API-key import fix requires the **destination daemon** to be updated; upgrading only the CLI adds diagnostics but cannot fix the old server. Agor Cloud rollout is a separate operator action, not a consequence of npm publication.
+
+## 0.26.9 (2026-10-02)
+
+Release preparation covers merged changes from `v0.26.8` (`c67b7ba5`) through `d7a676f8`, plus the SDK updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.8...d7a676f8cee62cd4418a561de71965723f9b19fd). This entry does not imply publication or deployment.
+
+### Features
+
+- **Home and teammate directory** — Home brings together Needs you, My work, recent boards, and an ask box; a shared teammate directory adds caller-scoped navigation. The creation gallery now leads with Start blank. ([#2901](https://github.com/preset-io/agor/pull/2901), [#2907](https://github.com/preset-io/agor/pull/2907), [#2959](https://github.com/preset-io/agor/pull/2959))
+- **OpenCode in hosted workspaces** — eligible deployments can run owner-only OpenCode sessions with per-user provider keys and checkpointed conversation state. Provider failures surface bounded, sanitized errors instead of leaving turns retrying indefinitely; unsupported deployments report the missing prerequisites. ([#2935](https://github.com/preset-io/agor/pull/2935))
+- **Branch-local Railway previews** — an opt-in launcher provisions previews from pushed public source, reuses branch-owned resources, retains data on Stop, and removes it on Nuke. ([#2927](https://github.com/preset-io/agor/pull/2927))
+- **Workspace identity in the header** — verified launches can supply a tenant-specific display label; a configurable external app link lives in the settings menu while the logo returns Home. ([#2945](https://github.com/preset-io/agor/pull/2945), [#2951](https://github.com/preset-io/agor/pull/2951), [#2961](https://github.com/preset-io/agor/pull/2961))
+
+### Fixes
+
+- **Claude and Codex runtime reliability** — updates Claude Agent SDK from 0.3.284 to 0.3.288 (Claude Code 2.1.288), including upstream fixes for streaming timeouts, resume/compaction, headless termination, and duplicate MCP calls; updates Codex SDK and CLI from 0.159.0 to 0.160.0 for startup and provider-catalog fixes. Model lists and defaults stay unchanged, including Claude Sonnet 5.5 and GPT-6 Astra; after publication and npm verification, packaged installations must drain active tasks, upgrade Agor, run `agor install --sync` and `agor doctor`, then restart. ([#2967](https://github.com/preset-io/agor/pull/2967))
+- **Faster session loading** — prioritizes the opened conversation, defers global hydration, and reduces session-list payloads. WebSocket compression supports Firefox and has an operator-controlled off switch; session settings and zone triggers show Retry rather than using incomplete context when full details cannot load. ([#2887](https://github.com/preset-io/agor/pull/2887), [#2947](https://github.com/preset-io/agor/pull/2947), [#2948](https://github.com/preset-io/agor/pull/2948))
+- **Bounded memory during long sessions** — limits retained transcript detail and realtime access-cache entries, releases completed thinking payloads and obsolete search callbacks, and settles pending socket requests on disconnect. Home selectors and shared branch-card styles also reduce repeated work. ([#2950](https://github.com/preset-io/agor/pull/2950), [#2949](https://github.com/preset-io/agor/pull/2949), [#2930](https://github.com/preset-io/agor/pull/2930), [#2908](https://github.com/preset-io/agor/pull/2908), [#2932](https://github.com/preset-io/agor/pull/2932), [#2905](https://github.com/preset-io/agor/pull/2905), [#2953](https://github.com/preset-io/agor/pull/2953))
+- **Teammate setup recovers from missed clone events** — rechecks repository readiness, provides teammate creation from an empty board tab, and resolves implicit template defaults from the registered remote. ([#2942](https://github.com/preset-io/agor/pull/2942), [#2924](https://github.com/preset-io/agor/pull/2924))
+- **Database upgrades preserve ownership boundaries** — repairs upgrade guards and same-tenant owner recovery. If ownership still cannot be attributed, migration stops with guidance to preserve the data and assign a real owner in the same tenant before retrying. ([#2955](https://github.com/preset-io/agor/pull/2955))
+- **Conversation layout and activity cues** — adds footer spacing and a persistent activity spinner, and finishes the compact header sizing in session drawers and board panels. ([#2944](https://github.com/preset-io/agor/pull/2944), [#2929](https://github.com/preset-io/agor/pull/2929))
+
+### Security
+
+- **Tenant-confined repository operations** — hosted repositories accept network Git remotes only, keep local paths server-owned, and reject origin realignment outside the caller's tenant repository root. ([#2934](https://github.com/preset-io/agor/pull/2934))
+- **Contained delegated branch deletion** — validates mounted storage roots and the exact branch SDK-home target, runs as the requesting Manager, and refuses unsupported executor setups before deletion begins. Shared execution homes remain outside the deletion targets. ([#2943](https://github.com/preset-io/agor/pull/2943))
+
+### Chores
+
+- **Release and deployment diagnostics** — adds the canonical `PUBLISH.md` preparation, approval, recovery, and upgrade runbook, plus trusted deployment provenance for analytics. ([#2925](https://github.com/preset-io/agor/pull/2925), [#2923](https://github.com/preset-io/agor/pull/2923))
+
 ## 0.26.8 (2026-09-29)
 
 Release preparation includes merged changes from `v0.26.7` (`fb272b8d`) through `504c7ec7`, plus the Claude and Codex model and runtime updates below: [compare merged changes](https://github.com/preset-io/agor/compare/v0.26.7...504c7ec7608d45bbc069791196e620db9d606d38). This entry does not imply publication or deployment.

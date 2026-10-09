@@ -16,7 +16,9 @@ import {
 } from 'antd';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useBranchCounts } from '../../hooks/useBranchCounts';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
+import { OPEN_BOARD_SWITCHER_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { BoardEditModal } from '../BoardEditModal';
 import { BoardTile, getBoardEmoji } from '../BoardTile';
 
@@ -79,18 +81,18 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const currentBoard = boards.find((b) => b.board_id === currentBoardId);
   const canManage = useCanManageBoard(client, currentBoard, currentUser);
 
-  const branchCountByBoard = useMemo(() => {
-    const counts = new Map<string, number>();
-    boards.forEach((board) => {
-      counts.set(board.board_id, 0);
-    });
-    for (const branch of branchById.values()) {
-      if (branch.board_id) counts.set(branch.board_id, (counts.get(branch.board_id) || 0) + 1);
-    }
-    return counts;
-  }, [boards, branchById]);
+  const branchCountByBoard = useBranchCounts(client);
 
   const showFilter = boards.length >= FILTER_THRESHOLD;
+
+  useEffect(
+    () =>
+      onShellPicker(OPEN_BOARD_SWITCHER_EVENT, () => {
+        triggerRef.current?.focus();
+        setDropdownOpen(true);
+      }),
+    []
+  );
 
   const closeDropdown = useCallback(() => {
     setDropdownOpen(false);
@@ -134,7 +136,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     }
 
     return filteredBoards.map((board) => {
-      const branchCount = branchCountByBoard.get(board.board_id) || 0;
+      const branchCount = branchCountByBoard.get(board.board_id) ?? 0;
       const isActive = board.board_id === currentBoardId;
       return {
         key: board.board_id,

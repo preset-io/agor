@@ -24,7 +24,8 @@ function isCodexConfigObject(value: unknown): value is CodexConfigObject {
  * scalar toggle like `tools.web_search`.
  */
 export function applyAgorCodexLaunchPolicy(
-  config: CodexConfigObject | undefined
+  config: CodexConfigObject | undefined,
+  includePlugins = false
 ): CodexConfigObject {
   const features = config?.features;
   if (features !== undefined && !isCodexConfigObject(features)) {
@@ -53,6 +54,8 @@ export function applyAgorCodexLaunchPolicy(
       ...features,
       // Agor sessions/subsessions are the supported, observable orchestration boundary.
       multi_agent: false,
+      // Opt-in permits native settings; it never forces plugins on.
+      ...(includePlugins ? {} : { plugins: false }),
     },
     tools: {
       ...tools,

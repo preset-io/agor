@@ -28,6 +28,24 @@ export function sanitizeGatewayProviderError(error: unknown, maxLength = 240): s
   return (sanitized || 'Provider request failed').slice(0, maxLength);
 }
 
+/**
+ * A provider refusal that retrying will not fix: a 4xx other than auth (a
+ * revoked token must fail loudly), timeouts, conflicts, and rate limits.
+ */
+export function isPermanentProviderRefusal(error: unknown): boolean {
+  const record =
+    error && typeof error === 'object' && !Array.isArray(error)
+      ? (error as Record<string, unknown>)
+      : undefined;
+  const status = record?.status ?? record?.statusCode;
+  return (
+    typeof status === 'number' &&
+    status >= 400 &&
+    status < 500 &&
+    ![401, 408, 409, 425, 429].includes(status)
+  );
+}
+
 /** Stable, content-free category for operational logs and terminal notices. */
 export function gatewayFailureCode(error: unknown): string {
   const record =

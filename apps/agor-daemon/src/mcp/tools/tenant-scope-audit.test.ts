@@ -81,7 +81,7 @@ const CALL_SITE_SCOPED_SERVICES = ['repos', 'boards', 'cards', 'sessions', 'boar
  * Other pre-existing MCP mutations (cards/board-object custom methods, and
  * non-`Service.method` writes such as direct repositories / `appendSystemMessage`)
  * still use the read helper and are the subject of the documented service-side
- * write-gate follow-up — see docs/internal/mcp-tenant-db-scope-createbranch-2026-08-29.md.
+ * write-gate follow-up.
  */
 const MUTATION_TOKENS = new Set([
   'reposService.createBranch',

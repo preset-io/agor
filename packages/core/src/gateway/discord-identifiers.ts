@@ -186,6 +186,8 @@ export function buildDiscordInboundMetadata(input: {
   isThread: boolean;
   parentChannelId?: string;
   replyToMessageId?: string;
+  /** False when a channel response mode admitted a message without a bot mention. */
+  hasMention?: boolean;
 }): DiscordAuthorityMetadata {
   const guildId = requireDiscordSnowflake(input.guildId, 'Discord guild ID');
   const channelId = requireDiscordSnowflake(input.channelId, 'Discord channel ID');
@@ -209,7 +211,7 @@ export function buildDiscordInboundMetadata(input: {
     [DISCORD_METADATA_KEY.roleIds]: input.roleIds,
     [DISCORD_METADATA_KEY.botUserId]: botUserId,
     [DISCORD_METADATA_KEY.isThread]: input.isThread,
-    [DISCORD_METADATA_KEY.hasMention]: true,
+    [DISCORD_METADATA_KEY.hasMention]: input.hasMention ?? true,
   };
   if (input.parentChannelId !== undefined) {
     metadata[DISCORD_METADATA_KEY.parentChannelId] = requireDiscordSnowflake(

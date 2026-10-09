@@ -66,7 +66,16 @@ export type SdkFailureReason =
   | 'startup_timeout'
   | SdkWatchdogFailureReason
   | 'heartbeat_lost'
-  | 'termination_unverified';
+  | 'executor_interrupted'
+  | 'termination_unverified'
+  | 'launch_refused';
+
+/**
+ * Reserved exit code (sysexits `EX_TEMPFAIL`) of a templated launcher that
+ * refused admission before creating anything. Read as a refusal only when the
+ * daemon env opts in with `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`.
+ */
+export const EXECUTOR_LAUNCH_REFUSED_EXIT_CODE = 75;
 
 export interface SdkFailure {
   reason: SdkFailureReason;
@@ -85,12 +94,23 @@ export type SdkHealthFailureInput = Pick<
   'elapsed_ms' | 'watchdog_action' | 'unknown_event_count' | 'sdk_version'
 > & { task_id: string; reason: SdkWatchdogFailureReason };
 
-export type TerminationCause =
-  | 'user_stop'
-  | 'startup_timeout'
-  | 'heartbeat_lost'
-  | 'sdk_health_failure'
-  | 'authorization_revoked';
+// Wire values for ExecutorCleanupContext v1; keep additions coordinated with helpers.
+export const TERMINATION_CAUSES = [
+  'user_stop',
+  'startup_timeout',
+  'heartbeat_lost',
+  'sdk_health_failure',
+  'executor_interrupted',
+  'authorization_revoked',
+  'launch_refused',
+] as const;
+export type TerminationCause = (typeof TERMINATION_CAUSES)[number];
+
+/** A live executor's signal observation, not evidence of process absence or OOM. */
+export interface ExecutorInterruptionInput {
+  task_id: string;
+  signal: 'SIGTERM' | 'SIGINT';
+}
 
 /** Fixed server/executor copy for runtime authorization withdrawal. */
 export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
@@ -129,9 +149,33 @@ export interface TerminationCoordinationClaim {
   boot_id: string;
 }
 
+/** How a termination request reached Agor; absent on requests recorded before this existed. */
+export type TerminationRequestVia = 'ui' | 'api' | 'mcp' | 'agor';
+
+/** Trusted supervisor stdin. Task IDs are immutable dispatch identities, never reused for replay. */
+export interface ExecutorCleanupContext {
+  version: 1;
+  tenant_id: string;
+  task_id: string;
+  session_id: string;
+  branch_id: string;
+  requested_at: string;
+  attempt_id: string;
+  cause: TerminationCause;
+}
+
 export interface TerminationRequest {
+  /** Changed on explicit Retry cleanup; fences duplicate/stale browser requests. */
+  recovery_revision?: string;
+  /** Bounded daemon-authored diagnostic, never raw command output. */
+  cleanup_diagnostic?: string;
+  /** Written before invoking the external command. Never automatically invoked twice. */
+  cleanup_attempt?: { attempt_id: string; started_at: string };
   cause: TerminationCause;
   requested_at: string;
+  /** Authenticated user whose request won the claim, when a person or their agent asked. */
+  requested_by_user_id?: string;
+  requested_via?: TerminationRequestVia;
   /** Failure/stop reason captured with the winning claim. */
   error_message?: string;
   /**
@@ -212,6 +256,23 @@ export interface TaskMetadata {
     gateway_channel_id: string;
     channel_type: import('./gateway').ChannelType;
     thread_id: string;
+    /**
+     * The `thread_session_map` row this prompt was admitted through — the
+     * Task's reply address.
+     *
+     * Outbound routing used to ask which thread a *Session* belongs to, which
+     * is only answerable while a session has exactly one mapping. This is the
+     * per-Task answer, resolved once at admission and never re-derived.
+     *
+     * It is stamped rather than recomputed from `thread_id` because the
+     * mapping is keyed on the outbound seed's platform thread when there is
+     * one, plus reply aliases — so a seed-originated thread does not find its
+     * own mapping by the inbound thread id. Absent on Tasks admitted before
+     * this was persisted; readers resolve those older Tasks by their recorded
+     * channel/thread coordinates (including reply aliases). An invalid stamp
+     * must not fall back to a different thread of the Session.
+     */
+    thread_session_map_id?: import('./gateway').ThreadSessionMapID;
     provider_user_id: string;
     provider_message_id?: string;
     slack_team_id?: string;

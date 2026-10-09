@@ -6,8 +6,10 @@ import { feathers } from '@agor/core/feathers';
 import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
+  BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   KNOWLEDGE_TRANSFER,
+  MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
@@ -156,6 +158,7 @@ describe('source scan: every registered path is declared', () => {
   function extractRegisteredPaths(source: string): Array<{ path: string; line: number }> {
     // Resolve the shared constant before the literal-only scan; do not duplicate its value.
     const lines = source
+      .replace(/\bMCP_OAUTH_RELAY\.deliveryPath\b/g, JSON.stringify(MCP_OAUTH_RELAY.deliveryPath))
       .replace(
         /\bENVIRONMENT_COMMAND_REPORT_SERVICE\b/g,
         JSON.stringify(ENVIRONMENT_COMMAND_REPORT_SERVICE)
@@ -165,6 +168,10 @@ describe('source scan: every registered path is declared', () => {
         JSON.stringify(BRANCH_DELETION_REPORT_SERVICE)
       )
       .replace(/\bBRANCH_CLEANUP_REPORT_SERVICE\b/g, JSON.stringify(BRANCH_CLEANUP_REPORT_SERVICE))
+      .replace(
+        /\bBRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE\b/g,
+        JSON.stringify(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE)
+      )
       .replace(/\bKNOWLEDGE_TRANSFER\.path\b/g, JSON.stringify(KNOWLEDGE_TRANSFER.path))
       .split('\n');
     const found: Array<{ path: string; line: number }> = [];
@@ -235,6 +242,14 @@ describe('source scan: every registered path is declared', () => {
     ]);
   });
 
+  it('recognizes the shared notification dismissal service identifier', () => {
+    expect(
+      extractRegisteredPaths(
+        'registerAuthenticatedRoute(app, BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE, service);'
+      )
+    ).toEqual([{ path: BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE, line: 1 }]);
+  });
+
   it('recognizes the shared deletion report service identifier', () => {
     expect(extractRegisteredPaths('app.use(BRANCH_DELETION_REPORT_SERVICE, service);')).toEqual([
       { path: BRANCH_DELETION_REPORT_SERVICE, line: 1 },
@@ -246,6 +261,22 @@ describe('source scan: every registered path is declared', () => {
       [{ path: ENVIRONMENT_COMMAND_REPORT_SERVICE, line: 1 }]
     );
     expect(registeredPathsInSource().has(ENVIRONMENT_COMMAND_REPORT_SERVICE)).toBe(true);
+  });
+
+  it('recognizes the relay Express mount instead of mistaking a callback header for its path', () => {
+    const fixture = [
+      'app.use(',
+      '  MCP_OAUTH_RELAY.deliveryPath,',
+      '  (_req, res, next) => {',
+      "    res.setHeader('Cache-Control', 'no-store');",
+      '    next();',
+      '  }',
+      ');',
+    ].join('\n');
+    const path = MCP_OAUTH_RELAY.deliveryPath.slice(1);
+    expect(extractRegisteredPaths(fixture)).toEqual([{ path, line: 1 }]);
+    expect(NON_SERVICE_REGISTERED_PATHS.has(path)).toBe(true);
+    expect(isRealtimePublishAllowed(path)).toBe(false);
   });
 
   it('ignores middleware mounted without a path', () => {

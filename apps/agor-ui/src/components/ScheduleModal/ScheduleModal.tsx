@@ -232,6 +232,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
         codexSandboxMode: undefined,
         codexApprovalPolicy: undefined,
         codexNetworkAccess: undefined,
+        codexIncludePlugins: undefined,
       }),
     });
   };
@@ -320,6 +321,7 @@ export const ScheduleModal: React.FC<ScheduleModalProps> = ({
                       codexSandboxMode: all.codexSandboxMode,
                       codexApprovalPolicy: all.codexApprovalPolicy,
                       codexNetworkAccess: all.codexNetworkAccess,
+                      codexIncludePlugins: all.codexIncludePlugins,
                     },
                     schedule?.agentic_tool_config
                   ),

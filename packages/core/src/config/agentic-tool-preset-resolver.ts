@@ -125,6 +125,10 @@ export async function materializeAgenticToolConfiguration(
   db: Database,
   args: MaterializeAgenticToolConfigurationArgs
 ): Promise<MaterializedAgenticToolConfiguration> {
+  const includePlugins = args.source.configuration?.codexIncludePlugins;
+  if (includePlugins !== undefined && typeof includePlugins !== 'boolean') {
+    throw new AgenticConfigurationResolutionError('codexIncludePlugins must be a boolean');
+  }
   const hasReference = args.source.reference != null;
   const hasInline = args.source.configuration !== undefined;
   if (hasReference && hasInline) {
@@ -179,6 +183,7 @@ export async function materializeAgenticToolConfiguration(
       codexSandboxMode: configuration.codexSandboxMode,
       codexApprovalPolicy: configuration.codexApprovalPolicy,
       codexNetworkAccess: configuration.codexNetworkAccess,
+      codexIncludePlugins: configuration.codexIncludePlugins,
     },
     now: args.now,
     modelConfiguration: args.modelConfiguration,

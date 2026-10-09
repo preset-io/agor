@@ -1,4 +1,7 @@
-import { KNOWLEDGE_TRANSFER } from '@agor/core/types';
+import {
+  CODEX_SUBSCRIPTION_CREDENTIALS_UNAVAILABLE_MESSAGE,
+  KNOWLEDGE_TRANSFER,
+} from '@agor/core/types';
 import { BranchCleanupStepsService } from './services/branch-cleanup-steps.js';
 /**
  * Service Registration
@@ -69,6 +72,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   ThreadSessionMapRepository,
+  UserExternalIdentitiesRepository,
   type UserMCPOAuthToken,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -76,6 +80,11 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  branchCountsQueryValidator,
+  sessionCountsQueryValidator,
+  typedValidateQuery,
+} from '@agor/core/lib/feathers-validation';
 import {
   hasTemplateMarker,
   isMCPServerUsableBy,
@@ -116,6 +125,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthEffectivePolicy,
   MCPOAuthPendingFlowStatus,
+  MCPOAuthRelayCallback,
   MCPOAuthRuntimeCompatibilityMode,
   MCPOAuthStartFailure,
   MCPServer,
@@ -153,6 +163,7 @@ import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contribu
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import {
   hasSecureLocalCredentialOverlay,
+  isHostedOpenCode,
   resolveBranchSdkHomeCompatibility,
   resolveBranchSdkHomeLaunch,
   resolveExecutionSdkHomeEnv,
@@ -173,6 +184,7 @@ import {
   trackExecutorProcess,
 } from './executor-tracking.js';
 import { assertHaTaskPermissionSupported, isConstrainedHa } from './ha-support.js';
+import { createDeploymentToolUnsupportedGate } from './integrations/opencode/deployment-capabilities.js';
 import { registerOpenCodeServices } from './integrations/opencode/index.js';
 import {
   inOpenCodeNativeStateMutationSlot,
@@ -200,6 +212,7 @@ import { createBoardBranchMover } from './services/board-branch-move.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
 import { createBoardsService } from './services/boards.js';
+import { createBranchCountsService } from './services/branch-counts.js';
 import { BranchDeletionStepsService } from './services/branch-deletion-steps.js';
 import { createBranchesService } from './services/branches.js';
 import { setupCapabilityPolicyServices } from './services/capability-policies.js';
@@ -269,6 +282,7 @@ import { createKnowledgeVersionsService } from './services/knowledge-versions.js
 import { createLeaderboardService } from './services/leaderboard.js';
 import {
   classifyMCPAuthRecovery,
+  MCPCloudIdentityRequiredError,
   MCPLinkAdmissionError,
   recoveryForOAuthAttemptFailure,
 } from './services/mcp-auth-recovery.js';
@@ -281,6 +295,7 @@ import {
 } from './services/mcp-marketplace-actions.js';
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
+  configuredCatalogIssuer,
   logMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -311,6 +326,7 @@ import {
   resolveMCPOAuthGrantLiveness,
 } from './services/mcp-oauth-grant-liveness.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
+import { MCPOAuthRelay } from './services/mcp-oauth-relay.js';
 import {
   MCP_OAUTH_START_BUDGET_MS,
   mcpOAuthStartPhaseRunner,
@@ -341,6 +357,7 @@ import {
   createSchedulesService,
   SCHEDULES_SERVICE_TRANSPORT_METHODS,
 } from './services/schedules.js';
+import { createSessionCountsService } from './services/session-counts.js';
 import { createSessionEnvSelectionsService } from './services/session-env-selections.js';
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
@@ -363,6 +380,7 @@ import {
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { scopeFindToAccessibleBranchesSql } from './utils/branch-authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
@@ -405,7 +423,7 @@ import {
   readSocketAuthorityId,
 } from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
-import { classifyExecutorExit } from './utils/task-launch-state.js';
+import { classifyExecutorExit, executorExitTermination } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 import type { OAuthWidgetParams } from './widgets/oauth/index.js';
 
@@ -548,8 +566,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Core services: sessions, tasks, messages
   // ============================================================================
 
-  const sessionsService = createSessionsService(db, app, (tool) =>
-    isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
+  const sessionsService = createSessionsService(
+    db,
+    app,
+    (tool) => isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy),
+    createDeploymentToolUnsupportedGate(config)
   ) as unknown as SessionsServiceImpl;
   const tasksService = createTasksService(db, app, sessionTokenService);
   app.use('/sessions', sessionsService, {
@@ -590,6 +611,27 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
+  app.use('/branch-counts', createBranchCountsService(db), { methods: ['find'] });
+  // Per-board active branch counts: the same branch + board visibility as
+  // `branches.find`, pushed into SQL by the RBAC marker. Registered with the
+  // service (like `mcp-servers/oauth-status`) so `registerHooks` stays
+  // independent of it.
+  app.service('branch-counts').hooks({
+    before: {
+      // No filter is modelled: one sent (`board_id`) is rejected, not ignored.
+      all: [typedValidateQuery(branchCountsQueryValidator), ctx.requireAuth],
+      find: [scopeFindToAccessibleBranchesSql({ allowSuperadmin })],
+    },
+  });
+  // Active sessions per branch or board: the same branch visibility as
+  // `sessions.find`, pushed into SQL by the RBAC marker.
+  app.use('/session-counts', createSessionCountsService(db), { methods: ['find'] });
+  app.service('session-counts').hooks({
+    before: {
+      all: [typedValidateQuery(sessionCountsQueryValidator), ctx.requireAuth],
+      find: [scopeFindToAccessibleBranchesSql({ allowSuperadmin })],
+    },
+  });
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
   const messagesService = createMessagesService(db, (tx, message) =>
     deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
@@ -782,7 +824,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
 
   // First-class schedules. RBAC hooks wired in register-hooks.ts.
-  // See docs/internal/schedules-first-class-design-2026-05-24.md §4.4.
   app.use('/schedules', createSchedulesService(db), {
     methods: [...SCHEDULES_SERVICE_TRANSPORT_METHODS],
   });
@@ -1038,7 +1079,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // returns the authorize URL; create({code}) exchanges the pasted CODE#STATE and
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
-  // See context/explorations/claude-code-oauth-signin.md.
   if (claudeOAuthAuthority) {
     const maintenance = setInterval(() => {
       void claudeOAuthAuthority.maintain().catch((error) => {
@@ -1305,7 +1345,7 @@ function createDeferredSignal() {
   return { promise, resolve, reject };
 }
 
-function createExecuteHandler(
+export function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
   sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
@@ -1377,6 +1417,7 @@ function createExecuteHandler(
         config,
         modelConfig: session.model_config ?? undefined,
         sessionOwnerId: session.created_by,
+        sessionSdkHomeScope: session.sdk_home_scope,
         prompterUserId: userId,
       });
     }
@@ -1496,14 +1537,14 @@ function createExecuteHandler(
         throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
       }
       const branchId = session.branch_id as string;
-      // A relocatable directory is necessary but not sufficient: OpenCode's
-      // current XDG data home also contains its native credential file. Until
-      // its actor credential namespace is split from branch-owned state, a
-      // branch home would either lose configured credentials or share them.
+      // A relocatable directory is necessary but not sufficient: local OpenCode's
+      // XDG data home also contains its native credential file, so only hosted
+      // OpenCode (credentials on Job scratch) may use a branch home.
       const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         resolveBranchSdkHomeCompatibility({
           tool: sdkHomeTool,
           delegated: isDelegatedExecution,
+          hostedOpenCode: isHostedOpenCode(config),
           secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
           userId,
           db: tenantDb,
@@ -1729,7 +1770,9 @@ function createExecuteHandler(
       return contribution.getExecutorLaunch({
         tenantId,
         session,
+        taskId: data.taskId,
         homeDir: executorHomeDir,
+        config,
       });
     })();
 
@@ -1762,6 +1805,9 @@ function createExecuteHandler(
           | 'opencode'
           | 'copilot'
           | 'cursor',
+        // Informational only (an external launcher may record it); the
+        // executor reads the model from the session.
+        ...(session.model_config?.model ? { model: session.model_config.model } : {}),
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
@@ -1789,9 +1835,7 @@ function createExecuteHandler(
       try {
         branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
       } catch {
-        throw new BadRequest(
-          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
-        );
+        throw new BadRequest(CODEX_SUBSCRIPTION_CREDENTIALS_UNAVAILABLE_MESSAGE);
       }
     }
 
@@ -1888,6 +1932,7 @@ function createExecuteHandler(
         }
 
         let templatedLauncherAbsenceVerified = false;
+        let launchRefused = false;
         if (spawnContext.mode === 'templated') {
           const disposition = classifyExecutorExit({
             mode: spawnContext.mode,
@@ -1895,7 +1940,8 @@ function createExecuteHandler(
             nonzeroMayHaveDispatched:
               config.execution?.executor_command_nonzero_may_have_dispatched === true,
           });
-          if (disposition !== 'authoritative') {
+          launchRefused = disposition === 'refused';
+          if (disposition !== 'authoritative' && !launchRefused) {
             if (disposition === 'ambiguous') {
               try {
                 await runInFreshTerminationTenantWriteDatabase(() =>
@@ -1921,28 +1967,32 @@ function createExecuteHandler(
         }
 
         try {
+          const { cause, errorMessage } = executorExitTermination(code, launchRefused);
           const termination = await requestExecutorTermination({
             app,
             taskId,
-            cause: 'heartbeat_lost',
-            errorMessage: `Executor exited unexpectedly with code ${code ?? 'unknown'}.`,
+            cause,
+            errorMessage,
             params,
             // Missing a local process handle is never absence proof. A
             // configured authoritative templated-launcher failure is the one
             // launch path that can prove no remote executor was created.
             absenceVerified: templatedLauncherAbsenceVerified,
             sdkFailure: {
-              reason: 'heartbeat_lost',
+              reason: cause,
               detected_at: new Date().toISOString(),
               tool: session.agentic_tool,
               termination: 'requested',
             },
             runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             // A remote executor may connect while its launcher is exiting.
-            // Resolve that race only at the row-locked claim.
+            // Resolve that race only at the row-locked claim. A refused launch
+            // created nothing, so it also settles a Stop that arrived first
+            // (status `stopping`, cause kept as `user_stop`); the disconnected
+            // fence alone still lets a connected executor win.
             ...(spawnContext.mode === 'templated'
               ? {
-                  expectedStatus: TaskStatus.DISPATCHING,
+                  ...(launchRefused ? {} : { expectedStatus: TaskStatus.DISPATCHING }),
                   requireExecutorDisconnected: true,
                 }
               : {}),
@@ -1967,7 +2017,7 @@ function createExecuteHandler(
       },
     });
 
-    if (executorLaunch) {
+    if (executorLaunch?.requiresLocalContainment) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;
@@ -2018,6 +2068,26 @@ export async function registerMCPServices(
   const { db, app } = ctx;
   const sessionsRepository = new SessionRepository(db);
   const postgresOAuthDeployment = isPostgresDatabaseHandle(db);
+  const oauthRelay = ctx.config.mcp_oauth_relay ? new MCPOAuthRelay(ctx.config) : undefined;
+  if (oauthRelay && !postgresOAuthDeployment)
+    throw new Error('MCP callback relay requires durable PostgreSQL OAuth authority');
+  const cloudUserFor = async (tenantId: string, userId: UserID): Promise<string> => {
+    if (!oauthRelay) throw new Error('MCP callback relay is disabled');
+    const identities = await runInOAuthTenantScope(db, tenantId, () =>
+      new UserExternalIdentitiesRepository(db).findForUser(
+        userId,
+        oauthRelay.launch.providerId ?? oauthRelay.launch.issuer!,
+        oauthRelay.launch.issuer!
+      )
+    );
+    if (
+      identities.length !== 1 ||
+      !identities[0].subject.startsWith('user:') ||
+      identities[0].subject.length <= 5
+    )
+      throw new MCPCloudIdentityRequiredError('MCP callback relay requires a bound Cloud user');
+    return identities[0].subject.slice(5);
+  };
   const durableOAuthFlows =
     ctx.mcpOAuthPendingFlowAuthority ??
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
@@ -2120,6 +2190,8 @@ export async function registerMCPServices(
       });
 
   type PendingOAuthFlow = {
+    /** Set only after Cloud signature, identity and sealed attempt binding validation. */
+    relayDelivered?: boolean;
     attemptId: MCPOAuthAttemptID;
     context: OAuthFlowContext;
     mcpServerId?: string;
@@ -2471,6 +2543,7 @@ export async function registerMCPServices(
     }
 
     let savedServerAuthority: MCPServer | undefined;
+    let configuredIssuer: string | undefined;
     let effectiveMcpUrl = opts.mcpUrl;
     let effectiveClientId = opts.clientId;
     let effectiveClientSecret = opts.clientSecret;
@@ -2538,6 +2611,7 @@ export async function registerMCPServices(
       // Clone the row so later repository/service mutations cannot change the
       // in-memory authority captured by a standalone pending flow.
       savedServerAuthority = structuredClone(server);
+      configuredIssuer = await configuredCatalogIssuer(server);
       if (durableOAuthFlows) {
         durableBinding = {
           tenantId: opts.tenantId!,
@@ -2547,6 +2621,10 @@ export async function registerMCPServices(
         };
       }
     }
+
+    // Only customer-owned (configured_client) catalog apps use the hosted
+    // relay. Every other flow keeps the cell's direct callback, unchanged.
+    const relayFlow = Boolean(oauthRelay && configuredIssuer);
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -2587,8 +2665,24 @@ export async function registerMCPServices(
     opts.onPolicyResolved?.(
       presentMCPOAuthEffectivePolicy(effectiveCompatibilityMode, effectiveDcrMode)
     );
+    // Resolve trusted user mapping before provider registration or authorization.
+    if (relayFlow && !durableBinding)
+      throw new Forbidden('MCP callback relay requires a saved tenant/user-bound server');
+    // Shared grants bind the relay to the initiating admin, as per-user grants do.
+    const relayBinding =
+      oauthRelay && relayFlow && durableBinding
+        ? {
+            cellId: oauthRelay.cellId,
+            cloudUserId: await cloudUserFor(durableBinding.tenantId, durableBinding.userId),
+          }
+        : undefined;
     const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
       startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
+        resolveRedirectUri: (issuer: string) => {
+          if (configuredIssuer && issuer !== configuredIssuer)
+            throw new Forbidden('Configured app issuer no longer matches its reviewed recipe');
+          return oauthRelay && relayFlow ? oauthRelay.redirectUri(issuer) : redirectUri;
+        },
         authorizationUrlOverride: effectiveAuthorizationUrlOverride,
         tokenUrlOverride: effectiveTokenUrlOverride,
         clientSecret: effectiveClientSecret,
@@ -2721,6 +2815,7 @@ export async function registerMCPServices(
       );
     }
 
+    if (relayBinding) context.relay = relayBinding;
     assertFlowAuthority?.();
     const attemptId = durableBinding
       ? await runWithinOAuthAuthority(assertFlowAuthority, () =>
@@ -2783,6 +2878,38 @@ export async function registerMCPServices(
     // A redirect-URI mismatch is rejected front-channel and never comes back,
     // so this is the only place Agor can state the binding it used.
     logOAuthAuthorizeBuilt({ mcpServerId: opts.mcpServerId, attemptId, context });
+    let authorizationUrl = context.authorizationUrl;
+    if (oauthRelay && durableBinding && context.relay) {
+      try {
+        authorizationUrl = await oauthRelay.prepare({
+          workspace_id: durableBinding.tenantId,
+          cloud_user_id: context.relay.cloudUserId,
+          runtime_user_id: durableBinding.userId,
+          server_id: durableBinding.mcpServerId,
+          attempt_id: attemptId,
+          state: context.state,
+          issuer: context.issuer,
+          authorization_url: context.authorizationUrl,
+          redirect_uri: context.redirectUri,
+        });
+      } catch (error) {
+        // Fail the attempt in the caller's own tenant scope (this start request
+        // already runs inside it). The sanitized relay error is what the caller
+        // sees and logs, even if this bookkeeping fails; the row then expires.
+        await durableOAuthFlows!
+          .failPendingForUser(
+            durableBinding.tenantId,
+            durableBinding.userId,
+            context.state,
+            'relay_prepare_failed'
+          )
+          .catch(() => {
+            console.warn('[OAuth Start] relay attempt could not be marked failed; it will expire');
+          });
+        throw error;
+      }
+    }
+    assertFlowAuthority?.();
 
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
     let tokenResolve: ((t: OAuthTokenResponse) => void) | undefined;
@@ -2878,7 +3005,7 @@ export async function registerMCPServices(
       // authenticated initiating socket only — never a user/tenant/global
       // room — and keep durable status as the completion authority.
       app.io.local.to(opts.browserReservation.socketId).emit('oauth:open_browser', {
-        authUrl: context.authorizationUrl,
+        authUrl: authorizationUrl,
         attempt_id: attemptId,
         reservation_token: opts.browserReservation.reservationToken,
         caller_user_id: opts.browserReservation.userId,
@@ -2910,8 +3037,8 @@ export async function registerMCPServices(
     const base: StartTwoPhaseOAuthResult = {
       attemptId,
       state: context.state,
-      authorizationUrl: context.authorizationUrl,
-      redirectUri,
+      authorizationUrl,
+      redirectUri: context.redirectUri,
     };
     if (awaitToken) {
       if (durableBinding) {
@@ -3454,6 +3581,8 @@ export async function registerMCPServices(
   ): Promise<void> => {
     const record = pendingFlow.durableRecord;
     try {
+      if (pendingFlow.context.relay && !pendingFlow.relayDelivered)
+        throw new Forbidden('Hosted OAuth requires the authenticated Cloud callback');
       await assertFlowInitiatorStillEntitled(
         record?.userId ?? pendingFlow.userId,
         record?.tenantId ?? pendingFlow.tenantId,
@@ -3845,16 +3974,56 @@ export async function registerMCPServices(
   };
 
   // Set the OAuth callback handler
-  const oauthCallbackHandler = async (req: express.Request, res: express.Response) => {
+  const handleOAuthCallback = async (
+    req: express.Request,
+    res: express.Response,
+    delivery?: MCPOAuthRelayCallback
+  ) => {
+    const sendResult = (
+      res: express.Response,
+      success: boolean,
+      message: string,
+      status = 200
+    ): void => {
+      if (delivery) {
+        res
+          .status(success ? 200 : status === 500 || status === 409 ? 409 : 200)
+          .json({ outcome: success ? 'connected' : 'failed' });
+      } else sendOAuthResultPage(res, success, message, status);
+    };
+    const claim = (state: string) =>
+      delivery
+        ? durableOAuthFlows!.claimForUser(
+            delivery.workspace_id,
+            delivery.runtime_user_id as UserID,
+            state
+          )
+        : durableOAuthFlows!.claimForCallback(state);
+    const bindDelivery = (pending: PendingOAuthFlow): void => {
+      if (!delivery) return;
+      if (
+        !pending.context.relay ||
+        pending.context.relay.cellId !== oauthRelay?.cellId ||
+        pending.context.relay.cloudUserId !== delivery.cloud_user_id ||
+        pending.attemptId !== delivery.attempt_id ||
+        pending.mcpServerId !== delivery.server_id ||
+        pending.tenantId !== delivery.workspace_id ||
+        pending.userId !== delivery.runtime_user_id ||
+        pending.context.issuer !== delivery.issuer ||
+        pending.context.redirectUri !== delivery.redirect_uri
+      )
+        throw new Forbidden('MCP relay attempt binding changed');
+      pending.relayDelivered = true;
+    };
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
     try {
-      const code = req.query.code as string | undefined;
-      const state = req.query.state as string | undefined;
-      const issuer = req.query.iss as string | undefined;
-      const error = req.query.error as string | undefined;
+      const code = (delivery ? delivery.code : req.query.code) as string | undefined;
+      const state = (delivery ? delivery.state : req.query.state) as string | undefined;
+      const issuer = (delivery ? delivery.iss : req.query.iss) as string | undefined;
+      const error = (delivery ? delivery.error : req.query.error) as string | undefined;
 
       if (error) {
         console.warn('[OAuth Callback] Provider authorization was not completed');
@@ -3867,12 +4036,13 @@ export async function registerMCPServices(
             // may therefore consume only this exact state capability; fleet
             // DCR authority is invalidated exclusively from the pinned
             // server-to-server exchange path below.
-            const claimed = await durableOAuthFlows.claimForCallback(state);
+            const claimed = await claim(state);
             if (claimed.outcome === 'claimed') {
               try {
                 const denied = pendingFromDurableClaim(
                   durableOAuthFlows.openClaim(claimed.flow, state)
                 );
+                bindDelivery(denied);
                 await durableOAuthFlows.finish(claimed.flow, 'failed', 'authorization_denied');
                 await preserveCommittedOAuthResult(undefined, [
                   {
@@ -3915,29 +4085,28 @@ export async function registerMCPServices(
             pendingOAuthFlows.delete(state);
           }
         }
-        sendOAuthResultPage(
-          res,
-          false,
-          'Authorization was not completed. Please restart OAuth.',
-          400
-        );
+        sendResult(res, false, 'Authorization was not completed. Please restart OAuth.', 400);
         return;
       }
 
       if (!code || !state) {
-        sendOAuthResultPage(res, false, 'Missing code or state parameter', 400);
+        sendResult(res, false, 'Missing code or state parameter', 400);
         return;
       }
 
       let pendingFlow: PendingOAuthFlow | undefined;
       if (durableOAuthFlows) {
-        const claimed = await durableOAuthFlows.claimForCallback(state);
+        const claimed = await claim(state);
         if (claimed.outcome === 'not_claimed') {
-          if (claimed.flow?.status === 'succeeded') {
-            sendOAuthResultPage(res, true, terminalMessageForStatus('succeeded'));
+          if (delivery) {
+            sendResult(res, false, 'OAuth callback already consumed', 409);
             return;
           }
-          sendOAuthResultPage(
+          if (claimed.flow?.status === 'succeeded') {
+            sendResult(res, true, terminalMessageForStatus('succeeded'));
+            return;
+          }
+          sendResult(
             res,
             false,
             claimed.flow
@@ -3949,9 +4118,10 @@ export async function registerMCPServices(
         }
         try {
           pendingFlow = pendingFromDurableClaim(durableOAuthFlows.openClaim(claimed.flow, state));
+          bindDelivery(pendingFlow);
         } catch {
           await durableOAuthFlows.finish(claimed.flow, 'failed', 'sealed_material_unavailable');
-          sendOAuthResultPage(res, false, 'OAuth flow cannot be resumed. Please start again.', 409);
+          sendResult(res, false, 'OAuth flow cannot be resumed. Please start again.', 409);
           return;
         }
       } else {
@@ -3974,7 +4144,7 @@ export async function registerMCPServices(
         }
       }
       if (!pendingFlow) {
-        sendOAuthResultPage(
+        sendResult(
           res,
           false,
           'OAuth flow expired or not found. Please start the flow again.',
@@ -4049,7 +4219,7 @@ export async function registerMCPServices(
         ]);
 
         console.log('[OAuth Callback] Flow completed successfully');
-        sendOAuthResultPage(
+        sendResult(
           res,
           true,
           pendingFlow.slackRecovery
@@ -4104,7 +4274,7 @@ export async function registerMCPServices(
               : 'OAuth provider rejected the authorization. Start a new OAuth flow.'
           )
         );
-        sendOAuthResultPage(
+        sendResult(
           res,
           false,
           terminalMessageForStatus(ambiguous ? 'ambiguous' : 'failed'),
@@ -4114,12 +4284,31 @@ export async function registerMCPServices(
       }
     } catch (err) {
       externalFailure('OAuth Callback', 'oauth_callback', err);
-      sendOAuthResultPage(
+      sendResult(
         res,
         false,
         'Authentication could not be completed. Please start a new OAuth flow.',
         500
       );
+    }
+  };
+
+  const oauthCallbackHandler = (req: express.Request, res: express.Response) =>
+    handleOAuthCallback(req, res);
+  (app as unknown as Record<string, unknown>).mcpOAuthRelayCallbackHandler = async (
+    req: express.Request,
+    res: express.Response
+  ) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    try {
+      if (!oauthRelay || !durableOAuthFlows || !Buffer.isBuffer(req.body)) throw new Error();
+      const delivery = await oauthRelay.verifyDelivery(req.body, req.headers.authorization);
+      // The tenant/user-scoped state claim plus bindDelivery() against the
+      // sealed relay binding are the attempt authority for a signed delivery.
+      await handleOAuthCallback(req, res, delivery);
+    } catch {
+      res.status(401).json({ outcome: 'failed' });
     }
   };
 
@@ -4298,6 +4487,10 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
+      redirectUri: (entry) =>
+        entry.oauth?.configured_client && oauthRelay
+          ? oauthRelay.redirectUri(entry.oauth.configured_client.issuer)
+          : ctx.mcpOAuthCallbackUrl,
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
       // draw a button. Normal configuration writes revoke bound grants; this

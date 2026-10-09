@@ -89,6 +89,11 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
   - `custom_context.scheduled_run.rendered_prompt` for audit trails.
   - `run_index` to show execution count.
   - A config snapshot in case you tweak the schedule later.
+- These audit details (`custom_context.scheduled_run`) are only in the **full** session
+  record: `sessions.get`, or a `sessions.find` without `lean`. Lean list rows
+  (`lean: true`, marked `read_shape: 'session-list-v1'`) leave them out on purpose, so
+  read audits from the full record. The run's `schedule_id` and `scheduled_run_at` stay on
+  every row.
 - Use retention to keep noise down; the daemon automatically deletes older runs beyond your limit.
 - Need to rerun immediately? Manually spawn a session, or adjust/save the cron for a new next run.
 
@@ -97,7 +102,7 @@ Because MCP is just JSON-RPC, you can bring any service into the loop: Agor’s 
 - **Stay idempotent.** Assume runs might retry; avoid prompts that double-post or delete blindly.
 - **Log visibly.** Have agents append notes to the branch or board so humans can see what happened.
 - **Permit headless automation.** If you expect the agent to operate unattended, set permission mode to `auto` (or a custom mode that doesn’t prompt) before saving the schedule.
-- **Attach the right MCP servers.** Make sure Slack, GitHub, HubSpot, etc. are registered and selected so scheduled agents have the tools they need.
+- **Attach the right MCP servers.** Make sure Slack, GitHub, HubSpot, etc. are registered and selected so scheduled agents have the tools they need. Schedules run as the user who created them, so only shared servers or servers that user owns can be attached; saving a schedule with another user's private server is rejected.
 - **Keep prompts contextual.** Leverage `branch.custom_context` and board data instead of hard-coded values.
 - **Pilot before scaling.** Run the first few executions manually to confirm output before letting it run unattended.
 

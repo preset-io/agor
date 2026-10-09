@@ -68,6 +68,18 @@ if $SHOWCASE; then
       -vf "scale=1600:900:flags=lanczos,format=yuv420p" \
       -c:v libx264 -profile:v high -crf 23 -preset slow -movflags +faststart -an \
       "out/showcase-$scene.mp4"
+    # Cursor-free rendition (capture.mjs --clean), when its frames exist.
+    if [[ -d "frames/$scene-clean" ]]; then
+      echo "── encoding showcase-$scene-clean"
+      ffmpeg -y -loglevel error -framerate "$FPS" -i "frames/$scene-clean/f%05d.png" \
+        -vf "scale=1600:900:flags=lanczos,format=yuv420p" \
+        -c:v libx264 -profile:v high -crf 23 -preset slow -movflags +faststart -an \
+        "out/showcase-$scene-clean.mp4"
+      ffmpeg -y -loglevel error -i "out/showcase-$scene-clean.mp4" \
+        -vf "scale=960:540:flags=lanczos,format=yuv420p" \
+        -c:v libx264 -profile:v high -crf 25 -preset slow -movflags +faststart -an \
+        "out/showcase-$scene-clean-540.mp4"
+    fi
     ffmpeg -y -loglevel error -i "out/showcase-$scene.mp4" -vframes 1 -q:v 4 \
       "out/showcase-$scene-poster.jpg"
     bytes=$(stat -f%z "out/showcase-$scene.mp4" 2>/dev/null || stat -c%s "out/showcase-$scene.mp4")
@@ -83,6 +95,10 @@ if $SHOWCASE; then
     mkdir -p ../public/videos
     for scene in "${SHOWCASE_SCENES[@]}"; do
       cp "out/showcase-$scene.mp4" "out/showcase-$scene-poster.jpg" ../public/videos/
+      if [[ -f "out/showcase-$scene-clean.mp4" ]]; then
+        cp "out/showcase-$scene-clean.mp4" "out/showcase-$scene-clean-540.mp4" ../public/videos/
+        cp "out/showcase-$scene-cursors.json" ../public/videos/
+      fi
     done
   fi
 

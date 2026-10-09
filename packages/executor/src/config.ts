@@ -2,8 +2,7 @@
  * Executor Configuration Module
  *
  * Strict, executor-local config helpers. The executor MUST NOT read
- * `~/.agor/config.yaml` directly — see context/explorations/daemon-fs-decoupling.md
- * §1.5 (H1) for the contract. Anything the executor needs is either:
+ * `~/.agor/config.yaml` directly. Anything the executor needs is either:
  *
  *   - an environment variable set by the daemon at spawn time (DAEMON_URL,
  *     credential env vars routed via the 0600 env-file), or

@@ -23,6 +23,7 @@ import {
   type Board,
   type BranchID,
   getSessionType,
+  getUserPrimaryAgenticTool,
   type Session,
   type SessionID,
   type SpawnConfig,
@@ -665,6 +666,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codexSandboxMode: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
         codexApprovalPolicy: z.enum(['untrusted', 'on-failure', 'on-request', 'never']).optional(),
         codexNetworkAccess: z.boolean().optional(),
+        codexIncludePlugins: z
+          .boolean()
+          .optional()
+          .describe(
+            'Include native Codex plugins (default off); true respects native plugin settings.'
+          ),
       }),
     },
     async (args) => {
@@ -686,6 +693,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         codexSandboxMode: args.codexSandboxMode,
         codexApprovalPolicy: args.codexApprovalPolicy,
         codexNetworkAccess: args.codexNetworkAccess,
+        codexIncludePlugins: args.codexIncludePlugins,
       };
 
       // spawn/fork are custom methods, not Feathers transport methods. Scope
@@ -1014,7 +1022,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     'agor_sessions_create',
     {
       description:
-        'Create a new session in an existing branch. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
+        'Create a new session in an existing branch. Prefer omitting agenticTool unless a specific tool is needed: omission uses the authenticated caller’s saved primary coding agent, not the calling session’s tool. If no primary coding agent is set, creation fails; pass agenticTool explicitly or set the preference. The selected tool uses the caller’s normal saved configuration (user default/preset/workspace default), with explicit overrides handled as usual. When called from an MCP session context in the same target branch (the default for branch-local orchestrator agents), the new session is automatically linked to the calling session as its parent — pass `parentSessionId: null` to create an unlinked root session instead. Cross-branch sessions are not genealogy-linked automatically; use callbacks for remote completion routing. Use for starting work on a new task in the same codebase (e.g., new feature branch, separate investigation). MCP servers are inherited from the branch (if configured) or user defaults, or can be overridden via `mcpServerIds`. Model selection falls back to user defaults and can be overridden via `modelConfig` (accepts either a model ID string like "claude-opus-4-6" or a full {mode, model, effort, advisorModel, provider} object — call `agor_models_list` to discover valid model IDs per agenticTool). Supports optional callbacks to notify the creating session when the new session completes.',
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1023,7 +1031,10 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         ),
         agenticTool: z
           .enum(AGENTIC_TOOL_NAMES)
-          .describe('Which agent to use for this session (required)'),
+          .optional()
+          .describe(
+            'Optional tool override. Omit to use the authenticated caller’s saved primary coding agent and its normal configuration defaults. Fails if omitted and no primary coding agent is set. Specify only when a particular tool is needed.'
+          ),
         title: mcpOptionalNonEmptyString('title', 'Session title (optional)'),
         description: mcpOptionalString('description', 'Session description (optional)'),
         contextFiles: z
@@ -1077,13 +1088,24 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
             'Explicit MCP server IDs to attach atomically; an unavailable or unauthorized selection rejects creation. [] selects none. Omit to inherit branch config > user defaults; missing inherited servers are skipped with a warning.'
           ),
         modelConfig: modelConfigInputSchema,
+        codexIncludePlugins: z
+          .boolean()
+          .optional()
+          .describe('Include native Codex plugins for this session (default off).'),
       }),
     },
     async (args) => {
-      const agenticTool = args.agenticTool as AgenticToolName;
-
-      // Fetch user data to get unix_username
+      // Resolve from the actual caller through the tenant-scoped users service,
+      // never from the parent session owner or the UI's unset-preference fallback.
       const user = await ctx.app.service('users').get(ctx.userId, ctx.baseServiceParams);
+      const agenticTool = args.agenticTool ?? getUserPrimaryAgenticTool(user);
+      if (!agenticTool) {
+        throw new Error(
+          'No primary coding agent is set. Specify agenticTool or choose a Primary coding agent in Settings → Preferences.'
+        );
+      }
+      // Leave configuration materialization to SessionsService so implicit and
+      // explicit tools share user/preset/workspace defaults and policy checks.
 
       // Get branch to extract repo context
       const branch = await ctx.app.service('branches').get(args.branchId, ctx.baseServiceParams);
@@ -1223,13 +1245,15 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         created_by: ctx.userId,
         unix_username: user.unix_username,
         ...(modelConfig && { model_config: modelConfig }),
+        ...(agenticTool === 'codex' && args.codexIncludePlugins !== undefined
+          ? { permission_config: { codex: { includePlugins: args.codexIncludePlugins } } }
+          : {}),
         ...(Object.keys(callbackConfig).length > 0 && { callback_config: callbackConfig }),
         contextFiles: args.contextFiles || [],
         genealogy: {
           ...(resolvedParentSessionId && { parent_session_id: resolvedParentSessionId }),
           children: [],
         },
-        tasks: [],
       };
 
       const session = await ctx.app.service('sessions').create(sessionData, ctx.baseServiceParams);

@@ -6,6 +6,7 @@ import {
   ENVIRONMENT_COMMAND_BUDGET as BUDGET,
   type EnvironmentCommandAction,
   type EnvironmentCommandReport,
+  EXECUTOR_LAUNCH_REFUSED_MESSAGE,
   environmentStartConfirmation,
   hasActiveEnvironmentCommand,
   type UserID,
@@ -258,7 +259,15 @@ export class EnvironmentCommandRepository {
     });
   }
 
-  async dispatchFailed(branchId: BranchID, attemptId: string): Promise<void> {
+  /**
+   * `launch_refused`: an opted-in launcher refused admission before creating
+   * anything, so the unclaimed attempt failed rather than ended unknown.
+   */
+  async dispatchFailed(
+    branchId: BranchID,
+    attemptId: string,
+    cause: 'unknown' | 'launch_refused' = 'unknown'
+  ): Promise<void> {
     return this.mutate(branchId, (environment, now) => {
       const attempt = environment.command_attempt;
       // A lost launcher response is not evidence against a claimed runner.
@@ -266,12 +275,15 @@ export class EnvironmentCommandRepository {
         return { value: undefined };
       return {
         value: undefined,
-        environment: settleEnvironmentCommand(
-          environment,
-          'unknown',
-          'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
-          now
-        ),
+        environment:
+          cause === 'launch_refused'
+            ? settleEnvironmentCommand(environment, 'failed', EXECUTOR_LAUNCH_REFUSED_MESSAGE, now)
+            : settleEnvironmentCommand(
+                environment,
+                'unknown',
+                'Launch handoff failed or timed out. Remote outcome is unknown; output may be missing. No automatic retry.',
+                now
+              ),
       };
     });
   }

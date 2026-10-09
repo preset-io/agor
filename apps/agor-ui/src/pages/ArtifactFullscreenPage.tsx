@@ -49,6 +49,8 @@ interface ArtifactFullscreenPageProps {
   currentUser?: User | null;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 interface ArtifactFullscreenNavbarProps {
@@ -62,6 +64,8 @@ interface ArtifactFullscreenNavbarProps {
   onHideNavbar: () => void;
   onUserSettingsClick?: () => void;
   onLogout?: () => void;
+  externalAppLink?: string;
+  externalAppLabel?: string;
 }
 
 function ArtifactFullscreenNavbar({
@@ -75,6 +79,8 @@ function ArtifactFullscreenNavbar({
   onHideNavbar,
   onUserSettingsClick,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }: ArtifactFullscreenNavbarProps) {
   const { token } = theme.useToken();
   return (
@@ -164,6 +170,8 @@ function ArtifactFullscreenNavbar({
           user={currentUser}
           onUserSettingsClick={onUserSettingsClick}
           onLogout={onLogout}
+          externalAppLink={externalAppLink}
+          externalAppLabel={externalAppLabel}
         />
       </Space>
     </Header>
@@ -175,6 +183,8 @@ export function ArtifactFullscreenPage({
   currentUser,
   onUserSettingsClick,
   onLogout,
+  externalAppLink,
+  externalAppLabel,
 }: ArtifactFullscreenPageProps) {
   const { token } = theme.useToken();
   const { artifactShortId } = useParams();
@@ -379,6 +389,8 @@ export function ArtifactFullscreenPage({
           onHideNavbar={hideNavbar}
           onUserSettingsClick={onUserSettingsClick}
           onLogout={onLogout}
+          externalAppLink={externalAppLink}
+          externalAppLabel={externalAppLabel}
         />
       ) : (
         <Button

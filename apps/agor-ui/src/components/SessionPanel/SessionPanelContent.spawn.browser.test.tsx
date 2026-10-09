@@ -108,7 +108,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
     await waitFor(() => expect(submit).not.toHaveClass('ant-btn-loading'));
     await fill(screen.getByRole('textbox', { name: 'Child prompt' }), `Child ${attempt}`);
     await click(screen.getByText('Custom config'));
-    const network = await screen.findByRole('switch');
+    const network = await screen.findByRole('switch', { name: 'Enable Network Access' });
     expect(network).toHaveAttribute('aria-checked', 'true');
     if (attempt === 2) await click(network);
     await submitSpawn();
@@ -130,7 +130,7 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   await click(screen.getByRole('button', { name: 'Open spawn' }));
   await fill(screen.getByRole('textbox', { name: 'Child prompt' }), 'Keep my draft');
   await click(screen.getByText('Custom config'));
-  await click(await screen.findByRole('switch'));
+  await click(await screen.findByRole('switch', { name: 'Enable Network Access' }));
   await fill(screen.getByRole('textbox', { name: 'Extra instructions' }), 'Keep my settings');
   await submitSpawn();
   await waitFor(() => expect(create).toHaveBeenCalledTimes(4));
@@ -142,7 +142,10 @@ it('reopens a mounted SessionPanel spawn modal after success and retains a rejec
   expect(screen.getByRole('textbox', { name: 'Extra instructions' })).toHaveValue(
     'Keep my settings'
   );
-  expect(screen.getByRole('switch')).toHaveAttribute('aria-checked', 'false');
+  expect(screen.getByRole('switch', { name: 'Enable Network Access' })).toHaveAttribute(
+    'aria-checked',
+    'false'
+  );
   await submitSpawn();
   await waitFor(() => expect(create).toHaveBeenCalledTimes(5));
   expect(create).toHaveBeenLastCalledWith(

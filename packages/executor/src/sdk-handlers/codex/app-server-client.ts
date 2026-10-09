@@ -19,6 +19,8 @@ export interface CodexAppServerClientOptions {
   timeoutMs?: number;
   /** Override executable for tests or non-standard installs. Defaults to `codex`. */
   command?: string;
+  /** Per-session opt-in; true respects native settings rather than forcing on. */
+  includePlugins?: boolean;
 }
 
 /**
@@ -93,7 +95,9 @@ export class CodexAppServerClient {
     if (this.startPromise) return this.startPromise;
 
     this.startPromise = new Promise<void>((resolve, reject) => {
-      const child = spawn(this.command, ['app-server'], {
+      const args = ['app-server'];
+      if (!this.options.includePlugins) args.push('--config', 'features.plugins=false');
+      const child = spawn(this.command, args, {
         env: { ...process.env, ...this.options.env },
         stdio: ['pipe', 'pipe', 'pipe'],
       });

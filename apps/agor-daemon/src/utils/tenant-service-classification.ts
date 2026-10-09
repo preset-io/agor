@@ -1,3 +1,4 @@
+import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
 import {
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
@@ -120,6 +121,10 @@ export interface TenantServiceClassification {
  * place to be wrong. This table is for services registered outside both.
  */
 export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassification> = {
+  [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Registered through the tenant-scoped authenticated route registrar; metadata-only acknowledgement.',
+  },
   // --------------------------------------------------------------------------
   // The two Slack lanes' browser preflights. Registered with a bare `app.use`
   // plus a `requireAuth` hook, so nothing upstream arms a scope: each opens one
@@ -158,6 +163,10 @@ export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassif
   // --------------------------------------------------------------------------
   // Catalog connect. Probes a remote endpoint before writing anything.
   // --------------------------------------------------------------------------
+  'repos/clone': {
+    scopeClass: 'scoped',
+    why: 'Authenticated tenant-scoped route; atomic clone claim and commit-bound executor dispatch.',
+  },
   'mcp-catalog/connect': {
     scopeClass: 'identity-only',
     why: 'Probes the entry endpoint over the network before installing; every write goes through a service that opens its own unit.',
@@ -304,7 +313,6 @@ export const UNCLASSIFIED_SERVICE_BASELINE: readonly string[] = [
   'board-comments/:id/toggle-reaction', // BASELINE-ENTRY
   'board-comments/:id/reposition', // BASELINE-ENTRY
   'repos/local', // BASELINE-ENTRY
-  'repos/clone', // BASELINE-ENTRY
   'repos/:id/branches', // BASELINE-ENTRY
   'repos/:id/branches/:name', // BASELINE-ENTRY
   'repos/:id/export-agor-yml', // BASELINE-ENTRY

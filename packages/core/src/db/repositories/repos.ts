@@ -6,6 +6,7 @@
 
 import type { Repo, RepoEnvironment, RepoEnvironmentConfigV1, UUID } from '@agor/core/types';
 import { eq, like, sql } from 'drizzle-orm';
+import { normalizeRepoUrl } from '../../config/repo-reference.js';
 import { resolveVariant, wrapV1AsV2 } from '../../config/variant-resolver.js';
 import { generateId } from '../../lib/ids';
 import { resolveRepoCleanupPolicy, validateRepoCleanupPolicy } from '../../types/branch-cleanup';
@@ -156,6 +157,7 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         environment,
         environment_config,
         clone_status: repo.clone_status,
+        clone_generation: repo.clone_generation,
         // `|| undefined` (not `??`) — deepMerge writes explicit `null` to
         // clear `clone_error` on the success patch from the executor; we
         // coerce that to `undefined` here so the stored value matches the
@@ -204,6 +206,61 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         error
       );
     }
+  }
+
+  /**
+   * Atomically register or retry a clone without replacing its identity or branches.
+   * The unique tenant/slug index arbitrates first-run races across daemon replicas;
+   * the row lock arbitrates failed retries. No network or filesystem work here.
+   */
+  async claimClone(data: Partial<Repo>): Promise<{
+    repo: Repo;
+    acquired: boolean;
+    created: boolean;
+  }> {
+    const candidate = this.repoToInsert({
+      ...data,
+      clone_status: 'cloning',
+      clone_generation: 1,
+      clone_error: undefined,
+    });
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const inserted = await insert(tx, repos).values(candidate).onConflictDoNothing().run();
+        await lockRowForUpdate(tx, this.db, repos, eq(repos.slug, candidate.slug));
+        const row = await select(tx).from(repos).where(eq(repos.slug, candidate.slug)).one();
+        if (!row)
+          throw new RepositoryError('Repository setup could not reserve its record. Retry setup.');
+        const repo = this.rowToRepo(row);
+        if (
+          repo.repo_type !== 'remote' ||
+          normalizeRepoUrl(repo.remote_url ?? '') !== normalizeRepoUrl(data.remote_url ?? '')
+        ) {
+          throw new RepositoryError(
+            'This repository name is already registered with a different source. Choose another name or ask an administrator to check repository settings.'
+          );
+        }
+        if (inserted.rowsAffected > 0) return { repo, acquired: true, created: true };
+        if (repo.clone_status !== 'failed') return { repo, acquired: false, created: false };
+        // Preserve the original locator, environment, IDs, and every dependent branch.
+        // Only a settled failed attempt may be retried; age is not proof of settlement.
+        const retry = this.repoToInsert({
+          ...repo,
+          default_branch: data.default_branch ?? repo.default_branch,
+          clone_status: 'cloning',
+          clone_generation: (repo.clone_generation ?? 0) + 1,
+          clone_error: undefined,
+        });
+        await update(tx, repos)
+          .set({ data: retry.data, updated_at: new Date() })
+          .where(eq(repos.repo_id, repo.repo_id))
+          .run();
+        const claimed = await select(tx).from(repos).where(eq(repos.repo_id, repo.repo_id)).one();
+        return { repo: this.rowToRepo(claimed!), acquired: true, created: false };
+      },
+      { sqliteImmediate: true, sqliteBusyRetries: 3 }
+    );
   }
 
   /**
@@ -396,6 +453,21 @@ export class RepoRepository implements BaseRepository<Repo, Partial<Repo>> {
         }
 
         const current = this.rowToRepo(currentRow);
+        if (current.clone_generation && Object.hasOwn(updates, 'clone_status')) {
+          if (
+            updates.clone_generation !== current.clone_generation ||
+            current.clone_status !== 'cloning' ||
+            !['ready', 'failed'].includes(updates.clone_status ?? '')
+          )
+            return current;
+        }
+        // Only claimClone may advance the generation, never a generic metadata patch.
+        if (
+          Object.hasOwn(updates, 'clone_generation') &&
+          updates.clone_generation !== current.clone_generation
+        ) {
+          throw new RepositoryError('Clone attempt can only be changed by repository setup');
+        }
 
         // STEP 2: Deep merge updates into current repo (in memory)
         // Preserves nested objects like permission_config when doing partial updates

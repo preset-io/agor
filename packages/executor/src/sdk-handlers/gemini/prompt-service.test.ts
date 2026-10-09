@@ -97,6 +97,7 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { GeminiPromptService, resolveGeminiInvocationModel } from './prompt-service.js';
 import { findGeminiRecording } from './runtime.js';
 import { Gemini } from './sdk.js';
@@ -122,10 +123,17 @@ function service(key: string | undefined = 'fake-key') {
 async function collect(
   s = service(),
   mode: 'autoEdit' | 'default' | 'ask' | 'plan' | 'yolo' | undefined = 'autoEdit',
-  signal?: AbortSignal
+  controller?: AbortController
 ) {
   const events = [];
-  for await (const e of s.promptSessionStreaming(id, 'hello', undefined, mode, undefined, signal))
+  for await (const e of s.promptSessionStreaming(
+    id,
+    'hello',
+    undefined,
+    mode,
+    undefined,
+    controller
+  ))
     events.push(e);
   return events;
 }
@@ -398,6 +406,26 @@ describe('Gemini prompt boundary', () => {
     state.streamError = new Gemini.UnauthorizedError('private provider detail');
     await expect(collect()).rejects.toThrow('Gemini rejected the API key.');
   });
+  it.each([false, true])(
+    'does not turn successful cancellation into teardown evidence (disposeFails=%s)',
+    async (disposeFails) => {
+      const controller = new AbortController();
+      const promptService = service();
+      state.events = [[event('tool_call_request', { callId: 'c', name: 'read_file', args: {} })]];
+      state.schedule.mockImplementationOnce(async () => {
+        expect(promptService.stopTask(id)).toEqual({ success: true });
+        controller.abort();
+        return [];
+      });
+      if (disposeFails) state.dispose.mockRejectedValueOnce(new Error('dispose failed'));
+      const execution = collect(promptService, 'autoEdit', controller);
+      if (disposeFails) await expect(execution).rejects.toThrow('Gemini integration error.');
+      else await execution;
+      expect(state.dispose).toHaveBeenCalledOnce();
+      await expectSignalQuiescence(controller, !disposeFails);
+    }
+  );
+
   it('stops during a tool without sending another turn', async () => {
     const abort = new AbortController();
     state.events = [[event('tool_call_request', { callId: 'c', name: 'read_file', args: {} })]];
@@ -405,7 +433,7 @@ describe('Gemini prompt boundary', () => {
       abort.abort();
       return [];
     });
-    await collect(service(), 'autoEdit', abort.signal);
+    await collect(service(), 'autoEdit', abort);
     expect(state.prompts).toHaveBeenCalledOnce();
   });
   it('warns only when prior messages exist and history is unavailable', async () => {

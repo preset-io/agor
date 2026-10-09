@@ -1,10 +1,12 @@
 import type { Artifact, Board, BoardEntityObject, Branch, Repo, Session } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { sessionPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { markBoardLoaded } from '../../test/userScopeCoverage';
 import SessionCanvas from '../SessionCanvas/SessionCanvas';
 
 // ── Render counters ──────────────────────────────────────────────────────────
@@ -157,6 +159,13 @@ describe('BranchCard store-selector session isolation', () => {
     branchCardSessions.clear();
     agorStore.setState({ ...EMPTY_MAPS });
     seedStore();
+    // The displayed board's loaded partition holds its rows.
+    setRealtimeAuthorityScope('user-1:member:1');
+    markBoardLoaded(BOARD_ID);
+  });
+  afterEach(() => {
+    setRealtimeAuthorityScope(null);
+    agorStore.getState().reset();
   });
 
   it('a session:patched for branch A re-renders only branch A’s card with the updated session', async () => {

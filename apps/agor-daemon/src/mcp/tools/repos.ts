@@ -95,7 +95,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
         'clone will fail with `clone_error.category: "auth_failed"`. If it is missing, PREFER calling ' +
         "`agor_widgets_request_env_vars({ names: ['GITHUB_TOKEN'], reason: ... })` to collect it inline " +
         'over pointing the user at Settings → Env Vars, then retry. Retrying after a failed clone is ' +
-        'supported — the previous failed row is replaced.',
+        'supported in place — the repository ID, configuration, and existing branches are preserved.',
       inputSchema: z.object({
         url: mcpRequiredString(
           'url',
@@ -135,11 +135,9 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       const name = coerceString(args.name);
       const defaultBranch = coerceString(args.default_branch);
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      // `cloneRepository` is a custom (non-transport) service method, so this
-      // direct call bypasses the around hooks that enter the tenant database
-      // scope for HTTP callers. Re-enter it here so its `this.db` reads/writes
-      // join one short tenant unit — the executor clone itself is fire-and-forget
-      // and runs outside this scope. See mcp/tenant-scope.ts.
+      // Keep MCP's trusted identity/write gate at the transport boundary. The
+      // service joins this short tenant unit (or opens its own for direct
+      // callers); the executor is dispatched only after it commits.
       const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.cloneRepository(
           { url, slug, name, ...(defaultBranch ? { default_branch: defaultBranch } : {}) },

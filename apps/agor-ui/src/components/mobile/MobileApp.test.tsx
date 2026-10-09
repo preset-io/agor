@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
@@ -29,6 +31,8 @@ vi.mock('../BranchModal', () => ({
 }));
 
 vi.mock('./MobileNavTree', () => ({ MobileNavTree: () => null }));
+// Home is the shared HomePage (covered by its own suites); these cases drive the tab-bar Ask.
+vi.mock('../HomePage', () => ({ HomePage: () => null }));
 
 // Counts mounts so a test can prove the picker is re-created (keyed) per signed-in identity.
 const teammatePicker = vi.hoisted(() => ({ mounts: 0, props: {} as Record<string, unknown> }));
@@ -132,6 +136,29 @@ describe('MobileApp branch actions', () => {
     expect(screen.getByTestId('branch-sheet')).toHaveTextContent('schedule');
   });
 
+  it("reads the opened branch's active sessions for the sheet, as desktop does", async () => {
+    setRealtimeAuthorityScope('user-1:member:1');
+    agorStore.setState({
+      branchById: new Map([['branch-1', { branch_id: 'branch-1', repo_id: 'repo-1' } as never]]),
+    });
+    const session = { session_id: 's1', branch_id: 'branch-1', title: 'Fix it' };
+    const findAll = vi.fn(async () => [session]);
+    const client = {
+      service: () => ({ getPrimaryTeammate: async () => null, findAll, on() {}, off() {} }),
+    };
+    try {
+      renderMobileApp('/m/board/board-1', { client, user: { user_id: 'user-1' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Open schedule' }));
+      await waitFor(() => expect(branchModalProps.sessions).toEqual([session]));
+      expect(findAll).toHaveBeenCalledWith({
+        query: { branch_id: 'branch-1', archived: false, $sort: { created_at: -1 } },
+      });
+    } finally {
+      setRealtimeAuthorityScope(null);
+      agorStore.getState().reset();
+    }
+  });
+
   it('hands the bottom sheet the same edit handlers as the desktop modal', () => {
     const handlers = {
       onUpdateBranch: vi.fn(),
@@ -230,9 +257,8 @@ describe('MobileApp branch actions', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
 
-    // Both Ask surfaces are refused while the first creation is pending (the Home one reads "loading Ask").
+    // A repeated tap is refused while the first creation is pending.
     fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
-    fireEvent.click(screen.getByRole('button', { name: /Ask$/ }));
     await act(async () => {});
     expect(onCreateSession).toHaveBeenCalledTimes(1);
 

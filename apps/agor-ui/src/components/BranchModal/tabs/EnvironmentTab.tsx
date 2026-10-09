@@ -44,14 +44,26 @@ import {
   SaveOutlined,
   ThunderboltOutlined,
   UploadOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Select, Space, Spin, Tag, Tooltip, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  Select,
+  Space,
+  Spin,
+  Tag,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../../hooks/useConfirmNukeEnvironment';
 import { useEnvironmentStart } from '../../../hooks/useEnvironmentStart';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { getEnvironmentCommandStatus, hasEnvironmentLogs } from '../../../utils/environmentCommand';
 import {
   getEnvironmentState,
   getEnvironmentStateDescription,
@@ -139,8 +151,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     ? undefined
     : "Requires branch 'all' permission or admin access";
   const lifecycleFieldHelp = isWebhookMode
-    ? 'This instance uses webhook-managed environments. Use public http(s) URLs for start, stop, nuke, and logs.'
-    : 'This instance supports shell commands and URL webhooks for start, stop, nuke, and logs.';
+    ? 'Use public HTTP(S) URLs for start, stop, nuke, and logs.'
+    : 'Commands accept shell scripts or HTTP(S) webhooks.';
   const repoPlaceholder = isWebhookMode
     ? 'version: 2\ndefault: remote\nvariants:\n  remote:\n    start: https://env.example.com/start?branch={{branch.name}}\n    stop: https://env.example.com/stop?branch={{branch.name}}\n    health: https://apps.example.com/{{branch.name}}/health\n    app: https://apps.example.com/{{branch.name}}\n'
     : 'version: 2\ndefault: lean\nvariants:\n  lean:\n    start: docker compose up -d\n    stop: docker compose down\n';
@@ -173,7 +185,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [lastHealthCheck, setLastHealthCheck] = useState(
     branch.environment_instance?.last_health_check
   );
-  const [lastError, setLastError] = useState(branch.environment_instance?.last_error);
   const [isStarting, setIsStarting] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
@@ -189,7 +200,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setEnvStatus(branch.environment_instance?.status || 'stopped');
     setEnvironment(branch.environment_instance);
     setLastHealthCheck(branch.environment_instance?.last_health_check);
-    setLastError(branch.environment_instance?.last_error);
 
     const branchChanged = prevBranchRef.current !== branch;
     prevBranchRef.current = branch;
@@ -226,7 +236,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         setEnvironment(updated.environment_instance);
         setEnvStatus(updated.environment_instance?.status || 'stopped');
         setLastHealthCheck(updated.environment_instance?.last_health_check);
-        setLastError(updated.environment_instance?.last_error);
       }
     };
     client.service('branches').on('patched', handleBranchUpdate);
@@ -545,7 +554,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   };
 
   // ----- Derived UI state -----
-  const inferredState = getEnvironmentState(branch.environment_instance);
+  const inferredState = getEnvironmentState(environment);
+  const commandStatus = getEnvironmentCommandStatus(environment);
+  const canViewLogs = hasEnvironmentLogs(
+    environment,
+    branch.logs_command,
+    featuresConfig?.environmentCommands?.shellLogs
+  );
   const hasEnvironmentConfig = !!repo.environment;
   const noVariantsConfigured = !hasEnvironmentConfig;
 
@@ -596,15 +611,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     }
   }, [inferredState, token]);
 
-  const healthIcon = lastHealthCheck ? (
-    lastHealthCheck.status === 'healthy' ? (
-      <CheckCircleOutlined style={{ color: token.colorSuccess }} />
-    ) : lastHealthCheck.status === 'unhealthy' ? (
-      <CloseCircleOutlined style={{ color: token.colorError }} />
-    ) : (
-      <WarningOutlined style={{ color: token.colorWarning }} />
-    )
-  ) : null;
+  const healthIcon =
+    envStatus === 'running' && lastHealthCheck ? (
+      lastHealthCheck.status === 'healthy' ? (
+        <CheckCircleOutlined style={{ color: token.colorSuccess }} />
+      ) : lastHealthCheck.status === 'unhealthy' ? (
+        <CloseCircleOutlined style={{ color: token.colorError }} />
+      ) : null
+    ) : null;
 
   const variantSelectOptions = availableVariants.map((name) => {
     const variant = repo.environment?.variants[name];
@@ -635,85 +649,6 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <EnvironmentDisclaimer markdown={featuresConfig?.environmentDisclaimerMarkdown} />
-        {asynchronous && (
-          <Alert
-            type="info"
-            showIcon
-            title="Bounded remote-environment commands"
-            description="Start, Stop, and Nuke report command outcomes, not proof of provider resource ownership or readiness. Restart is unavailable: Stop, inspect the result, then Start. Applications are not hosted in the executor."
-          />
-        )}
-        {shellLogsUnavailable && (
-          <Alert
-            type="info"
-            showIcon
-            title="Shell Logs unavailable"
-            description={featuresConfig?.environmentCommands?.shellLogsReason}
-          />
-        )}
-        {environment?.command_attempt && (
-          <Alert
-            type={environment.last_command?.status === 'unknown' ? 'warning' : 'info'}
-            showIcon
-            title={
-              commandActive
-                ? environment.command_attempt.claimed_at
-                  ? 'Command executing'
-                  : 'Command dispatched; awaiting executor claim'
-                : environment.last_command?.status === 'unknown'
-                  ? 'Outcome unknown'
-                  : environment.last_command?.message
-            }
-            description={
-              <Space orientation="vertical" style={{ width: '100%', minWidth: 0 }}>
-                {commandActive && (
-                  <span>Result deadline: {environment.command_attempt.result_deadline}</span>
-                )}
-                {environment.last_command?.status !== 'succeeded' && !commandActive && (
-                  <span>
-                    Retry Stop to request cleanup, or explicitly confirm Start anyway. An earlier
-                    command or provider operation may overlap; Agor does not automatically retry
-                    mutations.
-                  </span>
-                )}
-                <span>
-                  {environment.command_attempt.output_truncated
-                    ? 'Output truncated.'
-                    : 'Available command output (may be incomplete after executor loss).'}
-                </span>
-                <pre
-                  style={{
-                    maxHeight: 200,
-                    overflow: 'auto',
-                    whiteSpace: 'pre-wrap',
-                    overflowWrap: 'anywhere',
-                    margin: 0,
-                  }}
-                >
-                  {environment.command_attempt.output || 'No command output received.'}
-                </pre>
-                {environment.command_history?.map((entry) => (
-                  <details key={entry.attempt.id}>
-                    <summary>
-                      Previous {entry.attempt.action}: {entry.result?.status ?? 'unknown'}
-                    </summary>
-                    <p>{entry.result?.message}</p>
-                    <pre
-                      style={{
-                        maxHeight: 160,
-                        overflow: 'auto',
-                        whiteSpace: 'pre-wrap',
-                        overflowWrap: 'anywhere',
-                      }}
-                    >
-                      {entry.attempt.output || 'No output received.'}
-                    </pre>
-                  </details>
-                ))}
-              </Space>
-            }
-          />
-        )}
         <EnvironmentAccessLinks environment={environment} appUrl={branch.app_url} />
         {/* ====== Environment Controls (top — unchanged from prior behavior) ====== */}
         {hasEnvironmentConfig && (
@@ -762,7 +697,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   !canTriggerEnv || asynchronous || isStarting || isStopping || isRestarting
                 }
                 loading={isRestarting}
-                title={triggerDisabledTooltip}
+                title={
+                  triggerDisabledTooltip ??
+                  (asynchronous
+                    ? 'Use Stop, then Start to restart a remote environment'
+                    : undefined)
+                }
               >
                 Restart
               </Button>
@@ -793,12 +733,12 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 size="small"
                 icon={<FileTextOutlined />}
                 onClick={() => setLogsModalOpen(true)}
-                disabled={!canTriggerEnv || !branch.logs_command || shellLogsUnavailable}
+                disabled={!canTriggerEnv || !canViewLogs}
                 title={
                   !canTriggerEnv
                     ? triggerDisabledTooltip
-                    : !branch.logs_command
-                      ? 'Configure a logs command in the variant to enable'
+                    : !canViewLogs
+                      ? 'No command output or runtime logs available'
                       : undefined
                 }
               >
@@ -806,31 +746,56 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               </Button>
             </div>
 
-            {envStatus === 'error' && (lastHealthCheck?.message || lastError) && (
+            {commandStatus && (commandActive || commandStatus.type !== 'info') && (
               <Alert
-                style={{ marginTop: 12, fontSize: 11 }}
-                type="error"
+                style={{ marginTop: token.marginSM }}
+                type={commandStatus.type}
                 showIcon
-                title={lastHealthCheck?.message || 'Environment Error'}
-                description={
-                  lastError && (
-                    <pre
-                      style={{
-                        maxHeight: 200,
-                        overflow: 'auto',
-                        margin: 0,
-                        fontSize: 11,
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {lastError}
-                    </pre>
-                  )
-                }
+                title={commandStatus.text}
               />
             )}
+            {!commandActive &&
+              commandStatus?.type !== 'error' &&
+              commandStatus?.type !== 'warning' &&
+              lastHealthCheck?.status === 'unhealthy' && (
+                <Alert
+                  style={{ marginTop: token.marginSM }}
+                  type="error"
+                  showIcon
+                  title="Health check failed"
+                />
+              )}
           </Card>
+        )}
+
+        {(asynchronous || shellLogsUnavailable) && (
+          <Collapse
+            size="small"
+            ghost
+            items={[
+              {
+                key: 'remote-guidance',
+                label: 'About remote environments',
+                children: (
+                  <Space orientation="vertical">
+                    {asynchronous && (
+                      <Typography.Text type="secondary">
+                        Commands run remotely; completion does not mean the app is ready or
+                        resources are cleaned up. Check health and logs. To restart, Stop then
+                        Start.
+                      </Typography.Text>
+                    )}
+                    {shellLogsUnavailable && (
+                      <Typography.Text type="secondary">
+                        {featuresConfig?.environmentCommands?.shellLogsReason ??
+                          'Runtime shell logs are unavailable on this instance.'}
+                      </Typography.Text>
+                    )}
+                  </Space>
+                ),
+              },
+            ]}
+          />
         )}
 
         {/* ====== Empty state (no variants configured) ====== */}
@@ -938,13 +903,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           }
         >
           <Space orientation="vertical" size="small" style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={isWebhookMode ? 'Webhook-managed environments' : 'Managed environments'}
-              description={lifecycleFieldHelp}
-              style={{ fontSize: 12 }}
-            />
+            <Typography.Text type="secondary">{lifecycleFieldHelp}</Typography.Text>
             <Typography.Text type="secondary" style={{ fontSize: 11 }}>
               YAML representation of <code>repo.environment</code>. Includes <code>version</code>,{' '}
               <code>default</code>, <code>variants</code>, and optional{' '}
@@ -1102,7 +1061,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       <EnvironmentLogsModal
         open={logsModalOpen}
         onClose={() => setLogsModalOpen(false)}
-        branch={branch}
+        branch={{ ...branch, environment_instance: environment }}
         client={client}
       />
     </div>

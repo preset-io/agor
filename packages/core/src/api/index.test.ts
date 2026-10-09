@@ -10,6 +10,7 @@ import { TaskStatus } from '@agor/core/types';
 import type { Socket } from 'socket.io-client';
 import io from 'socket.io-client';
 import { beforeEach, describe, expect, it, type MockedFunction, vi } from 'vitest';
+import { BROWSER_FEATHERS_ACK_TIMEOUT_MS } from '../config/constants';
 import type { AgorService, UpdatePayload } from './index';
 import { createClient, isDaemonRunning, normalizeFindResult } from './index';
 
@@ -241,6 +242,22 @@ describe('createClient', () => {
 
       expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('ackTimeout');
       expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('retries');
+    });
+
+    it('defaults browser clients to an acknowledgement timeout without enabling retries', () => {
+      vi.stubGlobal('window', {});
+      try {
+        createClient('http://localhost:3030', false);
+        createClient('http://localhost:3030', false, { ackTimeout: 5_000 });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      expect(ioMock.mock.calls[0]?.[1]).toMatchObject({
+        ackTimeout: BROWSER_FEATHERS_ACK_TIMEOUT_MS,
+      });
+      expect(ioMock.mock.calls[0]?.[1]).not.toHaveProperty('retries');
+      expect(ioMock.mock.calls[1]?.[1]).toMatchObject({ ackTimeout: 5_000 });
     });
 
     it('should configure reconnection settings', () => {
@@ -788,8 +805,11 @@ describe('createClient', () => {
       expect(tasksService.methods).toHaveBeenCalledWith(
         'connectExecutor',
         'reportTerminationComplete',
+        'reportExecutorInterruption',
         'reportRuntimeTelemetry',
         'reportSdkHealthFailure',
+        'beginOpenCodeCheckpoint',
+        'acknowledgeOpenCodeCleanup',
         'cancelQueued',
         'reorderQueued'
       );

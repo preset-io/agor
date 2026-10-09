@@ -11,7 +11,6 @@ import type {
   GatewayChannelCreateData,
   GatewayChannelPatchData,
   Repo,
-  Session,
   UpdateUserInput,
   User,
 } from '@agor-live/client';
@@ -23,6 +22,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useBranchSessions } from '../../hooks/useBranchSessions';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
 import { useAgorStore } from '../../store/agorStore';
@@ -31,12 +31,10 @@ import {
   selectBoardById,
   selectBoardObjectById,
   selectBranchById,
-  selectCardById,
   selectCardTypeById,
   selectGatewayChannelById,
   selectMcpServerById,
   selectRepoById,
-  selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
@@ -78,7 +76,10 @@ export interface SettingsModalProps {
   ) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
-  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
   onCreateBranch?: (
@@ -165,10 +166,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const boardObjectById = useAgorStore(selectBoardObjectById);
   const repoById = useAgorStore(selectRepoById);
   const branchById = useAgorStore(selectBranchById);
-  const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
-  const cardById = useAgorStore(selectCardById);
   const cardTypeById = useAgorStore(selectCardTypeById);
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
@@ -180,14 +179,17 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
-  const [branchSessions, setBranchSessions] = useState<Session[]>([]);
   const [branchModalOpen, setBranchModalOpen] = useState(false);
+  // The store holds only the loaded scopes' sessions: each opening reads the branch's.
+  const branchSessions = useBranchSessions(
+    client,
+    branchModalOpen && selectedBranch ? selectedBranch.branch_id : null
+  );
 
   const handleBranchRowClick = (branch: Branch) => {
     // Snapshot the data when opening modal
     setSelectedBranch(branch);
     setSelectedRepo(repoById.get(branch.repo_id) || null);
-    setBranchSessions(sessionsByBranch.get(branch.branch_id) || []);
     setBranchModalOpen(true);
   };
 
@@ -196,7 +198,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     // Clear after modal closes
     setSelectedBranch(null);
     setSelectedRepo(null);
-    setBranchSessions([]);
   };
 
   // Wrapper to close modal after archive/delete
@@ -267,8 +268,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         counts: {
           boards: boardById.size,
           repos: repoById.size,
-          branches: branchById.size,
-          cards: cardById.size,
+          // No branch or card count: the store holds only the loaded scopes' rows.
           artifacts: artifactById.size,
           mcp: mcpServerById.size,
           gateway: gatewayChannelById.size,
@@ -280,8 +280,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       isAdmin,
       boardById.size,
       repoById.size,
-      branchById.size,
-      cardById.size,
       artifactById.size,
       mcpServerById.size,
       gatewayChannelById.size,
@@ -365,7 +363,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           <BoardsTable
             client={client}
             boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
             branchById={branchById}
             currentUser={currentUser}
             onCreate={onCreateBoard}
@@ -396,7 +393,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             branchById={branchById}
             repoById={repoById}
             boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onUnarchive={onUnarchiveBranch}
             onCreate={onCreateBranch}
@@ -415,7 +411,6 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             branchById={branchById}
             repoById={repoById}
             boardById={boardById}
-            sessionsByBranch={sessionsByBranch}
             userById={userById}
             onArchiveOrDelete={onArchiveOrDeleteBranch}
             onRowClick={handleBranchRowClick}
@@ -427,15 +422,17 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <CardsTable
             client={client}
-            cardById={cardById}
             cardTypeById={cardTypeById}
             boardById={boardById}
-            boardObjects={boardObjects}
+            // The resolved user's role: the table's dataset reads (with or
+            // without placements) start once, at open.
+            canReadPlacements={hasMinimumRole(currentUser?.role, ROLES.MEMBER)}
           />
         );
       case 'artifacts':
         return (
           <ArtifactsTable
+            client={client}
             userById={userById}
             artifactById={artifactById}
             branchById={branchById}

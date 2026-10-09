@@ -157,3 +157,40 @@ describe('ReposTable cleanup configuration authority', () => {
     });
   });
 });
+
+describe('repository setup status', () => {
+  it('shows failed diagnostics on demand and retries the same source without deletion', async () => {
+    const repo = makeRepo({
+      clone_status: 'failed',
+      clone_generation: 2,
+      clone_error: {
+        category: 'network',
+        exit_code: 1,
+        message: 'credential-redacted synthetic diagnostic',
+      },
+    });
+    const onCreate = vi.fn(async () => {});
+    const onDelete = vi.fn();
+    render(
+      <ReposTable
+        repoById={new Map([[repo.repo_id, repo]])}
+        identityKey="member:member"
+        operationScope={['member:member', 1]}
+        onCreate={onCreate}
+        onDelete={onDelete}
+      />
+    );
+    expect(screen.getByText('Repository setup failed')).toBeVisible();
+    expect(screen.queryByText('credential-redacted synthetic diagnostic')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Setup diagnostics'));
+    expect(await screen.findByText('credential-redacted synthetic diagnostic')).toBeVisible();
+    fireEvent.click(screen.getByText('Retry setup'));
+    await waitFor(() =>
+      expect(onCreate).toHaveBeenCalledWith(
+        { url: repo.remote_url, slug: repo.slug, default_branch: 'main' },
+        expect.any(Function)
+      )
+    );
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+});

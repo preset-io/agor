@@ -247,6 +247,7 @@ describe('resolveChildSessionConfig', () => {
             sandboxMode: 'workspace-write',
             approvalPolicy: 'on-request',
             networkAccess: true,
+            includePlugins: false,
           },
         },
       });
@@ -260,6 +261,7 @@ describe('resolveChildSessionConfig', () => {
         sandboxMode: 'workspace-write',
         approvalPolicy: 'on-request',
         networkAccess: true,
+        includePlugins: false,
       });
     });
 
@@ -282,6 +284,7 @@ describe('resolveChildSessionConfig', () => {
           sandboxMode: 'workspace-write',
           approvalPolicy: 'never',
           networkAccess: true,
+          includePlugins: false,
         },
       });
     });
@@ -305,6 +308,7 @@ describe('resolveChildSessionConfig', () => {
         sandboxMode: 'read-only',
         approvalPolicy: 'untrusted',
         networkAccess: false,
+        includePlugins: false,
       });
     });
 
@@ -330,6 +334,7 @@ describe('resolveChildSessionConfig', () => {
         sandboxMode: 'read-only',
         approvalPolicy: 'untrusted',
         networkAccess: false,
+        includePlugins: false,
       });
     });
   });

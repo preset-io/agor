@@ -1,9 +1,12 @@
+import type { AgorClient } from '@agor/core/client';
 import { generateId } from '@agor/core/ids/browser';
 import {
   type Message,
   MessageRole,
   type ReactiveSessionHandle,
   type ReactiveSessionState,
+  releaseReactiveSession,
+  retainReactiveSession,
   type Task,
   TaskStatus,
 } from '@agor-live/client';
@@ -121,6 +124,7 @@ const handle = {
   loadOlderTasks,
   loadTaskMessages,
   unloadTaskMessages: () => {},
+  retainTaskDetails: () => () => {},
   resync: async () => {},
 } as unknown as ReactiveSessionHandle;
 let currentHandle = handle;
@@ -588,14 +592,14 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
   state = { ...state, tasks: [{ ...tasks[19], status: TaskStatus.STOPPED }], hasOlderTasks: false };
   const { container } = render(<ConversationView client={null} sessionId={sessionId} />);
   const root = container.querySelector('[data-task-block]')!;
-  const stopped = screen.getByText('Turn stopped');
+  const stopped = screen.getByText('The agent was stopped. Any edits are kept.');
   expect(stopped).toBeVisible();
   const outcome = root.querySelector<HTMLElement>('[data-turn-outcome]')!;
-  expect(outcome).toHaveClass('ant-alert-warning');
+  expect(outcome).toHaveAttribute('data-notice-type', 'neutral');
   expect(
     Math.abs(outcome.getBoundingClientRect().left - root.getBoundingClientRect().left)
   ).toBeLessThan(1);
-  expect(getComputedStyle(outcome).fontSize).toBe('14px');
+  expect(getComputedStyle(stopped).fontSize).toBe('12px');
   expect(root.querySelector(':scope > .anticon')).toBeNull();
   expect(stopped.getBoundingClientRect().top).toBeGreaterThan(
     screen.getByText(/Answer 19\./).getBoundingClientRect().bottom
@@ -607,13 +611,16 @@ it('shows exceptional outcomes beneath their turn without floating top icons or 
         {
           ...state.tasks[0],
           status: TaskStatus.FAILED,
+          executor_connected_at: state.tasks[0].created_at,
           error_message: 'Synthetic failure: ' + 'long-diagnostic-'.repeat(50),
         },
       ],
     })
   );
-  expect(screen.getByRole('alert')).toHaveTextContent('Turn failed');
-  expect(screen.getByRole('alert')).toHaveClass('ant-alert-error');
+  expect(outcome).toHaveTextContent('The agent hit a problem.');
+  expect(outcome).toHaveAttribute('data-notice-type', 'error');
+  await userEvent.click(screen.getByRole('button', { name: 'Details' }));
+  expect(screen.getByText(/^Synthetic failure: long-diagnostic-/)).toBeVisible();
   expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   await page.screenshot({ path: `./.vitest/lean-outcome-${window.innerWidth}.png` });
 });
@@ -893,4 +900,149 @@ it('collapses tall low-character history and medium prose with shorter previews'
   expect(articles[0].textContent).toContain('Word49');
   await userEvent.click(screen.getByRole('button', { name: 'show more' }));
   expect(screen.getByText(prose)).toBeInTheDocument();
+});
+
+it('keeps synthetic streamed and persisted text visible while settling the thinking cache', async () => {
+  const task = { ...tasks[0], status: TaskStatus.RUNNING };
+  const saved: Message[] = [];
+  const handlers = new Map<string, (...args: unknown[]) => void>();
+  const service = (name: string, methods: Record<string, unknown>) => ({
+    ...methods,
+    on: (event: string, handler: (...args: unknown[]) => void) =>
+      handlers.set(`${name}:${event}`, handler),
+    removeListener: (event: string) => handlers.delete(`${name}:${event}`),
+  });
+  const services: Record<string, unknown> = {
+    sessions: service('sessions', {
+      get: async () => ({ session_id: sessionId, tasks: [task.task_id] }),
+    }),
+    tasks: service('tasks', { findAll: async () => [task] }),
+    messages: service('messages', { findAll: async () => saved }),
+    'session-streams': {
+      create: async () => ({ session_id: sessionId }),
+      remove: async () => ({}),
+    },
+  };
+  const client = {
+    io: { connected: true, on: () => {}, off: () => {} },
+    service: (name: string) =>
+      name.includes('/tasks/queue') ? { find: async () => ({ data: [] }) } : services[name],
+  } as unknown as AgorClient;
+  const live = retainReactiveSession(client, sessionId, { taskHydration: 'lazy' });
+  await live.ready();
+  currentHandle = live;
+  state = live.state;
+  const unsubscribe = live.subscribe(() => update(live.state));
+  const emit = (event: string, messageId: string, extra = {}) =>
+    act(() => {
+      handlers.get(`messages:${event}`)?.({
+        session_id: sessionId,
+        task_id: task.task_id,
+        message_id: messageId,
+        role: MessageRole.ASSISTANT,
+        timestamp: task.created_at,
+        ...extra,
+      });
+    });
+  try {
+    const thoughtId = generateId();
+    const textId = generateId();
+    emit('thinking:start', thoughtId);
+    emit('thinking:chunk', thoughtId, { chunk: 'Invented violet pebble' });
+    // Thinking-only live payloads are not currently rendered by AgentChain /
+    // MessageBlock (empty text). This fixture proves client activity and the
+    // real transcript text handoff, not thinking-only UI visibility.
+    expect(live.getStreamingMessage(thoughtId)?.isThinking).toBe(true);
+    emit('thinking:end', thoughtId);
+    expect(live.getStreamingMessage(thoughtId)?.isStreaming).toBe(false);
+    render(<ConversationView client={null} sessionId={sessionId} />);
+    emit('streaming:start', textId);
+    emit('streaming:chunk', textId, { chunk: 'Invented amber square' });
+    expect(screen.getByText('Invented amber square')).toBeVisible();
+    emit('streaming:end', textId);
+    const message = {
+      ...messages.get(task.task_id)![1],
+      message_id: textId,
+      content: 'Invented amber square',
+    };
+    saved.push(message);
+    act(() => handlers.get('messages:created')?.(message));
+    act(() => handlers.get('tasks:patched')?.({ ...task, status: TaskStatus.COMPLETED }));
+    expect(live.state.streamingMessages.size).toBe(0);
+    expect(screen.getByText('Invented amber square')).toBeVisible();
+    expect(screen.queryByText(/Extended Thinking/)).not.toBeInTheDocument();
+    await page.screenshot({
+      path: `./.vitest/synthetic-stream-lifecycle-${window.innerWidth}.png`,
+    });
+  } finally {
+    unsubscribe();
+    releaseReactiveSession(client, sessionId, { taskHydration: 'lazy' });
+  }
+});
+
+it('pins turn detail only while a reader expands it and releases on collapse and unmount', async () => {
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const [prompt, answer] = messages.get(tasks[0].task_id)!;
+  const turn = [
+    prompt,
+    {
+      ...answer,
+      message_id: generateId(),
+      content: [
+        { type: 'text', text: 'Editing now' },
+        { type: 'tool_use', id: 'edit', name: 'Edit', input: { file_path: '/a.ts' } },
+      ],
+    },
+    {
+      ...answer,
+      message_id: generateId(),
+      content: [{ type: 'tool_use', id: 'read', name: 'Read', input: { file_path: '/b.ts' } }],
+    },
+    {
+      ...answer,
+      message_id: generateId(),
+      content: [
+        { type: 'thinking', text: 'Synthetic reasoning' },
+        { type: 'text', text: 'Reasoned answer' },
+      ],
+    },
+  ] as Message[];
+  const view = render(
+    <TaskBlock
+      task={{ ...tasks[0], recorded_tool_count: 2 }}
+      taskMessages={turn}
+      taskMessagesLoaded
+      onLoadTaskMessages={() => {}}
+      onRetainTaskDetails={retain}
+    />
+  );
+  // A default-open edit body is not a reader's request to keep the turn.
+  expect(screen.getByText('Editing now')).toBeVisible();
+  expect(retain).not.toHaveBeenCalled();
+  const chain = screen.getByRole('button', { name: '1 tool call' });
+  await userEvent.click(chain);
+  await waitFor(() => expect(retain).toHaveBeenCalledTimes(1));
+  expect(retain).toHaveBeenCalledWith(tasks[0].task_id);
+  await userEvent.click(chain);
+  await waitFor(() => expect(release).toHaveBeenCalledTimes(1));
+  await userEvent.click(screen.getByText('Extended Thinking'));
+  await waitFor(() => expect(retain).toHaveBeenCalledTimes(2));
+  await userEvent.click(screen.getByText('Extended Thinking'));
+  await waitFor(() => expect(release).toHaveBeenCalledTimes(2));
+  // The default-open edit stays beside the answer with the chain collapsed.
+  // Collapsing it pins nothing; a reader's reopening does.
+  const edit = screen.getByRole('button', { name: /Edit.*\/a\.ts/, expanded: true });
+  await userEvent.click(edit);
+  expect(edit).toHaveAttribute('aria-expanded', 'false');
+  await userEvent.click(edit);
+  expect(edit).toHaveAttribute('aria-expanded', 'true');
+  await waitFor(() => expect(retain).toHaveBeenCalledTimes(3));
+  await userEvent.click(edit);
+  await waitFor(() => expect(release).toHaveBeenCalledTimes(3));
+  await userEvent.click(edit);
+  await userEvent.click(chain);
+  await waitFor(() => expect(retain).toHaveBeenCalledTimes(5));
+  view.unmount();
+  expect(release).toHaveBeenCalledTimes(5);
 });

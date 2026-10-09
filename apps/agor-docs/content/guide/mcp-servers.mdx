@@ -326,3 +326,45 @@ before upgrading; do not run old and new daemons against the upgraded schema.
 To propose or maintain catalog entries, see
 [Contributing to the MCP catalog](/guide/development#contributing-to-the-mcp-catalog).
 Hiding an entry prevents new catalog installs, but does not revoke existing connections.
+
+## Customer-owned OAuth apps
+
+Some Catalog entries offer **Use your own OAuth app**: you register an OAuth app
+with the provider and enter its client ID (and, for confidential apps, client
+secret) in the secure Catalog form. Like other Catalog apps, the install can be
+**Private** or **Shared**: a shared install's app credentials are entered once by
+whoever creates it, and other members reuse them without seeing the secret. Each
+user then consents to their own provider grant (or an admin connects one **Shared**
+grant), and sharing an app does not share users' tokens. On PostgreSQL, these app
+secrets are encrypted with `AGOR_MASTER_SECRET`; other servers' client secrets are
+stored as before. All are redacted on reads. Never paste a client
+secret into agent chat; MCP configuration tools accept only a
+`{{ user.env.NAME }}` reference for it. Rotating app credentials invalidates
+pending attempts and stored grants, so affected users must reconnect.
+
+### Asana recipe
+
+1. In Asana's developer console, create an **MCP app** (not a standard API app).
+2. Set its redirect URL to the exact callback the Agor Catalog form shows, and
+   select the permitted workspaces under distribution.
+3. Enter the client ID and secret in the Catalog form, then connect.
+
+Catalog uses `https://mcp.asana.com/v2/mcp` with configured-client OAuth and no
+DCR. See [Asana's MCP app guide](https://developers.asana.com/docs/integrating-with-asanas-mcp-server).
+
+### Stable hosted callback
+
+By default the redirect URI is this daemon's own OAuth callback. An operator can
+instead route customer-owned app callbacks through a stable Agor Cloud origin. All
+other OAuth servers (including DCR and pre-registered ones) keep the daemon's own
+callback:
+
+```yaml
+mcp_oauth_relay:
+  callback_origin: https://<trusted-cloud-console-origin>
+```
+
+The redirect URI the UI then shows is
+`<callback_origin>/api/mcp-oauth/relay/callback/<sha256-hex-of-exact-issuer>`.
+Register it exactly as shown. The relay requires PostgreSQL, plus the Cloud launch
+trust and Cell credentials that Agor Cloud provisions.

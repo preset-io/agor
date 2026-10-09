@@ -1,5 +1,5 @@
-import type { AgorClient, Board, Branch, Repo, UserID } from '@agor-live/client';
-import { getTeammateConfig, isTeammate } from '@agor-live/client';
+import type { AgorClient, Branch, UserID } from '@agor-live/client';
+import { isTeammate } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { App as AntApp, Button, Select, Space, Spin, Typography } from 'antd';
 import type React from 'react';
@@ -7,6 +7,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBoardById, selectRepoById } from '../../store/selectors';
+import { type TeammateOption, teammateLabel, teammateOption } from '../../utils/teammateLabels';
+import { TeammateOptionLabel } from '../PrimaryAssistantCompose';
 
 interface PrimaryTeammatePickerProps {
   client: AgorClient | null;
@@ -19,28 +21,6 @@ interface PrimaryTeammatePickerProps {
   disabled?: boolean;
   /** Fired after a successful pick so an embedder can continue an in-flight action. */
   onPicked?: (branch: Branch) => void;
-}
-
-interface TeammateOption {
-  value: string;
-  label: string;
-  context: string;
-  searchText: string;
-}
-
-function teammateLabel(branch: Branch): string {
-  return getTeammateConfig(branch)?.displayName ?? branch.name;
-}
-
-/** Where the teammate lives — its board, falling back to the repo slug. */
-function teammateContext(
-  branch: Branch,
-  boardById: Map<string, Board>,
-  repoById: Map<string, Repo>
-): string {
-  const board = branch.board_id ? boardById.get(branch.board_id) : undefined;
-  if (board) return `${board.icon ?? '📋'} ${board.name}`;
-  return repoById.get(branch.repo_id)?.slug ?? 'Unknown board';
 }
 
 /**
@@ -116,17 +96,12 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
     }
     return teammates
       .sort((a, b) => teammateLabel(a).localeCompare(teammateLabel(b)))
-      .map((branch) => {
-        const label = teammateLabel(branch);
-        const context = teammateContext(branch, boardById, repoById);
-        return {
-          value: branch.branch_id,
-          label,
-          context,
-          searchText: `${label} ${branch.name} ${context}`,
-        };
-      });
+      .map((branch) => teammateOption(branch, boardById, repoById));
   }, [candidates, boardById, repoById, current]);
+
+  const currentOption = current ? teammateOption(current, boardById, repoById) : null;
+  // Skip the closing period when the sentence already ends in punctuation (e.g. "Ambient!").
+  const currentEndsSentence = /[.!?…]$/.test(currentOption?.context ?? currentOption?.label ?? '');
 
   const handleChange = async (branchId: string | null) => {
     if (!client || !currentUserId) return;
@@ -164,10 +139,11 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         <Typography.Text type="danger">
           Couldn't load your primary assistant. Check the connection and try again.
         </Typography.Text>
-      ) : current ? (
+      ) : currentOption ? (
         <Typography.Text>
-          Currently <Typography.Text strong>{teammateLabel(current)}</Typography.Text> on{' '}
-          {teammateContext(current, boardById, repoById)}.
+          Currently <Typography.Text strong>{currentOption.label}</Typography.Text>
+          {currentOption.context && ` on ${currentOption.context}`}
+          {!currentEndsSentence && '.'}
         </Typography.Text>
       ) : compact ? null : (
         <Typography.Text type="secondary">
@@ -193,14 +169,7 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         notFoundContent={options.length === 0 ? 'No teammates available' : undefined}
         suffixIcon={<RobotOutlined />}
         style={{ width: '100%', maxWidth: 420 }}
-        optionRender={(option) => (
-          <div style={{ lineHeight: 1.3 }}>
-            <div>{option.data.label}</div>
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              {option.data.context}
-            </Typography.Text>
-          </div>
-        )}
+        optionRender={(option) => <TeammateOptionLabel option={option.data} />}
       />
     </Space>
   );

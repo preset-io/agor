@@ -19,17 +19,19 @@ import type {
   SessionID,
   User,
 } from '@agor-live/client';
-import { shortId, TaskStatus } from '@agor-live/client';
+import { LEAN_TRANSCRIPT_TASK_WINDOW, shortId, TaskStatus } from '@agor-live/client';
 import { BranchesOutlined, CopyOutlined, ForkOutlined } from '@ant-design/icons';
 import { Alert, Button, Spin, Typography, theme } from 'antd';
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStickToBottom } from 'use-stick-to-bottom';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useStreamingMessagesByTask } from '../../hooks/useStreamingMessagesByTask';
+import { useRetainEngagedTurns } from '../../hooks/useTaskDetailRetention';
 import { useCopyToClipboard } from '../../utils/clipboard';
 import { BrandMark } from '../BrandMark';
-import { HistoryTextChoices } from '../MessageBlock/HistoryMarkdown';
+import { HistoryTextChoices, historyTextKeyTurn } from '../MessageBlock/HistoryMarkdown';
 import { TaskBlock } from '../TaskBlock';
+import { isBottomLockEngaged, jumpToBottom, resetScrollBaseline } from './stickToBottomLock';
 
 const { Text } = Typography;
 const EMPTY_STREAMING_MESSAGES = new Map();
@@ -40,6 +42,14 @@ const EMPTY_USER_MAP = new Map<string, User>();
 // reference for tasks whose messages haven't been loaded — otherwise `|| []`
 // would mint a fresh array on every render and thrash TaskBlock's React.memo.
 const EMPTY_MESSAGES: Message[] = [];
+
+/** The first turn intersecting the viewport: the scroll anchor across paging and trimming. */
+function firstVisibleTurn(viewport: HTMLElement): HTMLElement | undefined {
+  const top = viewport.getBoundingClientRect().top;
+  return Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
+    (element) => element.getBoundingClientRect().bottom >= top
+  );
+}
 
 export interface ConversationViewProps {
   /**
@@ -132,6 +142,9 @@ export interface ConversationViewProps {
 
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
 
+  /** A prompt sent now would run, not wait in the queue (`canSessionStartTurn`). */
+  canStartTurn?: boolean;
+
   /** Use the denser, full-width task treatment for phone-sized session routes. */
   compact?: boolean;
 }
@@ -154,6 +167,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     genealogy,
     teammateEmoji,
     onOpenAgenticToolSettings,
+    canStartTurn = false,
     compact = false,
   }) => {
     const { token } = theme.useToken();
@@ -166,7 +180,15 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // user scrolls up. `scrollRef` goes on the scroll container, `contentRef`
     // on the inner content wrapper. `initial`/`resize: 'instant'` avoids
     // smooth-scroll animation jank on first paint and on layout growth.
-    const { scrollRef, contentRef, scrollToBottom, stopScroll, state } = useStickToBottom({
+    const {
+      scrollRef,
+      contentRef,
+      scrollToBottom,
+      stopScroll,
+      state,
+      isAtBottom,
+      escapedFromLock,
+    } = useStickToBottom({
       initial: 'instant',
       resize: 'instant',
     });
@@ -181,6 +203,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         viewportCleanupRef.current = null;
         scrollRef(element);
         if (!element) return;
+        resetScrollBaseline(state);
         let height = element.clientHeight;
         let resizeGeneration = 0;
         let guardedDifference = 0;
@@ -204,7 +227,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               }
             }, 1);
           });
-          if (state.isAtBottom && !state.escapedFromLock) {
+          if (isBottomLockEngaged(state)) {
             scrollToBottom({ animation: 'instant' });
           }
         });
@@ -221,19 +244,10 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // Public scroll-to-bottom exposed via onScrollRef (button clicks) and the
     // resume-on-send wiring in SessionPanel. Wrap to a plain `() => void` so we
     // don't leak the library's optional ScrollToBottom options to callers.
-    const handleScrollToBottom = useCallback(() => {
-      // The library's scrollToBottom() sets isAtBottom=true but never clears
-      // escapedFromLock, so a prior scroll-up leaves the bottom lock half-engaged:
-      // the resize-driven re-pin that follows late/streamed content is gated on
-      // isAtBottom, which a stale escapedFromLock keeps flipping back to false.
-      // Clearing the escape on an explicit go-to-bottom intent lets the pin
-      // survive until the round-tripped/streamed content actually arrives.
-      state.escapedFromLock = false;
-      // initial/resize options do not apply to this explicit call: without
-      // animation it springs through history. Late code-block shrinkage can
-      // then look like upward user scrolling and cancel the initial bottom lock.
-      scrollToBottom({ animation: 'instant' });
-    }, [state, scrollToBottom]);
+    const handleScrollToBottom = useCallback(
+      () => jumpToBottom(state, scrollToBottom),
+      [state, scrollToBottom]
+    );
 
     // Scroll to top. While content is still streaming/growing, the library's
     // persistent observer can re-pin to the bottom before our scrollTop write
@@ -262,7 +276,12 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         reactiveOptions: { taskHydration: 'lean' },
       }
     );
+    // Never capture the reactive state in a closure here. V8 keeps one context
+    // per render for all its closures, so the stable callbacks below would pin
+    // that snapshot, including turn detail the session handle has released.
     const currentReactiveState = reactiveState?.sessionId === sessionId ? reactiveState : null;
+    const reactiveTasks = currentReactiveState?.tasks;
+    const hasOlderTasks = !!currentReactiveState?.hasOlderTasks;
 
     // Queued tasks belong to the queue drawer, not the conversation. They
     // haven't run yet — there's no message_range, no user-message row, no
@@ -274,8 +293,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // every streaming chunk produced a fresh array → every downstream useMemo
     // depending on `tasks` would invalidate and rebuild.
     const tasks = useMemo(
-      () => (currentReactiveState?.tasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
-      [currentReactiveState?.tasks]
+      () => (reactiveTasks || []).filter((t) => t.status !== TaskStatus.QUEUED),
+      [reactiveTasks]
     );
 
     const allStreamingMessages =
@@ -295,6 +314,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // Realtime events also advance lastSyncedAt before that commit. Only loading
     // tracks initial readiness; ordinary reconnects leave it false.
     const initialHydrationPending = !!currentReactiveState?.loading;
+    const hasContent = tasks.length > 0 && !initialHydrationPending;
+    const loadedTurns = useMemo(() => new Set<string>(tasks.map((task) => task.task_id)), [tasks]);
     const latestTaskId = !initialHydrationPending ? tasks.at(-1)?.task_id : undefined;
     const liveIds = tasks
       .filter((task) => isTaskExecuting(task) || streamingMessagesByTask.has(task.task_id))
@@ -302,9 +323,18 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     const newlyProtected = [...liveIds, ...(latestTaskId ? [latestTaskId] : [])].filter(
       (id) => !protectedTurns.has(id)
     );
+    // Reading state lives as long as its turn is loaded: a trimmed turn takes
+    // it along and pages back in as plain history.
+    const keptProtected = [...protectedTurns].filter((id) => !hasContent || loadedTurns.has(id));
     // Render-time state adjustment prevents a full-text flash/collapse. Protection
-    // is monotonic for this mount, including messages arriving late in a turn.
-    if (newlyProtected.length) setProtectedTurns(new Set([...protectedTurns, ...newlyProtected]));
+    // is monotonic while the turn stays loaded, including messages arriving late in a turn.
+    if (newlyProtected.length || keptProtected.length < protectedTurns.size) {
+      setProtectedTurns(new Set([...keptProtected, ...newlyProtected]));
+    }
+    const keptTextChoices = [...textChoices].filter(
+      ([key]) => !hasContent || loadedTurns.has(historyTextKeyTurn(key))
+    );
+    if (keptTextChoices.length < textChoices.size) setTextChoices(new Map(keptTextChoices));
 
     // Land at the bottom on panel open / session switch — but only once real
     // content is mounted. On a cold open ConversationView early-returns <Spin/>
@@ -312,7 +342,6 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
     // that never re-runs; gating on tasks.length>0 fires it when the container
     // mounts. handleScrollToBottom also clears the escape so the library's
     // persistent observer reliably follows lazy/streamed growth from there.
-    const hasContent = tasks.length > 0 && !initialHydrationPending;
     useEffect(() => {
       if (isActive && sessionId && hasContent) {
         handleScrollToBottom();
@@ -331,6 +360,20 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
         return reactiveSession.loadTaskMessages(taskId).then(() => undefined);
       },
       [reactiveSession]
+    );
+    const handleRetainTaskDetails = useCallback(
+      (taskId: string) => reactiveSession?.retainTaskDetails(taskId),
+      [reactiveSession]
+    );
+    // Focus or a selection inside a turn keeps it from being evicted.
+    const turnsRoot = useRef<HTMLDivElement | null>(null);
+    useRetainEngagedTurns(turnsRoot, handleRetainTaskDetails);
+    const setTurnsViewport = useCallback(
+      (element: HTMLDivElement | null) => {
+        turnsRoot.current = element;
+        setScrollViewport(element);
+      },
+      [setScrollViewport]
     );
 
     const [loadingOlder, setLoadingOlder] = useState(false);
@@ -353,13 +396,11 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       };
     }, [reactiveSession]);
     const loadOlder = useCallback(async () => {
-      if (!reactiveSession || olderInflight.current || !currentReactiveState?.hasOlderTasks) return;
+      if (!reactiveSession || olderInflight.current || !hasOlderTasks) return;
       const viewport = scrollRef.current;
       if (!viewport) return;
       stopScroll();
-      const anchor = Array.from(viewport.querySelectorAll<HTMLElement>('[data-task-block]')).find(
-        (element) => element.getBoundingClientRect().bottom >= viewport.getBoundingClientRect().top
-      );
+      const anchor = firstVisibleTurn(viewport);
       if (anchor)
         olderAnchor.current = {
           element: anchor,
@@ -379,7 +420,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           setLoadingOlder(false);
         }
       }
-    }, [reactiveSession, currentReactiveState?.hasOlderTasks, scrollRef, stopScroll, sessionId]);
+    }, [reactiveSession, hasOlderTasks, scrollRef, stopScroll, sessionId]);
     useLayoutEffect(() => {
       const anchor = olderAnchor.current;
       if (!anchor || loadingOlder || !scrollRef.current) return;
@@ -389,6 +430,77 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       }
       olderAnchor.current = null;
     }, [loadingOlder, scrollRef, sessionId]);
+
+    // A reader parked at the latest turns keeps a bounded transcript: beyond
+    // LEAN_TRANSCRIPT_TASK_WINDOW turns the handle drops the oldest ones above
+    // the first visible turn, and they return through Load older history. Never
+    // while the reader is scrolled up or paging. In-session search only walks
+    // mounted turns, so a trimmed turn is found again once paged back in, like
+    // any not-yet-loaded history.
+    const trimAnchor = useRef<{ element: HTMLElement; top: number; tasks: unknown } | null>(null);
+    // Declared before the trim so it sees the trim's own commit, not the one that requested it.
+    useLayoutEffect(() => {
+      const anchor = trimAnchor.current;
+      const viewport = scrollRef.current;
+      if (!anchor || anchor.tasks === reactiveTasks || !viewport) return;
+      trimAnchor.current = null;
+      // The browser may already have moved scrollTop (scroll anchoring or
+      // clamping). With a turn appended in the same frame the content height
+      // can net out, so no resize guards that scroll event. Share the hook's
+      // resize guard, as the viewport observer does, or it reads as the reader
+      // scrolling up and releases the bottom lock.
+      const shift = anchor.element.isConnected
+        ? anchor.element.getBoundingClientRect().top - anchor.top
+        : 0;
+      const guard = shift || -1;
+      state.resizeDifference = guard;
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          if (state.resizeDifference === guard) state.resizeDifference = 0;
+        }, 1);
+      });
+      if (shift) state.scrollTop = viewport.scrollTop + shift;
+      // Removal can outweigh a turn appended in the same frame; a negative resize
+      // does not re-pin, so follow the lock explicitly.
+      if (state.isAtBottom) void scrollToBottom({ animation: 'instant' });
+    });
+    // Releasing the protection that held the window open (a pin, a resolved
+    // request, a settled turn) moves the first protected turn: trim again then,
+    // without waiting for another turn to arrive.
+    const firstProtectedTurn = currentReactiveState?.firstProtectedTaskId;
+    // biome-ignore lint/correctness/useExhaustiveDependencies: firstProtectedTurn and escapedFromLock only re-run the trim (protection released, a manual return to the bottom).
+    useLayoutEffect(() => {
+      const viewport = scrollRef.current;
+      if (
+        !reactiveSession ||
+        !viewport ||
+        loadingOlder ||
+        tasks.length <= LEAN_TRANSCRIPT_TASK_WINDOW ||
+        // The rendered flags re-run this when the reader returns to the bottom;
+        // the hook's live state decides whether the lock is engaged right now.
+        !isAtBottom ||
+        !isBottomLockEngaged(state)
+      )
+        return;
+      const anchor = firstVisibleTurn(viewport);
+      if (!anchor) return;
+      trimAnchor.current = {
+        element: anchor,
+        top: anchor.getBoundingClientRect().top,
+        tasks: reactiveTasks,
+      };
+      if (!reactiveSession.trimOlderTasks(anchor.dataset.taskBlock)) trimAnchor.current = null;
+    }, [
+      reactiveSession,
+      reactiveTasks,
+      firstProtectedTurn,
+      tasks.length,
+      isAtBottom,
+      escapedFromLock,
+      loadingOlder,
+      scrollRef,
+      state,
+    ]);
 
     // Streaming auto-scroll, manual scroll-away detection, and lazy-content
     // re-pinning are all handled by use-stick-to-bottom's persistent
@@ -522,9 +634,44 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
       );
     };
 
+    // A loop rather than a render-scoped .map() callback, for the reason above.
+    const taskBlocks: React.ReactNode[] = [];
+    for (const [taskIndex, task] of tasks.entries()) {
+      // Only the latest turn offers recovery, so older memoized turns ignore promptability changes.
+      const isLatestTask = taskIndex === tasks.length - 1;
+      taskBlocks.push(
+        <TaskBlock
+          key={task.task_id}
+          task={task}
+          latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
+          agentic_tool={agentic_tool}
+          sessionModel={sessionModel}
+          userById={userById}
+          currentUserId={currentUserId}
+          sessionId={sessionId}
+          onPermissionDecision={onPermissionDecision}
+          branchName={branchName}
+          scheduledFromBranch={scheduledFromBranch}
+          scheduledRunAt={scheduledRunAt}
+          streamingMessages={streamingMessagesByTask.get(task.task_id)}
+          taskMessages={currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES}
+          taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
+          onLoadTaskMessages={handleLoadTaskMessages}
+          onRetainTaskDetails={handleRetainTaskDetails}
+          teammateEmoji={teammateEmoji}
+          isLatestTask={isLatestTask}
+          canStartTurn={canStartTurn && isLatestTask}
+          client={client}
+          onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+          compact={compact}
+          defaultTextExpanded={protectedTurns.has(task.task_id)}
+        />
+      );
+    }
+
     return (
       <div
-        ref={setScrollViewport}
+        ref={setTurnsViewport}
         data-testid="conversation-scroll-container"
         onWheel={(event) => {
           // At the top (including an underfilled page), upward intent cannot
@@ -541,6 +688,8 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
           overflowY: 'auto',
           padding: '12px 0',
           minHeight: 0,
+          // Contain absolute descendants so they cannot grow an outer scroller.
+          position: 'relative',
         }}
       >
         <HistoryTextChoices.Provider value={textChoiceContext}>
@@ -555,34 +704,7 @@ const ConversationViewInner = React.memo<ConversationViewProps>(
               </Button>
             )}
             {/* Task-organized conversation */}
-            {tasks.map((task, taskIndex) => (
-              <TaskBlock
-                key={task.task_id}
-                task={task}
-                latestActivity={currentReactiveState?.toolsByTask.get(task.task_id)?.at(-1)}
-                agentic_tool={agentic_tool}
-                sessionModel={sessionModel}
-                userById={userById}
-                currentUserId={currentUserId}
-                sessionId={sessionId}
-                onPermissionDecision={onPermissionDecision}
-                branchName={branchName}
-                scheduledFromBranch={scheduledFromBranch}
-                scheduledRunAt={scheduledRunAt}
-                streamingMessages={streamingMessagesByTask.get(task.task_id)}
-                taskMessages={
-                  currentReactiveState?.messagesByTask.get(task.task_id) || EMPTY_MESSAGES
-                }
-                taskMessagesLoaded={!!currentReactiveState?.loadedTaskIds.has(task.task_id)}
-                onLoadTaskMessages={handleLoadTaskMessages}
-                teammateEmoji={teammateEmoji}
-                isLatestTask={taskIndex === tasks.length - 1}
-                client={client}
-                onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                compact={compact}
-                defaultTextExpanded={protectedTurns.has(task.task_id)}
-              />
-            ))}
+            {taskBlocks}
           </div>
         </HistoryTextChoices.Provider>
       </div>

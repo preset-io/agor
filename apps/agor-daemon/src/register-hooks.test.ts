@@ -40,6 +40,7 @@ import {
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
   classifyPrimaryTeammateAuthorizationInvalidation,
   classifyRealtimeAuthorizationInvalidation,
+  constrainedHaGateApplies,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -907,7 +908,9 @@ describe('registered tenant write-gate classification', () => {
       deployment: { mode: 'standalone' },
     });
 
-    const tenantHooks = registrations.find((hooks) => hooks.around?.all?.length);
+    // Tenant scoping is installed last (outermost); earlier registrations can
+    // also have around hooks, such as the avatar-sync write-admission wrapper.
+    const tenantHooks = registrations.findLast((hooks) => hooks.around?.all?.length);
     expect(tenantHooks).toBeDefined();
     const context = {
       path: 'users',
@@ -1354,11 +1357,6 @@ describe('isPromptFlowPatchOnly', () => {
       }
     );
 
-    it('accepts the prompt-route task-append shape', () => {
-      // register-routes.ts: /sessions/:id/prompt appends task_id to session.tasks
-      expect(isPromptFlowPatchOnly({ tasks: ['task-1', 'task-2'] })).toBe(true);
-    });
-
     it('accepts the stop-route idle shape', () => {
       // register-routes.ts: /sessions/:id/stop sets status + ready_for_prompt
       // (ready_for_prompt: true so the post-patch hook drains any QUEUED tasks)
@@ -1377,9 +1375,14 @@ describe('isPromptFlowPatchOnly', () => {
     });
 
     it('rejects a patch that mixes whitelist + metadata field', () => {
-      // Prevents partial-trust escalation: if `tasks` is allowed at session-tier,
-      // a caller must NOT be able to piggyback `name` (metadata) onto the same patch.
-      expect(isPromptFlowPatchOnly({ tasks: ['t'], name: 'evil' })).toBe(false);
+      // Prevents partial-trust escalation: a session-tier caller must NOT be
+      // able to piggyback `name` (metadata) onto a prompt-flow patch.
+      expect(isPromptFlowPatchOnly({ status: 'idle', name: 'evil' })).toBe(false);
+    });
+
+    it('rejects Session.tasks, which only dispatch writes', () => {
+      expect(PROMPT_FLOW_PATCH_FIELDS).not.toContain('tasks');
+      expect(isPromptFlowPatchOnly({ tasks: ['task-1', 'task-2'] })).toBe(false);
     });
 
     it.each([
@@ -1755,4 +1758,24 @@ describe('file service RBAC database preload', () => {
       expect(read).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('constrained-HA gate for hosted OpenCode', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch {task_id}',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+    },
+    agentic_tools: { opencode_hosted_native_state: 'checkpointed' as const },
+  };
+
+  it('lets any replica serve hosted OpenCode settings but keeps every other gate', () => {
+    expect(constrainedHaGateApplies('openCodeAuth', hosted)).toBe(false);
+    expect(constrainedHaGateApplies('openCodeAuth', {})).toBe(true);
+    for (const [, feature] of CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES) {
+      if (feature !== 'openCodeAuth') expect(constrainedHaGateApplies(feature, hosted)).toBe(true);
+    }
+  });
 });

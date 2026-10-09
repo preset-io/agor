@@ -1,0 +1,28 @@
+# Branch-following docs only: no daemon, database, SDKs or agent runtimes.
+# Build from the repository root with the committed workspace lockfile.
+FROM node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates git rsync util-linux gosu tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && corepack enable && corepack prepare pnpm@11.17.0 --activate \
+    && useradd --create-home --uid 1001 agor \
+    && mkdir -p /app /usr/local/lib/agor /home/agor/.agor \
+    && chown agor:agor /app /home/agor/.agor
+WORKDIR /app
+COPY --chown=agor:agor package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY --chown=agor:agor patches/ ./patches/
+COPY --chown=agor:agor apps/agor-docs/package.json ./apps/agor-docs/
+COPY --chown=agor:agor packages/git/package.json ./packages/git/
+USER agor
+RUN CI=true HUSKY=0 pnpm --filter @agor/docs --filter @agor/git install --frozen-lockfile
+USER root
+COPY docker/runtime-checkout.mjs docker/runtime-watch.mjs docker/runtime-docs.mjs /usr/local/lib/agor/
+COPY docker/docker-entrypoint-docs.sh /usr/local/bin/
+RUN chmod 755 /usr/local/bin/docker-entrypoint-docs.sh \
+    && node /usr/local/lib/agor/runtime-docs.mjs fingerprint > /opt/agor-docs-fingerprint
+ENV HOME=/home/agor PORT=3030 NEXT_TELEMETRY_DISABLED=1
+EXPOSE 3030
+# Root only fixes the Railway volume mount owner; entrypoint drops to agor
+# before fetching any branch code or running Next.
+ENTRYPOINT ["tini", "--", "/usr/local/bin/docker-entrypoint-docs.sh"]
+CMD ["--watch"]

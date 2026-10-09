@@ -15,8 +15,6 @@
  * re-reads the persisted grant and decides; a rejection here means the grant
  * is not there, and the widget stays pending so Slack (or the canvas) can
  * offer Connect again.
- *
- * See `docs/internal/slack-mcp-oauth-connect-2026-09-16.md` §7.
  */
 
 import type { AgorClient } from '@agor-live/client';

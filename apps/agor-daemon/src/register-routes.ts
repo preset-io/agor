@@ -1,5 +1,7 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
+import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
+import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -17,6 +19,7 @@ import {
   ENV_VAR_CONSTRAINTS,
   environmentCommandCapabilities,
   isEnvVarAllowed,
+  permanentBranchDeletionCapability,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
@@ -50,6 +53,7 @@ import {
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
+  TenantDisplayRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   UploadRepository,
@@ -163,6 +167,7 @@ import type {
 } from './declarations.js';
 import { registerExecutorResponseRoutes } from './executor-response-channel.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
+import { authenticatedHealthInstance, publicHealthInstance } from './health/instance.js';
 import {
   authenticatedHealthDb,
   healthMigrations,
@@ -223,7 +228,7 @@ import {
   markLocalAuthenticationLookup,
 } from './services/users.js';
 import { resolveWebTerminalCapability } from './terminal-capability.js';
-import { forceFailUnverifiedTask } from './termination-coordinator.js';
+import { beginExecutorTermination, forceFailUnverifiedTask } from './termination-coordinator.js';
 import { createFeathersTracingHook } from './tracing/feathers.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
@@ -769,13 +774,18 @@ export function createRegisteredMCPCatalogConnectService(
       const userId = params.user?.user_id as UserID | undefined;
       if (!userId) return false;
       const read = async () => {
+        // Verify against the full saved row: the candidate projection redacts
+        // configured client secrets, which the grant binding covers.
+        const server = await new MCPServerRepository(db).findById(candidate.server.mcp_server_id);
+        if (!server) return false;
+        // Same subject rule as execution: a Shared server's grant is the
+        // shared one; otherwise only the caller's own per-user grant.
         const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
-          userId,
-          candidate.server.mcp_server_id
+          server.auth?.oauth_mode === 'shared' ? null : userId,
+          server.mcp_server_id
         );
         return Boolean(
-          grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+          grant?.has_access_token && (await isMCPOAuthGrantAuthorizedForServer(db, server, grant))
         );
       };
       return runInTenantDatabaseScope(params, read);
@@ -871,6 +881,30 @@ export function createUploadAuthMiddleware(input: {
       recordUploadAuthFailure(res, classifyUploadAuthFailure(error));
       res.status(401).json({ error: 'Authentication required' });
     }
+  };
+}
+
+/** Called only after the Stop route's session lifecycle authorization and in trusted tenant scope. */
+export async function resolveCleanupRetryTarget(input: {
+  sessionId: SessionID;
+  body: Record<string, unknown>;
+  findTask: (taskId: string) => Promise<Task>;
+}): Promise<{ taskId: TaskID; requestedAt: string; revision: string }> {
+  const body = input.body;
+  if (
+    !isCanonicalFullUuid(body.expected_task_id) ||
+    typeof body.termination_requested_at !== 'string' ||
+    typeof body.recovery_revision !== 'string'
+  ) {
+    throw new BadRequest('An exact task and recovery request are required.');
+  }
+  const task = await input.findTask(body.expected_task_id as string);
+  if (task.session_id !== input.sessionId)
+    throw new Forbidden('This task belongs to another session.');
+  return {
+    taskId: task.task_id,
+    requestedAt: body.termination_requested_at,
+    revision: body.recovery_revision,
   };
 }
 
@@ -1807,8 +1841,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *     before the executor process is forked. Without this, any crash
    *     during executor startup loses the prompt from the chat transcript
    *     even though `tasks.full_prompt` still has the text. Gated by
-   *     `config.execution.daemon_writes_user_message` (kill switch — see
-   *     §5.E of `docs/never-lose-prompt-design.md`).
+   *     `config.execution.daemon_writes_user_message` (kill switch).
    *   - `task.metadata.is_agor_callback` / `task.metadata.source` are
    *     re-stamped onto the new message so the UI's callback styling
    *     (`MessageBlock.tsx`) survives the queue → run transition.
@@ -3279,6 +3312,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 app,
                 taskId: target.task.task_id,
                 terminationRequestedAt: target.terminationRequestedAt,
+                recoveryRevision:
+                  typeof body.recovery_revision === 'string' ? body.recovery_revision : undefined,
                 confirmation: target.confirmation,
                 params,
               })
@@ -3300,6 +3335,52 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           });
           triggerPreservedQueue();
           return result;
+        }
+
+        if (body.retry_cleanup === true) {
+          const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
+          const { target, retry } = await runInFreshTerminationTenantWriteDatabase(async () => {
+            const target = await resolveCleanupRetryTarget({
+              sessionId: session.session_id,
+              body,
+              findTask: (taskId) => app.service('tasks').get(taskId, params),
+            });
+            const retry = await tasksService.retryTermination(
+              target.taskId,
+              target.requestedAt,
+              target.revision,
+              { ...params, provider: undefined }
+            );
+            return { target, retry };
+          });
+          const taskId = target.taskId;
+          if (!retry?.termination_request)
+            return {
+              success: false,
+              outcome: 'condition_changed',
+              reason: 'Recovery has already changed. Check the latest session status.',
+              stoppedTaskId: taskId,
+            };
+          // The retry marker commits before this begins; realtime owns progress, not a long UI request.
+          await beginExecutorTermination({
+            app,
+            taskId,
+            cause: retry.termination_request.cause,
+            errorMessage:
+              retry.termination_request.error_message ?? 'The agent stopped responding.',
+            params,
+            remoteConnectDeadlineExpired: true,
+            allowUnownedLocalContainment: true,
+            runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
+          });
+          return {
+            success: false,
+            outcome: 'pending',
+            status: SessionStatus.STOPPING,
+            pendingCode: 'coordination_in_progress',
+            reason: 'Retrying cleanup.',
+            stoppedTaskId: taskId,
+          };
         }
 
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
@@ -3660,8 +3741,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // ============================================================================
   // Widget submission / dismissal endpoints
   //
-  // See `docs/internal/in-conversation-widgets-design-2026-05-19.md`. The
-  // resolver handles auth, idempotency, registry dispatch, message patching,
+  // The resolver handles auth, idempotency, registry dispatch, message patching,
   // auto-resume task queueing, and the `widget:resolved` broadcast.
   // ============================================================================
 
@@ -3740,8 +3820,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // The OAuth lane. The browser has finished the provider flow and is asking
   // the daemon to check; it supplies no server id and no payload worth
   // trusting, so everything that decides the outcome is read server-side from
-  // the pinned widget params and the persisted grant. See
-  // `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+  // the pinned widget params and the persisted grant.
   registerLongAuthenticatedRoute(
     app,
     '/widgets/:id/oauth-resolve',
@@ -3897,7 +3976,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
            *  passes the viewport center so the new card lands where the
            *  user invoked the dialog. */
           position?: { x: number; y: number };
-          // Branch storage model — see context/explorations/clone-redesign.md.
+          // Branch storage model.
           storage_mode?: 'worktree' | 'clone';
           clone_depth?: number;
         },
@@ -4334,6 +4413,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     requireAuth
   );
+
+  registerAuthenticatedRoute(
+    app,
+    BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+    new BranchWorkspaceNotificationService(db),
+    { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
+    requireAuth
+  );
+  app.service(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE).hooks({
+    after: {
+      create: [
+        async (context: HookContext) => {
+          emitServiceEvent(app, {
+            path: 'branches',
+            event: 'patched',
+            data: context.result,
+            params: context.params,
+            id: (context.result as import('@agor/core/types').Branch).branch_id,
+          });
+          return context;
+        },
+      ],
+    },
+  });
 
   app.use('/branches/:id/clean', {
     async create(data: unknown, params: RouteParams) {
@@ -6305,8 +6408,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
    *    leaves the card ON (`isMCPSlackConnectCardEnabled`), deliberately, and
    *    this route never writes one.
    *
-   * The runbook — including what happens to work stranded while it is off — is
-   * §7.1.4 of `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+   * The operator runbook — including what happens to work stranded while it
+   * is off — is in the MCP Administration guide (`mcp-administration.mdx`).
    */
   registerAuthenticatedRoute(
     app,
@@ -6649,16 +6752,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           identity: identityAuthority,
           passwordPolicy,
         },
-        instance: {
-          label: config.daemon?.instanceLabel,
-          description: config.daemon?.instanceDescription,
-        },
+        instance: publicHealthInstance(config),
         realtime: realtimeRuntime
           ? { required: true, ready: realtimeRuntime.isReady() }
           : { required: false, ready: true },
         features: {
           environmentDisclaimerMarkdown: config.environment_disclaimer_markdown,
           environmentCommands: environmentCommandCapabilities(config),
+          permanentBranchDeletion: permanentBranchDeletionCapability(config),
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this
@@ -6721,6 +6822,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           getMCPEgressGatewayMode(tenantDb)
         );
         const mcpEgressRuntime = mcpEgressGateway.status(healthTenantId);
+        const instance = await authenticatedHealthInstance(config, () =>
+          runWithTenantDatabaseScope(db, healthTenantId, (tenantDb) =>
+            new TenantDisplayRepository(tenantDb).find()
+          )
+        );
 
         return {
           ...publicResponse,
@@ -6728,6 +6834,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // (never in the public payload).
           db: authenticatedHealthDb(dbProbe),
           migrations: healthMigrations(migrations),
+          instance,
           database: databaseInfo,
           auth: {
             ...publicResponse.auth,

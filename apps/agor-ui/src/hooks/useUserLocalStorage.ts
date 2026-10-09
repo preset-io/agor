@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { readLocalStorageJson, writeLocalStorageJson } from './localStorageJson';
 
+/** The per-user localStorage key; signed-out renders share the `anonymous` one. */
+export const userStorageKey = (userId: string | null | undefined, key: string) =>
+  `agor:user:${userId || 'anonymous'}:${key}`;
+
 /**
  * LocalStorage hook for preferences that should be isolated per authenticated
  * user. Values are JSON-encoded just like useLocalStorage, but reads/writes are
@@ -12,7 +16,7 @@ export function useUserLocalStorage<T>(
   key: string,
   initialValue: T
 ): [T, (value: T | ((val: T) => T)) => void] {
-  const storageKey = useMemo(() => (userId ? `agor:user:${userId}:${key}` : null), [key, userId]);
+  const storageKey = useMemo(() => (userId ? userStorageKey(userId, key) : null), [key, userId]);
 
   const readStoredValue = useCallback(
     (): T => (storageKey ? readLocalStorageJson(storageKey, initialValue) : initialValue),

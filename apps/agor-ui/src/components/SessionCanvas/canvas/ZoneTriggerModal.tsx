@@ -23,8 +23,24 @@ import type {
 // shape.
 import { buildZoneTriggerContext, isAgenticToolName } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
-import { Alert, Collapse, Form, Input, Modal, Radio, Select, Space, Spin, Typography } from 'antd';
+import {
+  Alert,
+  Button,
+  Collapse,
+  Form,
+  Input,
+  Modal,
+  Radio,
+  Select,
+  Space,
+  Spin,
+  Typography,
+} from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  fullSessionDetailsErrorMessage,
+  useFullSessionDetails,
+} from '../../../hooks/useFullSessionDetails';
 import type { AgenticToolOption } from '../../../types';
 import { resolveSessionMcpServerIds } from '../../../utils/resolveQuickStartMcpServerIds';
 import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
@@ -226,11 +242,30 @@ const ZoneTriggerModalAction = ({
     }
   }, [mode, selectedSession, form]);
 
+  // Store rows may be lean (withheld custom_context keys). A reused session's
+  // template renders only against its full record; if that cannot load, show
+  // an error + Retry and keep execution disabled rather than render from the
+  // partial row.
+  const needsSessionDetails = Boolean(initial.client) && mode === 'reuse_existing';
+  const sessionDetails = useFullSessionDetails(
+    initial.client,
+    selectedSession,
+    open && needsSessionDetails
+  );
+  const fullSelectedSession =
+    sessionDetails.status === 'ready' && sessionDetails.session.session_id === selectedSessionId
+      ? sessionDetails.session
+      : undefined;
+  const sessionDetailsFailed = needsSessionDetails && sessionDetails.status === 'error';
+  const sessionDetailsPending = needsSessionDetails && !fullSelectedSession;
+
   const templateTarget = mode === 'reuse_existing' ? `session:${selectedSessionId}` : 'new';
   const templateStateMatchesTarget = templateState.target === templateTarget;
   const editableTemplate = templateStateMatchesTarget ? templateState.value : '';
   const isRendering = Boolean(
-    initial.client && (!templateStateMatchesTarget || templateState.isRendering)
+    initial.client &&
+      !sessionDetailsFailed &&
+      (!templateStateMatchesTarget || templateState.isRendering)
   );
 
   // Render once for the initial target, and once for each deliberate target
@@ -250,25 +285,27 @@ const ZoneTriggerModalAction = ({
       return;
     }
 
-    const selectedSessionForCtx =
-      mode === 'reuse_existing' && selectedSessionId
-        ? branchSessions.find((s) => s.session_id === selectedSessionId)
-        : undefined;
-    const context = buildZoneTriggerContext({
-      branch: initial.branch,
-      board: {
-        name: initial.boardName,
-        description: initial.boardDescription,
-        custom_context: initial.boardCustomContext,
-      },
-      zone: { label: initial.zoneName },
-      session: selectedSessionForCtx
-        ? {
-            description: selectedSessionForCtx.description,
-            custom_context: selectedSessionForCtx.custom_context,
-          }
-        : undefined,
-    });
+    // A reuse target waits for the full session record (see above).
+    if (mode === 'reuse_existing' && selectedSessionId && !fullSelectedSession) return;
+    const client = initial.client;
+    const renderForSession = (session: Session | undefined) =>
+      renderTemplate(
+        client,
+        initial.trigger.template,
+        buildZoneTriggerContext({
+          branch: initial.branch,
+          board: {
+            name: initial.boardName,
+            description: initial.boardDescription,
+            custom_context: initial.boardCustomContext,
+          },
+          zone: { label: initial.zoneName },
+          session: session
+            ? { description: session.description, custom_context: session.custom_context }
+            : undefined,
+        }),
+        'raw'
+      );
 
     let request = templateRenderRequestRef.current;
     if (!request || request.target !== templateTarget) {
@@ -276,7 +313,7 @@ const ZoneTriggerModalAction = ({
       request = {
         target: templateTarget,
         editRevision: templateEditRevisionRef.current,
-        promise: renderTemplate(initial.client, initial.trigger.template, context, 'raw'),
+        promise: renderForSession(fullSelectedSession),
       };
       templateRenderRequestRef.current = request;
       setTemplateState({ target: templateTarget, value: '', isRendering: true });
@@ -296,9 +333,10 @@ const ZoneTriggerModalAction = ({
     return () => {
       active = false;
     };
-  }, [initial, mode, selectedSessionId, branchSessions, templateTarget]);
+  }, [initial, mode, selectedSessionId, fullSelectedSession, templateTarget]);
 
   const handleExecute = async () => {
+    if (sessionDetailsPending) return;
     if (mode === 'create_new') {
       if (!selectedAgent) return;
       // Use component state which is guaranteed to have the correct values
@@ -351,7 +389,9 @@ const ZoneTriggerModalAction = ({
       onCancel={onCancel}
       onOk={handleExecute}
       okText="Execute Trigger"
-      okButtonProps={{ disabled: isRendering || requiresSupportedToolSelection }}
+      okButtonProps={{
+        disabled: isRendering || requiresSupportedToolSelection || sessionDetailsPending,
+      }}
       cancelText="Cancel"
       width={700}
     >
@@ -516,6 +556,20 @@ const ZoneTriggerModalAction = ({
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
             Prompt (editable)
           </Typography.Text>
+          {sessionDetails.status === 'error' && sessionDetailsFailed && (
+            <Alert
+              type="error"
+              showIcon
+              style={{ marginBottom: 8 }}
+              title={fullSessionDetailsErrorMessage(sessionDetails.error)}
+              description="The template is not rendered from partial session data. Retry to render it and enable execution."
+              action={
+                <Button size="small" onClick={sessionDetails.retry}>
+                  Retry
+                </Button>
+              }
+            />
+          )}
           <Spin spinning={isRendering} delay={200} description="Rendering template…">
             <Input.TextArea
               value={editableTemplate}

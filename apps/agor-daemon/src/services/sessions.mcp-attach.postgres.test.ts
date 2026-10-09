@@ -19,7 +19,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import { NotFound } from '@agor/core/feathers';
 import { resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
-import type { TenantID } from '@agor/core/types';
+import type { MCPServerID, TenantID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionsService } from './sessions.js';
@@ -77,6 +77,16 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     it('publishes one tenant-scoped event after commit and rejects a cross-tenant server atomically', async () => {
+      // The lock-order regression requires IDs sharing their timestamp prefix.
+      // Generate both under one instant, then restore the clock before any I/O;
+      // creating them on opposite sides of a UUID timestamp boundary is flaky.
+      let orderedIds: MCPServerID[];
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now());
+      try {
+        orderedIds = [generateId(), generateId()].sort();
+      } finally {
+        clock.mockRestore();
+      }
       const tenantA = `session-mcp-a-${generateId()}` as TenantID;
       const tenantB = `session-mcp-b-${generateId()}` as TenantID;
       const db = createTenantScopedDatabaseProxy(rawDb, {
@@ -105,6 +115,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           created_by: user.user_id,
         });
         const server = await new MCPServerRepository(scoped).create({
+          mcp_server_id: orderedIds[0],
           name: `tenant-a-${generateId()}`,
           transport: 'stdio',
           command: 'node',
@@ -254,8 +265,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // first creator after its first row lock, then prove the second is waiting
       // in PostgreSQL before it can attach anything. Record every acquisition,
       // including alias deduplication; mere absence of a deadlock is not proof.
-      const secondServer = await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+      await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
         new MCPServerRepository(scoped).create({
+          mcp_server_id: orderedIds[1],
           name: `ordered-${generateId()}`,
           transport: 'stdio',
           command: 'node',
@@ -264,7 +276,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           enabled: true,
         })
       );
-      const orderedIds = [owner.server.mcp_server_id, secondServer.mcp_server_id].sort();
       const prefix = (id: string) => id.replaceAll('-', '').slice(0, 31);
       const selections = [
         [orderedIds[0], prefix(orderedIds[1]), orderedIds[1]],

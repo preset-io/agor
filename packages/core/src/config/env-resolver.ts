@@ -18,6 +18,7 @@ import { normalizeStoredEnvMap, type StoredEnvVar } from './env-vars';
 export {
   ALLOWED_ENV_PREFIXES,
   ALLOWED_ENV_VARS,
+  EXECUTOR_SCRATCH_ROOT_ENV,
   TRUSTED_LAUNCHER_ENV_PREFIX,
 } from './env-inheritance';
 

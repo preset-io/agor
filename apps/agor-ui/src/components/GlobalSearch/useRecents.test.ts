@@ -7,9 +7,12 @@
  * filter here; sessions did not.
  */
 
-import type { Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
-import { renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import type { AgorClient, Artifact, Board, Branch, MCPServer, Session } from '@agor-live/client';
+import { renderHook, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { resetHydrationRevisions } from '../../store/agorHydration';
+import { agorStore } from '../../store/agorStore';
+import { discardRealtimeNow, setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { useRecents } from './useRecents';
 
 const USER_ID = 'user-1';
@@ -68,5 +71,34 @@ describe('useRecents', () => {
     const { result } = renderRecents(sessions);
 
     expect(result.current.session.map((r) => (r.item as Session).session_id)).toEqual(['active']);
+  });
+});
+
+describe('useRecents parent-branch labels', () => {
+  it('reads the parent branches of the shown recents the store lacks', async () => {
+    discardRealtimeNow();
+    setRealtimeAuthorityScope('user-1:member:1');
+    agorStore.getState().setLoading(false);
+    const find = vi.fn(async () => [{ branch_id: 'branch-1', name: 'b', archived: false }]);
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    try {
+      renderHook(() =>
+        useRecents({
+          client,
+          currentUserId: USER_ID,
+          sessionById: new Map([['session-1', makeSession()]]),
+          branchById: new Map<string, Branch>(),
+          artifactById: new Map<string, Artifact>(),
+          boardById: new Map<string, Board>(),
+          mcpServerById: new Map<string, MCPServer>(),
+        })
+      );
+      await waitFor(() => expect(agorStore.getState().branchById.has('branch-1')).toBe(true));
+      expect(find.mock.calls[0][0]).toMatchObject({ query: { branch_id: { $in: ['branch-1'] } } });
+    } finally {
+      setRealtimeAuthorityScope(null);
+      agorStore.getState().reset();
+      resetHydrationRevisions();
+    }
   });
 });

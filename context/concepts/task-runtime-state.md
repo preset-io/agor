@@ -171,6 +171,17 @@ an explicit mapping-review point.
   launcher exit or delay may not prove that remote work was not created. A
   durable observation marker removes that ambiguous dispatch from subsequent
   deadline scans so it cannot hot-loop or starve other candidates.
+- With the daemon opt-in `AGOR_EXECUTOR_LAUNCH_REFUSED_EXIT=75`, a templated
+  launcher exit `75` means admission was refused and nothing was created. The
+  prompt `onExit` requests termination with cause `launch_refused` and verified
+  absence instead of `heartbeat_lost`. The coordinator skips the OpenCode
+  integration's unverified-termination reason only for that requested cause, so
+  the task settles `failed` with `termination: 'verified'` for every agent.
+- A refusal claims only while no executor is connected (no `dispatching`
+  status fence), so a Stop that arrived first keeps its `user_stop` request and
+  the refusal settles it `stopped` with verified absence. Only that verified
+  path persists `launch_refused`, so the reconciler resumes a stranded
+  `launch_refused` request after a daemon restart with the same absence proof.
 - Connected active tasks heartbeat every 10 seconds by default. A scoped
   executor continues heartbeat and pulse telemetry while `stopping` until its
   provider cleanup returns and it reports quiescence.
@@ -248,6 +259,7 @@ The termination coordinator is the single owner for executor-backed:
 - dispatch startup timeout;
 - lost heartbeat;
 - enforced SDK health failure;
+- executor-observed `SIGTERM`/`SIGINT` (`executor_interrupted`);
 - authorization revocation observed by the existing heartbeat.
 
 It first atomically claims `stopping` with a durable `termination_request`.
@@ -291,10 +303,47 @@ one final exhaustion event rather than every retry. Provider cleanup that is
 still running after 15 seconds emits one warning but is not falsely reported as
 quiescent.
 
+The termination request also records who asked when the winning cause carries
+it: `requested_by_user_id` and `requested_via` (`ui` for the app's socket,
+`api` for REST callers such as the CLI, `mcp` for an agent acting for that
+user, `agor` for internal stops). It is attribution only and never
+changes containment or settlement.
+
+Out-of-band `SIGTERM`/`SIGINT` is not user cancellation. The executor marks
+daemon-owned terminality before aborting its provider, then uses the exact
+task-token-scoped `reportExecutorInterruption` method to claim the existing
+containment workflow. Only after provider execution and stop hooks return does
+it report the winning request's quiescence. Promise settlement alone is not
+teardown evidence: provider close timeouts, close failures, and failed stop hooks
+mark cleanup unverified for that execution and suppress all quiescence reports,
+including error/reconnect recovery. Gemini disposal failures and Copilot stop
+rejections or returned cleanup errors are tracked at the adapter teardown boundary,
+not inferred from a successful cancellation request. Duplicate signals share one shutdown
+and a **10 second total deadline**, including daemon I/O. Deadline expiry exits
+without inventing quiescence; local process-group containment or remote substrate
+evidence is still required. The first signal determines exit 143/130, not OOM
+attribution. A concurrent user Stop retains its existing precedence; terminal
+completion remains immutable. Already persisted transcript output is retained,
+but final uploads/reporting are best effort, not guaranteed during an outage.
+
+`SIGKILL` and kernel/container OOM cannot be handled by the killed executor.
+Template-launcher exit is not a remote terminal-status channel: zero can mean
+detached submission, and a signal (`code === null` or shell-style exit >=128) is
+always ambiguous even when ordinary nonzero returns promise no dispatch. The
+optional cleanup command supplies a narrow, trusted containment assertion, not
+a general remote Job-status ingestion API. An external execution substrate must bind
+terminal evidence to tenant, Task and immutable launch/workload identity, prove
+no running/retry workload remains, and settle through the same coordination
+fences. Missing Jobs, network failures and accounting `lost` states alone are
+not that proof. Kubernetes reason `OOMKilled` (or equivalent authoritative
+evidence), not exit 137/signal 9, is required to attribute OOM. No dummy executor
+or generic hook is needed to deliver such evidence.
+
 Verified user Stop settles as `stopped`; verified health/startup/heartbeat
 containment settles as `failed`. If absence cannot be verified, the task stays
-`stopping`, the session stays non-promptable, and an authorized owner/admin must
-explicitly force-fail it by typing `STOP`. Force-fail changes durable status to
+`stopping` and the session stays non-promptable. Explicit Retry cleanup starts
+one more attempt. As a last resort an authorized owner/admin can reopen it by
+typing `STOP`. This force-release changes durable status to
 `failed`; it does not prove or guarantee process termination. A daemon restart
 can logically release orphaned work as `stopped`, but records that termination
 was not verified. This last release exists only in explicit `standalone`
@@ -344,8 +393,29 @@ second busy-state test.
 
 ## Diagnosing a runtime interruption
 
-The UI's "Task interrupted" notice covers every verified non-user,
-non-authorization termination. `heartbeat_lost` has two producers: a stale
+The turn outcome banner (`describeTurnOutcome`) classifies from structured
+fields first (`sdk_failure.termination`, `termination_request.cause` and its
+recorded requester, `executor_connected_at`, the turn's restart notice,
+message `error_kind`, `rate_limit` blocks), then from the failure texts shared
+in `@agor/core/types` (`turn-failure-messages.ts`); its Details disclosure
+shows the raw `error_message` and the stored `sdk_failure.reason` code. A
+restart notice names the restart only on a failed turn that lost its connection
+(or carries the restart-release text): startup attaches the notice to the latest
+turn of every orphaned session, including one that had already timed out. The
+banner names a stall only when the termination cause is `sdk_health_failure`,
+because the watchdog observes by default. Resume / Try again appear only on the latest
+FAILED or TIMED_OUT turn whose termination is neither `requested` nor
+`unverified` and that was not a user stop or an access change, and only while a new prompt would be
+dispatched rather than left queued (`canSessionStartTurn`): the queue is empty
+and the drainer's `sessionCanStartTask` holds, or the session is `failed`, which
+the prompt route repairs even after opening it cleared `ready_for_prompt`. An
+opened `timed_out` session gets no action, because nothing repairs it. Try again (replay the
+prompt) is offered only when the run never started and the viewer typed that
+non-empty prompt themselves (`created_by`, `metadata.source === 'agor'`, not a
+callback or system-authored prompt); otherwise a run that never started offers
+Resume, as does every other outcome, including an unconfirmed provider result.
+
+`heartbeat_lost` has two producers: a stale
 heartbeat found by the reconciler, and any local/authoritative executor
 process exit while its Task is active (including the SIGTERM a standalone
 daemon sends on graceful shutdown). Correlate by `task_id`:
@@ -396,7 +466,6 @@ Preserve these invariants:
 | Runtime discovery and recovery                         | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                     |
 | Termination claims and containment settlement          | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts` |
 | Startup orphan reconciliation                          | `apps/agor-daemon/src/startup.ts`                                                              |
-| Full HA kill-point audit                               | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                   |
 
 ## Why the architecture has this shape
 
@@ -419,3 +488,41 @@ the present boundaries:
   with durable quiescence reporting.
 - [#2057](https://github.com/preset-io/agor/pull/2057) aligned Claude
   background-task lifetime with query and watchdog lifetime.
+
+### Explicit remote cleanup and retry
+
+`termination-coordinator.ts` invokes `utils/executor-cleanup-command.ts` only for
+remote tasks without cooperative quiescence and with
+`execution.executor_cleanup_command_template` configured. Trusted tenant/task
+context goes on stdin, never into shell interpolation. Only synchronous exit 0
+asserts containment (including suppression of delayed launches/retries).
+
+`TaskRepository.beginCleanupAttempt` records one attempt under the existing
+coordination token before external effects. The marker survives cause changes,
+lease expiry and daemon restart: replacement coordinators settle an uncertain
+attempt as unverified instead of rerunning it. `retryTermination` is reachable
+only through the authorized Session Stop route's `retry_cleanup` variant; it
+compares task/request/recovery revision, clears the guard, rotates the revision,
+and preserves the original cause. A retry does not turn unexpected death into
+user cancellation. Normal Stop retains user-stop precedence.
+
+Unverified settlement remains nonpromptable with no automatic rediscovery;
+fresh scoped quiescence evidence can still resolve it. Unverified settlement
+atomically compares the executor acknowledgement observed before containment;
+a new acknowledgement arriving during a failed helper cannot be buried under
+a guard. The coordinator re-evaluates that evidence without repeating the helper.
+Duplicate acknowledgements cannot reopen a later guard that already considered
+that same evidence. Force-release is also
+fenced to the observed recovery revision. UI projects this as recovery in
+progress, Cleanup needs attention, or reopened without confirmed cleanup—not
+new branch lifecycle states. Failures use durable Task errors/realtime plus
+`executor.cleanup_failures`; the deployment's operator owns paging and any
+trusted external cleanup helper.
+
+The UI's recovery copy is owned by `TaskBlock/describeTurnOutcome.ts`; do not add
+a second recovery presentation classifier. Templated exit 75 is a launch refusal
+only with the explicit opt-in, while signal exits remain ambiguous. Hosted
+OpenCode's descriptor exemption requires cooperative quiescence, successful
+helper containment, or the explicit pre-launch refusal contract—not bare
+launcher absence. The operator guide documents sequential reconciliation
+latency and the pre-connect startup-warning-only exclusion.

@@ -6,6 +6,7 @@ vi.mock('./query-builder.js', () => ({
   setupQuery: vi.fn(),
 }));
 
+import { isExecutorCleanupUnverified } from '../../termination-state.js';
 import { ClaudePromptService } from './prompt-service.js';
 import { setupQuery } from './query-builder.js';
 
@@ -108,6 +109,43 @@ function service() {
 
 describe('ClaudePromptService background task query lifetime', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it.each(['closed', 'rejected', 'timed_out'] as const)(
+    'preserves explicit query cleanup evidence when teardown is %s',
+    async (outcome) => {
+      vi.useFakeTimers();
+      try {
+        const abortController = new AbortController();
+        const query = fakeQuery([]);
+        if (outcome === 'rejected') query.return.mockRejectedValue(new Error('close failed'));
+        if (outcome === 'timed_out') query.return.mockImplementation(() => new Promise(() => {}));
+        vi.mocked(setupQuery).mockResolvedValue({
+          query: query as never,
+          resolvedModel: 'claude-sonnet-4-6',
+          getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
+        });
+        const consume = async () => {
+          for await (const _event of service().promptSessionStreaming(
+            sessionId,
+            'prompt',
+            undefined,
+            undefined,
+            undefined,
+            abortController
+          )) {
+            /* Drain the real adapter including its finally block. */
+          }
+        };
+        const execution = consume();
+        await vi.advanceTimersByTimeAsync(ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS);
+        await execution;
+        expect(query.return).toHaveBeenCalledOnce();
+        expect(isExecutorCleanupUnverified(abortController)).toBe(outcome !== 'closed');
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it('treats success/is_error as terminal despite active background work', async () => {
     const query = fakeQuery([

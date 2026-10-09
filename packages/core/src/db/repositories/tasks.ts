@@ -23,6 +23,7 @@ import type {
   TaskPendingDispatchStatus,
   TerminationCause,
   TerminationCoordinationClaim,
+  TerminationRequest,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -90,6 +91,7 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import { acceptOpenCodeCheckpoint, assertNoOpenOpenCodeCheckpoint } from './opencode-checkpoints';
 import { countRecordedTools } from './recorded-tool-count';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
@@ -181,6 +183,7 @@ export interface TerminationClaimInput {
   taskId: string;
   cause: TerminationCause;
   errorMessage: string;
+  requestedBy?: Pick<TerminationRequest, 'requested_by_user_id' | 'requested_via'>;
   sdkFailure?: SdkFailure;
   expectedStatus?: Task['status'];
   expectedHeartbeatAt?: string;
@@ -229,6 +232,7 @@ export interface TerminationClaimResult {
 }
 
 interface TerminationSettlementInputBase {
+  cleanupDiagnostic?: string;
   taskId: string;
   errorMessage?: string;
   sdkFailure?: SdkFailure;
@@ -238,6 +242,8 @@ interface TerminationSettlementInputBase {
 export type TerminationSettlementInput =
   | (TerminationSettlementInputBase & {
       outcome: 'verified_absent' | 'unverified';
+      /** Observed acknowledgement; unverified settlement must not bury newly committed evidence. */
+      expectedExecutorQuiescedAt?: string | null;
       /** Exact, currently persisted containment-coordination fence. */
       coordinationToken: string;
     })
@@ -245,6 +251,7 @@ export type TerminationSettlementInput =
       outcome: 'forced_unverified';
       /** Exact termination request confirmed by the authorized operator. */
       expectedTerminationRequestedAt: string;
+      expectedRecoveryRevision?: string;
       coordinationToken?: never;
     })
   | (TerminationSettlementInputBase & {
@@ -331,6 +338,7 @@ export interface TaskRuntimeDiscoveryOptions {
 export interface TaskFindPageOptions {
   excludeQueued?: boolean;
   taskId?: TaskID;
+  taskIds?: TaskID[];
   afterTaskId?: TaskID;
   throughTaskId?: TaskID;
   sessionId?: SessionID;
@@ -500,7 +508,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? {
             termination_request: {
               ...storedTerminationRequest,
-              ...(coordination ? { coordination } : {}),
+              coordination,
             },
           }
         : {}),
@@ -702,10 +710,11 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   async findPage(
     opts: TaskFindPageOptions = {}
   ): Promise<{ data: Partial<Task>[]; total: number }> {
-    if (opts.sessionIds?.length === 0) return { data: [], total: 0 };
+    if (opts.sessionIds?.length === 0 || opts.taskIds?.length === 0) return { data: [], total: 0 };
 
     const conditions: SQL[] = [];
     if (opts.taskId) conditions.push(eq(tasks.task_id, opts.taskId));
+    if (opts.taskIds) conditions.push(inArray(tasks.task_id, opts.taskIds));
     if (opts.afterTaskId) conditions.push(gt(tasks.task_id, opts.afterTaskId));
     if (opts.throughTaskId) conditions.push(lte(tasks.task_id, opts.throughTaskId));
     if (opts.sessionId) conditions.push(eq(tasks.session_id, opts.sessionId));
@@ -784,6 +793,50 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       cacheCreation: Number(row?.cacheCreation ?? 0),
       cost: Number(row?.cost ?? 0),
     };
+  }
+
+  /**
+   * Whether `listed` (a `Session.tasks` read earlier) named every Task this
+   * Session had dispatched, once each and nothing else: the lean transcript
+   * places history by its positions only then. One statement reads the
+   * current list and the Session's Tasks on one snapshot; `listed` must be a
+   * prefix of that list, since dispatch only appends. Never-run (CREATED,
+   * QUEUED) Tasks have no position. Anything else unlisted, a duplicate, or
+   * an entry that is no Task of this Session (a legacy row) makes it false.
+   */
+  async isSessionTaskListComplete(
+    sessionId: SessionID,
+    listed: readonly string[]
+  ): Promise<boolean> {
+    // Every read names the Session by parameter, never by correlation: SQLite
+    // re-runs a correlated list subquery per row, which is quadratic. Each
+    // count is one range scan of the Session's Tasks against the list as a set.
+    const data = sql`(SELECT ${sessions.data} FROM ${sessions} WHERE ${sessions.session_id} = ${sessionId})`;
+    const inList = isSQLiteDatabase(this.db)
+      ? sql`${tasks.task_id} IN (SELECT value FROM json_each(${data}, '$.tasks'))`
+      : sql`${tasks.task_id} IN (SELECT jsonb_array_elements_text(${data}->'tasks'))`;
+    const count = (when: SQL) =>
+      sql<number>`(SELECT COUNT(CASE WHEN ${when} THEN 1 END) FROM ${tasks} WHERE ${tasks.session_id} = ${sessionId})`;
+    const row = await select(this.db, {
+      order: jsonExtract(this.db, sessions.data, 'tasks'),
+      members: count(inList),
+      unlisted: count(
+        sql`${tasks.status} NOT IN (${TaskStatus.QUEUED}, ${TaskStatus.CREATED}) AND NOT (${inList})`
+      ),
+    })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    if (!row) return false;
+    const order: unknown = JSON.parse(String(row.order ?? '[]'));
+    // Distinct members of this Session as many as entries: no duplicate, no stranger.
+    return (
+      Array.isArray(order) &&
+      Number(row.members) === order.length &&
+      Number(row.unlisted) === 0 &&
+      listed.length <= order.length &&
+      listed.every((id, i) => id === order[i])
+    );
   }
 
   /**
@@ -1625,9 +1678,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         !existing || input.cause === 'user_stop' || existing.cause === input.cause;
       const mutationAt = await this.mutationNow(txDb, fullId, input.now);
       const requestedAt = existing?.requested_at ?? mutationAt.toISOString();
+      const requestedBy =
+        cause === input.cause
+          ? input.requestedBy
+          : {
+              requested_by_user_id: existing?.requested_by_user_id,
+              requested_via: existing?.requested_via,
+            };
+
+      const { coordination: _existingCoordination, ...existingRequest } = existing ?? {};
       const request = {
+        ...existingRequest,
         cause,
         requested_at: requestedAt,
+        ...(requestedBy?.requested_by_user_id
+          ? { requested_by_user_id: requestedBy.requested_by_user_id }
+          : {}),
+        ...(requestedBy?.requested_via ? { requested_via: requestedBy.requested_via } : {}),
         error_message:
           cause === input.cause
             ? input.errorMessage
@@ -1737,6 +1804,84 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
+  /** Commit before external side effects: a crashed daemon must not invoke cleanup again. */
+  async beginCleanupAttempt(taskId: string, claimToken: string): Promise<Task | null> {
+    return this.mutateLockedTask(taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      const now = await this.mutationNow(txDb, fullId);
+      if (
+        current.status !== TaskStatus.STOPPING ||
+        !request ||
+        request.cleanup_attempt ||
+        request.coordination?.claim_token !== claimToken ||
+        Date.parse(request.coordination.lease_expires_at) <= now.getTime() ||
+        row.termination_unverified_at
+      )
+        return null;
+      const { coordination: _coordination, ...storedRequest } = request;
+      const data = {
+        ...row.data,
+        termination_request: {
+          ...storedRequest,
+          cleanup_attempt: { attempt_id: generateId(), started_at: now.toISOString() },
+        },
+      };
+      await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, data });
+    });
+  }
+
+  /** Explicit, authorized recovery only. Preserve failure-vs-user-stop cause and request epoch. */
+  async retryTermination(
+    taskId: string,
+    requestedAt: string,
+    revision: string
+  ): Promise<Task | null> {
+    return this.mutateLockedTask(taskId, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
+      const request = current.termination_request;
+      if (
+        current.status !== TaskStatus.STOPPING ||
+        !request ||
+        current.sdk_failure?.termination !== 'unverified' ||
+        request.requested_at !== requestedAt ||
+        (request.recovery_revision ?? request.requested_at) !== revision
+      )
+        return null;
+      const {
+        cleanup_attempt: _attempt,
+        cleanup_diagnostic: _diagnostic,
+        coordination: _coordination,
+        ...retained
+      } = request;
+      // Like new quiescence evidence, a retry supersedes the synthetic guard
+      // diagnosis; only a real preceding SDK-health diagnosis survives it.
+      const sdkFailure =
+        current.sdk_failure.reason === 'termination_unverified'
+          ? undefined
+          : { ...current.sdk_failure, termination: 'requested' as const };
+      const data = {
+        ...row.data,
+        ...(sdkFailure ? { sdk_failure: sdkFailure } : {}),
+        termination_request: { ...retained, recovery_revision: generateId() },
+      };
+      delete data.error_message;
+      if (!sdkFailure) delete data.sdk_failure;
+      const values = {
+        data,
+        termination_unverified_at: null,
+        termination_coordination_token: null,
+        termination_coordination_claimed_at: null,
+        termination_coordination_expires_at: null,
+        termination_coordination_instance_id: null,
+        termination_coordination_boot_id: null,
+      };
+      await update(txDb, tasks).set(values).where(eq(tasks.task_id, fullId)).run();
+      return this.rowToTask({ ...row, ...values });
+    });
+  }
+
   /** Atomically record containment evidence and, when safe, terminalize the task. */
   async settleTermination(input: TerminationSettlementInput): Promise<TerminationSettlementResult> {
     return this.mutateLockedSessionTask(input.taskId, async (txDb, row, sessionRow, fullId) => {
@@ -1767,6 +1912,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       }
 
       if (input.outcome === 'unverified') {
+        if (
+          (current.termination_request?.executor_quiesced_at ?? null) !==
+          (input.expectedExecutorQuiescedAt ?? null)
+        ) {
+          return { outcome: 'condition_changed', task: current };
+        }
         const failure = input.sdkFailure ?? current.sdk_failure;
         if (!failure || !input.errorMessage) {
           throw new RepositoryError('unverified settlement requires failure evidence');
@@ -1774,6 +1925,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         const data = {
           ...row.data,
           sdk_failure: { ...failure, termination: 'unverified' as const },
+          termination_request: {
+            ...row.data.termination_request!,
+            ...(input.cleanupDiagnostic
+              ? { cleanup_diagnostic: input.cleanupDiagnostic.slice(0, 1000) }
+              : {}),
+          },
           error_message: input.errorMessage,
         };
         const unverifiedAt = await this.mutationNow(txDb, fullId, input.now);
@@ -1807,7 +1964,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
       if (
         input.outcome === 'forced_unverified' &&
         (current.sdk_failure?.termination !== 'unverified' ||
-          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt)
+          current.termination_request?.requested_at !== input.expectedTerminationRequestedAt ||
+          (current.termination_request.recovery_revision ??
+            current.termination_request.requested_at) !==
+            (input.expectedRecoveryRevision ?? input.expectedTerminationRequestedAt))
       ) {
         return { outcome: 'condition_changed', task: current };
       }
@@ -1906,7 +2066,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   private async updateTask(
     id: string,
     updates: Partial<Task>,
-    executorUpdate: boolean
+    executorUpdate: boolean,
+    openCodeCheckpoint?: { holderId: string; manifest: unknown }
   ): Promise<Task> {
     try {
       return await this.mutateLockedTask(id, async (txDb, currentRow, fullId) => {
@@ -1964,6 +2125,20 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           throw new RepositoryError(
             'termination-owned tasks must be settled through settleTermination'
           );
+        }
+        if (openCodeCheckpoint) {
+          if (updates.status !== TaskStatus.COMPLETED) {
+            throw new RepositoryError('An OpenCode checkpoint is accepted only with completion');
+          }
+          await acceptOpenCodeCheckpoint(
+            txDb,
+            this.db,
+            currentRow,
+            openCodeCheckpoint.holderId,
+            openCodeCheckpoint.manifest
+          );
+        } else if (executorUpdate && updates.status === TaskStatus.COMPLETED) {
+          await assertNoOpenOpenCodeCheckpoint(txDb, fullId);
         }
 
         const merged = {
@@ -2455,8 +2630,12 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /** Apply executor-owned result fields only while the executor still owns the locked row. */
-  async updateFromExecutor(id: string, updates: Partial<Task>): Promise<Task> {
-    return this.updateTask(id, updates, true);
+  async updateFromExecutor(
+    id: string,
+    updates: Partial<Task>,
+    openCodeCheckpoint?: { holderId: string; manifest: unknown }
+  ): Promise<Task> {
+    return this.updateTask(id, updates, true, openCodeCheckpoint);
   }
 
   /**

@@ -23,6 +23,7 @@ import type {
 import { BulbOutlined } from '@ant-design/icons';
 import { ConfigProvider, Typography, theme } from 'antd';
 import React, { useEffect, useMemo, useState } from 'react';
+import { useRetainTaskDetailsWhile } from '../../hooks/useTaskDetailRetention';
 import { getToolDisplayName } from '../../utils/toolDisplayName';
 import { toolResultToDisplayText } from '../../utils/toolResultToDisplayText';
 import { CollapsibleText } from '../CollapsibleText';
@@ -92,6 +93,7 @@ export const AgentChain = React.memo<AgentChainProps>(
     useEffect(() => {
       if (revealRequested) setExpanded(true);
     }, [revealRequested]);
+    useRetainTaskDetailsWhile(expanded);
 
     // Extract chain items (thoughts and tools) from messages
     const chainItems = useMemo(() => {

@@ -669,6 +669,7 @@ export const repos = sqliteTable(
         // Async clone lifecycle: 'cloning' → 'ready' | 'failed'. Undefined for
         // legacy rows and for local-type repos. See packages/core/src/types/repo.ts.
         clone_status?: 'cloning' | 'ready' | 'failed';
+        clone_generation?: number;
         clone_error?: {
           exit_code: number;
           category: 'auth_failed' | 'not_found' | 'network' | 'git_unavailable' | 'unknown';
@@ -815,7 +816,7 @@ export const branches = sqliteTable(
       .$type<'none' | 'read' | 'write'>()
       .default('read'),
 
-    // Branch storage model — see context/explorations/clone-redesign.md.
+    // Branch storage model.
     // 'worktree' = native `git worktree add` (shared base .git/config — legacy default).
     // 'clone'    = self-standing `git clone` (own .git/ — closes cross-branch leak vectors).
     //
@@ -1114,7 +1115,7 @@ export const users = sqliteTable(
           copilot?: {
             COPILOT_GITHUB_TOKEN?: string;
           };
-          opencode?: Record<string, never>;
+          opencode?: Record<string, string>;
         };
         agentic_auth_methods?: import('../types/user').AgenticAuthMethods;
         agentic_credential_sources?: import('../types/user').AgenticCredentialSources;
@@ -1128,7 +1129,6 @@ export const users = sqliteTable(
         // layer (no SQL CHECK constraint) so adding future scope values ('repo',
         // 'mcp_server', ...) doesn't require a SQLite table rebuild.
         //
-        // See `context/explorations/env-var-access.md`.
         env_vars?: Record<
           string,
           | string // legacy
@@ -1160,6 +1160,7 @@ export const users = sqliteTable(
             codexSandboxMode?: string;
             codexApprovalPolicy?: string;
             codexNetworkAccess?: boolean;
+            codexIncludePlugins?: boolean;
           };
           gemini?: {
             modelConfig?: {
@@ -2631,8 +2632,6 @@ export const gatewayOutboundMessages = sqliteTable(
  *
  * v0.5: env vars are keyed by name inside `users.data.env_vars` (no env_vars.id yet).
  * Rows scope implicitly to `session.created_by`.
- *
- * See `context/explorations/env-var-access.md`.
  */
 export const sessionEnvSelections = sqliteTable(
   'session_env_selections',
@@ -3234,5 +3233,29 @@ export const kbImportReceipts = sqliteTable(
       table.slug,
       table.entry_key
     ),
+  })
+);
+
+/** Hosted OpenCode checkpoints; no FKs so deleted Sessions' rows survive until their files are cleaned. */
+export const opencodeCheckpointAttempts = sqliteTable(
+  'opencode_checkpoint_attempts',
+  {
+    attempt_id: text('attempt_id', { length: 36 }).primaryKey(),
+    session_id: text('session_id', { length: 36 }).notNull(),
+    task_id: text('task_id', { length: 36 }).notNull(),
+    owner_user_id: text('owner_user_id', { length: 36 }).notNull(),
+    holder_instance_id: text('holder_instance_id', { length: 36 }).notNull(),
+    input_task_id: text('input_task_id', { length: 36 }),
+    state: text('state', { enum: ['open', 'accepted', 'superseded'] }).notNull(),
+    manifest: t.json<import('@agor/core/types').OpenCodeCheckpointManifest>('manifest'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    taskUnique: uniqueIndex('opencode_checkpoint_attempts_task_unique').on(table.task_id),
+    acceptedUnique: uniqueIndex('opencode_checkpoint_attempts_accepted_unique')
+      .on(table.session_id)
+      .where(sql`${table.state} = 'accepted'`),
+    ownerIdx: index('opencode_checkpoint_attempts_owner_idx').on(table.owner_user_id),
   })
 );

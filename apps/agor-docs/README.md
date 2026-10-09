@@ -23,14 +23,71 @@ unset and is otherwise enabled for production builds. To exercise it in `pnpm de
 set `NEXT_PUBLIC_ANALYTICS_DEBUG=true`; use a test property or block collection requests.
 
 Google Analytics sends one explicit `page_view` for the initial URL and each client-side
-App Router navigation. Its automatic page view is disabled to prevent duplicates. The
-site currently has no cookie-consent gate and does not interpret the browser's legacy Do
-Not Track signal; this matches the existing site-wide Microsoft Clarity and HubSpot
-loaders. Visitors can block these third-party scripts with browser privacy controls.
+App Router navigation. Its automatic page view is disabled to prevent duplicates.
+
+### Cookie consent and trackers
+
+Every tracker runs behind the cookie banner (`components/CookieConsent.tsx`, logic in
+`lib/consent.ts`, policy at `/privacy`). Visitors choose Reject, Analytics only, or Accept
+all. Optional cookies default off in the EEA, UK, and Switzerland (judged by time zone)
+and for browsers sending Global Privacy Control; elsewhere they default on. The banner
+appears on its own only where opt-in applies; everyone can open it from Cookie settings
+in the footer.
+
+| Tracker                                                           | Category  | Loads                                                            |
+| ----------------------------------------------------------------- | --------- | ---------------------------------------------------------------- |
+| Google Analytics (`G-DME77D3LDH`)                                 | Analytics | Always, through Consent Mode: cookieless until analytics consent |
+| Microsoft Clarity                                                 | Analytics | Only with analytics consent                                      |
+| Google Tag Manager (`GTM-WL3Q29NW`): Google Ads, LinkedIn Insight | Marketing | Only with marketing consent                                      |
+| HubSpot tracking code                                             | Marketing | Only with marketing consent                                      |
+
+Rules of thumb:
+
+- **Never add a tracker straight to `app/layout.tsx`.** Load it from `CookieConsent.tsx` under
+  the right category, and add its cookies to the table on the privacy page
+  (`content/privacy.mdx`, "Cookies and storage we use").
+- **A new tag in Tag Manager** only ever runs for visitors who accepted marketing cookies, so
+  it can't leak consent. Still add the provider and its cookies to the privacy page.
+
+### Google Ads conversions (read this before changing them)
+
+Visitors without marketing consent never load Tag Manager, so its Google Ads tags can't
+fire for them. For those visitors, the site's own Google tag sends the Ads page hit and
+each conversion cookielessly instead, so Google can still count and model them. It only
+does this while Tag Manager is absent, so consenting visitors aren't counted twice.
+
+That means **Google Ads changes need a matching code change** in `lib/consent.ts`:
+
+- **Add or change a conversion action:** set up its tag in Tag Manager as usual, then add or
+  update its entry in `ADS_CONVERSIONS` (`send_to` is `AW-<account>/<label>`; the label is
+  in the conversion action's Tag setup, or the Tag Manager tag). If it's triggered by a new
+  event, call `adsConversionSnippet(...)` (inline scripts) or `gtag('event', 'conversion',
+{ send_to })` wherever that event is pushed to `dataLayer`. The two existing ones fire
+  from the HubSpot form and meeting listeners in `app/layout.tsx`.
+- **Remove a conversion action:** delete its entry and call.
+- **Switch Google Ads accounts:** update `ADS_ID`.
+
+The Tag Manager container is public, so you can confirm the IDs and labels it carries:
+`curl -s 'https://www.googletagmanager.com/gtm.js?id=GTM-WL3Q29NW' | grep -o 'AW-[0-9][0-9]*\|vtp_conversionLabel":"[^"]*'`.
+Sign-ups completed on console.agor.cloud (rather than the agor.live HubSpot form) don't
+reach Google Ads from this site; they're attributed through UTM parameters and HubSpot.
 
 The GitHub Pages deployment does not currently send a Content Security Policy. If one is
 added, it must allow the GA loader from `https://www.googletagmanager.com` and collection
-to `https://www.google-analytics.com` (plus the existing Clarity and HubSpot origins).
+to `https://www.google-analytics.com` (plus the Tag Manager, Google Ads, LinkedIn, Clarity, and
+HubSpot origins).
+
+### Google Ads conversions for console sign-ups
+
+Most Cloud CTAs send visitors to `console.agor.cloud`, a different domain, so neither a
+`gclid`/`gbraid`/`wbraid` URL parameter nor GTM's HubSpot-form-submit trigger (which fires
+the conversion for the few sign-ups still completed through this site's own HubSpot form)
+ever reaches it. `CloudCtaLink` and `CloudInviteCTA` forward any Google Ads click id present
+on the page a CTA is clicked from (`lib/cloudCta.ts#adClickIds`,
+`lib/cloudCtaAttribution.ts#onCloudCtaClick`) as a query parameter on the outgoing console
+link, alongside the existing HubSpot visitor token. The console records it first-touch in
+its `agor_attribution` cookie and reports an Enhanced Conversion (hashed email + click id)
+once the account reaches `/welcome` — see `agor-cloud`'s `apps/console/src/analytics.ts`.
 
 ## Brand assets
 
@@ -111,19 +168,45 @@ them into absolute `og:image` and `twitter:image` URLs using `NEXT_PUBLIC_SITE_U
 `/screenshots/board-hero.png`. Add `imageWidth` and `imageHeight` only when you know the exact image
 dimensions.
 
+## Blog listing dates
+
+Keep each post's `date: YYYY-MM-DD` frontmatter in sync with `lib/blogPosts.ts`.
+The `/blog` listing reveals a post at **06:00 PST (fixed UTC−08:00 / 14:00 UTC)**
+on that date, including during daylight-saving time. `/blog?all` shows every
+post; presence of the `all` parameter is sufficient, regardless of its value.
+The browser checks the time on load, at the next publication boundary, and when
+a tab regains focus. This works without rebuilding the static site, but relies
+on JavaScript and the visitor's clock. Without JavaScript, the listing reflects
+the build time until the next deployment.
+
+This is **listing visibility, not an embargo or access control**. Article slugs
+are always exported and accessible. Sitemap, Pagefind, LLM indexes, other links
+and crawler indexing are unchanged and can expose future posts. For a real
+embargo, do not deploy the content. Existing `noindex: true` frontmatter can
+discourage search indexing, but removing it requires a rebuild/deployment; the
+listing timer does not change static article metadata.
+
 ## Validate and build
 
 From the repository root:
 
 ```bash
 pnpm --filter @agor/docs typecheck
+pnpm --filter @agor/docs test:blog
 pnpm --filter @agor/docs validate:brand-assets
 pnpm --filter @agor/docs validate:social-metadata
 pnpm docs:build
 ```
 
 The build compiles MDX, exports the site to `apps/agor-docs/out/`, and generates
-sitemap and Pagefind search assets. It does not regenerate API or CLI documentation.
+sitemap and Pagefind search assets.
+
+Builds use Turbopack (`next build --turbopack`): about 40s to compile from cold,
+versus about 110s cold (55s warm) with webpack, with identical output. If a build
+ever misbehaves under Turbopack (it's still beta in Next 15), `pnpm --filter
+@agor/docs build:webpack` runs the same build on webpack. Locally, `pnpm serve` builds
+and then serves `out/`; `pnpm preview` serves the last build without rebuilding,
+and `pnpm dev` is the fast loop while editing. It does not regenerate API or CLI documentation.
 The legacy root `docs:generate` alias has no matching docs-package script.
 
 For an analytics export check, set a test `NEXT_PUBLIC_GA_ID` during both the build

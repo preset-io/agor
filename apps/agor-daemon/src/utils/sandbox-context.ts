@@ -5,7 +5,7 @@
  * terminals) so the store-path logic + `filesystem_home` validation live in one
  * place instead of drifting between call sites.
  *
- * See `context/explorations/executor-sandboxing.md`.
+ * See `context/guides/rbac-and-unix-isolation.md`.
  */
 
 import { existsSync, realpathSync } from 'node:fs';

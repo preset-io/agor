@@ -3,8 +3,11 @@ import 'nextra-theme-docs/style.css';
 import { Hanken_Grotesk, JetBrains_Mono, Space_Grotesk } from 'next/font/google';
 import Script from 'next/script';
 import { type ReactNode, Suspense } from 'react';
+import { CookieConsent } from '../components/CookieConsent';
 import { DocsAuroraBackground } from '../components/DocsAuroraBackground';
 import { GoogleAnalytics } from '../components/GoogleAnalytics';
+import { ADS_CONVERSIONS, adsConversionSnippet, consentBootScript } from '../lib/consent';
+import { crtIntroBootScript } from '../lib/crtIntro';
 import {
   AGOR_CLOUD_DEMO_URL,
   DISCORD_INVITE_URL,
@@ -42,7 +45,9 @@ const displayFont = Space_Grotesk({
 });
 const bodyFont = Hanken_Grotesk({
   subsets: ['latin'],
-  weight: ['100', '400', '500', '600', '700'],
+  // 300 is used (hero subhead, detail titles); without it the browser fell
+  // back to 100.
+  weight: ['100', '300', '400', '500', '600', '700'],
   variable: '--font-body',
   display: 'swap',
 });
@@ -84,12 +89,21 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}
     >
       <Head>
-        {/* Google Tag Manager (container GTM-WL3Q29NW). Loaded as high in the
-            head as possible so downstream tags fire early. */}
-        <Script id="gtm-loader" strategy="afterInteractive">
-          {`(function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0],j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);})(window,document,'script','dataLayer','GTM-WL3Q29NW');`}
-        </Script>
+        {/* Cookie consent: sets Google's Consent Mode default, then loads Tag
+            Manager (GTM-WL3Q29NW) only if consent allows. No <noscript>
+            fallback: without JavaScript there's no way to ask. See
+            lib/consent.ts. */}
+        <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: static, build-time script; no user input.
+          dangerouslySetInnerHTML={{ __html: consentBootScript() }}
+        />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        {/* Before first paint: the optional CRT intro (?intro=true) covers the
+            home page, so it never flashes the site first. See lib/crtIntro. */}
+        <script
+          // biome-ignore lint/security/noDangerouslySetInnerHtml: static, build-time script; no user input.
+          dangerouslySetInnerHTML={{ __html: crtIntroBootScript(basePath) }}
+        />
         <meta name="description" content={DEFAULT_DESCRIPTION} />
         <meta name="theme-color" content={THEME_COLOR} />
         <link rel="icon" type="image/svg+xml" href={`${basePath}${LOGO_PATH}`} />
@@ -141,17 +155,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </Head>
       <body>
-        {/* Google Tag Manager (noscript) — must sit immediately after the
-            opening body tag. */}
-        <noscript>
-          <iframe
-            title="Google Tag Manager"
-            src="https://www.googletagmanager.com/ns.html?id=GTM-WL3Q29NW"
-            height="0"
-            width="0"
-            style={{ display: 'none', visibility: 'hidden' }}
-          />
-        </noscript>
         <DocsAuroraBackground />
         {children}
         {analyticsEnabled && googleAnalyticsId ? (
@@ -159,12 +162,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <GoogleAnalytics measurementId={googleAnalyticsId} />
           </Suspense>
         ) : null}
-        {/* HubSpot tracking / embed loader (portal 246818610). */}
-        <Script
-          id="hs-script-loader"
-          strategy="afterInteractive"
-          src="https://js-na2.hs-scripts.com/246818610.js"
-        />
+        {/* The cookie banner. It also loads HubSpot's tracking code (portal
+            246818610) and Microsoft Clarity, only once consent allows. */}
+        <CookieConsent />
         {/* GTM event on contact-form submission. HubSpot's forms-embed
             runtime calls window.postMessage({type:'hsFormCallback', ...})
             unconditionally on every form event — confirmed by reading its
@@ -204,6 +204,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 form_name: 'agor_cloud_beta',
                 source_page: sourcePage || 'unknown',
               });
+              ${adsConversionSnippet(ADS_CONVERSIONS.signup)}
             });
           })();`}
         </Script>
@@ -237,15 +238,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                   event: 'hubspot_meeting_booked',
                   form_name: 'agor_cloud_demo',
                 });
+                ${adsConversionSnippet(ADS_CONVERSIONS.demo)}
               } else if (payload.meetingBookFailed) {
                 window.dataLayer.push({ event: 'hubspot_meeting_book_failed' });
               }
             });
           })();`}
-        </Script>
-        {/* Microsoft Clarity analytics (project xroxavynkf). */}
-        <Script id="ms-clarity" strategy="afterInteractive">
-          {`(function(c,l,a,r,i,t,y){c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);})(window,document,"clarity","script","xroxavynkf");`}
         </Script>
       </body>
     </html>

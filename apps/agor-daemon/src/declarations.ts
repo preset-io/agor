@@ -185,6 +185,10 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     params?: FeathersParams
   ): Promise<TaskDispatchClaimResult>;
   connectExecutor(data: { task_id: string }, params?: FeathersParams): Promise<Task>;
+  reportExecutorInterruption(
+    data: import('@agor/core/types').ExecutorInterruptionInput,
+    params?: FeathersParams
+  ): Promise<Task>;
   reportTerminationComplete(
     data: import('@agor/core/types').ExecutorTerminationCompleteInput,
     params?: FeathersParams
@@ -196,6 +200,14 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
   ): Promise<Task | null>;
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: FeathersParams): Promise<Task>;
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: FeathersParams): Promise<Task>;
+  beginOpenCodeCheckpoint(
+    data: import('@agor/core/types').OpenCodeCheckpointBeginInput,
+    params?: FeathersParams
+  ): Promise<import('@agor/core/types').OpenCodeCheckpointAdmission>;
+  acknowledgeOpenCodeCleanup(
+    data: import('@agor/core/types').OpenCodeCheckpointCleanupInput,
+    params?: FeathersParams
+  ): Promise<void>;
   cancelQueued(
     data: CancelQueuedTasksInput,
     params?: FeathersParams
@@ -221,6 +233,17 @@ export interface TasksServiceImpl extends Service<Task, Partial<Task>, FeathersP
     input: TaskTerminationCoordinationClaimInput,
     params?: FeathersParams
   ): Promise<TaskTerminationCoordinationClaimResult>;
+  retryTermination(
+    taskId: string,
+    requestedAt: string,
+    revision: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
+  beginCleanupAttempt(
+    taskId: string,
+    claimToken: string,
+    params?: FeathersParams
+  ): Promise<Task | null>;
   settleTermination(
     input: TerminationSettlementInput,
     params?: FeathersParams

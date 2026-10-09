@@ -20,6 +20,7 @@ import type { AgenticToolName, AgorClient } from '@agor-live/client';
 import { DEFAULT_CLAUDE_MODEL } from '@agor-live/client';
 import { Form, Select } from 'antd';
 import { CodexNetworkAccessToggle } from '../CodexNetworkAccessToggle';
+import { CodexPluginsField } from '../CodexSettingsForm/CodexPluginsField';
 import { EffortSelector } from '../EffortSelector';
 import { ModelSelector } from '../ModelSelector';
 import {
@@ -187,6 +188,7 @@ export const AgenticToolConfigForm: React.FC<AgenticToolConfigFormProps> = ({
           <CodexNetworkAccessToggle showWarning={showHelpText} />
         </Form.Item>
       )}
+      {showCodexFields && <CodexPluginsField showHelpText={showHelpText} />}
     </>
   );
 };

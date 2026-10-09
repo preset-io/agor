@@ -15,9 +15,13 @@ const SESSION_ID = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
 const SESSION_TOKEN = '01a012d84f507c329daa6e3f';
 
 function CurrentPath() {
-  const { pathname } = useLocation();
+  const { pathname, state } = useLocation();
   return (
-    <div data-testid="path" data-navigation={useNavigationType()}>
+    <div
+      data-testid="path"
+      data-navigation={useNavigationType()}
+      data-state={state ? JSON.stringify(state) : undefined}
+    >
       {pathname}
     </div>
   );
@@ -51,6 +55,17 @@ describe('DeviceRouter', () => {
     renderAt('/');
     expect(currentPath()).toBe('/m');
     expect(screen.getByTestId('path')).toHaveAttribute('data-navigation', 'REPLACE');
+  });
+
+  it('keeps the entry state across the shell swap', () => {
+    viewport.isMobile = true;
+    render(
+      <MemoryRouter initialEntries={[{ pathname: '/teammates', state: { from: 'home' } }]}>
+        {tree()}
+      </MemoryRouter>
+    );
+    expect(currentPath()).toBe('/m/teammates');
+    expect(screen.getByTestId('path')).toHaveAttribute('data-state', '{"from":"home"}');
   });
 
   it('sends a wide viewport on a mobile route to the desktop shell', () => {

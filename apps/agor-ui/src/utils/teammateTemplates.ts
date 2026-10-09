@@ -1,4 +1,4 @@
-import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
+import { TEAMMATE_FRAMEWORK_DEFAULT_BRANCH, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import {
   AimOutlined,
   BuildOutlined,
@@ -177,9 +177,9 @@ export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
  * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
- * render "Start blank" last and never accidentally recommend it. Its
+ * render "Start blank" first and never accidentally recommend it. Its
  * `sourceBranch` is the framework repo default; the wiring resolves it to the
- * repo's own default branch rather than forcing a literal.
+ * repo's own default branch (the public template's for a github.com private fork).
  */
 export const BLANK_TEMPLATE = {
   id: BLANK_TEMPLATE_ID,
@@ -188,7 +188,7 @@ export const BLANK_TEMPLATE = {
     'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.',
   icon: PlusOutlined,
   emoji: '',
-  sourceBranch: 'main',
+  sourceBranch: TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
 } as const satisfies TeammateTemplate;
 
 export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_ID;
@@ -206,7 +206,7 @@ export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | u
  *
  * Real templates force their contract branch; the blank starter (or no
  * selection) returns undefined so branch creation falls back to the framework
- * repo's own default branch.
+ * repo's own default branch (the public template's for a github.com private fork).
  */
 export function resolveTemplateSourceBranch(id?: string | null): string | undefined {
   if (!id || id === BLANK_TEMPLATE_ID) return undefined;
@@ -217,7 +217,7 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
   return template.sourceBranch;
 }
 
-/** Remote that owns the selected template ref; blank/no selection uses the destination repo. */
+/** Remote that owns the selected template ref; blank/no selection defers to createTeammateBranch. */
 export function resolveTemplateSourceRemoteUrl(id?: string | null): string | undefined {
   if (!id || id === BLANK_TEMPLATE_ID) return undefined;
   const template = getTeammateTemplate(id);
@@ -331,11 +331,11 @@ export function galleryCardsForFilter(
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
 
-  // All: recommended first, then the remaining templates in default order, then blank.
+  // All: blank first (so templates never read as required), then recommended, then the rest.
   const recommendedCards = recommendedTemplateIds(goals)
     .map((id) => getTeammateTemplate(id))
     .filter((template): template is TeammateGalleryCard => Boolean(template));
   const recommendedIds = new Set(recommendedCards.map((template) => template.id));
   const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
-  return [...recommendedCards, ...rest, BLANK_TEMPLATE];
+  return [BLANK_TEMPLATE, ...recommendedCards, ...rest];
 }

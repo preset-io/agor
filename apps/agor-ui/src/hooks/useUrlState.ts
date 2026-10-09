@@ -26,9 +26,13 @@
 
 import type { BoardID, SessionID } from '@agor-live/client';
 import { boardPath, ENTITY_PATH_SEGMENTS, sessionPath } from '@agor-live/client';
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useRecenterMap } from '../contexts/CanvasNavigationContext';
+import { agorStore, useAgorStore } from '../store/agorStore';
+import { makeBoardReadySelector } from '../store/boardPartitions';
+import { boardIdForSession } from '../utils/boardIdForSession';
+import { isTeammatesRoute } from '../utils/uiRoutes';
 import {
   resolveArtifactFromShortIdPure,
   resolveBoardFromUrlPure,
@@ -55,7 +59,10 @@ export interface UseUrlStateOptions {
   boardById: Map<string, { board_id: string; slug?: string }>;
   /** Map of session ID to session object — used to resolve session
    *  share URLs and to chain through to the session's branch/board. */
-  sessionById: Map<string, { session_id: string; branch_id?: string }>;
+  sessionById: Map<
+    string,
+    { session_id: string; branch_id?: string; branch_board_id?: string | null }
+  >;
   /** Map of branch ID to branch — used to resolve branch share
    *  URLs (and to look up `branch.board_id` for session URLs). */
   branchById: Map<string, { branch_id: string; board_id?: string | null }>;
@@ -95,6 +102,19 @@ export function buildBoardPath(
 /**
  * Hook for bidirectional URL state synchronization.
  */
+/** Warn (in dev) that a short id matched several entities of `kind`. */
+const warnAmbiguous =
+  (kind: 'board' | 'session' | 'branch' | 'artifact') => (param: string, n: number) => {
+    if (import.meta.env.DEV) {
+      const capitalized = kind.charAt(0).toUpperCase() + kind.slice(1);
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[useUrlState] ${capitalized} short ID "${param}" matched ${n} ${kind}s; ` +
+          `treating as not-found (URL must use full UUID or unambiguous prefix).`
+      );
+    }
+  };
+
 export function useUrlState(options: UseUrlStateOptions) {
   const {
     currentBoardId,
@@ -137,6 +157,11 @@ export function useUrlState(options: UseUrlStateOptions) {
   // one so rapid URL changes don't fire a stale recenter after a newer
   // navigation has already settled.
   const deferredRecenterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [pendingRecenter, setPendingRecenter] = useState<{
+    target: string;
+    boardId: string;
+    sessionId: string | undefined;
+  } | null>(null);
   // Last emitted active URL target, so we only fire the callback on
   // actual transitions and don't churn parent state on every effect run.
   const lastEmittedTargetRef = useRef<ActiveUrlTarget | null>(null);
@@ -207,45 +232,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
   }, [currentBoardId, currentSessionId, buildUrl, location.pathname, location.search, navigate]);
 
-  const warnAmbiguous = useCallback(
-    (kind: 'board' | 'session' | 'branch' | 'artifact', param: string, n: number) => {
-      if (import.meta.env.DEV) {
-        const capitalized = kind.charAt(0).toUpperCase() + kind.slice(1);
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[useUrlState] ${capitalized} short ID "${param}" matched ${n} ${kind}s; ` +
-            `treating as not-found (URL must use full UUID or unambiguous prefix).`
-        );
-      }
-    },
-    []
-  );
-
-  const resolveBoardFromUrl = useCallback(
-    (boardParam: string) =>
-      resolveBoardFromUrlPure(boardParam, boardById, (p, n) => warnAmbiguous('board', p, n)),
-    [boardById, warnAmbiguous]
-  );
-
-  const resolveSessionFromShortId = useCallback(
-    (shortId: string) =>
-      resolveSessionFromShortIdPure(shortId, sessionById, (p, n) => warnAmbiguous('session', p, n)),
-    [sessionById, warnAmbiguous]
-  );
-
-  const resolveBranchFromShortId = useCallback(
-    (shortId: string) =>
-      resolveBranchFromShortIdPure(shortId, branchById, (p, n) => warnAmbiguous('branch', p, n)),
-    [branchById, warnAmbiguous]
-  );
-
-  const resolveArtifactFromShortId = useCallback(
-    (shortId: string) =>
-      resolveArtifactFromShortIdPure(shortId, artifactById, (p, n) =>
-        warnAmbiguous('artifact', p, n)
-      ),
-    [artifactById, warnAmbiguous]
-  );
+  // The resolvers are plain calls inside the URL→state effect, not memoized
+  // callbacks: a memoized callback that survives renders keeps its render's
+  // closure context, which also holds that render's session/branch Maps, and
+  // callbacks recreated at different cadences chain those contexts, retaining
+  // every replaced Map for the life of the tab.
 
   // URL → State sync
   useEffect(() => {
@@ -274,6 +265,7 @@ export function useUrlState(options: UseUrlStateOptions) {
         clearTimeout(deferredRecenterTimerRef.current);
         deferredRecenterTimerRef.current = null;
       }
+      setPendingRecenter(null);
     }
 
     const fullyResolved =
@@ -288,7 +280,10 @@ export function useUrlState(options: UseUrlStateOptions) {
     // paths also have no params, but should canonicalize to Home instead of
     // clearing board state and rendering a no-board canvas at that path.
     if (!urlBoardParam && !urlSessionShortId && !urlBranchShortId && !urlArtifactShortId) {
-      const isHomePath = location.pathname === '/' || location.pathname === '';
+      const isHomePath =
+        location.pathname === '/' ||
+        location.pathname === '' ||
+        isTeammatesRoute(location.pathname);
       if (!isSettingsRoute && !isHomePath) {
         syncingRef.current = true;
         navigate('/', { replace: true });
@@ -339,22 +334,28 @@ export function useUrlState(options: UseUrlStateOptions) {
     let recenterSessionId: string | null = null;
 
     if (urlBoardParam) {
-      resolvedBoardId = resolveBoardFromUrl(urlBoardParam);
+      resolvedBoardId = resolveBoardFromUrlPure(urlBoardParam, boardById, warnAmbiguous('board'));
       if (resolvedBoardId) urlParamsResolvedRef.current.board = true;
     } else {
       urlParamsResolvedRef.current.board = true;
     }
 
     if (urlSessionShortId) {
-      resolvedSessionId = resolveSessionFromShortId(urlSessionShortId);
+      resolvedSessionId = resolveSessionFromShortIdPure(
+        urlSessionShortId,
+        sessionById,
+        warnAmbiguous('session')
+      );
       if (resolvedSessionId) {
         urlParamsResolvedRef.current.session = true;
-        // Chain session → branch → board to drive board switch + recenter
+        // Chain session → board to drive board switch + recenter. The
+        // session row carries its board (`branch_board_id`), so this resolves
+        // before the branch is loaded; a loaded branch stays authoritative.
         const session = sessionById.get(resolvedSessionId);
-        const wt = session?.branch_id ? branchById.get(session.branch_id) : undefined;
-        if (wt?.board_id) {
-          resolvedBoardId = wt.board_id;
-          recenterTargetId = wt.branch_id;
+        const sessionBoardId = boardIdForSession(session, branchById);
+        if (session?.branch_id && sessionBoardId) {
+          resolvedBoardId = sessionBoardId;
+          recenterTargetId = session.branch_id;
           recenterSessionId = resolvedSessionId;
         }
       }
@@ -363,7 +364,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     if (urlBranchShortId) {
-      const branchId = resolveBranchFromShortId(urlBranchShortId);
+      const branchId = resolveBranchFromShortIdPure(
+        urlBranchShortId,
+        branchById,
+        warnAmbiguous('branch')
+      );
       if (branchId) {
         urlParamsResolvedRef.current.branch = true;
         activeUrlTarget = { kind: 'branch', id: branchId };
@@ -378,7 +383,11 @@ export function useUrlState(options: UseUrlStateOptions) {
     }
 
     if (urlArtifactShortId) {
-      const artifactId = resolveArtifactFromShortId(urlArtifactShortId);
+      const artifactId = resolveArtifactFromShortIdPure(
+        urlArtifactShortId,
+        artifactById,
+        warnAmbiguous('artifact')
+      );
       if (artifactId) {
         urlParamsResolvedRef.current.artifact = true;
         activeUrlTarget = { kind: 'artifact', id: artifactId };
@@ -449,20 +458,23 @@ export function useUrlState(options: UseUrlStateOptions) {
         deferredRecenterTimerRef.current = null;
         recenterMap(target, { boardId, sessionId, ensureVisible: sessionId != null });
       }, 50);
+      // The target card may not exist until the board's partition loads;
+      // re-run the recenter once the board becomes ready.
+      setPendingRecenter(
+        makeBoardReadySelector(boardId)(agorStore.getState())
+          ? null
+          : { target, boardId, sessionId }
+      );
     }
   }, [
     urlBoardParam,
     urlSessionShortId,
     urlBranchShortId,
     urlArtifactShortId,
-    boardById.size,
+    boardById,
     sessionById,
     branchById,
     artifactById,
-    resolveBoardFromUrl,
-    resolveSessionFromShortId,
-    resolveBranchFromShortId,
-    resolveArtifactFromShortId,
     onBoardChange,
     onSessionChange,
     onActiveUrlTargetChange,
@@ -471,6 +483,20 @@ export function useUrlState(options: UseUrlStateOptions) {
     location.pathname,
     navigate,
   ]);
+
+  // Re-run a deep-link recenter that was scheduled before its board was ready.
+  const pendingRecenterBoardReady = useAgorStore(
+    useMemo(() => makeBoardReadySelector(pendingRecenter?.boardId), [pendingRecenter?.boardId])
+  );
+  useEffect(() => {
+    if (!pendingRecenter || !pendingRecenterBoardReady) return;
+    const { target, boardId, sessionId } = pendingRecenter;
+    const timer = setTimeout(() => {
+      setPendingRecenter(null);
+      recenterMap(target, { boardId, sessionId, ensureVisible: sessionId != null });
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [pendingRecenter, pendingRecenterBoardReady, recenterMap]);
 
   // State → URL self-heal
   useEffect(() => {

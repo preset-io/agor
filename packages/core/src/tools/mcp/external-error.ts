@@ -42,7 +42,12 @@ export type MCPExternalErrorReason =
   | 'oauth_metadata_incompatible'
   | 'oauth_redirect_configuration_required'
   | 'catalog_probe_unreachable'
-  | 'catalog_probe_unrecognized';
+  | 'catalog_probe_unrecognized'
+  | 'oauth_relay_prepare_binding_failed'
+  | 'oauth_relay_prepare_signing_failed'
+  | 'oauth_relay_prepare_transport_failed'
+  | 'oauth_relay_prepare_http_rejected'
+  | 'oauth_relay_prepare_invalid_response';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -157,7 +162,12 @@ function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
     reason === 'oauth_metadata_incompatible' ||
     reason === 'oauth_redirect_configuration_required' ||
     reason === 'catalog_probe_unreachable' ||
-    reason === 'catalog_probe_unrecognized'
+    reason === 'catalog_probe_unrecognized' ||
+    reason === 'oauth_relay_prepare_binding_failed' ||
+    reason === 'oauth_relay_prepare_signing_failed' ||
+    reason === 'oauth_relay_prepare_transport_failed' ||
+    reason === 'oauth_relay_prepare_http_rejected' ||
+    reason === 'oauth_relay_prepare_invalid_response'
     ? reason
     : undefined;
 }

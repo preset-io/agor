@@ -104,6 +104,8 @@ export default defineConfig({
     // Independently bundled tools and tenant-aware config resolution must share
     // the DB entrypoint's stateful authority and ambient scope, not inlined copies.
     '@agor/core/db',
+    // The repository resolves curated.yaml through the catalog's own entry.
+    '@agor/core/mcp-catalog',
     '@anthropic-ai/claude-agent-sdk',
     '@openai/codex-sdk',
     '@google/gemini-cli-core',

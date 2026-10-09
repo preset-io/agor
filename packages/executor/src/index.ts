@@ -17,6 +17,7 @@
 import { resolveSdkWatchdogConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 import type {
+  ExecutorInterruptionInput,
   MessageSource,
   PermissionMode,
   PermissionScope,
@@ -25,7 +26,12 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
+import {
+  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+  EXECUTOR_UNCAUGHT_EXCEPTION_PREFIX,
+  EXECUTOR_UNHANDLED_REJECTION_PREFIX,
+  TaskStatus,
+} from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
@@ -34,9 +40,14 @@ import { globalPermissionManager } from './permissions/permission-manager.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
 import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
+import { createExecutorSignalShutdown } from './signal-shutdown.js';
 import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
 import { reportExecutorQuiescence } from './termination-report.js';
-import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
+import {
+  isDaemonOwnedAbort,
+  isExecutorCleanupUnverified,
+  markCoordinatorTerminationAbort,
+} from './termination-state.js';
 
 patchConsole();
 
@@ -80,6 +91,8 @@ export class AgorExecutor {
   private client: AgorClient | null = null;
   private abortController: AbortController;
   private isRunning = false;
+  private execution: Promise<void> | null = null;
+  private signalShutdown: Promise<void> | null = null;
   private heartbeat: ExecutorHeartbeatHandle | null = null;
   private watchdog: SdkWatchdog | null = null;
   private terminationRequest: Task['termination_request'];
@@ -96,7 +109,7 @@ export class AgorExecutor {
 
   /**
    * Bound wrapper around the standalone `tryMarkTaskTerminal` helper for
-   * the four fail-safe paths inside this class. Guards against a missing
+   * the startup/fatal-error fail-safe paths inside this class. Guards against a missing
    * client (e.g. when the daemon connection never came up).
    */
   private async tryMarkTaskTerminal(
@@ -111,6 +124,9 @@ export class AgorExecutor {
    * Start the executor process
    */
   async start(): Promise<void> {
+    // Register before authentication: a signal during connect must also have
+    // a deadline and must never allow SDK work to start afterwards.
+    this.setupShutdownHandlers();
     const uid = typeof process.getuid === 'function' ? process.getuid() : 'N/A';
     console.log(
       `[executor] Starting ${this.config.tool} task ${shortId(this.config.taskId)} ` +
@@ -132,7 +148,7 @@ export class AgorExecutor {
       // gap. The durable-state refresh in the catch path covers Stop that won
       // before this socket authenticated.
       this.setupEventListeners();
-      this.setupShutdownHandlers();
+      if (this.signalShutdown) return await this.signalShutdown;
 
       // Authentication is complete. Atomically claim the daemon-dispatched task
       // before starting heartbeats or SDK work; a late executor cannot revive a
@@ -143,8 +159,13 @@ export class AgorExecutor {
       this.handleTaskLifecycleUpdate(connectedTask, 'connect_claim');
 
       // Execute the task
-      if (!this.terminationRequest) await this.executeTask();
+      if (!this.terminationRequest) {
+        this.execution = this.executeTask();
+        await this.execution;
+      }
+      if (this.signalShutdown) return await this.signalShutdown;
       await this.reportTerminationComplete();
+      if (this.signalShutdown) return await this.signalShutdown;
 
       // Exit successfully
       console.log(
@@ -153,6 +174,7 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
+      if (this.signalShutdown) return await this.signalShutdown;
       if (isTaskFailurePersisted(error)) {
         console.log(
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
@@ -162,6 +184,7 @@ export class AgorExecutor {
         return;
       }
       const terminationRecovered = await this.recoverTerminationAfterExecutionError();
+      if (this.signalShutdown) return await this.signalShutdown;
       if (terminationRecovered) {
         console.log(
           `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
@@ -174,6 +197,7 @@ export class AgorExecutor {
         `[executor] fatal error category=${this.terminationRequest ? 'termination_report' : 'task_startup'}`
       );
       await this.tryMarkTaskTerminal(TaskStatus.FAILED, formatExecutorFailure(error));
+      if (this.signalShutdown) return await this.signalShutdown;
       process.exit(1);
     }
   }
@@ -374,6 +398,9 @@ export class AgorExecutor {
 
   private async reportTerminationComplete(): Promise<void> {
     if (!this.client || !this.terminationRequest) return;
+    if (this.isRunning || isExecutorCleanupUnverified(this.abortController)) {
+      throw new Error('Executor cleanup remains unverified');
+    }
     if (!this.terminationReport) {
       const client = this.client;
       const requestedAt = this.terminationRequest.requested_at;
@@ -462,6 +489,7 @@ export class AgorExecutor {
         './handlers/sdk/tool-registry.js'
       );
       await initializeToolRegistry();
+      if (this.abortController.signal.aborted) return;
 
       // Execute using registry
       await ToolRegistry.execute(this.config.tool, {
@@ -557,9 +585,47 @@ export class AgorExecutor {
     }
   }
 
-  /**
-   * Setup graceful shutdown handlers
-   */
+  private async shutdownForSignal(
+    signal: ExecutorInterruptionInput['signal'],
+    deadline: AbortSignal
+  ): Promise<void> {
+    console.log(
+      `[executor.signal] event=received task_id=${shortId(this.config.taskId)} signal=${signal}`
+    );
+    // Mark BEFORE abort: provider cancellation results must not race a STOPPED
+    // patch against the coordinator's failure/explicit-user-Stop semantics.
+    markCoordinatorTerminationAbort(this.abortController);
+    this.watchdog?.stop();
+    this.watchdog = null;
+    this.abortController.abort();
+    if (!this.client) return; // No SDK work can start before authentication.
+
+    // Observation is not quiescence. Claim containment while provider cleanup
+    // runs; the normal task/request fence and retries handle duplicate reports.
+    const task = await this.client
+      .service('tasks')
+      .reportExecutorInterruption({
+        task_id: this.config.taskId,
+        signal,
+      })
+      .catch(() => null);
+    if (deadline.aborted) return;
+    if (task) this.handleTaskLifecycleUpdate(task);
+    // Wait for finally/stop hooks, but settlement alone is not containment:
+    // reportTerminationComplete also checks the adapter's sticky cleanup outcome.
+    await this.execution?.catch(() => undefined);
+    if (deadline.aborted) return;
+    if (!task && !this.terminationRequest) {
+      // A lost response may conceal a committed request. Read the same durable
+      // state; if unavailable the outer deadline still bounds this attempt.
+      await this.refreshTerminationState('startup_recovery');
+      if (deadline.aborted) return;
+      if (!this.terminationRequest) throw new Error('Executor interruption was not acknowledged');
+    }
+    await this.reportTerminationComplete();
+  }
+
+  /** Setup bounded best-effort signal handling; SIGKILL has no handler. */
   private setupShutdownHandlers(): void {
     process.once('exit', (code) => {
       console.log(
@@ -567,47 +633,36 @@ export class AgorExecutor {
       );
     });
 
-    const shutdown = async (signal: string) => {
-      console.log(`[executor] Received ${signal}, shutting down...`);
-
-      // Abort any running task
-      if (this.isRunning) {
-        this.abortController.abort();
-      }
-      this.heartbeat?.stop();
-      this.heartbeat = null;
-      this.watchdog?.stop();
-      this.watchdog = null;
-
-      // The daemon's termination coordinator owns STOPPING → terminal. This
-      // fallback only fires for an out-of-band signal while the task is active.
-      await this.tryMarkTaskTerminal(TaskStatus.STOPPED);
-
-      console.log(
-        `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
-          `code=0 reason=signal_${signal.toLowerCase()}`
-      );
-      process.exit(0);
+    const shutdown = createExecutorSignalShutdown({
+      shutdown: (signal, deadline) => this.shutdownForSignal(signal, deadline),
+      exit: (code) => process.exit(code),
+      warn: (message) => console.warn(`${message} task_id=${shortId(this.config.taskId)}`),
+    });
+    const onSignal = (signal: ExecutorInterruptionInput['signal']) => {
+      this.signalShutdown ??= shutdown(signal);
     };
-
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => onSignal('SIGTERM'));
+    process.on('SIGINT', () => onSignal('SIGINT'));
 
     process.on('uncaughtException', async (error) => {
+      if (this.signalShutdown) return await this.signalShutdown;
       console.error('[executor] Uncaught exception:', error);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
-        `uncaughtException: ${error instanceof Error ? error.message : String(error)}`
+        `${EXECUTOR_UNCAUGHT_EXCEPTION_PREFIX}${error instanceof Error ? error.message : String(error)}`
       );
+      if (this.signalShutdown) return await this.signalShutdown;
       process.exit(1);
     });
 
     process.on('unhandledRejection', async (reason) => {
+      if (this.signalShutdown) return await this.signalShutdown;
       console.error('[executor] Unhandled rejection:', reason);
       await this.tryMarkTaskTerminal(
         TaskStatus.FAILED,
-        `unhandledRejection: ${reason instanceof Error ? reason.message : String(reason)}`
+        `${EXECUTOR_UNHANDLED_REJECTION_PREFIX}${reason instanceof Error ? reason.message : String(reason)}`
       );
+      if (this.signalShutdown) return await this.signalShutdown;
       process.exit(1);
     });
   }

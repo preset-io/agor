@@ -1,6 +1,13 @@
 import type { Board, Session } from '@agor-live/client';
+import { hasFullSessionDetails, toLeanSessionListRow } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { buildById, buildSessionMaps, reconcileByIdMap } from './agorMaps';
+import {
+  applySessionPatchToMaps,
+  buildById,
+  buildSessionMaps,
+  EMPTY_MAPS,
+  reconcileByIdMap,
+} from './agorMaps';
 
 // These guard the "reference-stable rebuild" contract: a wholesale rebuild of
 // already-loaded data (the background "load whole store" hydration, reconnect
@@ -117,5 +124,53 @@ describe('buildSessionMaps reference stability', () => {
     expect(surrogate?.genealogy?.parent_session_id).toBe('source');
     expect(surrogate?.remote_surrogate?.source_session_id).toBe('source');
     expect(surrogate?.remote_surrogate?.target_branch_id).toBe('B');
+  });
+});
+
+// Store rule (see `DataMaps.sessionById`): rows are summaries. A lean list row
+// replaces a full one as is — never merged with the full row's withheld keys —
+// and its `read_shape` marker keeps the downgrade visible; a full realtime row
+// replaces a lean one and carries no marker.
+describe('lean session list rows in the store', () => {
+  const fullSession = () =>
+    ({
+      ...makeSession('s1', 'A'),
+      custom_context: { teamName: 'x', slash_commands: ['/old'], scheduled_run: { run_index: 1 } },
+    }) as unknown as Session;
+
+  it('a lean list rebuild never leaves a full-looking row with missing keys', () => {
+    const prev = buildSessionMaps([fullSession()]);
+    // A wire-shaped lean row (JSON drops the server-side descriptor flags).
+    const lean = JSON.parse(JSON.stringify(toLeanSessionListRow(fullSession()))) as Session;
+
+    const { sessionById, sessionsByBranch } = buildSessionMaps([lean], prev);
+    const stored = sessionById.get('s1')!;
+
+    expect(hasFullSessionDetails(stored)).toBe(false);
+    expect(stored.custom_context).toEqual({ teamName: 'x' });
+    expect(sessionsByBranch.get('A')?.[0]).toBe(stored);
+  });
+
+  it('a full realtime patch upgrades a lean row and drops the marker', () => {
+    const lean = toLeanSessionListRow(fullSession()) as Session;
+    const prev = { ...EMPTY_MAPS, ...buildSessionMaps([lean]) };
+
+    const next = applySessionPatchToMaps(prev, fullSession());
+    const stored = next.sessionById.get('s1')!;
+
+    expect(hasFullSessionDetails(stored)).toBe(true);
+    expect(stored).not.toHaveProperty('read_shape');
+    expect(stored.custom_context?.slash_commands).toEqual(['/old']);
+    expect(next.sessionsByBranch.get('A')?.[0]).toBe(stored);
+  });
+
+  it('a lean patch over a full row is a visible downgrade, not a merge', () => {
+    const prev = { ...EMPTY_MAPS, ...buildSessionMaps([fullSession()]) };
+
+    const next = applySessionPatchToMaps(prev, toLeanSessionListRow(fullSession()) as Session);
+    const stored = next.sessionById.get('s1')!;
+
+    expect(hasFullSessionDetails(stored)).toBe(false);
+    expect(stored.custom_context).not.toHaveProperty('slash_commands');
   });
 });

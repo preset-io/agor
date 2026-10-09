@@ -6,8 +6,8 @@ import type {
   Repo,
   SpawnConfig,
 } from '@agor-live/client';
-import { getTeammateConfig, isTeammate } from '@agor-live/client';
-import { LeftOutlined, RobotOutlined } from '@ant-design/icons';
+import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
+import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
   Alert,
   Badge,
@@ -24,6 +24,7 @@ import {
 } from 'antd';
 import type React from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -33,6 +34,7 @@ import {
   selectSessionsByBranch,
   selectUserById,
 } from '../../store/selectors';
+import { selectTeammatesLoaded } from '../../store/userScope';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
@@ -53,13 +55,22 @@ interface BoardTeammatePanelProps {
   primaryTeammateBranch?: Branch;
   primaryTeammateRepo?: Repo;
   primaryTeammateInaccessible: boolean;
+  /**
+   * Whether the board's partition is complete. Until it is, an absent teammate
+   * branch or empty session list means "not loaded yet", so both tabs show a
+   * skeleton instead of empty/inaccessible states. Defaults to ready.
+   */
+  boardReady?: boolean;
   currentUserId?: string;
   selectedSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
   onCreateSession?: (branchId: string) => void;
   onForkSession?: (sessionId: string, prompt: string) => Promise<void>;
   onSpawnSession?: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onOpenSettings?: (branchId: string, tab?: BranchModalTab) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onOpenTerminal?: (commands: string[], branchId?: string) => void;
@@ -78,6 +89,8 @@ interface BoardTeammatePanelProps {
   unreadCommentsCount?: number;
   hasUserMentions?: boolean;
   onCollapse?: () => void;
+  /** Opens teammate creation targeted at this board (it becomes the primary). */
+  onCreateTeammate?: () => void;
   deferSessionDetails?: boolean;
   onDeferredDetailsHydrated?: () => void;
   client: AgorClient | null;
@@ -90,6 +103,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   primaryTeammateBranch,
   primaryTeammateRepo,
   primaryTeammateInaccessible,
+  boardReady = true,
   currentUserId,
   selectedSessionId,
   onSessionClick,
@@ -108,6 +122,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   unreadCommentsCount = 0,
   hasUserMentions = false,
   onCollapse,
+  onCreateTeammate,
   deferSessionDetails = false,
   onDeferredDetailsHydrated,
   client,
@@ -118,6 +133,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   // this panel when its own slice changes.
   const sessionsByBranch = useAgorStore(selectSessionsByBranch);
   const branchById = useAgorStore(selectBranchById);
+  // The assign list is the user scope's teammates (U3): empty means none only once it lands.
+  const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
   const repoById = useAgorStore(selectRepoById);
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
@@ -127,6 +144,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     board ?? undefined,
     currentUserId ? userById.get(currentUserId) : undefined
   );
+  // A primary whose branch or repo is not loaded yet must not be offered for replacement.
+  const canCreateTeammate =
+    canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
   const defaultTab: BoardTeammatePanelTab = primaryTeammateInaccessible
     ? 'all-sessions'
     : 'teammate';
@@ -257,13 +277,41 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     }
   };
 
+  // A primary teammate on another board: its sessions come with that board's
+  // partition, loaded in the background (the shown board stays displayed).
+  const teammateBoardId = primaryTeammateBranch?.board_id;
+  const { boardReady: teammateBoardReady } = useBoardPartition(
+    client,
+    teammateBoardId !== board?.board_id ? teammateBoardId : null,
+    {
+      canUseMemberWorkspaceServices: hasMinimumRole(
+        currentUserId ? userById.get(currentUserId)?.role : undefined,
+        ROLES.MEMBER
+      ),
+      background: true,
+    }
+  );
   const teammateSessions = useMemo(
     () =>
       primaryTeammateBranch ? sessionsByBranch.get(primaryTeammateBranch.branch_id) || [] : [],
     [primaryTeammateBranch, sessionsByBranch]
   );
 
+  const boardLoadingSkeleton = (
+    <div style={{ padding: 16 }} data-testid="board-partition-skeleton">
+      <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+          Loading board…
+        </Typography.Text>
+        <Skeleton active paragraph={{ rows: 4 }} title={false} />
+      </Space>
+    </div>
+  );
+
   const teammateContent = (() => {
+    // No board (or one that doesn't exist): nothing is loading.
+    if (board && !(boardReady && teammateBoardReady)) return boardLoadingSkeleton;
+
     if (primaryTeammateBranch && primaryTeammateRepo) {
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
       const teammateDescription = primaryTeammateBranch.notes?.trim();
@@ -417,10 +465,18 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
-        />
-        {canEditBoard && (
+        >
+          {canCreateTeammate && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={onCreateTeammate}>
+              Create AI teammate
+            </Button>
+          )}
+        </Empty>
+        {canEditBoard && (!canCreateTeammate || teammateOptions.length > 0) && (
           <Space orientation="vertical" size={12} style={{ width: '100%' }}>
-            <Typography.Text strong>Assign an existing teammate</Typography.Text>
+            <Typography.Text strong>
+              {canCreateTeammate ? 'Or assign an existing teammate' : 'Assign an existing teammate'}
+            </Typography.Text>
             <Select
               showSearch
               aria-label="Select a teammate"
@@ -430,15 +486,16 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               options={teammateOptions}
               optionFilterProp="searchText"
               disabled={assigningTeammate || teammateOptions.length === 0}
+              loading={!teammatesLoaded}
               style={{ width: '100%' }}
             />
-            {teammateOptions.length === 0 && (
+            {teammateOptions.length === 0 && teammatesLoaded && (
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                 No existing teammates are available to assign.
               </Typography.Text>
             )}
             <Button
-              type="primary"
+              type={canCreateTeammate ? 'default' : 'primary'}
               onClick={handleAssignTeammate}
               loading={assigningTeammate}
               disabled={!selectedTeammateId || !board || !client}
@@ -474,7 +531,9 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             label: 'Sessions',
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
-                {sessionDetailsHydrated ? (
+                {!boardReady ? (
+                  boardLoadingSkeleton
+                ) : sessionDetailsHydrated ? (
                   <BoardSessionList
                     board={board}
                     currentBoardId={board.board_id}

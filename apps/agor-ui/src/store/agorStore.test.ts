@@ -155,7 +155,6 @@ describe('agorStore branch hard-delete cascade', () => {
       ]),
       boardById: new Map([[board.board_id, board]]),
       boardObjectById: new Map([[boardObject.object_id, boardObject]]),
-      boardObjectByBranchId: new Map([[branch.branch_id, boardObject]]),
       boardObjectsByBoardId: new Map([[board.board_id, [boardObject]]]),
       commentById: new Map([
         [branchComment.comment_id, branchComment],
@@ -178,7 +177,6 @@ describe('agorStore branch hard-delete cascade', () => {
     expect(state.sessionById.get(retainedSession.session_id)).toEqual(retainedSession);
     expect(state.sessionsByBranch.has(branch.branch_id)).toBe(false);
     expect(state.boardObjectById.has(boardObject.object_id)).toBe(false);
-    expect(state.boardObjectByBranchId.has(branch.branch_id)).toBe(false);
     expect(state.boardObjectsByBoardId.has(board.board_id)).toBe(false);
     expect(state.sessionMcpServerIds.has(deletedSession.session_id)).toBe(false);
     expect(state.sessionMcpServerIds.get(retainedSession.session_id)).toEqual(['mcp-2']);

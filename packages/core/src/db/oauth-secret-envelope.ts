@@ -14,6 +14,7 @@ export type BoundSecretPurpose =
   | 'slack-mcp-recovery'
   | 'slack-mcp-connect'
   | 'dcr-client'
+  | 'configured-mcp-client'
   | 'codex-device-attempt'
   | 'claude-signin-attempt'
   | 'access-token'

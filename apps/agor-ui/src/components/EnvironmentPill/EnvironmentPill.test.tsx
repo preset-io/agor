@@ -1,6 +1,7 @@
 import type { Branch, Repo } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 
 vi.mock('antd', async () => {
   const React = await import('react');
@@ -76,6 +77,63 @@ const defaultProps = {
 };
 
 describe('EnvironmentPill', () => {
+  beforeEach(() => {
+    __setAuthConfigForTests({ requireAuth: true });
+  });
+
+  it('opens command-only logs while retaining the branch permission gate', () => {
+    const onViewLogs = vi.fn();
+    const commandOnly = {
+      ...branch,
+      environment_instance: { status: 'error', last_error: 'Launch failed' },
+    } as Branch;
+    const props = { ...defaultProps, branch: commandOnly, onViewLogs };
+    const { rerender } = render(<EnvironmentPill {...props} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View environment logs' }));
+    expect(onViewLogs).toHaveBeenCalledWith(branch.branch_id);
+    onViewLogs.mockClear();
+    rerender(<EnvironmentPill {...props} canControlEnvironment={false} />);
+    const button = screen.getByRole('button', { name: 'View environment logs' });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(onViewLogs).not.toHaveBeenCalled();
+  });
+
+  it('uses the rendered branch logs command and respects shell-log availability', () => {
+    __setAuthConfigForTests(
+      { requireAuth: true },
+      { environmentCommands: { asynchronous: true, shellLogs: false } }
+    );
+    const { rerender } = render(<EnvironmentPill {...defaultProps} />);
+    // A repo default is not evidence that this branch variant has runtime logs.
+    expect(screen.getByRole('button', { name: 'View environment logs' })).toBeDisabled();
+    rerender(
+      <EnvironmentPill {...defaultProps} branch={{ ...branch, logs_command: 'preview logs' }} />
+    );
+    expect(screen.getByRole('button', { name: 'View environment logs' })).toBeDisabled();
+    rerender(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={{ ...branch, logs_command: 'https://example.test/logs' }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'View environment logs' })).not.toBeDisabled();
+    rerender(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={{
+          ...branch,
+          logs_command: 'preview logs',
+          environment_instance: {
+            status: 'error',
+            last_error: 'Launch failed',
+          },
+        }}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'View environment logs' })).not.toBeDisabled();
+  });
+
   it('opens the reported URL and permits Stop retry only after an attempt settles', () => {
     const running = {
       ...branch,

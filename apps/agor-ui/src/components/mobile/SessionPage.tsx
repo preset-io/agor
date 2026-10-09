@@ -12,8 +12,9 @@ import { useCallback, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { type AppActionsContextValue, AppActionsProvider } from '../../contexts/AppActionsContext';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useAgorStore } from '../../store/agorStore';
-import { makeSessionMcpServerIdsSelector } from '../../store/selectors';
 import { resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { SessionPanel } from '../SessionPanel';
@@ -36,13 +37,16 @@ interface SessionPageProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   onUpdateSession: (sessionId: string, updates: Partial<Session>) => void;
   onDeleteSession: (sessionId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onOpenBranch?: AppActionsContextValue['onOpenBranch'];
   onOpenAgenticToolSettings?: AppActionsContextValue['onOpenAgenticToolSettings'];
 }
-
-const EMPTY_MCP_IDS: string[] = [];
 
 /**
  * Full-screen mobile session view. Reuses the shared desktop `SessionPanel`
@@ -78,14 +82,20 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   const session = resolvedSessionId ? sessionById.get(resolvedSessionId) : undefined;
   const branch = session?.branch_id ? (branchById.get(session.branch_id) ?? null) : null;
   const canonicalSessionId = session?.session_id;
+  // The open session and its branch stay while shown, whatever scope evicts.
+  usePinnedOpenRows({ sessions: [canonicalSessionId] });
 
-  const sessionMcpServerIds =
-    useAgorStore(
-      useMemo(() => makeSessionMcpServerIdsSelector(canonicalSessionId), [canonicalSessionId])
-    ) ?? EMPTY_MCP_IDS;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: sessionMcpServerIds } = useSessionMcpServerIds(client, canonicalSessionId);
 
   const navigate = useNavigate();
   const loading = useAgorStore((state) => state.loading);
+  // "Not loaded" only once the targeted read missed (`useAgorData`), or once a
+  // session this page showed left the store; until then the read may be in flight.
+  const missed = useAgorStore((state) => !!sessionId && state.missingLinkTargets.has(sessionId));
+  const [shownId, setShownId] = useState<string>();
+  if (session && shownId !== sessionId) setShownId(sessionId);
+  const waiting = loading || (!missed && shownId !== sessionId);
   const boardId = sessionBoardId(session, branchById, boardById);
   // X is an exit, not browser Back. Replace this detail entry so a cold link
   // also closes inside Agor. Earlier deliberate navigations remain in history.
@@ -137,11 +147,9 @@ export const SessionPage: React.FC<SessionPageProps> = ({
   if (!session) {
     return (
       <Flex vertical align="center" justify="center" gap="middle" style={{ height: '100%' }}>
-        {loading ? (
+        {waiting ? (
           <Spin size="large" />
         ) : (
-          // Bootstrap may be complete while the data owner fetches an uncached
-          // session. Do not infer a failed request from its absence in the store.
           <Alert
             type="info"
             title="Session not loaded"

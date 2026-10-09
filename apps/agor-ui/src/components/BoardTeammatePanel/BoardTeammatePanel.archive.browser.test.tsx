@@ -31,6 +31,8 @@ function session(id: string, genealogy: Session['genealogy'] = { children: [] })
     agentic_tool: 'codex',
     status: 'idle',
     archived: false,
+    // The fixture authority's own sessions: its user scope holds them.
+    created_by: 'browser-fixture',
     created_at: '2026-09-01T00:00:00.000Z',
     last_updated: '2026-09-01T00:00:00.000Z',
     genealogy,

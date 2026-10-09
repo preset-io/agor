@@ -117,6 +117,9 @@ export function normalizeScheduleAgenticToolConfig(
       ...(config.codex_network_access !== undefined
         ? { codex_network_access: config.codex_network_access }
         : {}),
+      ...(config.codex_include_plugins !== undefined
+        ? { codex_include_plugins: config.codex_include_plugins }
+        : {}),
     };
   }
   if (hasInline) {

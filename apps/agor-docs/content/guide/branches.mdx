@@ -123,9 +123,12 @@ The standalone wait tool is the safer choice when request replay is possible: br
 idempotent, and losing a waited create response does not cancel the branch that was already created.
 Long clones can safely repeat the read-only wait call. A timeout preserves the branch and does not
 cancel or retry materialization; terminal failures return the refreshed branch and its persisted safe
-error. Client cancellation only stops further polling. No database transaction or connection is
-retained between reads; each individual read remains subject to the daemon's normal database query
-timeout.
+error. Every `agor_branches_create` response after the branch exists includes `_create.branch_id`.
+If a wait cannot finish because a read fails or the request is cancelled, the call still returns the
+created branch, with `outcome: "unknown"` on the interrupted wait (`_resolution`, or `_readiness`
+when `waitForReady` is set) instead of a failed create. Client cancellation
+only stops further polling. No database transaction or connection is retained between reads; each
+individual read remains subject to the daemon's normal database query timeout.
 
 ### Source ref resolution
 
@@ -138,6 +141,14 @@ Agor resolves a branch creation's source ref before either worktree or clone mat
 - If matching refs point to different commits, creation fails with an actionable error listing each
   candidate and SHA. Qualify the intended ref rather than relying on a remote-name default.
 - A missing ref fails instead of being rewritten as `origin/<name>`.
+- An omitted source ref (no MCP `sourceBranch`, no CLI `--from`) means the repository's default
+  branch on its registered remote URL. Agor resolves the live commit without resetting the
+  registered checkout's possibly stale local branch, and a retry reuses that recorded remote source.
+  An unavailable remote fails rather than falling back to the local copy; repositories without a
+  remote use their local default.
+- With clone storage, the registered checkout is only a cache. When its refs disagree about an
+  explicit bare branch name, a new branch starts from that branch on the registered remote instead
+  of failing. Everything else keeps the rules above, and worktree storage keeps the strict check.
 
 Successful `agor_branches_create` responses include the concrete `base_ref`, `base_sha`, and an
 explicit `_resolution` object with the requested ref, resolved ref, and full commit SHA. The MCP call
@@ -291,6 +302,8 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
   style={{ maxWidth: '400px' }}
 />
 
+**Workspace** here means the branch’s on-disk Git checkout, not your Cloud tenant.
+
 **Filesystem options:**
 
 - **Leave untouched**: Metadata-only archival. Files stay on disk.
@@ -304,6 +317,12 @@ When a feature ships and the PR merges, you usually want to clean up disk withou
 
 - **Archive (recommended)**: Hides from board, preserves all sessions and conversations for analytics and history.
 - **Delete permanently**: Requests irreversible removal of owned branch files and data. Filesystem preservation is not available for permanent deletion; use archive instead.
+
+The dialog checks runtime support separately from branch permissions. Unsupported
+permanent deletion and external linked-worktree cleanup/removal are disabled with
+an explanation before confirmation. Permanent deletion is never changed to archive.
+On an older daemon without capability diagnostics, filesystem-changing choices
+stay disabled; metadata-only **Leave untouched** remains available with authority.
 
 When cleanup is unavailable, the archive dialog defaults to **Leave untouched**
 and warns that workspace files will remain on disk. It never selects full deletion
@@ -338,10 +357,21 @@ Agents can call **agor_branches_clean** with a branch ID. API clients can call
 `branches.clean({ branchId })` or POST an empty object to
 `/branches/:id/clean`. The response is **accepted**, not completed. Read the
 branch's `workspace_operation` or watch branch updates for its result. The card
-and General tab display pending/running/succeeded/failed/unknown state and safe
-errors in a compact, dismissible notification; hover for its timestamp. Dismissal
-hides the current notification in that view, not the durable operation history.
-A new operation or status change shows a fresh notification.
+and General tab show operation progress and the latest outcome, with readable error
+details and a timestamp on hover.
+
+Branch Managers can use **Dismiss notification for everyone** once an operation
+has finished and the branch has no unresolved workspace or deletion condition.
+Dismissal permanently clears that notification and any retained cleanup error
+for all users, including after refresh. It does not keep an acknowledgement log,
+undo filesystem changes, or reset the last successful cleanup timestamp. A new
+operation can produce a new notification.
+
+Running operations, unknown outcomes, failed provisioning, unavailable active
+workspaces, and unresolved deletions cannot be dismissed this way. Use the
+applicable recovery action or operator reconciliation instead; dismissing a
+notification never releases a maintenance restriction.
+
 `last_cleanup_succeeded_at` records command success, not bytes reclaimed.
 
 Stop environments and finish/cancel outstanding tasks before requesting maintenance.
@@ -354,12 +384,27 @@ retried. After six minutes without a final report, reads display an unknown outc
 Archive Clean uses the same executor cycle and policy. Archive metadata may already
 be saved when a filesystem command fails; filesystem status changes only after
 verified success. Preserve and explicit workspace deletion retain conversation data
-and SDK homes. Workspace removal retains Git refs; it is not branch-history deletion.
+and SDK homes. Workspace removal does not delete refs in a separate shared repository
+or on a remote. However, deleting a clone removes its entire checkout, including
+`.git`: clone-local refs, stashes, and unpushed history can be lost. Push any history
+you need to retain before deleting the checkout.
 Permanent deletion remains the separate full-resource workflow.
 
 Agor checks known task, upload and environment activity. Terminal closure is best-effort;
-detached/unmanaged processes are **not proven stopped**. Archive Clean and explicit
-workspace removal reject delegated/external executors when they would change files.
+detached/unmanaged processes are **not proven stopped**. Delegated/external executors
+support the fixed cleanup command and explicit checkout removal for self-contained
+clones, with verified tenant worktrees/repositories mounts. Missing or inconsistent
+mounts fail closed; an empty executor image directory is not proof of deletion.
+Legacy linked worktrees remain unsupported on external executors. This requires
+matching daemon/executor support; the separate delegated permanent-deletion flag
+does not enable or disable archive cleanup.
+
+Cleanup checks that the checkout is visible before archiving. Executor connectivity,
+unsupported responses, and inaccessible storage are errors, not proof that files
+are absent. Explicit checkout removal instead verifies its managed storage root
+and the checkout's final absence in the removal worker, so an already-absent checkout
+can complete successfully. Leave untouched needs no filesystem executor and never
+claims to free disk space.
 Branch `updated_at` is metadata activity, not evidence of filesystem inactivity.
 There is no scheduler or age cutoff.
 
@@ -525,7 +570,17 @@ workspace's `.git` file. Workspace removal alone does not erase SDK homes or his
 Selecting metadata deletion always requires complete owned-storage removal; preserve
 and clean are archive-only choices.
 
-The CLI `agor branch rm <id>` asks for confirmation; `--force` explicitly confirms
+`branches.get` (also `agor_branches_get`) returns read-only
+`maintenance_capabilities` for `archive_preserve`, `archive_clean`, `archive_remove`,
+and `permanent_delete`, each with `supported` and an explanation when unsupported.
+These are runtime support hints, **not** permission grants or proof of mounted
+storage, idle work, SDK-home ownership, or a settled prior invocation. Request
+admission rechecks all requirements. API/MCP clients should read these before
+offering an operation. The public `/health` response exposes the non-secret
+`features.permanentBranchDeletion` gate for operator diagnostics; a missing field
+on an older daemon means unknown, not enabled. Neither diagnostic enables deletion.
+
+The CLI `agor branch rm <id>` checks runtime support before asking for confirmation; `--force` explicitly confirms
 non-interactive deletion. The former `--from-filesystem` flag is now redundant.
 
 Deletion is asynchronous. Acceptance is **not completion**: the branch stays visible
@@ -554,6 +609,21 @@ rejected by default; operators may set `execution.delegated_branch_deletion: tru
 only when every deletion executor mounts the tenant's worktrees, base repositories,
 and `branch-homes` from the same persistent volume. The executor verifies that
 these roots are mounted separately from its container filesystem before deleting.
+Mount roots must be real directories, not symlink aliases, and the SDK-home target
+must be exactly `<tenantDataRoot>/branch-homes/<branchId>`. Deletion runs with the
+requesting Manager's delegated home key and credentials, not the branch creator's.
+The caller's shared execution home is not a deletion target.
+
+If deletion reports that it is **not enabled for this delegated/external executor**,
+the request was refused before deletion started. This is a deployment capability
+gate, not a missing branch permission. An operator must first deploy a compatible
+launcher and executor with the mount contract above, then enable the opt-in through
+the deployment's configuration owner. Enabling the flag alone does not provide
+storage or prove containment. Generic command-template and HA external executors
+also hit this gate; being able to run prompts or environment commands does not prove
+that a deletion executor can remove persistent branch storage. Archive is not a
+substitute for permanent deletion.
+
 Historical SDK sessions using a shared execution home also block deletion until
 their owned storage is reconciled; the shared user home is never recursively
 removed. Remote Git refs and

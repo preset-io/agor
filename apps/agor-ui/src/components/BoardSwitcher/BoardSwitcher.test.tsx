@@ -1,6 +1,8 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from './BoardSwitcher';
 
 const modalProps = vi.hoisted(() => ({ current: null as Record<string, unknown> | null }));
@@ -113,6 +115,15 @@ describe('BoardSwitcher long-name layout', () => {
 });
 
 describe('BoardSwitcher current-board edit shortcut', () => {
+  it('opens its board list on the shell event', async () => {
+    renderSwitcher();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    act(() => {
+      requestShellPicker(OPEN_BOARD_SWITCHER_EVENT);
+    });
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+  });
+
   it('allows the primary owner without consulting a legacy owners route', async () => {
     renderSwitcher(clientFor({ reject: { code: 500 } }));
     expect(await screen.findByRole('button', { name: /Edit current board:/ })).toBeVisible();
@@ -202,5 +213,26 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     renderSwitcher();
     const edit = await screen.findByRole('button', { name: /Edit current board:/ });
     expect(edit).toBeVisible();
+  });
+});
+
+describe('BoardSwitcher branch-count badges (Step 3)', () => {
+  afterEach(() => setRealtimeAuthorityScope(null));
+
+  it('reads each board count from the branch-counts aggregate with the store empty', async () => {
+    setRealtimeAuthorityScope('owner-1:member:1');
+    const client = {
+      service: (name: string) => ({
+        find: vi.fn(async () =>
+          name === 'branch-counts' ? [{ board_id: board.board_id, branch_count: 7 }] : []
+        ),
+        on: vi.fn(),
+        off: vi.fn(),
+      }),
+    } as unknown as AgorClient;
+    const { container } = renderSwitcher(client);
+    fireEvent.click(container.querySelector('button.ant-dropdown-trigger') as HTMLButtonElement);
+    const item = await screen.findByRole('menuitem');
+    await waitFor(() => expect(item.querySelector('.ant-badge-count')).toHaveTextContent('7'));
   });
 });

@@ -1,196 +1,93 @@
-import type { AgorClient } from '@agor-live/client';
-import { BulbOutlined, FileOutlined, SearchOutlined } from '@ant-design/icons';
-import { Button, Card, Empty, Input, List, Space, Typography, theme } from 'antd';
-import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
+import type { AgorClient, KnowledgeNamespace } from '@agor-live/client';
+import { Button, Flex, Input, theme } from 'antd';
+import { memo, useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { buildKnowledgeRoutePath, namespaceSlugFromUri } from '../../utils/knowledgeRoutes';
-import { formatRelativeTime } from '../../utils/time';
-import { KnowledgeNamespacePill } from '../Pill';
-import { glassCardStyle } from './homeStyles';
-import type { KnowledgeDocument } from './types';
+import { getTimeMs } from '../../utils/entityTime';
+import { buildKnowledgeRoutePath } from '../../utils/knowledgeRoutes';
+import { HomeCard, HomeLink, HomeSection, HomeSectionError } from './HomeSection';
 
-const { Text } = Typography;
+const HOME_KNOWLEDGE_SPACES = 5;
+// Personal and assistant-memory spaces stay out of Home's shortcuts.
+const SHARED_KINDS = new Set<KnowledgeNamespace['kind']>(['global', 'team', 'repo']);
 
-/** Home shows the most recently updated docs; the full list lives on /knowledge. */
-export const HOME_KNOWLEDGE_LIMIT = 50;
+export const pickSpaces = (spaces: KnowledgeNamespace[]) =>
+  spaces
+    .filter((space) => SHARED_KINDS.has(space.kind))
+    .sort((a, b) => (getTimeMs(b, 'updated_at') || 0) - (getTimeMs(a, 'updated_at') || 0))
+    .slice(0, HOME_KNOWLEDGE_SPACES);
 
-const normalizeFindResult = <T,>(result: T[] | { data?: T[]; total?: number }) =>
-  Array.isArray(result)
-    ? { rows: result, total: result.length }
-    : { rows: result.data ?? [], total: result.total ?? result.data?.length ?? 0 };
-
-const KnowledgeDocRow: React.FC<{ doc: KnowledgeDocument }> = ({ doc }) => {
-  const { token } = theme.useToken();
-  const navigate = useNavigate();
-  const namespace = namespaceSlugFromUri(doc.uri);
-  const path = buildKnowledgeRoutePath('/knowledge', namespace, doc.path);
-  return (
-    <List.Item onClick={() => navigate(path)} style={{ cursor: 'pointer', padding: '10px 0' }}>
-      <List.Item.Meta
-        avatar={
-          doc.icon_emoji ? (
-            <span style={{ fontSize: 18, lineHeight: '22px' }}>{doc.icon_emoji}</span>
-          ) : (
-            <FileOutlined style={{ color: token.colorTextTertiary }} />
-          )
-        }
-        title={
-          <Space size={6} style={{ maxWidth: '100%' }}>
-            <Text ellipsis={{ tooltip: doc.title || doc.path }} style={{ minWidth: 0 }}>
-              {doc.title || doc.path}
-            </Text>
-            <KnowledgeNamespacePill
-              namespace={namespace || 'Knowledge'}
-              style={{ marginInlineEnd: 0 }}
-            />
-          </Space>
-        }
-        description={
-          <Space size={6} wrap>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {doc.path}
-            </Text>
-            {doc.updated_at && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                · {formatRelativeTime(doc.updated_at)}
-              </Text>
-            )}
-          </Space>
-        }
-      />
-    </List.Item>
-  );
-};
-
-export const HomeKnowledgeSection: React.FC<{ client: AgorClient | null; connected?: boolean }> = ({
+/** Knowledge behind search plus a few spaces; the full list lives on /knowledge. */
+export const HomeKnowledgeSection = memo(function HomeKnowledgeSection({
   client,
   connected,
-}) => {
+}: {
+  client: AgorClient | null;
+  connected?: boolean;
+}) {
   const { token } = theme.useToken();
   const navigate = useNavigate();
-  const cardGlassStyle = glassCardStyle(token);
-  const [docs, setDocs] = useState<KnowledgeDocument[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
+  const [spaces, setSpaces] = useState<KnowledgeNamespace[]>([]);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
-  const filteredDocs = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return docs;
-    return docs.filter(
-      (d) => (d.title || d.path).toLowerCase().includes(q) || d.path.toLowerCase().includes(q)
-    );
-  }, [docs, query]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the load on retry
   useEffect(() => {
+    if (!client || !connected) return;
     let cancelled = false;
-    if (!client || !connected) {
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    setError(null);
+    setFailed(false);
     client
-      .service('kb/documents')
-      .find({ query: { archived: false, $limit: HOME_KNOWLEDGE_LIMIT, $sort: { updated_at: -1 } } })
+      .service('kb/namespaces')
+      .find({ query: { archived: false } })
       .then((result) => {
-        if (cancelled) return;
-        const page = normalizeFindResult(
-          result as KnowledgeDocument[] | { data?: KnowledgeDocument[]; total?: number }
-        );
-        setDocs(page.rows);
-        setTotal(page.total);
+        const rows = Array.isArray(result)
+          ? result
+          : ((result as { data?: KnowledgeNamespace[] }).data ?? []);
+        if (!cancelled) setSpaces(pickSpaces(rows));
       })
       .catch(() => {
-        if (!cancelled) setError('Failed to load knowledge docs');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [client, connected]);
+  }, [client, connected, attempt]);
+
   return (
-    <section
-      aria-label="Knowledge base"
-      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+    <HomeSection
+      id="knowledge"
+      title="Knowledge"
+      extra={<HomeLink onClick={() => navigate('/knowledge')}>Browse knowledge</HomeLink>}
     >
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8, gap: 6 }}>
-        <BulbOutlined style={{ color: token.colorTextSecondary, fontSize: 13 }} />
-        <Text strong style={{ fontSize: 14, flex: 1 }}>
-          Knowledge
-        </Text>
-        <Input
-          size="small"
-          placeholder="Search..."
-          prefix={<SearchOutlined style={{ color: token.colorTextQuaternary, fontSize: 11 }} />}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          allowClear
-          style={{ flex: '0 1 120px', minWidth: 80, fontSize: 12 }}
-        />
-        <Button
-          type="link"
-          size="small"
-          style={{ padding: 0, fontSize: 12 }}
-          onClick={() => navigate('/knowledge')}
-        >
-          {total > docs.length ? `View all ${total}` : 'View all'}
-        </Button>
-      </div>
-      <Card
-        loading={loading}
-        style={{
-          flex: 1,
-          minHeight: 0,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          borderRadius: token.borderRadiusLG,
-          ...cardGlassStyle,
-        }}
-        styles={{
-          body: {
-            padding: 0,
-            height: '100%',
-            overflow: 'auto',
-            background: 'transparent',
-          },
-        }}
-      >
-        {error ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={error}
-            style={{ padding: '24px 0' }}
+      <HomeCard padded>
+        <Flex vertical gap={token.marginSM}>
+          <Input.Search
+            allowClear
+            placeholder="Search docs and specs"
+            aria-label="Search knowledge"
+            onSearch={(q) =>
+              q.trim() && navigate(`/knowledge?${new URLSearchParams({ q: q.trim() })}`)
+            }
           />
-        ) : docs.length === 0 && !connected ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Reconnect to refresh Knowledge"
-            style={{ padding: '24px 0' }}
-          />
-        ) : docs.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No Knowledge docs yet"
-            style={{ padding: '24px 0' }}
-          />
-        ) : filteredDocs.length === 0 ? (
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="No matching docs"
-            style={{ padding: '24px 0' }}
-          />
-        ) : (
-          <List
-            rowKey="document_id"
-            dataSource={filteredDocs}
-            renderItem={(doc) => <KnowledgeDocRow doc={doc} />}
-            style={{ padding: '0 12px' }}
-          />
-        )}
-      </Card>
-    </section>
+          {failed ? (
+            <HomeSectionError message="Couldn’t load knowledge spaces." onRetry={retry} />
+          ) : (
+            spaces.length > 0 && (
+              <Flex gap={token.marginXS} wrap>
+                {spaces.map((space) => (
+                  <Button
+                    key={space.namespace_id}
+                    size="small"
+                    onClick={() => navigate(buildKnowledgeRoutePath('/knowledge', space.slug))}
+                  >
+                    {space.display_name}
+                  </Button>
+                ))}
+              </Flex>
+            )
+          )}
+        </Flex>
+      </HomeCard>
+    </HomeSection>
   );
-};
+});

@@ -25,6 +25,7 @@ import {
 } from '@agor/core/types';
 import { describe, expect, it, type MockInstance, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { createDeploymentToolUnsupportedGate } from '../integrations/opencode/deployment-capabilities.js';
 import {
   materializeScheduleAgenticToolConfig,
   renderSchedulePrompt,
@@ -152,6 +153,46 @@ function createSchedulerApp(db: SchedulerDb) {
   } as unknown as ConstructorParameters<typeof SchedulerService>[1];
   return { app, prompt, removeSession, sessionEvent, workIdentity };
 }
+
+describe('scheduler deployment capability admission', () => {
+  for (const hosted of [true, false]) {
+    dbTest(`${hosted ? 'refuses' : 'admits'} an OpenCode occurrence`, async ({ db }) => {
+      const { creator, schedule } = await seedRunnableSchedule(
+        db,
+        { email: `scheduler-opencode-${generateId()}@example.com`, name: 'Owner' },
+        {
+          agentic_tool: 'opencode',
+          model_config: { mode: 'exact', provider: 'anthropic', model: 'claude-sonnet-4-5' },
+        }
+      );
+      const { app, prompt } = createSchedulerApp(db);
+      const gate = vi.fn(
+        createDeploymentToolUnsupportedGate(
+          hosted ? { multi_tenancy: { mode: 'required_from_auth' } } : {}
+        )
+      );
+      const scheduler = new SchedulerService(db, app, {
+        deploymentPolicy: { managed: true, installed: new Set(['opencode']) },
+        deploymentToolUnsupported: gate,
+      });
+      const run = scheduler.executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: creator.user_id,
+      });
+      if (hosted) {
+        await expect(run).rejects.toMatchObject({ reason: { code: 'hosted_tenancy' } });
+        expect(prompt).not.toHaveBeenCalled();
+      } else {
+        await run;
+        expect(prompt).toHaveBeenCalledOnce();
+      }
+      expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+        hosted ? 0 : 1
+      );
+      expect(gate).toHaveBeenCalledWith('opencode');
+    });
+  }
+});
 
 describe('scheduler HA occurrence recovery', () => {
   const killStages = [
@@ -1153,6 +1194,7 @@ describe('materializeScheduleAgenticToolConfig', () => {
             sandboxMode: 'danger-full-access',
             approvalPolicy: 'never',
             networkAccess: true,
+            includePlugins: false,
           },
         },
         model_config: {

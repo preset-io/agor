@@ -14,7 +14,7 @@ heroImage: '/mcp_self_aware.png'
   />
 </div>
 
-**Anything a user can do in Agor, an agent can do too.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server**, a structured automation surface that turns every session into a self-aware orchestrator.
+**Agents drive Agor through the same API as the UI.** The same daemon that serves the UI's REST and WebSocket APIs also exposes a built-in **Model Context Protocol (MCP) server**, a structured automation surface that turns every session into a self-aware orchestrator.
 
 This is the foundational layer: [teammates](/guide/teammates), [scheduled prompts](/guide/scheduler), [cards](/guide/cards), [artifacts](/guide/artifacts), and the [message gateway](/guide/message-gateway) are all built on top of it.
 
@@ -22,10 +22,10 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 
 ## Key Ideas
 
-- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service. Sessions, branches, boards, zones, users, environments. Anything you can click or reach via the `agor` CLI is available as JSON-RPC.
+- **Agents as first-class users:** Every MCP tool wraps a FeathersJS service, under the same permissions as the user the agent acts for. Sessions, branches, boards, zones, cards, environments, schedules, artifacts, knowledge, and the gateway are all covered. A few actions stay in the UI: some are human-only by design (approving tool permissions, personal API keys, a teammate's Knowledge policy), and some admin work (permanent deletes, groups, workspace and agentic-tool settings) has no MCP tool yet.
 - **Self-aware sessions:** Each session is auto-issued a scoped MCP token, so the agent already knows _which_ session, branch, and board it's in, and can act on that context.
 - **No separate server:** MCP is part of the daemon. Nothing to install, nothing extra to run.
-- **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even invite new users).
+- **Remote access:** External agents and dashboards can connect over HTTP to drive Agor (create boards, branches, or even new users).
 
 > MCP is enabled by default and every session already has credentials injected. No setup required for in-Agor agents.
 
@@ -37,9 +37,13 @@ This is the foundational layer: [teammates](/guide/teammates), [scheduled prompt
 | **Repositories**      | List repositories, clone remote repos, register local repos, manage repo metadata                                            |
 | **Branches & Boards** | List or fetch branches, create new ones, assign them to boards, update metadata, move cards, request policy-approved cleanup |
 | **Board Zones**       | Create zones on boards, update zone properties (position, size, color), manage zone triggers                                 |
-| **Tasks & Reports**   | Fetch task history, cancel selected queued tasks, reorder pending work, generate reports                                     |
-| **Users & Teams**     | Create users, update profiles or avatars, assign roles, invite collaborators                                                 |
-| **Context Resources** | Enumerate context files, load concept docs, ingest repo metadata                                                             |
+| **Tasks**             | Fetch task history, cancel selected queued tasks, reorder pending work                                                       |
+| **Environments**      | Start, stop, health-check, and read logs for branch environments                                                             |
+| **Cards & Artifacts** | Create, move, and update cards and card types; publish, update, and inspect artifacts                                        |
+| **Schedules**         | Create, update, delete, and run scheduled prompts                                                                            |
+| **Knowledge**         | Search, read, write, link, and publish Knowledge documents; append teammate memory                                           |
+| **Gateway**           | Post to connected channels; read Slack threads and channel history (channel setup is admin-only)                             |
+| **Users**             | Create users, update profiles or avatars, assign roles                                                                       |
 
 Because tools route through FeathersJS services, every action emits the same events the UI listens to. Real-time updates appear instantly for everyone watching the board.
 
@@ -218,6 +222,23 @@ From there agents can:
 
 This self-awareness is what lets agents behave like team members instead of detached copilots.
 
+### Choosing a tool for a new session
+
+For `agor_sessions_create`, omit `agenticTool` unless the task needs a specific
+coding agent. Agor uses the **authenticated caller's Primary coding agent**
+from Settings → Preferences, not the calling session's tool or its owner's
+preference. If no primary coding agent is set, the call fails without creating
+a session. Set the preference or pass `agenticTool` explicitly.
+
+The selected tool follows the same configuration resolution as an explicit
+tool choice: the caller's saved configuration or selected preset, with workspace
+defaults and policies applied by the session service. Explicit overrides such as
+`modelConfig` retain their existing behavior. A disabled tool is rejected;
+Agor does not silently substitute another tool.
+
+This does not change the Add session picker or parent-tool inheritance for
+spawn and fork.
+
 ## Automation Examples
 
 Branch materialization is asynchronous by default. For the most discoverable one-call flow, an
@@ -234,7 +255,10 @@ Both wait paths check immediately and then once per second. The default wait is 
 single call is capped at 5 minutes. Values longer than the MCP client's request deadline require a
 matching client or host timeout. After a timeout, keep the returned branch ID and safely call the
 read-only wait tool again. Losing a waited create response does not cancel the already-created branch,
-so do not blindly replay branch creation.
+so do not blindly replay branch creation. Once the branch exists, every create response is JSON with a
+`_create` object carrying its `branch_id`; if the wait itself fails (for example, a read error or
+cancellation), the interrupted wait (`_resolution` or `_readiness`) reports `outcome: "unknown"`
+with a reason, and `_readiness` names the wait tool to call next.
 
 - **Repository bootstrap:** "Clone this GitHub repo, create a branch off `main`, and start the dev environment automatically."
 - **Zone-based workflows:** "Create a 'Human PR Review' zone on the board, positioned based on existing zones, with a trigger that prompts for review feedback."

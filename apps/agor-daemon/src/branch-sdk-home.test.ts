@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchSdkHomeAuthUnsupportedReason,
+  branchSdkHomeUnsupportedReason,
+  isHostedOpenCode,
   resolveBranchSdkHomeLaunch,
   resolveExecutionSdkHomeEnv,
   resolveNewSessionSdkHomeScope,
@@ -39,6 +41,31 @@ describe('sessionUsesBranchSdkHome', () => {
     expect(() =>
       sessionUsesBranchSdkHome({ sessionScope: 'branch', branchSdkHomeIntent: null })
     ).toThrow(/refusing fallback/);
+  });
+});
+
+describe('hosted OpenCode branch SDK homes', () => {
+  const hosted = {
+    multi_tenancy: { mode: 'required_from_auth' as const },
+    execution: {
+      unix_user_mode: 'delegated' as const,
+      executor_command_template: 'launch {task_id}',
+      executor_storage: { user_home: 'persistent-per-user' as const },
+      sandbox: { sdk_home_mode: 'per_branch' as const },
+    },
+  };
+
+  it('admits hosted OpenCode, whose credentials stay on Job scratch', () => {
+    expect(isHostedOpenCode(hosted)).toBe(true);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(hosted))).toBeUndefined();
+  });
+
+  it('keeps refusing local OpenCode, whose data home holds native credentials', () => {
+    const local = { execution: { unix_user_mode: 'sandbox' as const } };
+    expect(isHostedOpenCode(local)).toBe(false);
+    expect(branchSdkHomeUnsupportedReason('opencode', isHostedOpenCode(local))).toMatch(
+      /credentials/
+    );
   });
 });
 
@@ -225,7 +252,12 @@ describe('Gemini execution-home projection', () => {
       await close();
     `,
         ],
-        { cwd: process.cwd(), env: { ...process.env, ...env }, encoding: 'utf8', timeout: 30000 }
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, AGOR_EXECUTOR_SCRATCH_ROOT: undefined, ...env },
+          encoding: 'utf8',
+          timeout: 30000,
+        }
       );
       rmSync(executionHome, { recursive: true, force: true });
       rmSync(branchHome, { recursive: true, force: true });

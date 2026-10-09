@@ -2,17 +2,25 @@
  * Transport-neutral session ↔ MCP relationship store actions.
  *
  * REST mutation confirmations and websocket events both use these idempotent
- * actions. Bumping the hydration revision ensures either transport racing an
- * in-flight relationship snapshot causes that stale snapshot to be discarded.
+ * actions. Each stamps what it wrote for the touched fence of an in-flight
+ * per-session read (`sessionMcpLinks`): a link event its pair, a complete
+ * selection its session. Links enter only for a session something holds
+ * (`holdsSession`), like the rows themselves.
  */
 import { bumpRevision } from './agorHydration';
 import { type AgorState, agorStore } from './agorStore';
+import { holdsSession } from './retention';
+import { sessionMcpPairKey } from './sessionMcpLinks';
 
 const setMap: AgorState['setMap'] = (key, value) => agorStore.getState().setMap(key, value);
 
 export function sessionMcpCreated(relationship: { session_id: string; mcp_server_id: string }) {
   if (agorStore.getState().deletedMcpServerIds.has(relationship.mcp_server_id)) return;
-  bumpRevision('sessionMcp');
+  bumpRevision(
+    'sessionMcp',
+    sessionMcpPairKey(relationship.session_id, relationship.mcp_server_id)
+  );
+  if (!holdsSession(relationship.session_id)) return;
   setMap('sessionMcpServerIds', (prev) => {
     const sessionMcpIds = prev.get(relationship.session_id) || [];
     if (sessionMcpIds.includes(relationship.mcp_server_id)) return prev;
@@ -24,7 +32,10 @@ export function sessionMcpCreated(relationship: { session_id: string; mcp_server
 }
 
 export function sessionMcpRemoved(relationship: { session_id: string; mcp_server_id: string }) {
-  bumpRevision('sessionMcp');
+  bumpRevision(
+    'sessionMcp',
+    sessionMcpPairKey(relationship.session_id, relationship.mcp_server_id)
+  );
   setMap('sessionMcpServerIds', (prev) => {
     const sessionMcpIds = prev.get(relationship.session_id) || [];
     const filtered = sessionMcpIds.filter((id) => id !== relationship.mcp_server_id);
@@ -39,7 +50,8 @@ export function sessionMcpRemoved(relationship: { session_id: string; mcp_server
 
 /** Initialization publishes the complete selection, not an incremental relationship. */
 export function sessionMcpPatched(selection: { session_id: string; mcp_server_ids: string[] }) {
-  bumpRevision('sessionMcp');
+  bumpRevision('sessionMcp', selection.session_id);
+  if (!holdsSession(selection.session_id)) return;
   setMap('sessionMcpServerIds', (prev) => {
     const current = prev.get(selection.session_id) || [];
     const deleted = agorStore.getState().deletedMcpServerIds;

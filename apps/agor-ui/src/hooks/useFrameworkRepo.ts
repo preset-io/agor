@@ -1,4 +1,5 @@
 import {
+  isPrivateTeammateFrameworkFork,
   type Repo,
   TEAMMATE_FRAMEWORK_REPO_SLUG,
   TEAMMATE_FRAMEWORK_REPO_URL,
@@ -22,12 +23,7 @@ function findBestFrameworkRepo(repos: Repo[]): Repo | undefined {
 
   for (const r of repos) {
     // Highest priority: private fork
-    if (
-      r.slug?.includes('agor-assistant-private') ||
-      r.slug?.includes('agor-teammate-private') ||
-      r.remote_url?.includes('agor-teammate-private') ||
-      r.remote_url?.includes('agor-assistant-private')
-    ) {
+    if (isPrivateTeammateFrameworkFork(r)) {
       return r;
     }
     // Exact public slug

@@ -8,6 +8,11 @@ export const HistoryTextChoices = createContext<{
   setChoice: (key: string, expanded: boolean) => void;
 } | null>(null);
 
+/** Choice keys name their turn, so the conversation can forget a trimmed turn's choices. */
+export const historyTextKey = (taskId: string | undefined, part: string) =>
+  `task:${taskId}:${part}`;
+export const historyTextKeyTurn = (key: string) => key.split(':')[1];
+
 export function HistoryMarkdown({
   textKey,
   defaultExpanded,

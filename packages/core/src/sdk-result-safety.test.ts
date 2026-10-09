@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  claudeResultFailureCode,
   projectClaudeResultResponse,
   projectContextUsageSnapshot,
   projectNormalizedSdkResponse,
@@ -142,5 +143,24 @@ describe('normalized SDK response projection', () => {
     expect(
       projectContextUsageSnapshot({ totalTokens: 1, maxTokens: Infinity, percentage: 1 })
     ).toBeUndefined();
+  });
+});
+
+describe('claudeResultFailureCode', () => {
+  it('keeps only the closed failure code, never provider prose', () => {
+    expect(
+      claudeResultFailureCode({
+        type: 'result',
+        subtype: 'error_max_turns',
+        is_error: true,
+        errors: ['SENTINEL_PROSE'],
+        result: 'SENTINEL_RESULT',
+      })
+    ).toBe('error_max_turns');
+    expect(claudeResultFailureCode({ type: 'result', subtype: 'success', is_error: true })).toBe(
+      'is_error'
+    );
+    expect(claudeResultFailureCode({ type: 'result', subtype: 'success' })).toBeUndefined();
+    expect(claudeResultFailureCode({ type: 'result', subtype: 'SENTINEL' })).toBeUndefined();
   });
 });

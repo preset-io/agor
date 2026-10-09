@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { App, ConfigProvider } from 'antd';
 import type React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { SessionMcpFooterControl } from './SessionMcpFooterControl';
 
 const permissionState = vi.hoisted(() => ({ isAdmin: true, role: 'admin' }));
@@ -35,11 +36,13 @@ vi.mock('../MCPServerSelect', () => ({
   MCPServerSelect: ({
     onChange,
     mcpServers,
+    disabled,
   }: {
     onChange: (ids: string[]) => void;
     mcpServers: MCPServer[];
+    disabled?: boolean;
   }) => (
-    <div>
+    <div data-testid="session-mcp-select" data-disabled={String(!!disabled)}>
       <span data-testid="available-servers">
         {mcpServers.map((server) => server.name).join(',')}
       </span>
@@ -88,6 +91,36 @@ describe('SessionMcpFooterControl overlay lifecycle', () => {
     connectionState.authGeneration = 1;
     vi.clearAllMocks();
     findServers.mockResolvedValue([server]);
+    agorStore.getState().reset();
+    agorStore.getState().markSessionMcpLoaded('session-id');
+  });
+
+  it('keeps the picker disabled and sends no diff until the session links are loaded', async () => {
+    agorStore.getState().resetSessionMcpLoaded();
+    render(
+      <SessionMcpFooterControl
+        client={client}
+        currentUserId="user-a"
+        sessionId="session-id"
+        sessionMcpServerIds={[server.mcp_server_id]}
+        mcpServerById={new Map([[server.mcp_server_id, server]])}
+        userAuthenticatedMcpServerIds={new Set()}
+      />,
+      { wrapper: Wrapper }
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^MCP servers\./ }));
+    await waitFor(() =>
+      expect(screen.getByTestId('available-servers')).toHaveTextContent('portal-server')
+    );
+    expect(screen.getByTestId('session-mcp-select')).toHaveAttribute('data-disabled', 'true');
+    // Even a change that reaches the handler is dropped: the ids may be partial.
+    fireEvent.click(screen.getByRole('button', { name: 'replace-session-mcp' }));
+    expect(updateSessionMcpServers).not.toHaveBeenCalled();
+
+    act(() => agorStore.getState().markSessionMcpLoaded('session-id'));
+    expect(screen.getByTestId('session-mcp-select')).toHaveAttribute('data-disabled', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'replace-session-mcp' }));
+    await waitFor(() => expect(updateSessionMcpServers).toHaveBeenCalledOnce());
   });
 
   it('explains a permanent session-configuration denial rather than suggesting retry', async () => {

@@ -1,4 +1,5 @@
 import { type BoardID, boardPath, type SessionID, sessionPath } from '@agor-live/client';
+import { matchPath, type NavigateFunction } from 'react-router-dom';
 import { resolveUiRuntime, routerBasenameForRuntime } from '../config/urlRuntime';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from './urlResolution';
 
@@ -19,6 +20,34 @@ export function uiRouteHref(path: string, baseUrl = import.meta.env.BASE_URL): s
   return `${getRouterBasename(baseUrl)}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/**
+ * Whether Back stays inside Agor. The browser router keeps `idx` in history state across
+ * replaces, so a redirected deep link still counts as the first entry; without that state (memory-router tests) the key decides.
+ */
+export function hasInAppHistory(locationKey: string): boolean {
+  const idx = (typeof window === 'undefined' ? undefined : window.history.state)?.idx;
+  return typeof idx === 'number' ? idx > 0 : locationKey !== 'default';
+}
+
+/** Back one entry when `canPop`; else to `fallback`, replacing this entry so Back from there skips it. */
+export function backOr(navigate: NavigateFunction, canPop: boolean, fallback: string): void {
+  if (canPop) navigate(-1);
+  else navigate(fallback, { replace: true });
+}
+
+/** Whether `pathname` belongs to the mobile shell (`/m` and below). */
+export const isMobileShellPath = (pathname: string): boolean =>
+  matchPath({ path: '/m', end: false }, pathname) !== null;
+
+/** Directory of AI teammates shared with the caller; `/m` prefixes it on mobile. */
+export const TEAMMATES_ROUTE_PATH = '/teammates';
+export const MOBILE_TEAMMATES_ROUTE_PATH = `/m${TEAMMATES_ROUTE_PATH}`;
+const TEAMMATES_ROUTE_PATHS = [TEAMMATES_ROUTE_PATH, MOBILE_TEAMMATES_ROUTE_PATH] as const;
+
+/** Whether `pathname` is the teammates directory on either shell, trailing slash included. */
+export const isTeammatesRoute = (pathname: string): boolean =>
+  TEAMMATES_ROUTE_PATHS.some((path) => matchPath({ path, end: true }, pathname) !== null);
+
 type ResponsiveRouteEntities = {
   boards: Iterable<{ board_id: string; slug?: string }>;
   sessions: Iterable<{ session_id: string }>;
@@ -30,6 +59,9 @@ export function responsiveRoutePath(
   target: 'mobile' | 'desktop',
   entities: ResponsiveRouteEntities
 ): string {
+  if (isTeammatesRoute(pathname)) {
+    return target === 'mobile' ? MOBILE_TEAMMATES_ROUTE_PATH : TEAMMATES_ROUTE_PATH;
+  }
   if (target === 'mobile') {
     const boardToken = pathname.match(/^\/b\/([^/]+)\/?$/)?.[1];
     if (boardToken) {

@@ -214,6 +214,36 @@ describe('TaskRuntimeReconciler', () => {
     expect(getTrackedExecutor).toHaveBeenCalledWith(local.session_id, expect.anything());
   });
 
+  it('resumes a committed refused launch with absence proof, and no other cause', async () => {
+    const stranded = (id: string, cause: string) => ({
+      task_id: `018f0000-0000-7000-8000-0000000000${id}`,
+      session_id: `018f0000-0000-7000-8000-0000000001${id}`,
+      status: 'stopping',
+      executor_mode: 'templated',
+      termination_request: { cause, requested_at: '2026-01-01T00:00:00.000Z' },
+    });
+    const refused = stranded('61', 'launch_refused');
+    const lost = stranded('71', 'heartbeat_lost');
+    discovery.termination.mockResolvedValue([
+      { task_id: refused.task_id },
+      { task_id: lost.task_id },
+    ]);
+    const { create } = harness({ [refused.task_id]: refused, [lost.task_id]: lost });
+
+    await create().checkOnce();
+
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId: refused.task_id,
+        cause: 'launch_refused',
+        absenceVerified: true,
+      })
+    );
+    expect(requestExecutorTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: lost.task_id, absenceVerified: false })
+    );
+  });
+
   it('advances saturated keyset scans past a failing candidate and wraps after exhaustion', async () => {
     const firstId = '018f0000-0000-7000-8000-000000000071';
     const secondId = '018f0000-0000-7000-8000-000000000072';

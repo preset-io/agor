@@ -1,98 +1,51 @@
-# context/ — fast orientation for agents
+# context/
 
-This folder is **not** Agor's documentation. The user-facing docs live in [`apps/agor-docs/content/guide/`](../apps/agor-docs/content/guide/) and on [agor.live](https://agor.live).
+Agent-oriented contracts, pitfalls, and house rules that are not derivable from code. User and
+operator documentation lives in [`apps/agor-docs/content/guide/`](../apps/agor-docs/content/guide/);
+link to it instead of duplicating it. Code wins when a doc here drifts.
 
-This folder is a small set of **agent-oriented cheat sheets** — tight pointers, file maps, gotchas, and design rationale that an LLM dropped into the repo would actually want to skim before opening code.
+Keep this folder small. Investigation reports, audits, plans, and validation evidence belong in the
+issue or PR; git history keeps deleted docs.
 
-## Working principles
+## `concepts/` — how the system works and what must stay true
 
-- **Code is ground truth.** If a doc here drifts from the code, the code wins.
-- **Guides are user truth.** If a topic has a guide page, this folder links to it instead of duplicating it.
-- **Keep it small.** A bloated `context/` is a tax on every agent that loads it.
+| File                                                                        | Covers                                                                    |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| [`core.md`](concepts/core.md)                                               | The primitives (Branch, Board, Session, Task, Report).                    |
+| [`architecture.md`](concepts/architecture.md)                               | System shape and where to look first.                                     |
+| [`branches.md`](concepts/branches.md)                                       | Branch-centric boards (read before touching boards).                      |
+| [`id-management.md`](concepts/id-management.md)                             | UUIDv7, branded ID types, short-ID resolution.                            |
+| [`multitenancy.md`](concepts/multitenancy.md)                               | Tenant triggers, resource classification, code owners, proof.             |
+| [`security.md`](concepts/security.md)                                       | CSP, CORS, and daemon-wide git config hardening.                          |
+| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md)   | Daemon-host filesystem capability guard.                                  |
+| [`task-queueing.md`](concepts/task-queueing.md)                             | Task lifecycle and queue-on-busy semantics.                               |
+| [`task-runtime-state.md`](concepts/task-runtime-state.md)                   | Task states, executor liveness, pulses, watchdogs, and containment.       |
+| [`session-sharing.md`](concepts/session-sharing.md)                         | Shared session prompting: gates, compatibility, caller identity.          |
+| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                     | `agor_sessions_*` MCP tool surface and override semantics.                |
+| [`mcp-catalog.md`](concepts/mcp-catalog.md)                                 | Curated catalog, Connect probes, OAuth/bearer reuse, disclosure contract. |
+| [`mcp-egress-gateway.md`](concepts/mcp-egress-gateway.md)                   | Daemon-owned MCP egress: credential boundary and admission contract.      |
+| [`discord-gateway.md`](concepts/discord-gateway.md)                         | Discord gateway: provider-owned history, cursor, and admission contract.  |
+| [`opencode-hosted.md`](concepts/opencode-hosted.md)                         | Hosted OpenCode capability gate and checkpointed native state.            |
+| [`user-first-scoped-hydration.md`](concepts/user-first-scoped-hydration.md) | Browser data layers: user scope, board partitions, on-demand reads.       |
 
-Routine investigation reports, audit snapshots, before/after evidence, and validation receipts
-belong in the issue or PR, not this folder or dated `docs/internal/` files. For lasting user-facing
-behavior, update the relevant guide; for durable implementation contracts, update an existing
-cheat sheet or code comment before adding another document.
+## `guides/` — procedures
 
----
+- [`extending-feathers-services.md`](guides/extending-feathers-services.md) — services, methods, hooks.
+- [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (SQLite + Postgres).
+- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — branch RBAC and simple/sandbox/delegated execution.
+- [`migrate-strict-to-sandbox.md`](guides/migrate-strict-to-sandbox.md) — operator runbook for the 0.24.7 → 0.25.1 `strict`/`insulated` → `sandbox` cutover.
+- [`gemini-live-smoke.md`](guides/gemini-live-smoke.md) — the live Gemini smoke workflow.
+- Releases and SDK bumps: [`PUBLISH.md`](../PUBLISH.md).
 
-## Layout
+## `guidelines/` — house rules
 
-### `concepts/` — agent cheat sheets
+- [`constants.md`](guidelines/constants.md) — ownership and reuse of shared runtime identifiers.
+- [`frontend.md`](guidelines/frontend.md) — AntD-first components, tokens, themed modals, accessibility.
+- [`toasts.md`](guidelines/toasts.md) — always `useThemedMessage()`.
+- [`logging.md`](guidelines/logging.md) — safe, bounded operational logging.
+- [`testing.md`](guidelines/testing.md) — Vitest patterns.
+- [`onboarding-design.md`](guidelines/onboarding-design.md) — onboarding wizard: goal-over-role framing.
 
-Tight, code-pointer-heavy notes on internals.
-
-| File                                                                      | What it's for                                                             |
-| ------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| [`core.md`](concepts/core.md)                                             | The five primitives (Branch, Board, Session, Task, Report). Mental model. |
-| [`architecture.md`](concepts/architecture.md)                             | System shape: services / repos / executor / storage. Where to look first. |
-| [`branches.md`](concepts/branches.md)                                     | Branch-centric architecture (read before touching boards).                |
-| [`security.md`](concepts/security.md)                                     | Web-layer hardening: CSP, CORS, recipes, debugging.                       |
-| [`multitenancy.md`](concepts/multitenancy.md)                             | Triggers, resource classification, code owners, and proportional proof.   |
-| [`daemon-filesystem-boundary.md`](concepts/daemon-filesystem-boundary.md) | Daemon-host filesystem capability guard, registry, and limitations.       |
-| [`id-management.md`](concepts/id-management.md)                           | UUIDv7, branded ID types, short-ID resolution.                            |
-| [`task-queueing.md`](concepts/task-queueing.md)                           | Task lifecycle and queue-on-busy semantics.                               |
-| [`task-runtime-state.md`](concepts/task-runtime-state.md)                 | Task states, executor liveness, SDK pulses, watchdogs, and containment.   |
-| [`mcp-session-tools.md`](concepts/mcp-session-tools.md)                   | `agor_sessions_*` MCP tool surface and override semantics.                |
-
-### `guides/` — how-tos
-
-Step-by-step implementation guides referenced from code.
-
-- [`creating-database-migrations.md`](guides/creating-database-migrations.md) — Drizzle migrations (sqlite + postgres).
-- [`extending-feathers-services.md`](guides/extending-feathers-services.md) — Adding services, methods, hooks.
-- [`rbac-and-unix-isolation.md`](guides/rbac-and-unix-isolation.md) — Implementation guide for branch RBAC and simple/sandbox/delegated execution.
-- [`migrate-strict-to-sandbox.md`](guides/migrate-strict-to-sandbox.md) — Operator runbook for moving a deployment from `strict`/`insulated` to `unix_user_mode: sandbox` (uses the `scripts/*sandbox*` migration + pre-flight scripts).
-
-### `guidelines/` — house rules
-
-- [`constants.md`](guidelines/constants.md) — Ownership and reuse of shared runtime identifiers.
-- [`frontend.md`](guidelines/frontend.md) — AntD-first components, theme tokens, accessibility, and exact-color exceptions.
-- [`logging.md`](guidelines/logging.md) — Safe, bounded operational logging and its boundary with analytics, telemetry, and usage accounting.
-- [`testing.md`](guidelines/testing.md) — Vitest patterns and conventions.
-- [`toasts.md`](guidelines/toasts.md) — Toast/message pattern. Always `useThemedMessage()` — never static `message.x()`.
-- [`onboarding-design.md`](guidelines/onboarding-design.md) — Onboarding wizard: goal-over-role framing, the locked goal cards, and composable-block recs.
-
-### `explorations/` — active design docs
-
-Designs that are referenced from code or in flight. Anything here is either still being built or documents a security/behavior contract you'd want before touching the relevant code.
-
-- [`executor-isolation.md`](explorations/executor-isolation.md) — executor process / unix isolation architecture (referenced from `packages/executor/` and `apps/agor-docs/content/guide/architecture.mdx`).
-- [`executor-expansion.md`](explorations/executor-expansion.md) — referenced from `packages/core/src/config/`.
-- [`executor-implementation-plan.md`](explorations/executor-implementation-plan.md) — phased plan for executor work.
-- [`env-var-access.md`](explorations/env-var-access.md) — per-user / per-session env var access model (referenced from schemas, types, and migrations).
-- [`kb-agent-targeted-edits.md`](explorations/kb-agent-targeted-edits.md) — design proposal for small, version-checked agent edits to large Knowledge Base markdown documents.
-- [`kb-teammate-framework-integration.md`](explorations/kb-teammate-framework-integration.md) — options for backing Agor teammate framework memory/docs/skills with Knowledge Base namespaces and tools.
-- [`teammate-kb-namespace-memory-plan.md`](explorations/teammate-kb-namespace-memory-plan.md) — implementation plan for teammate primary KB namespaces, memory append tools, and branch-scoped namespace grants.
-- [`kb-namespace-rbac-v1.md`](explorations/kb-namespace-rbac-v1.md) — directed V1 plan for Knowledge namespace RBAC and teammate home namespaces.
-- [`session-sharing.md`](explorations/session-sharing.md) — tenant/branch gates, immutable Session compatibility, and caller identity for shared prompts.
-- [`parent-session-callbacks.md`](explorations/parent-session-callbacks.md) — child-session completion notifications (referenced from `docs/never-lose-prompt-design.md`).
-- [`task-runtime-architecture.md`](explorations/task-runtime-architecture.md) — discontinued runtime ownership exploration retained as a source for future targeted improvements.
-- [`frontend-hardcoded-colors.md`](explorations/frontend-hardcoded-colors.md) — Biome/GritQL color audit, classification, and enforcement rollout.
-- [`web-terminal-ownership-ha.md`](explorations/web-terminal-ownership-ha.md) — process-affine terminal ownership, HA support, and failure semantics.
-- [`mcp-authoritative-egress-gateway.md`](explorations/mcp-authoritative-egress-gateway.md) — issue-ready design for strong MCP credential/request revocation at a daemon-owned egress boundary.
-
-### Messaging & positioning (now in the Knowledge base)
-
-The source of truth for product copy (taglines, hero, package descriptions, blog voice) lives in the Agor team Knowledge base, **not** this repo: [`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md). Read it before writing user-facing prose; do **not** paraphrase the codebase to invent new framing.
-
-### `images/`
-
-Assets used by docs in this folder.
-
----
-
-## What lives elsewhere now
-
-A previous version of this folder had ~95 files (concepts/, archives/, explorations/, projects/) totaling ~57k lines. Most was either:
-
-- duplicated by the user-facing guide pages in `apps/agor-docs/content/guide/*.mdx`,
-- design exploration for features that have since shipped (the code is the source of truth),
-- or stale plans for features that never shipped.
-
-If you're looking for a topic and don't see it here, try (in order):
-
-1. The relevant guide page in `apps/agor-docs/content/guide/`
-2. `git log --all --diff-filter=D -- 'context/**'` to find the deleted version
-3. The actual code under `packages/` or `apps/`
+Product copy, voice, and positioning live in the Agor team Knowledge base
+([`marketing/messaging-and-positioning`](https://agor.sandbox.preset.zone/kb/agor-cloud-team/marketing/messaging-and-positioning.md)),
+not in this repo.

@@ -1,9 +1,8 @@
 /**
  * Idempotence guard around the executor's fail-safe terminal patches.
  *
- * Background: the executor has four fail-safe paths that try to mark a
- * task terminal — the top-level catch in `start()`, the SIGTERM/SIGINT
- * shutdown handler, the `uncaughtException` handler, and the
+ * Background: the executor has three fail-safe paths that try to mark a
+ * task terminal — the top-level catch in `start()`, the `uncaughtException` handler, and the
  * `unhandledRejection` handler. The SDK handler (`base-executor`) is the
  * authoritative writer for terminal state and stamps a richer payload
  * (timing, `git_state.sha_at_end`, normalized SDK responses). The

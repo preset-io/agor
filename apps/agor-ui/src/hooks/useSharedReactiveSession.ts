@@ -7,11 +7,17 @@ import {
   retainReactiveSession,
 } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
+import { holdBackgroundReads } from '../store/backgroundReads';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 
 interface UseSharedReactiveSessionOptions {
   enabled?: boolean;
   reactiveOptions?: ReactiveSessionOptions;
+  /**
+   * The open session's transcript: background partition reads wait for its
+   * first page (`holdBackgroundReads`), so they never queue ahead of it.
+   */
+  foreground?: boolean;
 }
 
 interface UseSharedReactiveSessionResult {
@@ -24,7 +30,7 @@ export function useSharedReactiveSession(
   sessionId: string | null | undefined,
   options: UseSharedReactiveSessionOptions = {}
 ): UseSharedReactiveSessionResult {
-  const { enabled = true, reactiveOptions } = options;
+  const { enabled = true, reactiveOptions, foreground = false } = options;
   const taskHydration = reactiveOptions?.taskHydration ?? 'lean';
   const cacheScope = reactiveOptions?.cacheScope ?? 'session';
   const binding = useRef<{
@@ -46,6 +52,7 @@ export function useSharedReactiveSession(
 
     binding.current = { client, sessionId, taskHydration, cacheScope };
     const sharedHandle = retainReactiveSession(client, sessionId, { taskHydration, cacheScope });
+    if (foreground) holdBackgroundReads(sharedHandle.ready());
     setHandle(sharedHandle);
     let disposed = false;
 
@@ -64,7 +71,7 @@ export function useSharedReactiveSession(
       unsubscribe();
       releaseReactiveSession(client, sessionId, { taskHydration, cacheScope });
     };
-  }, [client, sessionId, enabled, taskHydration, cacheScope]);
+  }, [client, sessionId, enabled, taskHydration, cacheScope, foreground]);
 
   // Re-trigger resync() when an external signal suggests our error state may
   // be stale. The reactive session itself only resyncs on socket `connect`

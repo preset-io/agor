@@ -13,6 +13,7 @@ export function buildSpawnPromptContext(config: string | Partial<SpawnConfig>) {
         codexSandboxMode: config.codexSandboxMode,
         codexApprovalPolicy: config.codexApprovalPolicy,
         codexNetworkAccess: config.codexNetworkAccess,
+        codexIncludePlugins: config.codexIncludePlugins,
         mcpServerIds: config.mcpServerIds,
         callbackConfig: {
           enableCallback: config.enableCallback,

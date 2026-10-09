@@ -5,17 +5,21 @@
  */
 import type { Board, Branch, Session, SessionID, User } from '@agor-live/client';
 import { sessionPath } from '@agor-live/client';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { forwardRef, useLayoutEffect } from 'react';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CanvasNavigationProvider, useRecenterMap } from '../../contexts/CanvasNavigationContext';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { USER_SCOPE_KEYS } from '../../store/scopeMerge';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
+import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { App } from './App';
 
 const canvasCommit = vi.hoisted(() => vi.fn<(boardName: string | null) => void>());
@@ -45,14 +49,12 @@ vi.mock('../BoardTeammatePanel', () => ({
   BoardTeammatePanel: () => null,
   TeammatePanelRail: () => null,
 }));
-vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({
   SettingsModal: (props: { open?: boolean }) =>
     props.open ? <div data-testid="settings-modal" /> : null,
   UserSettingsModal: () => null,
 }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
-vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
 vi.mock('../NewSessionModal', () => ({ NewSessionModal: () => null }));
 vi.mock('../SessionSettingsModal', () => ({ SessionSettingsModal: () => null }));
 vi.mock('../TerminalModal', () => ({
@@ -151,6 +153,35 @@ function seedStore() {
       [BRANCH_B, [session2]],
     ]),
     userById: new Map([[user.user_id, user]]),
+    coverage: mySessionsHeld(
+      userScopeCoverage({ sessions: true, references: true, teammates: true })
+    ),
+  } as never);
+}
+
+/** My sessions belong to the loaded user scope (so no eviction drops them). */
+function mySessionsHeld(coverage: ReturnType<typeof userScopeCoverage>) {
+  const entry = coverage.get(USER_SCOPE_KEYS.sessions)!;
+  return coverage.set(USER_SCOPE_KEYS.sessions, {
+    ...entry,
+    members: { sessions: new Set([SESSION_1, SESSION_2]) },
+  });
+}
+
+/** Someone else's teammate on Alpha, so Home's rail shows "See all 1". */
+function seedSharedTeammate() {
+  const shared = {
+    branch_id: '019e8888-0000-7000-8000-00000000000c',
+    repo_id: 'repo-1',
+    board_id: BOARD_A,
+    name: 'scout',
+    created_by: 'someone-else',
+    archived: false,
+    custom_context: { teammate: { kind: 'teammate', displayName: 'Scout' } },
+  } as unknown as Branch;
+  const { branchById } = agorStore.getState();
+  agorStore.setState({
+    branchById: new Map([...branchById, [shared.branch_id, shared]]),
   } as never);
 }
 
@@ -205,6 +236,15 @@ function CrossBoardRecenter() {
   );
 }
 
+const CONNECTED = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 /** Route table mirrors `apps/agor-ui/src/App.tsx` — the bugs live in how
  *  these paths resolve, so an approximation would not reproduce them. */
 function renderApp(initialPath: string) {
@@ -212,24 +252,26 @@ function renderApp(initialPath: string) {
     <App client={null} user={user} connected={true} availableAgents={[]} initialBoardId="" />
   );
   return render(
-    <ThemeProvider>
-      <AntApp>
-        <MemoryRouter initialEntries={[initialPath]}>
-          <CanvasNavigationProvider>
-            <PathSpy />
-            <RouteControls />
-            <CrossBoardRecenter />
-            <Routes>
-              <Route path="/b/:boardParam/" element={el} />
-              <Route path="/s/:sessionShortId/" element={el} />
-              <Route path="/w/:branchShortId/" element={el} />
-              <Route path="/a/:artifactShortId/" element={el} />
-              <Route path="/*" element={el} />
-            </Routes>
-          </CanvasNavigationProvider>
-        </MemoryRouter>
-      </AntApp>
-    </ThemeProvider>
+    <ConnectionProvider value={CONNECTED}>
+      <ThemeProvider>
+        <AntApp>
+          <MemoryRouter initialEntries={[initialPath]}>
+            <CanvasNavigationProvider>
+              <PathSpy />
+              <RouteControls />
+              <CrossBoardRecenter />
+              <Routes>
+                <Route path="/b/:boardParam/" element={el} />
+                <Route path="/s/:sessionShortId/" element={el} />
+                <Route path="/w/:branchShortId/" element={el} />
+                <Route path="/a/:artifactShortId/" element={el} />
+                <Route path="/*" element={el} />
+              </Routes>
+            </CanvasNavigationProvider>
+          </MemoryRouter>
+        </AntApp>
+      </ThemeProvider>
+    </ConnectionProvider>
   );
 }
 
@@ -241,7 +283,7 @@ async function settle() {
   });
 }
 
-const homeIsShowing = () => !!screen.queryByText(/Hi, Tester/);
+const homeIsShowing = () => !!screen.queryByText(/Good (morning|afternoon|evening), Tester/);
 const canvasBoardName = () =>
   screen.queryByTestId('session-canvas')?.getAttribute('data-board') ?? null;
 const openSessionId = () =>
@@ -268,6 +310,7 @@ async function pickBoardFromSwitcher(name: string) {
 
 beforeEach(() => {
   localStorage.clear();
+  resetAccessCacheForTests();
   seedStore();
   canvasCommit.mockClear();
 });
@@ -292,6 +335,65 @@ describe('Settings opens as an overlay, not a navigation', () => {
     expect(currentPath).toBe('/');
     expect(homeIsShowing()).toBe(true);
     expect(screen.queryByTestId('settings-modal')).toBeNull();
+  });
+
+  it.each(['/teammates', '/teammates/'])(
+    'renders the teammates directory at %s without canonicalizing to Home',
+    async (path) => {
+      renderApp(path);
+      await settle();
+      expect(currentPath).toBe(path);
+      expect(screen.getByRole('heading', { name: 'AI teammates' })).toBeTruthy();
+      expect(screen.queryByTestId('session-canvas')).toBeNull();
+    }
+  );
+
+  it('opens the teammates directory from the Home rail and returns Home from it', async () => {
+    seedSharedTeammate();
+    renderApp('/');
+    // Text queries: role queries trip jsdom's CSS parser on AntD's button styles here.
+    fireEvent.click(await screen.findByText('See all 1'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+    expect(document.querySelector('[aria-label="Scout, open Alpha"]')).toBeTruthy();
+
+    // The directory's back link, by its icon: "Home" text appears elsewhere in the shell.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    // It went back in history rather than pushing Home, so Forward returns to the directory.
+    fireEvent.click(screen.getByTestId('forward'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+  });
+
+  it('returns Home, not Settings, from the directory after a Settings round trip', async () => {
+    seedSharedTeammate();
+    renderApp('/');
+    fireEvent.click(await screen.findByText('See all 1'));
+    await settle();
+    fireEvent.click(screen.getByTestId('open-settings'));
+    await settle();
+    fireEvent.click(screen.getByTestId('close-settings'));
+    await settle();
+    expect(currentPath).toBe('/teammates');
+
+    // Closing Settings pushed the directory again, so the entry before it is Settings, not Home.
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
+    expect(screen.queryByTestId('settings-modal')).toBeNull();
+  });
+
+  it('returns Home from a deep-linked teammates directory', async () => {
+    renderApp('/teammates');
+    await settle();
+    fireEvent.click(screen.getByLabelText('arrow-left').closest('button') as HTMLElement);
+    await settle();
+    expect(currentPath).toBe('/');
+    expect(homeIsShowing()).toBe(true);
   });
 
   it('keeps the board canvas rendered behind the settings modal', async () => {
@@ -452,5 +554,42 @@ describe('Home navigation with a session open', () => {
 
     expect(canvasBoardName()).toBe('Beta');
     expect(currentPath).toBe('/b/beta/');
+  });
+});
+
+describe('Create entry points open the focused modals', () => {
+  // Text queries: role queries trip jsdom's CSS parser on AntD's button styles here.
+  it('opens the board modal from the Home onboarding step', async () => {
+    agorStore.setState({
+      boardById: new Map(),
+      branchById: new Map(),
+      sessionById: new Map(),
+      sessionsByBranch: new Map(),
+    } as never);
+    renderApp('/');
+    await settle();
+
+    const step = screen.getByText('Create your first board').parentElement as HTMLElement;
+    fireEvent.click(within(step).getByText('Create'));
+    await settle();
+
+    expect(screen.getByText('New board')).toBeTruthy();
+  });
+
+  it('opens the board modal from the navbar create menu on Home', async () => {
+    renderApp('/');
+    await settle();
+    expect(homeIsShowing()).toBe(true);
+
+    fireEvent.click(document.querySelector('[aria-label="Create new"]') as HTMLElement);
+    await settle();
+    const item = Array.from(document.querySelectorAll('[role="menuitem"]')).find(
+      (el) => el.textContent === 'Board'
+    );
+    if (!item) throw new Error('Board not offered by the create menu');
+    fireEvent.click(item);
+    await settle();
+
+    expect(screen.getByText('New board')).toBeTruthy();
   });
 });

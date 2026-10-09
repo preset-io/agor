@@ -29,6 +29,7 @@ const configurations = {
     codexSandboxMode: 'danger-full-access',
     codexApprovalPolicy: 'never',
     codexNetworkAccess: true,
+    codexIncludePlugins: true,
   },
 } satisfies Partial<Record<AgenticToolName, DefaultAgenticToolConfig>>;
 
@@ -143,6 +144,7 @@ describe('UI spawn-prompt to persisted child configuration', () => {
               sandboxMode: 'danger-full-access',
               approvalPolicy: 'never',
               networkAccess: true,
+              includePlugins: true,
             });
           }
           expect(child.agentic_tool_preset_id ?? null).toBe(
@@ -245,3 +247,20 @@ describe('UI spawn-prompt to persisted child configuration', () => {
     }
   );
 });
+
+dbTest(
+  'explicit plugin opt-out detaches from an inherited Codex preset through MCP spawn',
+  async ({ db }) => {
+    const f = await childAdmissionFixture(db);
+    await setup(f, 'codex');
+    const { child, args } = await spawnFromPrompt(f, {
+      userPrompt: 'No plugins',
+      agenticTool: 'codex',
+      ...configurations.codex,
+      codexIncludePlugins: false,
+    });
+    expect(args.codexIncludePlugins).toBe(false);
+    expect(child.permission_config?.codex?.includePlugins).toBe(false);
+    expect(child.agentic_tool_preset_id ?? null).toBeNull();
+  }
+);

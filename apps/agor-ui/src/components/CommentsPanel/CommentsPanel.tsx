@@ -34,6 +34,7 @@ import {
 import React, { useEffect, useMemo, useState } from 'react';
 import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { commentMentionsUser } from '../../utils/commentMentions';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { AgorEmojiPicker } from '../EmojiPickerInput';
 import { MarkdownRenderer } from '../MarkdownRenderer';
@@ -522,39 +523,6 @@ const CommentThread: React.FC<{
 };
 
 /**
- * Escape special regex characters in a string
- */
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-/**
- * Check if comment content mentions a user by name or email.
- * Uses word boundary matching to avoid false positives (e.g., @ann matching @anna).
- */
-function checkMentionsUser(content: string, userName?: string, userEmail?: string): boolean {
-  if (!userName && !userEmail) return false;
-
-  const patterns: RegExp[] = [];
-
-  if (userName) {
-    // @name not followed by word char (avoids @ann matching @anna)
-    patterns.push(new RegExp(`@${escapeRegex(userName)}(?![\\w])`, 'i'));
-    // @"name" quoted form
-    patterns.push(new RegExp(`@"${escapeRegex(userName)}"`, 'i'));
-  }
-
-  if (userEmail) {
-    // @email not followed by word char
-    patterns.push(new RegExp(`@${escapeRegex(userEmail)}(?![\\w])`, 'i'));
-    // @"email" quoted form
-    patterns.push(new RegExp(`@"${escapeRegex(userEmail)}"`, 'i'));
-  }
-
-  return patterns.some((pattern) => pattern.test(content));
-}
-
-/**
  * Main CommentsPanel component - permanent left sidebar with threading and reactions
  */
 export const CommentsPanel: React.FC<CommentsPanelProps> = ({
@@ -637,12 +605,12 @@ export const CommentsPanel: React.FC<CommentsPanelProps> = ({
   const threadMentionsUser = useMemo(() => {
     return (thread: BoardComment) => {
       // Check thread root
-      if (checkMentionsUser(thread.content, currentUserName, currentUserEmail)) {
+      if (commentMentionsUser(thread.content, currentUserName, currentUserEmail)) {
         return true;
       }
       // Check replies
       const replies = repliesByParent[thread.comment_id] || [];
-      return replies.some((r) => checkMentionsUser(r.content, currentUserName, currentUserEmail));
+      return replies.some((r) => commentMentionsUser(r.content, currentUserName, currentUserEmail));
     };
   }, [repliesByParent, currentUserName, currentUserEmail]);
 

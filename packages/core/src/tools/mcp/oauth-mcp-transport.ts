@@ -707,8 +707,7 @@ export function __seedDynamicClientCacheForTests(
  *
  * A per-deployment name was tried once, for a Datadog `Mismatching redirect
  * URI`, and reverted: the failure reproduced under both names while the same
- * integration kept working on deployments that sent this one. See §7.1.16 of
- * `docs/internal/slack-mcp-oauth-connect-2026-09-16.md`.
+ * integration kept working on deployments that sent this one.
  */
 export const MCP_OAUTH_DCR_CLIENT_NAME = 'Agor MCP Client';
 
@@ -1536,6 +1535,8 @@ export function getAuthCodeTokenCacheStats(): {
  * This is returned by startMCPOAuthFlow and consumed by completeMCPOAuthFlow
  */
 export interface OAuthFlowContext {
+  /** Hosted relay authority sealed alongside PKCE; absent for direct flows. */
+  relay?: import('../../types/mcp-oauth-relay').MCPOAuthRelayBinding;
   metadataUrl: string;
   resourceUri: string;
   issuer: string;
@@ -2163,6 +2164,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   cacheKey: string;
   clientId?: string;
   redirectUri?: string;
+  resolveRedirectUri?: (issuer: string) => string;
   authorizationUrlOverride?: string;
   tokenUrlOverride?: string;
   clientSecret?: string;
@@ -2206,7 +2208,9 @@ async function startMCPOAuthFlowWithAS(opts: {
   const pkce = generatePKCE();
 
   // Redirect URI default — preserved for legacy CLI callers
-  const actualRedirectUri = redirectUri || 'http://127.0.0.1:0/oauth/callback';
+  const actualRedirectUri = opts.resolveRedirectUri
+    ? opts.resolveRedirectUri(authServerMetadata?.issuer ?? issuer)
+    : redirectUri || 'http://127.0.0.1:0/oauth/callback';
   // Validate before registration: DCR sends this value to an external service
   // and must not turn an unsafe configured callback into durable provider-side
   // client metadata.
@@ -2257,7 +2261,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   });
 
   // CSRF state
-  const state = crypto.randomUUID();
+  const state = crypto.randomBytes(32).toString('base64url');
 
   // Before the URL exists, not after: a mismatch here is one Agor already
   // knows about, and the provider's rejection of it is front-channel.
@@ -2317,6 +2321,8 @@ export async function startMCPOAuthFlow(
   clientId?: string,
   redirectUri?: string,
   options?: {
+    /** Deployment-owned issuer-distinct callback selection, never a browser return URL. */
+    resolveRedirectUri?: (issuer: string) => string;
     authorizationUrlOverride?: string;
     tokenUrlOverride?: string;
     clientSecret?: string;
@@ -2407,6 +2413,7 @@ export async function startMCPOAuthFlow(
       cacheKey: options.cacheKey,
       clientId,
       redirectUri,
+      resolveRedirectUri: options.resolveRedirectUri,
       authorizationUrlOverride: options.authorizationUrlOverride,
       tokenUrlOverride: options.tokenUrlOverride,
       clientSecret: options.clientSecret,
@@ -2507,6 +2514,7 @@ export async function startMCPOAuthFlow(
     cacheKey: metadataUrl,
     clientId,
     redirectUri,
+    resolveRedirectUri: options?.resolveRedirectUri,
     authorizationUrlOverride: options?.authorizationUrlOverride,
     tokenUrlOverride: options?.tokenUrlOverride,
     clientSecret: options?.clientSecret,

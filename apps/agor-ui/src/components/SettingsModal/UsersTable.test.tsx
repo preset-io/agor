@@ -110,37 +110,47 @@ describe('UsersTable role authority', () => {
     ).toBeInTheDocument();
   });
 
-  it('composes external lifecycle capabilities with role authority', () => {
-    __setAuthConfigForTests({
-      requireAuth: true,
-      identity: {
-        contractVersion: 1,
-        userLifecycle: 'external',
-        roleAuthority: 'claims',
-        localAuth: 'disabled',
-        external: { provider: 'external_launch', provisioning: 'jit' },
-        capabilities: {
-          users: {
-            create: false,
-            delete: false,
-            identityWrite: false,
-            roleWrite: false,
-            passwordWrite: false,
-            avatarSettingsWrite: false,
-            selfConfigurationWrite: true,
+  it.each(['internal', 'external'] as const)(
+    'composes external lifecycle with %s avatar ownership and role authority',
+    (avatarAuthority) => {
+      __setAuthConfigForTests({
+        requireAuth: true,
+        identity: {
+          contractVersion: 2,
+          userLifecycle: 'external',
+          avatarAuthority,
+          roleAuthority: 'claims',
+          localAuth: 'disabled',
+          external: { provider: 'external_launch', provisioning: 'jit' },
+          capabilities: {
+            users: {
+              create: false,
+              delete: false,
+              identityWrite: false,
+              roleWrite: false,
+              passwordWrite: false,
+              avatarWrite: avatarAuthority === 'internal',
+              avatarSettingsWrite: avatarAuthority === 'internal',
+              selfConfigurationWrite: true,
+            },
           },
         },
-      },
-    });
-    const admin = user('admin', 'admin');
-    const member = user('member', 'member');
-    renderTable(admin, [admin, member]);
+      });
+      const admin = user('admin', 'admin');
+      const member = user('member', 'member');
+      renderTable(admin, [admin, member]);
 
-    expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Edit admin@example.test')).toBeInTheDocument();
-    expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Delete member@example.test')).not.toBeInTheDocument();
-  });
+      expect(screen.queryByRole('button', { name: /new user/i })).not.toBeInTheDocument();
+      expect(screen.getByLabelText('Edit admin@example.test')).toBeInTheDocument();
+      expect(screen.getByLabelText('Edit member@example.test')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Delete member@example.test')).not.toBeInTheDocument();
+      if (avatarAuthority === 'internal') {
+        expect(screen.getByRole('tab', { name: 'Avatars' })).toBeInTheDocument();
+      } else {
+        expect(screen.queryByRole('tab', { name: 'Avatars' })).not.toBeInTheDocument();
+      }
+    }
+  );
 
   it('preserves a same-admin create draft but drops the obsolete completion on reauth', async () => {
     const admin = user('admin', 'admin');

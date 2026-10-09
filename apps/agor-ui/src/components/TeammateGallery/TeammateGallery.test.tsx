@@ -213,11 +213,10 @@ describe('TeammateGallery', () => {
     expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
   });
 
-  it('sorts recommended cards to the front in the All view, blank last', () => {
+  it('leads the All view with blank, then sorts recommended cards to the front', () => {
     render(<TeammateGallery goals={['dig-into-anything']} value={null} onChange={vi.fn()} />);
     const order = cardOrder();
-    expect(order.slice(0, 2)).toEqual(['Competitive Analyst', 'Financial Analyst']);
-    expect(order.at(-1)).toBe('Start blank');
+    expect(order.slice(0, 3)).toEqual(['Start blank', 'Competitive Analyst', 'Financial Analyst']);
   });
 
   it('shows a category pill per card in the category color (no icon tile); blank has none', () => {
@@ -268,15 +267,15 @@ describe('TeammateGallery', () => {
     }
   );
 
-  it('renders Start blank as a full-width dashed footer card, last in the All view', () => {
+  it('renders Start blank as a full-width dashed header card, first in the All view', () => {
     render(<TeammateGallery value={null} onChange={vi.fn()} />);
     const blankStyle = cardFor('Start blank').getAttribute('style') ?? '';
-    // Spans both columns of the auto-fit grid → full-width footer.
+    // Spans every column of the auto-fit grid → full-width header.
     expect(blankStyle).toContain('grid-column: 1 / -1');
     // Understated "build your own" affordance: dashed border.
     expect(blankStyle).toContain('border-style: dashed');
-    // Stays last; the eight templates keep their normal (non-spanning) cells.
-    expect(cardOrder().at(-1)).toBe('Start blank');
+    // Leads the grid; the eight templates keep their normal (non-spanning) cells.
+    expect(cardOrder()[0]).toBe('Start blank');
     expect(cardFor('Competitive Analyst').getAttribute('style') ?? '').not.toContain('grid-column');
   });
 
@@ -300,7 +299,7 @@ describe('TeammateGallery', () => {
     expect(screen.queryByText('Start blank')).not.toBeInTheDocument();
 
     fireEvent.click(clear as HTMLButtonElement);
-    // Reset to All: every card back (blank last) and the button is gone.
+    // Reset to All: every card back (blank first) and the button is gone.
     expect(screen.getByText('Start blank')).toBeInTheDocument();
     expect(screen.queryByText('Clear filters')).toBeNull();
   });

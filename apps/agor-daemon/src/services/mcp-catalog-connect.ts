@@ -940,6 +940,49 @@ export function createMCPCatalogConnectService(
                 server.catalog_entry_name === entry.name
             )
           : undefined;
+      const configuredClient = data.oauth_client;
+      if (
+        configuredClient !== undefined &&
+        (!configuredClient ||
+          typeof configuredClient !== 'object' ||
+          Array.isArray(configuredClient) ||
+          Object.keys(configuredClient).some(
+            (key) => key !== 'client_id' && key !== 'client_secret'
+          ))
+      ) {
+        throw new BadRequest('Invalid configured OAuth app input');
+      }
+      if (
+        configuredClient !== undefined &&
+        (!entry.oauth?.configured_client || bearerToken !== undefined)
+      ) {
+        throw new BadRequest('This entry does not accept configured OAuth app credentials');
+      }
+      // A configured app's credentials are entered once, by whoever creates
+      // the install. Using an existing shared install reuses them as-is and
+      // never overwrites them from Connect; changing them is a Settings edit.
+      const reusesSharedConfiguredApp = Boolean(entry.oauth?.configured_client && initialShared);
+      if (reusesSharedConfiguredApp && configuredClient !== undefined) {
+        throw new BadRequest(
+          'This shared installation already has an OAuth app. Connect without app credentials, or ask an admin to change it in Settings.'
+        );
+      }
+      if (
+        entry.oauth?.configured_client &&
+        !reusesSharedConfiguredApp &&
+        (!configuredClient ||
+          typeof configuredClient.client_id !== 'string' ||
+          !configuredClient.client_id.trim() ||
+          configuredClient.client_id.length > 4096 ||
+          (configuredClient.client_secret !== undefined &&
+            (typeof configuredClient.client_secret !== 'string' ||
+              configuredClient.client_secret.length > 16384)) ||
+          (entry.oauth.configured_client.secret_required && !configuredClient.client_secret))
+      ) {
+        throw new BadRequest(
+          'Configure your own OAuth app in the secure Catalog form before connecting'
+        );
+      }
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a
       // newer concurrent connect has selected it but before that request has
@@ -957,10 +1000,24 @@ export function createMCPCatalogConnectService(
                 ).claimCatalogConnectGeneration(userId, entry.name)
               ),
             };
-      const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
+      const connectGeneration =
+        bearerToken === undefined && !configuredClient ? undefined : operationGeneration;
       let auth: MCPAuth;
       try {
         auth = await resolveAuthRequirement(entry, bearerToken, sharing);
+        if (configuredClient) {
+          if (auth.type !== 'oauth')
+            throw new BadRequest(
+              'The endpoint no longer requires OAuth; no app credentials were saved'
+            );
+          auth = {
+            ...auth,
+            oauth_client_id: configuredClient.client_id,
+            ...(configuredClient.client_secret
+              ? { oauth_client_secret: configuredClient.client_secret }
+              : {}),
+          };
+        }
       } catch (error) {
         if (isCatalogConnectControlError(error)) throw error;
         const safe = sanitizeMCPExternalError(error, { stage: 'discovery' });
@@ -1035,7 +1092,7 @@ export function createMCPCatalogConnectService(
         sharing === 'shared' &&
         (needsReconciliation ||
           mcpServer.scope !== 'session' ||
-          selection?.candidate.has_row_secret ||
+          (selection?.candidate.has_row_secret && !entry.oauth?.configured_client) ||
           Object.keys(mcpServer.env ?? {}).length > 0)
       ) {
         throw new BadRequest(

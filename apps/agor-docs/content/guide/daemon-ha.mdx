@@ -59,9 +59,9 @@ root's `branch-homes/<branch-id>/` tree carries each branch's relocated SDK
 config/state. Each Session is immutably stamped to use either that tree or its
 historical execution home; every replica and delegated launcher must honor the
 Session stamp rather than inferring the choice from current deployment or
-branch configuration. OpenCode is refused for branch-scoped Sessions because
-its native credential file cannot currently be separated from its writable XDG
-state. Local Codex subscription auth is supported only with the per-user
+branch configuration. Local OpenCode is refused for branch-scoped Sessions
+because its native credential file cannot currently be separated from its
+writable XDG state; hosted OpenCode stores only sealed checkpoints there. Local Codex subscription auth is supported only with the per-user
 sandbox: each replica opens the exact caller's persistent `auth.json` and
 projects that pinned inode into the branch home for one executor without
 copying it. Credential replacement/logout records a durable termination request
@@ -114,6 +114,21 @@ For Agor Cloud, configure the platform load balancer or ingress so that:
 6. authentication, refresh, and external-launch abuse limits are enforced at a shared edge/WAF layer rather than multiplied per daemon.
 
 The Compose IP hash is deliberately minimal and testable, not a recommendation for large NAT-heavy fleets.
+
+### WebSocket compression on each replica
+
+Each daemon compresses its own sockets with `permessage-deflate` unless
+`daemon.websocket_compression: false` (or `AGOR_WEBSOCKET_COMPRESSION=0`) is set. See
+[WebSocket compression](/guide/config-yaml#websocket-compression). When sizing replicas, plan for
+up to about 224 KiB of zlib state per compressing socket (~192 KiB deflate + up to ~32 KiB
+inflate; roughly 220 MiB per 1,000 sockets on that replica). This figure depends on the window
+each client negotiates; clients that request smaller windows use less. It is zlib state only:
+frame buffers and per-socket bookkeeping come on top. Also plan for compression CPU on every
+replica that sends a large broadcast, because each recipient's copy is compressed separately. Use the same setting on every replica so a
+reconnect to another replica behaves the same way. A change applies to new connections only.
+After rolling it out, confirm through the real ingress, not just against a daemon port, that the
+`Sec-WebSocket-Extensions` handshake header reaches the browser (present when on, absent when
+off).
 
 > **Compose readiness limitation:** Docker health checks gate the example's initial nginx startup, but open-source nginx does not continuously consume later Docker health-state changes for its static upstream list. It can passively fail over after a connection error, but `/readyz: 503` alone does not remove a still-listening daemon from this smoke ingress. Production ingress/orchestration must actively route only to ready replicas as required above.
 

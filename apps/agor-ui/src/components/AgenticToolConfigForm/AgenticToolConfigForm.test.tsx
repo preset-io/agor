@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
+import { CodexSettingsForm } from '../CodexSettingsForm';
 import { AgenticToolConfigForm } from './AgenticToolConfigForm';
 
 vi.mock('../ModelSelector', () => ({
@@ -69,4 +70,55 @@ describe('AgenticToolConfigForm reasoning effort', () => {
     expect(await screen.findByText(/exact OpenCode provider and model/i)).toBeInTheDocument();
     await waitFor(() => expect(onFinish).not.toHaveBeenCalled());
   });
+});
+
+describe('Include native Codex plugins', () => {
+  it('is off by default, can be enabled, and saves an explicit false', async () => {
+    const onFinish = vi.fn();
+    render(
+      <Form onFinish={onFinish}>
+        <AgenticToolConfigForm agenticTool="codex" />
+        <button type="submit">Save</button>
+      </Form>
+    );
+    const toggle = screen.getByRole('switch', { name: 'Include native Codex plugins' });
+    expect(toggle).toHaveAttribute('aria-checked', 'false');
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(onFinish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codexIncludePlugins: true })
+      )
+    );
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(onFinish).toHaveBeenLastCalledWith(
+        expect.objectContaining({ codexIncludePlugins: false })
+      )
+    );
+  });
+  it('does not render for other tools', () => {
+    renderForm('gemini');
+    expect(
+      screen.queryByRole('switch', { name: 'Include native Codex plugins' })
+    ).not.toBeInTheDocument();
+  });
+});
+
+it('restores and saves the session plugin opt-in through the standalone settings form', async () => {
+  const onFinish = vi.fn();
+  render(
+    <Form initialValues={{ codexIncludePlugins: true }} onFinish={onFinish}>
+      <CodexSettingsForm />
+      <button type="submit">Save</button>
+    </Form>
+  );
+  const toggle = screen.getByRole('switch', { name: 'Include native Codex plugins' });
+  expect(toggle).toHaveAttribute('aria-checked', 'true');
+  fireEvent.click(toggle);
+  fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await waitFor(() =>
+    expect(onFinish).toHaveBeenCalledWith(expect.objectContaining({ codexIncludePlugins: false }))
+  );
 });

@@ -27,8 +27,16 @@ import {
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
-import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
-import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
+import {
+  DAEMON_RESTART_RELEASED_MESSAGE,
+  isTerminalTaskStatus,
+  SessionStatus,
+} from '@agor/core/types';
+import {
+  hasSecureLocalCredentialOverlay,
+  isHostedOpenCode,
+  resolveSdkHomeConfig,
+} from './branch-sdk-home.js';
 import type {
   Application,
   ReposServiceImpl,
@@ -37,6 +45,7 @@ import type {
 } from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
+import { createDeploymentToolUnsupportedGate } from './integrations/opencode/deployment-capabilities.js';
 import {
   type DaemonMetrics,
   getDaemonMetrics,
@@ -302,7 +311,7 @@ async function cleanupOrphanStatusesInTenantScope(
                 last_pulse: task.latest_executor_pulse,
                 termination: 'unverified',
               },
-          errorMessage: 'Daemon restart released this Task without verifying executor termination.',
+          errorMessage: DAEMON_RESTART_RELEASED_MESSAGE,
         },
         { ...startupParams, suppressTerminalQueueProcessing: true } as never
       );
@@ -846,11 +855,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
   const schedulerService = new SchedulerService(db, app, {
     deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    deploymentToolUnsupported: createDeploymentToolUnsupportedGate(config),
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',
     sdkHomeMode: resolveSdkHomeConfig(config).mode,
     secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+    hostedOpenCode: isHostedOpenCode(config),
     // Static mode keeps the historical single-tenant scope. Auth-resolved
     // multi-tenant mode leaves this undefined so the scheduler discovers due
     // schedule tenant metadata at the DB boundary on each tick.

@@ -1,5 +1,6 @@
 import { isPlainConfigRecord } from './plain-record';
 import {
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
@@ -17,10 +18,13 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
   const localAuth = config.identity?.local_auth ?? AgorLocalAuthMode.ENABLED;
   const externallyManaged = userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
   const external = config.identity?.external;
+  const avatarAuthority = config.identity?.avatar_authority ?? userLifecycle;
+  const avatarWrite = avatarAuthority === AgorAvatarAuthority.INTERNAL;
 
   return {
     contractVersion: IDENTITY_AUTHORITY_CONTRACT_VERSION,
     userLifecycle,
+    avatarAuthority,
     roleAuthority,
     localAuth,
     ...(external?.provider === AgorExternalIdentityProvider.EXTERNAL_LAUNCH &&
@@ -39,7 +43,8 @@ export function resolveIdentityAuthority(config: AgorConfig): ResolvedIdentityAu
         identityWrite: !externallyManaged,
         roleWrite: roleAuthority === AgorRoleAuthority.INTERNAL,
         passwordWrite: localAuth === AgorLocalAuthMode.ENABLED && !externallyManaged,
-        avatarSettingsWrite: !externallyManaged,
+        avatarWrite,
+        avatarSettingsWrite: avatarWrite,
         selfConfigurationWrite: true,
       },
     },
@@ -63,8 +68,20 @@ export function assertValidEffectiveIdentityConfig(config: AgorConfig): void {
     throw new Error('identity.external must be an object');
   }
 
+  if (
+    identity.avatar_authority !== undefined &&
+    !Object.values(AgorAvatarAuthority).includes(identity.avatar_authority)
+  ) {
+    throw new Error('identity.avatar_authority must be internal or external');
+  }
+
   const resolved = resolveIdentityAuthority(config);
   if (resolved.userLifecycle === AgorUserLifecycleAuthority.INTERNAL) {
+    if (resolved.avatarAuthority !== AgorAvatarAuthority.INTERNAL) {
+      throw new Error(
+        "identity.avatar_authority 'external' requires identity.user_lifecycle 'external'"
+      );
+    }
     if (resolved.roleAuthority !== AgorRoleAuthority.INTERNAL) {
       throw new Error(
         "identity.role_authority 'claims' requires identity.user_lifecycle 'external'"

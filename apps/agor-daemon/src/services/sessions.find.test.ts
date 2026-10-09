@@ -21,9 +21,14 @@ import {
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
 import { sessionQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
-import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import type { Session, UserID, UUID } from '@agor/core/types';
+import { SESSION_LIST_ROW_SHAPE, SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
+import type { SessionPageOptions } from '../../../../packages/core/src/db/repositories/sessions';
+import {
+  legacySessionPage,
+  seedSessionVisibilityFixture,
+} from '../../../../packages/core/src/db/repositories/sessions.visibility-parity-test-helpers';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
 import { SessionsService } from './sessions';
@@ -165,6 +170,51 @@ describe('SessionsService.find — board_id pushdown', () => {
           spy.mockRestore();
         }
       }
+    }
+  );
+
+  dbTest(
+    'serves a regular user created_by query on the SQL path, recency-sorted and RBAC-scoped',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        user_id: generateId(),
+        email: `mine-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+      const hiddenBranch = await createBranchOnBoard(db, null);
+      const older = await createSession(db, visibleBranch, { created_by: user.user_id });
+      await createSession(db, visibleBranch); // someone else's session on my branch
+      // My session on a branch I can no longer see stays hidden: a filter, not a grant.
+      await createSession(db, hiddenBranch, { created_by: user.user_id });
+      const newer = await createSession(db, visibleBranch, { created_by: user.user_id });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await new SessionRepository(db).update(older, { title: 'touched' });
+      const app = feathers<{ sessions: SessionsService }>();
+      app.use('sessions', createService(db));
+      app.service('sessions').hooks({
+        before: {
+          all: [typedValidateQuery(sessionQueryValidator)],
+          find: [scopeFindToAccessibleSessionsSql()],
+        },
+      });
+      const findAllSpy = vi.spyOn(SessionRepository.prototype, 'findAll');
+      for (const provider of ['socketio', 'rest']) {
+        const result = await app.service('sessions').find({
+          provider,
+          user,
+          query: {
+            created_by: user.user_id,
+            archived: false,
+            $sort: { updated_at: -1 },
+            $limit: 100,
+            $count: provider === 'rest' ? 'false' : false,
+          },
+        });
+        expect(orderedIds(result)).toEqual([older, newer]);
+      }
+      // The SQL page path never loads the caller's whole visible inventory.
+      expect(findAllSpy).not.toHaveBeenCalled();
     }
   );
 
@@ -465,5 +515,285 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
       query: { board_id: boardA, session_id: { $in: [s1, s3] }, $limit: 100 },
     });
     expect(ids(result)).toEqual([s1, s3].sort());
+  });
+});
+
+describe('SessionsService.find — lean list projection', () => {
+  const heavyContext = {
+    teamName: 'Backend',
+    gateway_source: { channel_id: 'c', channel_name: 'n', channel_type: 'slack', thread_id: 't' },
+    scheduled_run: { rendered_prompt: 'x'.repeat(2_000) },
+    slash_commands: ['/review', '/compact'],
+    skills: [{ name: 'skill' }],
+  };
+  const leanContext = {
+    teamName: 'Backend',
+    gateway_source: heavyContext.gateway_source,
+  };
+
+  function contextsById(result: Awaited<ReturnType<SessionsService['find']>>) {
+    const data = Array.isArray(result) ? result : result.data;
+    return new Map(data.map((s) => [s.session_id, s.custom_context]));
+  }
+
+  function readShapes(result: Awaited<ReturnType<SessionsService['find']>>) {
+    const data = Array.isArray(result) ? result : result.data;
+    return data.map((s) => (s as { read_shape?: unknown }).read_shape);
+  }
+
+  dbTest(
+    'omits single-session context through transport validation without widening visibility',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        user_id: generateId(),
+        email: `lean-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+      const hiddenBranch = await createBranchOnBoard(db, null);
+      const visible = await createSession(db, visibleBranch, { custom_context: heavyContext });
+      const plain = await createSession(db, visibleBranch);
+      await createSession(db, hiddenBranch, { custom_context: heavyContext });
+      const app = feathers<{ sessions: SessionsService }>();
+      app.use('sessions', createService(db));
+      app.service('sessions').hooks({
+        before: {
+          all: [typedValidateQuery(sessionQueryValidator)],
+          find: [scopeFindToAccessibleSessionsSql()],
+        },
+      });
+
+      for (const provider of ['socketio', 'rest']) {
+        const query = { archived: false, $limit: 10, $sort: { updated_at: -1 } };
+        const full = await app.service('sessions').find({ provider, user, query });
+        const lean = await app.service('sessions').find({
+          provider,
+          user,
+          query: { ...query, lean: provider === 'rest' ? 'true' : true },
+        });
+        expect(ids(lean)).toEqual(ids(full));
+        expect(ids(lean)).toEqual([visible, plain].sort());
+        expect(contextsById(full).get(visible)).toEqual(heavyContext);
+        expect(contextsById(lean).get(visible)).toEqual(leanContext);
+        expect(contextsById(lean).get(plain)).toEqual(contextsById(full).get(plain));
+        // Every lean row is marked, including one that had nothing to omit;
+        // full rows never are.
+        expect(readShapes(lean)).toEqual([SESSION_LIST_ROW_SHAPE, SESSION_LIST_ROW_SHAPE]);
+        expect(readShapes(full)).toEqual([undefined, undefined]);
+      }
+    }
+  );
+
+  dbTest('composes with created_by and session_id $in on the SQL page path', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      user_id: generateId(),
+      email: `lean-scope-${generateId()}@example.invalid`,
+      role: 'member',
+    });
+    const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+    const hiddenBranch = await createBranchOnBoard(db, null);
+    const mine = await createSession(db, visibleBranch, {
+      created_by: user.user_id,
+      custom_context: heavyContext,
+    });
+    const theirs = await createSession(db, visibleBranch, { custom_context: heavyContext });
+    // Mine, but on a branch I can't see: lean never widens visibility.
+    const hidden = await createSession(db, hiddenBranch, {
+      created_by: user.user_id,
+      custom_context: heavyContext,
+    });
+    const app = feathers<{ sessions: SessionsService }>();
+    app.use('sessions', createService(db));
+    app.service('sessions').hooks({
+      before: {
+        all: [typedValidateQuery(sessionQueryValidator)],
+        find: [scopeFindToAccessibleSessionsSql()],
+      },
+    });
+    const findAllSpy = vi.spyOn(SessionRepository.prototype, 'findAll');
+    const pageSpy = vi.spyOn(SessionRepository.prototype, 'findPage');
+    try {
+      for (const provider of ['socketio', 'rest']) {
+        const lean = provider === 'rest' ? 'true' : true;
+        const $count = provider === 'rest' ? 'false' : false;
+        const byCreator = await app.service('sessions').find({
+          provider,
+          user,
+          query: {
+            created_by: user.user_id,
+            archived: false,
+            $sort: { updated_at: -1 },
+            $limit: 200,
+            $count,
+            lean,
+          },
+        });
+        expect(ids(byCreator)).toEqual([mine]);
+        expect(contextsById(byCreator).get(mine)).toEqual(leanContext);
+
+        const byIds = await app.service('sessions').find({
+          provider,
+          user,
+          query: { session_id: { $in: [mine, theirs, hidden] }, $count, lean },
+        });
+        expect(ids(byIds)).toEqual([mine, theirs].sort());
+        for (const context of contextsById(byIds).values()) {
+          expect(context).toEqual(leanContext);
+        }
+      }
+      expect(pageSpy).toHaveBeenCalledTimes(4);
+      expect(findAllSpy).not.toHaveBeenCalled();
+    } finally {
+      findAllSpy.mockRestore();
+      pageSpy.mockRestore();
+    }
+  });
+
+  // The repository matrix (`sessions.visibility-parity`) compares every shape
+  // with the oracle; this layer checks what transport adds: each principal's
+  // hook scoping (superadmin and service-account bypass) and lean rows.
+  dbTest(
+    'created_by and session_id $in reads match the branch-set form for every principal, lean or full',
+    async ({ db }) => {
+      const fixture = await seedSessionVisibilityFixture(db);
+      const app = feathers<{ sessions: SessionsService }>();
+      app.use('sessions', createService(db));
+      app.service('sessions').hooks({
+        before: {
+          all: [typedValidateQuery(sessionQueryValidator)],
+          find: [scopeFindToAccessibleSessionsSql()],
+        },
+      });
+      const usersRepo = new UsersRepository(db);
+      const principals: { name: string; user: object; visibleToUserId?: UUID }[] = [];
+      for (const [name, userId] of Object.entries(fixture.users)) {
+        const user = await usersRepo.findById(userId);
+        if (!user) throw new Error(`Missing fixture user ${name}`);
+        // Superadmins bypass at the hook; the repository then runs unscoped.
+        principals.push({
+          name,
+          user,
+          visibleToUserId: user.role === 'superadmin' ? undefined : (userId as UUID),
+        });
+      }
+      principals.push({
+        name: 'service-account',
+        user: { user_id: fixture.users.outsider, role: 'member', _isServiceAccount: true },
+      });
+      const mixed = [
+        ...fixture.sessionIds.filter((_, index) => index % 3 === 0),
+        ...fixture.deletedSessionIds.slice(0, 1),
+      ];
+      for (const principal of principals) {
+        const self = (principal.user as { user_id: UserID }).user_id;
+        const cases: [Record<string, unknown>, SessionPageOptions][] = [
+          [
+            {
+              created_by: self,
+              archived: false,
+              $sort: { updated_at: -1 },
+              $limit: 200,
+              $count: false,
+            },
+            {
+              createdBy: self,
+              archived: false,
+              sortUpdatedAt: -1,
+              limit: 200,
+              includeTotal: false,
+            },
+          ],
+          [
+            { session_id: { $in: mixed }, $limit: 100 },
+            { sessionIds: mixed, limit: 100 },
+          ],
+        ];
+        for (const [query, opts] of cases) {
+          const label = `${principal.name} ${JSON.stringify(opts)}`;
+          const params = { provider: 'socketio', user: principal.user };
+          const full = await app.service('sessions').find({ ...params, query });
+          const lean = await app
+            .service('sessions')
+            .find({ ...params, query: { ...query, lean: true } });
+          const legacy = await legacySessionPage(db, {
+            ...opts,
+            visibleToUserId: principal.visibleToUserId,
+          });
+          expect(orderedIds(full), label).toEqual(legacy.rows.map(([id]) => id));
+          expect(orderedIds(lean), label).toEqual(orderedIds(full));
+          expect(readShapes(lean).every((shape) => shape === SESSION_LIST_ROW_SHAPE)).toBe(true);
+          if (legacy.total !== undefined) {
+            expect((full as { total: number }).total, label).toBe(legacy.total);
+            expect((lean as { total: number }).total, label).toBe(legacy.total);
+          }
+        }
+      }
+    },
+    60_000
+  );
+
+  dbTest('applies to the generic find path and never to get', async ({ db }) => {
+    const service = createService(db);
+    const board = await createBoard(db);
+    const branch = await createBranchOnBoard(db, board);
+    const session = await createSession(db, branch, { custom_context: heavyContext });
+
+    // board_id + $in routes through the operator-capable generic pipeline.
+    const lean = await service.find({
+      query: { board_id: board, session_id: { $in: [session] }, lean: true, $limit: 10 },
+    });
+    expect(contextsById(lean).get(session)).toEqual(leanContext);
+    expect(readShapes(lean)).toEqual([SESSION_LIST_ROW_SHAPE]);
+    const notLean = await service.find({ query: { lean: false, $limit: 10 } });
+    expect(contextsById(notLean).get(session)).toEqual(heavyContext);
+    expect(readShapes(notLean)).toEqual([undefined]);
+    const full = await service.get(session);
+    expect(full.custom_context).toEqual(heavyContext);
+    expect(full).not.toHaveProperty('read_shape');
+  });
+});
+
+describe('SessionsService writes — read_shape is never writable', () => {
+  dbTest('rejects the marker on create, patch, and update and never echoes it', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch, {
+      custom_context: { scheduled_run: { schedule_id: 'sched-1' } },
+    });
+    const app = feathers<{ sessions: SessionsService }>();
+    app.use('sessions', createService(db));
+    const patched: unknown[] = [];
+    app.service('sessions').on('patched', (row: unknown) => patched.push(row));
+    const marker = { read_shape: SESSION_LIST_ROW_SHAPE } as unknown as Partial<Session>;
+
+    await expect(
+      app.service('sessions').create({ branch_id: branch, ...marker } as never)
+    ).rejects.toMatchObject({ code: 400, message: expect.stringMatching(/read_shape/) });
+    await expect(
+      app.service('sessions').patch(sessionId, { title: 'x', ...marker })
+    ).rejects.toMatchObject({ code: 400 });
+    await expect(
+      app.service('sessions').update(sessionId, { title: 'x', ...marker } as never)
+    ).rejects.toMatchObject({ code: 400 });
+    expect(patched).toEqual([]);
+
+    const result = await app.service('sessions').patch(sessionId, { title: 'renamed' });
+    for (const row of [result, ...patched]) {
+      expect(row).not.toHaveProperty('read_shape');
+      expect((row as Session).custom_context).toHaveProperty('scheduled_run');
+    }
+    expect(patched).toHaveLength(1);
+  });
+
+  dbTest('the repository drops a marker that reaches it internally', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const sessionId = await createSession(db, branch);
+
+    const merged = await new SessionRepository(db).update(sessionId, {
+      title: 'internal',
+      read_shape: SESSION_LIST_ROW_SHAPE,
+    } as unknown as Partial<Session>);
+
+    expect(merged.title).toBe('internal');
+    expect(merged).not.toHaveProperty('read_shape');
   });
 });

@@ -141,10 +141,10 @@ export function createManagedAgenticToolInstallManifest(
     dependencies: { [definition.packageName]: agorVersion },
     // npm ignores overrides in dependencies, including our integration wrapper.
     // Put this on the managed install ROOT as well as in pnpm-workspace.yaml:
-    // Gemini 0.59 pins simple-git 3.28.0, reintroducing GHSA-jcxm-m3jx-f287,
-    // GHSA-r275-fr43-pm7q, and GHSA-hffm-xvc3-vprc otherwise.
+    // Gemini 0.61 pins simple-git 3.28.0, reintroducing GHSA-jcxm-m3jx-f287,
+    // GHSA-r275-fr43-pm7q, GHSA-hffm-xvc3-vprc, and GHSA-x6jw-m9v5-85vh otherwise.
     ...(tool === 'gemini'
-      ? { overrides: { '@google/gemini-cli-core': { 'simple-git': '3.36.0' } } }
+      ? { overrides: { '@google/gemini-cli-core': { 'simple-git': '4.0.2' } } }
       : {}),
   };
 }
@@ -195,7 +195,9 @@ async function findInstalledPackageDirectory(
 export async function resolveManagedAgenticToolPackageDirectory(
   tool: InstallableAgenticTool,
   agorVersion: string,
-  packageName: string
+  packageName: string,
+  /** Dependency that owns `packageName`; isolated (pnpm) layouts keep it beside that package only. */
+  via?: string
 ): Promise<string> {
   const definition = AGENTIC_TOOL_INTEGRATIONS[tool];
   const installDir = getAgenticToolInstallDir(tool, agorVersion);
@@ -205,8 +207,17 @@ export async function resolveManagedAgenticToolPackageDirectory(
   if (!isContainedPath(realInstallDir, integrationEntry)) {
     throw new Error('integration wrapper resolved outside the managed directory');
   }
+  const searchFrom = via
+    ? join(
+        await findInstalledPackageDirectory(integrationEntry, via, realInstallDir),
+        'package.json'
+      )
+    : integrationEntry;
+  if (!isContainedPath(realInstallDir, searchFrom)) {
+    throw new Error(`${via} resolved outside the managed directory`);
+  }
   const packageDirectory = await findInstalledPackageDirectory(
-    integrationEntry,
+    searchFrom,
     packageName,
     realInstallDir
   );

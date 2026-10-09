@@ -19,7 +19,7 @@ import type {
   UpdateUserInput,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig, hasMinimumRole } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { Flex, Layout, theme, Upload } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -34,12 +34,16 @@ import { AppActionsProvider } from '../../contexts/AppActionsContext';
 import { useRegisterBoardSwitcher } from '../../contexts/CanvasNavigationContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBoardTitle } from '../../hooks/useBoardTitle';
+import { useCreateFlows } from '../../hooks/useCreateFlows';
 import { useEventStream } from '../../hooks/useEventStream';
 import { useFaviconStatus } from '../../hooks/useFaviconStatus';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { usePermissionDecision } from '../../hooks/usePermissionDecision';
+import { usePinnedOpenRows } from '../../hooks/usePinnedRows';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
+import { useSessionMcpServerIds } from '../../hooks/useSessionMcpServerIds';
 import { useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { useTaskCompletionChime } from '../../hooks/useTaskCompletionChime';
@@ -53,7 +57,6 @@ import {
   makeCommentMentionSelector,
   makeRepoSelector,
   makeSessionExistsSelector,
-  makeSessionMcpServerIdsSelector,
   makeSessionSelector,
   makeSessionsForBranchSelector,
   makeUnreadCommentCountSelector,
@@ -70,31 +73,25 @@ import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { getShellSurfacePath, hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
-import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
-import {
-  buildTeammateBootstrapPrompt,
-  buildTeammateFirstSessionTitle,
-} from '../../utils/teammateBootstrapPrompt';
-import { createTeammateBranch } from '../../utils/teammateCreation';
+import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
+import { isTeammatesRoute } from '../../utils/uiRoutes';
 import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
-import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
-import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
+import { CreateModals } from '../CreateModals';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
-import { NewSessionButton } from '../NewSessionButton';
 import { NewSessionModal } from '../NewSessionModal';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
 import { SessionSettingsModal } from '../SessionSettingsModal';
 import { SettingsModal } from '../SettingsModal';
+import { TeammatesDirectory } from '../TeammatesDirectory';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
 import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
@@ -202,7 +199,10 @@ export interface AppProps {
   ) => void | Promise<void>;
   onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
   onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
-  onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDeleteBranch?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
   onCreateBranch?: (
@@ -258,7 +258,12 @@ export interface AppProps {
   onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
-  onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
+  onUpdateSessionMcpServers?: (
+    sessionId: string,
+    mcpServerIds: string[],
+    /** The links the user was shown; the change is diffed against them. */
+    baselineIds?: string[]
+  ) => void;
   onUpdateSessionEnvSelections?: (sessionId: string, envVarNames: string[]) => void;
   onSendComment?: (boardId: string, content: string) => void;
   onReplyComment?: (parentId: string, content: string) => void;
@@ -271,16 +276,16 @@ export interface AppProps {
   instanceLabel?: string;
   /** Instance description (markdown) shown in popover around the instance label */
   instanceDescription?: string;
+  /** Settings-menu link to an external app, opened in a new tab */
+  externalAppLink?: string;
+  externalAppLabel?: string;
   /** Whether the web terminal is enabled on this instance (execution.allow_web_terminal) */
   webTerminalEnabled?: boolean;
   branchStorageConfig?: BranchStorageConfig;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
-// Stable empty-array sentinel: keeps prop refs equal across renders for the
-// common no-MCP case so that downstream React.memo bailouts are not defeated.
-// Frozen at runtime; the consuming components only read it.
-const EMPTY_STRING_ARRAY: string[] = Object.freeze([] as string[]) as string[];
+// Stable empty-array sentinel; frozen at runtime, consumers only read it.
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
 
@@ -385,6 +390,8 @@ export const App: React.FC<AppProps> = ({
   onReopenOnboarding,
   instanceLabel,
   instanceDescription,
+  externalAppLink,
+  externalAppLabel,
   webTerminalEnabled = false,
   branchStorageConfig,
   uploadPolicy,
@@ -395,7 +402,7 @@ export const App: React.FC<AppProps> = ({
   // `agorStore.getState()` read inside a handler, or pushed down into the
   // component that actually consumes the map (SettingsModal, UrlStateBridge).
   const { token } = theme.useToken();
-  const { showWarning, showError } = useThemedMessage();
+  const { showError } = useThemedMessage();
   const location = useLocation();
   const routeParams = useParams<{
     sessionShortId?: string;
@@ -404,7 +411,9 @@ export const App: React.FC<AppProps> = ({
   }>();
   // Settings owns the address bar, not the surface behind its modal.
   // Preserve the Home/board background recorded by useSettingsRoute.
-  const isRootHomePath = getShellSurfacePath(location) === '/';
+  const shellSurfacePath = getShellSurfacePath(location);
+  const isTeammatesPath = isTeammatesRoute(shellSurfacePath);
+  const isRootHomePath = shellSurfacePath === '/' || isTeammatesPath;
   const hasExplicitEntityTarget = hasExplicitEntityRouteTarget(routeParams);
   const sessionCanvasRef = useRef<SessionCanvasRef>(null);
   const [newSessionBranchId, setNewSessionBranchId] = useState<string | null>(null);
@@ -413,14 +422,6 @@ export const App: React.FC<AppProps> = ({
   // the drawer straight away in a "pick a tool" empty state rather than the
   // old blocking modal — see `chooseAgenticTool` / `handleQuickStartSession`.
   const [pendingToolChoiceBranchId, setPendingToolChoiceBranchId] = useState<string | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'teammate' | 'board' | 'repository'
-  >('teammate');
-  const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
-    x: number;
-    y: number;
-  } | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   // Active URL deep-link target (branch or artifact). Folds into the
   // unified dashed "selected" outline alongside `selectedSessionId` —
@@ -447,6 +448,9 @@ export const App: React.FC<AppProps> = ({
   );
   const effectiveSelectedSessionId =
     !isRootHomePath && selectedSessionId && selectedSessionExists ? selectedSessionId : null;
+  // The open session, its branch and the URL's branch target stay while
+  // shown, whatever scope evicts (`rowPins.ts`).
+  usePinnedOpenRows({ sessions: [selectedSessionId], branches: [activeUrlTargetBranchId] });
 
   // A real selected session always wins; the pending tool-choice empty state
   // only matters when there's no real session to show yet (see
@@ -677,15 +681,19 @@ export const App: React.FC<AppProps> = ({
   // and the localStorage-backed recents list keeps both in sync. The boards arg
   // only shapes `recentBoards`, which the shell does not consume — passing the
   // stable empty list avoids a whole-map subscription here.
-  const { recentBoardIds, trackBoardVisit } = useRecentBoards(EMPTY_BOARDS, currentBoardId);
+  const { recentBoardIds, trackBoardVisit } = useRecentBoards(
+    EMPTY_BOARDS,
+    currentBoardId,
+    user?.user_id
+  );
 
   // Persist current board to localStorage when it changes
+  const userId = user?.user_id;
   useEffect(() => {
-    if (currentBoardId) {
-      localStorage.setItem('agor:currentBoardId', currentBoardId);
-      trackBoardVisit(currentBoardId);
-    }
-  }, [currentBoardId, trackBoardVisit]);
+    if (currentBoardId) localStorage.setItem('agor:currentBoardId', currentBoardId);
+    // Visits wait for the user so the first one lands in their own history.
+    if (currentBoardId && userId) trackBoardVisit(currentBoardId);
+  }, [currentBoardId, trackBoardVisit, userId]);
 
   // Initialize audio on first user interaction (for browser autoplay policy)
   useEffect(() => {
@@ -733,6 +741,25 @@ export const App: React.FC<AppProps> = ({
   // across socket churn — important because they flow into memoized children.
   const navigation = useAppNavigation();
 
+  // Shared create flows (teammate/branch/board/repo) + open/close state, reused
+  // by MobileApp. On a board, new branches spawn at the canvas viewport centre.
+  const getViewportCenter = useCallback(() => sessionCanvasRef.current?.getViewportCenter(), []);
+  const createFlows = useCreateFlows({
+    client,
+    currentUser: user,
+    currentBoardId,
+    availableAgents,
+    branchStorageConfig,
+    navigation,
+    onCreateBranch,
+    onUpdateBranch,
+    onCreateSession,
+    onCreateBoard,
+    onCreateRepo: (data) => onCreateRepo?.(data),
+    onCreateLocalRepo: (data) => onCreateLocalRepo?.(data),
+    getDefaultPosition: getViewportCenter,
+  });
+
   const handleHomeBoardClick = useCallback(
     (boardId: string) => navigation.goToBoard(boardId),
     [navigation]
@@ -740,16 +767,6 @@ export const App: React.FC<AppProps> = ({
 
   const handleHomeBranchClick = useCallback(
     (branchId: string) => navigation.goToBranch(branchId),
-    [navigation]
-  );
-
-  const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'teammate' | 'board' | 'repository', boardId?: string) => {
-      if (boardId) navigation.goToBoard(boardId);
-      setNewBranchDefaultPosition(null);
-      setCreateDialogDefaultTab(tab || 'teammate');
-      setCreateDialogOpen(true);
-    },
     [navigation]
   );
 
@@ -786,16 +803,6 @@ export const App: React.FC<AppProps> = ({
       setCurrentBoardId(firstBoardId || '');
     }
   }, [boardCount, firstBoardId, currentBoard, currentBoardId, setCurrentBoardId, connected]);
-
-  // Recalculate default position when board changes while modal is open
-  // This ensures branches spawn at the center of the new board's viewport
-  // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
-  useEffect(() => {
-    if (createDialogOpen) {
-      const center = sessionCanvasRef.current?.getViewportCenter();
-      setNewBranchDefaultPosition(center || null);
-    }
-  }, [currentBoardId, createDialogOpen]);
 
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId);
@@ -973,164 +980,11 @@ export const App: React.FC<AppProps> = ({
     [effectiveSelectedSessionId, navigation]
   );
 
-  const handleCreateBranch = async (config: BranchTabConfig) => {
-    // Thread board placement (boardId + position) through the create
-    // call so it lands atomically. The previous shape did a follow-up
-    // PATCH for board_id and dropped position entirely — the API already
-    // accepts both at create time, so the patch is redundant and the
-    // dropped position made the BranchTab `defaultPosition` plumbing a
-    // no-op.
-    const branch = await onCreateBranch?.(config.repoId, {
-      name: config.name,
-      ref: config.ref,
-      refType: config.refType,
-      createBranch: config.createBranch,
-      sourceBranch: config.sourceBranch,
-      pullLatest: config.pullLatest,
-      issue_url: config.issue_url,
-      pull_request_url: config.pull_request_url,
-      ...(config.board_id ? { boardId: config.board_id } : {}),
-      ...(config.position ? { position: config.position } : {}),
-      ...(config.storage_mode ? { storage_mode: config.storage_mode } : {}),
-      ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
-    });
-
-    setCreateDialogOpen(false);
-
-    // Mirror handleCreateSession: route through the URL so useUrlState
-    // owns selection. The just-created branch may not be in branchById
-    // yet (socket `created` event still in flight) — goToBranch pushes
-    // `/w/<short>/` unconditionally and useUrlState's URL→state effect
-    // resolves the branch on a subsequent render to switch boards (if
-    // needed) and recenter the canvas.
-    if (branch) {
-      navigation.goToBranch(branch.branch_id);
-    }
-  };
-
-  const handleCreateBoardFromDialog = async (board: Partial<Board>) => {
-    if (!onCreateBoard) return;
-    const created = await onCreateBoard(board);
-    // Boards have their own URL (/b/<slug-or-short>/) — switch to the
-    // new board after creation so the user lands on the empty canvas
-    // they're about to populate. Same intent as goToBranch/goToSession
-    // after their respective creates.
-    if (created?.board_id) {
-      navigation.goToBoard(created.board_id);
-    }
-  };
-
-  const handleCreateTeammate = async (
-    result: TeammateTabResult,
-    progress?: CreateDialogProgress
-  ) => {
-    const repoId = result.repoId;
-    if (!repoId || !onCreateBranch || !onUpdateBranch) {
-      throw new Error('Missing repository or branch creation handler for AI teammate creation.');
-    }
-
-    progress?.onStatusChange?.('Creating AI teammate branch…');
-
-    const branch = await createTeammateBranch(
-      {
-        displayName: result.displayName,
-        description: result.description,
-        emoji: result.emoji,
-        repoId,
-        branchName: result.branchName,
-        sourceBranch: result.sourceBranch,
-        sourceRemoteUrl: result.sourceRemoteUrl,
-      },
-      { client, repoById: agorStore.getState().repoById, onCreateBranch, onUpdateBranch }
-    );
-
-    if (!branch) {
-      throw new Error(
-        'AI teammate branch could not be created. Please check the branch details and try again.'
-      );
-    }
-
-    const sessionConfig: NewSessionConfig = {
-      branch_id: branch.branch_id,
-      agent: result.agent,
-      agenticToolPresetId: result.agenticToolPresetId,
-      title: buildTeammateFirstSessionTitle(result),
-      initialPrompt: buildTeammateBootstrapPrompt({
-        displayName: result.displayName,
-        emoji: result.emoji,
-        description: result.description,
-        userName: user?.name,
-        userEmail: user?.email,
-        templateId: result.templateId,
-        localHome: getTeammateConfig(branch)?.localHome,
-      }),
-      modelConfig: result.modelConfig,
-      effort: result.effort,
-      mcpServerIds: result.mcpServerIds,
-      permissionMode: result.permissionMode,
-      codexSandboxMode: result.codexSandboxMode,
-      codexApprovalPolicy: result.codexApprovalPolicy,
-      codexNetworkAccess: result.codexNetworkAccess,
-    };
-
-    try {
-      if (!onCreateSession) {
-        throw new Error('Missing session creation handler.');
-      }
-      const initialization = await startTeammateBootstrapSession({
-        client,
-        branchId: branch.branch_id,
-        boardId: branch.board_id || currentBoardId,
-        sessionConfig,
-        onCreateSession,
-        onStatusChange: progress?.onStatusChange,
-      });
-      navigation.goToSession(initialization.sessionId);
-      return;
-    } catch (error) {
-      console.error('AI teammate session bootstrap failed:', error);
-      showWarning(
-        `AI teammate branch was created, but the first session could not start: ${
-          error instanceof Error ? error.message : String(error)
-        }. Opening the branch instead.`,
-        { key: 'teammate-bootstrap-session', duration: 8 }
-      );
-    }
-
-    // If the branch was created but the session failed, still take the user
-    // to the teammate branch so the created AI teammate is not lost. The
-    // top-level create-session handler surfaces the failure toast.
-    progress?.onStatusChange?.('Opening AI teammate branch…');
-    navigation.goToBranch(branch.branch_id);
-  };
-
   const handleSessionClick = useCallback(
     (sessionId: string) => {
-      // Call-time store read: the shell no longer subscribes to the session /
-      // branch maps, so any render-time snapshot here would be stale. The
-      // handler's identity stays stable across socket churn — important
-      // because it flows through SessionCanvas → initialNodes deps and a
-      // flipping identity would cascade re-renders into every BranchCard.
-      const { sessionById, branchById } = agorStore.getState();
-      const session = sessionById.get(sessionId);
-
-      // Best-effort: clear highlight flags when opening the conversation.
-      // These updates may fail silently if the user lacks write permission (e.g. read-only
-      // access via RBAC). We suppress errors to avoid spurious toasts for read-only users.
-      if (client && session?.ready_for_prompt) {
-        client
-          .service('sessions')
-          .patch(sessionId, { ready_for_prompt: false })
-          .catch(() => {});
-      }
-
-      const branch = session?.branch_id ? branchById.get(session.branch_id) : undefined;
-      if (client && branch?.needs_attention) {
-        client
-          .service('branches')
-          .patch(branch.branch_id, { needs_attention: false })
-          .catch(() => {});
-      }
+      // Reads the store at call time, so the handler's identity stays stable across
+      // socket churn (it flows into SessionCanvas → initialNodes deps).
+      clearOpenedSessionFlags(client, sessionId);
 
       // Route through URL nav so deep links / back-forward / cross-board
       // recenter all funnel through the same pipe. setSelectedSessionId
@@ -1155,13 +1009,11 @@ export const App: React.FC<AppProps> = ({
     useAgorStore(
       useMemo(() => makeBranchSelector(selectedSessionBranchId), [selectedSessionBranchId])
     ) ?? null;
-  const selectedSessionMcpServerIds =
-    useAgorStore(
-      useMemo(
-        () => makeSessionMcpServerIdsSelector(effectiveSelectedSessionId),
-        [effectiveSelectedSessionId]
-      )
-    ) ?? EMPTY_STRING_ARRAY;
+  // Loaded on first need; the footer's edit control waits for it.
+  const { ids: selectedSessionMcpServerIds } = useSessionMcpServerIds(
+    client,
+    effectiveSelectedSessionId
+  );
 
   // Narrow per-id subscription for the quick-start picker's branch — only
   // patches to that specific branch (or a socket-in-flight arrival) wake the
@@ -1205,7 +1057,14 @@ export const App: React.FC<AppProps> = ({
   const primaryTeammateRepo = useAgorStore(
     useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
   );
-  const primaryTeammateInaccessible = Boolean(primaryTeammateId && !primaryTeammateBranch);
+  // Load the displayed board's partition when it is not complete yet. Until it
+  // is, a missing teammate branch means "not loaded", not "no access" (I1).
+  const { boardReady } = useBoardPartition(client, isHomeSurface ? null : currentBoardId, {
+    canUseMemberWorkspaceServices: hasMinimumRole(user?.role, ROLES.MEMBER),
+  });
+  const primaryTeammateInaccessible = Boolean(
+    primaryTeammateId && !primaryTeammateBranch && boardReady
+  );
 
   // Preserve the historical board-switch behavior now that the panel itself
   // no longer pushes a default tab into controlled parent state on mount.
@@ -1384,6 +1243,8 @@ export const App: React.FC<AppProps> = ({
   // delegates to the latest impl via useStableCallback, so they read current
   // state (selection, panel, board) at call time without re-rendering the header.
   const handleHomeClick = useStableCallback(() => navigation.goHome());
+  const handleSeeAllTeammates = useStableCallback(() => navigation.goToTeammates());
+  const handleTeammatesBack = useStableCallback(() => navigation.goBack());
   const handleEventStreamClick = useStableCallback(() => {
     // If a session is open, close it and reveal the event stream; otherwise
     // toggle the event stream panel.
@@ -1409,6 +1270,7 @@ export const App: React.FC<AppProps> = ({
   const stableOnLogout = useStableCallback(onLogout);
   const stableOnRetryConnection = useStableCallback(onRetryConnection);
   const stableOnCreateSession = useStableCallback(onCreateSession);
+  const canCreateSessions = !!onCreateSession && hasMinimumRole(user?.role, ROLES.MEMBER);
 
   return (
     <AppActionsProvider value={appActionsValue}>
@@ -1444,7 +1306,10 @@ export const App: React.FC<AppProps> = ({
           onUserClick={handleHeaderUserClick}
           instanceLabel={instanceLabel}
           instanceDescription={instanceDescription}
+          externalAppLink={externalAppLink}
+          externalAppLabel={externalAppLabel}
           onCreateSession={stableOnCreateSession}
+          onCreate={createFlows.openCreate}
         />
         {topBanner}
         <Content style={{ position: 'relative', overflow: 'hidden', display: 'flex' }}>
@@ -1499,6 +1364,7 @@ export const App: React.FC<AppProps> = ({
                   primaryTeammateBranch={primaryTeammateBranch}
                   primaryTeammateRepo={primaryTeammateRepo}
                   primaryTeammateInaccessible={primaryTeammateInaccessible}
+                  boardReady={boardReady}
                   currentUserId={user?.user_id}
                   selectedSessionId={effectiveSelectedSessionId}
                   onSessionClick={handleSessionClick}
@@ -1522,6 +1388,7 @@ export const App: React.FC<AppProps> = ({
                   hoveredCommentId={hoveredCommentId}
                   selectedCommentId={selectedCommentId}
                   onCollapse={handleTeammateCollapse}
+                  onCreateTeammate={createFlows.openCreateBoardTeammate}
                   deferSessionDetails={homeExitPanelDetailsDeferred}
                   onDeferredDetailsHydrated={handleDeferredDetailsHydrated}
                 />
@@ -1592,17 +1459,26 @@ export const App: React.FC<AppProps> = ({
                   minSize={CANVAS_MIN_SIZE_PERCENT}
                 >
                   <div style={{ position: 'relative', overflow: 'hidden', height: '100%' }}>
-                    {isHomeSurface ? (
+                    {isTeammatesPath ? (
+                      <TeammatesDirectory
+                        client={client}
+                        currentUser={user}
+                        checkAccess={canCreateSessions}
+                        onOpenBoard={handleHomeBoardClick}
+                        onBack={handleTeammatesBack}
+                      />
+                    ) : isHomeSurface ? (
                       <HomePage
                         client={client}
-                        connected={connected}
+                        currentUser={user}
                         recentBoardIds={recentBoardIds}
-                        currentUserId={user?.user_id}
                         onBoardClick={handleHomeBoardClick}
                         onBranchClick={handleHomeBranchClick}
                         onSessionClick={handleSessionClick}
-                        onOpenCreateDialog={handleHomeOpenCreateDialog}
+                        onCreateSession={canCreateSessions ? stableOnCreateSession : undefined}
+                        onOpenCreateDialog={createFlows.openCreate}
                         onOpenSettings={openSettings}
+                        onSeeAllTeammates={handleSeeAllTeammates}
                       />
                     ) : (
                       <SessionCanvas
@@ -1634,16 +1510,6 @@ export const App: React.FC<AppProps> = ({
                         onOpenCommentsPanel={handleOpenCommentsPanel}
                         onCommentHover={setHoveredCommentId}
                         onCommentSelect={handleCommentSelect}
-                      />
-                    )}
-                    {!isHomeSurface && (
-                      <NewSessionButton
-                        onClick={() => {
-                          const center = sessionCanvasRef.current?.getViewportCenter();
-                          setNewBranchDefaultPosition(center || null);
-                          setCreateDialogDefaultTab('teammate');
-                          setCreateDialogOpen(true);
-                        }}
                       />
                     )}
                   </div>
@@ -1789,9 +1655,7 @@ export const App: React.FC<AppProps> = ({
           onCreateTeammate={() => {
             closeSettings();
             onSettingsClose?.();
-            setNewBranchDefaultPosition(null);
-            setCreateDialogDefaultTab('teammate');
-            setCreateDialogOpen(true);
+            createFlows.openCreate('teammate');
           }}
           branchStorageConfig={branchStorageConfig}
         />
@@ -1837,26 +1701,7 @@ export const App: React.FC<AppProps> = ({
           branchId={terminalBranchId}
           initialCommands={terminalCommands}
         />
-        <CreateDialog
-          open={createDialogOpen}
-          onClose={() => {
-            setCreateDialogOpen(false);
-            setCreateDialogDefaultTab('teammate');
-            setNewBranchDefaultPosition(null);
-          }}
-          defaultTab={createDialogDefaultTab}
-          currentBoardId={currentBoardId}
-          defaultPosition={newBranchDefaultPosition || undefined}
-          onCreateBranch={handleCreateBranch}
-          onCreateBoard={handleCreateBoardFromDialog}
-          onCreateRepo={(data) => onCreateRepo?.(data)}
-          onCreateLocalRepo={(data) => onCreateLocalRepo?.(data)}
-          onCreateTeammate={handleCreateTeammate}
-          availableAgents={availableAgents}
-          currentUser={user}
-          client={client}
-          branchStorageConfig={branchStorageConfig}
-        />
+        <CreateModals {...createFlows.createModalsProps} />
         {logsModalBranchId && (
           <EnvironmentLogsModal
             open={!!logsModalBranchId}

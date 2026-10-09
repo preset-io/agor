@@ -1,12 +1,6 @@
 import type { Session } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  bumpRevision,
-  getLastAppliedRevision,
-  getRevision,
-  recordHydrationApply,
-  resetHydrationRevisions,
-} from './agorHydration';
+import { bumpRevision, getRevision, resetHydrationRevisions } from './agorHydration';
 import { sessionRemoved } from './agorRealtimeActions';
 import { agorStore } from './agorStore';
 import {
@@ -24,10 +18,12 @@ const AUTHORITY = 'user-a:member:1';
 // The keyed session-patch queue writes through the real store, so these are
 // small integration tests: seed the store, drive the queue, assert the maps.
 
+// The caller's own sessions: the user scope holds them, so realtime admits them.
 const makeSession = (overrides: Partial<Session> = {}): Session =>
   ({
     session_id: 's-1',
     branch_id: 'b-1',
+    created_by: 'user-a',
     status: 'idle',
     archived: false,
     created_at: '2026-06-24T00:00:00.000Z',
@@ -161,23 +157,6 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     }
   });
 
-  it('drops a queued patch subsumed by a later hydration apply', () => {
-    seedSession(makeSession({ status: 'idle' }));
-
-    // A patch is enqueued (stamped with the current revision)...
-    bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
-
-    // ...then a hydration applies a fresher snapshot proven quiet at-or-after
-    // that revision. The queued patch is now stale.
-    recordHydrationApply(['sessions'], [1]);
-
-    flushRealtimeNow(AUTHORITY);
-
-    // The stale patch is dropped — the hydrated (idle) state stands.
-    expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'idle' });
-  });
-
   it('discardRealtimeNow drops the pending queue without applying', () => {
     seedSession(makeSession({ status: 'idle' }));
 
@@ -209,7 +188,11 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     bumpRevision('sessions');
     enqueueSessionPatch(
       replacementAuthority,
-      makeSession({ session_id: 's-b' as Session['session_id'], status: 'completed' })
+      makeSession({
+        session_id: 's-b' as Session['session_id'],
+        created_by: 'user-b',
+        status: 'completed',
+      })
     );
     flushRealtimeNow(AUTHORITY);
 
@@ -258,7 +241,7 @@ describe('confirmed mutation patches', () => {
     expect(agorStore.getState().sessionById.has('s-1')).toBe(true);
   });
 
-  it.each(['queued', 'applied', 'hydrated'] as const)(
+  it.each(['queued', 'applied'] as const)(
     'preserves a newer %s restore against an older archive response regardless of timestamps',
     async (delivery) => {
       seedSession(makeSession());
@@ -267,11 +250,6 @@ describe('confirmed mutation patches', () => {
       bumpRevision('sessions');
       enqueueSessionPatch(AUTHORITY, restored);
       if (delivery === 'applied') flushRealtimeNow(AUTHORITY);
-      if (delivery === 'hydrated') {
-        agorStore.getState().resetMaps();
-        seedSession(restored);
-        recordHydrationApply(['sessions'], [getRevision('sessions')]);
-      }
       // An old response can even carry a larger timestamp than the restore.
       await commit(
         [makeSession({ archived: true, last_updated: '2026-06-25T00:00:00.000Z' })],
@@ -300,7 +278,6 @@ describe('confirmed mutation patches', () => {
             enqueueSessionPatch(AUTHORITY, restored);
           } else if (race === 'hydration') {
             seedSession(restored);
-            recordHydrationApply(['sessions'], [getRevision('sessions')]);
           } else {
             await captureSessionPatchCommit()([restored], async () => restored);
           }
@@ -329,36 +306,6 @@ describe('confirmed mutation patches', () => {
       expect(agorStore.getState().sessionsByBranch.size).toBe(0);
     }
   );
-
-  it('does not freshen a queued row subsumed by hydration that removed it', async () => {
-    const session = makeSession();
-    seedSession(session);
-    const commit = captureSessionPatchCommit();
-    bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, session);
-    agorStore.getState().resetMaps();
-    recordHydrationApply(['sessions'], [getRevision('sessions')]);
-    const refetch = vi.fn();
-    await commit([session], refetch);
-    expect(refetch).not.toHaveBeenCalled();
-    expect(agorStore.getState().sessionById.size).toBe(0);
-  });
-
-  it('does not resurrect a queued-only row when an unchanged empty hydration lands during the read', async () => {
-    const session = makeSession();
-    bumpRevision('sessions');
-    enqueueSessionPatch(AUTHORITY, session);
-    const refetch = vi.fn(async () => {
-      // A quiet empty snapshot subsumes this queued event without replacing
-      // either map reference (buildSessionMaps preserves equal maps).
-      recordHydrationApply(['sessions'], [getRevision('sessions')]);
-      return session;
-    });
-    await captureSessionPatchCommit()([session], refetch);
-    flushRealtimeNow(AUTHORITY);
-    expect(refetch).toHaveBeenCalledTimes(1);
-    expect(agorStore.getState().sessionById.size).toBe(0);
-  });
 
   it.each([false, true])(
     'backs off repeated races and stops on authority cancellation=%s',
@@ -535,15 +482,13 @@ describe('confirmed mutation patches', () => {
     }
   );
 
-  it('does not discard unrelated queued patches or advance the full hydration watermark', async () => {
+  it('does not discard unrelated queued patches', async () => {
     const session = makeSession();
     seedSession(session);
     const unrelated = makeSession({ session_id: 'unrelated' as Session['session_id'] });
     bumpRevision('sessions');
     enqueueSessionPatch(AUTHORITY, unrelated);
-    const watermark = getLastAppliedRevision('sessions');
     await captureSessionPatchCommit()([session], async () => ({ ...session, archived: true }));
-    expect(getLastAppliedRevision('sessions')).toBe(watermark);
     expect(agorStore.getState().sessionById.get(unrelated.session_id)).toEqual(unrelated);
     expect(agorStore.getState().sessionById.has(session.session_id)).toBe(false);
   });
