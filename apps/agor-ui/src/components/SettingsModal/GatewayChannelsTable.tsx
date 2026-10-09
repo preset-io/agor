@@ -4334,7 +4334,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       config.allowed_channel_ids = teamsList(values.teams_allowed_channel_ids);
       config.allowed_user_aad_object_ids = teamsList(values.teams_allowed_user_aad_object_ids);
       config.align_teams_users = values.teams_align_users ?? true;
-      delete config.user_map;
+      // Empty, not delete: the shallow merge would keep a stored map the admin removed.
+      config.user_map = {};
       if (
         config.align_teams_users &&
         typeof values.teams_user_map === 'string' &&

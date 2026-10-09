@@ -1233,6 +1233,36 @@ describe('GatewayChannelsTable Teams edit mode', () => {
   });
 });
 
+describe('GatewayChannelsTable Teams identity edits', () => {
+  it('sends an empty user_map when the override is cleared, so the stored map is replaced', async () => {
+    const onUpdate = vi.fn();
+    renderEditTable(
+      null,
+      {
+        ...makeSlackChannel(),
+        id: 'teams-channel-1',
+        channel_type: 'teams',
+        agor_user_id: null,
+        config: {
+          app_id: 'app-123',
+          app_password: '••••••••',
+          microsoft_tenant_id: 'tenant-123',
+          align_teams_users: true,
+          user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
+        },
+      } as unknown as GatewayChannel,
+      { onUpdate }
+    );
+    expandPanel('Identity');
+    fireEvent.change(await screen.findByLabelText('User map override (optional)'), {
+      target: { value: '' },
+    });
+    clickButton(/^Save$/);
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1].config.user_map).toEqual({});
+  });
+});
+
 describe('gateway inventory boundaries', () => {
   it('labels a disabled Teams channel as experimental in the merged inventory', () => {
     const user = makeUser();
