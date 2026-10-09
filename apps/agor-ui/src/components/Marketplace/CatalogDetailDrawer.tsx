@@ -920,6 +920,11 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                         rules still apply. These are app credentials, not a personal access token.
                         Each user signs in separately. Enter the secret only here, never in agent
                         chat.
+                        {appForm.credentials_hint && (
+                          <Paragraph style={{ marginTop: token.marginXS, marginBottom: 0 }}>
+                            {appForm.credentials_hint}
+                          </Paragraph>
+                        )}
                       </>
                     }
                   />

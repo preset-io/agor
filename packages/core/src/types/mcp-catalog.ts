@@ -287,7 +287,13 @@ export interface MCPCatalogCredentialField {
  */
 export interface MCPCatalogEntryOAuth {
   /** Reviewed customer-owned app setup; contains no credentials or endpoint overrides. */
-  configured_client?: { setup_url: string; issuer: string; secret_required: boolean };
+  configured_client?: {
+    setup_url: string;
+    issuer: string;
+    secret_required: boolean;
+    /** Short provider-specific guidance on which credentials to use and where. */
+    credentials_hint?: string;
+  };
   /**
    * A DCR provider that admits only allowlisted redirect URIs. On a cell with
    * the hosted callback relay, flows use the relay's fixed per-issuer callback

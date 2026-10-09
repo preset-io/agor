@@ -1207,6 +1207,7 @@ unpublished:
         setup_url: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
         issuer: https://mcp.hubspot.com
         secret_required: true
+        credentials_hint: In HubSpot, create an MCP connector under Development → MCP Connectors and set its Redirect URL to the callback shown here. Use that connector's Client ID and Client secret, not the numeric App ID.
       # The token endpoint advertises only form-body client authentication.
       token_endpoint_auth_method: client_secret_post
 

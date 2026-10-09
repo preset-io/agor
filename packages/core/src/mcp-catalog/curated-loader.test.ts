@@ -408,6 +408,20 @@ ${block}
       }
     );
 
+    it('accepts a short credentials hint on the app recipe and ships one for HubSpot', async () => {
+      const [entry] = parseCuratedCatalog(
+        configured('client_secret_basic').replace(
+          'secret_required: true',
+          'secret_required: true\n        credentials_hint: Use the connector Client ID, not the App ID.'
+        )
+      );
+      expect(entry.oauth?.configured_client?.credentials_hint).toBe(
+        'Use the connector Client ID, not the App ID.'
+      );
+      const hubspot = (await loadCuratedCatalog()).find((e) => e.name === 'com.hubspot/mcp');
+      expect(hubspot?.oauth?.configured_client?.credentials_hint).toMatch(/not the numeric App ID/);
+    });
+
     it('refuses an unsupported method', () => {
       expect(() => parseCuratedCatalog(configured('private_key_jwt'))).toThrow(CuratedCatalogError);
     });

@@ -80,7 +80,14 @@ const catalogEntryOAuthSchema = z
   .object({
     scope: nonEmpty.optional(),
     configured_client: z
-      .object({ setup_url: httpUrl, issuer: issuerUrl, secret_required: z.boolean() })
+      .object({
+        setup_url: httpUrl,
+        issuer: issuerUrl,
+        secret_required: z.boolean(),
+        // Short, provider-specific "where to find it" for the app credentials,
+        // shown next to the Client ID/secret fields. Prose only, never a value.
+        credentials_hint: nonEmpty.max(400).optional(),
+      })
       .strict()
       .optional(),
     stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),

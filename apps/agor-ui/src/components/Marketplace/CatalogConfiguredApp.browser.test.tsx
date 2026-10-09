@@ -120,6 +120,30 @@ it('shows Asana app setup without a bearer field, keeps IDs and secrets in the s
   await expect.element(button).toBeDisabled();
 });
 
+it('shows a recipe credentials hint beside the app credential fields', async () => {
+  const hinted: MCPCatalogEntry = {
+    ...entry,
+    oauth: {
+      ...entry.oauth,
+      configured_client: {
+        ...entry.oauth!.configured_client!,
+        credentials_hint: "Use the connector's Client ID, not the numeric App ID.",
+      },
+    },
+  };
+  render(
+    <ConfigProvider>
+      <App>
+        <CatalogDetailDrawer {...makeProps(hinted, vi.fn())} />
+      </App>
+    </ConfigProvider>
+  );
+  await expect
+    .element(page.getByText("Use the connector's Client ID, not the numeric App ID."))
+    .toBeVisible();
+  await expect.element(page.getByLabelText('OAuth app Client ID')).toBeVisible();
+});
+
 it('reuses an existing shared app install without asking for or sending app credentials', async () => {
   const connect = vi.fn<CatalogDetailDrawerProps['onConnect']>((input) =>
     input.oauthPopup?.close()

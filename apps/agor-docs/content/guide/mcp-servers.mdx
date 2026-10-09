@@ -332,7 +332,10 @@ secrets are encrypted with `AGOR_MASTER_SECRET`; other servers' client secrets a
 stored as before. All are redacted on reads. Never paste a client
 secret into agent chat; MCP configuration tools accept only a
 `{{ user.env.NAME }}` reference for it. Rotating app credentials invalidates
-pending attempts and stored grants, so affected users must reconnect.
+pending attempts and stored grants, so affected users must reconnect. To change an
+installed app's Client ID or secret in place, open the server from **My Servers** or
+**Credentials** and choose **Edit OAuth app** (same edit permissions as Settings);
+the saved secret is never shown and can only be replaced.
 
 ### Asana recipe
 
@@ -358,7 +361,9 @@ Set the app's redirect URL to the callback the Catalog form shows.
 - **Zoom:** a Zoom Marketplace general app with the scopes Zoom documents for MCP.
 - **Salesforce** (beta, production orgs): an admin activates hosted MCP servers and
   creates an External Client App; its client secret is optional.
-- **HubSpot:** an MCP connector app on HubSpot's developer platform.
+- **HubSpot:** create an MCP connector under **Development → MCP Connectors**, set its
+  Redirect URL to the callback the Catalog form shows, and use the connector's Client ID
+  and Client secret (not the numeric App ID).
 - **Gmail, Google Calendar, Google Drive, Google Docs** (Google Developer Preview):
   your Workspace account and the Google Cloud project holding your
   Web-application OAuth client must be enrolled in Google's Workspace Developer
