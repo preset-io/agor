@@ -25,10 +25,11 @@ import {
   users,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { InternalUser, User, UserID } from '@agor/core/types';
+import type { AuthenticatedParams, InternalUser, User, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { authenticatedHealthInstance } from '../health/instance.js';
+import { UsersService } from '../services/users.js';
 import { createLaunchAuthService, resolvePublicLaunchAuthSettings } from './launch-auth.js';
 
 const ASSERTION_SECRET = 'test-launch-assertion-secret';
@@ -622,6 +623,9 @@ execution:
             .data as Record<string, unknown>),
           preferences: { audio: { enabled: false } },
           default_mcp_server_ids: ['mcp-1'],
+          avatar_source: 'slack',
+          avatar_source_id: 'U_PREVIOUS',
+          avatar_synced_at: '2026-10-09T00:00:00.000Z',
         },
       })
       .where(eq(users.user_id, first.user.user_id))
@@ -653,10 +657,74 @@ execution:
     });
     expect(row?.data).toMatchObject({
       avatar_url: 'https://cdn.example.test/second.png',
+      avatar_source: 'launch-auth',
       preferences: { audio: { enabled: false } },
       default_mcp_server_ids: ['mcp-1'],
     });
+    expect(row?.data).not.toHaveProperty('avatar_source_id');
+    expect(row?.data).not.toHaveProperty('avatar_synced_at');
   });
+
+  it.each(['manual', 'slack'] as const)(
+    'preserves an Agor-managed %s avatar while updating external identity on login',
+    async (source) =>
+      runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+        const config = externalAuthorityConfig();
+        config.identity = { ...config.identity, avatar_authority: 'internal' };
+        mockExchange(signClaims({ avatar: 'https://example.test/initial-claim.png' }));
+        const first = await service(config).create({ launchCode: 'first' });
+        const local = new UsersService(scoped, undefined, config);
+        expect((await local.get(first.user.user_id)).avatar_url).toBeUndefined();
+        const ownedAvatar = {
+          avatar_url: 'https://example.test/agor-owned.png',
+          avatar_source: source,
+          ...(source === 'slack'
+            ? { avatar_source_id: 'U_AVATAR', avatar_synced_at: '2026-10-09T00:00:00.000Z' }
+            : {}),
+        };
+        await local.patch(first.user.user_id, ownedAvatar, {
+          provider: 'rest',
+          user: first.user,
+        } as AuthenticatedParams);
+        mockExchange(
+          signClaims({
+            email: 'updated@example.test',
+            name: 'Updated',
+            role: 'admin',
+            avatar: 'https://example.test/replacement-claim.png',
+          })
+        );
+        const second = await service(config).create({ launchCode: 'second' });
+        expect(second.user.user_id).toBe(first.user.user_id);
+        expect(await local.get(first.user.user_id)).toMatchObject({
+          ...ownedAvatar,
+          email: 'updated@example.test',
+          name: 'Updated',
+          role: 'admin',
+        });
+      })
+  );
+
+  it('does not repopulate a cleared Agor avatar from a later picture claim', async () =>
+    runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      const config = externalAuthorityConfig();
+      config.identity = { ...config.identity, avatar_authority: 'internal' };
+      mockExchange(signClaims());
+      const first = await service(config).create({ launchCode: 'first' });
+      const local = new UsersService(scoped, undefined, config);
+      const params = { provider: 'rest', user: first.user } as AuthenticatedParams;
+      await local.patch(
+        first.user.user_id,
+        { avatar_url: 'https://example.test/manual.png' },
+        params
+      );
+      await local.patch(first.user.user_id, { avatar_url: null }, params);
+      mockExchange(signClaims({ picture: 'https://example.test/provider.png' }));
+      await service(config).create({ launchCode: 'second' });
+      const user = await local.get(first.user.user_id);
+      expect(user.avatar_url).toBeUndefined();
+      expect(user.avatar_source).toBeUndefined();
+    }));
 
   it('invalidates tenant authority only when launch projection changes a persisted role', async () => {
     const invalidated = vi.fn();

@@ -19,8 +19,9 @@ function externalConfig(overrides: Partial<AgorConfig> = {}): AgorConfig {
 describe('identity authority', () => {
   it('defaults omitted config to local authority', () => {
     expect(resolveIdentityAuthority({})).toEqual({
-      contractVersion: 1,
+      contractVersion: 2,
       userLifecycle: 'internal',
+      avatarAuthority: 'internal',
       roleAuthority: 'internal',
       localAuth: 'enabled',
       capabilities: {
@@ -30,6 +31,7 @@ describe('identity authority', () => {
           identityWrite: true,
           roleWrite: true,
           passwordWrite: true,
+          avatarWrite: true,
           avatarSettingsWrite: true,
           selfConfigurationWrite: true,
         },
@@ -64,6 +66,7 @@ describe('identity authority', () => {
     expect(() => assertValidEffectiveIdentityConfig(config)).not.toThrow();
     expect(resolveIdentityAuthority(config)).toMatchObject({
       userLifecycle: 'external',
+      avatarAuthority: 'external',
       roleAuthority: 'claims',
       localAuth: 'disabled',
       external: { provider: 'external_launch', provisioning: 'jit' },
@@ -74,11 +77,44 @@ describe('identity authority', () => {
           identityWrite: false,
           roleWrite: false,
           passwordWrite: false,
+          avatarWrite: false,
           avatarSettingsWrite: false,
           selfConfigurationWrite: true,
         },
       },
     });
+  });
+
+  it('allows Agor avatars without granting account or identity writes', () => {
+    const config = externalConfig();
+    config.identity = { ...config.identity, avatar_authority: 'internal' };
+    expect(() => assertValidRawConfig(config)).not.toThrow();
+    expect(() => assertValidEffectiveIdentityConfig(config)).not.toThrow();
+    expect(resolveIdentityAuthority(config)).toMatchObject({
+      avatarAuthority: 'internal',
+      userLifecycle: 'external',
+      roleAuthority: 'claims',
+      capabilities: {
+        users: {
+          avatarWrite: true,
+          avatarSettingsWrite: true,
+          create: false,
+          delete: false,
+          identityWrite: false,
+          roleWrite: false,
+          passwordWrite: false,
+        },
+      },
+    });
+  });
+
+  it('rejects unknown avatar authority and external avatars without an external account profile', () => {
+    const invalid = { identity: { avatar_authority: 'slack' } } as unknown as AgorConfig;
+    expect(() => assertValidRawConfig(invalid)).toThrow(/avatar_authority/);
+    expect(() => assertValidEffectiveIdentityConfig(invalid)).toThrow(/avatar_authority/);
+    expect(() =>
+      assertValidEffectiveIdentityConfig({ identity: { avatar_authority: 'external' } })
+    ).toThrow(/requires identity.user_lifecycle 'external'/);
   });
 
   it('rejects partial or contradictory external authority profiles', () => {
