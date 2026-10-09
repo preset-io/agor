@@ -139,7 +139,9 @@ describe('TeamsConversationAddressRepository', () => {
         APP_ID
       );
       if (!removal) throw new Error('removal was not classified');
-      expect(await addresses.revokeForEvent(channel.id, removal)).toBeGreaterThanOrEqual(2);
+      // The General channel's conversation is the team, so both matchers hit the same rows.
+      expect(await addresses.revokeForEvent(channel.id, removal)).toBe(2);
+      expect(await addresses.revokeForEvent(channel.id, removal)).toBe(0);
       for (const threadId of ['19:general@thread.tacv2|root-1', '19:design@thread.tacv2|root-9']) {
         expect(await addresses.loadFenced({ channel, threadId })).toEqual({
           ok: false,
