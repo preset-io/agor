@@ -51,7 +51,7 @@
     "file": "android360-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   },
@@ -59,7 +59,7 @@
     "file": "android360-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -67,7 +67,7 @@
     "file": "desktop-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Desktop keeps main's labelled Stop and Send buttons; Stop sizes to its own label.",
     "viewport": "Desktop 1280x800",
     "theme": "dark"
   },
@@ -75,7 +75,7 @@
     "file": "desktop-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Desktop keeps main's labelled Stop and Send buttons; Stop sizes to its own label.",
     "viewport": "Desktop 1280x800",
     "theme": "light"
   },
@@ -83,7 +83,7 @@
     "file": "iphone15-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "iPhone 15 WebKit",
     "theme": "dark"
   },
@@ -91,7 +91,7 @@
     "file": "iphone15-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "iPhone 15 WebKit",
     "theme": "light"
   },
@@ -227,7 +227,7 @@
     "file": "desktop-light-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Desktop Stop (69px) next to Send (72px): text labels as on main, without reserving the hidden \"Recovering\u2026\" width.",
     "viewport": "Desktop 1280x800",
     "theme": "light"
   },
@@ -235,7 +235,7 @@
     "file": "desktop-dark-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Desktop Stop (69px) next to Send (72px): text labels as on main, without reserving the hidden \"Recovering\u2026\" width.",
     "viewport": "Desktop 1280x800",
     "theme": "dark"
   },
@@ -243,7 +243,7 @@
     "file": "iphone15-light-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "iPhone 15 WebKit",
     "theme": "light"
   },
@@ -251,7 +251,7 @@
     "file": "iphone15-dark-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "iPhone 15 WebKit",
     "theme": "dark"
   },
@@ -259,7 +259,7 @@
     "file": "android360-light-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -267,7 +267,7 @@
     "file": "android360-dark-stop-send.png",
     "kind": "image",
     "title": "Stop next to Send",
-    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "caption": "Phones: Stop and Send are icon-only 44px squares.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   }
