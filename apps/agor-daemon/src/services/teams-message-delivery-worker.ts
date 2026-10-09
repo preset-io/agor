@@ -118,7 +118,12 @@ export function planTeamsChunks(
   options: { maxChunks?: number; continuation?: string } = {}
 ): TeamsChunkPlan {
   const maxChunks = options.maxChunks ?? MAX_CHUNKS;
-  let chunks = chunkMarkdown(text, { limit: budget, measure: utf16Length, label: 'Teams' });
+  let chunks = chunkMarkdown(text, {
+    limit: budget,
+    measure: utf16Length,
+    label: 'Teams',
+    preferLineBreaks: true,
+  });
   const truncated = chunks.length > maxChunks;
   if (truncated) {
     chunks = [...chunks.slice(0, maxChunks - 1), options.continuation ?? continuationText(null)];

@@ -4996,6 +4996,7 @@ export class GatewayService {
       limit: TEAMS_MESSAGE_TEXT_BUDGET - TEAMS_PROACTIVE_REPLY_HINT.length - 2,
       measure: utf16Length,
       label: 'Teams',
+      preferLineBreaks: true,
     });
     chunks[0] = `${chunks[0] ?? ''}\n\n${TEAMS_PROACTIVE_REPLY_HINT}`.trim();
     if (chunks.length > TEAMS_PROACTIVE_MAX_CHUNKS) {
