@@ -2414,6 +2414,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           : await channelRepo.findAll();
 
         const channels = [];
+        let deniedByPermission = 0;
         for (const channel of allChannels) {
           if (!channel) continue;
           if (args.channelType && channel.channel_type !== args.channelType) continue;
@@ -2434,7 +2435,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
 
           const branch = await branchRepo.findById(channel.target_branch_id);
           if (!branch) continue;
-          if (!(await canUseGatewayOutbound(ctx, branchRepo, branch))) continue;
+          if (!(await canUseGatewayOutbound(ctx, branchRepo, branch))) {
+            deniedByPermission += 1;
+            continue;
+          }
 
           channels.push({
             gateway_channel_id: channel.id,
@@ -2497,7 +2501,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             nextOffset: hasMore ? offset + page.length : null,
             ...(callerSessionBranchId && page.length === 0
               ? {
-                  hint: "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
+                  hint:
+                    deniedByPermission > 0
+                      ? "Outbound-enabled channels target this session's branch, but proactive sends need Manager on the branch or an admin role."
+                      : "No outbound-enabled channel targets this session's branch — ask an operator to create/enable one.",
                 }
               : {}),
           },
