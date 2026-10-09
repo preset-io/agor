@@ -382,6 +382,15 @@ describe('TeamsConnector', () => {
       );
     });
 
+    it('keeps line breaks next to inline code', () => {
+      expect(connector.formatMessage!('Run `npm test`\nThen check\nFile `a.ts` changed')).toBe(
+        'Run `npm test`  \nThen check  \nFile `a.ts` changed'
+      );
+      expect(connector.formatMessage!('first\n`a.ts` changed\n```\ncode\n```')).toBe(
+        'first  \n`a.ts` changed\n```\ncode\n```'
+      );
+    });
+
     it('handles empty input', () => {
       expect(connector.formatMessage!('')).toBe('');
     });
