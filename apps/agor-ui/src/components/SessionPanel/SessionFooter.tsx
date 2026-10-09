@@ -912,15 +912,17 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               display: 'flex',
               gap: token.sizeUnit,
               alignItems: 'center',
-              marginBottom: token.sizeUnit * 2,
               ...(isMobile
                 ? {
+                    // The scroll box clips both axes; inset it so focus rings stay visible.
+                    padding: token.sizeUnit,
+                    margin: `-${token.sizeUnit}px -${token.sizeUnit}px ${token.sizeUnit}px`,
                     flexWrap: 'nowrap',
                     whiteSpace: 'nowrap',
                     overflowX: 'auto',
                     scrollbarWidth: 'none',
                   }
-                : { flexWrap: 'wrap' }),
+                : { marginBottom: token.sizeUnit * 2, flexWrap: 'wrap' }),
             }}
             data-testid="info-bar"
           >
