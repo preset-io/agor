@@ -638,6 +638,27 @@ describe('normalizeTeamsActivity', () => {
     expect(normalizeTeamsActivity(activity(), config)).not.toHaveProperty('skippedFiles');
   });
 
+  it('reads download-info files only in personal chats', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        attachments: [
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'notes.txt',
+            content: {
+              downloadUrl: 'https://contoso.sharepoint.com/download.aspx?tempauth=t',
+              fileType: 'txt',
+            },
+          },
+        ],
+      }),
+      { ...config, files: true }
+    );
+    expect(normalized).not.toHaveProperty('files');
+    expect(normalized.skippedFiles).toEqual([{ name: 'notes.txt', reason: 'channel_file' }]);
+  });
+
   it('keeps image URLs on Bot Connector hosts and personal files on SharePoint only when files is on', () => {
     const imageUrl = 'https://smba.trafficmanager.net/teams/v3/attachments/a1/views/original';
     const fileUrl = 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=secret';

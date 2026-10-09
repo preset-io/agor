@@ -33,7 +33,6 @@ import {
   isDatabaseUniqueConstraintError,
   isMCPSlackConnectCardEnabled,
   isPostgresDatabase,
-  isStandardChannelType,
   MCPServerRepository,
   type MCPSlackConnectDueCursor,
   MessagesRepository,
@@ -97,6 +96,7 @@ import {
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
   sanitizeGatewayProviderError,
+  TEAMS_MESSAGE_ID,
   TEAMS_MESSAGE_TEXT_BUDGET,
   type TeamsChannelThreadResult,
   TeamsMemberLookupError,
@@ -5097,15 +5097,14 @@ export class GatewayService {
       channel,
       conversationId: channelId,
     });
-    if (direct.ok && direct.row.team_id) {
-      if (!isStandardChannelType(direct.row.teams_channel_type)) {
-        throw new Error('Teams proactive posts go to standard channels only');
-      }
-      return direct;
+    if (direct.ok && direct.row.team_id) return direct;
+    if (!direct.ok && direct.code === 'conversation_not_standard_channel') {
+      throw new Error('Teams proactive posts go to standard channels only');
     }
     const anchors = await this.teamsAddressRepo.loadFencedTeamAnchors({
       channel,
       limit: TEAMS_ANCHOR_TEAMS,
+      allowedTeamIds: (channel.config as TeamsGatewayConfig).allowed_team_ids,
     });
     const reachable = await listTeamsAnchoredChannels({ channel, anchors, connector, tenantId });
     const match = reachable.find(({ channels }) =>
@@ -6465,7 +6464,7 @@ export class GatewayService {
         teamsCursorToWrite = teamsCatchUp.cursor;
       } else if (
         channel.channel_type === 'teams' &&
-        /^\d{1,20}$/.test(data.teams_catch_up?.activity_id ?? '')
+        TEAMS_MESSAGE_ID.test(data.teams_catch_up?.activity_id ?? '')
       ) {
         // A seed reply skips catch-up; the next mention reads only what follows it.
         teamsCursorToWrite = data.teams_catch_up?.activity_id;

@@ -6793,8 +6793,13 @@ describe('GatewayService Teams proactive sends', () => {
     await expect(outsideTeams.emit()).rejects.toThrow('allowed_team_ids');
     vi.restoreAllMocks();
 
-    const privateChannel = emitHarness({ direct: fenced({ teams_channel_type: 'private' }) });
+    // The repository's answer for a channel with any thread marked private or shared.
+    const privateChannel = emitHarness({
+      direct: { ok: false, code: 'conversation_not_standard_channel' },
+      anchors: [fenced()],
+    });
     await expect(privateChannel.emit()).rejects.toThrow('standard channels only');
+    expect(privateChannel.addresses.loadFencedTeamAnchors).not.toHaveBeenCalled();
     vi.restoreAllMocks();
 
     const malformed = emitHarness({ direct: fenced() });

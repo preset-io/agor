@@ -128,7 +128,7 @@ export {
   TeamsChannelHistoryError,
 } from './connectors/teams-channel-history';
 export type { TeamsTeamChannel } from './connectors/teams-graph';
-export { resetTeamsGraphCaches } from './connectors/teams-graph';
+export { resetTeamsGraphCaches, TEAMS_MESSAGE_ID } from './connectors/teams-graph';
 export type { TeamsProviderHistoryContext } from './connectors/teams-history';
 export { fetchTeamsProviderHistory } from './connectors/teams-history';
 export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';

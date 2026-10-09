@@ -4011,7 +4011,7 @@ describe('Teams channel history agent tools (MCP)', () => {
     );
     vi.restoreAllMocks();
 
-    setup({ fenced: { ...address, row: { ...address.row, teams_channel_type: 'private' } } });
+    setup({ fenced: { ok: false, code: 'conversation_not_standard_channel' } });
     tools = await captureTools('member');
     await expect(tools.agor_gateway_teams_channel_posts_list.handler({})).rejects.toThrow(
       'standard channels only'
@@ -4072,8 +4072,12 @@ describe('Teams outbound targets (MCP)', () => {
     },
   });
 
-  function setup(config: Record<string, unknown>) {
+  function setup(config: Record<string, unknown>, marked: string[] = []) {
     spyCallerSessionBranch('branch-1');
+    vi.spyOn(
+      TeamsConversationAddressRepository.prototype,
+      'nonStandardConversationIds'
+    ).mockResolvedValue(new Set(marked));
     vi.spyOn(GatewayChannelRepository.prototype, 'findAll').mockResolvedValue([
       teamsChannel(config),
     ] as any);
@@ -4126,6 +4130,17 @@ describe('Teams outbound targets (MCP)', () => {
       })
     );
     expect(JSON.stringify(payload)).not.toContain('teams-secret');
+  });
+
+  it('leaves out channels stored as private or shared', async () => {
+    setup({ outbound_enabled: true }, [TEAMS_CHANNEL]);
+    const tools = await captureTools('admin');
+    const payload = JSON.parse(
+      (await tools.agor_gateway_outbound_targets_list.handler({})).content[0].text
+    );
+    expect(payload.channels[0].known_channels).toEqual([
+      { teams_channel_id: OTHER, name: 'Releases' },
+    ]);
   });
 
   it('falls back to formats only when Teams cannot list channels', async () => {

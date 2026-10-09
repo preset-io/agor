@@ -206,7 +206,8 @@ validation.
   request URL is rebuilt from validated IDs. A `nextLink` off the Graph origin
   fails the read.
 - One Graph page per call under one 20 s deadline; `Retry-After` is waited out
-  only while short. A Graph 403 is `rsc_not_granted` for that team.
+  only while short. A Graph 403 is reported as `rsc_not_granted` and, unlike
+  catch-up's, is not cached team-wide (it may be specific to one channel).
 - The tools never advance a cursor, admit a Task, or store Teams content.
   Output is labeled untrusted and carries attachment names, never URLs or
   tokens.
