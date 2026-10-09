@@ -51,7 +51,7 @@
     "file": "android360-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "Chromium 360x780",
     "theme": "dark"
   },
@@ -59,7 +59,7 @@
     "file": "android360-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "Chromium 360x780",
     "theme": "light"
   },
@@ -67,7 +67,7 @@
     "file": "desktop-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "Desktop 1280x800",
     "theme": "dark"
   },
@@ -75,7 +75,7 @@
     "file": "desktop-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "Desktop 1280x800",
     "theme": "light"
   },
@@ -83,7 +83,7 @@
     "file": "iphone15-dark-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "iPhone 15 WebKit",
     "theme": "dark"
   },
@@ -91,7 +91,7 @@
     "file": "iphone15-light-running.png",
     "kind": "image",
     "title": "Composer running",
-    "caption": "Stop and queue are icon-only squares that match the attach and more buttons.",
+    "caption": "Stop and Send are icon-only squares of the same size; Stop no longer reserves room for a hidden label.",
     "viewport": "iPhone 15 WebKit",
     "theme": "light"
   },
@@ -221,6 +221,54 @@
     "title": "Desktop: more popover",
     "caption": "Rows in the more popover share one 32px height while hovering down the list.",
     "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "desktop-light-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "Desktop 1280x800",
+    "theme": "light"
+  },
+  {
+    "file": "desktop-dark-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "Desktop 1280x800",
+    "theme": "dark"
+  },
+  {
+    "file": "iphone15-light-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "light"
+  },
+  {
+    "file": "iphone15-dark-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "iPhone 15 WebKit",
+    "theme": "dark"
+  },
+  {
+    "file": "android360-light-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "Chromium 360x780",
+    "theme": "light"
+  },
+  {
+    "file": "android360-dark-stop-send.png",
+    "kind": "image",
+    "title": "Stop next to Send",
+    "caption": "While running, Stop sizes to its icon, the same as Send (24px desktop, 44px phones).",
+    "viewport": "Chromium 360x780",
     "theme": "dark"
   }
 ]
