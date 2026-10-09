@@ -135,6 +135,24 @@ describe('Teams thread history', () => {
     expect(second.messages.map((message) => message.id)).toEqual(['1616989900000']);
   });
 
+  it('keeps a root post the bot wrote, as in a seeded thread', async () => {
+    const fetchImpl = fakeFetch((url) =>
+      url.includes('/replies')
+        ? json({ value: [] })
+        : json(
+            graphMessage(ROOT_ID, {
+              from: { application: { id: config.app_id, displayName: 'Agor' } },
+            })
+          )
+    );
+    const result = await fetchTeamsThreadHistory(
+      config,
+      { team, channelId: CHANNEL_ID, rootMessageId: ROOT_ID, cacheScope },
+      { fetchImpl }
+    );
+    expect(result.messages).toEqual([expect.objectContaining({ id: ROOT_ID, is_bot: true })]);
+  });
+
   it('keeps a hostile cursor on the Graph origin and refuses a foreign pagination link', async () => {
     const fetchImpl = fakeFetch(() =>
       json({ value: [], '@odata.nextLink': 'https://evil.example/replies?$skiptoken=x' })

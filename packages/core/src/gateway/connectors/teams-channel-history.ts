@@ -226,7 +226,12 @@ export async function fetchTeamsThreadHistory(
       if (message) parsed.push(message);
     }
     const messages = parsed
-      .filter((message) => req.includeBotMessages || (!message.isBot && !message.isSystem))
+      .filter(
+        (message) =>
+          message.id === req.rootMessageId ||
+          req.includeBotMessages ||
+          (!message.isBot && !message.isSystem)
+      )
       .sort((left, right) =>
         BigInt(left.id) < BigInt(right.id) ? -1 : BigInt(left.id) > BigInt(right.id) ? 1 : 0
       )
