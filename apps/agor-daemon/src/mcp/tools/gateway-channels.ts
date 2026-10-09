@@ -7,6 +7,7 @@ import {
 import {
   buildDiscordSetupArtifact,
   buildSlackManifest,
+  buildTeamsSetupManifest,
   DISCORD_CHANNEL_HISTORY_DEFAULT_LIMIT,
   DISCORD_CHANNEL_HISTORY_MAX_LIMIT,
   DISCORD_FORUM_POSTS_DEFAULT_LIMIT,
@@ -24,6 +25,7 @@ import {
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
   type SlackWizardOptions,
+  teamsGatewayCallbackUrl,
   validateDiscordSetup,
 } from '@agor/core/gateway';
 import {
@@ -60,7 +62,9 @@ import {
   type UserID,
   type UserRole,
   type UUID,
+  validateTeamsSetup,
   withDiscordConfigDefaults,
+  withTeamsConfigDefaults,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -401,7 +405,12 @@ const gatewayChannelCreateSchema = z
       'User',
       'Agor user ID whose identity is used when platform-user alignment is disabled.'
     ),
-    enabled: z.boolean().optional().describe('Whether the channel is active. Defaults to true.'),
+    enabled: z
+      .boolean()
+      .optional()
+      .describe(
+        'Whether the channel is active. Defaults to true. Teams channels are enabled only after their app credentials verify; pass false to save a draft.'
+      ),
     config: configSchema,
     agenticConfig: agenticConfigSchema.optional(),
     mcpServerIds: z
@@ -424,7 +433,11 @@ const gatewayChannelCreateSchema = z
       });
     }
     const config =
-      value.channelType === 'discord' ? withDiscordConfigDefaults(rawConfig) : rawConfig;
+      value.channelType === 'discord'
+        ? withDiscordConfigDefaults(rawConfig)
+        : value.channelType === 'teams'
+          ? withTeamsConfigDefaults(rawConfig)
+          : rawConfig;
     addPublicConfigIssues(config, issue, value.channelType === 'discord', false);
 
     // Disabled channels are drafts: they may omit required credentials so they
@@ -475,6 +488,20 @@ const gatewayChannelCreateSchema = z
         path: ['config', 'app_id'],
         message: 'config.app_id is required for Teams gateway channels.',
       });
+    }
+    if (value.channelType === 'teams') {
+      const validation = validateTeamsSetup(config, value.agorUserId, {
+        requireAppPassword: value.enabled !== false,
+      });
+      for (const message of validation.errors) {
+        // A disabled draft defers only the secret; identity and policy are still validated.
+        if (value.enabled === false && message === 'app_password is required') continue;
+        issue.addIssue({
+          code: 'custom',
+          path: ['config'],
+          message: `Invalid Teams gateway configuration: ${message}.`,
+        });
+      }
     }
 
     if (value.channelType === 'discord') {
@@ -1042,7 +1069,11 @@ function toServiceCreateData(
   args: z.infer<typeof gatewayChannelCreateSchema>
 ): GatewayChannelCreateData {
   const config =
-    args.channelType === 'discord' ? withDiscordConfigDefaults(args.config) : args.config;
+    args.channelType === 'discord'
+      ? withDiscordConfigDefaults(args.config)
+      : args.channelType === 'teams'
+        ? withTeamsConfigDefaults(args.config)
+        : args.config;
   return {
     name: args.name,
     channel_type: args.channelType,
@@ -1313,6 +1344,36 @@ const discordSetupSchema = z
       });
     }
   });
+
+const teamsSetupSchema = z.strictObject({
+  appId: mcpRequiredString('appId', 'Microsoft Entra application (client) ID.'),
+  gatewayChannelId: mcpRequiredId(
+    'gatewayChannelId',
+    'Gateway channel',
+    'Existing Teams gateway channel ID used in the shared callback URL.'
+  ),
+  displayName: mcpOptionalNonEmptyString('displayName', 'Teams app display name.'),
+  callbackOrigin: z
+    .string()
+    .url()
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        return (
+          url.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          url.pathname === '/' &&
+          !url.search &&
+          !url.hash
+        );
+      } catch {
+        return false;
+      }
+    }, 'callbackOrigin must be an HTTPS origin without a path')
+    .optional()
+    .describe('Public HTTPS origin hosting Agor, for example https://agor.example.com.'),
+});
 
 function toSlackWizardOptions(
   args: z.infer<typeof slackManifestGenerateSchema>
@@ -2024,6 +2085,40 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'Generated only; no Discord or Agor mutation occurred.',
           'A verified Discord application can be enabled on only one channel globally; duplicate attempts receive a generic conflict without tenant or channel details.',
           'Outbound targets are fresh channel:<snowflake> seeds; Discord thread identifiers are not accepted for proactive MCP sends. The first human reply consumes the durable seed.',
+        ],
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_teams_setup',
+    {
+      description:
+        'Generate the Microsoft Teams gateway setup artifact (admin-only): a desired Teams app manifest, the shared Agor callback URL, and explicit setup caveats. This is pure and honest: it creates no Azure/Teams resource, validates no credentials, and does not verify a live installation.',
+      annotations: { readOnlyHint: true },
+      inputSchema: teamsSetupSchema,
+    },
+    async (args) => {
+      requireAdmin(ctx, 'generate Teams setup guidance');
+      const options = {
+        appId: args.appId,
+        gatewayChannelId: args.gatewayChannelId,
+        ...(args.displayName ? { displayName: args.displayName } : {}),
+        ...(args.callbackOrigin ? { callbackOrigin: args.callbackOrigin } : {}),
+      };
+      return textResult({
+        manifest: buildTeamsSetupManifest(options),
+        callback_url: teamsGatewayCallbackUrl(options),
+        setup_steps: [
+          'Register or select the Microsoft Entra application and Azure Bot identity for this channel; keep the app ID and tenant ID aligned with the Agor channel configuration.',
+          'Configure the Azure Bot messaging endpoint to callback_url. Agor owns one shared HTTPS route; there is no per-channel port or path to configure.',
+          'Install the desired manifest in Teams for the users, teams, or group chats that should reach Agor.',
+          "Choose identity: align_teams_users (match each sender's Teams email to an Agor user; optional user_map overrides by AAD object ID) or a fixed agorUserId that every sender runs as.",
+          'Enter the app password through the secure credential widget. Agor verifies the app ID, password, and Microsoft tenant with a client-credentials token request and enables the channel only when that succeeds.',
+        ],
+        caveats: [
+          'GENERATED ONLY — no Azure or Teams resource was created, no credential was validated, and live activity delivery was not verified.',
+          'Outbound delivery is durable and HA, but a provider timeout after the effect marker is terminal ambiguous; operators must inspect the delivery rather than blindly retrying.',
         ],
       });
     }

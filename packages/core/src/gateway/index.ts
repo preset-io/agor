@@ -98,11 +98,40 @@ export {
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
 } from './connectors/slack-manifest';
-export {
-  extractQuotedReplyText,
-  parseThreadId as parseTeamsThreadId,
-  TeamsConnector,
+export type {
+  NormalizedTeamsActivity,
+  TeamsMemberIdentity,
+  TeamsMemberLookupRequest,
 } from './connectors/teams';
+export {
+  createTeamsAuthConfiguration,
+  extractQuotedReplyText,
+  fetchTeamsMemberIdentity,
+  normalizeTeamsActivity,
+  parseThreadId as parseTeamsThreadId,
+  probeTeamsCredentials,
+  TEAMS_NOT_VERIFIABLE,
+  TeamsConnector,
+  TeamsMemberLookupError,
+} from './connectors/teams';
+export type { TeamsAddressRevocationEvent } from './connectors/teams-address-events';
+export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';
+export {
+  buildTeamsSetupManifest,
+  TEAMS_BOT_SCOPES,
+  teamsGatewayCallbackUrl,
+} from './connectors/teams-manifest';
+export type {
+  PreparedTeamsSend,
+  TeamsAccessTokenProvider,
+  TeamsSendOutcome,
+} from './connectors/teams-send';
+export {
+  classifyTeamsSendFailure,
+  TEAMS_MESSAGE_TEXT_BUDGET,
+  TeamsSendError,
+} from './connectors/teams-send';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
 export type {
@@ -132,6 +161,8 @@ export {
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
+export type { MarkdownChunkOptions } from './markdown-chunker';
+export { chunkMarkdown, codePointLength, utf16Length } from './markdown-chunker';
 export {
   gatewayFailureCode,
   isPermanentProviderRefusal,
@@ -145,3 +176,5 @@ export {
   formatGatewaySystemMessage,
   formatGatewaySystemPayload,
 } from './system-message';
+export { safeTeamsMetadata, TEAMS_SAFE_METADATA_KEYS } from './teams-metadata';
+export { isAllowedTeamsServiceUrl, TEAMS_SERVICE_URL_HOSTS } from './teams-service-url';

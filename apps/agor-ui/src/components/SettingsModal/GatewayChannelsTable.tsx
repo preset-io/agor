@@ -20,11 +20,16 @@ import {
   slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
 import {
+  buildTeamsSetupManifest,
+  teamsGatewayCallbackUrl,
+} from '@agor/core/gateway/teams-manifest';
+import {
   DEFAULT_DISCORD_CATCH_UP,
   type DiscordResponseMode,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
   validateDiscordConfig,
+  validateTeamsUserMap,
 } from '@agor/core/types';
 import type {
   AgenticToolName,
@@ -124,6 +129,20 @@ import { SettingsActionGroup } from './SettingsActionGroup';
 import { SettingsIdentity } from './SettingsIdentity';
 import { UserSelect } from './UserSelect';
 
+const validateTeamsUserMapField = (_: unknown, value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return Promise.resolve();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return Promise.reject(new Error('Enter a valid JSON object.'));
+  }
+  const validation = validateTeamsUserMap(parsed);
+  return validation.ok
+    ? Promise.resolve()
+    : Promise.reject(new Error(validation.errors[0] ?? 'Invalid Teams user map.'));
+};
+
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
   gatewayChannelById: Map<string, GatewayChannel>;
@@ -200,13 +219,23 @@ const PlatformIdentityFields: React.FC<{
   alignUsers: boolean;
   alignedContent: React.ReactNode;
   userById: Map<string, User>;
-}> = ({ alignFieldName, alignLabel, alignDescription, alignUsers, alignedContent, userById }) => (
+  /** Initial choice on create; aligned identity is the safer default where supported. */
+  defaultAligned?: boolean;
+}> = ({
+  alignFieldName,
+  alignLabel,
+  alignDescription,
+  alignUsers,
+  alignedContent,
+  userById,
+  defaultAligned = false,
+}) => (
   <>
     <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
       Choose which Agor user identity gateway-created sessions run as.
     </Typography.Text>
 
-    <Form.Item name={alignFieldName} initialValue={false}>
+    <Form.Item name={alignFieldName} initialValue={defaultAligned}>
       <Radio.Group style={{ width: '100%' }}>
         <Space orientation="vertical" style={{ width: '100%' }}>
           <Radio value={true}>
@@ -386,7 +415,7 @@ function createStepsForType(type: ChannelType): { title: string }[] {
         { title: 'Configure' },
       ];
     case 'teams':
-      return [{ title: 'Channel' }, { title: 'Setup' }];
+      return [{ title: 'Channel' }, { title: 'Access' }, { title: 'Credentials & test' }];
     case 'shortcut':
       return [{ title: 'Channel' }, { title: 'Setup' }];
     case 'discord':
@@ -409,16 +438,32 @@ function createStepFields(
   type: ChannelType,
   step: number,
   alignSlackUsers: boolean,
-  alignDiscordUsers: boolean
+  alignDiscordUsers: boolean,
+  alignTeamsUsers = true
 ): string[] {
   if (step === 0) {
     const fields = ['name', 'target_branch_id', 'channel_type'];
     // Slack and GitHub pick identity inside their platform steps; everyone else
     // chooses it on the universal Channel step.
-    if (type !== 'slack' && type !== 'github' && type !== 'shortcut' && type !== 'discord') {
+    if (
+      type !== 'slack' &&
+      type !== 'github' &&
+      type !== 'shortcut' &&
+      type !== 'discord' &&
+      type !== 'teams'
+    ) {
       fields.push('agor_user_id');
     }
     return fields;
+  }
+  if (type === 'teams' && step === 1) {
+    return [
+      'teams_align_users',
+      ...(alignTeamsUsers ? ['teams_user_map'] : ['agor_user_id']),
+      'teams_allowed_team_ids',
+      'teams_allowed_channel_ids',
+      'teams_allowed_user_aad_object_ids',
+    ];
   }
   if (type === 'slack' && step === 1) {
     const fields = ['slack_app_name'];
@@ -508,6 +553,9 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'discord_catch_up_rate_limit_max_total_delay_ms',
   'discord_outbound_enabled',
   'discord_default_outbound_target',
+  'teams_app_id',
+  'teams_app_password',
+  'teams_tenant_id',
 ]);
 
 /**
@@ -601,6 +649,51 @@ const CompactAlert: React.FC<{
         icon: { fontSize: token.fontSizeSM, marginInlineEnd: 8 },
         title: { marginBottom: body == null ? 0 : 2 },
       }}
+    />
+  );
+};
+
+const TeamsManifestPanel: React.FC<{ appId: string; gatewayChannelId: string }> = ({
+  appId,
+  gatewayChannelId,
+}) => {
+  const { token } = theme.useToken();
+  // Non-HTTPS origins (local dev) fall back to the documented placeholder host.
+  const callbackOrigin =
+    typeof window !== 'undefined' && window.location.protocol === 'https:'
+      ? window.location.origin
+      : undefined;
+  const callbackUrl = teamsGatewayCallbackUrl({ appId, gatewayChannelId, callbackOrigin });
+  const manifest = useMemo(
+    () =>
+      JSON.stringify(buildTeamsSetupManifest({ appId, gatewayChannelId, callbackOrigin }), null, 2),
+    [appId, gatewayChannelId, callbackOrigin]
+  );
+  return (
+    <CompactAlert
+      type="info"
+      heading="Messaging endpoint and app manifest"
+      expandable
+      description={
+        <>
+          Set the Azure Bot messaging endpoint to{' '}
+          <Typography.Text code copyable>
+            {callbackUrl}
+          </Typography.Text>
+          , then paste this manifest into the Developer Portal for Teams.
+          <pre
+            style={{
+              maxHeight: 180,
+              overflow: 'auto',
+              marginTop: token.marginXS,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {manifest}
+          </pre>
+        </>
+      }
+      style={{ marginTop: token.marginSM }}
     />
   );
 };
@@ -954,8 +1047,15 @@ const GatewayAgentConfigurationFields: React.FC<{
   const alignDiscordUsers =
     (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
     (form.getFieldValue('discord_align_users') as boolean | undefined);
+  const alignTeamsUsers =
+    (Form.useWatch('teams_align_users', form) as boolean | undefined) ??
+    (form.getFieldValue('teams_align_users') as boolean | undefined);
   const usesAlignedExecutionOwner = Boolean(
-    alignSlackUsers || alignGithubUsers || alignShortcutUsers || alignDiscordUsers
+    alignSlackUsers ||
+      alignGithubUsers ||
+      alignShortcutUsers ||
+      alignDiscordUsers ||
+      alignTeamsUsers
   );
   const resolvedExecutionOwnerId =
     executionOwnerId ?? (form.getFieldValue('agor_user_id') as string | undefined);
@@ -2112,6 +2212,7 @@ const ChannelFormFields: React.FC<{
   onSlackTest: () => void;
   onShortcutTest: () => void;
   onDiscordTest: () => void;
+  onTeamsTest: () => void;
   /** Slack app identity resolved server-side on edit open (edit mode only). */
   slackAppInfo: SlackAppInfo | null;
   authorityGuard: AuthorityOperationGuard;
@@ -2137,6 +2238,7 @@ const ChannelFormFields: React.FC<{
   onSlackTest,
   onShortcutTest,
   onDiscordTest,
+  onTeamsTest,
   slackAppInfo,
   authorityGuard,
 }) => {
@@ -2182,6 +2284,10 @@ const ChannelFormFields: React.FC<{
   );
   const alignGithubUsers = Form.useWatch('github_align_users', form) ?? false;
   const alignShortcutUsers = Form.useWatch('shortcut_align_users', form) ?? false;
+  const alignTeamsUsers = Boolean(
+    Form.useWatch('teams_align_users', form) ??
+      (mode === 'create' ? true : slackConfig?.align_teams_users)
+  );
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
   const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
@@ -2260,6 +2366,261 @@ const ChannelFormFields: React.FC<{
   const botTokenStored = isSecretStored(slackConfig, 'bot_token');
   const appTokenStored = isSecretStored(slackConfig, 'app_token');
 
+  // Teams: credentials (with a live probe) and access are separate wizard steps.
+  const teamsCredentialItems = [
+    {
+      key: 'teams-credentials',
+      label: (
+        <SectionLabel
+          icon={<KeyOutlined />}
+          title="Azure Bot Credentials"
+          subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
+        />
+      ),
+      children: (
+        <>
+          <Form.Item
+            label="App ID"
+            name="teams_app_id"
+            rules={
+              mode === 'create' ? [{ required: true, message: 'Azure Bot App ID is required' }] : []
+            }
+            tooltip="Azure Bot Registration Application (client) ID"
+          >
+            <Input placeholder="00000000-0000-0000-0000-000000000000" />
+          </Form.Item>
+
+          <Form.Item
+            label="App Password"
+            name="teams_app_password"
+            rules={
+              mode === 'create'
+                ? [{ required: true, message: 'Azure Bot App Password is required' }]
+                : []
+            }
+            tooltip="Azure Bot Registration client secret (value, not the secret ID)"
+          >
+            <Input.Password placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'} />
+          </Form.Item>
+
+          <Form.Item
+            label="Tenant ID"
+            name="teams_tenant_id"
+            rules={[{ required: true, message: 'Tenant ID is required for Teams bots' }]}
+            tooltip="Microsoft Entra tenant ID of the single-tenant app registration."
+          >
+            <Input placeholder="00000000-0000-0000-0000-000000000000" />
+          </Form.Item>
+
+          <CompactAlert
+            type="info"
+            heading="Azure Bot Setup · Experimental"
+            expandable
+            description={
+              <span>
+                Create a single-tenant Azure Bot in the{' '}
+                <Typography.Link
+                  href="https://portal.azure.com/#create/Microsoft.AzureBotService"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Azure Portal
+                </Typography.Link>
+                , add the Microsoft Teams channel, and set its messaging endpoint to this channel's
+                callback URL. The channel is enabled only after Agor verifies these credentials.
+                Teams delivery is experimental until live provider QA is complete.
+              </span>
+            }
+          />
+          {mode === 'edit' &&
+            editingChannel?.id &&
+            typeof editingChannel.config?.app_id === 'string' && (
+              <TeamsManifestPanel
+                appId={editingChannel.config.app_id}
+                gatewayChannelId={editingChannel.id}
+              />
+            )}
+
+          <Button
+            icon={<ThunderboltOutlined />}
+            loading={connectionTestLoading}
+            onClick={async () => {
+              const operation = authorityGuard.begin();
+              if (!operation.isCurrent()) return;
+              // In edit the stored password backs the redacted field, so only create validates it.
+              try {
+                await form.validateFields(
+                  mode === 'create'
+                    ? ['teams_app_id', 'teams_app_password', 'teams_tenant_id']
+                    : ['teams_tenant_id']
+                );
+                if (!operation.isCurrent()) return;
+              } catch {
+                return;
+              }
+              onTeamsTest();
+            }}
+            style={{ marginTop: 12 }}
+          >
+            Test connection
+          </Button>
+
+          {connectionTestResult && (
+            <div style={{ marginTop: 12 }}>
+              <ConnectionTestResultView result={connectionTestResult} />
+            </div>
+          )}
+        </>
+      ),
+    },
+  ];
+  const teamsAccessItems = [
+    {
+      key: 'identity',
+      label: (
+        <SectionLabel
+          icon={<UserOutlined />}
+          title="Identity"
+          subtitle={getIdentitySubtitle(alignTeamsUsers)}
+        />
+      ),
+      children: (
+        <>
+          <PlatformIdentityFields
+            alignFieldName="teams_align_users"
+            alignLabel="Align Teams users"
+            alignDescription="Match each sender's Teams email to an Agor user. Unmatched senders are rejected."
+            alignUsers={alignTeamsUsers}
+            defaultAligned
+            userById={userById}
+            alignedContent={
+              <Form.Item
+                label="User map override (optional)"
+                name="teams_user_map"
+                rules={[{ validator: validateTeamsUserMapField }]}
+                tooltip="JSON object mapping Teams AAD object IDs to Agor User IDs, for people whose Teams email differs from their Agor email."
+              >
+                <Input.TextArea
+                  rows={3}
+                  placeholder={'{"<aad-object-id>":"01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"}'}
+                />
+              </Form.Item>
+            }
+          />
+          {!alignTeamsUsers && (
+            <CompactAlert
+              type="warning"
+              heading="Every sender runs as this user"
+              description="Anyone in your Microsoft tenant who can message the bot runs sessions with this user's branch access and credentials. Allowlists narrow who can reach the bot; aligning users is safer."
+              style={{ marginBottom: 16 }}
+            />
+          )}
+        </>
+      ),
+    },
+    {
+      key: 'teams-message-sources',
+      label: (
+        <SectionLabel icon={<MessageOutlined />} title="Message Sources" subtitle="optional" />
+      ),
+      children: (
+        <>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: token.fontSizeSM, display: 'block', marginBottom: token.margin }}
+          >
+            Personal chats are accepted without a mention. Group chats and channels require an
+            @mention of this bot. Leave the allowlists blank to accept every team, channel, and user
+            in your Microsoft tenant.
+          </Typography.Text>
+
+          <Form.Item
+            label="Allowed team IDs"
+            name="teams_allowed_team_ids"
+            tooltip="Optional. Separate IDs with commas or new lines."
+          >
+            <Input.TextArea rows={2} placeholder="team-id-1, team-id-2" />
+          </Form.Item>
+
+          <Form.Item
+            label="Allowed channel IDs"
+            name="teams_allowed_channel_ids"
+            tooltip="Optional. Separate IDs with commas or new lines."
+          >
+            <Input.TextArea rows={2} placeholder="19:...@thread.tacv2" />
+          </Form.Item>
+
+          <Form.Item
+            label="Allowed user AAD object IDs"
+            name="teams_allowed_user_aad_object_ids"
+            tooltip="Optional. Separate IDs with commas or new lines."
+          >
+            <Input.TextArea rows={2} placeholder="aad-object-id-1, aad-object-id-2" />
+          </Form.Item>
+        </>
+      ),
+    },
+    {
+      key: 'teams-delivery',
+      label: <SectionLabel icon={<ToolOutlined />} title="Delivery" subtitle="optional" />,
+      children: (
+        <Form.Item
+          label="Enable outbound replies"
+          name="teams_outbound_enabled"
+          valuePropName="checked"
+          initialValue={true}
+        >
+          <Switch />
+        </Form.Item>
+      ),
+    },
+    {
+      key: 'agentic-tool-config',
+      label: (
+        <SectionLabel
+          icon={<ThunderboltOutlined />}
+          title="Agent Configuration"
+          subtitle={selectedAgent ?? 'Choose a supported tool'}
+        />
+      ),
+      children: (
+        <GatewayAgentConfigurationFields
+          client={client}
+          currentUser={currentUser}
+          userById={userById}
+          mcpServerById={mcpServerById}
+          selectedAgent={selectedAgent}
+          onAgentChange={onAgentChange}
+          requiresSupportedToolSelection={requiresSupportedToolSelection}
+        />
+      ),
+    },
+    {
+      key: 'env-vars',
+      label: (
+        <SectionLabel
+          icon={<LockOutlined />}
+          title="Environment Variables"
+          subtitle="channel-level secrets"
+        />
+      ),
+      children: (
+        <>
+          <Typography.Text
+            type="secondary"
+            style={{ fontSize: token.fontSizeSM, display: 'block', marginBottom: token.marginSM }}
+          >
+            Define environment variables for sessions created from this channel. Useful for service
+            account tokens or API keys for MCP servers.
+          </Typography.Text>
+          <Form.Item name="envVars" noStyle>
+            <GatewayEnvVarsEditor />
+          </Form.Item>
+        </>
+      ),
+    },
+  ];
+
   return (
     <>
       {/* Unified step indicator — sits directly under the modal title on create,
@@ -2305,6 +2666,7 @@ const ChannelFormFields: React.FC<{
                   <Space>
                     {opt.icon}
                     {opt.label}
+                    {opt.value === 'teams' && <Tag color="gold">Experimental</Tag>}
                     {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
@@ -2333,11 +2695,12 @@ const ChannelFormFields: React.FC<{
             <BranchSelect client={client} />
           </Form.Item>
 
-          {/* Platform-specific identity sections own Slack/GitHub/Shortcut/Discord identity. */}
+          {/* Platform-specific identity sections own Slack/GitHub/Shortcut/Discord/Teams identity. */}
           {channelType !== 'slack' &&
             channelType !== 'github' &&
             channelType !== 'shortcut' &&
-            channelType !== 'discord' && (
+            channelType !== 'discord' &&
+            channelType !== 'teams' && (
               <Form.Item
                 label="Post messages as"
                 name="agor_user_id"
@@ -2758,217 +3121,37 @@ const ChannelFormFields: React.FC<{
           </>
         )}
 
-        {/* ── Teams setup (create step 1, or the whole edit body) ── */}
-        {channelType === 'teams' && (mode === 'edit' || createStep === 1) && (
+        {/* ── Teams setup (create steps 1–2, or the whole edit body) ── */}
+        {channelType === 'teams' && mode === 'edit' && (
           <Collapse
             ghost
             destroyOnHidden={false}
-            defaultActiveKey={mode === 'create' ? ['teams-credentials'] : []}
+            defaultActiveKey={[]}
             style={{ marginLeft: -16, marginRight: -16 }}
-            items={[
-              // ── Credentials ──
-              {
-                key: 'teams-credentials',
-                label: (
-                  <SectionLabel
-                    icon={<KeyOutlined />}
-                    title="Azure Bot Credentials"
-                    subtitle={mode === 'edit' ? 'leave blank to keep current' : undefined}
-                  />
-                ),
-                children: (
-                  <>
-                    <Form.Item
-                      label="App ID"
-                      name="teams_app_id"
-                      rules={
-                        mode === 'create'
-                          ? [{ required: true, message: 'Azure Bot App ID is required' }]
-                          : []
-                      }
-                      tooltip="Azure Bot Registration Application (client) ID"
-                    >
-                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="App Password"
-                      name="teams_app_password"
-                      rules={
-                        mode === 'create'
-                          ? [{ required: true, message: 'Azure Bot App Password is required' }]
-                          : []
-                      }
-                      tooltip="Azure Bot Registration client secret (value, not the secret ID)"
-                    >
-                      <Input.Password
-                        placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'}
-                      />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Tenant ID"
-                      name="teams_tenant_id"
-                      rules={[
-                        {
-                          required: true,
-                          message: 'Tenant ID is required for Teams bots',
-                        },
-                      ]}
-                      tooltip="Azure AD Tenant ID. Required so the bot can acquire tokens to send replies."
-                    >
-                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
-                    </Form.Item>
-
-                    <CompactAlert
-                      type="info"
-                      heading="Azure Bot Setup"
-                      expandable
-                      description={
-                        <span>
-                          Create an Azure Bot resource in the{' '}
-                          <Typography.Link
-                            href="https://portal.azure.com/#create/Microsoft.AzureBotService"
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            Azure Portal
-                          </Typography.Link>
-                          . Both single-tenant and multi-tenant bots are supported. The{' '}
-                          <strong>Tenant ID</strong> is required so the bot can send replies. Then
-                          sideload the bot as a Teams app via a custom manifest.
-                        </span>
-                      }
-                    />
-                  </>
-                ),
-              },
-
-              // ── Message Sources ──
-              {
-                key: 'teams-message-sources',
-                label: (
-                  <SectionLabel
-                    icon={<MessageOutlined />}
-                    title="Message Sources"
-                    subtitle="DMs & channels"
-                  />
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 16 }}
-                    >
-                      Configure how the bot responds in Teams channels vs 1:1 chats. Direct messages
-                      are always enabled.
-                    </Typography.Text>
-
-                    <Form.Item
-                      label="Require @mention in channels"
-                      name="teams_require_mention"
-                      valuePropName="checked"
-                      initialValue={true}
-                      tooltip="When enabled, bot only responds when @mentioned in Teams channels (recommended)"
-                    >
-                      <Switch />
-                    </Form.Item>
-                  </>
-                ),
-              },
-
-              // ── Webhook Configuration ──
-              {
-                key: 'teams-webhook',
-                label: (
-                  <SectionLabel
-                    icon={<ToolOutlined />}
-                    title="Webhook Configuration"
-                    subtitle="port & path"
-                  />
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                    >
-                      The Teams connector runs an HTTP server for the Bot Framework messaging
-                      endpoint. Configure the port and path to match your Azure Bot&apos;s messaging
-                      endpoint URL.
-                    </Typography.Text>
-
-                    <Form.Item
-                      label="Webhook Port"
-                      name="teams_webhook_port"
-                      initialValue={3978}
-                      tooltip="Port for the Bot Framework HTTP endpoint"
-                    >
-                      <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
-                    </Form.Item>
-
-                    <Form.Item
-                      label="Webhook Path"
-                      name="teams_webhook_path"
-                      initialValue="/api/messages"
-                      tooltip="URL path for the Bot Framework messaging endpoint"
-                    >
-                      <Input placeholder="/api/messages" />
-                    </Form.Item>
-                  </>
-                ),
-              },
-
-              // ── Agentic Tool Configuration ──
-              {
-                key: 'agentic-tool-config',
-                label: (
-                  <SectionLabel
-                    icon={<ThunderboltOutlined />}
-                    title="Agent Configuration"
-                    subtitle={selectedAgent ?? 'Choose a supported tool'}
-                  />
-                ),
-                children: (
-                  <GatewayAgentConfigurationFields
-                    client={client}
-                    currentUser={currentUser}
-                    userById={userById}
-                    mcpServerById={mcpServerById}
-                    selectedAgent={selectedAgent}
-                    onAgentChange={onAgentChange}
-                    requiresSupportedToolSelection={requiresSupportedToolSelection}
-                  />
-                ),
-              },
-
-              // ── Environment Variables ──
-              {
-                key: 'env-vars',
-                label: (
-                  <SectionLabel
-                    icon={<LockOutlined />}
-                    title="Environment Variables"
-                    subtitle="channel-level secrets"
-                  />
-                ),
-                children: (
-                  <>
-                    <Typography.Text
-                      type="secondary"
-                      style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
-                    >
-                      Define environment variables for sessions created from this channel. Useful
-                      for service account tokens or API keys for MCP servers.
-                    </Typography.Text>
-                    <Form.Item name="envVars" noStyle>
-                      <GatewayEnvVarsEditor />
-                    </Form.Item>
-                  </>
-                ),
-              },
-            ]}
+            items={[...teamsCredentialItems, ...teamsAccessItems]}
           />
+        )}
+        {channelType === 'teams' && mode === 'create' && createStep >= 1 && (
+          <>
+            <div style={{ display: createStep === 1 ? undefined : 'none' }}>
+              <Collapse
+                ghost
+                destroyOnHidden={false}
+                defaultActiveKey={['identity']}
+                style={{ marginLeft: -16, marginRight: -16 }}
+                items={teamsAccessItems}
+              />
+            </div>
+            <div style={{ display: createStep === 2 ? undefined : 'none' }}>
+              <Collapse
+                ghost
+                destroyOnHidden={false}
+                defaultActiveKey={['teams-credentials']}
+                style={{ marginLeft: -16, marginRight: -16 }}
+                items={teamsCredentialItems}
+              />
+            </div>
+          </>
         )}
 
         {/* ── Shortcut setup (create step 1, or the whole edit body) ── */}
@@ -3733,7 +3916,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         form.getFieldValue('align_slack_users') ||
           form.getFieldValue('github_align_users') ||
           form.getFieldValue('shortcut_align_users') ||
-          form.getFieldValue('discord_align_users')
+          form.getFieldValue('discord_align_users') ||
+          form.getFieldValue('teams_align_users')
       );
       const ownerId = form.getFieldValue('agor_user_id') as string | undefined;
       const executionOwner = !usesAlignedExecutionOwner && ownerId ? userById.get(ownerId) : null;
@@ -3941,6 +4125,23 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     );
   }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
 
+  // Probe Teams credentials; in edit the channel id lets the stored password back a blank field.
+  const handleTeamsTest = useCallback(async () => {
+    const form = editModalOpen ? editForm : createForm;
+    const values = form.getFieldsValue(true);
+    const config: Record<string, unknown> = {};
+    if (values.teams_app_id) config.app_id = values.teams_app_id;
+    if (values.teams_app_password && values.teams_app_password !== GATEWAY_REDACTED_SENTINEL) {
+      config.app_password = sanitizeSecretValue(values.teams_app_password);
+    }
+    if (values.teams_tenant_id) config.microsoft_tenant_id = values.teams_tenant_id;
+    await runConnectionProbe(
+      'teams',
+      config,
+      editModalOpen ? (editingChannel?.id ?? undefined) : undefined
+    );
+  }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
+
   const handleDiscordTest = useCallback(async () => {
     const form = editModalOpen ? editForm : createForm;
     const values = form.getFieldsValue(true);
@@ -4038,10 +4239,38 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.teams_app_password) {
         config.app_password = sanitizeSecretValue(values.teams_app_password as string);
       }
-      config.tenant_id = values.teams_tenant_id;
-      config.webhook_port = (values.teams_webhook_port as number) ?? 3978;
-      config.webhook_path = (values.teams_webhook_path as string) || '/api/messages';
-      config.require_mention = values.teams_require_mention ?? true;
+      config.microsoft_tenant_id = values.teams_tenant_id;
+      // Group chats and channels always require a structured app-ID mention;
+      // retain the canonical value so legacy config cannot weaken that fence.
+      config.require_mention = true;
+      const teamsList = (value: unknown): string[] =>
+        typeof value === 'string'
+          ? value
+              .split(/[\n,]/)
+              .map((item) => item.trim())
+              .filter(Boolean)
+          : Array.isArray(value)
+            ? value.filter(
+                (item): item is string => typeof item === 'string' && item.trim().length > 0
+              )
+            : [];
+      config.allowed_team_ids = teamsList(values.teams_allowed_team_ids);
+      config.allowed_channel_ids = teamsList(values.teams_allowed_channel_ids);
+      config.allowed_user_aad_object_ids = teamsList(values.teams_allowed_user_aad_object_ids);
+      config.align_teams_users = values.teams_align_users ?? true;
+      delete config.user_map;
+      if (
+        config.align_teams_users &&
+        typeof values.teams_user_map === 'string' &&
+        values.teams_user_map.trim()
+      ) {
+        try {
+          config.user_map = JSON.parse(values.teams_user_map as string);
+        } catch {
+          // The field validator reports malformed JSON before submit.
+        }
+      }
+      config.outbound_enabled = values.teams_outbound_enabled ?? true;
     } else if (values.channel_type === 'shortcut') {
       if (values.shortcut_api_token) {
         config.api_token = sanitizeSecretValue(values.shortcut_api_token as string);
@@ -4158,7 +4387,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       values.align_slack_users ||
         values.github_align_users ||
         values.shortcut_align_users ||
-        values.discord_align_users
+        values.discord_align_users ||
+        (values.channel_type === 'teams' && (values.teams_align_users ?? true))
     );
     return {
       name: values.name as string,
@@ -4294,7 +4524,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       channelType,
       createStep,
       createForm.getFieldValue('align_slack_users') ?? false,
-      createForm.getFieldValue('discord_align_users') ?? false
+      createForm.getFieldValue('discord_align_users') ?? false,
+      createForm.getFieldValue('teams_align_users') ?? true
     );
     if (fields.length > 0) {
       try {
@@ -4406,10 +4637,24 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
     } else if (channel.channel_type === 'teams') {
       formValues.teams_app_id = config?.app_id;
-      formValues.teams_tenant_id = config?.tenant_id;
-      formValues.teams_webhook_port = (config?.webhook_port as number) ?? 3978;
-      formValues.teams_webhook_path = (config?.webhook_path as string) || '/api/messages';
-      formValues.teams_require_mention = config?.require_mention ?? true;
+      formValues.teams_tenant_id = config?.microsoft_tenant_id ?? config?.tenant_id;
+      formValues.teams_allowed_team_ids = ((config?.allowed_team_ids as string[]) ?? []).join('\n');
+      formValues.teams_allowed_channel_ids = ((config?.allowed_channel_ids as string[]) ?? []).join(
+        '\n'
+      );
+      formValues.teams_allowed_user_aad_object_ids = (
+        (config?.allowed_user_aad_object_ids as string[]) ?? []
+      ).join('\n');
+      formValues.teams_align_users = config?.align_teams_users === true;
+      const teamsUserMap = config?.user_map as Record<string, string> | undefined;
+      if (
+        teamsUserMap &&
+        typeof teamsUserMap === 'object' &&
+        Object.keys(teamsUserMap).length > 0
+      ) {
+        formValues.teams_user_map = JSON.stringify(teamsUserMap, null, 2);
+      }
+      formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;
       formValues.shortcut_mention_name = config?.mention_name;
@@ -4538,7 +4783,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           name={channel.name}
           query={searchTerm}
           icon={getChannelTypeIcon(channel.channel_type)}
-          metadata={<Tag>{channel.channel_type}</Tag>}
+          metadata={
+            <Tag color={channel.channel_type === 'teams' ? 'gold' : undefined}>
+              {channel.channel_type === 'teams' ? 'Teams · Experimental' : channel.channel_type}
+            </Tag>
+          }
         />
       ),
     },
@@ -4758,6 +5007,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             discordDraftId={discordDraftId}
             onSlackTest={handleSlackTest}
             onShortcutTest={handleShortcutTest}
+            onTeamsTest={handleTeamsTest}
             onDiscordTest={handleDiscordTest}
             slackAppInfo={null}
             authorityGuard={operationGuard}
@@ -4828,6 +5078,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             discordDraftId={null}
             onSlackTest={handleSlackEditTest}
             onShortcutTest={handleShortcutTest}
+            onTeamsTest={handleTeamsTest}
             onDiscordTest={handleDiscordTest}
             slackAppInfo={slackAppInfo}
             authorityGuard={operationGuard}

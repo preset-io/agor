@@ -1117,50 +1117,138 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
 });
 
 describe('GatewayChannelsTable Teams create wizard', () => {
-  it('walks Channel → Setup and builds a teams payload', async () => {
-    const { client, channelCreate } = makeClient();
+  it('walks Channel → Access → Credentials & test with aligned identity by default', async () => {
+    const { client, channelCreate, testCreate } = makeClient();
     renderTable(client);
     clickButton(/Add Channel/);
 
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
     selectChannelType('Microsoft Teams');
-    await waitForAvailableStep('Setup');
+    await waitForAvailableStep('Credentials & test');
+    // Teams is enabled on creation once its credentials verify.
+    expect(screen.getByRole('switch', { name: 'Enabled' })).toBeChecked();
 
-    // Step 0 for Teams includes the generic "Post messages as" identity.
+    // Step 0: identity moved to the Access step, so no "Post messages as" here.
+    expect(screen.queryByLabelText('user-select')).toBeNull();
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
       target: { value: 'My Teams' },
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
-    await waitForStep('Setup');
+    await waitForStep('Access');
 
-    // Setup step (final): Azure Bot credentials.
+    // Fixed identity shows the shared-account warning; alignment is the default.
+    fireEvent.click(screen.getByText('Run as selected user'));
+    expect(await screen.findByText('Every sender runs as this user')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Align Teams users'));
+    await waitFor(() => expect(screen.queryByText('Every sender runs as this user')).toBeNull());
+
+    const userMap = screen.getByLabelText('User map override (optional)');
+    fireEvent.change(userMap, { target: { value: '{"aad-object-1":"user@example.com"}' } });
+    clickButton(/^Continue$/);
+    await waitFor(() =>
+      expect(document.querySelector('.ant-form-item-explain-error')?.textContent).toContain(
+        'full lowercase UUIDv7 Agor User IDs'
+      )
+    );
+    fireEvent.change(userMap, {
+      target: { value: '{"aad-object-1":"01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"}' },
+    });
+    clickButton(/^Continue$/);
+    await waitForStep('Credentials & test');
+
     fireEvent.change(document.querySelector('#teams_app_id') as HTMLInputElement, {
       target: { value: 'app-123' },
     });
     fireEvent.change(screen.getByPlaceholderText('Client secret value'), {
-      target: { value: 'secret' },
+      target: { value: 's e c r e t' },
     });
     fireEvent.change(document.querySelector('#teams_tenant_id') as HTMLInputElement, {
       target: { value: 'tenant-123' },
+    });
+    clickButton(/^Test connection$/);
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({
+      channelType: 'teams',
+      config: { app_id: 'app-123', app_password: 'secret', microsoft_tenant_id: 'tenant-123' },
     });
 
     clickButton(/Create channel/);
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'teams',
+      enabled: true,
       name: 'My Teams',
       target_branch_id: 'branch-1',
-      agor_user_id: 'user-1',
-      config: { app_id: 'app-123', tenant_id: 'tenant-123' },
+      agor_user_id: null,
+      config: {
+        app_id: 'app-123',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-123',
+        align_teams_users: true,
+        allowed_team_ids: [],
+        user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
+      },
     });
+    expect(channelCreate.mock.calls[0][0].config).not.toHaveProperty('catch_up');
     // Same headroom rationale as the GitHub wizard test above: opens the real
     // channel-type Select, so it's among the heaviest tests in this file.
   }, 30_000);
 });
 
+describe('GatewayChannelsTable Teams edit mode', () => {
+  it('shows the callback URL and probes stored credentials by channel id', async () => {
+    const { client, testCreate } = makeClient();
+    renderEditTable(client, {
+      ...makeSlackChannel(),
+      id: 'teams-channel-1',
+      channel_type: 'teams',
+      agor_user_id: null,
+      config: {
+        app_id: 'app-123',
+        app_password: '••••••••',
+        microsoft_tenant_id: 'tenant-123',
+        align_teams_users: true,
+      },
+    } as unknown as GatewayChannel);
+    expandPanel('Azure Bot Credentials');
+    expect(
+      await screen.findByText(
+        'https://your-agor-host.example/gateway/teams/teams-channel-1/activities'
+      )
+    ).toBeInTheDocument();
+    clickButton(/^Test connection$/);
+    await waitFor(() => expect(testCreate).toHaveBeenCalledTimes(1));
+    expect(testCreate.mock.calls[0][0]).toEqual({
+      gatewayChannelId: 'teams-channel-1',
+      config: { app_id: 'app-123', microsoft_tenant_id: 'tenant-123' },
+    });
+  });
+});
+
 describe('gateway inventory boundaries', () => {
+  it('labels a disabled Teams channel as experimental in the merged inventory', () => {
+    const user = makeUser();
+    const channel = {
+      ...makeSlackChannel(),
+      channel_type: 'teams',
+      enabled: false,
+      created_by: user.user_id,
+    } as GatewayChannel;
+    renderWithProviders(
+      <GatewayChannelsTable
+        client={null}
+        gatewayChannelById={new Map([[channel.id, channel]])}
+        branchById={new Map()}
+        userById={new Map([[user.user_id, user]])}
+        mcpServerById={new Map()}
+        currentUser={user}
+      />
+    );
+    expect(screen.getByText('Teams · Experimental')).toBeInTheDocument();
+    expect(screen.getByText('Disabled')).toBeInTheDocument();
+  });
+
   it('does not resolve a branch or user per row, including after filtering', () => {
     const service = vi.fn(() => ({ get: vi.fn() }));
     const user = makeUser();

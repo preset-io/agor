@@ -25,7 +25,11 @@ import {
 } from './tenant-archive';
 import type { TenantDatabaseIdentity } from './tenant-catalog';
 import { UnsafeArchivePathError } from './tenant-filesystem';
-import { importTenant, validateArchivedMCPCompatibilityModes } from './tenant-import';
+import {
+  importTenant,
+  validateArchivedInFlightPayloads,
+  validateArchivedMCPCompatibilityModes,
+} from './tenant-import';
 
 let scratch: string;
 
@@ -297,4 +301,50 @@ describe('importTenant MCP OAuth public policy boundary', () => {
       ).resolves.toBeUndefined();
     }
   );
+});
+
+describe('importTenant queued provider payload boundary', () => {
+  async function archivedInboundManifest(payload: string | null): Promise<TenantArchiveManifest> {
+    const line = `${JSON.stringify({
+      tenant_id: 'acme',
+      id: '01900000-0000-7000-8000-000000000002',
+      gateway_channel_id: '01900000-0000-7000-8000-000000000003',
+      provider_event_id: 'teams:activity:["19:c","1"]',
+      status: payload ? 'pending' : 'completed',
+      payload_encrypted: payload,
+    })}\n`;
+    await mkdir(databaseDir(scratch), { recursive: true });
+    await writeFile(tableJsonlPath(scratch, 'gateway_inbound_events'), line, 'utf8');
+    return {
+      manifestVersion: TENANT_ARCHIVE_MANIFEST_VERSION,
+      tenantId: 'acme',
+      operationId: 'op-inbound-payload',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      contentFingerprint: 'not-used-by-direct-validator',
+      database: {
+        identity,
+        tables: [
+          {
+            name: 'gateway_inbound_events',
+            rowCount: 1,
+            sha256: sha256Hex(line),
+            bytes: Buffer.byteLength(line),
+          },
+        ],
+      },
+      filesystem: { included: false, entries: [], skippedSpecialCount: 0, unsafeSymlinkCount: 0 },
+    };
+  }
+
+  it('rejects an archive carrying a queued Teams payload before any write', async () => {
+    await expect(
+      validateArchivedInFlightPayloads(scratch, await archivedInboundManifest('ciphertext'))
+    ).rejects.toThrow(/queued provider payload/);
+  });
+
+  it('accepts terminal inbound idempotency rows', async () => {
+    await expect(
+      validateArchivedInFlightPayloads(scratch, await archivedInboundManifest(null))
+    ).resolves.toBeUndefined();
+  });
 });

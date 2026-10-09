@@ -64,6 +64,7 @@ import {
   parseDiscordThreadKey,
 } from '../discord-identifiers';
 import { GatewayListenerError } from '../listener-error';
+import { chunkMarkdown, codePointLength } from '../markdown-chunker';
 import { gatewayFailureCode } from '../provider-error';
 import {
   createDiscordReadBudget,
@@ -504,149 +505,9 @@ function parseThreadId(threadId: string): {
   throw new Error(`Invalid Discord thread ID: ${threadId}`);
 }
 
-interface DiscordFenceState {
-  /** Exact info string from the opening fence, without the newline. */
-  info: string;
-}
-
-interface DiscordChunkToken {
-  text: string;
-  stateAfter: DiscordFenceState | null;
-  kind: 'text' | 'open' | 'close';
-}
-
-function codePointLength(value: string): number {
-  return Array.from(value).length;
-}
-
-function fencePrefix(state: DiscordFenceState): string {
-  return `\`\`\`${state.info}\n`;
-}
-
-function tokenizeDiscordMessage(text: string): DiscordChunkToken[] {
-  const codePoints = Array.from(text);
-  const tokens: DiscordChunkToken[] = [];
-  let state: DiscordFenceState | null = null;
-  let offset = 0;
-  while (offset < codePoints.length) {
-    const isFence = codePoints.slice(offset, offset + 3).join('') === '```';
-    if (!isFence) {
-      tokens.push({ text: codePoints[offset], stateAfter: state, kind: 'text' });
-      offset += 1;
-      continue;
-    }
-
-    if (state) {
-      state = null;
-      tokens.push({ text: '```', stateAfter: state, kind: 'close' });
-      offset += 3;
-      continue;
-    }
-
-    const newlineOffset = codePoints.indexOf('\n', offset + 3);
-    const infoEnd = newlineOffset === -1 ? codePoints.length : newlineOffset;
-    const info = codePoints.slice(offset + 3, infoEnd).join('');
-    const tokenEnd = newlineOffset === -1 ? codePoints.length : newlineOffset + 1;
-    state = { info };
-    tokens.push({
-      text: codePoints.slice(offset, tokenEnd).join(''),
-      stateAfter: state,
-      kind: 'open',
-    });
-    offset = tokenEnd;
-  }
-  return tokens;
-}
-
-function renderedDiscordChunkLength(
-  prefix: string,
-  source: string,
-  nextState: DiscordFenceState | null
-): number {
-  return codePointLength(prefix) + codePointLength(source) + (nextState ? 4 : 0);
-}
-
 /** Split text deterministically without ever exceeding Discord's 2000-code-point cap. */
 export function chunkDiscordMessage(text: string, limit = DISCORD_MESSAGE_LIMIT): string[] {
-  if (!Number.isInteger(limit) || limit < 32) throw new Error('Discord chunk limit is too small');
-  if (text.length === 0) return [''];
-
-  const tokens = tokenizeDiscordMessage(text);
-  const chunks: string[] = [];
-  let state: DiscordFenceState | null = null;
-  let tokenOffset = 0;
-
-  while (tokenOffset < tokens.length) {
-    const prefix = state ? fencePrefix(state) : '';
-    if (codePointLength(prefix) >= limit) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-
-    const startOffset = tokenOffset;
-    let source = '';
-    let nextState: DiscordFenceState | null = state;
-    let maxOffset = tokenOffset;
-    let maxSource = '';
-    let maxState: DiscordFenceState | null = state;
-    while (tokenOffset < tokens.length) {
-      const token = tokens[tokenOffset];
-      const candidateSource = source + token.text;
-      const candidateState = token.stateAfter;
-      if (renderedDiscordChunkLength(prefix, candidateSource, candidateState) > limit) break;
-      source = candidateSource;
-      nextState = candidateState;
-      tokenOffset += 1;
-      maxOffset = tokenOffset;
-      maxSource = source;
-      maxState = nextState;
-    }
-    if (maxOffset === startOffset) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-
-    // Prefer a readable cut after whitespace, but only at token boundaries and
-    // only when the following token still fits with its full fence prefix.
-    let softOffset = startOffset;
-    let sourceLength = 0;
-    for (let index = startOffset; index < maxOffset; index += 1) {
-      const token = tokens[index];
-      sourceLength += codePointLength(token.text);
-      if ((token.text === '\n' || token.text === ' ') && sourceLength >= Math.floor(limit * 0.6)) {
-        softOffset = index + 1;
-      }
-    }
-    if (softOffset > startOffset && softOffset < maxOffset) {
-      const candidateNextState = tokens[softOffset - 1].stateAfter;
-      const candidatePrefix = candidateNextState ? fencePrefix(candidateNextState) : '';
-      const nextToken = tokens[softOffset];
-      const nextFits =
-        !nextToken ||
-        renderedDiscordChunkLength(candidatePrefix, nextToken.text, nextToken.stateAfter) <= limit;
-      if (nextFits) {
-        tokenOffset = softOffset;
-        source = tokens
-          .slice(startOffset, softOffset)
-          .map((token) => token.text)
-          .join('');
-        nextState = candidateNextState;
-      } else {
-        tokenOffset = maxOffset;
-        source = maxSource;
-        nextState = maxState;
-      }
-    } else {
-      tokenOffset = maxOffset;
-      source = maxSource;
-      nextState = maxState;
-    }
-
-    if (renderedDiscordChunkLength(prefix, source, nextState) > limit) {
-      throw new Error('Discord chunk limit cannot accommodate a Markdown fence');
-    }
-    chunks.push(prefix + source + (nextState ? '\n```' : ''));
-    state = nextState;
-  }
-  return chunks;
+  return chunkMarkdown(text, { limit, measure: codePointLength, label: 'Discord' });
 }
 
 /** Remove only the bot mention forms Discord emits for a message content. */

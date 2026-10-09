@@ -25,6 +25,15 @@ export * from './environment-commands';
 export * from './environment-health';
 export * from './executor-session-token-authorities';
 export * from './gateway-channels';
+export {
+  DELIVERY_COMPLETED_RETENTION_MS,
+  DELIVERY_FAILED_RETENTION_MS,
+  type DeliveryChunkReceipt,
+  type DeliveryMapping,
+  deliveryMessageText,
+  isRoutableAssistantMessage,
+  resolveDeliveryMapping,
+} from './gateway-delivery-outbox';
 export * from './gateway-inbound-events';
 export * from './gateway-outbound-messages';
 export * from './github-install-states';
@@ -51,6 +60,8 @@ export * from './session-mcp-servers';
 export * from './session-relationships';
 export * from './sessions';
 export * from './tasks';
+export * from './teams-conversation-addresses';
+export * from './teams-message-deliveries';
 export * from './tenant-agentic-tools';
 export * from './tenant-display';
 export * from './tenant-public-routing';

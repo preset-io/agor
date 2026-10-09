@@ -65,7 +65,10 @@ import {
   type TenantFilesystemEntry,
   tenantFilesystemEntriesEqual,
 } from './tenant-filesystem';
-import { buildTenantInsertOrder } from './tenant-portability-manifest';
+import {
+  buildTenantInsertOrder,
+  TENANT_IN_FLIGHT_PAYLOAD_COLUMNS,
+} from './tenant-portability-manifest';
 import { runWithTenantDatabaseScope } from './tenant-scope';
 
 /** Bounded, secret-free summary returned by {@link importTenant}. */
@@ -120,6 +123,32 @@ export async function validateArchivedMCPCompatibilityModes(
           error instanceof Error ? error.message : 'invalid MCP server row'
         }`
       );
+    }
+  }
+}
+
+/** Refuse an archive that carries queued provider ciphertext before any write. */
+export async function validateArchivedInFlightPayloads(
+  archivePath: string,
+  manifest: TenantArchiveManifest
+): Promise<void> {
+  for (const { table: tableName, column } of TENANT_IN_FLIGHT_PAYLOAD_COLUMNS) {
+    const table = manifest.database.tables.find((candidate) => candidate.name === tableName);
+    if (!table || table.rowCount === 0) continue;
+    for (const line of splitTenantJsonlLines(await readTableJsonl(archivePath, tableName))) {
+      let row: unknown;
+      try {
+        row = JSON.parse(line);
+      } catch {
+        throw new MalformedArchiveError(`Refusing to import ${tableName}: invalid row`);
+      }
+      const value =
+        row && typeof row === 'object' ? (row as Record<string, unknown>)[column] : undefined;
+      if (value !== null && value !== undefined) {
+        throw new MalformedArchiveError(
+          `Refusing to import ${tableName}: archive carries a queued provider payload`
+        );
+      }
     }
   }
 }
@@ -279,6 +308,7 @@ export async function importTenant(
   assertManifestTablesMatchCatalog(manifest, identity.tenantTables);
 
   await validateArchivedMCPCompatibilityModes(options.archivePath, manifest);
+  await validateArchivedInFlightPayloads(options.archivePath, manifest);
 
   // Derive the exact per-table snapshots the destination will hold once the
   // archive's rows are rewritten to `tenantId` and restored. Comparing the live
