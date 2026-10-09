@@ -368,6 +368,13 @@ describe('TeamsConnector', () => {
       expect(connector.formatMessage!(input)).toBe('Hello World');
     });
 
+    it('keeps generics and components written in prose', () => {
+      const input = 'Return a Map<string, number> from <UserCard /> and <p>done</p>';
+      expect(connector.formatMessage!(input)).toBe(
+        'Return a Map<string, number> from <UserCard /> and done'
+      );
+    });
+
     it('handles empty input', () => {
       expect(connector.formatMessage!('')).toBe('');
     });
@@ -479,6 +486,19 @@ describe('normalizeTeamsActivity', () => {
         config
       ).threadId
     ).toBe('19:group@thread.v2');
+  });
+
+  it('keeps user-typed angle brackets and code while removing Teams markup', () => {
+    // Live QA: a personal-chat message lost `<string>` and a JSX element to a blanket tag strip.
+    const normalized = normalizeTeamsActivity(
+      activity({
+        text: '<p>Use `const xs: Array<string> = [];` and <Button onClick={go}>Go</Button>, not Map<string, number>&nbsp;&amp; &lt;id&gt;</p>',
+      }),
+      config
+    );
+    expect(normalized.text).toBe(
+      'Use `const xs: Array<string> = [];` and <Button onClick={go}>Go</Button>, not Map<string, number> & <id>'
+    );
   });
 
   it('maps channel replies to the root reply chain and strips a structured mention', () => {
