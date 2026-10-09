@@ -3,6 +3,7 @@ import {
   DAEMON_RESTART_RELEASED_MESSAGE,
   failureMessageBase,
   isConnectionLossMessage,
+  isExecutorOutOfMemoryMessage,
   isMissingCredentialMessage,
   isTerminalTaskStatus,
   LEGACY_SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
@@ -28,6 +29,7 @@ export type TurnOutcomeCause =
   | 'approval_timeout'
   | 'not_connected'
   | 'never_started'
+  | 'out_of_memory'
   | 'lost_connection'
   | 'stalled'
   | 'usage_limit'
@@ -212,6 +214,15 @@ export function describeTurnOutcome(
   }
   const provenNothing = !sawTools && task.recorded_tool_count === 0;
   const work = provenNothing ? NO_FILES_CHANGED : EDITS_KEPT;
+  // The cleanup command reported why the executor died; that beats restart, interruption and
+  // every heuristic below. Only an unverified termination or a user stop says more.
+  if (
+    cause !== 'user_stop' &&
+    status !== TaskStatus.STOPPED &&
+    isExecutorOutOfMemoryMessage(error)
+  ) {
+    return { cause: 'out_of_memory', type: 'error', message: `${error} ${work}`, action: 'resume' };
+  }
   if (wasRestart) {
     return {
       cause: 'restart',

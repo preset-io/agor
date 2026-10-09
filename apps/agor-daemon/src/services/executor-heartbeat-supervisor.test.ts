@@ -73,6 +73,12 @@ function harness(tasksById: Record<string, Record<string, unknown>>) {
   return { app, create, recordExecutorStartupWarning };
 }
 
+it('adds the memory-limit hint to the heartbeat-loss message', () => {
+  expect(EXECUTOR_HEARTBEAT_LOST_MESSAGE).toBe(
+    'Executor heartbeat lost; the executor may have crashed or disconnected. This can happen when the agent hits its memory limit.'
+  );
+});
+
 describe('TaskRuntimeReconciler', () => {
   beforeEach(() => {
     discovery.dispatch.mockReset().mockResolvedValue([]);

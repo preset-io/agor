@@ -1154,6 +1154,28 @@ describe('remote cleanup integration', () => {
     );
     expect(containExecutorProcess).not.toHaveBeenCalled();
   });
+  it.each([
+    [
+      { cause: 'oom_killed', memoryLimitBytes: 6 * 1024 ** 3 },
+      'The agent went over its 6 GiB memory limit and was stopped.',
+    ],
+    [{ cause: 'oom_killed' }, 'The agent went over its memory limit and was stopped.'],
+    [{}, 'Lost contact'],
+  ])('settles with the cleanup command’s reported cause %#', async (reported, errorMessage) => {
+    runCleanup.mockResolvedValue({ confirmed: true, diagnostic: 'exit 0', ...reported });
+    const state = appDouble('codex', { config });
+    state.claim({
+      ...stopping('heartbeat_lost'),
+      executor_mode: 'templated' as const,
+      executor_connected_at: '2026-01-01T00:00:00Z',
+    });
+    state.settle(task(TaskStatus.FAILED));
+    expect((await execute(state)).status).toBe('terminal');
+    expect(state.settleTermination).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'verified_absent', errorMessage }),
+      expect.anything()
+    );
+  });
   it('persists a failed attempt without claiming termination', async () => {
     runCleanup.mockResolvedValue({ confirmed: false, diagnostic: 'Cleanup timed out.' });
     const state = appDouble('codex', { config });

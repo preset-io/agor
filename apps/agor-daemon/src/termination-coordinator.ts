@@ -13,6 +13,7 @@ import type {
   TerminationRequest,
 } from '@agor/core/types';
 import {
+  executorOutOfMemoryMessage,
   isAgenticToolName,
   isAwaitingRemoteExecutor,
   isTerminalTaskStatus,
@@ -218,9 +219,16 @@ async function containRemoteExecution(input: TerminationInput, task: Task, waite
     context,
     input.app.get?.('config')?.execution?.executor_cleanup_timeout_ms ?? DEFAULT_CLEANUP_TIMEOUT_MS
   );
-  return result.confirmed
-    ? { status: 'verified_absent' as const, helperConfirmed: true as const }
-    : { status: 'unverified' as const, reason: result.diagnostic };
+  if (!result.confirmed) return { status: 'unverified' as const, reason: result.diagnostic };
+  return {
+    status: 'verified_absent' as const,
+    helperConfirmed: true as const,
+    // The helper's optional result explains why the executor stopped.
+    errorMessage:
+      result.cause === 'oom_killed'
+        ? executorOutOfMemoryMessage(result.memoryLimitBytes)
+        : undefined,
+  };
 }
 
 async function claimRequest(input: TerminationInput) {
@@ -422,7 +430,9 @@ async function runContainment(
       {
         taskId: current.task_id,
         outcome: 'verified_absent',
-        errorMessage: input.errorMessage,
+        errorMessage:
+          ('errorMessage' in containment ? containment.errorMessage : undefined) ??
+          input.errorMessage,
         coordinationToken,
       },
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params

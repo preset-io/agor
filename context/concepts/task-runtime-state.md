@@ -495,7 +495,11 @@ the present boundaries:
 remote tasks without cooperative quiescence and with
 `execution.executor_cleanup_command_template` configured. Trusted tenant/task
 context goes on stdin, never into shell interpolation. Only synchronous exit 0
-asserts containment (including suppression of delayed launches/retries).
+asserts containment (including suppression of delayed launches/retries). On exit
+0 the helper may print an optional version-1 stdout result whose
+`cause: "oom_killed"` (with optional `memoryLimitBytes`) replaces the settled
+error message with the shared `executorOutOfMemoryMessage` text; any malformed or
+unknown result means no cause, never "not contained".
 
 `TaskRepository.beginCleanupAttempt` records one attempt under the existing
 coordination token before external effects. The marker survives cause changes,
