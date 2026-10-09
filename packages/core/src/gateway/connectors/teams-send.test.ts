@@ -81,6 +81,20 @@ describe('prepareTeamsSend', () => {
     });
   });
 
+  it('sends a bare typing activity to the same thread', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(201, {}));
+    vi.stubGlobal('fetch', fetchMock);
+    const prepared = await prepareTeamsSend(address, { getAccessToken: async () => 'bot-token' });
+    await prepared.sendTyping();
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      'https://smba.trafficmanager.net/amer/v3/conversations/19:channel@thread.tacv2;messageid=root-1/activities/activity-1'
+    );
+    const body = JSON.parse(String(init.body));
+    expect(body).toMatchObject({ type: 'typing', replyToId: 'activity-1' });
+    expect(body).not.toHaveProperty('text');
+  });
+
   it('maps provider and network failures without keeping provider prose', async () => {
     const prepared = await prepareTeamsSend(address, { getAccessToken: async () => 'token' });
     vi.stubGlobal(

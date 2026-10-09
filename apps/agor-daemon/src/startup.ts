@@ -915,6 +915,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const teamsMessageDeliveryWorker = new TeamsMessageDeliveryWorker(db, {
     tenantId:
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    onReplyPosted: (sessionId) => gatewayService?.stopTeamsTyping(sessionId),
   });
   app.set('teamsMessageDeliveryWorker', teamsMessageDeliveryWorker);
   teamsMessageDeliveryWorker.start();

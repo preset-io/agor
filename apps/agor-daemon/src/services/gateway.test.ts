@@ -813,7 +813,7 @@ describe('GatewayService user alignment operational logs', () => {
       thread_id: '19:dm-thread',
       text: 'hello',
       user_name: sensitive.slackUsername,
-      metadata: { teams_conversation_type: 'personal' },
+      metadata: { teams_conversation_type: 'personal', teams_user_name: 'Ada' },
       teams_user_aad_object_id: 'aad-object-1',
       teams_member: {
         service_url: 'https://smba.trafficmanager.net/amer/',
@@ -854,6 +854,11 @@ describe('GatewayService user alignment operational logs', () => {
     expect(findByEmailForAlignment).toHaveBeenCalledWith(sensitive.email);
     expect(findById).not.toHaveBeenCalled();
     expect(promptCreate).toHaveBeenCalledOnce();
+    // The resolved email reaches the prompt context, and the agent learns where replies go.
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(sensitive.email);
+    expect(prompt.startsWith('Note: Any assistant message you send')).toBe(true);
+    expect(prompt).toContain('Microsoft Teams conversation');
     expect(log).toHaveBeenCalledWith(
       `[gateway] Teams user alignment succeeded: source=email agor_user=${shortId(alignedUser.user_id)}`
     );
@@ -861,14 +866,62 @@ describe('GatewayService user alignment operational logs', () => {
   });
 
   it('lets a Teams user_map entry override the email match', async () => {
-    const { create, lookup, findById, findByEmailForAlignment } = teamsAlignedHarness({
-      alignedUser,
-      userMap: { 'aad-object-1': alignedUser.user_id },
-    });
+    const { create, lookup, findById, findByEmailForAlignment, promptCreate } = teamsAlignedHarness(
+      {
+        alignedUser,
+        userMap: { 'aad-object-1': alignedUser.user_id },
+      }
+    );
     await expect(create()).resolves.toMatchObject({ success: true });
     expect(findById).toHaveBeenCalledWith(alignedUser.user_id);
     expect(lookup).not.toHaveBeenCalled();
     expect(findByEmailForAlignment).not.toHaveBeenCalled();
+    // No email was resolved, so none is claimed in the prompt.
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain('> From: Ada\n');
+  });
+
+  it('names attachments it cannot read and omits the reply note when outbound is off', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    (channel.config as Record<string, unknown>).outbound_enabled = false;
+    await expect(
+      service.create(
+        withVerifiedHttpGatewayAuthority(
+          {
+            channel_key: channel.channel_key,
+            thread_id: '19:dm-thread',
+            text: '',
+            skipped_files: [{ name: 'report<1>.pdf', reason: 'unsupported_type' }],
+            metadata: { teams_conversation_type: 'personal' },
+            teams_user_aad_object_id: 'aad-object-1',
+            teams_member: {
+              service_url: 'https://smba.trafficmanager.net/amer/',
+              conversation_id: 'a:personal-conversation',
+              team_id: null,
+              user_id: '29:user-1',
+            },
+            gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a3' as never,
+          },
+          {
+            id: '01927f9d-0000-7000-8000-0000000000a3',
+            gateway_channel_id: channel.id,
+            processing_token: 'claim-token',
+            provider_config_generation: 2,
+            verified_app_id: 'teams-app',
+            verified_tenant_id: 'tenant-a',
+            thread_id: '19:dm-thread',
+          }
+        )
+      )
+    ).resolves.toMatchObject({ success: true });
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(
+      '(Attachments you could not read: "report 1 .pdf" (not read from Microsoft Teams).'
+    );
+    expect(prompt).toContain('suggest pasting the text instead.');
+    expect(prompt).not.toContain('Note: Any assistant message you send');
   });
 
   it('rejects an unmatched Teams sender with a not-linked notice and no fallback user', async () => {
@@ -6265,7 +6318,185 @@ describe('GatewayService Teams notices', () => {
     expect(notices).not.toHaveBeenCalled();
     await send(teamsChannel, '19:c|root-1', 'Prompt was denied');
     expect(notices).toHaveBeenCalledOnce();
-    expect(notices).toHaveBeenCalledWith(teamsChannel, '19:c|root-1', 'Prompt was denied');
+    expect(notices).toHaveBeenCalledWith(teamsChannel, '19:c|root-1', 'Agor: Prompt was denied');
+  });
+
+  it('types while a Teams chat Task works and stops when its turn ends or the daemon stops', async () => {
+    const { service } = makeGatewayHarness({
+      channel: teamsChannel,
+      existingMapping: makeMapping({
+        channel_id: teamsChannel.id,
+        thread_id: '19:c|root-1',
+        session_id: 'sess-1',
+        metadata: { teams_conversation_type: 'groupChat' },
+      }),
+    });
+    const typing = (
+      service as unknown as {
+        teamsTyping: { start: () => void; stop: () => void; stopAll: () => void };
+      }
+    ).teamsTyping;
+    const start = vi.spyOn(typing, 'start').mockImplementation(() => undefined);
+    const stop = vi.spyOn(typing, 'stop');
+    const stopAll = vi.spyOn(typing, 'stopAll');
+    await runWithTenantContext('tenant-channel', async () => {
+      await service.updateProgress({ session_id: 'sess-1', state: 'queued', task_id: 'task-1' });
+      expect(start).not.toHaveBeenCalled();
+      await service.updateProgress({ session_id: 'sess-1', state: 'working', task_id: 'task-1' });
+      expect(start).toHaveBeenCalledWith({
+        tenantId: 'tenant-channel',
+        sessionId: 'sess-1',
+        taskId: 'task-1',
+        channelId: teamsChannel.id,
+        threadId: '19:c|root-1',
+      });
+      await service.updateProgress({ session_id: 'sess-1', state: 'done' });
+      expect(stop).toHaveBeenCalledWith('tenant-channel', 'sess-1');
+    });
+    await service.stopListeners();
+    expect(stopAll).toHaveBeenCalledOnce();
+  });
+
+  it('does not type in channel threads or when outbound is off', async () => {
+    for (const [conversationType, outbound] of [
+      ['channel', true],
+      ['personal', false],
+    ] as const) {
+      const { service } = makeGatewayHarness({
+        channel: {
+          ...teamsChannel,
+          config: {
+            ...(teamsChannel.config as Record<string, unknown>),
+            outbound_enabled: outbound,
+          },
+        } as GatewayChannel,
+        existingMapping: makeMapping({
+          channel_id: teamsChannel.id,
+          thread_id: '19:c|root-1',
+          session_id: 'sess-1',
+          metadata: { teams_conversation_type: conversationType },
+        }),
+      });
+      const start = vi.spyOn(
+        (service as unknown as { teamsTyping: { start: () => void } }).teamsTyping,
+        'start'
+      );
+      await runWithTenantContext('tenant-channel', () =>
+        service.updateProgress({ session_id: 'sess-1', state: 'working', task_id: 'task-1' })
+      );
+      expect(start).not.toHaveBeenCalled();
+    }
+  });
+
+  describe('session-created notice', () => {
+    const fixedChannel = {
+      ...teamsChannel,
+      id: 'teams-fixed-channel' as never,
+      config: { app_id: 'teams-app', app_password: 'secret', microsoft_tenant_id: 'tenant-a' },
+    } as GatewayChannel;
+    const sessionUrl = 'https://agor.example/ui/s/sess-1/';
+    const linkNotice = `Agor: Session created: [View session](${sessionUrl}).`;
+
+    function harness(existingMapping: ThreadSessionMap | null) {
+      const result = makeGatewayHarness({ channel: fixedChannel, existingMapping });
+      const notices = vi.fn(async () => undefined);
+      Object.assign(result.service as unknown as Record<string, unknown>, {
+        sendTeamsSystemMessage: notices,
+      });
+      vi.spyOn(
+        result.service as unknown as { fetchExistingSessionUrlForGatewayUser: () => unknown },
+        'fetchExistingSessionUrlForGatewayUser'
+      ).mockResolvedValue(sessionUrl);
+      return { ...result, notices };
+    }
+
+    function admit(
+      service: GatewayService,
+      threadId: string,
+      conversationType: string,
+      ids: { session?: string } = {}
+    ) {
+      const data = {
+        channel_key: fixedChannel.channel_key,
+        thread_id: threadId,
+        text: 'hello',
+        metadata: { teams_conversation_type: conversationType, teams_has_mention: true },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000d1' as never,
+        idempotency_task_id: '01927f9d-0000-7000-8000-0000000000d2' as never,
+        ...(ids.session ? { idempotency_session_id: ids.session as never } : {}),
+      };
+      return service.create(
+        withVerifiedHttpGatewayAuthority(data, {
+          id: data.gateway_inbound_event_id,
+          gateway_channel_id: fixedChannel.id,
+          processing_token: 'claim-token',
+          provider_config_generation: 3,
+          verified_app_id: 'teams-app',
+          verified_tenant_id: 'tenant-a',
+          thread_id: threadId,
+        })
+      );
+    }
+
+    it('posts one masked link with the follow-up hint when a channel session is created', async () => {
+      const { service, notices, promptCreate } = harness(null);
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: true,
+      });
+      expect(promptCreate).toHaveBeenCalledOnce();
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        `${linkNotice} Mention me again to follow up.`,
+      ]);
+    });
+
+    it('omits the follow-up hint in a personal chat', async () => {
+      const { service, notices } = harness(null);
+      await admit(service, 'a:personal-1', 'personal');
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([linkNotice]);
+    });
+
+    it('posts nothing on a follow-up mention', async () => {
+      const { service, notices, promptCreate } = harness(
+        makeMapping({ channel_id: fixedChannel.id, thread_id: '19:c|root-1' })
+      );
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: false,
+      });
+      expect(promptCreate).toHaveBeenCalledOnce();
+      expect(notices).not.toHaveBeenCalled();
+    });
+
+    it('posts nothing when a concurrent message loses the thread race', async () => {
+      const { service, notices, threadMapRepo } = harness(null);
+      threadMapRepo.findByChannelAndThread
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(
+          makeMapping({ channel_id: fixedChannel.id, thread_id: '19:c|root-1', session_id: 'w' })
+        );
+      threadMapRepo.create.mockRejectedValueOnce(new Error('mapping unique conflict'));
+      await expect(admit(service, '19:c|root-1', 'channel')).resolves.toMatchObject({
+        success: true,
+        created: false,
+      });
+      expect(notices).not.toHaveBeenCalled();
+    });
+
+    it('announces the session when a redelivered first message recovers', async () => {
+      const mapping = makeMapping({
+        channel_id: fixedChannel.id,
+        thread_id: '19:c|root-1',
+        session_id: 'sess-1',
+      });
+      const { service, notices } = harness(mapping);
+      await expect(
+        admit(service, '19:c|root-1', 'channel', { session: 'sess-1' })
+      ).resolves.toMatchObject({ success: true, created: true });
+      expect(notices.mock.calls.map((call) => (call as unknown[])[2])).toEqual([
+        `${linkNotice} Mention me again to follow up.`,
+      ]);
+    });
   });
 
   it('tells an unlinked Teams user once that their account is not linked', async () => {

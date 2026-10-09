@@ -18,6 +18,7 @@ import type {
   GatewayConnector,
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
+  InboundSkippedFile,
 } from '../connector';
 import { isAllowedTeamsServiceUrl } from '../teams-service-url';
 import { fetchTeamsProviderHistory } from './teams-history';
@@ -267,6 +268,8 @@ export interface NormalizedTeamsActivity {
   timestamp: string;
   address: Record<string, unknown>;
   metadata: Record<string, unknown>;
+  /** Files the sender attached; names only, since Agor does not read Teams attachments yet. */
+  skippedFiles?: InboundSkippedFile[];
 }
 
 export function createTeamsAuthConfiguration(config: TeamsGatewayConfig): AuthConfiguration {
@@ -337,6 +340,30 @@ export function extractQuotedReplyText(
     if (text) return text;
   }
   return null;
+}
+
+const MAX_TEAMS_UNREAD_ATTACHMENTS = 10;
+
+/**
+ * Name the files a sender attached so the agent can say it could not read
+ * them. Only the name is kept: download URLs can carry access tokens.
+ */
+export function teamsUnreadAttachments(attachments: unknown): InboundSkippedFile[] {
+  if (!Array.isArray(attachments)) return [];
+  const files: InboundSkippedFile[] = [];
+  for (const attachment of attachments) {
+    const record = asRecord(attachment);
+    const contentType = stringValue(record.contentType)?.toLowerCase() ?? '';
+    // The message's own HTML rendering (including quoted replies) and cards are not files.
+    if (!contentType || contentType === 'text/html' || contentType.includes('.card.')) continue;
+    const fallback = contentType.startsWith('image/') ? 'image' : 'attachment';
+    files.push({
+      name: (stringValue(record.name) ?? fallback).slice(0, 200),
+      reason: 'unsupported_type',
+    });
+    if (files.length >= MAX_TEAMS_UNREAD_ATTACHMENTS) break;
+  }
+  return files;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -419,6 +446,7 @@ export function normalizeTeamsActivity(
   const userId = stringValue(from.id) ?? 'unknown';
   const timestamp = stringValue(activityRecord.timestamp) ?? new Date().toISOString();
   const address = activity.getConversationReference() as unknown as Record<string, unknown>;
+  const skippedFiles = teamsUnreadAttachments(activityRecord.attachments);
 
   return {
     activityId,
@@ -449,6 +477,7 @@ export function normalizeTeamsActivity(
       teams_user_name: stringValue(from.name),
       teams_has_mention: hasMention,
     },
+    ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
   };
 }
 

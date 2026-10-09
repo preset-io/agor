@@ -369,6 +369,31 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
     });
   });
 
+  ownedDbTest('queues an attachment-only message with file names but no URLs', async ({ db }) => {
+    await withRoute(db, async ({ sign, post }) => {
+      expect((await post(sign(), activity({ text: '' }))).status).toBe(200);
+      await expectNoPersistence(db);
+      const downloadUrl = 'https://contoso.sharepoint.com/download?tempauth=secret-token';
+      const body = activity({
+        id: 'activity-2',
+        text: '',
+        attachments: [
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'report.pdf',
+            contentUrl: downloadUrl,
+            content: { downloadUrl, uniqueId: 'file-1', fileType: 'pdf' },
+          },
+        ],
+      });
+      expect((await post(sign(), body)).status).toBe(200);
+      const [event] = await select(db).from(gatewayInboundEvents).all();
+      const payload = new GatewayInboundEventRepository(db).decryptQueuedPayload(event as never);
+      expect(payload.skippedFiles).toEqual([{ name: 'report.pdf', reason: 'unsupported_type' }]);
+      expect(JSON.stringify(payload)).not.toContain('tempauth');
+    });
+  });
+
   ownedDbTest('acknowledges non-message activities without storing them', async ({ db }) => {
     await withRoute(db, async ({ sign, post }) => {
       for (const body of [

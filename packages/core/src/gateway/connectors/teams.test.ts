@@ -611,4 +611,30 @@ describe('normalizeTeamsActivity', () => {
     expect(normalized.hasMention).toBe(false);
     expect(normalized.text).toBe('Agor please review');
   });
+
+  it('names attached files without their URLs and ignores the HTML body and cards', () => {
+    const url = 'https://smba.trafficmanager.net/teams/v3/attachments/a1/views/original';
+    const normalized = normalizeTeamsActivity(
+      activity({
+        text: '',
+        attachments: [
+          { contentType: 'text/html', content: '<p><img src="x"></p>' },
+          { contentType: 'application/vnd.microsoft.card.adaptive', content: {} },
+          { contentType: 'image/png', contentUrl: url },
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'notes.docx',
+            content: { downloadUrl: `${url}?tempauth=secret`, fileType: 'docx' },
+          },
+        ],
+      }),
+      config
+    );
+    expect(normalized.skippedFiles).toEqual([
+      { name: 'image', reason: 'unsupported_type' },
+      { name: 'notes.docx', reason: 'unsupported_type' },
+    ]);
+    expect(JSON.stringify(normalized)).not.toContain('attachments/a1');
+    expect(normalizeTeamsActivity(activity(), config)).not.toHaveProperty('skippedFiles');
+  });
 });

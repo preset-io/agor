@@ -88,6 +88,8 @@ export interface TeamsMessageDeliveryWorkerOptions {
   repositories?: Partial<TeamsMessageDeliveryWorkerRepositories>;
   connectorFactory?: (channel: GatewayChannel) => TeamsSendConnector;
   sessionUrl?: (sessionId: SessionID) => Promise<string | null>;
+  /** Called in the delivery's tenant once its first chunk is posted (ends this replica's typing). */
+  onReplyPosted?: (sessionId: SessionID) => void;
 }
 
 /** The chunk may have been posted; record it terminally and never resend. */
@@ -382,6 +384,13 @@ export class TeamsMessageDeliveryWorker {
           channelId: channel.id,
           threadId: mapping.thread_id,
         });
+      }
+      if (!sentInThisClaim) {
+        try {
+          this.options.onReplyPosted?.(message.session_id);
+        } catch {
+          // Typing is cosmetic; it never affects delivery.
+        }
       }
       sentInThisClaim = true;
       const checkpointed = await this.deliveryRepo.checkpointChunk({

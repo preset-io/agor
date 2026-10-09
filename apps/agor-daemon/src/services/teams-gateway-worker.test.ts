@@ -21,8 +21,6 @@ function channel(): GatewayChannel {
       app_id: 'teams-app',
       app_password: 'secret',
       microsoft_tenant_id: 'tenant-1',
-      require_mention: true,
-      allow_thread_replies_without_mention: true,
       catch_up: {
         mode: 'best_effort',
         max_messages: 50,
@@ -295,6 +293,15 @@ describe('TeamsGatewayWorker inbound admission', () => {
       expect(setup.create).not.toHaveBeenCalled();
       expect(setup.complete).toHaveBeenCalledOnce();
     }
+  });
+
+  it('admits an attachment-only mention and passes the file names on', async () => {
+    const skippedFiles = [{ name: 'report.pdf', reason: 'unsupported_type' }];
+    const setup = makeWorker({ activity: activity({ text: '', skippedFiles }) });
+    await setup.worker.checkOnce();
+    expect(setup.create).toHaveBeenCalledOnce();
+    expect(setup.create.mock.calls[0][0]).toMatchObject({ text: '', skipped_files: skippedFiles });
+    expect(setup.complete).toHaveBeenCalledOnce();
   });
 
   it('does not complete when Task admission fails', async () => {

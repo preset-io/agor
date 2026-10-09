@@ -618,6 +618,17 @@ final answer back into the same chat or channel thread.
   messages. If Agor cannot tell whether Teams accepted a message (for example, the
   connection dropped mid-send), the delivery is marked `ambiguous` and is not
   resent automatically, so you never get duplicates.
+- **Session link and typing.** When a message starts a session, the bot posts one
+  link to it, "Agor: Session created: View session", plus a reminder to mention
+  it again (not in personal chats, where no mention is needed). Follow-ups get no
+  extra notice. In personal and group chats, Teams shows the bot as typing while
+  the agent works.
+- **Outbound off.** Turning off **Enable outbound replies** (`outbound_enabled:
+  false`) stops every post to Teams: answers, the session link, other notices,
+  and the typing indicator. Messages still run in Agor.
+- **Attachments.** Agor does not read files or images sent in Teams yet. A
+  message with only an attachment still reaches the agent, which tells the sender
+  which files it could not read and asks them to paste the text instead.
 
 ### 1. Register the bot in Azure
 
@@ -676,11 +687,12 @@ They do not choose an identity.
 3. Upload the custom app (or publish it to your organization) and install it in
    the chats and teams where you want it.
 
-**Channel catch-up (optional, off by default).** When enabled, a mention in a
-channel thread also gives the agent the replies posted since its last answer.
-It needs the `ChannelMessage.Read.Group` resource-specific permission, which a
-team owner grants when installing the app. Without it, the bot still answers the
-mention.
+**Channel catch-up (on by default).** A mention in a channel thread also gives
+the agent the replies posted since its last answer. It needs the
+`ChannelMessage.Read.Group` resource-specific permission, which the app manifest
+requests and a team owner grants when installing the app. Without it, the bot
+still answers the mention, without the earlier replies. Set **Catch-up mode** to
+**Off** to turn it off.
 
 ### 5. Use it
 
@@ -858,9 +870,10 @@ authoritative mutation transaction.
 - **"Your Microsoft Teams account isn't linked to an Agor user."** With aligned
   users, create an Agor account with the sender's work email, or add their AAD
   object ID to the channel's user map.
-- **Channel catch-up is missing.** Catch-up is off by default and needs the
-  `ChannelMessage.Read.Group` permission granted in that team. The bot still
-  answers the mention without it.
+- **Channel catch-up is missing.** Check that the channel's **Catch-up mode** is
+  on and that the `ChannelMessage.Read.Group` permission was granted in that team.
+  The bot still answers the mention without it. Personal and group chats have no
+  catch-up.
 - **A reply shows as `ambiguous`.** Agor could not confirm whether Teams accepted
   it. Check the conversation in Teams before resending anything yourself; Agor
   does not resend it automatically.

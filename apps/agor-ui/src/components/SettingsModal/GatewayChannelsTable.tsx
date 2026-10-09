@@ -25,6 +25,7 @@ import {
 } from '@agor/core/gateway/teams-manifest';
 import {
   DEFAULT_DISCORD_CATCH_UP,
+  DEFAULT_TEAMS_CATCH_UP,
   type DiscordResponseMode,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
@@ -2567,7 +2568,11 @@ const ChannelFormFields: React.FC<{
       ),
       children: (
         <>
-          <Form.Item label="Catch-up mode" name="teams_catch_up_mode" initialValue="off">
+          <Form.Item
+            label="Catch-up mode"
+            name="teams_catch_up_mode"
+            initialValue={DEFAULT_TEAMS_CATCH_UP.mode}
+          >
             <Select
               options={[
                 { value: 'best_effort', label: 'Best effort (bounded)' },
@@ -4272,9 +4277,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         config.app_password = sanitizeSecretValue(values.teams_app_password as string);
       }
       config.microsoft_tenant_id = values.teams_tenant_id;
-      // Group chats and channels always require a structured app-ID mention;
-      // retain the canonical value so legacy config cannot weaken that fence.
-      config.require_mention = true;
       const teamsList = (value: unknown): string[] =>
         typeof value === 'string'
           ? value
@@ -4310,7 +4312,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           : {};
       config.catch_up = {
         ...storedCatchUp,
-        mode: values.teams_catch_up_mode ?? 'off',
+        mode: values.teams_catch_up_mode ?? DEFAULT_TEAMS_CATCH_UP.mode,
         max_messages: (values.teams_catch_up_max_messages as number) ?? 50,
         max_prompt_bytes: (values.teams_catch_up_max_prompt_bytes as number) ?? 16 * 1024,
       };
@@ -4698,7 +4700,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         formValues.teams_user_map = JSON.stringify(teamsUserMap, null, 2);
       }
       const catchUp = config?.catch_up as Record<string, unknown> | undefined;
-      formValues.teams_catch_up_mode = catchUp?.mode ?? 'off';
+      formValues.teams_catch_up_mode = catchUp?.mode ?? DEFAULT_TEAMS_CATCH_UP.mode;
       formValues.teams_catch_up_max_messages = catchUp?.max_messages ?? 50;
       formValues.teams_catch_up_max_prompt_bytes = catchUp?.max_prompt_bytes ?? 16 * 1024;
       formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;

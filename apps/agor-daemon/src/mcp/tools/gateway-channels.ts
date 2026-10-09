@@ -2120,7 +2120,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         ],
         caveats: [
           'GENERATED ONLY — no Azure or Teams resource was created, no credential was validated, and live activity delivery was not verified.',
-          'Channel catch-up is off by default. When enabled it needs resource-specific consent per team and never blocks the current mention.',
+          'Channel catch-up is on by default for new channels. It needs resource-specific consent per team; without it the bot still answers the mention, without earlier replies.',
           'Outbound delivery is durable and HA, but a provider timeout after the effect marker is terminal ambiguous; operators must inspect the delivery rather than blindly retrying.',
         ],
       });
