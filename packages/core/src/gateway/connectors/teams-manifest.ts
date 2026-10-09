@@ -54,7 +54,6 @@ export function buildTeamsSetupManifest(
     manifestVersion: '1.17',
     version: '1.0.0',
     id: options.appId,
-    packageName: `live.agor.teams.${options.appId.toLowerCase()}`,
     developer: {
       name: 'Agor',
       websiteUrl: 'https://agor.live',

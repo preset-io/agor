@@ -27,6 +27,32 @@ describe('Teams setup artifact', () => {
     ]);
   });
 
+  it('emits only top-level properties the v1.17 manifest schema allows', () => {
+    // The v1.17 schema is closed; an extra key (e.g. packageName) fails Developer Portal import.
+    const allowed = new Set([
+      '$schema',
+      'manifestVersion',
+      'version',
+      'id',
+      'developer',
+      'name',
+      'description',
+      'icons',
+      'accentColor',
+      'bots',
+      'validDomains',
+      'webApplicationInfo',
+      'authorization',
+    ]);
+    const manifest = buildTeamsSetupManifest({
+      appId: 'app-123',
+      gatewayChannelId: 'channel-123',
+      callbackOrigin: 'https://agor.example/',
+      files: true,
+    });
+    expect(Object.keys(manifest).filter((key) => !allowed.has(key))).toEqual([]);
+  });
+
   it('rejects non-HTTPS callback origins instead of producing an unusable artifact', () => {
     expect(() =>
       teamsGatewayCallbackUrl({
