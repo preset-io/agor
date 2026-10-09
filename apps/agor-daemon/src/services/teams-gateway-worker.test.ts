@@ -297,6 +297,20 @@ describe('TeamsGatewayWorker inbound admission', () => {
 
   it('admits an attachment-only mention and passes the file names on', async () => {
     const skippedFiles = [{ name: 'report.pdf', reason: 'unsupported_type' }];
+    const files = [
+      {
+        id: 'img-1',
+        name: 'image-1',
+        mimetype: 'image/png',
+        size: -1,
+        url_private_download:
+          'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original',
+        auth: 'provider_token',
+      },
+    ];
+    const imageOnly = makeWorker({ activity: activity({ text: '', files }) });
+    await imageOnly.worker.checkOnce();
+    expect(imageOnly.create.mock.calls[0][0]).toMatchObject({ text: '', files });
     const setup = makeWorker({ activity: activity({ text: '', skippedFiles }) });
     await setup.worker.checkOnce();
     expect(setup.create).toHaveBeenCalledOnce();

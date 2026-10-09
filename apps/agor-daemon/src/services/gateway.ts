@@ -83,6 +83,8 @@ import {
   hasConnector,
   isPermanentProviderRefusal,
   isSlackWriteTargetAllowed,
+  isTeamsFileDownloadUrl,
+  isTeamsTokenHost,
   normalizeOutbound,
   normalizeSendReceipt,
   parseDiscordAuthorityMetadata,
@@ -142,6 +144,7 @@ import {
   ROLES,
   SessionStatus,
   TaskStatus,
+  teamsAttachmentDeadlineMs,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   validateDiscordConfig,
 } from '@agor/core/types';
@@ -156,6 +159,8 @@ import {
   buildPromptWithAttachments,
   ingestDiscordInboundImages,
   ingestInboundAttachments,
+  ingestProviderInboundFiles,
+  type ProviderFileRequest,
 } from '../utils/gateway-attachments.js';
 import {
   fetchGatewayCatchUp,
@@ -818,10 +823,11 @@ const TEAMS_GATEWAY_REPLY_NOTE =
 const GATEWAY_STARTUP_BOOTSTRAP_HINT =
   'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
 
-const DISCORD_SKIPPED_FILE_REASON: Record<InboundSkippedFile['reason'], string> = {
+const SKIPPED_FILE_REASON: Record<InboundSkippedFile['reason'], string> = {
   unsupported_type: 'unsupported file type',
   files_disabled: 'attachments are turned off for this channel',
   invalid: 'could not be read',
+  channel_file: 'stored in SharePoint, which Agor cannot read',
 };
 
 /**
@@ -854,11 +860,12 @@ function formatDiscordUnreadAttachmentsNote(unread: string[], filesEnabled: bool
   );
 }
 
-/** Teams attachments are named, never downloaded; the agent asks for pasted text instead. */
-function formatTeamsUnreadAttachmentsNote(files: InboundSkippedFile[]): string {
+function formatTeamsUnreadAttachmentsNote(unread: string[], filesEnabled: boolean): string {
   return formatUnreadAttachmentsNote(
-    files.map((file) => formatUnreadAttachment(file.name, 'not read from Microsoft Teams')),
-    'Agor cannot read files sent in Microsoft Teams yet; suggest pasting the text instead.'
+    unread,
+    filesEnabled
+      ? 'Pasted images and, in personal chats, image and text files can be read; files shared in channels and group chats live in SharePoint, so suggest pasting the text or sending the file in a personal chat.'
+      : 'Attachments are turned off for this channel; suggest pasting the text instead.'
   );
 }
 
@@ -6399,13 +6406,11 @@ export class GatewayService {
       // here) is named in the prompt so the agent tells the user.
       if (channel.channel_type === 'discord') {
         const unread = (data.skipped_files ?? []).map((file) =>
-          formatUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON[file.reason])
+          formatUnreadAttachment(file.name, SKIPPED_FILE_REASON[file.reason])
         );
         if (channelConfig.files !== true) {
           for (const file of data.files ?? []) {
-            unread.push(
-              formatUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON.files_disabled)
-            );
+            unread.push(formatUnreadAttachment(file.name, SKIPPED_FILE_REASON.files_disabled));
           }
         } else if (data.files && data.files.length > 0) {
           const ingestion = await ingestDiscordInboundImages({
@@ -6429,8 +6434,48 @@ export class GatewayService {
           promptText = `${promptText}\n\n${formatDiscordUnreadAttachmentsNote(unread, channelConfig.files === true)}`;
         }
       }
-      if (channel.channel_type === 'teams' && data.skipped_files?.length) {
-        promptText = `${promptText}\n\n${formatTeamsUnreadAttachmentsNote(data.skipped_files)}`;
+      // Teams: inline images use the bot token on Bot Connector hosts only; personal-chat
+      // files use their pre-authenticated SharePoint URL with no credential.
+      if (channel.channel_type === 'teams') {
+        const filesEnabled = channelConfig.files === true;
+        const unread = (data.skipped_files ?? []).map((file) =>
+          formatUnreadAttachment(file.name, SKIPPED_FILE_REASON[file.reason])
+        );
+        if (data.files?.length && !filesEnabled) {
+          for (const file of data.files) {
+            unread.push(formatUnreadAttachment(file.name, SKIPPED_FILE_REASON.files_disabled));
+          }
+        } else if (data.files?.length) {
+          const connector = teamsConnectorCache.get(getCurrentTenantId(), channel);
+          const ingestion = await ingestProviderInboundFiles({
+            files: data.files,
+            label: 'Teams',
+            provenance: 'gateway-teams',
+            requestFor: async (file): Promise<ProviderFileRequest> =>
+              file.auth === 'provider_token'
+                ? {
+                    isAllowedUrl: isTeamsTokenHost,
+                    headers: {
+                      Authorization: `Bearer ${await connector.downloadToken(file.url_private_download)}`,
+                    },
+                  }
+                : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} },
+            tenantId: requireCurrentTenantId() as TenantID,
+            sessionId,
+            branchId: channel.target_branch_id,
+            createdBy: channel.agor_user_id ?? user.user_id,
+            signal: AbortSignal.timeout(teamsAttachmentDeadlineMs(channelConfig)),
+          });
+          if (ingestion.uploads.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
+          }
+          for (const name of ingestion.failedNames ?? []) {
+            unread.push(formatUnreadAttachment(name, 'could not be downloaded or is too large'));
+          }
+        }
+        if (unread.length > 0) {
+          promptText = `${promptText}\n\n${formatTeamsUnreadAttachmentsNote(unread, filesEnabled)}`;
+        }
       }
 
       // Prepend gateway context block so the agent knows the message source.

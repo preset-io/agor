@@ -1190,6 +1190,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
         user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
         catch_up: { mode: 'best_effort' },
         agent_tools: { channel_history: false },
+        files: false,
       },
     });
     expect(channelCreate.mock.calls[0][0].config).not.toHaveProperty('require_mention');

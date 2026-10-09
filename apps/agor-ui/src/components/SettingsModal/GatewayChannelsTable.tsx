@@ -655,10 +655,11 @@ const CompactAlert: React.FC<{
   );
 };
 
-const TeamsManifestPanel: React.FC<{ appId: string; gatewayChannelId: string }> = ({
-  appId,
-  gatewayChannelId,
-}) => {
+const TeamsManifestPanel: React.FC<{
+  appId: string;
+  gatewayChannelId: string;
+  files: boolean;
+}> = ({ appId, gatewayChannelId, files }) => {
   const { token } = theme.useToken();
   // Non-HTTPS origins (local dev) fall back to the documented placeholder host.
   const callbackOrigin =
@@ -668,8 +669,12 @@ const TeamsManifestPanel: React.FC<{ appId: string; gatewayChannelId: string }> 
   const callbackUrl = teamsGatewayCallbackUrl({ appId, gatewayChannelId, callbackOrigin });
   const manifest = useMemo(
     () =>
-      JSON.stringify(buildTeamsSetupManifest({ appId, gatewayChannelId, callbackOrigin }), null, 2),
-    [appId, gatewayChannelId, callbackOrigin]
+      JSON.stringify(
+        buildTeamsSetupManifest({ appId, gatewayChannelId, callbackOrigin, files }),
+        null,
+        2
+      ),
+    [appId, gatewayChannelId, callbackOrigin, files]
   );
   return (
     <CompactAlert
@@ -2290,6 +2295,7 @@ const ChannelFormFields: React.FC<{
     Form.useWatch('teams_align_users', form) ??
       (mode === 'create' ? true : slackConfig?.align_teams_users)
   );
+  const teamsFiles = Boolean(Form.useWatch('teams_files', form) ?? slackConfig?.files);
   // Track the live Name field so the manifest preview reflects in-progress edits,
   // falling back to the stored channel name.
   const channelName = (Form.useWatch('name', form) as string | undefined) ?? editingChannel?.name;
@@ -2440,6 +2446,7 @@ const ChannelFormFields: React.FC<{
               <TeamsManifestPanel
                 appId={editingChannel.config.app_id}
                 gatewayChannelId={editingChannel.id}
+                files={teamsFiles}
               />
             )}
 
@@ -2601,6 +2608,17 @@ const ChannelFormFields: React.FC<{
             </Form.Item>
           </Space.Compact>
 
+          <Form.Item name="teams_files" valuePropName="checked" initialValue={false}>
+            <Checkbox>
+              Enable inbound images and files (<code>files:true</code>)
+            </Checkbox>
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Pasted images (PNG, JPEG, GIF, WebP) are passed to the agent everywhere, and image and
+            text files (.txt, .log, .md, .csv, .json) in personal chats. Files shared in channels
+            and group chats live in SharePoint and are not read; the agent tells the user which ones
+            it skipped. Turning this on changes the app manifest, so upload the app again.
+          </Typography.Text>
           <Form.Item name="teams_channel_history" valuePropName="checked" initialValue={false}>
             <Checkbox>
               Let session agents read channel history (<code>agent_tools.channel_history</code>)
@@ -4319,6 +4337,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
       config.outbound_enabled = values.teams_outbound_enabled ?? true;
       config.agent_tools = { channel_history: values.teams_channel_history === true };
+      config.files = values.teams_files === true;
       // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.
       const storedCatchUp =
         config.catch_up && typeof config.catch_up === 'object' && !Array.isArray(config.catch_up)
@@ -4721,6 +4740,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.teams_channel_history = resolveTeamsAgentTools(
         config?.agent_tools
       ).channel_history;
+      formValues.teams_files = config?.files === true;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;
       formValues.shortcut_mention_name = config?.mention_name;

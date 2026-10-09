@@ -626,9 +626,14 @@ final answer back into the same chat or channel thread.
 - **Outbound off.** Turning off **Enable outbound replies** (`outbound_enabled:
   false`) stops every post to Teams: answers, the session link, other notices,
   and the typing indicator. Messages still run in Agor.
-- **Attachments.** Agor does not read files or images sent in Teams yet. A
-  message with only an attachment still reaches the agent, which tells the sender
-  which files it could not read and asks them to paste the text instead.
+- **Attachments (off by default).** With **Enable inbound images and files**
+  (`files: true`), pasted images (PNG, JPEG, GIF, WebP) are passed to the agent in
+  every chat and channel, and image and text files (.txt, .log, .md, .csv, .json)
+  sent in personal chats. Files shared in channels and group chats are stored in
+  SharePoint, which Agor cannot read. Turning the setting on also sets
+  `supportsFiles` in the app manifest, so upload the app package again. A message
+  with only an attachment still reaches the agent, which tells the sender which
+  files it could not read.
 
 ### 1. Register the bot in Azure
 

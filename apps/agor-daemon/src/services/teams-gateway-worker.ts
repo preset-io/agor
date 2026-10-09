@@ -8,18 +8,18 @@ import {
 } from '@agor/core/db';
 import type { NormalizedTeamsActivity } from '@agor/core/gateway';
 import { gatewayFailureCode, safeTeamsMetadata } from '@agor/core/gateway';
-import type {
-  GatewayInboundEvent,
-  GatewayInboundEventID,
-  TaskID,
-  TenantID,
+import {
+  type GatewayInboundEvent,
+  type GatewayInboundEventID,
+  type TaskID,
+  TEAMS_INBOUND_LEASE_MS,
+  type TenantID,
 } from '@agor/core/types';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import type { GatewayService } from './gateway.js';
 import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
 import { boundedBackoff, GatewayDeliveryLoop } from './gateway-delivery-loop.js';
 
-const INBOUND_LEASE_MS = 30_000;
 const SCAN_BATCH = 25;
 const MAX_CONCURRENCY = 4;
 const LOOP_INTERVAL_MS = 1_000;
@@ -144,7 +144,7 @@ export class TeamsGatewayWorker {
   }
 
   private async processInbound(eventId: GatewayInboundEventID): Promise<void> {
-    const event = await this.inboundRepo.claimQueued(eventId, generateId(), INBOUND_LEASE_MS);
+    const event = await this.inboundRepo.claimQueued(eventId, generateId(), TEAMS_INBOUND_LEASE_MS);
     if (!event) return;
     try {
       await this.admitInbound(event);
@@ -198,7 +198,7 @@ export class TeamsGatewayWorker {
     // Rows queued before ingress filtering (non-message, empty, unmentioned) drain without a Task.
     const admissible =
       activity.activityType === 'message' &&
-      (!!activity.text.trim() || !!activity.skippedFiles?.length) &&
+      (!!activity.text.trim() || !!activity.files?.length || !!activity.skippedFiles?.length) &&
       (activity.conversationType.toLowerCase() === 'personal' || activity.hasMention);
     let result: { sessionId?: string; taskId?: TaskID } = {};
     if (admissible) {
@@ -213,6 +213,7 @@ export class TeamsGatewayWorker {
               thread_id: activity.threadId,
               text: activity.text,
               user_name: activity.userName ?? activity.userId,
+              ...(activity.files?.length ? { files: activity.files } : {}),
               ...(activity.skippedFiles?.length ? { skipped_files: activity.skippedFiles } : {}),
               metadata: safeTeamsMetadata(activity.metadata),
               teams_user_aad_object_id: activity.userAadObjectId ?? undefined,

@@ -12,7 +12,7 @@ import { isTeamsTokenHost } from '../teams-service-url';
 /** Text budget per Teams message in UTF-16 units; the hard activity limit is ~100 KB. */
 export const TEAMS_MESSAGE_TEXT_BUDGET = 40_000;
 
-function botFrameworkScope(serviceUrl: string): string {
+export function botFrameworkScope(serviceUrl: string): string {
   return new URL(serviceUrl).hostname.endsWith('.us')
     ? 'https://api.botframework.us'
     : 'https://api.botframework.com';

@@ -21,6 +21,10 @@ describe('Teams setup artifact', () => {
       },
     });
     expect(manifest).not.toHaveProperty('agor');
+    expect(manifest.bots).toEqual([expect.objectContaining({ supportsFiles: false })]);
+    expect(buildTeamsSetupManifest({ ...options, files: true }).bots).toEqual([
+      expect.objectContaining({ supportsFiles: true }),
+    ]);
   });
 
   it('rejects non-HTTPS callback origins instead of producing an unusable artifact', () => {

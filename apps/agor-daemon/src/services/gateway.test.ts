@@ -37,7 +37,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ingestDiscordInboundImages,
   ingestInboundAttachments,
+  ingestProviderInboundFiles,
 } from '../utils/gateway-attachments.js';
+import { teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
 import {
   verifiedHttpGatewayAuthority,
@@ -91,6 +93,7 @@ vi.mock('@agor/core/config', async (importOriginal) => {
 
 vi.mock('../utils/gateway-attachments.js', () => ({
   ingestDiscordInboundImages: vi.fn(),
+  ingestProviderInboundFiles: vi.fn(),
   ingestInboundAttachments: vi.fn(),
   buildPromptWithAttachments: vi.fn(
     (text: string, attachments: Array<{ ref: string }>) =>
@@ -456,6 +459,7 @@ afterEach(() => {
   vi.mocked(getConnector).mockReset();
   vi.mocked(ingestDiscordInboundImages).mockReset();
   vi.mocked(ingestInboundAttachments).mockReset();
+  vi.mocked(ingestProviderInboundFiles).mockReset();
 });
 
 describe('GatewayService session links', () => {
@@ -918,10 +922,119 @@ describe('GatewayService user alignment operational logs', () => {
     ).resolves.toMatchObject({ success: true });
     const prompt = String(promptCreate.mock.calls[0][0].prompt);
     expect(prompt).toContain(
-      '(Attachments you could not read: "report 1 .pdf" (not read from Microsoft Teams).'
+      '(Attachments you could not read: "report 1 .pdf" (unsupported file type).'
     );
     expect(prompt).toContain('suggest pasting the text instead.');
     expect(prompt).not.toContain('Note: Any assistant message you send');
+  });
+
+  function teamsFileCreate(
+    service: GatewayService,
+    channel: GatewayChannel,
+    files: Array<Record<string, unknown>>,
+    skippedFiles: Array<Record<string, unknown>> = []
+  ) {
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:dm-thread',
+      text: '',
+      files: files as never,
+      ...(skippedFiles.length ? { skipped_files: skippedFiles as never } : {}),
+      metadata: { teams_conversation_type: 'personal' },
+      teams_user_aad_object_id: 'aad-object-1',
+      teams_member: {
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        conversation_id: 'a:personal-conversation',
+        team_id: null,
+        user_id: '29:user-1',
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000a4' as never,
+    };
+    return service.create(
+      withVerifiedHttpGatewayAuthority(data, {
+        id: data.gateway_inbound_event_id,
+        gateway_channel_id: channel.id,
+        processing_token: 'claim-token',
+        provider_config_generation: 2,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'tenant-a',
+        thread_id: '19:dm-thread',
+      })
+    );
+  }
+
+  const teamsImage = {
+    id: 'img-1',
+    name: 'image-1',
+    mimetype: 'image/png',
+    size: -1,
+    url_private_download: 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original',
+    auth: 'provider_token',
+  };
+  const teamsPersonalFile = {
+    id: 'file-1',
+    name: 'notes.txt',
+    mimetype: 'text/plain',
+    size: -1,
+    url_private_download: 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=t',
+  };
+
+  it('reads Teams images with the bot token and personal files without one, under one deadline', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    (channel.config as Record<string, unknown>).files = true;
+    const downloadToken = vi.fn(async () => 'bot-token');
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({ downloadToken } as never);
+    vi.mocked(ingestProviderInboundFiles).mockResolvedValue({
+      uploads: [{ ref: 'upl_image' } as never],
+      failed: 1,
+      failedNames: ['notes.txt'],
+    });
+    await expect(
+      teamsFileCreate(
+        service,
+        channel,
+        [teamsImage, teamsPersonalFile],
+        [{ name: 'spec.docx', reason: 'channel_file' }]
+      )
+    ).resolves.toMatchObject({ success: true });
+    const args = vi.mocked(ingestProviderInboundFiles).mock.calls[0][0];
+    expect(args).toMatchObject({
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      signal: expect.any(AbortSignal),
+    });
+    const image = await args.requestFor(teamsImage as never);
+    expect(image?.headers).toEqual({ Authorization: 'Bearer bot-token' });
+    expect(image?.isAllowedUrl(teamsImage.url_private_download)).toBe(true);
+    expect(image?.isAllowedUrl(teamsPersonalFile.url_private_download)).toBe(false);
+    const file = await args.requestFor(teamsPersonalFile as never);
+    expect(file?.headers).toEqual({});
+    expect(file?.isAllowedUrl(teamsPersonalFile.url_private_download)).toBe(true);
+    expect(file?.isAllowedUrl(teamsImage.url_private_download)).toBe(false);
+    expect(downloadToken).toHaveBeenCalledOnce();
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain('upl_image');
+    expect(prompt).toContain(
+      'Attachments you could not read: "spec.docx" (stored in SharePoint, which Agor cannot read); "notes.txt" (could not be downloaded or is too large).'
+    );
+    expect(prompt).not.toContain('tempauth');
+  });
+
+  it('names Teams files as turned off without downloading when files is off', async () => {
+    const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
+    const channel = await (
+      service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
+    ).channelRepo.findByKey();
+    await expect(teamsFileCreate(service, channel, [teamsImage])).resolves.toMatchObject({
+      success: true,
+    });
+    expect(ingestProviderInboundFiles).not.toHaveBeenCalled();
+    expect(String(promptCreate.mock.calls[0][0].prompt)).toContain(
+      '"image-1" (attachments are turned off for this channel)'
+    );
   });
 
   it('rejects an unmatched Teams sender with a not-linked notice and no fallback user', async () => {

@@ -407,10 +407,38 @@ describe('registered Teams HTTP ingress with real SDK JWT verification', {
       expect((await post(sign(), body)).status).toBe(200);
       const [event] = await select(db).from(gatewayInboundEvents).all();
       const payload = new GatewayInboundEventRepository(db).decryptQueuedPayload(event as never);
-      expect(payload.skippedFiles).toEqual([{ name: 'report.pdf', reason: 'unsupported_type' }]);
+      expect(payload.skippedFiles).toEqual([{ name: 'report.pdf', reason: 'files_disabled' }]);
       expect(JSON.stringify(payload)).not.toContain('tempauth');
     });
   });
+
+  ownedDbTest(
+    'queues an image-only message with its URL only inside the encrypted payload',
+    async ({ db }) => {
+      await withRoute(
+        db,
+        async ({ sign, post }) => {
+          const imageUrl = 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original';
+          const body = activity({
+            text: '',
+            attachments: [{ contentType: 'image/png', contentUrl: imageUrl }],
+          });
+          expect((await post(sign(), body)).status).toBe(200);
+          const [event] = await select(db).from(gatewayInboundEvents).all();
+          expect(JSON.stringify(event)).not.toContain('attachments/a1');
+          const [address] = await select(db).from(teamsConversationAddresses).all();
+          expect(JSON.stringify(address)).not.toContain('attachments/a1');
+          const payload = new GatewayInboundEventRepository(db).decryptQueuedPayload(
+            event as never
+          );
+          expect(payload.files).toEqual([
+            expect.objectContaining({ url_private_download: imageUrl, auth: 'provider_token' }),
+          ]);
+        },
+        { files: true }
+      );
+    }
+  );
 
   ownedDbTest('acknowledges non-message activities without storing them', async ({ db }) => {
     await withRoute(db, async ({ sign, post }) => {

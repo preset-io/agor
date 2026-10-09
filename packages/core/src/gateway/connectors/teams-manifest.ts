@@ -12,6 +12,8 @@ export interface TeamsSetupManifestOptions {
   gatewayChannelId: string;
   displayName?: string;
   callbackOrigin?: string;
+  /** Mirrors the channel's `files` setting: lets users send files to the bot in personal chats. */
+  files?: boolean;
 }
 
 export function teamsGatewayCallbackUrl(options: TeamsSetupManifestOptions): string {
@@ -70,7 +72,7 @@ export function buildTeamsSetupManifest(
       {
         botId: options.appId,
         scopes: [...TEAMS_BOT_SCOPES],
-        supportsFiles: false,
+        supportsFiles: options.files === true,
         isNotificationOnly: false,
       },
     ],

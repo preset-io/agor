@@ -2,7 +2,11 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import type { InboundFile } from '@agor/core/gateway';
-import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
+import {
+  isAllowedDiscordAttachmentUrl,
+  isTeamsFileDownloadUrl,
+  isTeamsTokenHost,
+} from '@agor/core/gateway';
 import type { SessionID, TenantID, UploadRef, UploadStagingStore } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalUploadStagingStore } from '../host/local/upload-staging-store.js';
@@ -10,6 +14,7 @@ import {
   buildPromptWithAttachments,
   ingestDiscordInboundImages,
   ingestInboundAttachments,
+  ingestProviderInboundFiles,
   isAllowedSlackFileUrl,
   isIngestableFile,
 } from './gateway-attachments.js';
@@ -1124,5 +1129,142 @@ describe('ingestDiscordInboundImages', () => {
     } finally {
       configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
     }
+  });
+});
+
+describe('ingestProviderInboundFiles for Teams', () => {
+  let uploadDir: string;
+  let store: LocalUploadStagingStore;
+  const owner = {
+    tenantId: 'tenant-teams' as TenantID,
+    sessionId: '00000000-0000-0000-0000-000000000021' as SessionID,
+    branchId: '00000000-0000-0000-0000-000000000023' as never,
+    createdBy: '00000000-0000-0000-0000-000000000024' as never,
+  };
+  const IMAGE_URL = 'https://smba.trafficmanager.net/amer/v3/attachments/a1/views/original';
+  const FILE_URL = 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=t';
+  const image = (overrides: Partial<InboundFile> = {}): InboundFile => ({
+    id: 'img-1',
+    name: 'image-1',
+    mimetype: 'image/png',
+    size: -1,
+    url_private_download: IMAGE_URL,
+    auth: 'provider_token',
+    ...overrides,
+  });
+  const personalFile: InboundFile = {
+    id: 'file-1',
+    name: 'notes.txt',
+    mimetype: 'text/plain',
+    size: -1,
+    url_private_download: FILE_URL,
+  };
+  // Mirrors the Teams wiring in GatewayService: token only for token-host images.
+  const requestFor = async (file: InboundFile) =>
+    file.auth === 'provider_token'
+      ? { isAllowedUrl: isTeamsTokenHost, headers: { Authorization: 'Bearer bot-token' } }
+      : { isAllowedUrl: isTeamsFileDownloadUrl, headers: {} };
+
+  beforeEach(async () => {
+    uploadDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agor-teams-attachments-'));
+    store = new LocalUploadStagingStore(() => uploadDir);
+  });
+
+  afterEach(async () => {
+    await fs.rm(uploadDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('sends the bot token only to the Bot Connector image host, never to SharePoint', async () => {
+    const fetchImpl = vi.fn(async (url: string) =>
+      url === IMAGE_URL
+        ? makeImageResponse(VALID_PNG)
+        : makeImageResponse(Buffer.from('hello\n'), { 'content-type': 'text/plain' })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image(), personalFile],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      ...owner,
+    });
+    expect(result).toMatchObject({ failed: 0 });
+    expect(result.uploads.map((upload) => upload.provenance)).toEqual([
+      'gateway-teams',
+      'gateway-teams',
+    ]);
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      IMAGE_URL,
+      expect.objectContaining({ headers: { Authorization: 'Bearer bot-token' } }),
+    ]);
+    expect(fetchImpl.mock.calls[1]).toEqual([FILE_URL, expect.objectContaining({ headers: {} })]);
+  });
+
+  it('refuses a redirect off the token host before forwarding the token', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchImpl = vi.fn(
+      async () => new Response(null, { status: 302, headers: { location: FILE_URL } })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image()],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      ...owner,
+    });
+    expect(result).toMatchObject({ uploads: [], failed: 1, failedNames: ['image-1'] });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(String(vi.mocked(console.warn).mock.calls)).not.toContain('sharepoint');
+  });
+
+  it('caps the actual bytes of a file whose size Teams never declared', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // 12 bytes: over the 8-byte file cap but under the 16-byte message cap.
+    configureUploadLimits(8);
+    try {
+      const fetchImpl = vi.fn(async () =>
+        makeImageResponse(Buffer.from('twelve bytes'), { 'content-type': 'text/plain' })
+      );
+      const result = await ingestProviderInboundFiles({
+        files: [personalFile],
+        label: 'Teams',
+        provenance: 'gateway-teams',
+        requestFor,
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        store,
+        ...owner,
+      });
+      expect(result).toMatchObject({ uploads: [], failed: 1 });
+    } finally {
+      configureUploadLimits(MAX_UPLOAD_FILE_SIZE);
+    }
+  });
+
+  it('shares one deadline across every file of the message', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const deadline = new AbortController();
+    const fetchImpl = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+          deadline.abort();
+        })
+    );
+    const result = await ingestProviderInboundFiles({
+      files: [image(), image({ id: 'img-2', name: 'image-2' })],
+      label: 'Teams',
+      provenance: 'gateway-teams',
+      requestFor,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      store,
+      signal: deadline.signal,
+      ...owner,
+    });
+    expect(result).toMatchObject({ uploads: [], failed: 2, failedNames: ['image-1', 'image-2'] });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 });

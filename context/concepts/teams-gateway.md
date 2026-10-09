@@ -149,9 +149,16 @@ allowlist, outside the outbox. `outbound_enabled: false` turns all of them off.
   terminal Task, a posted reply, or shutdown. A failed or refused send or the
   deadline ends it for that Task on that replica. Loops are capped per tenant.
   Duplicate or missing indicators across replicas are acceptable.
-- Attachments are never downloaded. Ingress keeps only file names (no URLs,
-  which can carry tokens) in the bounded inbound payload, so an attachment-only
-  mention is admitted and the prompt names the files the agent cannot read.
+- Attachments (`files: true`): inline images are fetched with the bot token,
+  and only from Bot Connector hosts (`isTeamsTokenHost`); personal-chat files use
+  their pre-authenticated SharePoint `downloadUrl` with no credential. Every
+  redirect hop is re-checked against the same per-file host rule, so the token
+  never follows a redirect elsewhere. Download URLs live only in the encrypted
+  inbound payload and are never logged or stored elsewhere; staged files are
+  session executor uploads. One deadline covers all of a message's files and
+  fits the inbound lease with catch-up. Channel and group-chat files
+  (SharePoint) and everything else are named in the prompt as unread, so an
+  attachment-only mention is still admitted.
 - The prompt carries the sender email only when aligned identity resolved it
   from the member API for that prompt; it is not stored in mapping metadata.
 
@@ -215,5 +222,5 @@ plain, as for Discord, while channel foreign keys stay tenant-composite.
 ## Non-goals
 
 Teams SDK 2.x or a global `serviceUrl`; multi-tenant bot registrations; Graph
-transcript mirrors; attachment download; replay or repair APIs for ambiguous
+transcript mirrors; SharePoint file reads or sending files back; replay or repair APIs for ambiguous
 deliveries; Tasks for messages that did not mention the bot.

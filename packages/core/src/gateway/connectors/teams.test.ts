@@ -631,10 +631,64 @@ describe('normalizeTeamsActivity', () => {
       config
     );
     expect(normalized.skippedFiles).toEqual([
-      { name: 'image', reason: 'unsupported_type' },
-      { name: 'notes.docx', reason: 'unsupported_type' },
+      { name: 'image-1', reason: 'files_disabled' },
+      { name: 'notes.docx', reason: 'files_disabled' },
     ]);
     expect(JSON.stringify(normalized)).not.toContain('attachments/a1');
     expect(normalizeTeamsActivity(activity(), config)).not.toHaveProperty('skippedFiles');
+  });
+
+  it('keeps image URLs on Bot Connector hosts and personal files on SharePoint only when files is on', () => {
+    const imageUrl = 'https://smba.trafficmanager.net/teams/v3/attachments/a1/views/original';
+    const fileUrl = 'https://contoso-my.sharepoint.com/personal/download.aspx?tempauth=secret';
+    const normalized = normalizeTeamsActivity(
+      activity({
+        text: '',
+        attachments: [
+          { contentType: 'image/png', contentUrl: imageUrl },
+          { contentType: 'image/png', contentUrl: 'https://evil.example/a.png' },
+          { contentType: 'image/svg+xml', contentUrl: imageUrl },
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'notes.txt',
+            content: { downloadUrl: fileUrl, fileType: 'txt' },
+          },
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'log.txt',
+            content: { downloadUrl: imageUrl, fileType: 'txt' },
+          },
+          {
+            contentType: 'application/vnd.microsoft.teams.file.download.info',
+            name: 'notes.docx',
+            content: { downloadUrl: fileUrl, fileType: 'docx' },
+          },
+          { contentType: 'reference', name: 'spec.docx', contentUrl: fileUrl },
+        ],
+      }),
+      { ...config, files: true }
+    );
+    expect(normalized.files).toEqual([
+      expect.objectContaining({
+        name: 'image-1',
+        mimetype: 'image/png',
+        size: -1,
+        url_private_download: imageUrl,
+        auth: 'provider_token',
+      }),
+      expect.objectContaining({
+        name: 'notes.txt',
+        mimetype: 'text/plain',
+        url_private_download: fileUrl,
+      }),
+    ]);
+    expect(normalized.files?.[1]).not.toHaveProperty('auth');
+    expect(normalized.skippedFiles).toEqual([
+      { name: 'image-2', reason: 'invalid' },
+      { name: 'image-3', reason: 'unsupported_type' },
+      { name: 'log.txt', reason: 'invalid' },
+      { name: 'notes.docx', reason: 'unsupported_type' },
+      { name: 'spec.docx', reason: 'channel_file' },
+    ]);
   });
 });
