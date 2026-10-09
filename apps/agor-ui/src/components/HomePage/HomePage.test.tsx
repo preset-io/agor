@@ -3,6 +3,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildSessionMaps } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import {
   OPEN_BOARD_SWITCHER_EVENT,
   OPEN_GLOBAL_SEARCH_EVENT,
@@ -34,9 +35,39 @@ describe('HomePage', () => {
     expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
     expect(screen.getByText('Session idle')).toBeInTheDocument();
 
-    act(() => agorStore.setState({ sessionsHydrated: true, branchesHydrated: true }));
+    act(() =>
+      agorStore.setState({ coverage: userScopeCoverage({ sessions: true, references: true }) })
+    );
     expect(screen.getByText('You’re all caught up.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All caught up/ })).toBeInTheDocument();
+  });
+
+  it('renders truncated counts as N+ and never claims “all caught up”', () => {
+    seed({
+      sessions: [
+        session('perm', { status: 'awaiting_permission' }),
+        session('run', { status: 'running' }),
+      ],
+    });
+    act(() =>
+      agorStore.setState({
+        coverage: userScopeCoverage({ sessions: 'capped', references: true, teammates: true }),
+      })
+    );
+    renderHome();
+    expect(screen.getByRole('button', { name: '1+ need you' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '1+ running' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Running 1+' })).toBeInTheDocument();
+
+    // Nothing found in the capped read is not proof that nothing needs me.
+    act(() => {
+      seed({ sessions: [session('idle')] });
+      agorStore.setState({
+        coverage: userScopeCoverage({ sessions: 'capped', references: true, teammates: true }),
+      });
+    });
+    expect(screen.queryByText(/caught up/i)).not.toBeInTheDocument();
+    expect(screen.getByText('Nothing needs you in your most recent sessions.')).toBeInTheDocument();
   });
 
   it('hides Needs you and the status line for new users', () => {
@@ -577,6 +608,45 @@ describe('HomePage', () => {
     renderHome();
     const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
     expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
+  });
+
+  it('shows the fallback at first paint, before the user scope completes', () => {
+    // Only the gated page of my sessions is in the store; no branch is loaded.
+    seed({
+      sessions: [session('a', { branch_board_id: 'b-a' } as Partial<Session>)],
+      boards: [{ board_id: 'b-a', name: 'Launch board', archived: false } as Board],
+      hydrated: false,
+    });
+    renderHome();
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(within(recentBoards).getByRole('button', { name: 'Launch board' })).toBeInTheDocument();
+  });
+
+  it('marks recent boards only with my running or needs-you sessions', () => {
+    seed({
+      sessions: [
+        session('mine-ready', {
+          branch_board_id: 'b-a',
+          ready_for_prompt: true,
+        } as Partial<Session>),
+        session('theirs-running', {
+          branch_id: 'branch-2',
+          branch_board_id: 'b-b',
+          created_by: 'someone',
+          status: 'running',
+        } as Partial<Session>),
+      ],
+      boards: [
+        { board_id: 'b-a', name: 'Launch board', archived: false } as Board,
+        { board_id: 'b-b', name: 'Team board', archived: false } as Board,
+      ],
+    });
+    renderHome({ recentBoardIds: ['b-a', 'b-b'] });
+    const recentBoards = screen.getByRole('group', { name: 'Recent boards' });
+    expect(
+      within(recentBoards).getByRole('button', { name: 'Launch board, needs you' })
+    ).toBeInTheDocument();
+    expect(within(recentBoards).getByRole('button', { name: 'Team board' })).toBeInTheDocument();
   });
 
   it('falls back too when every visited board is gone or archived', () => {

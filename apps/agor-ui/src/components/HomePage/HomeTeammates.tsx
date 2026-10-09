@@ -5,9 +5,10 @@ import { memo, useMemo, useState } from 'react';
 import { useSessionAccess } from '../../hooks/useSessionAccess';
 import { useSharedTeammates } from '../../hooks/useSharedTeammates';
 import { useAgorStore } from '../../store/agorStore';
+import { selectTeammatesLoaded, selectTeammatesTruncated } from '../../store/userScope';
 import { TeammateCard } from '../TeammateCard';
 import { HomeCard, HomeLink, HomeSection, HomeSkeleton } from './HomeSection';
-import { homeDivider } from './homeLayout';
+import { formatCount, homeDivider } from './homeLayout';
 
 const RAIL_SIZE = 3;
 
@@ -34,7 +35,8 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
     retry: retrySharing,
     retrying: sharingRetrying,
   } = useSharedTeammates(client, currentUser);
-  const hydrated = useAgorStore((s) => s.branchesHydrated);
+  const hydrated = useAgorStore(selectTeammatesLoaded);
+  const truncated = useAgorStore(selectTeammatesTruncated);
   const [offset, setOffset] = useState(0);
   const shown = useMemo(
     () =>
@@ -75,7 +77,9 @@ export const HomeTeammatesSection = memo(function HomeTeammatesSection({
           )}
           {/* Nothing to list yet (e.g. every read failed): the failure notice says why. */}
           {onSeeAll && teammates.length > 0 && (
-            <HomeLink onClick={onSeeAll}>See all {teammates.length}</HomeLink>
+            <HomeLink onClick={onSeeAll}>
+              See all {formatCount(teammates.length, truncated)}
+            </HomeLink>
           )}
         </>
       }

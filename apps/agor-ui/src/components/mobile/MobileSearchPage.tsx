@@ -1,4 +1,4 @@
-import type { User } from '@agor-live/client';
+import type { AgorClient, User } from '@agor-live/client';
 import { artifactFullscreenPath } from '@agor-live/client';
 import { ArrowLeftOutlined, SearchOutlined } from '@ant-design/icons';
 import { Button, Empty, Input, List, Typography, theme } from 'antd';
@@ -29,6 +29,7 @@ import { MobileListRow } from './MobileListRow';
 import { useMobileBack } from './useMobileBack';
 
 interface MobileSearchPageProps {
+  client?: AgorClient | null;
   currentUser?: User | null;
   onOpenWorkspaceSettings: (section: string) => void;
   onOpenBranch: (branchId: string) => void;
@@ -51,6 +52,7 @@ interface Row {
  * navigation targets, branch board-name subtitle and Comments section are mobile's own.
  */
 export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
+  client,
   currentUser,
   onOpenWorkspaceSettings,
   onOpenBranch,
@@ -70,6 +72,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
   const commentById = useAgorStore(selectCommentById);
 
   const { results, hasAnyResults } = useGlobalSearch({
+    client,
     query: deferredQuery,
     ownedByMe: false, // global scope
     activeTypeChip: 'all',

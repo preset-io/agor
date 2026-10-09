@@ -67,10 +67,11 @@ export const EventStreamPill = ({
     </Tag>
   );
 
-  // If metadata card provided, wrap in popover
+  // If metadata card provided, wrap in popover. The card mounts only while it
+  // is open, so a card that reads on mount reads once per opening.
   if (metadataCard) {
     return (
-      <Popover content={metadataCard} title={null} trigger="click" placement="left">
+      <Popover content={metadataCard} title={null} trigger="click" placement="left" destroyOnHidden>
         {pill}
       </Popover>
     );

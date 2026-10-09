@@ -44,7 +44,6 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
     const repoById = new Map([[repo.repo_id, repo]]);
     const boardById = new Map<string, Board>();
     const branchById = new Map<string, Branch>();
-    const sessionsByBranch = new Map<string, never[]>();
 
     const { rerender } = renderWithProviders(
       <BranchesTable
@@ -52,7 +51,6 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
         branchById={branchById}
         repoById={repoById}
         boardById={boardById}
-        sessionsByBranch={sessionsByBranch as Map<string, never[]>}
       />
     );
 
@@ -76,7 +74,6 @@ describe('BranchesTable — source-branch preservation', { timeout: 10_000 }, ()
           branchById={branchById}
           repoById={new Map([[repo.repo_id, repo]])}
           boardById={new Map<string, Board>()}
-          sessionsByBranch={sessionsByBranch as Map<string, never[]>}
         />
       </MemoryRouter>
     );

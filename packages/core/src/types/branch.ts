@@ -1028,6 +1028,26 @@ export const isPersistedAgent = isTeammate;
  * Supports canonical (`custom_context.teammate`) plus legacy
  * (`custom_context.assistant` / `custom_context.agent`) storage.
  */
+/**
+ * One row of `branch-counts.find()`: the number of active (non-archived)
+ * branches on a board, counting only branches the caller can view on boards
+ * the caller can view. Backs the board-switcher and mobile nav-tree badges.
+ */
+export interface BoardBranchCount {
+  board_id: BoardID;
+  branch_count: number;
+}
+
+/**
+ * One row of `session-counts.find({ group_by })`: the active sessions on a
+ * branch, or on a board's branches, that the caller can view.
+ */
+export interface SessionCount {
+  /** The branch id or board id, per `group_by`. */
+  id: string;
+  session_count: number;
+}
+
 export function getTeammateConfig(branch: {
   custom_context?: Record<string, unknown>;
 }): TeammateConfig | null {

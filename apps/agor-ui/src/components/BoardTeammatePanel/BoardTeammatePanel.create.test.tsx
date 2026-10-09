@@ -4,6 +4,7 @@ import { App as AntApp } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { makeTeammateBranch } from '../BranchModal/testUtils';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
@@ -42,9 +43,10 @@ function renderPanel(onCreateTeammate?: () => void, primary?: { board: Board; br
   );
 }
 
-function setBranches(branches: Branch[]) {
+function setBranches(branches: Branch[], teammatesLoaded = true) {
   agorStore.setState({
     ...EMPTY_MAPS,
+    coverage: userScopeCoverage({ teammates: teammatesLoaded }),
     userById: new Map([['user-1', { user_id: 'user-1', role: 'member' } as User]]),
     branchById: new Map(branches.map((branch) => [branch.branch_id, branch])),
   });
@@ -80,6 +82,15 @@ describe('BoardTeammatePanel empty state', () => {
     expect(screen.queryByRole('button', { name: /create ai teammate/i })).toBeNull();
     expect(screen.getByText('Assign an existing teammate')).toBeInTheDocument();
     expect(screen.getByText(/no existing teammates are available/i)).toBeInTheDocument();
+  });
+
+  // Step 3: the store holds teammates only once the user scope's teammate read lands.
+  it('does not call the assign list empty before the user scope has the teammates', () => {
+    setBranches([], false);
+    renderPanel();
+
+    expect(screen.getByText('Assign an existing teammate')).toBeInTheDocument();
+    expect(screen.queryByText(/no existing teammates are available/i)).toBeNull();
   });
 
   it('does not offer creating over a primary whose repo is not loaded', () => {

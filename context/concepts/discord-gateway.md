@@ -41,7 +41,7 @@ transport progress; only the mapping cursor proves context reached Agor.
 1. **Trigger.** Only a live `MESSAGE_CREATE` from the configured guild with a
    structured bot mention outside inline/fenced code. Message Content intent is
    mandatory (`message_content_enabled: true`); never rely on the mention-only
-   content exception. Strip only the bot mention; an empty summon is ignored.
+   content exception. Strip only the bot mention; an empty summon without attachments is ignored.
    Bots/self, webhooks, private threads, other guilds, unconfigured parents, and
    unsupported message types are ignored. Missed events never become background
    Tasks.

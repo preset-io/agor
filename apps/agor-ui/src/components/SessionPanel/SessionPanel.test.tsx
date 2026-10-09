@@ -350,6 +350,7 @@ describe('SessionPanel search control', () => {
 
     expect(reactive.useSharedReactiveSession).toHaveBeenLastCalledWith(null, session.session_id, {
       enabled: true,
+      foreground: true,
       reactiveOptions: { taskHydration: 'lean' },
     });
   });

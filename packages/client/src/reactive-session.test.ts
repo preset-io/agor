@@ -43,6 +43,8 @@ interface MockClientOptions {
   deferTaskMessageFetch?: string;
   deferSessionGet?: boolean;
   sessionTaskIds?: string[];
+  /** An older daemon: it ignores `include_tasks_complete`. */
+  omitTasksComplete?: boolean;
 }
 
 function createMockClient(opts: MockClientOptions) {
@@ -131,22 +133,31 @@ function createMockClient(opts: MockClientOptions) {
 
   const services: Record<string, unknown> = {
     sessions: {
-      get: vi.fn(async () => {
+      get: vi.fn(async (_id: string, params?: { query?: Record<string, unknown> }) => {
         order.push('hydrate');
         if (opts.deferSessionGet) {
           await new Promise<void>((resolve) => sessionGetResolvers.push(resolve));
         }
         // The daemon appends Session.tasks at dispatch: never a queued or
         // never-run (CREATED) Task.
+        const neverRun = (task: Task) =>
+          task.status === TaskStatus.QUEUED || task.status === TaskStatus.CREATED;
+        const tasks =
+          opts.sessionTaskIds ??
+          opts.tasks.filter((task) => !neverRun(task)).map((task) => task.task_id);
+        // Its completeness report: every entry a distinct Task of this
+        // Session, and every Task that ran listed.
+        const known = new Set<string>(opts.tasks.map((task) => task.task_id));
+        const complete =
+          new Set(tasks).size === tasks.length &&
+          tasks.every((id) => known.has(id)) &&
+          opts.tasks.every((task) => neverRun(task) || tasks.includes(task.task_id));
         return {
           session_id: SESSION_ID,
-          tasks:
-            opts.sessionTaskIds ??
-            opts.tasks
-              .filter(
-                (task) => task.status !== TaskStatus.QUEUED && task.status !== TaskStatus.CREATED
-              )
-              .map((task) => task.task_id),
+          tasks,
+          ...(params?.query?.include_tasks_complete && !opts.omitTasksComplete
+            ? { tasks_complete: complete }
+            : {}),
         } as Session;
       }),
       ...listener('sessions'),
@@ -3971,13 +3982,11 @@ describe('lean transcript window follows displayed turn order', () => {
       new Set(opts.tasks.map((task) => task.task_id))
     );
     expect(handle.trimOlderTasks()).toBe(false);
-    // No positional read: only the bounded membership counts use `$in`.
+    // No positional read: nothing uses `$in`.
     const find = vi.mocked(mock.client.service('tasks').find);
-    expect(
-      find.mock.calls.filter(
-        ([params]) => '$in' in Object(params?.query?.task_id) && params?.query?.$limit !== 0
-      )
-    ).toEqual([]);
+    expect(find.mock.calls.filter(([params]) => '$in' in Object(params?.query?.task_id))).toEqual(
+      []
+    );
     handle.dispose();
 
     // A Task created but never run has no position by design: the daemon never
@@ -4009,7 +4018,7 @@ describe('lean transcript window follows displayed turn order', () => {
     const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
     // The newest task page (40 nonqueued Tasks) is read first …
     await vi.waitFor(() => expect(mock.client.service('tasks').find).toHaveBeenCalled());
-    // … then another prompt dispatches before the Session row is read: equal counts.
+    // … then another prompt dispatches before the Session row is read.
     add(40);
     opts.sessionTaskIds = [...opts.sessionTaskIds, turn(40)];
     mock.emitServiceEvent('tasks', 'patched', makeTask(turn(40), TaskStatus.RUNNING));
@@ -4023,42 +4032,33 @@ describe('lean transcript window follows displayed turn order', () => {
     handle.dispose();
   });
 
-  it('proves Session.tasks lists every turn by membership, not by matching counts', async () => {
-    const legacyWith = async (listed: (ids: string[]) => string[], newest: TaskStatus) => {
-      const opts: MockClientOptions = { tasks: [], messagesByTask: {} };
-      for (let n = 0; n < 40; n++) {
-        opts.tasks.push(makeTask(turn(n), n === 39 ? newest : TaskStatus.COMPLETED));
+  it('decides display order from one daemon report, whatever the Session size', async () => {
+    const bootstrap = async (turns: number, omitTasksComplete = false) => {
+      const opts: MockClientOptions = { tasks: [], messagesByTask: {}, omitTasksComplete };
+      for (let n = 0; n < turns; n++) {
+        opts.tasks.push(makeTask(turn(n), TaskStatus.COMPLETED));
         opts.messagesByTask[turn(n)] = [answer(turn(n)) as Message];
       }
-      opts.sessionTaskIds = listed(opts.tasks.map((task) => task.task_id));
-      const handle = new ReactiveSessionHandle(createMockClient(opts).client, SESSION_ID, {
-        taskHydration: 'lean',
-      });
+      const mock = createMockClient(opts);
+      const handle = new ReactiveSessionHandle(mock.client, SESSION_ID, { taskHydration: 'lean' });
       await handle.ready();
       const order = Reflect.get(handle, 'leanOrder');
+      const gets = vi.mocked(mock.client.service('sessions').get).mock.calls;
+      const finds = vi.mocked(mock.client.service('tasks').find).mock.calls.length;
       handle.dispose();
-      return order;
+      return { order, gets, finds };
     };
-    // Another Session's Task stands in for the lost turn 5: equal counts.
-    const foreign = completionCallbackTaskId(earlierSource, SESSION_ID as SessionID);
-    expect(
-      await legacyWith(
-        (ids) => ids.map((id) => (id === turn(5) ? foreign : id)),
-        TaskStatus.COMPLETED
-      )
-    ).toBe('legacy');
-    // A running turn missing from the list was dispatched; only CREATED is pending.
-    expect(await legacyWith((ids) => ids.filter((id) => id !== turn(39)), TaskStatus.RUNNING)).toBe(
-      'legacy'
-    );
-    expect(await legacyWith((ids) => ids, TaskStatus.RUNNING)).toBe('display');
-    // A duplicated entry shifts every later position.
-    expect(
-      await legacyWith(
-        (ids) => [...ids.slice(0, 20), ids[19], ...ids.slice(20)],
-        TaskStatus.COMPLETED
-      )
-    ).toBe('legacy');
+    const small = await bootstrap(30);
+    const large = await bootstrap(3_000);
+    expect(small.order).toBe('display');
+    expect(large.order).toBe('display');
+    // One Session read carries the answer; the Task reads do not grow with history.
+    expect(large.gets).toEqual([[SESSION_ID, { query: { include_tasks_complete: true } }]]);
+    expect(large.finds).toBe(small.finds);
+    // A daemon that does not report it: task-ID paging, still without probes.
+    const older = await bootstrap(3_000, true);
+    expect(older.order).toBe('legacy');
+    expect(older.finds).toBe(small.finds);
   });
 
   it('places a turn that settles during the first page once its Session patch arrives after commit', async () => {

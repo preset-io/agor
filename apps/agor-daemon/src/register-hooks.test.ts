@@ -908,7 +908,9 @@ describe('registered tenant write-gate classification', () => {
       deployment: { mode: 'standalone' },
     });
 
-    const tenantHooks = registrations.find((hooks) => hooks.around?.all?.length);
+    // Tenant scoping is installed last (outermost); earlier registrations can
+    // also have around hooks, such as the avatar-sync write-admission wrapper.
+    const tenantHooks = registrations.findLast((hooks) => hooks.around?.all?.length);
     expect(tenantHooks).toBeDefined();
     const context = {
       path: 'users',

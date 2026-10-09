@@ -22,7 +22,6 @@ import type {
   BoardComment,
   Branch,
   CardType,
-  CardWithType,
   Repo,
   Session,
   User,
@@ -38,22 +37,33 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import {
+  beginPartitionLoad,
   bumpFirstPaintMergeRevisions,
   bumpRevision,
   cancelAllHydrations,
   cancelAndFailAllHydrations,
-  getHydrationCancellationEpoch,
+  endPartitionLoad,
+  markWholesaleReplacement,
   resetHydrationRevisions,
   runHydration,
+  touchedIdsSince,
 } from '../store/agorHydration';
-import {
-  buildBoardObjectMaps,
-  buildById,
-  buildSessionMaps,
-  buildSessionMcpMap,
-} from '../store/agorMaps';
+import { buildById, buildSessionMaps, keepLiveWrites } from '../store/agorMaps';
 import * as realtime from '../store/agorRealtimeActions';
 import { agorStore, shallow, useStoreWithEqualityFn } from '../store/agorStore';
+import {
+  evictUnloadedBoards,
+  getDisplayedBoardId,
+  loadBoardPartition,
+  preloadBoardPartitions,
+  selectBoardPartition,
+  unloadBoardsForResync,
+} from '../store/boardPartitions';
+import {
+  captureLoadLifetime,
+  isLoadLifetimeCurrent,
+  type LoadLifetime,
+} from '../store/loadLifetime';
 import {
   type OpenedTranscriptPrefetch,
   prefetchOpenedTranscript,
@@ -66,6 +76,20 @@ import {
   tombstoneSession,
   untombstoneSession,
 } from '../store/realtimeBatch';
+import { holdRows, releaseStaleScopes } from '../store/retention';
+import { BOARD_SCOPE_PREFIX } from '../store/scopeMerge';
+import { homeRecentBoardIds } from '../store/selectors';
+import { resetSessionMcpLinks } from '../store/sessionMcpLinks';
+import {
+  fillOnDemand,
+  MY_SESSIONS_GATED_LIMIT,
+  mySessionsQuery,
+  selectHomeBranchesLoaded,
+  selectMySessionsLoaded,
+  startUserScope,
+  stopUserScope,
+  userScopeRunGeneration,
+} from '../store/userScope';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
 import { runLatestMCPOAuthStatusRequest } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
@@ -74,6 +98,8 @@ import {
   resolveBranchFromShortIdPure,
   resolveSessionFromShortIdPure,
 } from '../utils/urlResolution';
+import { readLocalStorageJson } from './localStorageJson';
+import { recentBoardsStorageKey } from './useRecentBoards';
 
 // Canonical list of initial-load items tracked by the loading checklist —
 // the ESSENTIAL set the first-paint gate blocks on. Internal only; consumers
@@ -82,40 +108,40 @@ import {
 //
 // The first paint only needs what's required to render the canvas (branch
 // cards, their sessions, cards, comments, zones). Collections that aren't
-// needed to paint — mcp-servers, session-mcp-servers, gateway-channels,
-// artifacts, and the oauth-status probe — are fetched in the BACKGROUND
-// (see `fetchData`) and intentionally absent here so the gate never waits on
-// them. Their realtime subscriptions are still attached immediately in the
+// needed to paint — mcp-servers, gateway-channels, artifacts, and the
+// oauth-status probe — are fetched in the BACKGROUND (see `fetchData`), and
+// session↔MCP links per session on first need (`sessionMcpLinks`); none of
+// them is here, so the gate never waits on them. Their realtime subscriptions are still attached immediately in the
 // subscribe effect, so live updates land even before their fetch resolves.
 const INITIAL_LOAD_ITEMS = [
   { key: 'sessions', label: 'Sessions' },
   { key: 'boards', label: 'Boards' },
-  { key: 'board-objects', label: 'Board objects' },
+  { key: 'board', label: 'Board' },
   { key: 'board-comments', label: 'Board comments' },
-  { key: 'branches', label: 'Branches' },
   { key: 'repos', label: 'Repos' },
   { key: 'users', label: 'Users' },
-  { key: 'cards', label: 'Cards' },
   { key: 'card-types', label: 'Card types' },
 ] as const;
 
 export type InitialLoadItemKey = (typeof INITIAL_LOAD_ITEMS)[number]['key'];
 
-// First-paint bound for the global (non-board-scoped) sessions slice. Covers
-// Home's "My Sessions" + "Team activity" feeds (both show only recent items)
-// and seeds enough of `sessionById` to resolve `/s/<id>` deep links. The FULL
-// session set is background-hydrated a beat later (see `fetchData`), so
-// genealogy / GlobalSearch / per-board counts converge without blocking the
-// gate. Sessions are the unbounded-with-activity collection, so this is the
-// single most important cap for first-paint latency on a busy workspace.
-//
 // Every session list read that feeds the store is `lean: true`: rows omit the
 // bulky single-session `custom_context` keys (LEAN_SESSION_LIST_OMITTED_CONTEXT_KEYS)
 // and carry the `read_shape` marker, so `sessionById` holds summaries and must
 // never be the source for those keys (see `DataMaps.sessionById`). The open
 // session reads them from its full `sessions.get` (the reactive session /
 // settings modal / zone trigger).
-const RECENT_SESSIONS_LIMIT = 50;
+
+// Items the Home first paint gates on. Home displays no board, so it reads no
+// board partition. Comments stay gated on every route: Home's "comments for
+// you" rule scans them all.
+const HOME_DEFERRED_ITEMS: ReadonlySet<InitialLoadItemKey> = new Set(['board']);
+const ALL_INITIAL_LOAD_KEYS: readonly InitialLoadItemKey[] = INITIAL_LOAD_ITEMS.map(
+  ({ key }) => key
+);
+const HOME_INITIAL_LOAD_KEYS: readonly InitialLoadItemKey[] = ALL_INITIAL_LOAD_KEYS.filter(
+  (key) => !HOME_DEFERRED_ITEMS.has(key)
+);
 
 // One row in the loading checklist. `count` is captured atomically with
 // `done` when each tracked fetch resolves — readers never see a green row
@@ -168,8 +194,8 @@ function parseEntityPath(pathname: string): ParsedEntityPath {
 // `parseEntityPath` never matches them. Each still displays a single board at
 // first paint, so match them here: a cold deep-link then resolves its board
 // scope and triggers the targeted full-board `get`. Without this the load
-// falls back to a GLOBAL first paint and `board.objects` stays undefined until
-// the background boards hydration lands.
+// paints with no board scope and `board.objects` stays undefined until the
+// board's partition loads.
 const MOBILE_PATH_RE = /\/m\/(board|session|comments)\/([^/]+)/;
 
 // Resolve the board the app will ACTUALLY display on first paint from the
@@ -266,6 +292,8 @@ export function useAgorData(
   options?: {
     enabled?: boolean;
     directSessionId?: string | null;
+    /** Optional branch short/full ID from a direct `/w/` URL; fetched by ID when not loaded. */
+    directBranchId?: string | null;
     /** Authenticated identity, independent from the privileged users directory. */
     authenticatedUserId?: string;
     /**
@@ -283,6 +311,7 @@ export function useAgorData(
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
   const directSessionId = options?.directSessionId ?? null;
+  const directBranchId = options?.directBranchId ?? null;
   // Preserve the hook's historical standalone-test/default behavior when the
   // caller does not provide role context. App always provides the property,
   // including `undefined` before auth resolves, and therefore fails closed.
@@ -410,6 +439,13 @@ export function useAgorData(
   // maps stale until manual page refresh).
   const [hasInitiallyFetched, setHasInitiallyFetched] = useState(false);
 
+  // The gated items of the current first-paint load. Home gates on fewer
+  // items than a board route (see HOME_DEFERRED_ITEMS).
+  const [initialLoadPlan, setInitialLoadPlan] =
+    useState<readonly InitialLoadItemKey[]>(ALL_INITIAL_LOAD_KEYS);
+  // The plan as of the latest fetch, for a reconnect to tell whether it is unfinished.
+  const initialLoadPlanRef = useRef<readonly InitialLoadItemKey[]>(ALL_INITIAL_LOAD_KEYS);
+
   // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
   // when the socket flaps (e.g. waking from sleep on a flaky network). The
   // authority key prevents an older identity's flight from blocking the next.
@@ -423,6 +459,10 @@ export function useAgorData(
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
   const lastSilentFetchFailedRef = useRef(false);
+  // Boards an authority transition unloaded (a disconnect forgets every
+  // partition). Their rows may have missed deletions, archives or revoked
+  // access meanwhile: the next resync evicts them unless loaded again.
+  const transitionUnloadedBoardsRef = useRef(new Set<string>());
   const oauthStatusRequestGenerationRef = useRef(0);
 
   // The opened session's transcript prefetch (see `openedTranscriptPrefetch`).
@@ -445,7 +485,7 @@ export function useAgorData(
   const refetchOAuthDurableState = useCallback(
     async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
       if (!client) return false;
-      const requestEpoch = getHydrationCancellationEpoch();
+      const requestLifetime = captureLoadLifetime(requestAuthorityScope);
       return runLatestMCPOAuthStatusRequest(
         oauthStatusRequestGenerationRef,
         async () => {
@@ -458,8 +498,7 @@ export function useAgorData(
           return { status, freshServer };
         },
         () =>
-          authorityScopeKeyRef.current === requestAuthorityScope &&
-          getHydrationCancellationEpoch() === requestEpoch,
+          !!requestLifetime && isLoadLifetimeCurrent(requestLifetime, authorityScopeKeyRef.current),
         ({ status, freshServer }) => {
           const ids =
             (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
@@ -501,10 +540,11 @@ export function useAgorData(
       // was — so the scope check alone would let a load suspended in the
       // light/heavy batch resume after teardown, retain a transcript prefetch,
       // repopulate the singleton store and start deferred hydrations.
-      const loadEpoch = getHydrationCancellationEpoch();
+      // The scope and the partition record carry this same lifetime, never
+      // whatever authority is current when they run (a remount can swap it).
+      const loadLifetime = captureLoadLifetime(fetchAuthorityScope) as LoadLifetime;
       const authorityIsCurrent = () =>
-        authorityScopeKeyRef.current === fetchAuthorityScope &&
-        getHydrationCancellationEpoch() === loadEpoch;
+        isLoadLifetimeCurrent(loadLifetime, authorityScopeKeyRef.current);
       const runAuthorityHydration = (
         name: string,
         revisions: Parameters<typeof runHydration>[1],
@@ -521,6 +561,33 @@ export function useAgorData(
           : null;
       let debugFinishStatus: 'success' | 'error' | null = null;
       let debugFinishError: unknown;
+      // Per-id touched fence for the first-paint/resync applies below:
+      // realtime events keep landing while this load is in flight, and the
+      // apply must keep them (a created row, a patch, a removal) rather than
+      // replace them with the older snapshot. Released in `finally`.
+      const firstPaintFence = beginPartitionLoad();
+      // A resync unloads every board but the displayed one before it reads
+      // anything; the kept board is read again in place below. The UI
+      // registers the board it displays; before it mounts, the URL names it.
+      const resyncBoards = silent
+        ? unloadBoardsForResync(
+            getDisplayedBoardId() ??
+              (() => {
+                const { boardById, branchById, sessionById } = agorStore.getState();
+                return resolveDisplayedBoardId(
+                  typeof window !== 'undefined' ? window.location.pathname : '',
+                  boardById,
+                  branchById,
+                  sessionById
+                );
+              })()
+          )
+        : undefined;
+      const keptBoardId = resyncBoards?.kept;
+      // Reads in flight may have seen the store while disconnected: they
+      // restart rather than apply over what this resync reconciles.
+      if (silent) markWholesaleReplacement();
+      let resyncFailed = false;
 
       try {
         if (!silent) {
@@ -529,13 +596,17 @@ export function useAgorData(
           debugTimer?.markStage('fetching');
           agorStore.getState().setError(null);
           agorStore.getState().setItemCounts({});
+          initialLoadPlanRef.current = ALL_INITIAL_LOAD_KEYS;
+          setInitialLoadPlan(ALL_INITIAL_LOAD_KEYS);
         }
 
         // A reconnect can be the first successful bootstrap after an error.
         // Finish its checklist too, otherwise App's first-load gate stays closed.
         const updateInitialProgress =
           !silent ||
-          INITIAL_LOAD_ITEMS.some(({ key }) => agorStore.getState().itemCounts[key] === undefined);
+          initialLoadPlanRef.current.some(
+            (key) => agorStore.getState().itemCounts[key] === undefined
+          );
         // Marks a tracked item complete (and captures its count from the
         // resolved list length) when its promise resolves. Routine reconnects
         // leave the completed checklist alone.
@@ -588,18 +659,10 @@ export function useAgorData(
             agorStore.getState().markHydrated('mcpServersHydrated');
           }
         );
-        void runAuthorityHydration(
-          'session-mcp-servers',
-          ['sessionMcp'],
-          () =>
-            client
-              .service('session-mcp-servers')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) =>
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
-        );
+        // Session↔MCP links are not read here: each session's load on first
+        // need (`sessionMcpLinks`). A resync may have missed link events, so
+        // every session counts as unloaded again and mounted readers reload.
+        if (silent) resetSessionMcpLinks();
         void runAuthorityHydration(
           'gateway-channels',
           ['gatewayChannels'],
@@ -635,58 +698,50 @@ export function useAgorData(
 
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
-        // global — bounded and small) plus a BOUNDED recent slice of sessions.
+        // global — bounded and small) plus a BOUNDED page of my sessions.
         // Awaited first so we can resolve the first-paint board scope BEFORE the
-        // board-scoped heavy batch. Sessions and branches are the two that scale
-        // (sessions unbounded with activity; hundreds of branches on a real
-        // workspace), so they are NOT fetched in full here: sessions are capped
-        // at recent-N, branches are deferred to the board-scoped heavy batch, and
-        // BOTH full sets are background-hydrated after the gate opens.
+        // board-scoped heavy batch. Sessions and branches are never read in
+        // full: the displayed board's load with it, and the user scope reads
+        // the rest of mine after paint (`userScope`).
         debugTimer?.startFetchPhase();
+        // Set when the gated page of MY sessions returned fewer rows than its
+        // limit, i.e. it already holds every active session I created.
+        let gatedMineComplete = false;
         const [sessionsList, boardsList, cardTypesList, reposList, usersList] = await Promise.all([
           track(
             'sessions',
-            silent
-              ? // Reconnect resyncs must fully repopulate every board, so they stay
-                // GLOBAL/full (mirrors the heavy + hydration paths below).
-                client.service('sessions').findAll({
-                  query: {
-                    archived: false,
-                    lean: true,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                    $sort: { updated_at: -1 },
-                  },
-                })
-              : // Bounded recent slice for first paint. Use find() (a SINGLE page),
-                // NOT findAll(): findAll loops until it has `total` rows, so a small
-                // $limit would still walk the whole table and defeat the cap. The
-                // daemon orders by `updated_at` in SQL (findPage), so this is the
-                // genuinely most-recent N. The FULL set is hydrated below.
+            !silent && authenticatedUserId
+              ? // My newest sessions (user scope), served from
+                // SQL by `created_by`: correct however busy the rest of the
+                // workspace is. One page via find() (findAll would walk every
+                // page). The rest of mine load right after paint (`userScope`).
                 client
                   .service('sessions')
-                  .find({
-                    query: {
-                      archived: false,
-                      lean: true,
-                      $limit: RECENT_SESSIONS_LIMIT,
-                      $count: false,
-                      $sort: { updated_at: -1 },
-                    },
+                  .find({ query: mySessionsQuery(authenticatedUserId, MY_SESSIONS_GATED_LIMIT) })
+                  .then((result) => {
+                    const rows = (Array.isArray(result) ? result : result.data) as Session[];
+                    gatedMineComplete = rows.length < MY_SESSIONS_GATED_LIMIT;
+                    return rows;
                   })
-                  .then((result) => (Array.isArray(result) ? result : result.data))
+                  .catch((err) => {
+                    // Non-fatal: U1 reads every session of mine after paint.
+                    console.warn('[useAgorData] my-sessions page failed:', err);
+                    return [] as Session[];
+                  })
+              : // A resync: the user scope's U1 and the displayed board read them.
+                Promise.resolve([] as Session[])
           ),
           track(
             'boards',
-            // First paint: LEAN list — omit each board's heavy `objects` /
-            // `custom_css` annotations (68% of the boards payload — only the
-            // displayed board needs them to paint). Metadata still covers the
-            // switcher, Home, and `resolveDisplayedBoardId` scope resolution. The
-            // displayed board's full record is fetched below; all boards' objects
-            // backfill via the `boards` background hydration. Silent reconnect
-            // resyncs FULL (mirrors sessions/branches) so the displayed board's
-            // zones never flash off while re-syncing.
+            // LEAN list — omit each board's heavy `objects` / `custom_css`
+            // annotations (68% of the boards payload — only the displayed board
+            // needs them to paint). Metadata still covers the switcher, Home,
+            // and `resolveDisplayedBoardId` scope resolution. The displayed
+            // board's full record is fetched below, also on a reconnect resync
+            // (its zones never flash off); other boards' records load with
+            // their partition.
             client.service('boards').findAll({
-              query: { ...(silent ? {} : { lean: true }), $limit: PAGINATION.DEFAULT_LIMIT },
+              query: { lean: true, $limit: PAGINATION.DEFAULT_LIMIT },
             })
           ),
           track(
@@ -712,14 +767,14 @@ export function useAgorData(
         const healedBranches: Branch[] = [];
 
         // Direct /s/<id>/ opens should work for archived sessions without broadening
-        // the recent-session slice. If it missed the URL target, fetch just that
+        // the gated page. If it missed the URL target, fetch just that
         // session by ID/short ID. Do not await a separate branches.get here:
         // sessions carry branch_board_id for board resolution, and the scoped
-        // branch batch / authority-fenced background hydration below loads active
-        // branches. Optional branch enrichment must not block session first paint.
-        // Older responses without branch_board_id use global background hydration.
+        // branch batch below loads active branches. Optional branch enrichment
+        // must not block session first paint.
         if (
           directSessionId &&
+          !silent &&
           !hasIdMatchingPrefix(directSessionId, sessionsList, (s) => s.session_id)
         ) {
           try {
@@ -737,9 +792,9 @@ export function useAgorData(
         // The board the app will ACTUALLY display, resolved from the current URL
         // with the same slug/short-id resolvers `useUrlState` uses (NOT
         // localStorage — the displayed board can differ from the stored one, e.g.
-        // a `/b/<other>/` deep link). undefined → GLOBAL (unscoped) first paint,
-        // always correct: Home, `/a/` artifact links, or any unresolvable target.
-        // Silent reconnect refetches always go GLOBAL so they fully resync.
+        // a `/b/<other>/` deep link). undefined → no board scope, always
+        // correct: Home, `/a/` artifact links, or any unresolvable target.
+        // A silent reconnect resyncs the displayed board's partition in place.
         const pathname = typeof window !== 'undefined' ? window.location.pathname : '';
 
         // Direct /w/<id>/ branch opens: heal that branch so the board chains
@@ -791,8 +846,8 @@ export function useAgorData(
         const interimSessionById = buildSessionMaps(sessionsList).sessionById;
 
         // A session route: start its transcript now, concurrently with the
-        // board-scoped batch, and hold the global hydration below until its
-        // first page lands so multi-megabyte snapshots don't queue ahead of it.
+        // board-scoped batch, and hold the user scope's bulk U1 read until its
+        // first page lands (below).
         const openedSessionId =
           !silent && directSessionId
             ? resolveSessionFromShortIdPure(directSessionId, interimSessionById)
@@ -810,105 +865,150 @@ export function useAgorData(
           openedTranscriptReady = prefetch.ready;
         }
 
-        const boardScope = silent
-          ? undefined
-          : (resolveDisplayedBoardId(pathname, boardsMap, interimBranchById, interimSessionById) ??
-            undefined);
+        // A reconnect resync reconciles the board the UI actually displays
+        // (`useBoardPartition` registers it: artifact routes and the mobile
+        // shell's fallbacks resolve boards the URL alone can't). First paint
+        // runs before the UI mounts, so it resolves from the URL.
+        const displayedBoardId = silent ? getDisplayedBoardId() : undefined;
+        const boardScope =
+          (displayedBoardId && boardsMap.has(displayedBoardId) ? displayedBoardId : null) ??
+          resolveDisplayedBoardId(
+            pathname,
+            boardsMap,
+            silent ? agorStore.getState().branchById : interimBranchById,
+            interimSessionById
+          ) ??
+          undefined;
+        // No displayed board (Home): no board partition is read. A reconnect
+        // finishing a failed bootstrap re-plans for the route it lands on.
+        if (updateInitialProgress) {
+          const plan = boardScope ? ALL_INITIAL_LOAD_KEYS : HOME_INITIAL_LOAD_KEYS;
+          initialLoadPlanRef.current = plan;
+          setInitialLoadPlan(plan);
+        }
 
-        // ── Essential gated fetches — HEAVY + board-scoped batch ────────
-        // Scoped to the first-paint board when resolved (board_id pushes to SQL
-        // for sessions / board-objects / board-comments; cards filter it
-        // server-side). On a real workspace this trims thousands of rows to one
-        // board's. Silent reconnect (boardScope undefined) fetches branches
-        // GLOBAL/full to resync; sessions were already fetched full in the silent
-        // light batch above, so the extra board-session fetch is skipped there.
-        const [
-          branchesList,
-          boardSessionsList,
-          boardObjectsList,
-          commentsList,
-          cardsList,
-          displayedBoardFull,
-        ] = await Promise.all([
-          track(
-            'branches',
-            silent
-              ? client.service('branches').findAll({
-                  query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT },
-                })
-              : boardScope
-                ? client.service('branches').findAll({
-                    query: {
-                      archived: false,
-                      board_id: boardScope,
-                      $limit: PAGINATION.DEFAULT_LIMIT,
-                    },
-                  })
-                : Promise.resolve([] as Branch[])
-          ),
-          // Board-scoped sessions: only when a board is displayed and we didn't
-          // already fetch the full set (silent path). Merged with the recent
-          // slice below. Not tracked — not part of the loading checklist.
-          !silent && boardScope
-            ? client.service('sessions').findAll({
-                query: {
-                  archived: false,
-                  board_id: boardScope,
-                  lean: true,
-                  $limit: PAGINATION.DEFAULT_LIMIT,
-                  $sort: { updated_at: -1 },
-                },
-              })
-            : Promise.resolve([] as Session[]),
-          track(
-            'board-objects',
-            // The daemon intentionally keeps the whole board-objects service at
-            // the MEMBER floor (the rows carry editable canvas layout). A global
-            // viewer can still read the workspace shell and Marketplace, so an
-            // expected authorization failure here is not an essential bootstrap
-            // failure. Keep the collection empty and don't subscribe below.
-            canUseMemberWorkspaceServices
-              ? client.service('board-objects').findAll({
-                  query: {
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                    ...(boardScope ? { board_id: boardScope } : {}),
-                  },
-                })
-              : Promise.resolve([])
-          ),
+        // Queued streaming patches are live writes too: apply them now so the
+        // touched overlay below sees them in the store, not only in the queue.
+        flushRealtimeNow(fetchAuthorityScope);
+        const live = agorStore.getState();
+        const touchedSinceLoad = (collection: Parameters<typeof touchedIdsSince>[0]) =>
+          touchedIdsSince(collection, firstPaintFence.startRevisions[collection]);
+        // A branch touched during the load and absent now was archived or
+        // removed meanwhile: rows on it are dropped with it.
+        const removedBranchIds = new Set(
+          touchedSinceLoad('branches').filter((id) => !live.branchById.has(id))
+        );
+        // A board with a current partition keeps its full record over the
+        // lean row: the displayed board until it is read again, and boards
+        // loaded since this resync began (their reads postdate it).
+        for (const [key, entry] of live.coverage) {
+          const boardId = key.slice(BOARD_SCOPE_PREFIX.length);
+          const record = live.boardById.get(boardId);
+          if (key.startsWith(BOARD_SCOPE_PREFIX) && record && boardsMap.has(boardId)) {
+            if (isLoadLifetimeCurrent(entry)) boardsMap.set(boardId, record);
+          }
+        }
+        keepLiveWrites(boardsMap, live.boardById, touchedSinceLoad('boards'));
+
+        // First paint holds my sessions (the gated page) and the branches a
+        // deep link healed; the displayed board's rows come with its
+        // partition below. A resync keeps the session and branch sets: the
+        // board's replace and the user scope's reconcile the rows they claim.
+        const firstPaintSessions = new Map<string, Session>();
+        for (const session of sessionsList) {
+          firstPaintSessions.set(session.session_id, session);
+        }
+        const touchedSessionIds = touchedSinceLoad('sessions');
+        keepLiveWrites(firstPaintSessions, live.sessionById, touchedSessionIds);
+        for (const [id, session] of firstPaintSessions) {
+          if (removedBranchIds.has(session.branch_id)) firstPaintSessions.delete(id);
+        }
+        // The gated page proves "all of mine" only if no session of mine was
+        // created or removed while it was in flight; otherwise U1 runs.
+        if (gatedMineComplete) {
+          const gatedPage = new Set(sessionsList.map((session) => session.session_id));
+          gatedMineComplete = !touchedSessionIds.some((id) => {
+            const row = live.sessionById.get(id);
+            return row
+              ? row.created_by === authenticatedUserId && !gatedPage.has(id)
+              : gatedPage.has(id);
+          });
+        }
+        const { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId } =
+          buildSessionMaps([...firstPaintSessions.values()]);
+        const branchesMap = new Map<string, Branch>();
+        for (const branch of healedBranches) branchesMap.set(branch.branch_id, branch);
+        keepLiveWrites(branchesMap, live.branchById, touchedSinceLoad('branches'));
+
+        // Merge the light slices in one atomic update. We spread `prev` so the
+        // BACKGROUND-managed slices (mcpServerById / gatewayChannelById /
+        // artifactById / userAuthenticatedMcpServerIds, the per-session
+        // `sessionMcpServerIds`) and the board rows survive: those are owned by
+        // their own loaders and the realtime handlers.
+        agorStore.getState().applyMaps((prev) => ({
+          ...prev,
+          ...(silent
+            ? {}
+            : {
+                sessionById: sessionsById,
+                sessionsByBranch: sessionsByBranchId,
+                branchById: branchesMap,
+              }),
+          boardById: boardsMap,
+          cardTypeById: cardTypesMap,
+          repoById: reposMap,
+          userById: usersMap,
+        }));
+        // Not a `runHydration` apply: bump the revisions it overwrote, as the
+        // realtime handlers do, so an in-flight hydration whose snapshot
+        // predates it discards. A resync replaces only the board list, so
+        // partition loads started since it began keep their reads.
+        if (silent) bumpRevision('boards');
+        else bumpFirstPaintMergeRevisions();
+
+        // ── Essential gated fetches — comments and the displayed board ──
+        // Comments are GLOBAL and gated on every route: Home's comment rule
+        // and the mobile bell scan them all, so they are never board-scoped.
+        // The displayed board loads as a partition (its branches, sessions,
+        // board objects, cards and full record), like any other board. The
+        // board a resync kept is read again in place, so it never shows as
+        // unloaded; one loaded or loading since the resync began postdates it.
+        const loadDisplayedBoard = async (boardId: string): Promise<boolean> => {
+          const entry = selectBoardPartition(agorStore.getState(), boardId);
+          if (
+            boardId !== keptBoardId &&
+            entry?.status === 'loaded' &&
+            isLoadLifetimeCurrent(entry)
+          ) {
+            return true;
+          }
+          return loadBoardPartition(client, boardId, {
+            canUseMemberWorkspaceServices,
+            inPlace: boardId === keptBoardId,
+          });
+        };
+        const [commentsList, boardLoaded] = await Promise.all([
           track(
             'board-comments',
-            client.service('board-comments').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                ...(boardScope ? { board_id: boardScope } : {}),
-              },
-            })
+            client
+              .service('board-comments')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
           ),
-          track(
-            'cards',
-            client.service('cards').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                ...(boardScope ? { board_id: boardScope } : {}),
-              },
-            })
-          ),
-          // Displayed board's FULL record (with objects/custom_css) so its
-          // zones/text/markdown paint at first load — the gated boards fetch
-          // above is lean. Only when a board is actually displayed; Home and
-          // silent reconnect (boardScope undefined) skip it and let the boards
-          // hydration restore objects. Not tracked — not a loading-checklist item.
-          !silent && boardScope
-            ? // A failed get degrades gracefully rather than blocking first paint:
-              // the displayed board's objects backfill via the boards background
-              // hydration a beat later, so one board's annotation fetch failing
-              // must not fail or stall the whole load.
-              (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
-            : Promise.resolve(null),
+          boardScope
+            ? loadDisplayedBoard(boardScope).then((loaded) => {
+                // Settled (loaded, or failed with a retryable partition error).
+                if (updateInitialProgress && authorityIsCurrent()) {
+                  agorStore.getState().setItemCounts((prev) => ({ ...prev, board: 1 }));
+                }
+                return loaded;
+              })
+            : Promise.resolve(true),
         ]);
         if (!authorityIsCurrent()) return false;
         debugTimer?.endFetchPhase();
+        // A resync whose board read failed leaves it as it was, and retries
+        // with the next token replacement (`lastSilentFetchFailedRef`).
+        resyncFailed = silent && !boardLoaded;
 
         if (!silent) {
           agorStore.getState().setLoadingStage('indexing');
@@ -930,287 +1030,90 @@ export function useAgorData(
         }
         if (!authorityIsCurrent()) return false;
 
-        // Build board object Maps for efficient lookups (shared with the
-        // background full-hydration pass so the two index builds stay identical)
-        const {
-          boardObjectById: boardObjectsMap,
-          boardObjectsByBoardId: boardObjectsByBoardMap,
-          boardObjectByBranchId: boardObjectByBranchMap,
-          boardObjectByCardId: boardObjectByCardMap,
-        } = buildBoardObjectMaps(boardObjectsList);
-        // Build comment Map for efficient lookups
         const commentsMap = new Map<string, BoardComment>();
         for (const comment of commentsList) {
           commentsMap.set(comment.comment_id, comment);
         }
-        // Build card Map for efficient lookups
-        const cardsMap = new Map<string, CardWithType>();
-        for (const card of cardsList) {
-          cardsMap.set(card.card_id, card);
+        flushRealtimeNow(fetchAuthorityScope);
+        keepLiveWrites(commentsMap, agorStore.getState().commentById, touchedSinceLoad('comments'));
+        agorStore.getState().applyMaps((prev) => ({ ...prev, commentById: commentsMap }));
+        bumpRevision('comments');
+        // User scope: the rest of my sessions, my branches, every
+        // teammate I can view, and the branches my sessions and comment
+        // threads reference. On a session route only its bulk U1 read is held
+        // behind the opened transcript: Home and the teammate surfaces must
+        // not wait for a transcript. Starting after first paint
+        // keeps the small reads behind the transcript's stream/get/tasks reads
+        // (sent with the board-scoped batch); only its messages page, which
+        // needs the tasks response, can follow them. Re-run as a replace on
+        // every silent resync so the scope reconciles anything missed while
+        // disconnected.
+        let userScopeSettled: Promise<void> | null = null;
+        if (authenticatedUserId) {
+          userScopeSettled = startUserScope(client, {
+            userId: authenticatedUserId,
+            lifetime: loadLifetime,
+            gatedMineComplete: !silent && gatedMineComplete,
+            // A resync reconciles the scope: rows deleted, archived or moved
+            // out while disconnected leave.
+            replace: silent,
+            // On a session route only the bulk U1 read waits for the opened
+            // transcript (up to 10,000 rows could queue ahead of its first
+            // messages page); Home has no transcript, and small reads stay early.
+            deferBulkRead: openedTranscriptReady ?? undefined,
+          });
         }
-
-        // Replace the displayed board's LEAN row with its FULL record so the
-        // visible canvas paints zones/text/markdown at first paint (no flash).
-        // Other boards stay lean until the boards background hydration lands.
-        if (displayedBoardFull) {
-          boardsMap.set(displayedBoardFull.board_id, displayedBoardFull);
-        }
-
-        // Merge the recent session slice with the board-scoped sessions (dedup by
-        // id) for first paint, then build both session lookups (incl. remote
-        // surrogates). The FULL session set is background-hydrated below.
-        const firstPaintSessions = new Map<string, Session>();
-        for (const session of sessionsList) {
-          firstPaintSessions.set(session.session_id, session);
-        }
-        for (const session of boardSessionsList) {
-          if (!firstPaintSessions.has(session.session_id)) {
-            firstPaintSessions.set(session.session_id, session);
-          }
-        }
-        const { sessionById: sessionsById, sessionsByBranch: sessionsByBranchId } =
-          buildSessionMaps([...firstPaintSessions.values()]);
-
-        // Branch map for first paint: the board-scoped (or silent-global) set,
-        // plus any deep-link-healed branches. The FULL set is hydrated below.
-        const branchesMap = new Map<string, Branch>();
-        for (const branch of branchesList) {
-          branchesMap.set(branch.branch_id, branch);
-        }
-        for (const branch of healedBranches) {
-          if (!branchesMap.has(branch.branch_id)) {
-            branchesMap.set(branch.branch_id, branch);
-          }
-        }
-
-        // Merge the essential slices in one atomic update. We spread `prev`
-        // (rather than replacing the whole object) so the BACKGROUND-managed
-        // slices — mcpServerById / gatewayChannelById / artifactById /
-        // sessionMcpServerIds / userAuthenticatedMcpServerIds — survive even if
-        // their fire-and-forget fetches resolved before this gate did. Those
-        // slices are owned by their background setters + realtime handlers.
-        agorStore.getState().applyMaps((prev) => ({
-          ...prev,
-          sessionById: sessionsById,
-          sessionsByBranch: sessionsByBranchId,
-          boardById: boardsMap,
-          boardObjectById: boardObjectsMap,
-          boardObjectsByBoardId: boardObjectsByBoardMap,
-          boardObjectByBranchId: boardObjectByBranchMap,
-          boardObjectByCardId: boardObjectByCardMap,
-          commentById: commentsMap,
-          cardById: cardsMap,
-          cardTypeById: cardTypesMap,
-          repoById: reposMap,
-          branchById: branchesMap,
-          userById: usersMap,
-        }));
-        // This wholesale replace is NOT a `runHydration` apply, so it must bump
-        // the revisions of every collection it overwrites — exactly like the
-        // per-mutation realtime handlers do. Critical on the SILENT reconnect
-        // resync: an in-flight hydration whose snapshot predates the disconnect
-        // would otherwise pass its quiet check and clobber this newer reconnect
-        // snapshot (resurrecting data that changed while we were disconnected).
-        // The background hydrations kicked off below re-snapshot AFTER this bump,
-        // so they're unaffected.
-        bumpFirstPaintMergeRevisions();
-        if (silent) {
-          // A silent resync just applied the full active session and branch sets.
-          agorStore.getState().markHydrated('sessionsHydrated');
-          agorStore.getState().markHydrated('branchesHydrated');
-        }
-        debugTimer?.endIndexing();
-        debugFinishStatus = 'success';
-
-        // ── Background full hydration (skip-apply-on-race) ──────────────
-        // First paint is now open with ONLY the recent sessions + the displayed
-        // board's branches/sessions/objects/cards/comments. Pull the FULL sets so
-        // per-board counts, the board switcher, GlobalSearch, the branch-list
-        // drawer, facepiles and session genealogy (which can span boards) see
-        // everything a beat later.
-        //
-        // Correctness: this runs WHILE the app is interactive, so a realtime
-        // create/patch/remove can land during a global fetch. `runHydration`
-        // applies the fetched snapshot WHOLESALE only when no live write to the
-        // listed collection(s) raced the fetch (revision counters unchanged) —
-        // a wholesale apply of a quiet snapshot can neither clobber a live
-        // create/patch (none happened) nor resurrect a live remove (a remove
-        // would have bumped the counter → no apply). If a write raced, the
-        // snapshot is discarded and refetched; we never overlay a racy snapshot.
-
-        const hydrateGlobalSets = () => {
-          // Sessions + branches: now ALWAYS bounded at first paint (recent-N /
-          // board-scoped), so hydrate them on every non-silent load (silent
-          // reconnect already fetched them full above). repos / users / boards /
-          // card-types stay global at first paint, so they need no top-up.
-          //
-          // Sessions and branches hydrate on INDEPENDENT loops (separate fetches,
-          // separate revision guards, separate generation tokens). Coupling them
-          // in a single runHydration would let high-frequency session-write churn
-          // (common when agents stream) starve the branch apply indefinitely — and
-          // on Home, branches start empty and are filled ONLY by this hydration, so
-          // coupling could leave the board empty forever. On independent loops,
-          // branches apply on their own quiet window (almost immediately)
-          // regardless of session churn.
-          if (!silent) {
-            void runAuthorityHydration(
-              'sessions',
-              ['sessions'],
-              () =>
-                client.service('sessions').findAll({
-                  query: {
-                    archived: false,
-                    lean: true,
-                    $limit: PAGINATION.DEFAULT_LIMIT,
-                    $sort: { updated_at: -1 },
-                  },
-                }),
-              (allSessions) => {
-                agorStore.getState().applyMaps((prev) => {
-                  // The hydration fetches active sessions only. Deep-link-healed
-                  // archived sessions (added to `sessionById` so a direct /s/<id>
-                  // archived link can open the drawer) are OUT of that query's
-                  // domain — never in branch buckets, so they don't affect board
-                  // rendering — so carry them over rather than dropping them. This
-                  // is domain-completion, NOT race reconciliation: the race
-                  // correctness comes entirely from the quiet-window guarantee.
-                  const sessions = new Map<string, Session>();
-                  for (const session of allSessions) sessions.set(session.session_id, session);
-                  for (const [id, session] of prev.sessionById) {
-                    if (session.archived && !sessions.has(id)) sessions.set(id, session);
-                  }
-                  // Reconcile against the current maps so a wholesale apply of
-                  // already-loaded sessions reuses prior refs (no board-wide
-                  // re-render). This is the hot path on a busy workspace: the
-                  // full-session hydration lands right as the user enters a board.
-                  const { sessionById, sessionsByBranch } = buildSessionMaps(
-                    [...sessions.values()],
-                    {
-                      sessionById: prev.sessionById,
-                      sessionsByBranch: prev.sessionsByBranch,
-                    }
-                  );
-                  return { ...prev, sessionById, sessionsByBranch };
-                });
-                agorStore.getState().markHydrated('sessionsHydrated');
-              }
+        // The run just started (`startUserScope` sets it synchronously).
+        const userScopeRun = userScopeRunGeneration();
+        // Retention, once the user scope is replaced under this lifetime (so
+        // my rows stay): the rows of the boards this resync or an authority
+        // change unloaded leave unless a scope holds them — a board displayed
+        // or loaded again meanwhile keeps its rows — and so do the scopes this
+        // load didn't replace (a failed read: an earlier lifetime's, or an
+        // earlier run's after a plain reconnect), with the rows only they held.
+        void (userScopeSettled ?? Promise.resolve())
+          .catch(() => undefined)
+          .then(() => {
+            if (!authorityIsCurrent()) return;
+            const displayed = getDisplayedBoardId();
+            const transitionUnloaded = [...transitionUnloadedBoardsRef.current];
+            transitionUnloadedBoardsRef.current.clear();
+            evictUnloadedBoards(
+              [...(resyncBoards?.unloaded ?? []), ...transitionUnloaded].filter(
+                (id) => id !== boardScope && id !== displayed
+              )
             );
-            void runAuthorityHydration(
-              'branches',
-              ['branches'],
-              () =>
-                client
-                  .service('branches')
-                  .findAll({ query: { archived: false, $limit: PAGINATION.DEFAULT_LIMIT } }),
-              (allBranches) => {
-                // Quiet window proven by runHydration → apply wholesale. Branches
-                // are active-only (the snapshot query is archived:false and the
-                // handlers never keep an archived branch), so a wholesale replace
-                // is complete.
-                agorStore.getState().applyMaps((prev) => ({
-                  ...prev,
-                  branchById: buildById(allBranches, 'branch_id', prev.branchById),
-                }));
-                agorStore.getState().markHydrated('branchesHydrated');
-              }
-            );
-          }
-
-          // Board objects / cards / comments: only board-scoped at first paint when
-          // a board was resolved (`boardScope` set, non-silent only — silent
-          // reconnect already refetches everything global). Top up to the global set.
-          //
-          // Board objects / cards / comments also hydrate on INDEPENDENT loops so
-          // churn in one (e.g. rapid card moves) can't starve another's apply. Each
-          // global snapshot is a superset of its board-scoped first-paint slice, so
-          // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
-          if (boardScope) {
-            if (canUseMemberWorkspaceServices) {
-              void runAuthorityHydration(
-                'board-objects',
-                ['boardObjects'],
-                () =>
-                  client
-                    .service('board-objects')
-                    .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-                (allBoardObjects) =>
-                  agorStore.getState().applyMaps((prev) => {
-                    const base = buildBoardObjectMaps(allBoardObjects);
-                    return {
-                      ...prev,
-                      boardObjectById: base.boardObjectById,
-                      boardObjectsByBoardId: base.boardObjectsByBoardId,
-                      boardObjectByBranchId: base.boardObjectByBranchId,
-                      boardObjectByCardId: base.boardObjectByCardId,
-                    };
-                  })
+            releaseStaleScopes(userScopeRun);
+            // Once my sessions and branches are in, preload my recent boards:
+            // after first paint, and after each resync (which unloaded them).
+            const state = agorStore.getState();
+            if (
+              authenticatedUserId &&
+              selectMySessionsLoaded(state) &&
+              selectHomeBranchesLoaded(state)
+            ) {
+              // Exactly the boards Home's recent row lists, fallback included.
+              const visited = readLocalStorageJson<string[]>(
+                recentBoardsStorageKey(authenticatedUserId),
+                []
+              );
+              void preloadBoardPartitions(
+                client,
+                homeRecentBoardIds(state, visited, authenticatedUserId),
+                { canUseMemberWorkspaceServices }
               );
             }
-            void runAuthorityHydration(
-              'cards',
-              ['cards'],
-              () =>
-                client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-              (allCards) =>
-                agorStore.getState().applyMaps((prev) => ({
-                  ...prev,
-                  cardById: buildById(allCards, 'card_id', prev.cardById),
-                }))
-            );
-            void runAuthorityHydration(
-              'board-comments',
-              ['comments'],
-              () =>
-                client
-                  .service('board-comments')
-                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-              (allComments) =>
-                agorStore.getState().applyMaps((prev) => ({
-                  ...prev,
-                  commentById: buildById(allComments, 'comment_id', prev.commentById),
-                }))
-            );
-          }
-
-          // Boards: the gated first-paint list is LEAN (no objects/custom_css) and
-          // board switching never refetches — so every OTHER board's annotations
-          // must be backfilled here, exactly like sessions/branches. Only on the
-          // non-silent first load: silent reconnect already refetched boards FULL
-          // above. The displayed board already carries its objects from the
-          // targeted get; the full set is a superset of it.
-          if (!silent) {
-            void runAuthorityHydration(
-              'boards',
-              ['boards'],
-              () =>
-                client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-              (allBoards) =>
-                agorStore.getState().applyMaps((prev) => ({
-                  ...prev,
-                  boardById: buildById(allBoards, 'board_id', prev.boardById),
-                }))
-            );
-          }
-        };
-        // On a session route, the global sets wait for the opened transcript
-        // (bounded by the prefetch timeout). A cancellation at any point of
-        // this load (unmount, authority change, logout) skips the deferred
-        // start — `authorityIsCurrent` includes the load's epoch.
-        if (openedTranscriptReady) {
-          void openedTranscriptReady.then(() => {
-            if (!authorityIsCurrent()) return;
-            hydrateGlobalSets();
           });
-        } else {
-          hydrateGlobalSets();
-        }
+
+        debugTimer?.endIndexing();
+        debugFinishStatus = 'success';
 
         agorStore.getState().setError(null);
 
         // Silent refetch succeeded — clear the retry flag so future token
         // refreshes don't trigger another wasted re-fetch.
         if (silent) {
-          lastSilentFetchFailedRef.current = false;
+          lastSilentFetchFailedRef.current = resyncFailed;
         }
         return true;
       } catch (err) {
@@ -1231,6 +1134,7 @@ export function useAgorData(
         }
         return true;
       } finally {
+        endPartitionLoad();
         if (!silent && authorityIsCurrent()) {
           agorStore.getState().setLoading(false);
           agorStore.getState().setLoadingStage('idle');
@@ -1242,6 +1146,7 @@ export function useAgorData(
       }
     },
     [
+      authenticatedUserId,
       authorityScopeKey,
       canListUsers,
       canUseMemberWorkspaceServices,
@@ -1277,6 +1182,18 @@ export function useAgorData(
 
     cancelAllHydrations();
     releaseOpenedTranscriptPrefetch();
+    stopUserScope();
+    // Which session↔MCP links are visible depends on the caller.
+    resetSessionMcpLinks();
+    // Partition loads of the old authority are orphaned by the cancellation;
+    // forget their entries so the displayed board loads again under this one,
+    // and remember the boards for the resync to evict.
+    for (const key of agorStore.getState().coverage.keys()) {
+      if (key.startsWith(BOARD_SCOPE_PREFIX)) {
+        transitionUnloadedBoardsRef.current.add(key.slice(BOARD_SCOPE_PREFIX.length));
+      }
+    }
+    agorStore.getState().resetBoardPartitions();
     refetchInflightRef.current = null;
     lastSilentFetchFailedRef.current = false;
 
@@ -1292,8 +1209,6 @@ export function useAgorData(
         userById: new Map(),
         boardObjectById: new Map(),
         boardObjectsByBoardId: new Map(),
-        boardObjectByBranchId: new Map(),
-        boardObjectByCardId: new Map(),
       }));
     }
 
@@ -1336,6 +1251,7 @@ export function useAgorData(
     discardRealtimeNow();
     cancelAndFailAllHydrations();
     releaseOpenedTranscriptPrefetch();
+    stopUserScope();
     agorStore.getState().resetMaps();
     setHasInitiallyFetched(false);
   }, [client, releaseOpenedTranscriptPrefetch]);
@@ -1347,6 +1263,7 @@ export function useAgorData(
     () => () => {
       cancelAllHydrations();
       releaseOpenedTranscriptPrefetch();
+      stopUserScope();
     },
     [releaseOpenedTranscriptPrefetch]
   );
@@ -1355,78 +1272,92 @@ export function useAgorData(
   // reconnect and explicit OAuth events, not on an idle-tab timer. Execution
   // independently resolves credentials; this UI snapshot never authorizes use.
 
-  // If the user navigates to /s/<id>/ after the initial active-session fetch,
-  // load that one session by ID as well. This keeps direct links to archived
-  // sessions openable without changing the default list query.
+  // A deep link (`/s/`, `/m/session/`, `/w/`) whose session or branch the
+  // store doesn't hold after the initial load — archived, outside every loaded
+  // scope, or an ambiguous short id: read it by id (the daemon resolves short
+  // ids) and fill it, joining no scope. An active session brings its branch;
+  // an archived one is inserted for display only, outside every list. A
+  // target the fill doesn't apply (not returned, or removed while the read
+  // was in flight) is recorded in `missingLinkTargets`.
   useEffect(() => {
-    if (!client || !enabled || !authorityScopeKey || !hasInitiallyFetched || !directSessionId)
-      return;
+    const target = directSessionId
+      ? { kind: 'session' as const, token: directSessionId }
+      : directBranchId
+        ? { kind: 'branch' as const, token: directBranchId }
+        : null;
+    if (!client || !enabled || !authorityScopeKey || !hasInitiallyFetched || !target) return;
     const directFetchAuthorityScope = authorityScopeKey;
     const authorityIsCurrent = () => authorityScopeKeyRef.current === directFetchAuthorityScope;
-    const { sessionById } = agorStore.getState();
-    if (sessionById.has(directSessionId)) return;
-    if (hasIdMatchingPrefix(directSessionId, sessionById.values(), (s) => s.session_id)) {
+    const { sessionById, branchById } = agorStore.getState();
+    if (
+      target.kind === 'session'
+        ? sessionById.has(target.token) || resolveSessionFromShortIdPure(target.token, sessionById)
+        : branchById.has(target.token) || resolveBranchFromShortIdPure(target.token, branchById)
+    ) {
       return;
     }
 
     let cancelled = false;
+    // Holds what the link reads until it is left (the route's pins take over
+    // the opened rows by full id); a read it outlived inserts nothing.
+    const hold = holdRows();
+    const missed = () => {
+      if (cancelled || !authorityIsCurrent()) return;
+      // Only the current target: the marks never grow with history.
+      const { missingLinkTargets, setUserScope } = agorStore.getState();
+      if (missingLinkTargets.size === 1 && missingLinkTargets.has(target.token)) return;
+      setUserScope({ missingLinkTargets: new Set([target.token]) });
+    };
+    const fillBranch = (id: string) =>
+      fillOnDemand(
+        async () => ({
+          branches: [(await client.service('branches').get(id)) as Branch].filter(Boolean),
+        }),
+        hold
+      );
     (async () => {
       try {
-        const directSession = (await client.service('sessions').get(directSessionId)) as Session;
-        if (cancelled || !authorityIsCurrent()) return;
-
-        // This is a live write to the sessions maps — bump so a sessions
-        // hydration in flight discards its (session-missing) snapshot rather
-        // than clobbering this deep-link heal.
-        bumpRevision('sessions');
-        agorStore.getState().setMap('sessionById', (prev) => {
-          if (prev.has(directSession.session_id)) return prev;
-          const next = new Map(prev);
-          next.set(directSession.session_id, directSession);
-          return next;
-        });
-        if (!directSession.archived) {
-          agorStore.getState().setMap('sessionsByBranch', (prev) => {
-            const branchSessions = prev.get(directSession.branch_id) || [];
-            if (branchSessions.some((s) => s.session_id === directSession.session_id)) return prev;
-            const next = new Map(prev);
-            next.set(directSession.branch_id, [...branchSessions, directSession]);
-            return next;
-          });
+        if (target.kind === 'branch') {
+          const rows = await fillBranch(target.token);
+          const { branchById } = agorStore.getState();
+          if (rows && !rows.branches?.some((branch) => branchById.has(branch.branch_id))) missed();
+          return;
         }
-
+        // The get runs inside the fill's fence, so a removal that lands while
+        // it is in flight keeps its stale row out.
+        const rows = await fillOnDemand(
+          async () => ({
+            sessions: [(await client.service('sessions').get(target.token)) as Session].filter(
+              Boolean
+            ),
+          }),
+          hold
+        );
+        if (!rows) return;
+        const directSession = rows.sessions?.[0];
+        if (!directSession || !agorStore.getState().sessionById.has(directSession.session_id)) {
+          return missed();
+        }
         if (
           !directSession.archived &&
           directSession.branch_id &&
           !agorStore.getState().branchById.has(directSession.branch_id)
         ) {
-          try {
-            const directBranch = (await client
-              .service('branches')
-              .get(directSession.branch_id)) as Branch;
-            if (cancelled || !authorityIsCurrent()) return;
-            bumpRevision('branches');
-            agorStore.getState().setMap('branchById', (prev) => {
-              if (directBranch.archived) return prev;
-              if (prev.has(directBranch.branch_id)) return prev;
-              const next = new Map(prev);
-              next.set(directBranch.branch_id, directBranch);
-              return next;
-            });
-          } catch {
-            // Session can still be selected if its branch is inaccessible/gone.
-          }
+          // The session can still be selected if its branch is inaccessible or gone.
+          await fillBranch(directSession.branch_id).catch(() => undefined);
         }
       } catch {
-        // Keep unresolved session URLs sticky; the normal URL resolver will
-        // avoid self-healing until a matching session exists.
+        // Not found, ambiguous, or failed: the URL stays sticky and the normal
+        // resolver keeps waiting; surfaces may now say "not found".
+        missed();
       }
     })();
 
     return () => {
       cancelled = true;
+      hold.release();
     };
-  }, [authorityScopeKey, client, directSessionId, enabled, hasInitiallyFetched]);
+  }, [authorityScopeKey, client, directBranchId, directSessionId, enabled, hasInitiallyFetched]);
 
   // Subscribe to real-time updates
   //
@@ -1466,9 +1397,9 @@ export function useAgorData(
     // keyed queue's tombstones keep a deferred patch from resurrecting a
     // session a synchronous `removed` just deleted (see `realtimeBatch`).
     const sessionsService = client.service('sessions');
-    // Keep the skip-apply-on-race revision bump SYNCHRONOUS — the background
-    // hydration's quiet-window guard, and the queue's own stale-drop stamp, both
-    // depend on the bump landing the instant the event does, not a frame later.
+    // Keep the revision bump SYNCHRONOUS — the loads' per-id touched fences,
+    // and the queue's own stale-drop stamp, both depend on the bump landing
+    // the instant the event does, not a frame later.
     const sessionPatchedBatched = (session: Session) => {
       if (!subscriptionIsCurrent()) return;
       bumpRevision('sessions');
@@ -1812,15 +1743,17 @@ export function useAgorData(
   // identity is stable across renders where no per-item count changed.
   const initialLoadItems = useMemo<InitialLoadItem[]>(
     () =>
-      INITIAL_LOAD_ITEMS.map(({ key, label }) => {
-        const count = storeState.itemCounts[key];
-        return { key, label, done: count !== undefined, count: count ?? 0 };
-      }),
-    [storeState.itemCounts]
+      INITIAL_LOAD_ITEMS.filter(({ key }) => initialLoadPlan.includes(key)).map(
+        ({ key, label }) => {
+          const count = storeState.itemCounts[key];
+          return { key, label, done: count !== undefined, count: count ?? 0 };
+        }
+      ),
+    [initialLoadPlan, storeState.itemCounts]
   );
 
-  const initialLoadComplete = INITIAL_LOAD_ITEMS.every(
-    ({ key }) => storeState.itemCounts[key] !== undefined
+  const initialLoadComplete = initialLoadPlan.every(
+    (key) => storeState.itemCounts[key] !== undefined
   );
 
   return {

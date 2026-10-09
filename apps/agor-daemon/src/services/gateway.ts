@@ -55,6 +55,7 @@ import type {
   GatewayContext,
   InboundFile,
   InboundMessage,
+  InboundSkippedFile,
   SlackThreadHistoryRequest,
   SlackThreadHistoryResult,
 } from '@agor/core/gateway';
@@ -219,6 +220,8 @@ interface PostMessageData {
   text: string;
   user_name?: string;
   files?: InboundFile[];
+  /** Attachments the connector did not pass on (Discord), named so the user can be told. */
+  skipped_files?: InboundSkippedFile[];
   metadata?: Record<string, unknown>;
   /** Daemon-internal durable identities for a claimed provider occurrence. */
   idempotency_task_id?: TaskID;
@@ -776,6 +779,36 @@ const SLACK_GATEWAY_REPLY_NOTE =
 
 const GATEWAY_STARTUP_BOOTSTRAP_HINT =
   'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
+
+const DISCORD_SKIPPED_FILE_REASON: Record<InboundSkippedFile['reason'], string> = {
+  unsupported_type: 'unsupported file type',
+  files_disabled: 'attachments are turned off for this channel',
+  invalid: 'could not be read',
+};
+
+/**
+ * Attachment names are user-controlled and the note sits outside the
+ * untrusted-data wrapper, so quote them as bounded JSON strings without
+ * control or markup characters.
+ */
+function formatDiscordUnreadAttachment(name: string, reason: string): string {
+  const safeName = name
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}<>`]/gu, ' ')
+    .trim()
+    .slice(0, 100);
+  return `${JSON.stringify(safeName || 'attachment')} (${reason})`;
+}
+
+/**
+ * Prompt note naming the attachments the agent could not read. The user must
+ * hear about them, so it overrides the option to stay silent.
+ */
+function formatDiscordUnreadAttachmentsNote(unread: string[], filesEnabled: boolean): string {
+  const hint = filesEnabled
+    ? 'Images (PNG, JPEG, GIF, WebP) and text files (.txt, .log, .md, .csv, .json) can be read; suggest one of those or pasting the text.'
+    : 'Attachments are turned off for this channel; suggest pasting the text instead.';
+  return `(Attachments you could not read: ${unread.join('; ')}. Tell the user which files you could not read, even if you would otherwise stay silent. ${hint})`;
+}
 
 /** Prompt note for a Discord message admitted by a response mode without a mention. */
 const DISCORD_UNADDRESSED_NOTE = `This Discord message did not mention you; the channel is set to let you answer anyway, and every message you write is posted. Reply only if you can genuinely help. If people are already handling it or you have nothing useful to add, write nothing else at all: your only message must be exactly ${DISCORD_NO_REPLY_SENTINEL}, and nothing will be posted.`;
@@ -1536,7 +1569,7 @@ export class GatewayService {
     channel: GatewayChannel,
     threadId: string,
     text: string,
-    opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
+    opts?: { suppressSlack?: boolean; suppressDiscord?: boolean; followUpHint?: boolean }
   ): Promise<void> {
     // GitHub and Shortcut have their own editable ack comment (the connector's
     // "Processing" / "👀 on it" comment that becomes the final reply), so they
@@ -1557,7 +1590,7 @@ export class GatewayService {
         getConnector(channel.channel_type as ChannelType, channel.config);
       await connector.sendMessage({
         threadId,
-        ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
+        ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text, opts),
       });
     } catch (error) {
       // Ignore — debug messages are best-effort
@@ -4812,13 +4845,22 @@ export class GatewayService {
     const discordMetadata =
       channel.channel_type === 'discord' ? parseDiscordAuthorityMetadata(data.metadata) : null;
     const discordDm = discordMetadata?.[DISCORD_METADATA_KEY.directMessage] === true;
-    // Admitted by a channel response mode without mentioning the bot.
-    // These stay quiet: no lifecycle, denial, or error notices, and a denial
-    // ends the event instead of failing the listener.
+    // Admitted by a channel response mode without mentioning the bot. These
+    // stay quiet on failure: no denial or error notices, and a denial ends the
+    // event instead of failing the listener.
     const discordUnaddressed =
       !!discordMetadata &&
       !discordDm &&
       discordResponseModeAdmitsMetadata(channel.config as Record<string, unknown>, discordMetadata);
+    // DMs and forum posts in `all` mode are answered without a mention, so the
+    // session-created notice does not tell people to mention the bot.
+    const discordParentChannelId = discordMetadata?.[DISCORD_METADATA_KEY.parentChannelId];
+    const discordFollowUpsNeedNoMention =
+      discordDm ||
+      (discordMetadata?.[DISCORD_METADATA_KEY.isThread] === true &&
+        typeof discordParentChannelId === 'string' &&
+        (channel.config as DiscordGatewayConfig).response_modes?.[discordParentChannelId] ===
+          'all');
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -5424,13 +5466,28 @@ export class GatewayService {
         }
       }
 
-      const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
-      if (sessionUrl && channel.channel_type !== 'slack' && !discordDm && !discordUnaddressed) {
-        this.sendSystemMessage(
-          channel,
-          data.thread_id,
-          formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
-        );
+      // Like Slack, Discord shows the session link once, when it is created. A
+      // redelivered first message may have stopped before posting it, so a
+      // recovery announces the session instead.
+      if (channel.channel_type !== 'slack' && channel.channel_type !== 'discord') {
+        const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
+        if (sessionUrl) {
+          this.sendSystemMessage(
+            channel,
+            data.thread_id,
+            formatGatewayFollowUpRoutingMessage(sessionId, sessionUrl)
+          );
+        }
+      } else if (channel.channel_type === 'discord' && recoveringInitialDelivery) {
+        const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
+        if (sessionUrl) {
+          this.sendSystemMessage(
+            channel,
+            data.thread_id,
+            formatGatewaySessionCreatedMessage(sessionId, sessionUrl),
+            { followUpHint: !discordFollowUpsNeedNoMention }
+          );
+        }
       }
     } else {
       // New thread → create session via FeathersJS service
@@ -5755,11 +5812,17 @@ export class GatewayService {
 
       const sessionUrl = await this.fetchExistingSessionUrlForGatewayUser(sessionId, user);
 
-      if ((sessionUrl || channel.channel_type === 'slack') && !discordUnaddressed) {
+      // On Discord only the event that created the session announces it, so a
+      // concurrent message that lost the thread race does not repeat the link.
+      if (
+        (sessionUrl || channel.channel_type === 'slack') &&
+        (created || channel.channel_type !== 'discord')
+      ) {
         this.sendSystemMessage(
           channel,
           data.thread_id,
-          formatGatewaySessionCreatedMessage(sessionId, sessionUrl)
+          formatGatewaySessionCreatedMessage(sessionId, sessionUrl),
+          { followUpHint: !discordFollowUpsNeedNoMention }
         );
       }
 
@@ -6025,32 +6088,43 @@ export class GatewayService {
         }
       }
 
-      // Discord inbound images use the provider's signed CDN URL and the
+      // Discord inbound attachments use the provider's signed CDN URL and the
       // same tenant/session/branch-scoped staging plus executor materializer
-      // as browser and Slack uploads. The capability is opt-in; unsupported
-      // or mixed rich payloads are rejected by the connector before reaching
-      // this boundary, while individual download failures degrade the prompt.
-      if (
-        channel.channel_type === 'discord' &&
-        channelConfig.files === true &&
-        data.files &&
-        data.files.length > 0
-      ) {
-        const ingestion = await ingestDiscordInboundImages({
-          files: data.files,
-          tenantId: requireCurrentTenantId() as TenantID,
-          sessionId,
-          branchId: channel.target_branch_id,
-          createdBy: channel.agor_user_id ?? user.user_id,
-        });
-        if (ingestion.uploads.length > 0) {
-          promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
-          console.log(
-            `[gateway] Ingested ${ingestion.uploads.length} Discord image attachment(s) for session ${shortId(sessionId)}`
-          );
+      // as browser and Slack uploads. The capability is opt-in. Every
+      // attachment the agent cannot read (skipped by the connector, or failed
+      // here) is named in the prompt so the agent tells the user.
+      if (channel.channel_type === 'discord') {
+        const unread = (data.skipped_files ?? []).map((file) =>
+          formatDiscordUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON[file.reason])
+        );
+        if (channelConfig.files !== true) {
+          for (const file of data.files ?? []) {
+            unread.push(
+              formatDiscordUnreadAttachment(file.name, DISCORD_SKIPPED_FILE_REASON.files_disabled)
+            );
+          }
+        } else if (data.files && data.files.length > 0) {
+          const ingestion = await ingestDiscordInboundImages({
+            files: data.files,
+            tenantId: requireCurrentTenantId() as TenantID,
+            sessionId,
+            branchId: channel.target_branch_id,
+            createdBy: channel.agor_user_id ?? user.user_id,
+          });
+          if (ingestion.uploads.length > 0) {
+            promptText = buildPromptWithAttachments(promptText, ingestion.uploads);
+            console.log(
+              `[gateway] Ingested ${ingestion.uploads.length} Discord attachment(s) for session ${shortId(sessionId)}`
+            );
+          }
+          for (const name of ingestion.failedNames ?? []) {
+            unread.push(
+              formatDiscordUnreadAttachment(name, 'could not be downloaded or is too large')
+            );
+          }
         }
-        if (ingestion.failed > 0) {
-          promptText = `${promptText}\n\n(an attachment could not be fetched)`;
+        if (unread.length > 0) {
+          promptText = `${promptText}\n\n${formatDiscordUnreadAttachmentsNote(unread, channelConfig.files === true)}`;
         }
       }
 
@@ -7440,6 +7514,7 @@ export class GatewayService {
                 text: msg.text,
                 user_name: msg.userId,
                 ...(msg.files ? { files: msg.files } : {}),
+                ...(msg.skippedFiles ? { skipped_files: msg.skippedFiles } : {}),
                 metadata,
                 ...(eventId && lease
                   ? {

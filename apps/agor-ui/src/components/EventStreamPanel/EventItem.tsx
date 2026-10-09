@@ -15,12 +15,23 @@ import {
 } from '@ant-design/icons';
 import { Button, Popover, Typography, theme } from 'antd';
 import React from 'react';
+import { useBranchSessions } from '../../hooks/useBranchSessions';
 import type { SocketEvent } from '../../hooks/useEventStream';
 import BranchCard from '../BranchCard/BranchCard';
 import { ENTITY_PILL_COLORS, EventStreamPill, SessionMetadataCard, UserPill } from '../Pill';
 import { Tag } from '../Tag';
 
 const { Text } = Typography;
+
+/**
+ * The BranchCard of an event's branch pill. It mounts only while the popover
+ * is open, and reads that branch's active sessions then (the store holds only
+ * the loaded scopes' sessions).
+ */
+const EventBranchCard = (props: Omit<React.ComponentProps<typeof BranchCard>, 'sessions'>) => {
+  const sessions = useBranchSessions(props.client, props.branch.branch_id);
+  return <BranchCard {...props} sessions={sessions} />;
+};
 
 export interface BranchActions {
   onSessionClick?: (sessionId: string) => void;
@@ -39,7 +50,6 @@ export interface EventItemProps {
   event: SocketEvent;
   branchById: Map<string, Branch>;
   sessionById: Map<string, Session>;
-  sessionsByBranch: Map<string, Session[]>;
   repos: Repo[];
   userById: Map<string, User>;
   currentUserId?: string;
@@ -52,7 +62,6 @@ const EventItemComponent = ({
   event,
   branchById,
   sessionById,
-  sessionsByBranch,
   repos,
   userById,
   currentUserId,
@@ -158,7 +167,6 @@ const EventItemComponent = ({
   const derivedBranchId = branchId || session?.branch_id;
   const branch = derivedBranchId ? branchById.get(derivedBranchId) : undefined;
   const repo = branch ? repos.find((r) => r.repo_id === branch.repo_id) : undefined;
-  const branchSessions = branch ? sessionsByBranch.get(branch.branch_id) || [] : [];
 
   // Look up user if created_by is present
   const user = createdBy ? userById.get(createdBy) : undefined;
@@ -296,10 +304,9 @@ const EventItemComponent = ({
           color={ENTITY_PILL_COLORS.branch}
           copyLabel="Branch ID"
           metadataCard={
-            <BranchCard
+            <EventBranchCard
               branch={branch}
               repo={repo}
-              sessions={branchSessions}
               userById={userById}
               currentUserId={currentUserId}
               selectedSessionId={selectedSessionId}

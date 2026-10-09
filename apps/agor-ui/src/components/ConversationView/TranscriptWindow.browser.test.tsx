@@ -11,7 +11,7 @@ import {
   type TaskID,
   TaskStatus,
 } from '@agor-live/client';
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { useState } from 'react';
 import { afterEach, expect, it } from 'vitest';
@@ -37,7 +37,8 @@ function task(n: number, status: Task['status'] = TaskStatus.COMPLETED): Task {
   } as Task;
 }
 
-function messages(n: number): Message[] {
+/** `long` answers collapse as history unless the turn arrived live or the reader expanded them. */
+function messages(n: number, long = false): Message[] {
   const base = {
     session_id: SESSION_ID,
     task_id: taskId(n),
@@ -59,7 +60,9 @@ function messages(n: number): Message[] {
       index: n * 2 + 1,
       role: MessageRole.ASSISTANT,
       type: 'assistant',
-      content: `Answer ${n}. ${'A line of synthetic transcript text. '.repeat(4)}`,
+      content: long
+        ? `Answer ${n}.\n${'A line of synthetic transcript text.\n'.repeat(20)}`
+        : `Answer ${n}. ${'A line of synthetic transcript text. '.repeat(4)}`,
     },
   ] as Message[];
 }
@@ -85,12 +88,13 @@ function events() {
 }
 
 /** A fresh client per test: shared handles are cached per client. */
-function transport(persisted: number) {
+function transport(persisted: number, failedTurns: number[] = [], { long = false } = {}) {
   let turns = persisted;
+  const row = (n: number) => task(n, failedTurns.includes(n) ? TaskStatus.FAILED : undefined);
   const tasks = Object.assign(events(), {
     find: async ({ query }: { query: Record<string, unknown> }) => {
       const range = query.task_id as { $lte?: string; $gt?: string; $in?: string[] } | undefined;
-      let rows = Array.from({ length: turns }, (_, n) => task(n)).filter(
+      let rows = Array.from({ length: turns }, (_, n) => row(n)).filter(
         (row) =>
           (!range?.$lte || row.task_id <= range.$lte) &&
           (!range?.$gt || row.task_id > range.$gt) &&
@@ -99,17 +103,18 @@ function transport(persisted: number) {
       if ((query.$sort as { task_id?: number } | undefined)?.task_id === -1) rows = rows.reverse();
       return { data: rows.slice(0, Number(query.$limit)), total: rows.length };
     },
-    get: async (id: string) => task(turnOf(id)),
+    get: async (id: string) => row(turnOf(id)),
   });
   const messageService = Object.assign(events(), {
     findAll: async ({ query }: { query: { task_id: string | { $in: string[] } } }) => {
       const ids = typeof query.task_id === 'string' ? [query.task_id] : query.task_id.$in;
-      return ids.flatMap((id) => messages(turnOf(id)));
+      return ids.flatMap((id) => messages(turnOf(id), long));
     },
   });
   const session = () => ({
     session_id: SESSION_ID,
     tasks: Array.from({ length: turns }, (_, n) => taskId(n)),
+    tasks_complete: true,
   });
   const sessions = Object.assign(events(), { get: async () => session() });
   const services: Record<string, unknown> = {
@@ -133,7 +138,7 @@ function transport(persisted: number) {
       tasks.emit('created', task(n, TaskStatus.RUNNING));
       // Dispatch appends the turn to Session.tasks.
       sessions.emit('patched', session());
-      for (const message of messages(n)) messageService.emit('created', message);
+      for (const message of messages(n, long)) messageService.emit('created', message);
       tasks.emit('patched', task(n));
     });
     await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
@@ -387,4 +392,76 @@ it('trims again once the panel is reactivated after the reader scrolled away', a
   for (let i = 0; i < 30; i++) await addTurn();
   await waitFor(() => expect(mountedTurns(viewport())).toEqual(range(50, 79)), { timeout: 5_000 });
   await waitFor(() => expect(distanceFromBottom(viewport())).toBeLessThan(2), { timeout: 5_000 });
+});
+
+it('keeps a scrolled-away turn notice from growing an outer positioned scroller', async () => {
+  // A middle turn failed, so it renders a turn-outcome notice with an aria-live span.
+  const { client } = transport(30, [25]);
+  // The session drawer's body is a positioned scroller around the transcript and composer.
+  render(
+    <ConfigProvider theme={{ algorithm: theme.darkAlgorithm }}>
+      <App>
+        <div
+          data-testid="outer-scroller"
+          style={{
+            position: 'relative',
+            overflowY: 'auto',
+            height: 320,
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
+          <ConversationView client={client} sessionId={SESSION_ID} />
+        </div>
+      </App>
+    </ConfigProvider>
+  );
+  await screen.findByText(/Answer 29\./);
+  const viewport = screen.getByTestId('conversation-scroll-container');
+  const outer = screen.getByTestId('outer-scroller');
+  await scrollTo(viewport, viewport.scrollHeight);
+  expect(viewport.scrollTop).toBeGreaterThan(viewport.clientHeight);
+
+  const notice = viewport.querySelector<HTMLElement>('[data-notice-type]')!;
+  const live = notice.querySelector<HTMLElement>('span[aria-live="polite"]')!;
+  expect(getComputedStyle(live).position).toBe('absolute');
+  expect(notice.getBoundingClientRect().bottom).toBeLessThan(viewport.getBoundingClientRect().top);
+
+  expect(outer.scrollHeight).toBe(outer.clientHeight);
+  expect(live.offsetParent).toBe(viewport);
+});
+
+it('forgets the reading state of trimmed turns and keeps it for turns still loaded', async () => {
+  const { client, addTurn } = transport(10, [], { long: true });
+  const viewport = await mount(client);
+  const toggle = (n: number) =>
+    within(viewport.querySelector<HTMLElement>(`[data-task-block="${taskId(n)}"]`)!).getByRole(
+      'button',
+      { name: /^show (more|less)$/ }
+    );
+  // History arrives collapsed and the reader expands turn 5; turn 9 arrived
+  // as the latest turn and stays expanded.
+  expect(toggle(5)).toHaveAttribute('aria-expanded', 'false');
+  act(() => toggle(5).click());
+  expect(toggle(5)).toHaveAttribute('aria-expanded', 'true');
+  expect(toggle(9)).toHaveAttribute('aria-expanded', 'true');
+
+  // Trimmed up to turn 5: both turns are still loaded and keep their state.
+  for (let i = 0; i < 25; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(5, 34)), { timeout: 5_000 });
+  expect(toggle(5)).toHaveAttribute('aria-expanded', 'true');
+  expect(toggle(9)).toHaveAttribute('aria-expanded', 'true');
+
+  // Many more trims drop them; paged back in, they are plain history again.
+  for (let i = 0; i < 35; i++) await addTurn();
+  await waitFor(() => expect(mountedTurns(viewport)).toEqual(range(40, 69)), { timeout: 5_000 });
+  while (!mountedTurns(viewport).includes(5)) {
+    const before = mountedTurns(viewport)[0];
+    // Its fading loading icon can linger in the accessible name; match the label.
+    const loadOlder = screen.getByText('Load older history').closest('button')!;
+    act(() => loadOlder.click());
+    await waitFor(() => expect(mountedTurns(viewport)[0]).toBeLessThan(before), { timeout: 5_000 });
+  }
+  await waitFor(() => expect(toggle(5)).toHaveAttribute('aria-expanded', 'false'));
+  expect(toggle(9)).toHaveAttribute('aria-expanded', 'false');
 });

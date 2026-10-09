@@ -39,8 +39,6 @@ export const LEAN_TRANSCRIPT_TASK_WINDOW = 3 * LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
  */
 export const LEAN_TRANSCRIPT_DETAIL_BYTE_BUDGET = 32 * 1024 * 1024;
 const isLeanActive = isTaskExecuting;
-// Concurrent `$in` count probes while the first page checks Session.tasks.
-const LEAN_MEMBERSHIP_PROBE_CONCURRENCY = 4;
 // Attribution only for a bounded late-error delivery window; never retain payloads.
 const MAX_RETIRED_STREAM_IDENTITIES = 256;
 
@@ -299,9 +297,9 @@ export class ReactiveSessionHandle {
   // Memoized per Session.tasks array: display rank by Task ID.
   private displayRanks: { order: readonly string[]; ranks: Map<string, number> } | undefined;
   // Lean conversation history is read in one order, Session.tasks (display
-  // order), unless the first page cannot establish that it lists every
-  // dispatched Task (`legacy`, see listsEveryDispatchedTask), or a later list
-  // stops extending the one the window placed. Undecided until the first page.
+  // order), unless the daemon does not report that it lists every dispatched
+  // Task (`legacy`: Session.tasks_complete), or a later list stops extending
+  // the one the window placed. Undecided until the first page.
   private leanOrder: 'display' | 'legacy' | undefined;
   // Display order only. The loaded transcript is Session.tasks positions
   // [start, …): older history is [0, start). `reconciled` ends the positions a
@@ -1393,66 +1391,6 @@ export class ReactiveSessionHandle {
   }
 
   /**
-   * Whether `order` (a Session.tasks list) provably names every dispatched Task
-   * of this Session, so history can be read by position. Fails closed: a
-   * legacy row may have lost IDs to an older non-atomic append or a
-   * whole-array overwrite, and that Session pages by task ID instead.
-   *
-   * The nonqueued count is read only after `order` was: a Task dispatched
-   * later is counted but unlisted, which can only fail closed. Listed IDs are
-   * counted as this Session's nonqueued Tasks in bounded `$in` probes, so an
-   * entry that names no Task cannot stand in for a missing one. What remains
-   * unlisted must be a not-yet-dispatched (CREATED) row on the newest page;
-   * any other (a missing turn, or a queued head failed without dispatch)
-   * means task-ID paging. Duplicate entries, or a probe the server rejects
-   * (an entry that is not a Task ID), do too.
-   */
-  private async listsEveryDispatchedTask(
-    order: readonly string[] | undefined,
-    newest: readonly Task[],
-    stale: () => boolean
-  ): Promise<boolean> {
-    const listed = new Set(order ?? []);
-    if (listed.size !== (order?.length ?? 0)) return false;
-    const count = async (query: Record<string, unknown>) => {
-      const result = await this.client.service('tasks').find({
-        query: {
-          session_id: this.sessionId,
-          status: { $ne: TaskStatus.QUEUED },
-          $limit: 0,
-          ...query,
-        },
-      });
-      return Array.isArray(result) ? result.length : result.total;
-    };
-    const chunks: string[][] = [];
-    const ids = [...listed];
-    for (let offset = 0; offset < ids.length; offset += TASK_PAGINATION.MAX_TASK_IDS)
-      chunks.push(ids.slice(offset, offset + TASK_PAGINATION.MAX_TASK_IDS));
-    try {
-      const total = count({});
-      // Awaited below; settled early, it must not surface as unhandled.
-      total.catch(() => undefined);
-      let members = 0;
-      for (let i = 0; i < chunks.length && !stale(); i += LEAN_MEMBERSHIP_PROBE_CONCURRENCY) {
-        const counts = await Promise.all(
-          chunks
-            .slice(i, i + LEAN_MEMBERSHIP_PROBE_CONCURRENCY)
-            .map((chunk) => count({ task_id: { $in: chunk } }))
-        );
-        members += counts.reduce((sum, n) => sum + n, 0);
-      }
-      const pending = newest.filter(
-        (task) => task.status === TaskStatus.CREATED && !listed.has(task.task_id)
-      ).length;
-      return (await total) <= members + pending;
-    } catch (error) {
-      if (errorStatusCode(error) === 400) return false;
-      throw error;
-    }
-  }
-
-  /**
    * A turn the window keeps, with everything displayed after it: not terminal
    * (running, streaming, stopping, awaiting permission/input), pinned through
    * retainTaskDetails (expanded disclosures, focus, selection, portaled
@@ -1694,16 +1632,21 @@ export class ReactiveSessionHandle {
     try {
       const pageSize = this.options.cacheScope === 'preview' ? 1 : LEAN_TRANSCRIPT_TASK_PAGE_SIZE;
       const window = this.followsDisplayOrder() ? this.leanWindow : undefined;
+      // The first page asks the daemon whether Session.tasks lists every
+      // dispatched Task. A daemon that does not answer (older) means legacy.
+      const decides = !older && this.options.cacheScope === 'session' && !this.leanOrder;
       const cursor = older ? this.leanOldestTaskId : undefined;
       const shownIds = this.stateSnapshot.tasks
         .filter((task) => task.status !== TaskStatus.QUEUED)
         .map((task) => task.task_id);
       const [fetchedSession, result, refreshed] = await Promise.all([
-        mode !== 'sync' && this.stateSnapshot.session
+        mode !== 'sync' && !decides && this.stateSnapshot.session
           ? Promise.resolve(this.stateSnapshot.session)
-          : this.client.service('sessions').get(this.sessionId),
+          : this.client
+              .service('sessions')
+              .get(this.sessionId, decides ? { query: { include_tasks_complete: true } } : {}),
         // Display order reads Tasks by position below. The task-ID page is the
-        // legacy and preview path, and the first page decides with it.
+        // legacy and preview path; the first page reads it before it decides.
         window
           ? Promise.resolve(undefined)
           : this.client.service('tasks').find({
@@ -1723,11 +1666,7 @@ export class ReactiveSessionHandle {
       if (stale()) return 'ended';
       const session = fetchedSession;
       const rows = !result ? [] : Array.isArray(result) ? result : result.data;
-      let display = !!window;
-      if (!window && !older && this.options.cacheScope === 'session' && !this.leanOrder) {
-        display = await this.listsEveryDispatchedTask(session.tasks, rows, stale);
-        if (stale()) return 'ended';
-      }
+      const display = window ? true : decides && session.tasks_complete === true;
       // A list that moved placed positions: plan again in task-ID order.
       if (window && !this.acceptLeanOrder(session.tasks)) return 'replan';
       this.canonicalSessionId = session.session_id;

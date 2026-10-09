@@ -4,6 +4,8 @@ import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { agorStore } from '../../store/agorStore';
+import { boardScopeKey, type ScopeCoverage } from '../../store/scopeMerge';
+import { boardCoverage } from '../../test/userScopeCoverage';
 import { MobileApp } from './MobileApp';
 
 // Keep the real mobile shell/router/page/close callback. The heavy conversation
@@ -50,9 +52,19 @@ const branches = new Map([
   ['assistant', { branch_id: 'assistant', board_id: 'a', name: 'Ada' } as Branch],
   ['other', { branch_id: 'other', board_id: 'b' } as Branch],
 ]);
+/** A loaded partition's membership: the rows its read returned. */
+const withMembers = (entry: ScopeCoverage, branchIds: string[], sessionIds: string[]) => ({
+  ...entry,
+  members: { ...entry.members, branches: new Set(branchIds), sessions: new Set(sessionIds) },
+});
 function mount(path = '/m/board/alpha') {
   agorStore.setState({
     boardById: boards,
+    // Both boards' partitions are loaded (the page waits for them), with their rows.
+    coverage: new Map([
+      [boardScopeKey('a'), withMembers(boardCoverage(), ['assistant'], ['parent'])],
+      [boardScopeKey('b'), withMembers(boardCoverage(), ['other'], ['child'])],
+    ]),
     branchById: branches,
     sessionById: new Map([
       ['parent', { session_id: 'parent', title: 'Parent', branch_id: 'assistant' } as Session],
@@ -156,12 +168,9 @@ it('lets the user exit when an open session is removed or becomes inaccessible',
   expect(window.location.pathname).toBe('/m');
 });
 
-it('keeps uncached session wording neutral after bootstrap and renders a late targeted result', async () => {
+it('waits for the targeted read of an uncached session and renders its late result', async () => {
   mount('/m/session/archived');
-  expect(screen.getByText('Session not loaded')).toBeInTheDocument();
-  expect(
-    screen.getByText('It may still be loading or may no longer be available.')
-  ).toBeInTheDocument();
+  expect(screen.queryByText('Session not loaded')).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Back to home' })).toBeInTheDocument();
   await act(async () =>
     agorStore.setState({

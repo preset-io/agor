@@ -1213,7 +1213,9 @@ const discordSetupSchema = z
     files: z
       .boolean()
       .default(false)
-      .describe('Enable bounded inbound PNG/JPEG image attachments for live Discord messages.'),
+      .describe(
+        'Enable bounded inbound image (PNG/JPEG/GIF/WebP) and text (.txt/.log/.md/.csv/.json) attachments for live Discord messages.'
+      ),
     channelHistory: z
       .boolean()
       .default(false)
@@ -1896,7 +1898,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_channels_create',
     {
       description:
-        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live PNG/JPEG images, direct_messages_enabled:false by default or true for allowed current server members, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get and list forum posts via agor_gateway_discord_forum_posts_list, and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
+        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live image and text attachments, direct_messages_enabled:false by default or true for allowed current server members, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get and list forum posts via agor_gateway_discord_forum_posts_list, and an optional channel:<snowflake> proactive target. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: gatewayChannelCreateSchema,
     },
@@ -2015,7 +2017,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           artifact.messageContent.instruction,
           'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
           'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
-          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages unless a forum channel has a response_modes entry (starters or all); DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true admits only text plus bounded PNG/JPEG attachments, while unsupported or mixed rich payloads are rejected.',
+          'Keep the channel and author allowlists explicit. Discord ignores webhooks, bot/self messages, wrong guild/channel, and unmentioned server messages unless a forum channel has a response_modes entry (starters or all); DMs are off by default and require directMessages:true plus live server membership and an allowed user or role; files:true passes bounded image and text attachments to the agent; other files are skipped and the agent is told to name them, while embeds, stickers, and polls are rejected.',
         ],
         validation: artifact.validation,
         caveats: [

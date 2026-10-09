@@ -278,13 +278,14 @@ Discord is intentionally narrow and explicit:
   and server messages without a structured mention are ignored. DMs are off by default. Attachment handling
   is controlled separately by the explicit `files` capability below.
 - `files:false` is the default text-only behavior. With the explicit
-  `files:true` capability, a live mentioned message may include PNG/JPEG
-  attachments; each accepted image is downloaded from Discord's signed CDN URL
-  into the existing tenant/session/branch upload staging and exposed to the
-  remote executor through its normal materialization tool. Unsupported or
-  mixed attachment/rich payloads are rejected rather than silently dropping
-  content. Per-file and per-message count/size limits still apply; failed or
-  expired downloads deliver the text with a bounded degradation note.
+  `files:true` capability, a live message may include image (PNG, JPEG, GIF,
+  WebP) and text (.txt, .log, .md, .csv, .json) attachments; each is downloaded
+  from Discord's signed CDN URL into the existing tenant/session/branch upload
+  staging and exposed to the remote executor through its normal
+  materialization tool. Attachments never drop a message: any file the agent
+  cannot read (unsupported type, `files:false`, or a failed, expired, or
+  oversized download) is named in the prompt so the agent tells the user.
+  Per-file and per-message count/size limits still apply.
 - Identity is either (a) aligned through a tenant-owned Discord user ID → Agor
   email map, where an unmapped author is rejected, or (b) one explicitly chosen
   fixed Agor user. These modes are mutually exclusive. There is no fallback
@@ -435,7 +436,7 @@ creates a Discord application or calls Discord. Before enabling a row:
    needs only View Channel, Read Message History, and Send Messages in Threads.
 3. Configure the explicit channel and user/role allowlists, thread mode,
    auto-archive setting, bounded catch-up values, identity mode, `files:false`
-   (or opt in to bounded PNG/JPEG inbound images with `files:true`),
+   (or opt in to bounded image and text attachments with `files:true`),
    agent tools (off by default), and optional proactive target. Enter the bot token through
    the secure credential form; do not paste it into chat or MCP arguments.
    To admit every current guild member, add the Guild ID itself to the role
@@ -771,7 +772,7 @@ authoritative mutation transaction.
 
 - **Bot does not respond.** Confirm the row is enabled, has a valid bot token, and passes the shared configuration checks. The bot must be in the configured guild and public text or forum channel with permission to view, read history, and send messages (in threads, for a forum).
 - **Mentions are ignored.** Confirm the privileged Message Content intent is enabled and acknowledged. The structured bot mention is required on every prompt. The author must also match an allowed user ID or hold an allowed role ID, and the message must be in the configured public parent channel.
-- **Content is narrow and explicit.** DMs, private threads, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the contract. `files:false` keeps the channel text-only; opt-in `files:true` admits only PNG/JPEG attachments on a mentioned text message, staged through the existing owner-bound upload/materialization path.
+- **Content is narrow and explicit.** DMs, private threads, embeds, components, stickers, polls, webhooks, and bot/self messages are outside the contract. `files:false` keeps the channel text-only; opt-in `files:true` passes image and text attachments to the agent, staged through the existing owner-bound upload/materialization path. Other attachments do not block the message; the agent names the files it could not read.
 - **Catch-up did not run.** REST catch-up is bounded and only runs after a live structured mention. A human reply without a mention does not create a Task; a failed history read or Task admission leaves the admitted cursor unchanged.
 - **Reconnects.** Discord Gateway sequence/session state is process-local. Agor does not expose durable Discord resume/checkpoint configuration; the next live mention uses bounded REST catch-up after the last admitted cursor.
 - **Proactive replies.** Use `channel:<snowflake>` for a configured text channel; forums cannot be proactive targets. Replies to any response chunk use its durable alias and continue the same session; the first human reply to a proactive seed consumes that seed without creating a summon thread.

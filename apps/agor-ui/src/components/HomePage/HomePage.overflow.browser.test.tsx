@@ -7,6 +7,7 @@ import { page } from 'vitest/browser';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { HomePage } from './HomePage';
 
@@ -102,8 +103,7 @@ function seed() {
       [ME, { user_id: ME, name: 'Ada Lovelace' } as User],
       ['u2', { user_id: 'u2', name: 'Grace Hopper' } as User],
     ]),
-    sessionsHydrated: true,
-    branchesHydrated: true,
+    coverage: userScopeCoverage({ sessions: true, references: true, teammates: true }),
   } as never);
 }
 

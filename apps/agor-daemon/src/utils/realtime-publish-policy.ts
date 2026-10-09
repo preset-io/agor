@@ -1,8 +1,10 @@
 import {
   BRANCH_CLEANUP_REPORT_SERVICE,
   BRANCH_DELETION_REPORT_SERVICE,
+  BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
   ENVIRONMENT_COMMAND_REPORT_SERVICE,
   KNOWLEDGE_TRANSFER,
+  MCP_OAUTH_RELAY,
   OWNERSHIP_TRANSFER_SERVICES,
   type UserRole,
 } from '@agor/core/types';
@@ -270,6 +272,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: 'Retirement admission response; archived branch state publishes through branches.',
   },
+  [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
+    audience: 'none',
+    why: 'Acknowledgement response; updated branch publishes through branches.',
+  },
   'branches/:id/clean': {
     audience: 'none',
     why: 'Cleanup admission response; status publishes through branches.',
@@ -405,6 +411,14 @@ export const REALTIME_PUBLISH_POLICY = {
   'agentic-tool-presets': { audience: 'none', why: 'Read-mostly presets; no socket subscriber.' },
   templates: { audience: 'none', why: 'Static template list.' },
   leaderboard: { audience: 'none', why: 'Analytics rollup, polled.' },
+  'branch-counts': {
+    audience: 'none',
+    why: 'Per-caller RBAC-scoped aggregate; refetched on branch events.',
+  },
+  'session-counts': {
+    audience: 'none',
+    why: 'Per-caller RBAC-scoped aggregate; refetched on session events.',
+  },
   'thread-session-map': { audience: 'none', why: 'Gateway-internal thread bookkeeping.' },
   gateway: { audience: 'none', why: 'Inbound/outbound message routing; no socket subscriber.' },
   file: { audience: 'none', why: 'Reads a file out of a branch worktree for the caller.' },
@@ -576,6 +590,7 @@ export function isRealtimePublishAllowed(path: string | null | undefined): boole
 export const NON_SERVICE_REGISTERED_PATHS: ReadonlySet<string> = new Set([
   '', // SPA fallback
   'static', // express.static
+  MCP_OAUTH_RELAY.deliveryPath.slice(1), // Signed raw-body Express callback; no service events.
 ]);
 
 export class RealtimePublishPolicyCoverageError extends Error {

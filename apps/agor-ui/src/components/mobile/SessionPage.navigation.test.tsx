@@ -98,12 +98,18 @@ describe('mobile session exit versus history', () => {
     expect(router.state.location.pathname).toBe('/m');
   });
 
-  it('offers an exit for a removed/inaccessible session instead of spinning forever', () => {
+  it('says "not loaded" only once the targeted read missed, offering an exit meanwhile', async () => {
     agorStore.getState().setLoading(false);
     const router = setup(['/m/session/missing']);
+    expect(screen.queryByText('Session not loaded')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to home' })).toBeInTheDocument();
+    await act(async () =>
+      agorStore.getState().setUserScope({ missingLinkTargets: new Set(['missing']) })
+    );
     expect(screen.getByText('Session not loaded')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Back to home' }));
     expect(router.state.location.pathname).toBe('/m');
+    agorStore.getState().reset();
   });
 
   it('late session data cannot reopen a session after the user exits loading', async () => {

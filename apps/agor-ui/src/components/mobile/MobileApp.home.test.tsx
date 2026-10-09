@@ -8,6 +8,7 @@ import { ThemeProvider } from '../../contexts/ThemeContext';
 import { recentBoardsStorageKey } from '../../hooks/useRecentBoards';
 import { buildSessionMaps, EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { userScopeCoverage } from '../../test/userScopeCoverage';
 import { resetAccessCacheForTests } from '../../utils/accessCache';
 import { MobileApp } from './MobileApp';
 
@@ -80,8 +81,7 @@ function seed({
       ['board-2', { board_id: 'board-2', name: 'Ops', archived: false } as Board],
     ]),
     userById: new Map([[ME, user]]),
-    sessionsHydrated: true,
-    branchesHydrated: true,
+    coverage: userScopeCoverage({ sessions: true, references: true, teammates: true }),
   } as never);
 }
 
@@ -202,8 +202,8 @@ describe('MobileApp Home wiring', () => {
       sessions: [session('idle')],
       comments: [mention('c1', { branch_id: 'branch-unloaded', board_id: 'board-2' })],
     });
-    // Before branches hydrate, a comment's branch may not be in the store yet.
-    agorStore.setState({ branchesHydrated: false });
+    // Before the user scope resolves it, a comment's branch may not be in the store yet.
+    agorStore.setState({ coverage: userScopeCoverage({ sessions: true, teammates: true }) });
     renderPhoneHome();
     fireEvent.click(await screen.findByRole('button', { name: /mentioned you/ }));
     expect(await screen.findByTestId('board-page')).toHaveTextContent('board-2');

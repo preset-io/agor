@@ -1,3 +1,4 @@
+import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
 import {
   TENANT_IDENTITY_ONLY_SERVICE_PATHS,
   TENANT_OWNED_SERVICE_PATHS,
@@ -120,6 +121,10 @@ export interface TenantServiceClassification {
  * place to be wrong. This table is for services registered outside both.
  */
 export const TENANT_SERVICE_CLASSIFICATIONS: Record<string, TenantServiceClassification> = {
+  [BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE]: {
+    scopeClass: 'scoped',
+    why: 'Registered through the tenant-scoped authenticated route registrar; metadata-only acknowledgement.',
+  },
   // --------------------------------------------------------------------------
   // The two Slack lanes' browser preflights. Registered with a bare `app.use`
   // plus a `requireAuth` hook, so nothing upstream arms a scope: each opens one

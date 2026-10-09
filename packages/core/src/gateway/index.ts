@@ -15,6 +15,7 @@ export type {
   InboundFile,
   InboundMessage,
   InboundPreparationContext,
+  InboundSkippedFile,
   OutboundPayload,
 } from './connector';
 export { normalizeOutbound, normalizeSendReceipt } from './connector';
@@ -24,8 +25,8 @@ export {
   DiscordConnector,
   DiscordDirectMessageError,
   DiscordThreadUnavailableError,
-  extractDiscordInboundFiles,
   isAllowedDiscordAttachmentUrl,
+  partitionDiscordInboundFiles,
   stripDiscordBotMention,
 } from './connectors/discord';
 export type {

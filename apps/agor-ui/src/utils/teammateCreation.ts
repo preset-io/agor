@@ -52,6 +52,26 @@ export interface TeammateCreationDeps {
 }
 
 /**
+ * Whether `boardId` holds no active branch the caller can see, from a
+ * count-only read (the store holds only the loaded scopes' branches). An
+ * unknown count is false, so a welcome note never lands on a board with work.
+ */
+export async function boardHasNoActiveBranches(
+  client: AgorClient | null,
+  boardId: string
+): Promise<boolean> {
+  if (!client) return false;
+  try {
+    const found = await client
+      .service('branches')
+      .find({ query: { board_id: boardId, archived: false, $limit: 0 } });
+    return !Array.isArray(found) && found.total === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Shared teammate creation logic used by CreateDialog (via App.tsx).
  *
  * Flow: resolve repo → create board → create branch → tag branch with

@@ -1,5 +1,7 @@
 import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
+import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
+import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -771,13 +773,18 @@ export function createRegisteredMCPCatalogConnectService(
       const userId = params.user?.user_id as UserID | undefined;
       if (!userId) return false;
       const read = async () => {
+        // Verify against the full saved row: the candidate projection redacts
+        // configured client secrets, which the grant binding covers.
+        const server = await new MCPServerRepository(db).findById(candidate.server.mcp_server_id);
+        if (!server) return false;
+        // Same subject rule as execution: a Shared server's grant is the
+        // shared one; otherwise only the caller's own per-user grant.
         const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
-          userId,
-          candidate.server.mcp_server_id
+          server.auth?.oauth_mode === 'shared' ? null : userId,
+          server.mcp_server_id
         );
         return Boolean(
-          grant?.has_access_token &&
-            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+          grant?.has_access_token && (await isMCPOAuthGrantAuthorizedForServer(db, server, grant))
         );
       };
       return runInTenantDatabaseScope(params, read);
@@ -4405,6 +4412,30 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     requireAuth
   );
+
+  registerAuthenticatedRoute(
+    app,
+    BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE,
+    new BranchWorkspaceNotificationService(db),
+    { create: { role: ROLES.VIEWER, action: 'dismiss branch workspace notifications' } },
+    requireAuth
+  );
+  app.service(BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE).hooks({
+    after: {
+      create: [
+        async (context: HookContext) => {
+          emitServiceEvent(app, {
+            path: 'branches',
+            event: 'patched',
+            data: context.result,
+            params: context.params,
+            id: (context.result as import('@agor/core/types').Branch).branch_id,
+          });
+          return context;
+        },
+      ],
+    },
+  });
 
   app.use('/branches/:id/clean', {
     async create(data: unknown, params: RouteParams) {

@@ -421,7 +421,7 @@ export class UserMCPOAuthTokenRepository {
    * recompute the binding HMAC. Nothing returned crosses an API boundary.
    */
   async getCatalogGrantAuthority(
-    userId: UserID,
+    userId: UserID | null,
     serverId: MCPServerID
   ): Promise<(UserMCPOAuthToken & { has_access_token: boolean }) | null> {
     try {

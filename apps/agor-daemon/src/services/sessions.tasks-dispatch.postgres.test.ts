@@ -185,5 +185,45 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
       expect(final?.tasks).toEqual([first.task_id, second.task_id]);
     });
+
+    it('reports Session.tasks completeness on one snapshot, only inside the tenant', async () => {
+      const tenant = `session-tasks-${generateId()}`;
+      const { session, first, second } = await seed(tenant);
+      const other = `session-tasks-${generateId()}`;
+      await seed(other);
+      const complete = (tenantId: string, listed: string[]) =>
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new TaskRepository(scoped).isSessionTaskListComplete(session.session_id, listed)
+        );
+      const list = (tasks: string[]) =>
+        runWithTenantDatabaseScope(dbA, tenant, (scoped) =>
+          new SessionRepository(scoped).update(session.session_id, { tasks: tasks as never })
+        );
+      await runWithTenantDatabaseScope(dbA, tenant, (scoped) =>
+        new TaskRepository(scoped).claimDispatchAndProjectSession(
+          first.task_id,
+          TaskStatus.QUEUED,
+          { status: TaskStatus.DISPATCHING }
+        )
+      );
+      // The second prompt is still queued: never run, no position.
+      expect(await complete(tenant, [first.task_id])).toBe(true);
+      // A row read before the dispatch is a prefix of the snapshot's list.
+      expect(await complete(tenant, [])).toBe(true);
+      // Legacy rows: a duplicate, a dispatched Task unlisted, an unknown ID.
+      await list([first.task_id, first.task_id]);
+      expect(await complete(tenant, [first.task_id, first.task_id])).toBe(false);
+      await list([]);
+      expect(await complete(tenant, [])).toBe(false);
+      await list([first.task_id, second.task_id, generateId()]);
+      expect(await complete(tenant, [first.task_id, second.task_id])).toBe(false);
+      // NULL makes `NOT IN` unknown, so it must not hide the omitted dispatched Task.
+      await list([null as unknown as string]);
+      expect(await complete(tenant, [null as unknown as string])).toBe(false);
+      await list([first.task_id]);
+      expect(await complete(tenant, [first.task_id])).toBe(true);
+      // Another tenant's scope cannot see the Session: nothing to report.
+      expect(await complete(other, [first.task_id])).toBe(false);
+    });
   }
 );

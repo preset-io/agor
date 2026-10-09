@@ -357,10 +357,21 @@ Agents can call **agor_branches_clean** with a branch ID. API clients can call
 `branches.clean({ branchId })` or POST an empty object to
 `/branches/:id/clean`. The response is **accepted**, not completed. Read the
 branch's `workspace_operation` or watch branch updates for its result. The card
-and General tab display pending/running/succeeded/failed/unknown state and safe
-errors in a compact, dismissible notification; hover for its timestamp. Dismissal
-hides the current notification in that view, not the durable operation history.
-A new operation or status change shows a fresh notification.
+and General tab show operation progress and the latest outcome, with readable error
+details and a timestamp on hover.
+
+Branch Managers can use **Dismiss notification for everyone** once an operation
+has finished and the branch has no unresolved workspace or deletion condition.
+Dismissal permanently clears that notification and any retained cleanup error
+for all users, including after refresh. It does not keep an acknowledgement log,
+undo filesystem changes, or reset the last successful cleanup timestamp. A new
+operation can produce a new notification.
+
+Running operations, unknown outcomes, failed provisioning, unavailable active
+workspaces, and unresolved deletions cannot be dismissed this way. Use the
+applicable recovery action or operator reconciliation instead; dismissing a
+notification never releases a maintenance restriction.
+
 `last_cleanup_succeeded_at` records command success, not bytes reclaimed.
 
 Stop environments and finish/cancel outstanding tasks before requesting maintenance.

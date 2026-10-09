@@ -1,14 +1,17 @@
-import type { Board, BoardComment, Branch, Session } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, Branch, Session } from '@agor-live/client';
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import { Drawer, Flex, Segmented, Typography, theme } from 'antd';
 import { useTheme } from '../../contexts/ThemeContext';
 import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import type { CreateModalKind } from '../CreateMenu';
 import { glassSurfaceStyle } from '../GlassSurface/glassStyles';
 import { MobileNavTree } from './MobileNavTree';
 
 interface MobileMoreSheetProps {
   open: boolean;
   onClose: () => void;
+  client: AgorClient | null;
+  canUseMemberWorkspaceServices: boolean;
   boardById: Map<string, Board>;
   branchById: Map<string, Branch>;
   sessionsByBranch: Map<string, Session[]>;
@@ -18,6 +21,9 @@ interface MobileMoreSheetProps {
   onLogout?: () => void;
   externalAppLink?: string;
   externalAppLabel?: string;
+  /** Opens the shared create flow for the picked kind (sheet closes first). Omit to hide the row. */
+  onCreate?: (kind: CreateModalKind) => void;
+  isAdmin: boolean;
 }
 
 /**
@@ -28,6 +34,8 @@ interface MobileMoreSheetProps {
 export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   open,
   onClose,
+  client,
+  canUseMemberWorkspaceServices,
   boardById,
   branchById,
   sessionsByBranch,
@@ -37,6 +45,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
   onLogout,
   externalAppLink,
   externalAppLabel,
+  onCreate,
+  isAdmin,
 }) => {
   const { token } = theme.useToken();
   const { themeMode, setThemeMode } = useTheme();
@@ -72,6 +82,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         />
       </Flex>
       <MobileNavTree
+        client={client}
+        canUseMemberWorkspaceServices={canUseMemberWorkspaceServices}
         boardById={boardById}
         branchById={branchById}
         sessionsByBranch={sessionsByBranch}
@@ -88,6 +100,8 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
         onLogout={onLogout}
         externalAppLink={externalAppLink}
         externalAppLabel={externalAppLabel}
+        onCreate={onCreate}
+        isAdmin={isAdmin}
       />
     </Drawer>
   );

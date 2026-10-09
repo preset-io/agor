@@ -75,6 +75,7 @@ import {
   NotFound,
 } from '@agor/core/feathers';
 import { stripGitUrlCredentials } from '@agor/core/git/pure';
+import { assertSearchTerms, idFilterValues } from '@agor/core/lib/feathers-validation';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -162,6 +163,8 @@ export const BRANCH_MATERIALIZATION_INTENT = Symbol('branchMaterializationIntent
  */
 export type BranchParams = QueryParams<{
   branch_id?: BranchID | { $in?: BranchID[] };
+  created_by?: UUID;
+  teammate?: true;
   repo_id?: UUID;
   name?: string;
   ref?: string;
@@ -186,7 +189,10 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
     'board_id',
     'repo_id',
     'branch_id',
+    'created_by',
     'zone_id',
+    'search',
+    'teammate',
     '$limit',
     '$skip',
     '$sort',
@@ -195,7 +201,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
   // An empty virtual filter historically goes through the generic adapter;
   // do not turn it into an unrestricted SQL page.
   if (query.zone_id === '') return false;
-  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id']) {
+  for (const key of ['archived', 'board_id', 'repo_id', 'zone_id', 'created_by', 'search']) {
     if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
       return false;
     }
@@ -203,13 +209,7 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
       return false;
     }
   }
-  if (query.branch_id !== undefined) {
-    const value = query.branch_id;
-    if (typeof value !== 'string') {
-      const ids = value && typeof value === 'object' ? (value as { $in?: unknown }).$in : undefined;
-      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return false;
-    }
-  }
+  if (query.branch_id !== undefined && idFilterValues(query.branch_id) === undefined) return false;
   const sort = query.$sort as Record<string, unknown> | undefined;
   if (sort) {
     const columns = new Set(['branch_id', 'name', 'ref', 'created_at', 'updated_at']);
@@ -1748,20 +1748,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (zoneId && !shouldSqlPageBranchQuery(params?.query)) {
       const branchIdsInZone = await this.branchRepo.findBranchIdsByZone(zoneId);
       const existingBranchFilter = params?.query?.branch_id;
-      let filteredBranchIds = branchIdsInZone;
-
-      if (typeof existingBranchFilter === 'string') {
-        filteredBranchIds = branchIdsInZone.includes(existingBranchFilter as BranchID)
-          ? [existingBranchFilter as BranchID]
-          : [];
-      } else if (
-        existingBranchFilter &&
-        typeof existingBranchFilter === 'object' &&
-        Array.isArray(existingBranchFilter.$in)
-      ) {
-        const allowed = new Set(existingBranchFilter.$in);
-        filteredBranchIds = branchIdsInZone.filter((branchId) => allowed.has(branchId));
-      }
+      const requested = idFilterValues(existingBranchFilter);
+      const filteredBranchIds = requested
+        ? branchIdsInZone.filter((branchId) => requested.includes(branchId))
+        : branchIdsInZone;
 
       const { zone_id: _zoneId, ...queryWithoutZone } = params?.query ?? {};
       findParams = {
@@ -1774,27 +1764,36 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const query = findParams?.query as Record<string, unknown> | undefined;
+    assertSearchTerms(query?.search);
     if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
-      const branchIds =
-        typeof branchFilter === 'string'
-          ? [branchFilter as BranchID]
-          : branchFilter &&
-              typeof branchFilter === 'object' &&
-              Array.isArray((branchFilter as { $in?: unknown }).$in)
-            ? (branchFilter as { $in: BranchID[] }).$in
-            : undefined;
-      const { limit, skip } = this.pageWindow(query ?? {});
+      const branchIds = idFilterValues(branchFilter) as BranchID[] | undefined;
+      const teammate = query?.teammate === true;
+      const window = this.pageWindow(query ?? {});
+      // `teammate` reads at most MAX_TEAMMATE_BRANCHES, newest first; the
+      // real `total` tells a capped page from a complete one.
+      const limit = teammate
+        ? Math.min(
+            (query?.$limit as number | undefined) ?? PAGINATION.MAX_TEAMMATE_BRANCHES,
+            PAGINATION.MAX_TEAMMATE_BRANCHES
+          )
+        : window.limit;
+      const skip = window.skip;
       const page = await this.branchRepo.findPage({
         repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
         board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
         zone_id: typeof query?.zone_id === 'string' ? query.zone_id : undefined,
         archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
         branchIds,
+        createdBy: typeof query?.created_by === 'string' ? (query.created_by as UUID) : undefined,
+        search: typeof query?.search === 'string' ? query.search : undefined,
+        teammate: teammate || undefined,
         visibleToUserId: findParams?._agorSqlBranchAccessUserId,
         limit,
         offset: skip,
-        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+        sort:
+          (query?.$sort as Record<string, 1 | -1> | undefined) ??
+          (teammate ? { branch_id: -1 } : undefined),
       });
       const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
       return {
@@ -1803,6 +1802,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         skip,
         data: enriched,
       };
+    }
+
+    if (query?.search !== undefined) {
+      throw new BadRequest('search is supported only for SQL-paginated branch queries');
     }
 
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)

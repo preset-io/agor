@@ -17,14 +17,27 @@ import {
   VerticalAlignBottomOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
-import { Button, ColorPicker, Dropdown, Flex, Popover, Space, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  ColorPicker,
+  Dropdown,
+  Flex,
+  Popover,
+  Space,
+  Typography,
+  theme,
+} from 'antd';
 import type { Color } from 'antd/es/color-picker';
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
-import { useMutationGate } from '../../../contexts/ConnectionContext';
+import { useConnectionState, useMutationGate } from '../../../contexts/ConnectionContext';
+import type { BoardWriteResult } from '../../../hooks/useBoardMutationGuard';
+import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/boardMutationGuard';
 import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
+import { STALE_DRAFT_TITLE, useCopyDraft } from './staleDraft';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
 import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
@@ -48,7 +61,7 @@ const getColorPalette = (token: ReturnType<typeof theme.useToken>['token']) => [
 ];
 
 type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
-type BoardObjectUpdateResult = boolean | undefined | Promise<boolean | undefined>;
+type BoardObjectUpdateResult = BoardWriteResult | undefined | Promise<BoardWriteResult | undefined>;
 
 /**
  * ZoneNode - Resizable rectangle for organizing sessions visually
@@ -56,9 +69,31 @@ type BoardObjectUpdateResult = boolean | undefined | Promise<boolean | undefined
 interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   objectId: string;
   pinnedItemCount?: number;
-  onUpdate?: (objectId: string, objectData: BoardObject) => BoardObjectUpdateResult;
-  onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
+  /**
+   * `ticket`: captured when the edit began (an immediate action captures it
+   * as it runs). `null` — nothing could be captured — is refused.
+   */
+  onUpdate?: (
+    objectId: string,
+    objectData: BoardObject,
+    ticket: BoardWriteTicket | null
+  ) => BoardObjectUpdateResult;
+  onDelete?: (
+    objectId: string,
+    deleteAssociatedSessions: boolean,
+    ticket: BoardWriteTicket | null
+  ) => void;
   onReorder?: (objectId: string, op: LayerOp) => void;
+  /**
+   * Capture the board write ticket when an edit begins (label editor, config
+   * or delete dialog): a write from before a board reload is then dropped.
+   */
+  beginBoardWrite?: () => BoardWriteTicket | null;
+  /**
+   * The node unmounted with an unsaved label or settings draft (its zone was
+   * deleted, e.g. by a reload): the canvas shows the draft to copy or discard.
+   */
+  onDraftLost?: (draft: { objectId: string; zoneName: string; text: string }) => void;
   /** Effective board.edit capability. Omitted only by isolated tests/fixtures. */
   canEdit?: boolean;
   /** Number of other zones whose rectangles intersect this zone. */
@@ -101,6 +136,44 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const [label, setLabel] = useState(data.label);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  // The write ticket of the edit in progress (label, config or delete dialog).
+  // A node without a ticket source gets none, so its writes are refused:
+  // never a fresh capture when the delayed write is finally confirmed.
+  const [editTicket, setEditTicket] = useState<BoardWriteTicket | null>(null);
+  const captureTicket = () => data.beginBoardWrite?.() ?? null;
+  // An open dialog keeps its ticket: opening either dialog again while one
+  // is open is ignored (as an open label editor ignores re-open clicks).
+  const zoneDialogOpen = configModalOpen || deleteModalOpen;
+  const beginEdit = () => {
+    const ticket = captureTicket();
+    setEditTicket(ticket);
+    return ticket;
+  };
+  // A label save refused because the board reloaded: the draft stays in the
+  // editor to copy or discard. Its ticket never saves again, and the open
+  // editor ignores re-open clicks, so only reopening after Discard edits.
+  const [labelStale, setLabelStale] = useState(false);
+  const labelDraftHeldRef = useRef(false);
+  labelDraftHeldRef.current = isEditingLabel || labelStale;
+  const copyDraft = useCopyDraft();
+  // The open settings dialog's draft, as text (see ZoneConfigModal).
+  const configDraftReaderRef = useRef<(() => string | null) | null>(null);
+  // An unmount with an unsaved draft hands it to the canvas. This cleanup
+  // runs before the dialog's, so its draft reader is still set.
+  const unmountDraftRef = useRef<() => void>(() => {});
+  unmountDraftRef.current = () => {
+    const drafts = [
+      isEditingLabel && label !== data.label ? `Label: ${label}` : null,
+      configDraftReaderRef.current?.() ?? null,
+    ].filter((draft): draft is string => draft !== null);
+    if (drafts.length === 0) return;
+    data.onDraftLost?.({
+      objectId: data.objectId,
+      zoneName: data.label,
+      text: drafts.join('\n\n'),
+    });
+  };
+  useLayoutEffect(() => () => unmountDraftRef.current(), []);
   const [recentColors, setRecentColors] = useState<string[]>(getRecentColors());
   const labelInputRef = useRef<HTMLInputElement>(null);
   const colors = getColorPalette(token);
@@ -109,14 +182,16 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // mutation. Production callers always provide canEdit; omission keeps old
   // isolated fixtures backwards compatible.
   const mutationGate = useMutationGate();
+  const { authGeneration } = useConnectionState();
   const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
 
   // Inverse scale to keep toolbar at constant size regardless of zoom
   const scale = 1 / zoom;
 
-  // Sync label state when data.label changes (from WebSocket or modal updates)
+  // Sync label state when data.label changes (from WebSocket or modal
+  // updates), except over a draft that is being edited or was refused.
   useEffect(() => {
-    setLabel(data.label);
+    if (!labelDraftHeldRef.current) setLabel(data.label);
   }, [data.label]);
 
   // Auto-focus input when entering edit mode
@@ -167,20 +242,40 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     ...overrides,
   });
 
+  const saveLabel = async (ticket: BoardWriteTicket | null) => {
+    if (!data.onUpdate) return;
+    const result = await data.onUpdate(data.objectId, createObjectData({ label }), ticket);
+    if (result === 'stale') {
+      setLabelStale(true);
+      setIsEditingLabel(true);
+    }
+  };
+
   const handleSaveLabel = () => {
+    // A refused draft leaves only by Discard (or Escape).
+    if (labelStale) return;
+    if (mutationDisabled && label !== data.label) {
+      // A read-only board keeps the draft in the editor. If its ticket ended
+      // (the board unloaded), it is refused now, as a save would be.
+      if (hasBoardWriteTicketEnded(editTicket, authGeneration)) setLabelStale(true);
+      return;
+    }
     setIsEditingLabel(false);
     if (mutationDisabled) return;
-    if (label !== data.label && data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ label }));
-    }
+    if (label !== data.label) void saveLabel(editTicket);
+  };
+
+  const handleDiscardLabel = () => {
+    setLabelStale(false);
+    setLabel(data.label); // Reset to original
+    setIsEditingLabel(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       handleSaveLabel();
     } else if (e.key === 'Escape') {
-      setLabel(data.label); // Reset to original
-      setIsEditingLabel(false);
+      handleDiscardLabel();
     }
   };
 
@@ -200,7 +295,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                 backgroundColor: toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`),
               }
             : {}),
-        })
+        }),
+        captureTicket()
       );
     }
     // Save to recent colors and update state
@@ -212,7 +308,11 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     if (mutationDisabled) return;
     const hexColor = color.toHexString();
     if (data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ backgroundColor: hexColor }));
+      data.onUpdate(
+        data.objectId,
+        createObjectData({ backgroundColor: hexColor }),
+        captureTicket()
+      );
     }
     // Save to recent colors and update state
     saveRecentColor(hexColor);
@@ -222,7 +322,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const handleToggleLock = () => {
     if (mutationDisabled) return;
     if (data.onUpdate) {
-      data.onUpdate(data.objectId, createObjectData({ locked: !data.locked }));
+      data.onUpdate(data.objectId, createObjectData({ locked: !data.locked }), captureTicket());
     }
   };
 
@@ -320,7 +420,12 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               title="Rename zone"
               icon={<EditOutlined />}
               disabled={mutationDisabled}
-              onClick={() => setIsEditingLabel(true)}
+              onClick={() => {
+                // An open editor (or a refused draft) keeps its ticket.
+                if (isEditingLabel) return;
+                beginEdit();
+                setIsEditingLabel(true);
+              }}
               style={{ width: 32, height: 32 }}
             />
 
@@ -471,7 +576,11 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               title="Zone settings"
               icon={<SettingOutlined />}
               disabled={mutationDisabled}
-              onClick={() => setConfigModalOpen(true)}
+              onClick={() => {
+                if (zoneDialogOpen) return;
+                beginEdit();
+                setConfigModalOpen(true);
+              }}
               style={{ width: 32, height: 32 }}
             />
 
@@ -521,6 +630,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   domEvent.stopPropagation();
                   if (mutationDisabled) return;
                   if (key === 'delete') {
+                    if (zoneDialogOpen) return;
+                    beginEdit();
                     setDeleteModalOpen(true);
                     return;
                   }
@@ -557,7 +668,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             minHeight: `${labelFontSize * scale}px`,
           }}
           onDoubleClick={() => {
-            if (mutationDisabled) return;
+            // Double-clicking inside an open editor keeps its ticket.
+            if (mutationDisabled || isEditingLabel) return;
+            beginEdit();
             setIsEditingLabel(true);
           }}
         >
@@ -605,6 +718,42 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
               {label}
             </h3>
           )}
+          {labelStale && (
+            <Alert
+              className="nodrag nopan"
+              type="warning"
+              showIcon
+              title={STALE_DRAFT_TITLE}
+              description="Your label was not saved over the reloaded board. Copy it, then discard and rename the zone again."
+              action={
+                <Space orientation="vertical" size={4}>
+                  <Button
+                    size="small"
+                    // Keep the editor focused: its blur would end the edit.
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => void copyDraft(label)}
+                  >
+                    Copy draft
+                  </Button>
+                  <Button
+                    size="small"
+                    type="text"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleDiscardLabel}
+                  >
+                    Discard
+                  </Button>
+                </Space>
+              }
+              style={{
+                marginTop: token.marginXS,
+                transform: `scale(${scale})`,
+                transformOrigin: 'top left',
+                width: 'max-content',
+                maxWidth: 360,
+              }}
+            />
+          )}
         </div>
         {data.status && (
           <div
@@ -635,7 +784,10 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           onCancel={() => setConfigModalOpen(false)}
           zoneName={data.label}
           objectId={data.objectId}
-          onUpdate={data.onUpdate || (() => undefined)}
+          onUpdate={(objectId, objectData) =>
+            data.onUpdate ? data.onUpdate(objectId, objectData, editTicket) : undefined
+          }
+          draftReaderRef={configDraftReaderRef}
           zoneData={zoneData}
           canEdit={data.canEdit !== false}
         />
@@ -647,7 +799,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           onConfirm={() => {
             setDeleteModalOpen(false);
             if (data.onDelete) {
-              data.onDelete(data.objectId, false);
+              data.onDelete(data.objectId, false, editTicket);
             }
           }}
           zoneName={data.label}

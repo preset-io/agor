@@ -29,6 +29,26 @@ export function createZoneConfigDraft(zone: ZoneBoardObject, name: string): Zone
   };
 }
 
+/** A readable copy of a draft the board refused, for "Copy draft". */
+export function formatZoneConfigDraft(draft: ZoneConfigDraft): string {
+  const lines = [`Name: ${draft.name}`];
+  if (draft.triggerTemplate.trim()) {
+    lines.push(
+      `When a branch enters: ${draft.triggerBehavior}`,
+      ...(draft.triggerAgent ? [`Agent: ${draft.triggerAgent}`] : []),
+      'Prompt template:',
+      draft.triggerTemplate
+    );
+  } else {
+    lines.push('Prompt template: (none)');
+  }
+  lines.push(`Locked: ${draft.locked ? 'yes' : 'no'}`);
+  if (draft.borderColor) lines.push(`Border color: ${draft.borderColor}`);
+  if (draft.backgroundColor) lines.push(`Fill color: ${draft.backgroundColor}`);
+  if (draft.fontSize !== undefined) lines.push(`Label size: ${draft.fontSize}`);
+  return lines.join('\n');
+}
+
 /**
  * Upserts replace the entire zone. Overlay only edits relative to the opening
  * draft, not every field in the form, onto the freshest received zone. Explicit

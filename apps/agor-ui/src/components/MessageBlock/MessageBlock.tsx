@@ -58,7 +58,7 @@ import { ToolIcon } from '../ToolIcon';
 import { ToolUseRenderer } from '../ToolUseRenderer';
 import { TranscriptTruncationNotice } from '../ToolUseRenderer/TranscriptTruncationNotice';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
-import { HistoryMarkdown } from './HistoryMarkdown';
+import { HistoryMarkdown, historyTextKey } from './HistoryMarkdown';
 // Side-effect import: registers every built-in widget component with the
 // `WidgetBlock` dispatcher (e.g. `env_vars`).
 import '../Widgets';
@@ -890,7 +890,10 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
                           <div key={`text-${textIndex}`}>
                             {shouldTruncate ? (
                               <HistoryMarkdown
-                                textKey={textChoiceKey ?? message.message_id}
+                                textKey={
+                                  textChoiceKey ??
+                                  historyTextKey(message.task_id, message.message_id)
+                                }
                                 defaultExpanded={
                                   isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
                                 }
@@ -1027,7 +1030,9 @@ const MessageBlockInner: React.FC<MessageBlockProps> = ({
 
                         return shouldTruncate ? (
                           <HistoryMarkdown
-                            textKey={textChoiceKey ?? message.message_id}
+                            textKey={
+                              textChoiceKey ?? historyTextKey(message.task_id, message.message_id)
+                            }
                             defaultExpanded={
                               isSystem || isTaskPrompt || isTaskResult || defaultTextExpanded
                             }

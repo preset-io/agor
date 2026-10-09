@@ -1,6 +1,7 @@
 import type { JsonWebKey, KeyObject } from 'node:crypto';
 import { createHash, createPublicKey, randomBytes } from 'node:crypto';
 import {
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
@@ -39,7 +40,7 @@ import type {
   UserID,
   UserRole,
 } from '@agor/core/types';
-import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types';
+import { isValidExecutionHomeKey, MCP_OAUTH_RELAY, normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
 import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
@@ -314,7 +315,12 @@ async function projectLaunchUser(
   ) {
     throw new NotAuthenticated('Invalid one-time launch assertion execution home');
   }
-  const avatar = claims.avatar || claims.picture;
+  // Avatar ownership is independent of external account/role authority. Do
+  // not rehydrate even a cleared Agor-owned avatar on a subsequent launch.
+  const avatar =
+    identityAuthority.avatarAuthority === AgorAvatarAuthority.EXTERNAL
+      ? claims.avatar || claims.picture
+      : undefined;
   const identity: StoredExternalIdentity = {
     key,
     provider,
@@ -387,8 +393,15 @@ async function projectLaunchUser(
         updated_at: now,
         data: {
           ...data,
-          avatar_url: avatar ?? data.avatar_url ?? data.avatar,
-          avatar_source: avatar ? 'launch-auth' : data.avatar_source,
+          ...(avatar
+            ? {
+                avatar_url: avatar,
+                avatar: undefined,
+                avatar_source: 'launch-auth',
+                avatar_source_id: undefined,
+                avatar_synced_at: undefined,
+              }
+            : {}),
           external_identities: nextIdentities,
         },
       })
@@ -532,7 +545,7 @@ async function exchangeLaunchCode(
   return json as LaunchExchangeResponse;
 }
 
-async function resolveVerificationKey(
+export async function resolveVerificationKey(
   header: JwtHeader,
   settings: ResolvedExternalLaunchProvider
 ): Promise<string | KeyObject> {
@@ -591,6 +604,10 @@ function validateLaunchClaims(
   claims: LaunchClaims,
   settings: ResolvedExternalLaunchProvider
 ): void {
+  // Callback delivery assertions use the launch signing key but are never login assertions.
+  if (claims.purpose === MCP_OAUTH_RELAY.callbackPurpose) {
+    throw new NotAuthenticated('Invalid one-time launch assertion purpose');
+  }
   if (!claims.iss || claims.iss !== settings.issuer) {
     throw new NotAuthenticated('Invalid one-time launch assertion issuer');
   }

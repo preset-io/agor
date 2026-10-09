@@ -1,7 +1,11 @@
 import type { AgorClient, Branch, Session, SpawnConfig, User } from '@agor-live/client';
-import { Empty, List, Segmented, theme } from 'antd';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { Empty, List, Segmented, Spin, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useBoardPartition } from '../../hooks/useBoardPartition';
+import { useAgorStore } from '../../store/agorStore';
+import { selectMySessionsLoaded } from '../../store/userScope';
 import { isOwnActiveSession, sortSessions } from '../../utils/sessionSearch';
 import { BranchSessionSections } from '../BranchCard';
 import { mobileScrollAreaStyle } from './constants';
@@ -33,9 +37,10 @@ interface MobileSessionsPageProps {
 /**
  * Sessions tab. A scope control switches between the caller's own sessions
  * (default, unchanged) and the primary assistant's sessions, which reuse the
- * same BranchSessionSections surface the desktop Teammate tab renders. Both read
- * only the RBAC-filtered store; there is no extra fetch. Tapping a row opens the
- * shared full-screen session view.
+ * same BranchSessionSections surface the desktop Teammate tab renders. Yours
+ * reads the user scope; the assistant scope loads the assistant's board (its
+ * partition, in the background) while shown. Tapping a row opens the shared
+ * full-screen session view.
  */
 export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   sessionById,
@@ -67,7 +72,17 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
     );
     return sortSessions(own, 'recent');
   }, [sessionById, currentUser?.user_id]);
+  // An empty list means "none" only once the caller's sessions have loaded.
+  const yourSessionsLoaded = useAgorStore(selectMySessionsLoaded);
 
+  const { boardReady: assistantReady } = useBoardPartition(
+    client,
+    scope === 'assistant' ? primaryBranch?.board_id : null,
+    {
+      canUseMemberWorkspaceServices: hasMinimumRole(currentUser?.role, ROLES.MEMBER),
+      background: true,
+    }
+  );
   const assistantSessions = useMemo(
     () => (primaryBranch ? (sessionsByBranch.get(primaryBranch.branch_id) ?? []) : []),
     [primaryBranch, sessionsByBranch]
@@ -106,7 +121,9 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
         </div>
       )}
       <div style={mobileScrollAreaStyle}>
-        {scope === 'assistant' && primaryBranch ? (
+        {scope === 'assistant' && primaryBranch && !assistantReady ? (
+          <Spin style={{ display: 'block', margin: '48px auto' }} />
+        ) : scope === 'assistant' && primaryBranch ? (
           <div style={{ paddingInline: token.padding }}>
             <BranchSessionSections
               branch={primaryBranch}
@@ -121,6 +138,8 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
               client={client}
             />
           </div>
+        ) : yourSessions.length === 0 && !yourSessionsLoaded ? (
+          <Spin style={{ display: 'block', margin: '48px auto' }} />
         ) : yourSessions.length === 0 ? (
           <div
             style={{

@@ -49,6 +49,7 @@ import type {
   GatewaySendReceipt,
   InboundFile,
   InboundMessage,
+  InboundSkippedFile,
 } from '../connector';
 import type { DiscordDeliveryNonce } from '../discord-identifiers';
 import {
@@ -74,6 +75,8 @@ import {
 } from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
+/** Prompt text for a message that carries attachments but no words. */
+const DISCORD_ATTACHMENT_ONLY_TEXT = '(attachments only, no text)';
 const DISCORD_CHANNEL_INFO_CACHE_LIMIT = 1_000;
 const DISCORD_TEXT_CHANNEL_TYPE = DiscordChannelType.GuildText;
 const DISCORD_FORUM_CHANNEL_TYPE = DiscordChannelType.GuildForum;
@@ -257,7 +260,30 @@ function snowflake(value: unknown): string | undefined {
 const DISCORD_ATTACHMENT_CDN_HOST = 'cdn.discordapp.com';
 const DISCORD_ATTACHMENT_PATH = /^\/attachments\/\d{17,20}\/\d{17,20}\/.+$/;
 const DISCORD_SIGNED_ATTACHMENT_QUERY = new Set(['ex', 'is', 'hm']);
-const DISCORD_IMAGE_MIMES = new Set(['image/png', 'image/jpeg']);
+/**
+ * Attachment types handed to the agent: images and text-like files. Mirrors
+ * the daemon's gateway ingestion allowlist, which re-checks each download.
+ */
+const DISCORD_READABLE_MIMES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+]);
+const DISCORD_READABLE_EXTENSIONS: ReadonlyArray<[RegExp, string]> = [
+  [/\.png$/, 'image/png'],
+  [/\.jpe?g$/, 'image/jpeg'],
+  [/\.gif$/, 'image/gif'],
+  [/\.webp$/, 'image/webp'],
+  [/\.(txt|log)$/, 'text/plain'],
+  [/\.(md|markdown)$/, 'text/markdown'],
+  [/\.csv$/, 'text/csv'],
+  [/\.json$/, 'application/json'],
+];
 
 /**
  * Discord attachment URLs are signed CDN URLs, not arbitrary user-provided
@@ -299,40 +325,57 @@ function discordAttachmentMime(contentType: unknown, filename: string): string |
   }
   const normalized =
     typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
-  if (normalized) return DISCORD_IMAGE_MIMES.has(normalized) ? normalized : undefined;
+  if (normalized) return DISCORD_READABLE_MIMES.has(normalized) ? normalized : undefined;
   const lowerName = filename.toLowerCase();
-  if (lowerName.endsWith('.png')) return 'image/png';
-  if (lowerName.endsWith('.jpg') || lowerName.endsWith('.jpeg')) return 'image/jpeg';
-  return undefined;
+  return DISCORD_READABLE_EXTENSIONS.find(([pattern]) => pattern.test(lowerName))?.[1];
 }
 
-/** Normalize the strictly supported live Discord attachment subset. */
-export function extractDiscordInboundFiles(rawAttachments: unknown): InboundFile[] | undefined {
+/**
+ * Split a live message's attachments into files the agent can read and files
+ * that are skipped (with a reason), so a message is never dropped because of
+ * an attachment and the user can be told what was not read. Returns
+ * undefined only when the attachment list itself is malformed.
+ */
+export function partitionDiscordInboundFiles(
+  rawAttachments: unknown,
+  filesEnabled: boolean
+): { files: InboundFile[]; skipped: InboundSkippedFile[] } | undefined {
   if (!Array.isArray(rawAttachments)) return undefined;
   const files: InboundFile[] = [];
+  const skipped: InboundSkippedFile[] = [];
   for (const rawAttachment of rawAttachments) {
     const attachment = asRecord(rawAttachment);
     const id = snowflake(attachment?.id);
     const filename = attachment?.filename;
     const size = attachment?.size;
     const url = attachment?.url;
+    const name =
+      typeof filename === 'string' && filename.length > 0 && filename.length <= 255
+        ? filename
+        : 'attachment';
     if (
       !id ||
-      typeof filename !== 'string' ||
-      filename.length === 0 ||
-      filename.length > 255 ||
+      name !== filename ||
       !Number.isSafeInteger(size) ||
       (size as number) < 0 ||
       typeof url !== 'string' ||
       !isAllowedDiscordAttachmentUrl(url)
     ) {
-      return undefined;
+      skipped.push({ name, reason: 'invalid' });
+      continue;
     }
-    const mimetype = discordAttachmentMime(attachment?.content_type, filename);
-    if (!mimetype) return undefined;
-    files.push({ id, name: filename, mimetype, size: size as number, url_private_download: url });
+    if (!filesEnabled) {
+      skipped.push({ name, reason: 'files_disabled' });
+      continue;
+    }
+    const mimetype = discordAttachmentMime(attachment?.content_type, name);
+    if (!mimetype) {
+      skipped.push({ name, reason: 'unsupported_type' });
+      continue;
+    }
+    files.push({ id, name, mimetype, size: size as number, url_private_download: url });
   }
-  return files;
+  return { files, skipped };
 }
 
 function hasUnsupportedDiscordRichPayload(message: Record<string, unknown>): boolean {
@@ -1457,6 +1500,7 @@ export class DiscordConnector implements GatewayConnector {
     metadata?: Record<string, unknown>;
     text?: string;
     files?: InboundFile[];
+    skippedFiles?: InboundSkippedFile[];
     prepareDelivery?: InboundMessage['prepareDelivery'];
   }> {
     const author = asRecord(message.author);
@@ -1502,14 +1546,19 @@ export class DiscordConnector implements GatewayConnector {
       return { accepted: false };
     }
     if (hasUnsupportedDiscordRichPayload(message)) return { accepted: false };
+    // Attachments never drop a message: readable files go to the agent and
+    // the rest are reported as skipped so the user can be told.
     let files: InboundFile[] | undefined;
+    let skippedFiles: InboundSkippedFile[] | undefined;
     if (Array.isArray(rawAttachments) && rawAttachments.length > 0) {
-      if (this.config.files !== true) return { accepted: false };
-      files = extractDiscordInboundFiles(rawAttachments);
-      if (!files) return { accepted: false };
+      const partitioned = partitionDiscordInboundFiles(rawAttachments, this.config.files === true);
+      if (!partitioned) return { accepted: false };
+      if (partitioned.files.length > 0) files = partitioned.files;
+      if (partitioned.skipped.length > 0) skippedFiles = partitioned.skipped;
     }
-    const text = stripStructuredDiscordBotMention(rawContent, botUserId);
-    if (!text) return { accepted: false };
+    const strippedText = stripStructuredDiscordBotMention(rawContent, botUserId);
+    if (!strippedText && !files && !skippedFiles) return { accepted: false };
+    const text = strippedText || DISCORD_ATTACHMENT_ONLY_TEXT;
 
     const allowedUsers = Array.isArray(this.config.allowed_user_ids)
       ? this.config.allowed_user_ids.filter((id): id is string => typeof id === 'string')
@@ -1552,6 +1601,7 @@ export class DiscordConnector implements GatewayConnector {
         threadId: buildDiscordDirectMessageThreadKey(channelId, authorId),
         text,
         ...(files ? { files } : {}),
+        ...(skippedFiles ? { skippedFiles } : {}),
         metadata: buildDiscordDirectMessageMetadata({
           channelId,
           messageId,
@@ -1605,6 +1655,7 @@ export class DiscordConnector implements GatewayConnector {
       threadId,
       text,
       ...(files ? { files } : {}),
+      ...(skippedFiles ? { skippedFiles } : {}),
       metadata: buildDiscordInboundMetadata({
         guildId: guildId!,
         channelId,
@@ -1647,6 +1698,9 @@ export class DiscordConnector implements GatewayConnector {
       userId: String(asRecord(message.author)?.id ?? ''),
       timestamp: toIsoTimestamp(message.timestamp),
       ...(result.files && result.files.length > 0 ? { files: result.files } : {}),
+      ...(result.skippedFiles && result.skippedFiles.length > 0
+        ? { skippedFiles: result.skippedFiles }
+        : {}),
       metadata: result.metadata,
       prepareDelivery: result.prepareDelivery,
     };

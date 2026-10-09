@@ -1,7 +1,7 @@
-import type { BoardID, Branch, Repo, UUID } from '@agor-live/client';
+import type { AgorClient, BoardID, Branch, Repo, UUID } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
 import { findFrameworkRepo } from '../hooks/useFrameworkRepo';
-import { createTeammateBranch } from './teammateCreation';
+import { boardHasNoActiveBranches, createTeammateBranch } from './teammateCreation';
 
 function makeRepo(overrides: Partial<Repo> = {}): Repo {
   return {
@@ -224,4 +224,34 @@ it('keeps the registered private-name preference over the public starter', () =>
       ])
     )?.[0]
   ).toBe(privateRepo.repo_id);
+});
+
+describe('boardHasNoActiveBranches', () => {
+  const clientWith = (find: () => Promise<unknown>) =>
+    ({ service: () => ({ find: vi.fn(find) }) }) as unknown as AgorClient;
+
+  it("counts the board's active branches on the daemon, not in the store", async () => {
+    const find = vi.fn(async () => ({ total: 0, limit: 0, skip: 0, data: [] }));
+    const client = { service: () => ({ find }) } as unknown as AgorClient;
+    expect(await boardHasNoActiveBranches(client, 'board-1')).toBe(true);
+    expect(find).toHaveBeenCalledWith({
+      query: { board_id: 'board-1', archived: false, $limit: 0 },
+    });
+  });
+
+  it('is false for a board with branches, and when the count is unknown', async () => {
+    expect(
+      await boardHasNoActiveBranches(
+        clientWith(async () => ({ total: 2, limit: 0, skip: 0, data: [] })),
+        'board-1'
+      )
+    ).toBe(false);
+    expect(
+      await boardHasNoActiveBranches(
+        clientWith(async () => Promise.reject(new Error('offline'))),
+        'board-1'
+      )
+    ).toBe(false);
+    expect(await boardHasNoActiveBranches(null, 'board-1')).toBe(false);
+  });
 });

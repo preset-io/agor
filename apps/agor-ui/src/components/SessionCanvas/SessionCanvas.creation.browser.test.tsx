@@ -9,10 +9,15 @@ import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { boardObjectCreated, branchCreated, branchPatched } from '../../store/agorRealtimeActions';
 import { agorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { makeBranchesForBoardSelector } from '../../store/selectors';
+import { markBoardLoaded } from '../../test/userScopeCoverage';
 import SessionCanvas from './SessionCanvas';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  setRealtimeAuthorityScope(null);
+});
 
 it('renders an asynchronously created branch in its zone without remounting the open board', async () => {
   const board = {
@@ -48,6 +53,9 @@ it('renders an asynchronously created branch in its zone without remounting the 
   } as BoardEntityObject;
   const repo = { repo_id: branch.repo_id, slug: 'fixture/realtime' } as Repo;
   agorStore.setState({ ...EMPTY_MAPS, repoById: new Map([[repo.repo_id, repo]]) });
+  // The open board's loaded partition holds the rows created on it.
+  setRealtimeAuthorityScope('creation-user:member:1');
+  markBoardLoaded(board.board_id);
   const client = {
     service: () => ({
       find: async () => ({ data: [], capabilities: [] }),
@@ -99,7 +107,5 @@ it('renders an asynchronously created branch in its zone without remounting the 
     expect(nodes[0].style.transform.replaceAll(' ', '')).toBe('translate(180px,220px)');
   });
   expect(agorStore.getState().branchById.get(branch.branch_id)?.filesystem_status).toBe('ready');
-  expect(agorStore.getState().boardObjectByBranchId.get(branch.branch_id)?.zone_id).toBe(
-    'zone-tasks'
-  );
+  expect(agorStore.getState().boardObjectsByBoardId.get(board.board_id)).toEqual([placement]);
 });

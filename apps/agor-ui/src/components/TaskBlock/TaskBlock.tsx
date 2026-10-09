@@ -30,6 +30,7 @@ import { AgentChain } from '../AgentChain';
 import { AgorAvatar } from '../AgorAvatar';
 import { CompactionBlock } from '../CompactionBlock';
 import { getMessageSpeaker, hasRevealableInlineDetail, MessageBlock } from '../MessageBlock';
+import { historyTextKey } from '../MessageBlock/HistoryMarkdown';
 import { CreatedByTag } from '../metadata/CreatedByTag';
 import {
   ContextWindowPill,
@@ -1027,7 +1028,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           : Array.isArray(message.content) &&
             message.content.some((block) => block.type === 'text' || block.type === 'image'))
     )?.message_id;
-    const promptKey = `task:${task.task_id}:prompt`;
+    const promptKey = historyTextKey(task.task_id, 'prompt');
     // Presentation only, derived from an already-admitted Task. Never insert this
     // into reactive messages or persist it. Reuse MessageBlock so Markdown, copy,
     // avatars and attachments have the same layout before/after message delivery.

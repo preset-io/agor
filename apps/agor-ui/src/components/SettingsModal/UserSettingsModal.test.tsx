@@ -547,77 +547,82 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps externally managed identity read-only while saving Agor preferences', async () => {
-    __resetAuthConfigForTests();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          auth: {
-            requireAuth: true,
-            identity: {
-              contractVersion: 1,
-              userLifecycle: 'external',
-              roleAuthority: 'claims',
-              localAuth: 'disabled',
-              external: { provider: 'external_launch', provisioning: 'jit' },
-              capabilities: {
-                users: {
-                  create: false,
-                  delete: false,
-                  identityWrite: false,
-                  roleWrite: false,
-                  passwordWrite: false,
-                  avatarSettingsWrite: false,
-                  selfConfigurationWrite: true,
+  it.each(['internal', 'external'] as const)(
+    'keeps external identity read-only with %s avatars while saving Agor preferences',
+    async (avatarAuthority) => {
+      __resetAuthConfigForTests();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            auth: {
+              requireAuth: true,
+              identity: {
+                contractVersion: 2,
+                userLifecycle: 'external',
+                avatarAuthority,
+                roleAuthority: 'claims',
+                localAuth: 'disabled',
+                external: { provider: 'external_launch', provisioning: 'jit' },
+                capabilities: {
+                  users: {
+                    create: false,
+                    delete: false,
+                    identityWrite: false,
+                    roleWrite: false,
+                    passwordWrite: false,
+                    avatarWrite: avatarAuthority === 'internal',
+                    avatarSettingsWrite: avatarAuthority === 'internal',
+                    selfConfigurationWrite: true,
+                  },
                 },
               },
             },
-          },
-        }),
-      })
-    );
-    const user = makeUser({ role: 'admin' });
-    const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
+          }),
+        })
+      );
+      const user = makeUser({ role: 'admin' });
+      const onUpdate = vi.fn<NonNullable<UserSettingsModalProps['onUpdate']>>(async () => {});
 
-    renderWithApp(
-      <UserSettingsModal
-        open
-        onClose={vi.fn()}
-        user={user}
-        currentUser={user}
-        client={null}
-        onUpdate={onUpdate}
-      />
-    );
+      renderWithApp(
+        <UserSettingsModal
+          open
+          onClose={vi.fn()}
+          user={user}
+          currentUser={user}
+          client={null}
+          onUpdate={onUpdate}
+        />
+      );
 
-    await screen.findByText('Identity and role are managed by your workspace');
-    expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
-    expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
-    expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
-    const useSlackAvatar = screen.getByRole('switch');
-    expect(useSlackAvatar).toBeEnabled();
-    fireEvent.click(useSlackAvatar);
+      await screen.findByText('Identity and role are managed by your workspace');
+      expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
+      expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
+      expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+      const useSlackAvatar = screen.getByRole('switch');
+      expect(useSlackAvatar).toBeEnabled();
+      fireEvent.click(useSlackAvatar);
 
-    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
-    await screen.findByRole('heading', { name: 'Preferences' });
-    const enableChimes = document.querySelector<HTMLInputElement>(
-      'input[aria-label="Enable chimes"]'
-    );
-    expect(enableChimes).not.toBeNull();
-    fireEvent.click(enableChimes as HTMLInputElement);
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+      await screen.findByRole('heading', { name: 'Preferences' });
+      const enableChimes = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Enable chimes"]'
+      );
+      expect(enableChimes).not.toBeNull();
+      fireEvent.click(enableChimes as HTMLInputElement);
+      fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
-    const patch = onUpdate.mock.calls[0][1];
-    expect(patch.preferences?.audio?.enabled).toBe(true);
-    expect(patch.preferences?.use_slack_avatar).toBe(false);
-    expect(patch).not.toHaveProperty('email');
-    expect(patch).not.toHaveProperty('name');
-    expect(patch).not.toHaveProperty('role');
-    expect(patch).not.toHaveProperty('password');
-  });
+      await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+      const patch = onUpdate.mock.calls[0][1];
+      expect(patch.preferences?.audio?.enabled).toBe(true);
+      expect(patch.preferences?.use_slack_avatar).toBe(false);
+      expect(patch).not.toHaveProperty('email');
+      expect(patch).not.toHaveProperty('name');
+      expect(patch).not.toHaveProperty('role');
+      expect(patch).not.toHaveProperty('password');
+    }
+  );
 
   it('keeps the modal open when saving Profile settings fails', async () => {
     const user = makeUser();

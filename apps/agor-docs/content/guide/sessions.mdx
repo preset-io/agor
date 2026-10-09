@@ -32,8 +32,9 @@ _A coordinator session fanned out to eight parallel security-review children, ea
 Long user and assistant messages in older turns start collapsed, with **show more**
 to reveal the full text. The latest whole turn and live turns stay expanded; a new
 turn never automatically collapses text you were already reading. Your explicit
-**show more / show less** choices last while that conversation is mounted, including
-reconnects and tool-detail loading. Reopening it applies the history defaults again.
+**show more / show less** choices last while that turn stays loaded, including
+reconnects and tool-detail loading. A turn loaded again after it was unloaded, or a
+reopened conversation, starts from the history defaults.
 
 Collapsed messages show a shortened preview. Expand the message to use code or
 table export controls. The message copy action still copies the full source;
@@ -412,7 +413,9 @@ Scroll up or select **Load older history** to read earlier turns. While you stay
 latest turn, the conversation normally keeps the latest 30 turns loaded: older turns are
 unloaded and return through **Load older history**. Turns still running, awaiting an
 approval or answer, or open in an expanded section stay loaded, along with everything
-after them. Nothing is unloaded while you are scrolled up. After a reconnect that missed
+after them. Nothing is unloaded while you are scrolled up; after you return to the
+latest turn, older turns are unloaded by the time the next turn arrives. Unloaded turns forget
+their **show more / show less** choices. After a reconnect that missed
 more than 30 turns, the conversation loads the latest 30, plus any such turn and everything
 after it.
 

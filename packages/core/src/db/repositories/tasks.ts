@@ -796,6 +796,50 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
   }
 
   /**
+   * Whether `listed` (a `Session.tasks` read earlier) named every Task this
+   * Session had dispatched, once each and nothing else: the lean transcript
+   * places history by its positions only then. One statement reads the
+   * current list and the Session's Tasks on one snapshot; `listed` must be a
+   * prefix of that list, since dispatch only appends. Never-run (CREATED,
+   * QUEUED) Tasks have no position. Anything else unlisted, a duplicate, or
+   * an entry that is no Task of this Session (a legacy row) makes it false.
+   */
+  async isSessionTaskListComplete(
+    sessionId: SessionID,
+    listed: readonly string[]
+  ): Promise<boolean> {
+    // Every read names the Session by parameter, never by correlation: SQLite
+    // re-runs a correlated list subquery per row, which is quadratic. Each
+    // count is one range scan of the Session's Tasks against the list as a set.
+    const data = sql`(SELECT ${sessions.data} FROM ${sessions} WHERE ${sessions.session_id} = ${sessionId})`;
+    const inList = isSQLiteDatabase(this.db)
+      ? sql`${tasks.task_id} IN (SELECT value FROM json_each(${data}, '$.tasks'))`
+      : sql`${tasks.task_id} IN (SELECT jsonb_array_elements_text(${data}->'tasks'))`;
+    const count = (when: SQL) =>
+      sql<number>`(SELECT COUNT(CASE WHEN ${when} THEN 1 END) FROM ${tasks} WHERE ${tasks.session_id} = ${sessionId})`;
+    const row = await select(this.db, {
+      order: jsonExtract(this.db, sessions.data, 'tasks'),
+      members: count(inList),
+      unlisted: count(
+        sql`${tasks.status} NOT IN (${TaskStatus.QUEUED}, ${TaskStatus.CREATED}) AND NOT (${inList})`
+      ),
+    })
+      .from(sessions)
+      .where(eq(sessions.session_id, sessionId))
+      .one();
+    if (!row) return false;
+    const order: unknown = JSON.parse(String(row.order ?? '[]'));
+    // Distinct members of this Session as many as entries: no duplicate, no stranger.
+    return (
+      Array.isArray(order) &&
+      Number(row.members) === order.length &&
+      Number(row.unlisted) === 0 &&
+      listed.length <= order.length &&
+      listed.every((id, i) => id === order[i])
+    );
+  }
+
+  /**
    * Find all tasks for a session
    */
   async findBySession(sessionId: string): Promise<Task[]> {

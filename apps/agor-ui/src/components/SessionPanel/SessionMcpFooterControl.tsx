@@ -7,6 +7,7 @@ import { useConnectionState } from '@/contexts/ConnectionContext';
 import { useMCPCatalogModal } from '@/contexts/MCPCatalogModalContext';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { usePermissions } from '@/hooks/usePermissions';
+import { useAgorStore } from '../../store/agorStore';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
@@ -67,6 +68,9 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
       ? `${currentUserId}:${role}:${authGeneration}`
       : null;
   const editMutationAllowed = isAdmin && callerAuthorityReady;
+  // Until this session's links are loaded `sessionMcpServerIds` may be
+  // partial, and an edit diff would detach what it never saw.
+  const linksLoaded = useAgorStore((s) => s.sessionMcpLoaded.has(sessionId));
   const [saving, setSaving] = React.useState(false);
   const [open, setOpen] = React.useState(false);
   // Bind the response to every authority/inventory input at render time, not
@@ -228,7 +232,15 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
 
   const handleChange = async (nextIds: string[]) => {
     const operation = operationGuard.begin();
-    if (!client || !operation.isCurrent() || !availabilityCurrent || serversError || saving) return;
+    if (
+      !client ||
+      !operation.isCurrent() ||
+      !linksLoaded ||
+      !availabilityCurrent ||
+      serversError ||
+      saving
+    )
+      return;
     // Display-only selected metadata must never authorize a new attachment,
     // including a queued Select event racing an inventory/authority refresh.
     if (
@@ -313,8 +325,8 @@ const SessionMcpFooterControlForIdentity: React.FC<SessionMcpFooterControlProps>
           placeholder="Attach MCP servers…"
           value={sessionMcpServerIds}
           onChange={handleChange}
-          loading={saving || loadingServers}
-          disabled={!callerAuthorityReady || saving || !!serversError}
+          loading={saving || loadingServers || !linksLoaded}
+          disabled={!callerAuthorityReady || !linksLoaded || saving || !!serversError}
           style={{ width: '100%' }}
           getPopupContainer={(trigger) =>
             popupRef.current ?? trigger.parentElement ?? document.body

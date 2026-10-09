@@ -1,10 +1,11 @@
-import type { Board, Branch } from '@agor-live/client';
+import type { AgorClient, Board, Branch } from '@agor-live/client';
 import { memo } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectArtifactById, selectMcpServerById, selectSessionById } from '../../store/selectors';
 import { GlobalSearch } from '../GlobalSearch';
 
 interface AppHeaderGlobalSearchProps {
+  client?: AgorClient | null;
   currentUserId?: string;
   branchById: Map<string, Branch>;
   boardById: Map<string, Board>;
@@ -22,6 +23,7 @@ interface AppHeaderGlobalSearchProps {
  * patches). GlobalSearch receives the exact same live maps as before.
  */
 export const AppHeaderGlobalSearch = memo(function AppHeaderGlobalSearch({
+  client,
   currentUserId,
   branchById,
   boardById,
@@ -33,6 +35,7 @@ export const AppHeaderGlobalSearch = memo(function AppHeaderGlobalSearch({
 
   return (
     <GlobalSearch
+      client={client}
       currentUserId={currentUserId}
       sessionById={sessionById}
       branchById={branchById}

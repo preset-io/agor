@@ -132,7 +132,8 @@ describe('archive response reconciliation', () => {
   beforeEach(() => {
     agorStore.getState().reset();
     agorStore.getState().applyMaps((prev) => ({ ...prev, ...buildSessionMaps(sessions) }));
-    setRealtimeAuthorityScope('tenant-a:user-a:1');
+    // The caller is the sessions' author: the user scope holds them.
+    setRealtimeAuthorityScope('user-a:member:1');
   });
   afterEach(() => {
     setRealtimeAuthorityScope(null);
@@ -257,8 +258,8 @@ describe('archive response reconciliation', () => {
       if (newerRoot !== 'none') {
         act(() => {
           bumpRevision('sessions');
-          enqueueSessionPatch('tenant-a:user-a:1', restored);
-          if (newerRoot === 'applied') flushRealtimeNow('tenant-a:user-a:1');
+          enqueueSessionPatch('user-a:member:1', restored);
+          if (newerRoot === 'applied') flushRealtimeNow('user-a:member:1');
         });
       }
       await act(async () => {

@@ -9,12 +9,16 @@ describe('MobileNavTree settings navigation', () => {
     render(
       <MemoryRouter>
         <MobileNavTree
+          client={null}
+          canUseMemberWorkspaceServices={false}
           boardById={new Map([['board-1', { board_id: 'board-1', name: 'Delivery' } as Board]])}
           branchById={new Map()}
           sessionsByBranch={new Map()}
           commentById={new Map()}
           onOpenWorkspaceSettings={vi.fn()}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
+          isAdmin={false}
         />
       </MemoryRouter>
     );
@@ -31,12 +35,16 @@ describe('MobileNavTree settings navigation', () => {
     render(
       <MemoryRouter>
         <MobileNavTree
+          client={null}
+          canUseMemberWorkspaceServices={false}
           boardById={new Map()}
           branchById={new Map()}
           sessionsByBranch={new Map()}
           commentById={new Map()}
           onOpenWorkspaceSettings={onOpenWorkspaceSettings}
           onOpenUserSettings={vi.fn()}
+          onCreate={vi.fn()}
+          isAdmin={false}
           onNavigate={onNavigate}
         />
       </MemoryRouter>
@@ -59,6 +67,8 @@ describe('MobileNavTree external app link', () => {
     render(
       <MemoryRouter>
         <MobileNavTree
+          client={null}
+          canUseMemberWorkspaceServices={false}
           boardById={new Map()}
           branchById={new Map()}
           sessionsByBranch={new Map()}
@@ -68,6 +78,8 @@ describe('MobileNavTree external app link', () => {
           onNavigate={onNavigate}
           externalAppLink={externalAppLink}
           externalAppLabel="Open Agor Cloud"
+          onCreate={vi.fn()}
+          isAdmin={false}
         />
       </MemoryRouter>
     );

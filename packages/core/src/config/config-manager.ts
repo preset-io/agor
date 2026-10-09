@@ -42,6 +42,7 @@ import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorApmSettings,
+  AgorAvatarAuthority,
   type AgorConfig,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
@@ -549,6 +550,7 @@ function validateConfig(config: AgorConfig): void {
     'ui',
     'database',
     'external_launch',
+    'mcp_oauth_relay',
     'identity',
     'execution',
     'security',
@@ -767,8 +769,10 @@ function validateConfig(config: AgorConfig): void {
     'return_host_param',
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
+  only(config.mcp_oauth_relay, 'mcp_oauth_relay', ['callback_origin']);
   only(config.identity, 'identity', [
     'user_lifecycle',
+    'avatar_authority',
     'role_authority',
     'local_auth',
     'password_policy',
@@ -780,6 +784,12 @@ function validateConfig(config: AgorConfig): void {
     !Object.values(AgorUserLifecycleAuthority).includes(config.identity.user_lifecycle)
   ) {
     throw new Error('Config error: identity.user_lifecycle must be internal or external');
+  }
+  if (
+    config.identity?.avatar_authority !== undefined &&
+    !Object.values(AgorAvatarAuthority).includes(config.identity.avatar_authority)
+  ) {
+    throw new Error('Config error: identity.avatar_authority must be internal or external');
   }
   if (
     config.identity?.role_authority !== undefined &&
@@ -1645,6 +1655,7 @@ export function resolveEffectiveConfig(
     },
     identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
+    ...(config.mcp_oauth_relay ? { mcp_oauth_relay: { ...config.mcp_oauth_relay } } : {}),
     execution: {
       ...defaults.execution,
       ...config.execution,

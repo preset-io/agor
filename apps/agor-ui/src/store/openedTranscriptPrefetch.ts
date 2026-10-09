@@ -1,13 +1,13 @@
 /**
- * Start loading the opened session's transcript at boot, ahead of the global
- * workspace hydration.
+ * Start loading the opened session's transcript at boot, ahead of the user
+ * scope's bulk read.
  *
- * Every service call shares one WebSocket, so a multi-megabyte global snapshot
- * in flight delays the small transcript responses behind it (head-of-line). On
- * a `/s/<id>` open, `useAgorData` retains the SAME shared reactive-session
+ * Every service call shares one WebSocket, so a large snapshot in flight
+ * delays the small transcript responses behind it (head-of-line). On a
+ * `/s/<id>` open, `useAgorData` retains the SAME shared reactive-session
  * handle the session panel and ConversationView retain (identical cache key),
- * which begins subscribing and hydrating immediately, and holds the global
- * full-set hydration until that first page lands or `timeoutMs` passes.
+ * which begins subscribing and hydrating immediately, and holds the user
+ * scope's U1 read until that first page lands or `timeoutMs` passes.
  *
  * The prefetch keeps its reference for `adoptionGraceMs` after the priority
  * barrier settles — the page landed, its load failed, or `timeoutMs` passed —
@@ -17,9 +17,6 @@
  * listeners, stream subscription and transcript state) after
  * `timeoutMs + adoptionGraceMs`. `release()` drops it early (logout,
  * authority change, unmount); it is idempotent.
- *
- * Transitional: this is a localized `/s/` deferral of the global hydration
- * gate, expected to go away with that gate.
  */
 
 import {
@@ -39,7 +36,7 @@ export const OPENED_TRANSCRIPT_ADOPTION_GRACE_MS = 30_000;
 
 export interface OpenedTranscriptPrefetch {
   /**
-   * Priority barrier released: the global hydration may start. Settles when
+   * Priority barrier released: the bulk U1 read may start. Settles when
    * the first transcript page lands, when its load fails, or at the timeout —
    * so it does NOT mean the transcript loaded. Never rejects.
    */

@@ -18,8 +18,8 @@ import {
   createDiscordRest,
   DiscordConnector,
   DiscordDirectMessageError,
-  extractDiscordInboundFiles,
   hasStructuredDiscordBotMention,
+  partitionDiscordInboundFiles,
   stripDiscordBotMention,
 } from './discord';
 import { buildDiscordSetupArtifact } from './discord-setup';
@@ -124,82 +124,46 @@ describe('Discord connector beta', () => {
   const signedAttachmentUrl =
     'https://cdn.discordapp.com/attachments/333333333333333333/777777777777777777/screenshot.png?ex=66aabbcc&is=66995a11&hm=signature';
 
-  it('normalizes only signed PNG/JPEG attachment records', () => {
+  it('partitions attachments into readable files and skipped files with a reason', () => {
+    const attachment = (filename: string, contentType?: string, url = signedAttachmentUrl) => ({
+      id: '777777777777777777',
+      filename,
+      size: 2048,
+      ...(contentType ? { content_type: contentType } : {}),
+      url: url.replace('screenshot.png', filename),
+    });
     expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: signedAttachmentUrl,
-        },
-        {
-          id: '888888888888888888',
-          filename: 'photo.jpeg',
-          size: 4096,
-          url: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
-        },
-      ])
-    ).toEqual([
-      {
-        id: '777777777777777777',
-        name: 'screenshot.png',
-        mimetype: 'image/png',
-        size: 2048,
-        url_private_download: signedAttachmentUrl,
-      },
-      {
-        id: '888888888888888888',
-        name: 'photo.jpeg',
-        mimetype: 'image/jpeg',
-        size: 4096,
-        url_private_download: signedAttachmentUrl.replace('screenshot.png', 'photo.jpeg'),
-      },
-    ]);
+      partitionDiscordInboundFiles(
+        [
+          attachment('screenshot.png', 'image/png'),
+          attachment('photo.jpeg'),
+          attachment('demo.gif', 'image/gif'),
+          attachment('error.log'),
+          attachment('data.json', 'application/json; charset=utf-8'),
+          attachment('report.pdf', 'application/pdf'),
+          attachment('clip.mov'),
+          attachment('hosted.png', 'image/png', 'https://evil.example/screenshot.png'),
+        ],
+        true
+      )
+    ).toEqual({
+      files: [
+        expect.objectContaining({ name: 'screenshot.png', mimetype: 'image/png' }),
+        expect.objectContaining({ name: 'photo.jpeg', mimetype: 'image/jpeg' }),
+        expect.objectContaining({ name: 'demo.gif', mimetype: 'image/gif' }),
+        expect.objectContaining({ name: 'error.log', mimetype: 'text/plain' }),
+        expect.objectContaining({ name: 'data.json', mimetype: 'application/json' }),
+      ],
+      skipped: [
+        { name: 'report.pdf', reason: 'unsupported_type' },
+        { name: 'clip.mov', reason: 'unsupported_type' },
+        { name: 'hosted.png', reason: 'invalid' },
+      ],
+    });
     expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'document.pdf',
-          size: 2048,
-          content_type: 'application/pdf',
-          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
-        },
-      ])
-    ).toBeUndefined();
-    expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: 'https://evil.example/screenshot.png',
-        },
-      ])
-    ).toBeUndefined();
-  });
-
-  it('rejects a mixed supported/unsupported attachment payload instead of dropping the unsupported item', () => {
-    expect(
-      extractDiscordInboundFiles([
-        {
-          id: '777777777777777777',
-          filename: 'screenshot.png',
-          size: 2048,
-          content_type: 'image/png',
-          url: signedAttachmentUrl,
-        },
-        {
-          id: '888888888888888888',
-          filename: 'document.pdf',
-          size: 2048,
-          content_type: 'application/pdf',
-          url: signedAttachmentUrl.replace('screenshot.png', 'document.pdf'),
-        },
-      ])
-    ).toBeUndefined();
+      partitionDiscordInboundFiles([attachment('screenshot.png', 'image/png')], false)
+    ).toEqual({ files: [], skipped: [{ name: 'screenshot.png', reason: 'files_disabled' }] });
+    expect(partitionDiscordInboundFiles('not-a-list', true)).toBeUndefined();
   });
 
   it('chunks at Discord’s hard limit and avoids empty trailing chunks', () => {
@@ -591,7 +555,7 @@ describe('Discord connector beta', () => {
     expect(gateway.destroy).toHaveBeenCalledOnce();
   });
 
-  it('keeps attachment messages rejected when the capability is disabled', async () => {
+  it('admits a message with attachments when files are off, reporting them as skipped', async () => {
     const { transport, gateway, dispatch } = makeTransport();
     const connector = new DiscordConnector(config, transport as never);
     const received: unknown[] = [];
@@ -607,7 +571,7 @@ describe('Discord connector beta', () => {
           guild_id: config.guild_id,
           channel_id: config.allowed_channel_ids[0],
           type: 0,
-          content: '<@666666666666666666> do not admit this file',
+          content: '<@666666666666666666> can you see this file?',
           author: { id: '444444444444444444', bot: false },
           member: { roles: [] },
           mentions: [{ id: '666666666666666666' }],
@@ -626,9 +590,54 @@ describe('Discord connector beta', () => {
     );
     await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
 
-    expect(received).toHaveLength(0);
+    expect(received).toEqual([
+      expect.objectContaining({
+        text: 'can you see this file?',
+        skippedFiles: [{ name: 'screenshot.png', reason: 'files_disabled' }],
+      }),
+    ]);
+    expect((received[0] as { files?: unknown }).files).toBeUndefined();
     await connector.stopListening();
     expect(gateway.destroy).toHaveBeenCalledOnce();
+  });
+
+  it('admits an attachment-only message with a placeholder text', async () => {
+    const { transport, dispatch } = makeTransport();
+    const connector = new DiscordConnector({ ...config, files: true }, transport as never);
+    const received: Array<{ text: string; files?: unknown[]; skippedFiles?: unknown[] }> = [];
+    await connector.startListening(async (message) => {
+      received.push(message as never);
+    });
+    dispatch()?.(
+      {
+        t: 'MESSAGE_CREATE',
+        s: 13,
+        d: {
+          id: '888888888888888888',
+          guild_id: config.guild_id,
+          channel_id: config.allowed_channel_ids[0],
+          type: 0,
+          content: '<@666666666666666666>',
+          author: { id: '444444444444444444', bot: false },
+          member: { roles: [] },
+          mentions: [{ id: '666666666666666666' }],
+          attachments: [
+            {
+              id: '777777777777777777',
+              filename: 'screenshot.png',
+              size: 2048,
+              content_type: 'image/png',
+              url: signedAttachmentUrl,
+            },
+          ],
+        },
+      },
+      0
+    );
+    await (connector as unknown as { dispatchChain: Promise<void> }).dispatchChain;
+    expect(received[0]).toMatchObject({ text: '(attachments only, no text)' });
+    expect(received[0]?.files).toHaveLength(1);
+    await connector.stopListening();
   });
 
   it('accepts ordinary text messages in existing public threads and routes replies to that thread', async () => {
@@ -1211,7 +1220,6 @@ describe('Discord direct messages', () => {
       { author: { id: userId, bot: true } },
       { author: { id: userId, system: true } },
       { webhook_id: userId },
-      { attachments: [{ id: dm.id }] },
       { type: 7 },
       { content: '' },
     ];
@@ -1390,8 +1398,14 @@ describe('Discord direct messages', () => {
           },
         ],
       });
-      expect(receive).toHaveBeenCalledTimes(files ? 1 : 0);
+      // The DM is answered either way; a disabled capability reports the file as skipped.
+      expect(receive).toHaveBeenCalledOnce();
       if (files) expect(receive.mock.calls[0][0].files).toHaveLength(1);
+      else {
+        expect(receive.mock.calls[0][0].skippedFiles).toEqual([
+          { name: 'picture.png', reason: 'files_disabled' },
+        ]);
+      }
       await connector.stopListening();
     }
   });

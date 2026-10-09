@@ -59,6 +59,7 @@ import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useConfirmArchiveSession } from '../../hooks/useConfirmArchiveSession';
 import { useIsMobileViewport } from '../../hooks/useIsMobileViewport';
+import { useSessionGenealogyTargets } from '../../hooks/useSessionGenealogyTargets';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
 import { useAgorStore } from '../../store/agorStore';
@@ -547,11 +548,15 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
+    // The open session: background partition reads wait for its first page.
+    foreground: true,
     // ConversationView retains the same lean handle. Keeping the cache key
     // identical collapses duplicate Session bootstrap/reconnect reads while
     // preserving paged history without eager historical tool hydration.
     reactiveOptions: { taskHydration: 'lean' },
   });
+  // Parent, fork, callback and children links resolve without global data.
+  useSessionGenealogyTargets(client, open ? session : null);
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
   const queuedTasks = reactiveSessionState?.queuedTasks ?? EMPTY_TASKS;

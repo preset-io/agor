@@ -85,6 +85,7 @@ import {
   type OnboardingOperationOwner,
   useOnboardingLifecycle,
 } from './hooks/useOnboardingLifecycle';
+import { usePinnedOpenRows } from './hooks/usePinnedRows';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { useUnarchiveBranch } from './hooks/useUnarchiveBranch';
 import { repoPatched, sessionCreated } from './store/agorRealtimeActions';
@@ -438,7 +439,11 @@ function AppContent() {
 
   const directSessionIdFromPath =
     location.pathname.match(/^\/(?:s|m\/session)\/([^/]+)\/?$/)?.[1] ?? null;
+  const directBranchIdFromPath = location.pathname.match(/^\/w\/([^/]+)\/?$/)?.[1] ?? null;
   const authenticatedUserCanListUsers = hasMinimumRole(user?.role, ROLES.MEMBER);
+  // A deep link's target (and an open session's branch) stays while routed
+  // to, whatever scope evicts; a short id is pinned once the UI resolves it.
+  usePinnedOpenRows({ sessions: [directSessionIdFromPath], branches: [directBranchIdFromPath] });
 
   // Pass the stable client lifetime, not `connected ? client : null`:
   // useAgorData owns reconnect refetches and `null` is reserved for logout /
@@ -454,6 +459,7 @@ function AppContent() {
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
+    directBranchId: directBranchIdFromPath,
     authenticatedUserId: user?.user_id,
     authenticatedUserRole: user?.role,
     authGeneration,
@@ -1795,12 +1801,18 @@ function AppContent() {
   };
 
   // Handle update session-MCP server relationships
-  const handleUpdateSessionMcpServers = async (sessionId: string, mcpServerIds: string[]) => {
+  const handleUpdateSessionMcpServers = async (
+    sessionId: string,
+    mcpServerIds: string[],
+    baselineIds?: string[]
+  ) => {
     if (!client) return;
 
     try {
-      // Get current session-MCP relationships for this session
-      const currentIds = agorStore.getState().sessionMcpServerIds.get(sessionId) || [];
+      // Diff against the links the user was shown (the settings form's
+      // baseline), never against links that loaded after they last looked.
+      const currentIds =
+        baselineIds ?? agorStore.getState().sessionMcpServerIds.get(sessionId) ?? [];
       await updateSessionMcpServers(client, sessionId, currentIds, mcpServerIds);
 
       // Note: Don't show success message here - it's part of the session settings save
@@ -2218,6 +2230,11 @@ function AppContent() {
                   topBanner={onboardingBanners}
                   onSendPrompt={handleSendPrompt}
                   onCreateSession={handleCreateSession}
+                  onCreateBranch={handleCreateBranch}
+                  onCreateBoard={handleCreateBoard}
+                  onCreateRepo={handleCreateRepo}
+                  onCreateLocalRepo={handleCreateLocalRepo}
+                  branchStorageConfig={featuresConfig?.branchStorage}
                   onForkSession={handleForkSession}
                   onBtwForkSession={handleBtwForkSession}
                   onSpawnSession={handleSpawnSession}

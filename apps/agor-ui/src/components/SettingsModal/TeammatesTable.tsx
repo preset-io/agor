@@ -4,15 +4,16 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   Repo,
-  Session,
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, isTeammate } from '@agor-live/client';
 import { AimOutlined, EditOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
-import { Button, Empty, Input, Space, Tooltip, Typography, theme } from 'antd';
+import { Button, Empty, Input, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useAgorStore } from '../../store/agorStore';
+import { selectTeammatesLoaded } from '../../store/userScope';
 import { ArchiveActionButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
@@ -20,16 +21,20 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { SettingsIdentity } from './SettingsIdentity';
+import { useSessionCounts } from './useBranchPage';
 
 interface TeammatesTableProps {
   client?: AgorClient | null;
   currentUser?: User | null;
+  /** The store's branches: its user scope holds every visible teammate (`teammatesLoaded`). */
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>;
   userById: Map<string, User>;
-  onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  onArchiveOrDelete?: (
+    branchId: string,
+    options: BranchArchiveOrDeleteOptions
+  ) => void | Promise<void>;
   onRowClick?: (branch: Branch) => void;
   onCreateTeammate?: () => void;
   /** Close the parent Settings modal so the canvas isn't obscured by
@@ -43,7 +48,6 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
   branchById,
   repoById,
   boardById,
-  sessionsByBranch,
   userById,
   onArchiveOrDelete,
   onRowClick,
@@ -73,6 +77,8 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
+  const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
+  const sessionCounts = useSessionCounts(client ?? null, 'branch_id', !!selectedBranch);
 
   const teammates = useMemo(() => {
     const teammateBranches = Array.from(branchById.values())
@@ -230,7 +236,11 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         )}
       />
 
-      {teammates.length === 0 && !searchTerm && (
+      {teammates.length === 0 && !searchTerm && !teammatesLoaded && (
+        <Spin style={{ display: 'block', margin: '48px auto' }} />
+      )}
+
+      {teammates.length === 0 && !searchTerm && teammatesLoaded && (
         <div
           style={{
             display: 'flex',
@@ -274,7 +284,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
           currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
-          sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
+          sessionCount={sessionCounts.get(selectedBranch.branch_id)}
           environmentRunning={selectedBranch.environment_instance?.status === 'running'}
           onConfirm={(options) => {
             onArchiveOrDelete?.(selectedBranch.branch_id, options);

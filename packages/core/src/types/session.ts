@@ -242,6 +242,13 @@ export interface Session {
   /** Read-only, opt-in aggregate over all tasks, independent of transcript paging. */
   usage_summary?: SessionUsageSummary;
 
+  /**
+   * Read-only, opt-in (`include_tasks_complete` on get): `tasks` lists every
+   * dispatched Task of this Session, once each, in dispatch order. False for a
+   * legacy row whose list lost or misnames Tasks; absent from older daemons.
+   */
+  tasks_complete?: boolean;
+
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
 
@@ -655,6 +662,7 @@ export type CreateSessionInput = Omit<
   | 'model_config'
   | 'sdk_home_scope'
   | 'usage_summary'
+  | 'tasks_complete'
   | 'mcp_defaults_skipped'
 > & {
   agentic_tool?: AgenticToolName;
@@ -667,7 +675,7 @@ export type CreateSessionInput = Omit<
 /** Session patch semantics: omit/undefined preserves, string sets, null clears. */
 export type SessionUpdate = Omit<
   Partial<Session>,
-  'sdk_session_id' | 'sdk_home_scope' | 'usage_summary' | 'mcp_defaults_skipped'
+  'sdk_session_id' | 'sdk_home_scope' | 'usage_summary' | 'tasks_complete' | 'mcp_defaults_skipped'
 > & {
   sdk_session_id?: string | null;
 };

@@ -1,13 +1,14 @@
 import type { AgorClient, Board, Branch, Repo, User } from '@agor-live/client';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { App } from 'antd';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import '../../index.css';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { boardPatched, branchPatched } from '../../store/agorRealtimeActions';
 import { agorStore, useAgorStore } from '../../store/agorStore';
+import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
 import { makeTeammateBranch } from '../BranchModal/testUtils';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
 
@@ -52,7 +53,10 @@ beforeEach(() => {
     repoById: new Map([[repo.repo_id, repo]]),
     userById: new Map([[user.user_id, user]]),
   });
+  // The caller's user scope holds every teammate branch: realtime writes to them land.
+  setRealtimeAuthorityScope(`${user.user_id}:member:1`);
 });
+afterEach(() => setRealtimeAuthorityScope(null));
 function mount(role: 'editor' | 'manager' | 'viewer' | 'error' = 'editor', inaccessible = false) {
   const retryProvisioning = vi.fn().mockResolvedValue(old);
   const setPrimaryTeammate = vi.fn().mockResolvedValue(board);

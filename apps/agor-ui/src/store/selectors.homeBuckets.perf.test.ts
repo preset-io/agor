@@ -56,7 +56,6 @@ function busyTenant(): AgorState {
     ...buildSessionMaps(sessions),
     commentById: new Map(comments.map((c) => [c.comment_id, c])),
     branchById: new Map(branches.map((b) => [b.branch_id, b])),
-    sessionsHydrated: true,
   } as unknown as AgorState;
 }
 
@@ -80,7 +79,7 @@ function hotBranch(): AgorState {
         last_updated: new Date(NOW - (2000 - i) * 60_000).toISOString(),
       }) as unknown as Session
   );
-  return { ...EMPTY_MAPS, ...buildSessionMaps(sessions), sessionsHydrated: true } as AgorState;
+  return { ...EMPTY_MAPS, ...buildSessionMaps(sessions) } as AgorState;
 }
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)];

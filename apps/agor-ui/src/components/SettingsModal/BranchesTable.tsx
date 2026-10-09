@@ -4,10 +4,9 @@ import type {
   Branch,
   BranchArchiveOrDeleteOptions,
   Repo,
-  Session,
   User,
 } from '@agor-live/client';
-import { isTeammate } from '@agor-live/client';
+import { isTeammate, serverSearchText } from '@agor-live/client';
 import {
   AimOutlined,
   BranchesOutlined,
@@ -22,24 +21,29 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
+import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { useAgorStore } from '../../store/agorStore';
+import { selectTeammatesLoaded } from '../../store/userScope';
 import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
+import { useDebouncedSearchQuery } from '../GlobalSearch/useGlobalSearch';
 import { HighlightMatch } from '../HighlightMatch';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { ResponsiveTable } from './ResponsiveTable';
 import { SettingsActionGroup } from './SettingsActionGroup';
+import { useBranchPage, useSessionCounts } from './useBranchPage';
 
 interface BranchesTableProps {
   currentUser?: User | null;
   client: AgorClient | null;
+  /** The store's branches: navigation and the Teammates filter (the user scope holds every teammate). */
   branchById: Map<string, Branch>;
   repoById: Map<string, Repo>;
   boardById: Map<string, Board>;
-  sessionsByBranch: Map<string, Session[]>; // O(1) branch filtering
   onArchiveOrDelete?: (
     branchId: string,
     options: BranchArchiveOrDeleteOptions
@@ -73,7 +77,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   branchById,
   repoById,
   boardById,
-  sessionsByBranch,
   onArchiveOrDelete,
   onUnarchive,
   onCreate,
@@ -115,67 +118,56 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
   const [initialArchiveDeleteAction, setInitialArchiveDeleteAction] = useState<
     'archive' | 'delete'
   >('archive');
-  const [archivedBranches, setArchivedBranches] = useState<Branch[]>([]);
-  const [archivedLoaded, setArchivedLoaded] = useState(false);
-  const [archivedLoading, setArchivedLoading] = useState(false);
-  const archivedFetchingRef = useRef(false);
+  const [pageSize, setPageSize] = useState(10);
+  const { debouncedQuery } = useDebouncedSearchQuery(searchTerm);
+  const search = debouncedQuery.trim();
+  // A new filter or search starts again on its first page, in the same
+  // render: the page belongs to the filter and search it was chosen under.
+  const pageKey = `${archiveFilter}\u0000${search}`;
+  const [paged, setPaged] = useState({ key: pageKey, page: 1 });
+  // Forget the old page when the key changes, so returning to it starts on 1.
+  if (paged.key !== pageKey) setPaged({ key: pageKey, page: 1 });
+  const page = paged.key === pageKey ? paged.page : 1;
+  const setPage = (next: number) => setPaged({ key: pageKey, page: next });
 
-  // No need for reposById anymore, we already have it as a prop
-
-  useEffect(() => {
-    if (archiveFilter !== 'archived' && archiveFilter !== 'all') {
-      return;
-    }
-    if (archivedLoaded || archivedFetchingRef.current || !client) {
-      return;
-    }
-
-    let cancelled = false;
-    archivedFetchingRef.current = true;
-    setArchivedLoading(true);
-
-    client
-      .service('branches')
-      .findAll({ query: { archived: true, $limit: 1000, $sort: { created_at: -1 } } })
-      .then((result) => {
-        if (cancelled) return;
-        setArchivedBranches(result as Branch[]);
-        setArchivedLoaded(true);
-      })
-      .catch(() => {
-        // Keep table functional with active-only data if archived fetch fails
-      })
-      .finally(() => {
-        archivedFetchingRef.current = false;
-        if (!cancelled) {
-          setArchivedLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [archiveFilter, archivedLoaded, client]);
-
-  useEffect(() => {
-    if (!client) return;
-    const service = client.service('branches');
-    const patched = (branch: Branch) =>
-      setArchivedBranches((previous) => {
-        if (!previous.some((item) => item.branch_id === branch.branch_id)) return previous;
-        return previous.map((item) => (item.branch_id === branch.branch_id ? branch : item));
-      });
-    const removed = (branch: Branch) =>
-      setArchivedBranches((previous) =>
-        previous.filter((item) => item.branch_id !== branch.branch_id)
-      );
-    service.on('patched', patched);
-    service.on('removed', removed);
-    return () => {
-      service.off('patched', patched);
-      service.off('removed', removed);
-    };
-  }, [client]);
+  // Every filter but Teammates pages on the daemon (`search` included). The
+  // daemon can't combine `teammate` with `search`; the user scope already
+  // holds every visible teammate, so that filter pages over the store.
+  const teammatesFilter = archiveFilter === 'teammates';
+  const branchPage = useBranchPage(
+    client,
+    teammatesFilter
+      ? null
+      : {
+          ...(archiveFilter === 'all' ? {} : { archived: archiveFilter === 'archived' }),
+          ...(search ? { search: serverSearchText(search) } : {}),
+        },
+    page,
+    pageSize
+  );
+  const teammatesLoaded = useAgorStore(selectTeammatesLoaded);
+  const teammates = useMemo(
+    () =>
+      teammatesFilter
+        ? filterBySettingsSearch(
+            Array.from(branchById.values())
+              .filter((b) => !b.archived && isTeammate(b))
+              .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+            search,
+            [
+              (b) => [b.name, b.ref, b.path, b.branch_id, String(b.branch_unique_id)],
+              (b) => [repoById.get(b.repo_id)?.name, repoById.get(b.repo_id)?.slug],
+            ]
+          )
+        : [],
+    [teammatesFilter, branchById, repoById, search]
+  );
+  const rows = teammatesFilter
+    ? teammates.slice((page - 1) * pageSize, page * pageSize)
+    : branchPage.rows;
+  const total = teammatesFilter ? teammates.length : branchPage.total;
+  const loading = teammatesFilter ? !teammatesLoaded && teammates.length === 0 : branchPage.loading;
+  const sessionCounts = useSessionCounts(client, 'branch_id');
 
   // Validate form fields to enable/disable Create button
   const validateForm = useCallback(() => {
@@ -260,37 +252,9 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       return;
     }
 
-    if (options.metadataAction === 'archive') {
-      const source =
-        branchById.get(branchId) ||
-        archivedBranches.find((branch) => branch.branch_id === branchId);
-      if (source) {
-        const archivedCopy: Branch = {
-          ...source,
-          archived: true,
-          archived_at: new Date().toISOString(),
-        };
-        setArchivedBranches((prev) => {
-          const index = prev.findIndex((branch) => branch.branch_id === branchId);
-          if (index === -1) return [archivedCopy, ...prev];
-          const next = [...prev];
-          next[index] = archivedCopy;
-          return next;
-        });
-      }
-      return;
-    }
-
-    // Acceptance is not removal. Refresh this row while waiting for the
-    // authoritative patched/removed events (archived rows have a local cache).
-    const pending = await client
-      ?.service('branches')
-      .get(branchId)
-      .catch(() => undefined);
-    if (pending)
-      setArchivedBranches((prev) =>
-        prev.map((branch) => (branch.branch_id === branchId ? pending : branch))
-      );
+    // Acceptance is not removal: read the page again while the authoritative
+    // patched/removed events are on their way.
+    branchPage.refresh();
   };
 
   const handleCreate = async () => {
@@ -413,7 +377,8 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       key: 'sessions',
       width: 100,
       render: (_: unknown, record: Branch) => {
-        const sessionCount = (sessionsByBranch.get(record.branch_id) || []).length;
+        const sessionCount = sessionCounts.get(record.branch_id);
+        if (sessionCount === undefined) return null;
         return (
           <Typography.Text type="secondary">
             {sessionCount} {sessionCount === 1 ? 'session' : 'sessions'}
@@ -501,59 +466,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
     },
   ];
 
-  const filteredBranches = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    const activeBranches = Array.from(branchById.values());
-    const mergedById = new Map<string, Branch>();
-    for (const branch of activeBranches) {
-      mergedById.set(branch.branch_id, branch);
-    }
-    for (const branch of archivedBranches) {
-      if (!mergedById.has(branch.branch_id)) {
-        mergedById.set(branch.branch_id, branch);
-      }
-    }
-
-    const sorted = Array.from(mergedById.values()).sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-
-    // Filter by archive status / type
-    let filtered = sorted;
-    if (archiveFilter === 'active') {
-      filtered = sorted.filter((w) => !w.archived);
-    } else if (archiveFilter === 'archived') {
-      filtered = sorted.filter((w) => w.archived);
-    } else if (archiveFilter === 'teammates') {
-      filtered = sorted.filter((w) => !w.archived && isTeammate(w));
-    }
-
-    // Filter by search term
-    if (!term) {
-      return filtered;
-    }
-
-    return filtered.filter((branch) => {
-      const repo = repoById.get(branch.repo_id);
-      const haystacks = [
-        branch.name,
-        branch.ref,
-        branch.path,
-        String(branch.branch_unique_id),
-        repo?.name,
-        repo?.slug,
-      ];
-
-      return haystacks.some((value) => {
-        if (value === undefined || value === null) {
-          return false;
-        }
-        return value.toString().toLowerCase().includes(term);
-      });
-    });
-  }, [archiveFilter, archivedBranches, repoById, searchTerm, branchById]);
-  const hasAnyBranches = branchById.size > 0 || archivedBranches.length > 0;
-
   return (
     <div>
       <ResponsiveSettingsHeader
@@ -562,7 +474,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
               allowClear
-              placeholder="Search by name, repo, slug, path, or ID"
+              placeholder="Search by name, ref, notes, or URL"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               style={{
@@ -573,7 +485,6 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             <Select
               value={archiveFilter}
               onChange={(value) => setArchiveFilter(value)}
-              loading={archivedLoading && (archiveFilter === 'archived' || archiveFilter === 'all')}
               style={{ width: 120 }}
               options={[
                 { value: 'active', label: 'Active' },
@@ -611,29 +522,21 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         </div>
       )}
 
-      {repos.length > 0 && !hasAnyBranches && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minHeight: 400,
-          }}
-        >
-          <Empty description="No branches yet">
-            <Typography.Text type="secondary">
-              Branches will appear here once created from sessions or the CLI.
-            </Typography.Text>
-          </Empty>
-        </div>
-      )}
-
-      {hasAnyBranches && (
+      {repos.length > 0 && (
         <ResponsiveTable
-          dataSource={filteredBranches}
+          dataSource={rows}
           columns={columns}
           rowKey="branch_id"
-          pagination={{ defaultPageSize: 10 }}
+          loading={loading}
+          pagination={{
+            current: page,
+            pageSize,
+            total,
+            onChange: (nextPage, nextPageSize) => {
+              setPage(nextPageSize === pageSize ? nextPage : 1);
+              setPageSize(nextPageSize);
+            },
+          }}
           size="small"
           scroll={{ x: 1000 }}
           onRow={(record) => ({
@@ -676,7 +579,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           currentUser={currentUser}
           open={archiveDeleteModalOpen}
           branch={selectedBranch}
-          sessionCount={(sessionsByBranch.get(selectedBranch.branch_id) || []).length}
+          sessionCount={sessionCounts.get(selectedBranch.branch_id)}
           environmentRunning={selectedBranch.environment_instance?.status === 'running'}
           initialMetadataAction={initialArchiveDeleteAction}
           onConfirm={(options) => {

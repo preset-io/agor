@@ -39,3 +39,7 @@ export const HOME_ASK_TARGET_MAX_WIDTH = 200;
 /** Recent board pills, and branch/board pills in row meta on phones. */
 export const HOME_BOARD_PILL_MAX_WIDTH = { compact: 110, wide: 190 } as const;
 export const HOME_META_PILL_MAX_WIDTH_COMPACT = 140;
+
+/** A count that may be a lower bound (my sessions hit the read cap) renders as "N+". */
+export const formatCount = (count: number, lowerBound: boolean): string =>
+  lowerBound ? `${count}+` : `${count}`;

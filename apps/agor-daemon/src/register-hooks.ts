@@ -560,6 +560,8 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'kb/indexing/status',
   'kb/indexing/reindex',
   'leaderboard',
+  'branch-counts',
+  'session-counts',
 ];
 
 // These endpoints perform network/process work after their tenant DB reads,
@@ -1485,7 +1487,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 path === 'gateway' ||
                 path === BRANCH_DELETION_REPORT_SERVICE ||
                 path === BRANCH_CLEANUP_REPORT_SERVICE ||
-                (path === 'branches' && context.method === 'clean');
+                (path === 'branches' && context.method === 'clean') ||
+                // Avatar sync opens short tenant units around Slack I/O;
+                // ordinary users CRUD and settings mutations remain scoped.
+                (path === 'users' && context.method === 'syncAvatars');
               return (external ? tenantIdentityAround : tenantDatabaseScopeAround)(context, next);
             },
           ],
@@ -1520,7 +1525,19 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // (`required_from_auth` still runs the full `registerTenantHooks` path.)
   const registerTenantDatabaseScopeForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
-      safeService(path)?.hooks({ around: { all: [tenantDatabaseScopeAround] } });
+      safeService(path)?.hooks({
+        around: {
+          all: [
+            async (context: HookContext, next: () => Promise<void>) => {
+              const scope =
+                path === 'users' && context.method === 'syncAvatars'
+                  ? tenantIdentityAround
+                  : tenantDatabaseScopeAround;
+              return scope(context, next);
+            },
+          ],
+        },
+      });
     }
   };
 
@@ -3091,6 +3108,14 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   app.service('users').hooks({
+    around: {
+      all: [
+        async (context: HookContext, next: () => Promise<void>) => {
+          if (context.method === 'syncAvatars') return tenantWriteAdmissionAround(context, next);
+          return next();
+        },
+      ],
+    },
     before: {
       all: [typedValidateQuery(userQueryValidator), authenticateUsersRequestWhenCredentialed],
       find: [
@@ -3168,12 +3193,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             | { refreshAvatarFromSettings?: (userId: UserID) => Promise<unknown> }
             | undefined;
           if (avatarService?.refreshAvatarFromSettings) {
-            avatarService.refreshAvatarFromSettings(user.user_id).catch((error: unknown) => {
-              console.warn(
-                `[users/avatar-sync] Failed to refresh avatar for new user ${shortId(user.user_id)}:`,
-                error instanceof Error ? error.message : String(error)
-              );
-            });
+            // Never let fire-and-forget work inherit a transaction that is
+            // about to commit (or refresh a user whose mutation rolls back).
+            deferWithTenantContext(
+              context.params,
+              async () => {
+                await avatarService.refreshAvatarFromSettings!(user.user_id);
+              },
+              (error) => {
+                console.warn(
+                  `[users/avatar-sync] Failed to refresh avatar for new user ${shortId(user.user_id)}:`,
+                  error instanceof Error ? error.message : String(error)
+                );
+              }
+            );
           }
           return context;
         },
@@ -3241,12 +3274,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             | { refreshAvatarFromSettings?: (userId: UserID) => Promise<unknown> }
             | undefined;
           if (avatarService?.refreshAvatarFromSettings) {
-            avatarService.refreshAvatarFromSettings(user.user_id).catch((error: unknown) => {
-              console.warn(
-                `[users/avatar-sync] Failed to refresh avatar for updated user ${shortId(user.user_id)}:`,
-                error instanceof Error ? error.message : String(error)
-              );
-            });
+            // Never let fire-and-forget work inherit a transaction that is
+            // about to commit (or refresh a user whose mutation rolls back).
+            deferWithTenantContext(
+              context.params,
+              async () => {
+                await avatarService.refreshAvatarFromSettings!(user.user_id);
+              },
+              (error) => {
+                console.warn(
+                  `[users/avatar-sync] Failed to refresh avatar for updated user ${shortId(user.user_id)}:`,
+                  error instanceof Error ? error.message : String(error)
+                );
+              }
+            );
           }
           return context;
         },

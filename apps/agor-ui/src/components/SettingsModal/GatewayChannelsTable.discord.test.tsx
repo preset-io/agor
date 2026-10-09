@@ -235,7 +235,7 @@ async function fillDiscordWizard({
   expect(screen.getByLabelText('Allowed public channel IDs')).toBeInTheDocument();
   expect(screen.getByLabelText('Application ID')).not.toBeVisible();
   if (directMessages) fireEvent.click(screen.getByLabelText('Direct messages'));
-  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound PNG\/JPEG image attachments/));
+  if (files) fireEvent.click(screen.getByLabelText(/Enable inbound image and text attachments/));
   if (channelHistory)
     fireEvent.click(screen.getByLabelText(/Let session agents read channel history/));
   addTag('Allowed public channel IDs', CHANNEL_ID);
