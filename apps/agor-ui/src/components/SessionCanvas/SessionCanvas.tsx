@@ -3094,197 +3094,200 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             style={{ background: 'transparent' }}
           >
             {!canvasBackground && <Background />}
-            <Controls
-              style={readOnly ? { display: 'none' } : undefined}
-              position="top-left"
-              showZoom={false}
-              showFitView={false}
-              showInteractive={false}
-            >
-              {/* Zoom controls */}
-              <Tooltip title="Zoom In" placement="right" mouseEnterDelay={0.3}>
-                <span>
-                  <ControlButton
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      reactFlowInstanceRef.current?.zoomIn();
-                    }}
-                  >
-                    <PlusOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip title="Zoom Out" placement="right" mouseEnterDelay={0.3}>
-                <span>
-                  <ControlButton
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      reactFlowInstanceRef.current?.zoomOut();
-                    }}
-                  >
-                    <MinusOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip title="Fit View" placement="right" mouseEnterDelay={0.3}>
-                <span>
-                  <ControlButton
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      reactFlowInstanceRef.current?.fitView();
-                    }}
-                  >
-                    <ZoomInOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              {/* Custom toolbox buttons */}
-              <Tooltip title="Select" placement="right" mouseEnterDelay={0.3}>
-                <span>
-                  <ControlButton
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveTool('select');
-                    }}
-                    style={{
-                      borderLeft:
-                        activeTool === 'select'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
-                    }}
-                  >
-                    <SelectOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip
-                title={canMutateBoard ? 'Add Zone' : (boardMutationMessage ?? 'Add Zone')}
-                placement="right"
-                mouseEnterDelay={0.3}
+            {/* View-only canvas: no edit controls or minimap, not even hidden (the minimap redraws on every pan). */}
+            {!readOnly && (
+              <Controls
+                position="top-left"
+                showZoom={false}
+                showFitView={false}
+                showInteractive={false}
               >
-                <span>
-                  <ControlButton
-                    aria-label="Add Zone"
-                    disabled={!canMutateBoard}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveTool('zone');
-                    }}
-                    style={{
-                      borderLeft:
-                        activeTool === 'zone'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
-                      opacity: canMutateBoard ? 1 : 0.4,
-                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    <BorderOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip
-                title={
-                  canMutateComments ? 'Add Comment' : (commentMutationMessage ?? 'Add Comment')
-                }
-                placement="right"
-                mouseEnterDelay={0.3}
-              >
-                <span>
-                  <ControlButton
-                    aria-label="Add Comment"
-                    disabled={!canMutateComments}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveTool('comment');
-                    }}
-                    style={{
-                      borderLeft:
-                        activeTool === 'comment'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
-                      opacity: canMutateComments ? 1 : 0.4,
-                      cursor: canMutateComments ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    <CommentOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip
-                title={
-                  canMutateBoard
-                    ? 'Add Markdown Note — click canvas to place'
-                    : (boardMutationMessage ?? 'Add Markdown Note — click canvas to place')
-                }
-                placement="right"
-                mouseEnterDelay={0.3}
-              >
-                <span>
-                  <ControlButton
-                    aria-label="Add Markdown Note"
-                    disabled={!canMutateBoard}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveTool('markdown');
-                    }}
-                    style={{
-                      borderLeft:
-                        activeTool === 'markdown'
-                          ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
-                          : 'none',
-                      opacity: canMutateBoard ? 1 : 0.4,
-                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    <FileMarkdownOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-              <Tooltip
-                title={
-                  canMutateBoard ? 'Eraser - Click to toggle' : (boardMutationMessage ?? 'Eraser')
-                }
-                placement="right"
-                mouseEnterDelay={0.3}
-              >
-                <span>
-                  <ControlButton
-                    aria-label="Eraser"
-                    disabled={!canMutateBoard}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
-                    }}
-                    style={{
-                      borderLeft:
-                        activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
-                      color: activeTool === 'eraser' ? token.colorError : 'inherit',
-                      backgroundColor:
-                        activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
-                      opacity: canMutateBoard ? 1 : 0.4,
-                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
-                    }}
-                  >
-                    <DeleteOutlined style={{ fontSize: '16px' }} />
-                  </ControlButton>
-                </span>
-              </Tooltip>
-            </Controls>
-            <MiniMap
-              nodeColor={miniMapNodeColor}
-              onClick={handleMiniMapClick}
-              pannable
-              zoomable
-              style={{
-                display: readOnly ? 'none' : undefined,
-                backgroundColor: token.colorBgElevated,
-                border: `1px solid ${token.colorBorder}`,
-              }}
-              maskColor="rgba(0, 0, 0, 0.5)"
-              maskStrokeColor={token.colorPrimary}
-              maskStrokeWidth={2}
-            />
+                {/* Zoom controls */}
+                <Tooltip title="Zoom In" placement="right" mouseEnterDelay={0.3}>
+                  <span>
+                    <ControlButton
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        reactFlowInstanceRef.current?.zoomIn();
+                      }}
+                    >
+                      <PlusOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Zoom Out" placement="right" mouseEnterDelay={0.3}>
+                  <span>
+                    <ControlButton
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        reactFlowInstanceRef.current?.zoomOut();
+                      }}
+                    >
+                      <MinusOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Fit View" placement="right" mouseEnterDelay={0.3}>
+                  <span>
+                    <ControlButton
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        reactFlowInstanceRef.current?.fitView();
+                      }}
+                    >
+                      <ZoomInOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                {/* Custom toolbox buttons */}
+                <Tooltip title="Select" placement="right" mouseEnterDelay={0.3}>
+                  <span>
+                    <ControlButton
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTool('select');
+                      }}
+                      style={{
+                        borderLeft:
+                          activeTool === 'select'
+                            ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                            : 'none',
+                      }}
+                    >
+                      <SelectOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={canMutateBoard ? 'Add Zone' : (boardMutationMessage ?? 'Add Zone')}
+                  placement="right"
+                  mouseEnterDelay={0.3}
+                >
+                  <span>
+                    <ControlButton
+                      aria-label="Add Zone"
+                      disabled={!canMutateBoard}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTool('zone');
+                      }}
+                      style={{
+                        borderLeft:
+                          activeTool === 'zone'
+                            ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                            : 'none',
+                        opacity: canMutateBoard ? 1 : 0.4,
+                        cursor: canMutateBoard ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      <BorderOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    canMutateComments ? 'Add Comment' : (commentMutationMessage ?? 'Add Comment')
+                  }
+                  placement="right"
+                  mouseEnterDelay={0.3}
+                >
+                  <span>
+                    <ControlButton
+                      aria-label="Add Comment"
+                      disabled={!canMutateComments}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTool('comment');
+                      }}
+                      style={{
+                        borderLeft:
+                          activeTool === 'comment'
+                            ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                            : 'none',
+                        opacity: canMutateComments ? 1 : 0.4,
+                        cursor: canMutateComments ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      <CommentOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    canMutateBoard
+                      ? 'Add Markdown Note — click canvas to place'
+                      : (boardMutationMessage ?? 'Add Markdown Note — click canvas to place')
+                  }
+                  placement="right"
+                  mouseEnterDelay={0.3}
+                >
+                  <span>
+                    <ControlButton
+                      aria-label="Add Markdown Note"
+                      disabled={!canMutateBoard}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTool('markdown');
+                      }}
+                      style={{
+                        borderLeft:
+                          activeTool === 'markdown'
+                            ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
+                            : 'none',
+                        opacity: canMutateBoard ? 1 : 0.4,
+                        cursor: canMutateBoard ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      <FileMarkdownOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+                <Tooltip
+                  title={
+                    canMutateBoard ? 'Eraser - Click to toggle' : (boardMutationMessage ?? 'Eraser')
+                  }
+                  placement="right"
+                  mouseEnterDelay={0.3}
+                >
+                  <span>
+                    <ControlButton
+                      aria-label="Eraser"
+                      disabled={!canMutateBoard}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
+                      }}
+                      style={{
+                        borderLeft:
+                          activeTool === 'eraser' ? `3px solid ${token.colorError}` : 'none',
+                        color: activeTool === 'eraser' ? token.colorError : 'inherit',
+                        backgroundColor:
+                          activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
+                        opacity: canMutateBoard ? 1 : 0.4,
+                        cursor: canMutateBoard ? 'pointer' : 'not-allowed',
+                      }}
+                    >
+                      <DeleteOutlined style={{ fontSize: '16px' }} />
+                    </ControlButton>
+                  </span>
+                </Tooltip>
+              </Controls>
+            )}
+            {!readOnly && (
+              <MiniMap
+                nodeColor={miniMapNodeColor}
+                onClick={handleMiniMapClick}
+                pannable
+                zoomable
+                style={{
+                  backgroundColor: token.colorBgElevated,
+                  border: `1px solid ${token.colorBorder}`,
+                }}
+                maskColor="rgba(0, 0, 0, 0.5)"
+                maskStrokeColor={token.colorPrimary}
+                maskStrokeWidth={2}
+              />
+            )}
             <RemoteCursorLayer
               client={client}
               boardId={(board?.board_id as BoardID | null) ?? null}

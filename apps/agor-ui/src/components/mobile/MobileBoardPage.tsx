@@ -5,17 +5,12 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import { resolveBoardFromUrlPure } from '@/utils/urlResolution';
 import { useTrackBoardVisit } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
-import { agorStore, shallow, useAgorStore, useStoreWithEqualityFn } from '../../store/agorStore';
-import {
-  makeBranchesForBoardSelector,
-  makeBranchSelector,
-  makeCommentMentionSelector,
-  makeRepoSelector,
-  makeUnreadCommentCountSelector,
-} from '../../store/selectors';
+import { agorStore, shallow, useStoreWithEqualityFn } from '../../store/agorStore';
+import { makeBranchesForBoardSelector } from '../../store/selectors';
 import { OPEN_BOARD_SWITCHER_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { BoardSwitcher } from '../BoardSwitcher';
 import { BoardTeammatePanel, type BoardTeammatePanelTab } from '../BoardTeammatePanel';
+import { useBoardTeammatePanelData } from '../BoardTeammatePanel/useBoardTeammatePanelData';
 import type { BranchModalTab } from '../BranchModal';
 import { mobilePageStyle } from './constants';
 
@@ -72,7 +67,6 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
-  const { state } = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { token } = theme.useToken();
   const userId = currentUser?.user_id;
@@ -86,10 +80,14 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     if (visitedBoardId) trackBoardVisit(visitedBoardId);
   }, [visitedBoardId, trackBoardVisit]);
 
+  const { state, pathname, search } = useLocation();
   const openBoardSwitcher = (state as MobileBoardLocationState | null)?.openBoardSwitcher;
   useEffect(() => {
-    if (openBoardSwitcher) requestShellPicker(OPEN_BOARD_SWITCHER_EVENT);
-  }, [openBoardSwitcher]);
+    if (!openBoardSwitcher) return;
+    requestShellPicker(OPEN_BOARD_SWITCHER_EVENT);
+    // One-shot: clear it so Back/Forward onto this entry doesn't reopen the switcher.
+    navigate({ pathname, search }, { replace: true, state: null });
+  }, [openBoardSwitcher, navigate, pathname, search]);
 
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
   const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : 'board';
@@ -103,24 +101,14 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
     useMemo(() => makeBranchesForBoardSelector(visitedBoardId), [visitedBoardId]),
     shallow
   );
-  const primaryTeammateId = board?.primary_teammate_id ?? null;
-  const primaryTeammateBranch = useAgorStore(
-    useMemo(() => makeBranchSelector(primaryTeammateId), [primaryTeammateId])
-  );
-  const primaryTeammateRepoId = primaryTeammateBranch?.repo_id;
-  const primaryTeammateRepo = useAgorStore(
-    useMemo(() => makeRepoSelector(primaryTeammateRepoId), [primaryTeammateRepoId])
-  );
-  const unreadCommentsCount = useAgorStore(
-    useMemo(() => makeUnreadCommentCountSelector(visitedBoardId), [visitedBoardId])
-  );
-  const userName = currentUser?.name || currentUser?.email?.split('@')[0] || undefined;
-  const hasUserMentions = useAgorStore(
-    useMemo(
-      () => makeCommentMentionSelector(visitedBoardId, userName, currentUser?.email),
-      [visitedBoardId, userName, currentUser?.email]
-    )
-  );
+  const {
+    primaryTeammateId,
+    primaryTeammateBranch,
+    primaryTeammateRepo,
+    primaryTeammateInaccessible,
+    unreadCommentsCount,
+    hasUserMentions,
+  } = useBoardTeammatePanelData(board, currentUser, boardReady);
 
   const openSession = useStableCallback((sessionId: string) => navigate(`/m/session/${sessionId}`));
   const openBranch = useStableCallback((branchId: string, tab?: BranchModalTab) =>
@@ -180,9 +168,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             onTabChange={setActiveTab}
             primaryTeammateBranch={primaryTeammateBranch}
             primaryTeammateRepo={primaryTeammateRepo}
-            primaryTeammateInaccessible={Boolean(
-              primaryTeammateId && !primaryTeammateBranch && boardReady
-            )}
+            primaryTeammateInaccessible={primaryTeammateInaccessible}
             boardReady={boardReady}
             currentUserId={userId}
             unreadCommentsCount={unreadCommentsCount}

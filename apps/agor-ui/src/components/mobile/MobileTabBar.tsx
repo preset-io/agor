@@ -15,7 +15,7 @@ export interface MobileTabBarProps {
   activeTab: MobileTab | null;
   onSelect: (tab: MobileTab) => void;
   /** Home's "need you" count (0 hides the badge). */
-  sessionsBadge?: number;
+  homeBadge?: number;
   /** Unread comments and mentions, shown on More (0 hides the badge). */
   moreBadge?: number;
   /** Ask is creating a session; the action shows it and refuses a repeated tap. */
@@ -39,14 +39,14 @@ interface TabDef {
 export const MobileTabBar: React.FC<MobileTabBarProps> = ({
   activeTab,
   onSelect,
-  sessionsBadge,
+  homeBadge,
   moreBadge,
   askPending,
 }) => {
   const { token } = theme.useToken();
 
   const leftTabs: TabDef[] = [
-    { key: 'home', label: 'Home', icon: <HomeOutlined />, badge: sessionsBadge },
+    { key: 'home', label: 'Home', icon: <HomeOutlined />, badge: homeBadge },
     { key: 'board', label: 'Board', icon: <AppstoreOutlined /> },
   ];
   const rightTabs: TabDef[] = [

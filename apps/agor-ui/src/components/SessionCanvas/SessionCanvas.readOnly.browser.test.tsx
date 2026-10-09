@@ -78,3 +78,12 @@ describe('SessionCanvas view-only first view', () => {
     await waitFor(() => expect(viewport(container)).toEqual({ x: -120, y: -80, zoom: 0.9 }));
   });
 });
+
+describe('SessionCanvas view-only chrome', () => {
+  it('does not mount the minimap or the edit controls', async () => {
+    const { container } = renderPhoneCanvas();
+    await waitFor(() => expect(container.querySelector('.react-flow__viewport')).not.toBeNull());
+    expect(container.querySelector('.react-flow__minimap')).toBeNull();
+    expect(container.querySelector('.react-flow__controls')).toBeNull();
+  });
+});

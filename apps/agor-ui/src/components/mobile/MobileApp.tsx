@@ -19,7 +19,6 @@ import type { BranchStorageConfig } from '@/utils/branchStorage';
 import type { AppActionsContextValue } from '../../contexts/AppActionsContext';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
-import { readLocalStorageJson } from '../../hooks/localStorageJson';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useBranchSessions } from '../../hooks/useBranchSessions';
@@ -30,10 +29,8 @@ import { reducedMotionSurface, usePrefersReducedMotion } from '../../hooks/usePr
 import { usePrimaryTeammate } from '../../hooks/usePrimaryTeammate';
 import { useRecentBoards } from '../../hooks/useRecentBoards';
 import { useStableCallback } from '../../hooks/useStableCallback';
-import { userStorageKey } from '../../hooks/useUserLocalStorage';
-import { type AgorState, agorStore, useAgorStore } from '../../store/agorStore';
+import { agorStore, useAgorStore } from '../../store/agorStore';
 import {
-  makeHomeBucketsSelector,
   selectBoardById,
   selectBoardObjectsByBoardId,
   selectBranchById,
@@ -51,7 +48,7 @@ import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
-import { OPENED_FAILURES_KEY, openedRunsOf } from '../HomePage/openedFailures';
+import { useHomeNeedsCount } from '../HomePage/useHomeNeedsCount';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
@@ -303,22 +300,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   const commentsBadge = useCommentsForYou(client, user).length;
 
-  // Home's "need you" count. Opened failures and the clock are re-read per navigation, as Home does on mount.
-  const userId = user?.user_id;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on location.key to re-read on navigation.
-  const selectNeedsCount = useMemo(() => {
-    const selectBuckets = makeHomeBucketsSelector({
-      userId,
-      now: Date.now(),
-      needsLimit: 0,
-      recentLimit: 0,
-      openedFailures: openedRunsOf(
-        userId ? readLocalStorageJson(userStorageKey(userId, OPENED_FAILURES_KEY), null) : null
-      ),
-    });
-    return (s: AgorState) => selectBuckets(s).needsCount;
-  }, [userId, location.key]);
-  const homeBadge = useAgorStore(selectNeedsCount) + commentsBadge;
+  // Home's "need you" count, computed once here: the tab bar and Home both read it.
+  const needsCount = useHomeNeedsCount(user?.user_id);
+  const homeBadge = needsCount + commentsBadge;
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
@@ -448,14 +432,15 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   );
 
   return (
-    // Fixed to the visible viewport, so the document never scrolls and iOS cannot
-    // lift the shell (and its tab bar) when the toolbar hides; only page content
-    // scrolls. Clipping horizontally keeps any wide descendant from widening it.
-    // Top and side insets apply here; the tab bar alone owns the bottom inset.
+    // Exactly the visible viewport (#root is 100dvh too, see index.html), so the
+    // document never scrolls and iOS cannot lift the shell (and its tab bar) when
+    // the toolbar hides; only page content scrolls. Clipping horizontally keeps
+    // any wide descendant from widening it. Top and side insets apply here; the
+    // tab bar alone owns the bottom inset.
     <Layout
       style={{
-        position: 'fixed',
-        inset: 0,
+        height: '100dvh',
+        boxSizing: 'border-box',
         paddingTop: 'env(safe-area-inset-top)',
         paddingLeft: 'env(safe-area-inset-left)',
         paddingRight: 'env(safe-area-inset-right)',
@@ -509,6 +494,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                   onAllBoards={openBoardList}
                   onSeeAllSessions={openSessionList}
                   onSeeAllTeammates={openTeammates}
+                  needsCount={needsCount}
                 />
               </div>
             }
@@ -629,7 +615,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       <MobileTabBar
         activeTab={activeTab}
         onSelect={handleTabSelect}
-        sessionsBadge={homeBadge}
+        homeBadge={homeBadge}
         moreBadge={commentsBadge}
         askPending={creatingSession}
       />

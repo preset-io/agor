@@ -22,7 +22,7 @@ import {
 } from '@codesandbox/sandpack-react';
 import { Alert, Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 import {
   ArtifactConsoleReporter,
   ArtifactRuntimeBridge,
@@ -36,6 +36,7 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
+import { useMobileBack } from '../components/mobile/useMobileBack';
 import { useStableSandpackProviderInputs } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 
@@ -59,7 +60,7 @@ interface ArtifactFullscreenNavbarProps {
   title: string;
   loading: boolean;
   currentUser?: User | null;
-  /** When true, the left control is an in-app Back to the mobile shell. */
+  /** When set, the left control is an in-app Back to the mobile shell. */
   onBackToShell?: () => void;
   onReload: () => void;
   onTrustClick: () => void;
@@ -197,15 +198,11 @@ export function ArtifactFullscreenPage({
 }: ArtifactFullscreenPageProps) {
   const { token } = theme.useToken();
   const { artifactShortId } = useParams();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   // Opened from the mobile shell (?from=m): the left control returns into /m via
   // history rather than the desktop board link, which has no /m equivalent.
   const cameFromMobileShell = searchParams.get('from') === 'm';
-  const onBackToShell = useCallback(() => {
-    if (window.history.length > 1) navigate(-1);
-    else navigate('/m');
-  }, [navigate]);
+  const onBackToShell = useMobileBack('/m');
   const showNavbar =
     searchParams.get('show_navbar') !== 'false' &&
     searchParams.get('chrome') !== '0' &&
