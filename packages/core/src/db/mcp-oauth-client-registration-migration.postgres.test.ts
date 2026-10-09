@@ -420,6 +420,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               DROP COLUMN verified_tenant_id, DROP COLUMN attempt_count,
               DROP COLUMN next_attempt_at, DROP COLUMN last_error_code`
       );
+      await executeRaw(
+        db,
+        sql`ALTER TABLE thread_session_map DROP COLUMN teams_last_admitted_activity_id`
+      );
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
       await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
 
