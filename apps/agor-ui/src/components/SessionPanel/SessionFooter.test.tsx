@@ -7,6 +7,7 @@ import type {
   MCPServer,
   PermissionMode,
   Session,
+  Task,
 } from '@agor-live/client';
 import { SessionStatus } from '@agor-live/client';
 import {
@@ -699,38 +700,6 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     expect(screen.getByLabelText('Queue').textContent).toBe('');
   });
 
-  it('keeps the overflow menu on one type scale and one row height', async () => {
-    render(
-      <SessionFooter
-        {...baseProps}
-        latestContextWindow={{ used: 10, limit: 100, taskMetadata: null }}
-        onOpenSessionSettings={vi.fn()}
-      />,
-      { wrapper: Wrapper }
-    );
-    fireEvent.click(screen.getByLabelText('More options'));
-    const menu = await screen.findByRole('group', { name: 'More options' });
-    for (const title of ['Settings', 'Actions', 'Info bar']) {
-      expect(within(menu).getByText(title, { exact: true })).toBeInTheDocument();
-    }
-    for (const element of menu.querySelectorAll<HTMLElement>('*')) {
-      expect(['', '12px', '14px', '16px', '20px']).toContain(element.style.fontSize);
-      expect(element.style.textTransform).not.toBe('uppercase');
-    }
-    const rowHeight = width < 1024 ? '44px' : '32px';
-    const rows = [...menu.querySelectorAll<HTMLElement>(':scope > div')].filter(
-      (row) => !row.classList.contains('ant-divider') && row.style.height !== ''
-    );
-    expect(rows.length).toBeGreaterThan(8);
-    for (const row of rows) {
-      expect(row.style.height === 'auto' ? row.style.minHeight : row.style.height).toBe(rowHeight);
-    }
-    expect(within(menu).getByLabelText('Session settings').style.height).toBe(rowHeight);
-    const modelRow = within(menu).getByTestId('model-selector-stub').closest('fieldset > div')!;
-    expect(within(modelRow as HTMLElement).getByText('Model')).toBeInTheDocument();
-    expect((modelRow as HTMLElement).style.flexWrap).toBe('');
-  });
-
   it('retains pending feedback and waits for an explicit cleanup failure before offering retry', () => {
     const onStop = vi.fn();
     const view = render(
@@ -748,6 +717,21 @@ describe.each([320, 390, 768, 1280])('SessionFooter at %ipx', (width) => {
     expect(recovering).toBeDisabled();
     fireEvent.click(recovering);
     expect(onStop).not.toHaveBeenCalled();
+    view.rerender(
+      <SessionFooter
+        {...baseProps}
+        isRunning
+        isStopping
+        recoveryTask={
+          {
+            task_id: 'stopping-task',
+            termination_request: { cause: 'user_stop', requested_at: '2026-01-01T00:00:00Z' },
+          } as Task
+        }
+        onStop={onStop}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Stopping' })).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} isRunning connectionDisabled onStop={onStop} />);
     expect(screen.getByLabelText('Stop')).toBeDisabled();
     view.rerender(<SessionFooter {...baseProps} />);

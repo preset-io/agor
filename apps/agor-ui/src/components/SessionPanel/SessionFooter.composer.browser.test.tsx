@@ -1,8 +1,9 @@
-import type { Session, Task } from '@agor-live/client';
+import { SessionStatus, type Task, TaskStatus } from '@agor-live/client';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { App, ConfigProvider, theme } from 'antd';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { page, userEvent } from 'vitest/browser';
+import { makeSession } from '../../test/harness';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { SessionFooter, type SessionFooterProps } from './SessionFooter';
 
@@ -26,17 +27,17 @@ afterEach(async () => {
 const noop = vi.fn();
 const props: SessionFooterProps = {
   session: {
-    session_id: 'composer-session',
-    branch_id: 'composer-branch',
-    status: 'running',
+    ...makeSession('composer-session', 'composer-branch', {
+      status: SessionStatus.RUNNING,
+      model_config: { model: 'claude-opus-4-8-20251115-with-a-long-pinned-suffix' },
+    }),
     agentic_tool: 'claude-code',
-    model_config: { model: 'claude-opus-4-8-20251115-with-a-long-pinned-suffix' },
-  } as unknown as SessionFooterProps['session'],
+  },
   footerTimerTask: {
     task_id: 'composer-task',
-    status: 'running',
+    status: TaskStatus.RUNNING,
     created_at: new Date().toISOString(),
-  } as unknown as Task,
+  } as Task,
   latestContextWindow: { used: 4_000, limit: 100_000, taskMetadata: null },
   sessionMcpServerIds: [],
   unauthedMcpServers: [],
@@ -82,10 +83,7 @@ it.each([
     >
       <App>
         <main style={{ paddingInline: 24 }}>
-          <SessionFooter
-            {...props}
-            session={props.session as Session & { agentic_tool: 'claude-code' }}
-          />
+          <SessionFooter {...props} />
         </main>
       </App>
     </ConfigProvider>
@@ -95,14 +93,16 @@ it.each([
   const chips = [...bar.children].map((chip) => chip.getBoundingClientRect());
   const lineBottom = Math.min(...chips.map((chip) => chip.bottom));
   for (const chip of chips) expect(chip.top).toBeLessThan(lineBottom);
-  expect(getComputedStyle(bar).overflowX).toBe('auto');
+  const isMobile = width < 1024;
+  // Phones scroll the chip row; desktop wraps so focus rings are never clipped.
+  expect(getComputedStyle(bar).overflowX).toBe(isMobile ? 'auto' : 'visible');
+  expect(getComputedStyle(bar).flexWrap).toBe(isMobile ? 'nowrap' : 'wrap');
   expect(screen.getByTestId('model-chip').getBoundingClientRect().width).toBeGreaterThanOrEqual(96);
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
   const actions = ['Attach files', 'More options', 'Stop', 'Queue'].map((name) =>
     screen.getByRole('button', { name }).getBoundingClientRect()
   );
-  const isMobile = width < 1024;
   for (const action of actions) {
     expect(action.height).toBe(actions[0].height);
     expect(action.right).toBeLessThanOrEqual(window.innerWidth);

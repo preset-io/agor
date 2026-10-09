@@ -324,8 +324,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
   };
+  // Phones skip hover tooltips: a tap leaves them over the sheet and buttons.
+  // Gated by viewport width, not pointer type, to match the phone layout switch.
+  const hoverTooltip = (title: React.ReactNode) => (isMobile ? undefined : title);
   const pinToggle = (pinned: boolean, label: string, tooltip: string, onToggle: () => void) => (
-    <Tooltip title={tooltip} placement="right">
+    <Tooltip title={hoverTooltip(tooltip)} placement="right">
       <Button
         type="text"
         size={actionSize}
@@ -378,10 +381,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         plain
       />
     ) : null;
-  // Phones skip action bar tooltips: a tap leaves them over the sheet and buttons.
-  const barTooltip = (title: React.ReactNode) => (isMobile ? undefined : title);
   const moreButton = (
-    <Tooltip title={barTooltip('More options')}>
+    <Tooltip title={hoverTooltip('More options')}>
       <Button
         size={actionSize}
         style={touchActionStyle}
@@ -895,7 +896,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
       <div style={{ position: 'relative', zIndex: 1 }}>
         {/* Row 1: Info bar (always shown on mobile as the compact chip bar).
-            One line: the model chip truncates first, then the row scrolls. */}
+            Desktop wraps. Phones keep one line: the model chip truncates first,
+            then the row scrolls. */}
         {(isMobile ||
           showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
@@ -911,10 +913,14 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               gap: token.sizeUnit,
               alignItems: 'center',
               marginBottom: token.sizeUnit * 2,
-              flexWrap: 'nowrap',
-              whiteSpace: 'nowrap',
-              overflowX: 'auto',
-              scrollbarWidth: 'none',
+              ...(isMobile
+                ? {
+                    flexWrap: 'nowrap',
+                    whiteSpace: 'nowrap',
+                    overflowX: 'auto',
+                    scrollbarWidth: 'none',
+                  }
+                : { flexWrap: 'wrap' }),
             }}
             data-testid="info-bar"
           >
@@ -1109,7 +1115,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           />
         )}
 
-        {/* Row 2 — Prompt textarea (inline in the action bar on phones) */}
+        {/* Row 2 — Prompt textarea (inline in the action bar on phones). Crossing
+            the breakpoint remounts PromptInput; its unmount saveDraft keeps the text. */}
         {!isMobile && promptInputSlot}
 
         {/* Row 3 — Action bar. On phones it is a chat bar: the input grows
@@ -1127,12 +1134,12 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           <Space size={4}>
             {barPinnedItems.includes('upload') && (
               <Tooltip
-                title={barTooltip(
+                title={hoverTooltip(
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
                       ? 'Disconnected from daemon'
-                      : 'Attach Files'
+                      : 'Attach files'
                 )}
               >
                 <Button
@@ -1150,13 +1157,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
             {barPinnedItems.includes('advanced-upload') && (
               <Tooltip
-                title={
+                title={hoverTooltip(
                   composerAttachmentUploading
                     ? composerUploadTooltip
                     : connectionDisabled
                       ? 'Disconnected from daemon'
                       : 'Advanced upload'
-                }
+                )}
               >
                 <Button
                   size={actionSize}
@@ -1171,7 +1178,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {barPinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
+              <Tooltip
+                title={hoverTooltip(
+                  connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'
+                )}
+              >
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1186,7 +1197,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
             {/* Dynamically pinned items */}
             {barPinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title="BTW fork">
+              <Tooltip title={hoverTooltip('BTW fork')}>
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1200,7 +1211,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {barPinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
-              <Tooltip title="Spawn subsession">
+              <Tooltip title={hoverTooltip('Spawn subsession')}>
                 <Button
                   size={actionSize}
                   style={touchActionStyle}
@@ -1255,10 +1266,16 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {/* Flex avoids inline baseline/descender space around the controls. */}
             <Flex align="center" gap={token.sizeUnit}>
               {showStop && (
-                <Tooltip title={barTooltip(stopTooltip)}>
+                <Tooltip title={hoverTooltip(stopTooltip)}>
                   <Button
                     danger
-                    aria-label={isStopping ? 'Recovering' : 'Stop'}
+                    aria-label={
+                      recoveryTask?.termination_request?.cause === 'user_stop'
+                        ? 'Stopping'
+                        : isStopping
+                          ? 'Recovering'
+                          : 'Stop'
+                    }
                     aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
@@ -1270,7 +1287,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                   />
                 </Tooltip>
               )}
-              <Tooltip title={barTooltip(sendTooltip)}>
+              <Tooltip title={hoverTooltip(sendTooltip)}>
                 <Badge
                   count={queuedTasks.length > 0 ? queuedTasks.length : 0}
                   size="small"
