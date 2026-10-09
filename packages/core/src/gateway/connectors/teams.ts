@@ -348,6 +348,24 @@ function stripHtmlTags(text: string): string {
   return text.replace(/<[^>]+>/g, '');
 }
 
+// Only Teams' own lowercase formatting markup; `<string>`, `<Button …>` and `<id>` are user text.
+const TEAMS_MARKUP_TAG =
+  /<\/?(?:a|at|b|blockquote|br|code|del|details|div|em|h[1-6]|hr|i|img|li|ol|p|pre|s|span|strike|strong|sub|summary|sup|table|tbody|td|th|thead|tr|u|ul)(?:\s[^<>]*)?\/?>/g;
+
+function stripTeamsMarkup(text: string): string {
+  return text.replace(TEAMS_MARKUP_TAG, '');
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
 export function extractQuotedReplyText(
   attachments: Array<{ contentType?: string; content?: string }> | undefined
 ): string | null {
@@ -356,7 +374,7 @@ export function extractQuotedReplyText(
     if (attachment.contentType !== 'text/html' || !attachment.content) continue;
     if (!attachment.content.includes('schema.skype.com/Reply')) continue;
     const afterQuote = attachment.content.split('</blockquote>').pop();
-    const text = afterQuote ? stripHtmlTags(afterQuote).trim() : '';
+    const text = afterQuote ? decodeHtmlEntities(stripHtmlTags(afterQuote)).trim() : '';
     if (text) return text;
   }
   return null;
@@ -510,7 +528,7 @@ export function normalizeTeamsActivity(
     const mentionText = stringValue(record.text);
     if (mentionText) text = text.replace(mentionText, '').trim();
   }
-  text = stripHtmlTags(text).trim();
+  text = decodeHtmlEntities(stripTeamsMarkup(text)).trim();
   const userAadObjectId = stringValue(from.aadObjectId);
   const tenantId = stringValue(tenant.id) ?? stringValue(from.tenantId);
   const userId = stringValue(from.id) ?? 'unknown';
@@ -660,7 +678,7 @@ const TEAMS_CODE_SEGMENT = /(`{3,}|~{3,})[\s\S]*?(?:\1|$)|(`+)[^\n]*?(?<!`)\2(?!
  */
 export function formatTeamsMarkdown(markdown: string): string {
   const formatProse = (prose: string) =>
-    stripHtmlTags(
+    stripTeamsMarkup(
       prose
         .replace(/<details>\s*<summary>([\s\S]*?)<\/summary>\s*/gi, (_match, summary: string) => {
           return `**${summary.trim()}**\n`;
