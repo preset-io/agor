@@ -16,6 +16,7 @@ import {
   MCP_CATALOG_CATEGORIES,
   MCP_OAUTH_COMPATIBILITY_MODES,
   MCP_OAUTH_DCR_MODES,
+  MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS,
 } from '@agor/core/types';
 import { z } from 'zod';
 import {
@@ -83,6 +84,7 @@ const catalogEntryOAuthSchema = z
       .strict()
       .optional(),
     stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),
+    token_endpoint_auth_method: z.enum(MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS).optional(),
     client_id: nonEmpty.optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),
     compatibility_mode: z.enum(MCP_OAUTH_COMPATIBILITY_MODES).optional(),
@@ -120,6 +122,11 @@ const catalogEntryOAuthSchema = z
   // two issuers for one flow.
   .refine((value) => !value.configured_client || !value.stable_callback, {
     message: 'stable_callback is implied by configured_client; state only one',
+  })
+  // Only a client with a secret authenticates at the token endpoint, and only
+  // a customer-owned app recipe brings one.
+  .refine((value) => !value.token_endpoint_auth_method || value.configured_client, {
+    message: 'token_endpoint_auth_method applies only to a configured_client recipe',
   });
 
 /**

@@ -14,7 +14,7 @@ import {
   ROTATING_GRANT_OBSERVE_TIMEOUT_MS,
   refreshRotatingGrant,
 } from '../../oauth/rotating-grant-refresh';
-import type { MCPOAuthTokenEndpointAuthMethod, MCPServerID, UserID } from '../../types';
+import type { MCPOAuthTokenEndpointAuthMethod, MCPServer, MCPServerID, UserID } from '../../types';
 import {
   type OutboundDnsLookup,
   OutboundPreDispatchAuthorityError,
@@ -328,6 +328,14 @@ export interface RefreshAndPersistDeps {
   assertCurrent?: () => void | Promise<void>;
   /** Deterministic DNS seam used by pre-dispatch authority race tests. */
   resolveDns?: OutboundDnsLookup;
+  /**
+   * Token endpoint client authentication for this server, read from the
+   * authoritative row. The daemon passes the catalog-recipe resolver it also
+   * uses for the code exchange, so both agree. Omitted means HTTP Basic.
+   */
+  resolveTokenEndpointAuthMethod?: (
+    server: MCPServer | null
+  ) => Promise<MCPOAuthTokenEndpointAuthMethod | undefined>;
 }
 
 function exactGrantMatches(
@@ -468,6 +476,8 @@ async function settleObservedRefresh(
 }
 
 async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
+  // Resolved in `prepare` (inside the authorized tenant unit), used by `exchange`.
+  let tokenEndpointAuthMethod: MCPOAuthTokenEndpointAuthMethod | undefined;
   const expected = deps.observedRefreshVersion;
   if (!expected) {
     throw new Error('PostgreSQL MCP OAuth refresh requires an observed grant version');
@@ -506,7 +516,12 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       if (!row.oauth_refresh_token) throw new MissingRefreshTokenError();
       if (!row.oauth_client_id) throw new MissingClientIdError();
       if (!row.oauth_token_endpoint) throw new MissingTokenEndpointError();
-      await tenantWork(deps, (db) => assertGrantStillAuthorized(deps, row, db));
+      await tenantWork(deps, async (db) => {
+        await assertGrantStillAuthorized(deps, row, db);
+        tokenEndpointAuthMethod = await deps.resolveTokenEndpointAuthMethod?.(
+          await new MCPServerRepository(db).findById(deps.mcpServerId)
+        );
+      });
     },
     exchange: ({ row }) =>
       refreshMCPToken({
@@ -514,7 +529,7 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
         refreshToken: row.oauth_refresh_token!,
         clientId: row.oauth_client_id!,
         clientSecret: row.oauth_client_secret,
-        tokenEndpointAuthMethod: row.oauth_token_endpoint_auth_method,
+        tokenEndpointAuthMethod,
         resourceUri: row.oauth_resource_uri,
         redirectUri: row.oauth_redirect_uri,
         allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
@@ -675,11 +690,7 @@ async function refreshStandalone(
       refreshToken: row.oauth_refresh_token,
       clientId,
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
-      // Only meaningful for the grant's own secret; a server-row fallback
-      // secret predates any recorded method and keeps HTTP Basic.
-      tokenEndpointAuthMethod: row.oauth_client_secret
-        ? row.oauth_token_endpoint_auth_method
-        : undefined,
+      tokenEndpointAuthMethod: await deps.resolveTokenEndpointAuthMethod?.(server ?? null),
       resourceUri: row.oauth_resource_uri,
       redirectUri: row.oauth_redirect_uri,
       allowLocalhostHttp: true,

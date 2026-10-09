@@ -29,14 +29,7 @@ it('upgrades real SQLite 0104, preserves personal grants and requires fresh shar
     ).toHaveLength(2);
     await runMigrations(db, { allowOfflineCutover: true });
     const rows = rawRows(await executeRaw(db, sql`SELECT * FROM user_mcp_oauth_tokens`));
-    expect(rows).toEqual([
-      {
-        ...fixture.personal,
-        granted_by_user_id: fixture.userId,
-        // Added after 0105; historical grants keep HTTP Basic.
-        oauth_token_endpoint_auth_method: null,
-      },
-    ]);
+    expect(rows).toEqual([{ ...fixture.personal, granted_by_user_id: fixture.userId }]);
     expect(rawRows(await executeRaw(db, sql`PRAGMA foreign_key_check`))).toEqual([]);
     await expect(
       executeRaw(

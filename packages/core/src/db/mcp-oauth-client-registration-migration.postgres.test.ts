@@ -384,10 +384,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`ALTER TABLE tasks DROP COLUMN mcp_slack_recovery_due_at`);
       await executeRaw(db, sql`ALTER TABLE messages DROP COLUMN mcp_slack_connect_due_at`);
       await executeRaw(db, sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN granted_by_user_id`);
-      await executeRaw(
-        db,
-        sql`ALTER TABLE user_mcp_oauth_tokens DROP COLUMN oauth_token_endpoint_auth_method`
-      );
       await executeRaw(db, sql`DROP POLICY IF EXISTS branch_maintenance_discovery ON branches`);
       await executeRaw(
         db,

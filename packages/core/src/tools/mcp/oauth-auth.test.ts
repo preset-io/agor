@@ -2,7 +2,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MCPExternalError } from './external-error';
-import { clearOAuthCache, fetchOAuthToken, selectTokenEndpointAuthMethod } from './oauth-auth';
+import { clearOAuthCache, fetchOAuthToken } from './oauth-auth';
 
 async function expectOAuthConfigurationRequired(operation: Promise<unknown>): Promise<void> {
   const error = await operation.catch((caught: unknown) => caught);
@@ -101,19 +101,5 @@ describe('OAuth client-credentials egress and cache isolation', () => {
         server.close((closeError) => (closeError ? reject(closeError) : resolve()))
       );
     }
-  });
-});
-
-describe('selectTokenEndpointAuthMethod', () => {
-  it.each([
-    [undefined, 'client_secret_basic'],
-    [[], 'client_secret_basic'],
-    [['client_secret_basic'], 'client_secret_basic'],
-    [['client_secret_post', 'client_secret_basic'], 'client_secret_basic'],
-    [['client_secret_post'], 'client_secret_post'],
-    [['none', 'client_secret_post'], 'client_secret_post'],
-    [['private_key_jwt'], 'client_secret_basic'],
-  ])('%j → %s', (supported, expected) => {
-    expect(selectTokenEndpointAuthMethod(supported)).toBe(expected);
   });
 });

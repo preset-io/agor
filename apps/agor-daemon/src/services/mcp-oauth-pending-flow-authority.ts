@@ -30,7 +30,7 @@ import type {
   MCPSlackOAuthRecoveryContext,
   UserID,
 } from '@agor/core/types';
-import { isMCPOAuthGrantBindingVersion, isMCPOAuthTokenEndpointAuthMethod } from '@agor/core/types';
+import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { grantBindingVersionForCompatibilityMode } from './mcp-oauth-grant-binding.js';
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
@@ -115,8 +115,6 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is MCPOAuthPendingF
       material.compatibilityMode === 'marketplace') &&
     (material.authorizationResponseIssuerParameterSupported === undefined ||
       typeof material.authorizationResponseIssuerParameterSupported === 'boolean') &&
-    (material.tokenEndpointAuthMethod === undefined ||
-      isMCPOAuthTokenEndpointAuthMethod(material.tokenEndpointAuthMethod)) &&
     typeof material.allowLocalhostHttp === 'boolean' &&
     (material.relay === undefined ||
       (material.version === PENDING_FLOW_MATERIAL_VERSION &&
@@ -225,9 +223,6 @@ export class MCPOAuthPendingFlowAuthority {
         compatibilityMode: input.context.compatibilityMode,
         authorizationResponseIssuerParameterSupported:
           input.context.authorizationResponseIssuerParameterSupported,
-        ...(input.context.tokenEndpointAuthMethod
-          ? { tokenEndpointAuthMethod: input.context.tokenEndpointAuthMethod }
-          : {}),
         allowLocalhostHttp: input.context.allowLocalhostHttp,
         ...(input.context.relay ? { relay: input.context.relay } : {}),
         ...(input.slackRecovery ? { slackRecovery: input.slackRecovery } : {}),
@@ -394,9 +389,6 @@ export class MCPOAuthPendingFlowAuthority {
         authorizationResponseIssuerParameterSupported:
           material.authorizationResponseIssuerParameterSupported ??
           material.compatibilityMode === 'strict',
-        ...(material.tokenEndpointAuthMethod
-          ? { tokenEndpointAuthMethod: material.tokenEndpointAuthMethod }
-          : {}),
         allowLocalhostHttp: material.allowLocalhostHttp,
       },
     };

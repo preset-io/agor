@@ -1148,26 +1148,27 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
   );
 
   it.each([
-    [['client_secret_post'], 'client_secret_post'],
-    [['client_secret_basic', 'client_secret_post'], 'client_secret_basic'],
+    ['client_secret_post', 'client_secret_post'],
     [undefined, 'client_secret_basic'],
   ] as const)(
-    'authenticates a configured confidential client per token_endpoint_auth_methods_supported %j',
-    async (supported, expected) => {
+    'authenticates a configured confidential client with the method the caller supplies (%s)',
+    async (method, expected) => {
+      // The AS advertises only form-body auth; start must not choose from it.
+      // The daemon supplies the catalog recipe's method at completion.
       const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {
         clientSecret: 'configured-secret',
         prefetchedAuthServerMetadata: {
           issuer: 'https://auth.example.test',
           authorization_endpoint: 'https://auth.example.test/authorize',
           token_endpoint: 'https://auth.example.test/token',
-          ...(supported ? { token_endpoint_auth_methods_supported: [...supported] } : {}),
+          token_endpoint_auth_methods_supported: ['client_secret_post'],
         },
         cacheKey: 'https://mcp.example.test/mcp',
         resourceUri: 'https://mcp.example.test/mcp',
         compatibilityMode: 'legacy',
         allowLocalhostHttp: true,
       });
-      expect(ctx.tokenEndpointAuthMethod).toBe(expected);
+      expect(ctx.tokenEndpointAuthMethod).toBeUndefined();
 
       globalThis.fetch = vi.fn().mockResolvedValue(
         new Response(JSON.stringify({ access_token: 'issued' }), {
@@ -1175,7 +1176,12 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
           headers: { 'content-type': 'application/json' },
         })
       ) as unknown as typeof fetch;
-      await completeMCPOAuthFlow(ctx, 'auth-code', ctx.state, { cacheToken: false });
+      await completeMCPOAuthFlow(
+        method ? { ...ctx, tokenEndpointAuthMethod: method } : ctx,
+        'auth-code',
+        ctx.state,
+        { cacheToken: false }
+      );
 
       const [, init] = vi.mocked(globalThis.fetch).mock.calls[0];
       const headers = (init?.headers ?? {}) as Record<string, string>;
@@ -1193,22 +1199,6 @@ describe('startMCPOAuthFlow with prefetchedAuthServerMetadata', () => {
       }
     }
   );
-
-  it('records no token auth method for a public client', async () => {
-    const ctx = await startMCPOAuthFlow('', 'public-client', redirectUri, {
-      prefetchedAuthServerMetadata: {
-        issuer: 'https://auth.example.test',
-        authorization_endpoint: 'https://auth.example.test/authorize',
-        token_endpoint: 'https://auth.example.test/token',
-        token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
-      },
-      cacheKey: 'https://mcp.example.test/mcp',
-      resourceUri: 'https://mcp.example.test/mcp',
-      compatibilityMode: 'legacy',
-      allowLocalhostHttp: true,
-    });
-    expect(ctx.tokenEndpointAuthMethod).toBeUndefined();
-  });
 
   it('does not add Google-only offline parameters to another provider', async () => {
     const ctx = await startMCPOAuthFlow('', 'configured-client', redirectUri, {

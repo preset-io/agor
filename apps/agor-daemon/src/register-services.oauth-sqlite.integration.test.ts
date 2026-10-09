@@ -3742,85 +3742,100 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(callback.status).toBe(200);
   });
 
-  it('starts a declared-OAuth configured app without a challenge and keeps its post-only client auth through refresh', async () => {
-    // Google Workspace shape: unauthenticated initialize answers 200. The
-    // token endpoint (HubSpot shape) advertises only form-body client auth.
-    const provider = await createTestProvider({
-      noChallenge: true,
-      tokenAuthMethods: ['client_secret_post'],
-    });
-    providers.push(provider);
-    const catalogEntry = {
-      ...dcrCatalogEntry('test/declared-oauth-byo', provider.savedMcpUrl),
-      oauth: {
-        dcr_mode: 'disabled',
-        configured_client: {
-          setup_url: 'https://provider.example.test/apps',
-          issuer: provider.baseUrl,
-          secret_required: true,
+  it.each([
+    ['declares client_secret_post', 'client_secret_post'],
+    ['declares nothing', undefined],
+  ] as const)(
+    'starts a declared-OAuth configured app without a challenge; a recipe that %s sets client auth for exchange and refresh',
+    async (_label, method) => {
+      // Google Workspace shape: unauthenticated initialize answers 200. The
+      // token endpoint (HubSpot shape) advertises only form-body client auth,
+      // but only the catalog recipe decides; metadata is not consulted.
+      const provider = await createTestProvider({
+        noChallenge: true,
+        tokenAuthMethods: ['client_secret_post'],
+      });
+      providers.push(provider);
+      const catalogEntry = {
+        ...dcrCatalogEntry(`test/declared-oauth-byo-${method ?? 'basic'}`, provider.savedMcpUrl),
+        oauth: {
+          dcr_mode: 'disabled',
+          ...(method ? { token_endpoint_auth_method: method } : {}),
+          configured_client: {
+            setup_url: 'https://provider.example.test/apps',
+            issuer: provider.baseUrl,
+            secret_required: true,
+          },
         },
-      },
-    } as MCPCatalogEntry;
-    const catalogMock = vi.mocked(loadCatalog);
-    const previousImplementation = catalogMock.getMockImplementation();
-    catalogMock.mockResolvedValue([catalogEntry]);
-    onTestFinished(() => {
-      catalogMock.mockReset();
-      if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
-    });
-    const harness = await createHarness(provider, 'per_user', { catalogEntry });
-    databases.push(harness.rawDb);
-    await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
-      auth: {
-        type: 'oauth',
-        oauth_mode: 'per_user',
-        oauth_dcr_mode: 'disabled',
-        oauth_client_id: 'customer-app',
-        oauth_client_secret: 'customer-secret',
-      },
-    });
+      } as MCPCatalogEntry;
+      const catalogMock = vi.mocked(loadCatalog);
+      const previousImplementation = catalogMock.getMockImplementation();
+      catalogMock.mockResolvedValue([catalogEntry]);
+      onTestFinished(() => {
+        catalogMock.mockReset();
+        if (previousImplementation) catalogMock.mockImplementation(previousImplementation);
+      });
+      const harness = await createHarness(provider, 'per_user', { catalogEntry });
+      databases.push(harness.rawDb);
+      await new MCPServerRepository(harness.rawDb).update(harness.server.mcp_server_id, {
+        auth: {
+          type: 'oauth',
+          oauth_mode: 'per_user',
+          oauth_dcr_mode: 'disabled',
+          oauth_client_id: 'customer-app',
+          oauth_client_secret: 'customer-secret',
+        },
+      });
 
-    const started = (await harness.app
-      .service('mcp-servers/oauth-start')
-      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
-      success: boolean;
-      authorizationUrl?: string;
-    };
-    expect(started).toMatchObject({ success: true });
-    const authorizationUrl = new URL(started.authorizationUrl!);
-    expect(authorizationUrl.origin).toBe(provider.baseUrl);
-    expect(authorizationUrl.searchParams.get('client_id')).toBe('customer-app');
-    // Discovery came from well-known metadata, not from a challenge.
-    expect(provider.requests.map((entry) => entry.path)).toContain(
-      '/.well-known/oauth-protected-resource'
-    );
+      const started = (await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+        success: boolean;
+        authorizationUrl?: string;
+      };
+      expect(started).toMatchObject({ success: true });
+      const authorizationUrl = new URL(started.authorizationUrl!);
+      expect(authorizationUrl.origin).toBe(provider.baseUrl);
+      expect(authorizationUrl.searchParams.get('client_id')).toBe('customer-app');
+      // Discovery came from well-known metadata, not from a challenge.
+      expect(provider.requests.map((entry) => entry.path)).toContain(
+        '/.well-known/oauth-protected-resource'
+      );
+      expect((await harness.callback(authorizationUrl.searchParams.get('state')!)).status).toBe(
+        200
+      );
 
-    expect((await harness.callback(authorizationUrl.searchParams.get('state')!)).status).toBe(200);
-    const [exchange] = provider.requests.filter((entry) => entry.path === '/token');
-    expect(exchange?.authorization).toBeUndefined();
-    expect(exchange?.formBody?.get('client_id')).toBe('customer-app');
-    expect(exchange?.formBody?.get('client_secret')).toBe('customer-secret');
-    await expect(
-      new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
-        harness.user.user_id as UserID,
-        harness.server.mcp_server_id as MCPServerID
-      )
-    ).resolves.toMatchObject({ oauth_token_endpoint_auth_method: 'client_secret_post' });
-
-    await harness.app
-      .service('mcp-servers/oauth-auth-headers')
-      .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
-        provider: undefined,
-        user: harness.user,
-        tenant: { tenant_id: 'default', source: 'static' },
-        authentication: { _isServiceAccount: true },
-      } as unknown as AuthenticatedParams);
-    const refresh = provider.requests
-      .filter((entry) => entry.path === '/token')
-      .find((entry) => entry.formBody?.get('grant_type') === 'refresh_token');
-    expect(refresh?.authorization).toBeUndefined();
-    expect(refresh?.formBody?.get('client_secret')).toBe('customer-secret');
-  });
+      await harness.app
+        .service('mcp-servers/oauth-auth-headers')
+        .create({ mcp_server_ids: [harness.server.mcp_server_id], force_refresh: true }, {
+          provider: undefined,
+          user: harness.user,
+          tenant: { tenant_id: 'default', source: 'static' },
+          authentication: { _isServiceAccount: true },
+        } as unknown as AuthenticatedParams);
+      const tokenRequests = provider.requests.filter((entry) => entry.path === '/token');
+      const exchange = tokenRequests.find(
+        (entry) => entry.formBody?.get('grant_type') === 'authorization_code'
+      );
+      const refresh = tokenRequests.find(
+        (entry) => entry.formBody?.get('grant_type') === 'refresh_token'
+      );
+      expect(exchange).toBeDefined();
+      expect(refresh).toBeDefined();
+      for (const request of [exchange, refresh]) {
+        if (method === 'client_secret_post') {
+          expect(request?.authorization).toBeUndefined();
+          expect(request?.formBody?.get('client_id')).toBe('customer-app');
+          expect(request?.formBody?.get('client_secret')).toBe('customer-secret');
+        } else {
+          expect(request?.authorization).toBe(
+            `Basic ${Buffer.from('customer-app:customer-secret').toString('base64')}`
+          );
+          expect(request?.formBody?.get('client_secret')).toBeNull();
+        }
+      }
+    }
+  );
 
   it('reports an outage instead of starting declared-OAuth sign-in when the server answers 5xx', async () => {
     const provider = await createTestProvider({ mcpStatus: 503 });

@@ -198,38 +198,3 @@ dbTest(
     await expect(grants.listShared()).resolves.toEqual([]);
   }
 );
-
-dbTest(
-  'records the token endpoint auth method only alongside the client secret it authenticates',
-  async ({ db }) => {
-    const { a, b, serverId, grants } = await seed(db);
-    await grants.saveToken(a, serverId, {
-      accessToken: 'post-client',
-      clientId: 'configured-client',
-      clientSecret: 'configured-secret',
-      tokenEndpointAuthMethod: 'client_secret_post',
-    });
-    await expect(grants.getToken(a, serverId)).resolves.toMatchObject({
-      oauth_client_secret: 'configured-secret',
-      oauth_token_endpoint_auth_method: 'client_secret_post',
-    });
-
-    // A public client has nothing to authenticate with, so no method is kept.
-    await grants.saveToken(b, serverId, {
-      accessToken: 'public-client',
-      clientId: 'public-client',
-      tokenEndpointAuthMethod: 'client_secret_post',
-    });
-    const publicGrant = await grants.getToken(b, serverId);
-    expect(publicGrant?.oauth_token_endpoint_auth_method).toBeUndefined();
-
-    // Replacing the secret replaces the method with it (absent = HTTP Basic).
-    await grants.saveToken(a, serverId, {
-      accessToken: 'basic-client',
-      clientSecret: 'rotated-secret',
-    });
-    const rotated = await grants.getToken(a, serverId);
-    expect(rotated?.oauth_client_secret).toBe('rotated-secret');
-    expect(rotated?.oauth_token_endpoint_auth_method).toBeUndefined();
-  }
-);

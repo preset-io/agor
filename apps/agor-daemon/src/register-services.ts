@@ -293,6 +293,7 @@ import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client
 import {
   catalogInstallDeclaresOAuth,
   catalogInstallRelayIssuer,
+  catalogTokenEndpointAuthMethod,
   logMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -3567,6 +3568,29 @@ export async function registerMCPServices(
     });
   };
 
+  /**
+   * The flow context for the code exchange, with the token endpoint client
+   * authentication the saved server's catalog recipe declares. Never stored in
+   * the pending flow: refresh resolves the same value the same way.
+   */
+  const pendingFlowExchangeContext = async (pendingFlow: PendingOAuthFlow) => {
+    const serverId = pendingFlow.mcpServerId;
+    if (!serverId) return pendingFlow.context;
+    // A local flow carries the saved row it was started from, which
+    // `assertPendingFlowStillAuthorized` has just checked against the current
+    // configuration; a durable flow re-reads it.
+    const tenantId = pendingFlow.durableRecord?.tenantId ?? pendingFlow.tenantId;
+    const server =
+      pendingFlow.savedServerAuthority ??
+      (await runInOAuthTenantScope(db, tenantId, () =>
+        new MCPServerRepository(db).findById(serverId as MCPServerID)
+      ));
+    const method = await catalogTokenEndpointAuthMethod(server);
+    return method
+      ? { ...pendingFlow.context, tokenEndpointAuthMethod: method }
+      : pendingFlow.context;
+  };
+
   const assertPendingFlowStillAuthorized = async (
     pendingFlow: PendingOAuthFlow,
     afterProviderExchange = false
@@ -3705,7 +3729,6 @@ export async function registerMCPServices(
           ...pendingFlow,
           clientId: pendingFlow.context.clientId,
           clientSecret: pendingFlow.context.clientSecret,
-          tokenEndpointAuthMethod: pendingFlow.context.tokenEndpointAuthMethod,
           tokenEndpoint: pendingFlow.context.tokenEndpoint,
           resourceUri: pendingFlow.context.resourceUri,
           ...(grantBinding ? { grantBinding } : {}),
@@ -4149,10 +4172,12 @@ export async function registerMCPServices(
       try {
         await assertPendingFlowStillAuthorized(pendingFlow);
         const { completeMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
-        const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
-          cacheToken: false,
-          issuer,
-        });
+        const tokenResponse = await completeMCPOAuthFlow(
+          await pendingFlowExchangeContext(pendingFlow),
+          code,
+          state,
+          { cacheToken: false, issuer }
+        );
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
         if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');
@@ -6511,10 +6536,12 @@ export async function registerMCPServices(
         }
 
         await assertPendingFlowStillAuthorized(pendingFlow);
-        const tokenResponse = await completeMCPOAuthFlow(pendingFlow.context, code, state, {
-          cacheToken: false,
-          issuer,
-        });
+        const tokenResponse = await completeMCPOAuthFlow(
+          await pendingFlowExchangeContext(pendingFlow),
+          code,
+          state,
+          { cacheToken: false, issuer }
+        );
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
         const completedFlow = pendingFlow;
         const completedServerId = completedFlow.mcpServerId;
@@ -7005,6 +7032,7 @@ export async function registerMCPServices(
                 userId: tokenUserId,
                 mcpServerId: serverId as MCPServerID,
                 validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
                 assertCurrent: mcpEgressAssertCurrent,
                 forceRefresh,
                 resolveDns: ctx.mcpOutboundDnsLookup,
@@ -7148,6 +7176,7 @@ export async function registerMCPServices(
           mcpServerId: serverId as MCPServerID,
           observedRefreshVersion,
           validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+          resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
         });
 
         const fresh = await runInOAuthTenantScope(db, tenantId, () =>
@@ -7658,6 +7687,7 @@ export async function registerMCPServices(
                 userId: lookupUserId,
                 mcpServerId: serverId as MCPServerID,
                 validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                resolveTokenEndpointAuthMethod: catalogTokenEndpointAuthMethod,
                 assertCurrent: assertRequestAuthority,
                 resolveDns: ctx.mcpOutboundDnsLookup,
               })

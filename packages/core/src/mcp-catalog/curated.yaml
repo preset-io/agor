@@ -1122,6 +1122,8 @@ unpublished:
         setup_url: https://docs.slack.dev/ai/slack-mcp-server
         issuer: https://mcp.slack.com
         secret_required: true
+      # The token endpoint advertises only form-body client authentication.
+      token_endpoint_auth_method: client_secret_post
 
   - name: com.box/mcp
     title: Box
@@ -1186,8 +1188,7 @@ unpublished:
 
   - name: com.hubspot/mcp
     # 2026-10-07: customer-owned app (MCP connector). HubSpot's token endpoint
-    # advertises only form-body client authentication; Agor now picks that
-    # from the metadata for the code exchange and every refresh.
+    # advertises only form-body client authentication, declared below.
     title: HubSpot
     category: productivity
     capabilities: [crm]
@@ -1206,6 +1207,8 @@ unpublished:
         setup_url: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
         issuer: https://mcp.hubspot.com
         secret_required: true
+      # The token endpoint advertises only form-body client authentication.
+      token_endpoint_auth_method: client_secret_post
 
   - name: com.salesforce/mcp
     # 2026-10-07: beta, Enterprise+. The 401 carries no WWW-Authenticate

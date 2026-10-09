@@ -4,6 +4,7 @@ import type {
   MCPOAuthDCRMode,
   MCPOAuthEffectivePolicy,
   MCPOAuthRuntimeCompatibilityMode,
+  MCPOAuthTokenEndpointAuthMethod,
   MCPServer,
 } from '@agor/core/types';
 import {
@@ -11,7 +12,11 @@ import {
   catalogEntryDeclaresOAuth,
   MCP_OAUTH_DEFAULT_DCR_MODE,
 } from '@agor/core/types';
-import { catalogOAuthConfig, isCurrentCatalogInstall } from './mcp-catalog-install-policy.js';
+import {
+  catalogOAuthConfig,
+  isCurrentCatalogInstall,
+  sameCatalogEndpoint,
+} from './mcp-catalog-install-policy.js';
 
 export type MCPOAuthCompatibilityPolicyReason =
   | 'explicit_strict'
@@ -185,4 +190,29 @@ export async function catalogInstallDeclaresOAuth(
     catalogOAuthConfig(entry),
     { reconcileMissingCompatibilityMode: true }
   );
+}
+
+/**
+ * The token endpoint client authentication a saved server's catalog recipe
+ * declares (`oauth.token_endpoint_auth_method`), or `undefined` (HTTP Basic).
+ *
+ * Read from the shared catalog by the install's provenance rather than stored
+ * per grant, so the code exchange and every later refresh agree without a
+ * database column. A manual server, a row whose entry is gone, or one pointed
+ * somewhere the entry does not name keeps the pre-existing Basic behavior.
+ */
+export async function catalogTokenEndpointAuthMethod(
+  server: Pick<MCPServer, 'source' | 'catalog_entry_name' | 'url'> | null | undefined,
+  catalogEntries?: readonly MCPCatalogEntry[]
+): Promise<MCPOAuthTokenEndpointAuthMethod | undefined> {
+  if (server?.source !== 'catalog' || !server.catalog_entry_name) return undefined;
+  const entry = findCatalogEntry(
+    catalogEntries ?? (await loadCatalog()),
+    server.catalog_entry_name
+  );
+  const method = entry?.oauth?.token_endpoint_auth_method;
+  if (!method || !entry?.remote_url || !sameCatalogEndpoint(server.url, entry.remote_url)) {
+    return undefined;
+  }
+  return method;
 }

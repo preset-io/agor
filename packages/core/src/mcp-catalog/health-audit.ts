@@ -87,6 +87,19 @@ async function assertOAuthMetadataReady(
       'issuer_mismatch',
       'Catalog OAuth issuer no longer matches its reviewed recipe'
     );
+  // A declared form-body method has to be one the token endpoint advertises
+  // (an omitted list means RFC 8414's default, HTTP Basic only), or every
+  // exchange and refresh for the entry would be refused as invalid_client.
+  const declaredMethod = entry.oauth?.token_endpoint_auth_method;
+  if (
+    declaredMethod &&
+    declaredMethod !== 'client_secret_basic' &&
+    !validated.authServerMetadata.token_endpoint_auth_methods_supported?.includes(declaredMethod)
+  )
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Token endpoint no longer advertises the client authentication the recipe declares'
+    );
   // Customer app input is required; the audit never registers a client.
   if (entry.oauth?.configured_client) return;
   if (entry.oauth?.client_id) return;

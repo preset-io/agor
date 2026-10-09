@@ -11,13 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import {
-  isMCPOAuthTokenEndpointAuthMethod,
-  type MCPOAuthGrantBindingVersion,
-  type MCPOAuthTokenEndpointAuthMethod,
-  type MCPServerID,
-  type UserID,
-} from '@agor/core/types';
+import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
 import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import {
@@ -60,7 +54,6 @@ export interface UserMCPOAuthToken {
   oauth_authorization_endpoint?: string;
   oauth_token_endpoint?: string;
   oauth_redirect_uri?: string;
-  oauth_token_endpoint_auth_method?: MCPOAuthTokenEndpointAuthMethod;
   refresh_status: 'idle' | 'refreshing' | 'ambiguous';
   refresh_generation: number;
   refresh_success_generation: number;
@@ -142,8 +135,6 @@ export interface SaveTokenInput {
   clientId?: string;
   /** If absent on update, the existing client_secret is kept. */
   clientSecret?: string;
-  /** Written with `clientSecret`; absent means HTTP Basic. */
-  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /**
    * Discovered endpoint retained for standalone/SQLite refresh. PostgreSQL
    * grants take this value only from the authoritative grant binding below.
@@ -255,11 +246,6 @@ async function rowToToken(
       : undefined,
     oauth_token_endpoint: raw.oauth_token_endpoint ? String(raw.oauth_token_endpoint) : undefined,
     oauth_redirect_uri: raw.oauth_redirect_uri ? String(raw.oauth_redirect_uri) : undefined,
-    oauth_token_endpoint_auth_method: isMCPOAuthTokenEndpointAuthMethod(
-      raw.oauth_token_endpoint_auth_method
-    )
-      ? raw.oauth_token_endpoint_auth_method
-      : undefined,
     refresh_status: (raw.refresh_status ?? 'idle') as UserMCPOAuthToken['refresh_status'],
     refresh_generation: Number(raw.refresh_generation ?? 0),
     refresh_success_generation: Number(raw.refresh_success_generation ?? 0),
@@ -651,15 +637,11 @@ export class UserMCPOAuthTokenRepository {
         );
       };
       const sealedAccessToken = seal(input.accessToken, 'access-token', 'access')!;
-      // Meaningless without the secret it authenticates, so never stored alone.
-      const tokenEndpointAuthMethod =
-        input.clientSecret != null ? input.tokenEndpointAuthMethod : undefined;
       const boundReplacement = binding
         ? {
             oauth_refresh_token: seal(input.refreshToken, 'refresh-token', 'refresh') ?? null,
             oauth_client_id: seal(input.clientId, 'client-id', 'client-id') ?? null,
             oauth_client_secret: seal(input.clientSecret, 'client-secret', 'client-secret') ?? null,
-            oauth_token_endpoint_auth_method: tokenEndpointAuthMethod ?? null,
             grant_generation: binding.generation,
             grant_binding_version: binding.version,
             grant_binding_fingerprint: binding.fingerprint,
@@ -703,7 +685,6 @@ export class UserMCPOAuthTokenRepository {
         oauth_authorization_endpoint: binding?.authorizationEndpoint,
         oauth_token_endpoint: binding?.tokenEndpoint ?? input.tokenEndpoint,
         oauth_redirect_uri: binding?.redirectUri,
-        oauth_token_endpoint_auth_method: tokenEndpointAuthMethod,
         refresh_status: 'idle',
         refresh_generation: 0,
         refresh_success_generation: 0,
@@ -769,7 +750,6 @@ export class UserMCPOAuthTokenRepository {
                           'client-secret',
                           'client-secret'
                         ),
-                        oauth_token_endpoint_auth_method: tokenEndpointAuthMethod ?? null,
                       }
                     : {}),
                   ...(input.tokenEndpoint != null

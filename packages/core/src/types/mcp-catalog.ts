@@ -10,7 +10,12 @@
 
 import type { AgenticToolName } from './agentic-tool';
 import type { BranchID } from './id';
-import type { MCPOAuthCompatibilityMode, MCPOAuthDCRMode, MCPServer } from './mcp';
+import type {
+  MCPOAuthCompatibilityMode,
+  MCPOAuthDCRMode,
+  MCPOAuthTokenEndpointAuthMethod,
+  MCPServer,
+} from './mcp';
 import type { Session } from './session';
 
 /**
@@ -290,6 +295,13 @@ export interface MCPCatalogEntryOAuth {
    * be submitted to the provider. Without the relay, the direct callback is used.
    */
   stable_callback?: { issuer: string };
+  /**
+   * How a confidential client authenticates at the token endpoint, for both
+   * the code exchange and every refresh of an install of this entry.
+   * `client_secret_basic` (HTTP Basic) when omitted; `client_secret_post` for
+   * providers that accept only form-body credentials (e.g. HubSpot, Slack).
+   */
+  token_endpoint_auth_method?: MCPOAuthTokenEndpointAuthMethod;
   /** Space-separated OAuth scopes to request. */
   scope?: string;
   /** A pre-registered *public* client id. Never a confidential one. */

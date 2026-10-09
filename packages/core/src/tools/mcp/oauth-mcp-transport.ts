@@ -20,11 +20,7 @@ import type {
 import { MCP_OAUTH_DEFAULT_DCR_MODE } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
 import { asMCPExternalError } from './external-error.js';
-import {
-  applyTokenEndpointClientAuth,
-  type OAuthTokenResponse,
-  selectTokenEndpointAuthMethod,
-} from './oauth-auth.js';
+import { applyTokenEndpointClientAuth, type OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
 export interface OAuthMetadata {
@@ -1431,9 +1427,7 @@ export async function performMCPOAuthFlow(
       actualClientId,
       clientSecret,
       typeof resourceMetadata.resource === 'string' ? resourceMetadata.resource : undefined,
-      true,
-      false,
-      selectTokenEndpointAuthMethod(authServerMetadata.token_endpoint_auth_methods_supported)
+      true
     );
 
     console.log('[MCP OAuth] Access token received successfully');
@@ -1576,7 +1570,10 @@ export interface OAuthFlowContext {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Require `iss` when the AS advertised RFC 9207 support for this flow. */
   authorizationResponseIssuerParameterSupported: boolean;
-  /** Confidential-client token auth chosen from AS metadata; absent means HTTP Basic. */
+  /**
+   * Confidential-client token auth from the install's catalog recipe, set by
+   * the daemon at completion; never persisted. Absent means HTTP Basic.
+   */
   tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   /** Narrow standalone-development exception; durable daemon flows leave this false. */
   allowLocalhostHttp: boolean;
@@ -2326,13 +2323,6 @@ async function startMCPOAuthFlowWithAS(opts: {
     compatibilityMode,
     authorizationResponseIssuerParameterSupported:
       authServerMetadata?.authorization_response_iss_parameter_supported === true,
-    ...(resolvedClient.clientSecret
-      ? {
-          tokenEndpointAuthMethod: selectTokenEndpointAuthMethod(
-            authServerMetadata?.token_endpoint_auth_methods_supported
-          ),
-        }
-      : {}),
     allowLocalhostHttp,
   };
 }

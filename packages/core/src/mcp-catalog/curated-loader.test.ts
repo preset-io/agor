@@ -390,6 +390,38 @@ entries:
 ${block}
 `;
 
+  describe('token_endpoint_auth_method', () => {
+    const configured = (method: string) =>
+      withOAuth(`      dcr_mode: disabled
+      configured_client:
+        setup_url: https://example.com/apps
+        issuer: https://auth.example.com
+        secret_required: true
+      token_endpoint_auth_method: ${method}`);
+
+    it.each(['client_secret_basic', 'client_secret_post'])(
+      'accepts %s on a configured app',
+      (method) => {
+        expect(parseCuratedCatalog(configured(method))[0].oauth?.token_endpoint_auth_method).toBe(
+          method
+        );
+      }
+    );
+
+    it('refuses an unsupported method', () => {
+      expect(() => parseCuratedCatalog(configured('private_key_jwt'))).toThrow(CuratedCatalogError);
+    });
+
+    it('refuses the method without a configured app, which is the only secret-bearing recipe', () => {
+      expect(() =>
+        parseCuratedCatalog(
+          withOAuth(`      client_id: public-client-123
+      token_endpoint_auth_method: client_secret_post`)
+        )
+      ).toThrow(/configured_client/);
+    });
+  });
+
   it('accepts the settings a server may need stated', () => {
     const [entry] = parseCuratedCatalog(
       withOAuth(`      scope: read:issues write:issues
@@ -871,11 +903,24 @@ describe('the shipped catalog', () => {
   it('carries no secret-shaped value anywhere in the file', async () => {
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
     // A credential recipe's `header:` names where the user's key goes (e.g.
-    // `api-key`); it is a header name, not a value.
-    const withoutHeaderNames = source.replace(/^\s*header: [!#$%&'*+.^_`|~0-9A-Za-z-]+$/gm, '');
+    // `api-key`), and `token_endpoint_auth_method:` names a client
+    // authentication method (e.g. `client_secret_post`); neither is a value.
+    const withoutHeaderNames = source
+      .replace(/^\s*header: [!#$%&'*+.^_`|~0-9A-Za-z-]+$/gm, '')
+      .replace(/^\s*token_endpoint_auth_method: client_secret_(?:basic|post)$/gm, '');
     expect(withoutHeaderNames).not.toMatch(
       /client_secret|token_url|authorization_url|api[_-]?key/i
     );
+  });
+
+  it('declares form-body token auth exactly for the shipped apps whose token endpoint requires it', async () => {
+    const entries = await loadCuratedCatalog();
+    expect(
+      entries
+        .filter((entry) => entry.oauth?.token_endpoint_auth_method === 'client_secret_post')
+        .map((entry) => entry.name)
+        .sort()
+    ).toEqual(['com.hubspot/mcp', 'com.slack/mcp']);
   });
 
   it('renders the shipped Similarweb recipe as its documented api-key header', async () => {

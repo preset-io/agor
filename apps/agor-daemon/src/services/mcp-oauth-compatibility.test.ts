@@ -5,6 +5,7 @@ import { compatibleCatalogOAuthPeers } from './mcp-catalog-credential-match.js';
 import { catalogOAuthConfig } from './mcp-catalog-install-policy.js';
 import {
   catalogInstallRelayIssuer,
+  catalogTokenEndpointAuthMethod,
   presentMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -336,3 +337,50 @@ it.each(['per_user', 'shared'] as const)(
     }
   }
 );
+
+describe('catalogTokenEndpointAuthMethod', () => {
+  const recipe = {
+    name: 'com.example/post-only',
+    remote_url: 'https://mcp.example.com/mcp',
+    oauth: { token_endpoint_auth_method: 'client_secret_post' },
+  } as unknown as MCPCatalogEntry;
+  const install = {
+    source: 'catalog' as const,
+    catalog_entry_name: recipe.name,
+    url: 'https://mcp.example.com/mcp/',
+  };
+
+  it('returns the recipe method for an install of the entry', async () => {
+    await expect(catalogTokenEndpointAuthMethod(install, [recipe])).resolves.toBe(
+      'client_secret_post'
+    );
+  });
+
+  it.each([
+    ['a manual server', { ...install, source: 'user' as const }],
+    ['a row whose entry is gone', { ...install, catalog_entry_name: 'com.example/removed' }],
+    ['a row pointed elsewhere', { ...install, url: 'https://other.example.com/mcp' }],
+    ['no server', undefined],
+  ])('keeps HTTP Basic (undefined) for %s', async (_label, server) => {
+    await expect(catalogTokenEndpointAuthMethod(server, [recipe])).resolves.toBeUndefined();
+  });
+
+  it('names the two shipped recipes whose token endpoint requires form-body auth', async () => {
+    const entries = await loadCatalog();
+    const methods = await Promise.all(
+      entries.map(async (entry) => ({
+        name: entry.name,
+        method: await catalogTokenEndpointAuthMethod(
+          { source: 'catalog', catalog_entry_name: entry.name, url: entry.remote_url },
+          entries
+        ),
+      }))
+    );
+    expect(
+      methods
+        .filter(({ method }) => method === 'client_secret_post')
+        .map(({ name }) => name)
+        .sort()
+    ).toEqual(['com.hubspot/mcp', 'com.slack/mcp']);
+  });
+});

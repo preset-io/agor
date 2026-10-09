@@ -281,6 +281,44 @@ describe('auditCatalogHealth', () => {
   });
 });
 
+it.each([
+  [['client_secret_post'], 'credential-required'],
+  [['client_secret_basic'], 'oauth-metadata-not-ready'],
+  [undefined, 'oauth-metadata-not-ready'],
+])(
+  'flags a recipe declaring client_secret_post the token endpoint does not advertise (%j)',
+  async (supported, status) => {
+    const configured = {
+      ...entry('oauth'),
+      oauth: {
+        dcr_mode: 'disabled' as const,
+        token_endpoint_auth_method: 'client_secret_post' as const,
+        configured_client: {
+          issuer: 'https://issuer.example',
+          setup_url: 'https://issuer.example/apps',
+          secret_required: true,
+        },
+      },
+    };
+    oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+    oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+      issuer: 'https://issuer.example',
+      authServerMetadata: {
+        issuer: 'https://issuer.example',
+        ...(supported ? { token_endpoint_auth_methods_supported: supported } : {}),
+      },
+    });
+    const [result] = await auditCatalogHealth([configured], {
+      probe: async () => ({ authType: 'oauth' }),
+    });
+    expect(result).toMatchObject(
+      status === 'credential-required'
+        ? { status, reason: 'configured_client_not_verified' }
+        : { status, reason: 'metadata_incompatible' }
+    );
+  }
+);
+
 it.each(['https://issuer.example', 'https://wrong.example', 'https://issuer.example/'])(
   'audits configured BYO without DCR or claiming the customer credential works (%s)',
   async (issuer) => {

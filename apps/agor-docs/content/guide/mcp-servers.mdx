@@ -370,9 +370,9 @@ Set the app's redirect URL to the callback the Catalog form shows.
 - **Dropbox:** an App Console app with scoped access and **Full Dropbox**. See
   [Dropbox's MCP guide](https://help.dropbox.com/integrations/connect-dropbox-mcp-server).
 
-Agor authenticates your app at the provider's token endpoint the way the
-provider advertises (HTTP Basic, or form-body credentials when that is all it
-supports), and refreshes the same way.
+Agor authenticates your app at the provider's token endpoint with HTTP Basic,
+or with form-body credentials for providers that accept only those (Slack,
+HubSpot), and refreshes the same way.
 
 ### Stable hosted callback
 

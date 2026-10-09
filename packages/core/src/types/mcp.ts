@@ -304,13 +304,6 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
-  /**
-   * How a confidential client authenticates at the token endpoint, chosen from
-   * the AS metadata at start. Absent means HTTP Basic. Deliberately not a
-   * version bump: it binds nothing, and a daemon that predates it sends Basic,
-   * which is the pre-existing behavior and fails at the provider, not open.
-   */
-  tokenEndpointAuthMethod?: MCPOAuthTokenEndpointAuthMethod;
   allowLocalhostHttp: boolean;
   /** Non-secret durable routing back to an exact Slack recovery notice. */
   slackRecovery?: MCPSlackOAuthRecoveryContext;

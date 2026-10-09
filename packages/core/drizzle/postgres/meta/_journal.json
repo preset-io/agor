@@ -813,13 +813,6 @@
       "when": 1790129000301,
       "tag": "0117_opencode_checkpoint_attempts",
       "breakpoints": true
-    },
-    {
-      "idx": 117,
-      "version": "7",
-      "when": 1790129000400,
-      "tag": "0118_mcp_oauth_token_endpoint_auth_method",
-      "breakpoints": true
     }
   ]
 }

@@ -103,16 +103,16 @@ to whatever a redirect names.
   flows tolerate a single trailing-slash difference
   (`oauthIssuerIdentifiersMatch`). A mismatch fails as an `issuer_mismatch`
   configuration error before registration or relay work.
-- **Token endpoint client auth** follows AS `token_endpoint_auth_methods_supported`:
-  HTTP Basic when advertised or unstated, else form-body `client_secret_post`.
-  The choice travels in the sealed pending flow and is stored on the grant
-  (`oauth_token_endpoint_auth_method`, NULL = Basic) so refresh matches it.
-  **Rolling upgrade caveat:** replicas older than this column ignore it and
-  refresh with Basic. A form-body-only grant (e.g. Slack, HubSpot) issued by a
-  new replica mid-rollout can therefore get `invalid_client` on an old replica's
-  refresh, which drops the grant; the user reconnects. Such grants could not
-  exist before (the Basic exchange failed), so only grants created during the
-  rollout are exposed. Finish the rollout before connecting those providers.
+- **Token endpoint client auth** is HTTP Basic unless a configured-app recipe
+  declares `oauth.token_endpoint_auth_method: client_secret_post` (Slack,
+  HubSpot). The daemon resolves it from the install's catalog provenance
+  (`catalogTokenEndpointAuthMethod`) for both the code exchange and every
+  refresh; nothing is stored per grant, and manual servers always use Basic.
+  The health audit flags a declared method the token endpoint no longer
+  advertises. **Rolling upgrade:** replicas that predate the field refresh
+  with Basic, so a Slack/HubSpot grant issued mid-rollout can fail an old
+  replica's refresh with `invalid_client` and need reconnecting. Finish the
+  rollout before connecting those providers.
 - **GitHub** uses its documented PAT bearer route as a reviewed exception to its
   OAuth challenge; the health audit flags if its OAuth metadata becomes usable.
 - **Sign-in completion.** Connect pre-opens the provider window during user
