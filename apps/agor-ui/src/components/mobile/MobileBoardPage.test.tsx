@@ -23,6 +23,19 @@ vi.mock('../SessionCanvas/SessionCanvas', () => ({
   },
 }));
 vi.mock('../CommentsPanel', () => ({ CommentsPanel: () => <div data-testid="comments" /> }));
+// Counts renders that get past the panel's memo.
+const panel = { renders: 0 };
+vi.mock('../BoardTeammatePanel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../BoardTeammatePanel')>();
+  const { memo } = await import('react');
+  return {
+    ...actual,
+    BoardTeammatePanel: memo((props: React.ComponentProps<typeof actual.BoardTeammatePanel>) => {
+      panel.renders++;
+      return <actual.BoardTeammatePanel {...props} />;
+    }),
+  };
+});
 
 const board = { board_id: 'board-1', name: 'Delivery', objects: {} } as unknown as Board;
 const other = { board_id: 'board-2', name: 'Ops', objects: {} } as unknown as Board;
@@ -65,6 +78,10 @@ function renderPage(
                 onForkSession={vi.fn(async () => {})}
                 onSpawnSession={vi.fn(async () => {})}
                 onSendComment={vi.fn()}
+                onReplyComment={vi.fn()}
+                onResolveComment={vi.fn()}
+                onToggleReaction={vi.fn()}
+                onDeleteComment={vi.fn()}
                 boardReady={ready}
               />
             }
@@ -82,6 +99,7 @@ const location = () => screen.getByRole('status', { name: 'location' }).textCont
 beforeEach(() => {
   canvas.props = undefined;
   canvas.renders = 0;
+  panel.renders = 0;
   agorStore.setState({
     ...EMPTY_MAPS,
     boardById,
@@ -133,6 +151,14 @@ describe('MobileBoardPage', () => {
     act(() => agorStore.setState({ sessionById: new Map() } as never));
     rerenderFromShell();
     expect(canvas.renders).toBe(renders);
+  });
+
+  it('does not re-render the board panel when the shell re-renders with fresh handlers', async () => {
+    const { rerenderFromShell } = renderPage('/m/board/board-1?tab=comments');
+    await screen.findByTestId('comments');
+    const renders = panel.renders;
+    rerenderFromShell();
+    expect(panel.renders).toBe(renders);
   });
 
   it('opens the board switcher once when arriving from All boards, then clears the request', () => {

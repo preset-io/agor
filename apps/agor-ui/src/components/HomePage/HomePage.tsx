@@ -64,6 +64,7 @@ import {
   openedAt,
   openedRunsOf,
 } from './openedFailures';
+import type { HomeNeeds } from './useHomeNeeds';
 
 const ONBOARDING_HIDDEN_KEY = 'agor:onboarding-card-hidden';
 // Longer than the 7-day failure window, since a later patch can keep an old failure in view.
@@ -102,10 +103,11 @@ export interface HomePageProps {
   /** Opens the teammates directory; the rail's "See all" hides without it. */
   onSeeAllTeammates?: () => void;
   /**
-   * The shell's "need you" session count (`useHomeNeedsCount`), so Home and the
-   * mobile tab bar badge show one number. Home counts its own without it.
+   * The shell's "need you" result and clock (`useHomeNeeds`), so Home and the
+   * mobile tab bar badge show one number and Home skips its own needs pass.
+   * Without it Home computes its own.
    */
-  needsCount?: number;
+  homeNeeds?: HomeNeeds;
 }
 
 const scrollToSection = (id: string) =>
@@ -212,7 +214,7 @@ export const HomePage = memo(function HomePage({
   onAllBoards,
   onSeeAllSessions,
   onSeeAllTeammates,
-  needsCount: shellNeedsCount,
+  homeNeeds,
 }: HomePageProps) {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -266,7 +268,10 @@ export const HomePage = memo(function HomePage({
   const deferredQuery = useDeferredValue(query);
   const [workLimit, setWorkLimit] = useState(MY_WORK_PAGE);
   // Frozen at mount: Home unmounts on navigation, so the 7-day failure window stays fresh enough.
-  const [now] = useState(Date.now);
+  // With the shell's needs, its clock, so a failure is never a need there and recent here.
+  const [mountedAt] = useState(Date.now);
+  const now = homeNeeds?.now ?? mountedAt;
+  const hasShellNeeds = homeNeeds !== undefined;
   const [onboardingHidden, setOnboardingHidden] = useLocalStorage(ONBOARDING_HIDDEN_KEY, false);
 
   const hydrated = useAgorStore(selectHydrated);
@@ -284,7 +289,7 @@ export const HomePage = memo(function HomePage({
         makeHomeBucketsSelector({
           userId,
           now,
-          needsLimit: needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
+          needsLimit: hasShellNeeds ? 0 : needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW,
           recentLimit: workLimit,
           boardsLimit: visitedBoardIds.length ? 0 : HOME_RECENT_BOARDS,
           query: deferredQuery,
@@ -294,6 +299,7 @@ export const HomePage = memo(function HomePage({
       [
         userId,
         now,
+        hasShellNeeds,
         needsExpanded,
         workLimit,
         visitedBoardIds.length,
@@ -305,16 +311,17 @@ export const HomePage = memo(function HomePage({
     shallow
   );
   const comments = useCommentsForYou(client, currentUser);
+  const sessionNeeds = homeNeeds ?? buckets;
   const needsLimit = needsExpanded ? NEEDS_MAX : NEEDS_PREVIEW;
   const needs = useMemo(
     () =>
       (needsFilter === 'comments'
         ? comments
-        : [...buckets.needs, ...comments].sort(compareHomeNeeds)
+        : [...sessionNeeds.needs, ...comments].sort(compareHomeNeeds)
       ).slice(0, needsLimit),
-    [needsFilter, comments, buckets.needs, needsLimit]
+    [needsFilter, comments, sessionNeeds.needs, needsLimit]
   );
-  const needsCount = (shellNeedsCount ?? buckets.needsCount) + comments.length;
+  const needsCount = sessionNeeds.needsCount + comments.length;
   const newUser = hydrated && !buckets.hasSessions && comments.length === 0;
 
   useEffect(() => {
@@ -503,7 +510,7 @@ export const HomePage = memo(function HomePage({
               client={client}
               needs={needs}
               needsCount={needsCount}
-              needsByReason={buckets.needsByReason}
+              needsByReason={sessionNeeds.needsByReason}
               commentCount={comments.length}
               filter={needsFilter}
               onFilterChange={setNeedsFilter}

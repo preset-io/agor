@@ -91,8 +91,20 @@ export const MobileMoreSheet: React.FC<MobileMoreSheetProps> = ({
       title="More"
       {...reducedMotionSurface(reduced)}
       styles={{
+        // Auto height keeps the sheet compact. Bound both flex ancestors so an
+        // expanded Create new (or a short or landscape screen) scrolls in the
+        // body instead of pushing the header offscreen.
+        wrapper: { maxHeight: '85dvh' },
+        section: { maxHeight: '85dvh' },
         content: glassSurfaceStyle(token, 0.85),
-        body: { padding: 0, paddingBottom: 'env(safe-area-inset-bottom)' },
+        body: {
+          minHeight: 0,
+          overflowY: 'auto',
+          overscrollBehaviorY: 'contain',
+          touchAction: 'pan-y',
+          padding: 0,
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        },
       }}
     >
       <List split={false}>

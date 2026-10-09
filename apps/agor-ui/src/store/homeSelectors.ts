@@ -55,7 +55,7 @@ export interface HomeCommentNeed {
 
 export type HomeNeed = HomeSessionNeed | HomeCommentNeed;
 
-interface HomeBuckets {
+export interface HomeBuckets {
   /** Session needs only; comments come from `makeCommentsForYouSelector`. */
   needs: HomeSessionNeed[];
   needsCount: number;

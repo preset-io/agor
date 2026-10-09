@@ -186,6 +186,29 @@ describe('MobileApp Home wiring', () => {
     ).toBeInTheDocument();
   });
 
+  it('shows one "need you" number on the badge and Home across the 7-day failure window', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const settled = Date.now() - (7 * 24 * 60 - 1) * 60 * 1000;
+      seed({
+        sessions: [
+          session('failed', { status: 'failed', last_updated: new Date(settled).toISOString() }),
+        ],
+      });
+      // The shell starts on a board while the failure is still inside the window...
+      renderPhoneHome(['/m/board/board-1']);
+      const nav = screen.getByRole('navigation', { name: 'Primary' });
+      expect(within(nav).getByRole('button', { name: 'Home' })).toHaveTextContent('1');
+      // ...and Home opens after it has left it: both judge it by the shell's clock.
+      vi.setSystemTime(Date.now() + 2 * 60 * 1000);
+      fireEvent.click(within(nav).getByRole('button', { name: 'Home' }));
+      expect(await screen.findByText(/need you/)).toHaveTextContent('1 need you');
+      expect(within(nav).getByRole('button', { name: 'Home' })).toHaveTextContent('1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('opens Needs you on Comments from More', async () => {
     seed({
       sessions: [session('perm', { status: 'awaiting_permission' })],

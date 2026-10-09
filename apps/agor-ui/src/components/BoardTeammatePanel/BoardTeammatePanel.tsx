@@ -27,6 +27,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   selectBranchById,
   selectCommentById,
@@ -45,6 +46,7 @@ import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 
 export type BoardTeammatePanelTab =
   | 'board'
@@ -293,7 +295,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   // A primary teammate on another board: its sessions come with that board's
   // partition, loaded in the background (the shown board stays displayed).
   const teammateBoardId = primaryTeammateBranch?.board_id;
-  const { boardReady: teammateBoardReady } = useBoardPartition(
+  const { boardReady: teammateBoardReady, status: teammateBoardStatus } = useBoardPartition(
     client,
     teammateBoardId !== board?.board_id ? teammateBoardId : null,
     {
@@ -310,6 +312,24 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
     [primaryTeammateBranch, sessionsByBranch]
   );
 
+  const boardFailed =
+    useAgorStore(useMemo(() => makeBoardPartitionSelector(board?.board_id), [board?.board_id]))
+      ?.status === 'error';
+  /** A board still loading; a failed load offers Retry instead of loading forever. */
+  const boardLoading = (failedBoardId?: string) =>
+    failedBoardId ? (
+      <BoardPartitionError
+        boardId={failedBoardId}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: token.marginXS,
+          padding: token.padding,
+        }}
+      />
+    ) : (
+      boardLoadingSkeleton
+    );
   const boardLoadingSkeleton = (
     <div style={{ padding: 16 }} data-testid="board-partition-skeleton">
       <Space orientation="vertical" size={8} style={{ width: '100%' }}>
@@ -323,7 +343,10 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
 
   const teammateContent = (() => {
     // No board (or one that doesn't exist): nothing is loading.
-    if (board && !(boardReady && teammateBoardReady)) return boardLoadingSkeleton;
+    if (board && !boardReady) return boardLoading(boardFailed ? board.board_id : undefined);
+    if (board && !teammateBoardReady) {
+      return boardLoading(teammateBoardStatus === 'error' ? teammateBoardId : undefined);
+    }
 
     if (primaryTeammateBranch && primaryTeammateRepo) {
       const teammateConfig = getTeammateConfig(primaryTeammateBranch);
@@ -546,7 +569,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             children: board ? (
               <div style={{ height: '100%', overflow: 'auto' }}>
                 {!boardReady ? (
-                  boardLoadingSkeleton
+                  boardLoading(boardFailed ? board.board_id : undefined)
                 ) : sessionDetailsHydrated ? (
                   <BoardSessionList
                     board={board}

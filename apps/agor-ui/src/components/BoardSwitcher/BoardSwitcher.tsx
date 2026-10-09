@@ -305,7 +305,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                 <>
                   <div style={{ padding: '8px 12px' }}>
                     <Input
-                      placeholder="Search boards"
+                      placeholder="Filter boards..."
                       prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
                       value={filterText}
                       onChange={(e) => setFilterText(e.target.value)}
@@ -313,7 +313,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                       size={coarsePointer ? 'large' : 'small'}
                       allowClear
                       autoFocus={!coarsePointer}
-                      aria-label="Search boards"
+                      aria-label="Filter boards"
                     />
                   </div>
                   <Divider style={{ margin: 0 }} />
