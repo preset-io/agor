@@ -623,9 +623,16 @@ final answer back into the same chat or channel thread.
   it again (not in personal chats, where no mention is needed). Follow-ups get no
   extra notice. In personal and group chats, Teams shows the bot as typing while
   the agent works.
-- **Outbound off.** Turning off **Enable outbound replies** (`outbound_enabled:
-  false`) stops every post to Teams: answers, the session link, other notices,
-  and the typing indicator. Messages still run in Agor.
+- **Proactive sends (off by default).** With **Enable proactive outbound**
+  (`outbound_enabled: true`), agents can start a new thread in a standard channel
+  with `agor_gateway_emit_message` and a `channel:<19:…@thread.tacv2>` target (or
+  the channel's **Default outbound target**). The channel must be one Agor has
+  received a message from, or a channel in the same team; `agor_gateway_outbound_targets_list`
+  lists them under `known_channels`. The post ends with a line asking people to
+  @mention Agor in their reply: as in Slack, a reply that mentions the bot starts
+  the session, and a reply without a mention is ignored. Private and shared
+  channels, personal chats, and group chats are not targets. Answers to people who
+  mention the bot do not depend on this setting.
 - **Attachments (off by default).** With **Enable inbound images and files**
   (`files: true`), pasted images (PNG, JPEG, GIF, WebP) are passed to the agent in
   every chat and channel, and image and text files (.txt, .log, .md, .csv, .json)

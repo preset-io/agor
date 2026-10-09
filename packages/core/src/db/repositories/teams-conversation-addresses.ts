@@ -11,7 +11,7 @@ import type {
   TeamsConversationAddressID,
   TenantID,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, type SQL } from 'drizzle-orm';
 import { isAllowedTeamsServiceUrl } from '../../gateway/teams-service-url';
 import { generateId } from '../../lib/ids';
 import { TEAMS_ADDRESS_REVOCATION_REASONS } from '../../types/gateway';
@@ -120,6 +120,13 @@ function requireTenant(db: Database): TenantID | undefined {
 
 // Newest rows checked per lookup; older siblings of a live conversation add nothing.
 const LOOKUP_LIMIT = 20;
+const ANCHOR_SCAN_LIMIT = 200;
+
+/** Private and shared channels are refused; an absent type is a standard channel. */
+export function isStandardChannelType(type: string | null | undefined): boolean {
+  const normalized = type?.toLowerCase();
+  return normalized !== 'private' && normalized !== 'shared';
+}
 
 export class TeamsConversationAddressRepository {
   constructor(private readonly db: Database) {}
@@ -327,6 +334,39 @@ export class TeamsConversationAddressRepository {
       .limit(LOOKUP_LIMIT)
       .all();
     return this.firstFenced(input.channel, rows.map(rowToAddress));
+  }
+
+  /** The newest usable standard-channel address per team, at most `limit` teams; anchors for proactive posts. */
+  async loadFencedTeamAnchors(input: {
+    channel: GatewayChannel;
+    limit: number;
+  }): Promise<Array<Extract<FencedTeamsAddress, { ok: true }>>> {
+    const rows = await select(this.db)
+      .from(teamsConversationAddresses)
+      .where(
+        and(
+          eq(teamsConversationAddresses.gateway_channel_id, input.channel.id),
+          isNotNull(teamsConversationAddresses.team_id),
+          isNull(teamsConversationAddresses.revoked_at)
+        )
+      )
+      .orderBy(desc(teamsConversationAddresses.refreshed_at))
+      .limit(ANCHOR_SCAN_LIMIT)
+      .all();
+    const anchors = new Map<string, Extract<FencedTeamsAddress, { ok: true }>>();
+    for (const row of rows.map(rowToAddress)) {
+      if (anchors.size >= input.limit) break;
+      if (
+        !row.team_id ||
+        anchors.has(row.team_id) ||
+        !isStandardChannelType(row.teams_channel_type)
+      ) {
+        continue;
+      }
+      const fenced = this.fenceRow(input.channel, row);
+      if (fenced.ok) anchors.set(row.team_id, fenced);
+    }
+    return [...anchors.values()];
   }
 
   private firstFenced(

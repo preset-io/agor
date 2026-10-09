@@ -2631,13 +2631,24 @@ const ChannelFormFields: React.FC<{
             in the reading session's transcript.
           </Typography.Text>
 
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Proactive sends post a new thread in a standard channel the bot can reach. Replies that
+            @mention the bot start a session; answers to people who mention the bot are always on.
+          </Typography.Text>
           <Form.Item
-            label="Enable outbound replies"
+            label="Enable proactive outbound"
             name="teams_outbound_enabled"
             valuePropName="checked"
-            initialValue={true}
+            initialValue={false}
           >
             <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Default outbound target"
+            name="teams_default_outbound_target"
+            tooltip="Optional. Must be channel:<19:…@thread.tacv2> for a standard channel, and in the allowed channel IDs when that list is set."
+          >
+            <Input placeholder="channel:19:…@thread.tacv2" />
           </Form.Item>
         </>
       ),
@@ -4335,7 +4346,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           // The field validator reports malformed JSON before submit.
         }
       }
-      config.outbound_enabled = values.teams_outbound_enabled ?? true;
+      config.outbound_enabled = values.teams_outbound_enabled ?? false;
+      const teamsTarget =
+        typeof values.teams_default_outbound_target === 'string'
+          ? values.teams_default_outbound_target.trim()
+          : '';
+      if (teamsTarget) config.default_outbound_target = teamsTarget;
+      else delete config.default_outbound_target;
       config.agent_tools = { channel_history: values.teams_channel_history === true };
       config.files = values.teams_files === true;
       // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.
@@ -4736,7 +4753,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       formValues.teams_catch_up_mode = catchUp?.mode ?? DEFAULT_TEAMS_CATCH_UP.mode;
       formValues.teams_catch_up_max_messages = catchUp?.max_messages ?? 50;
       formValues.teams_catch_up_max_prompt_bytes = catchUp?.max_prompt_bytes ?? 16 * 1024;
-      formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;
+      formValues.teams_outbound_enabled = config?.outbound_enabled ?? false;
+      formValues.teams_default_outbound_target = config?.default_outbound_target;
       formValues.teams_channel_history = resolveTeamsAgentTools(
         config?.agent_tools
       ).channel_history;

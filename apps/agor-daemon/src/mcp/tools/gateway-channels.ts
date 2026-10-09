@@ -1,8 +1,10 @@
 import {
   BranchRepository,
   GatewayChannelRepository,
+  isStandardChannelType,
   SessionRepository,
   TeamsConversationAddressRepository,
+  type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
 } from '@agor/core/db';
 import {
@@ -31,6 +33,7 @@ import {
   TEAMS_RSC_APPLICATION_PERMISSIONS,
   TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
   type TeamsChannelPostsRequest,
+  type TeamsConnector,
   type TeamsThreadHistoryRequest,
   teamsGatewayCallbackUrl,
   validateDiscordSetup,
@@ -95,6 +98,7 @@ import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.j
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import { teamsGraphCacheScope } from '../../utils/teams-connector-cache.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
 import { resolveMcpCallerSandboxMounts } from '../caller-sandbox-mounts.js';
@@ -343,10 +347,10 @@ const outboundTargetSchema = z
   .string()
   .trim()
   .regex(
-    /^(user:\d{17,20}|channel:[^:\s]+|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
+    /^(user:\d{17,20}|channel:[^:\s]+|channel:19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)|channel_name:[^\s]+|#[^\s]+|(?:email:|user_email:)?[^@\s]+@[^@\s]+\.[^@\s]+)$/
   )
   .describe(
-    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake> or user:<snowflake> (when DMs are enabled). Thread targets are intentionally not supported for a new seed.'
+    'Outbound target: Slack channel:C123, #project-updates, channel_name:project-updates, or user@example.com; Discord channel:<snowflake> or user:<snowflake> (when DMs are enabled); Microsoft Teams channel:<19:…@thread.tacv2> (a standard channel; see known_channels in agor_gateway_outbound_targets_list). Thread targets are intentionally not supported for a new seed.'
   );
 
 const envVarSchema = z.strictObject({
@@ -1799,6 +1803,53 @@ async function resolveDiscordReadToolTarget(
   };
 }
 
+interface TeamsKnownChannel {
+  teams_channel_id: string;
+  name: string;
+}
+
+const TEAMS_KNOWN_CHANNEL_TEAMS = 5;
+
+/** Standard channels the bot can post to, within the allowlists; empty when Teams cannot be asked. */
+async function teamsKnownChannels(
+  ctx: McpContext,
+  db: TenantScopeAwareDatabase,
+  channel: GatewayChannel
+): Promise<TeamsKnownChannel[]> {
+  const config = channel.config as TeamsGatewayConfig;
+  const allowedTeams = config.allowed_team_ids ?? [];
+  const allowedChannels = config.allowed_channel_ids ?? [];
+  try {
+    const anchors = await new TeamsConversationAddressRepository(db).loadFencedTeamAnchors({
+      channel,
+      limit: TEAMS_KNOWN_CHANNEL_TEAMS,
+    });
+    const connector = getConnector('teams', channel.config) as unknown as Pick<
+      TeamsConnector,
+      'listTeamChannels'
+    >;
+    const known: TeamsKnownChannel[] = [];
+    for (const anchor of anchors) {
+      const teamId = anchor.row.team_id as string;
+      if (allowedTeams.length > 0 && !allowedTeams.includes(teamId)) continue;
+      const channels = await connector
+        .listTeamChannels({
+          teamId,
+          serviceUrl: anchor.address.serviceUrl as string,
+          cacheScope: teamsCacheScope(ctx, channel),
+        })
+        .catch(() => []);
+      for (const candidate of channels) {
+        if (allowedChannels.length > 0 && !allowedChannels.includes(candidate.id)) continue;
+        known.push({ teams_channel_id: candidate.id, name: candidate.name });
+      }
+    }
+    return known;
+  } catch {
+    return [];
+  }
+}
+
 const TEAMS_CHANNEL_UNSEEN =
   'This gateway channel has not received an activity from that Teams channel, so Agor cannot read it.';
 
@@ -1851,8 +1902,7 @@ async function resolveTeamsReadToolTarget(
   ) {
     throw new Error(`Teams channel ${teamsChannelId} is not in this gateway channel's allowlists.`);
   }
-  const channelType = fenced.row.teams_channel_type?.toLowerCase();
-  if (channelType === 'private' || channelType === 'shared') {
+  if (!isStandardChannelType(fenced.row.teams_channel_type)) {
     throw new Error('Teams history tools read standard channels only, not private or shared ones.');
   }
   return {
@@ -1875,14 +1925,7 @@ async function resolveTeamsReadToolTarget(
 }
 
 function teamsCacheScope(ctx: McpContext, channel: GatewayChannel) {
-  const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
-  return tenantId
-    ? {
-        agorTenantId: tenantId,
-        gatewayChannelId: channel.id,
-        providerConfigGeneration: channel.provider_config_generation,
-      }
-    : null;
+  return teamsGraphCacheScope(channel, ctx.baseServiceParams.tenant?.tenant_id);
 }
 
 /**
@@ -2175,7 +2218,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_channels_create',
     {
       description:
-        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live image and text attachments, direct_messages_enabled:false by default or true for allowed current server members, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get and list forum posts via agor_gateway_discord_forum_posts_list, and an optional channel:<snowflake> proactive target. Teams accepts agent_tools {channel_history:false} by default or {channel_history:true} to let session agents read standard-channel threads via agor_gateway_teams_thread_history_get and list channel posts via agor_gateway_teams_channel_posts_list. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
+        'Create a gateway channel definition (admin-only) through the same gateway-channels service used by the UI. Current connectors: Slack, Discord, GitHub, Teams. For interactive/agent-driven setup, create the channel disabled without secrets, then collect credentials with agor_widgets_request_gateway_token so the user enters them in a secure inline form — raw secrets passed into tool arguments leak into the MCP transcript. Discord accepts only its explicit public contract: application_id, guild_id, Message Content acknowledgement, public_thread_per_summon, bounded catch-up, channel/user/role allowlists, aligned tenant-owned user_map or fixed agorUserId, files:false by default or files:true for bounded live image and text attachments, direct_messages_enabled:false by default or true for allowed current server members, agent_tools {channel_history:false} by default ([] also means all off) or {channel_history:true} to let session agents read allowed channel history via agor_gateway_discord_channel_history_get and list forum posts via agor_gateway_discord_forum_posts_list, and an optional channel:<snowflake> proactive target. Teams accepts agent_tools {channel_history:false} by default or {channel_history:true} to let session agents read standard-channel threads via agor_gateway_teams_thread_history_get and list channel posts via agor_gateway_teams_channel_posts_list, files:false by default or files:true to read pasted images and personal-chat files, and outbound_enabled:false by default or true (with an optional channel:<19:…@thread.tacv2> default_outbound_target) for proactive channel posts; replies to people who mention the bot are always on. Provider installation, listener, cursor, delivery, repair, history, and provider-action state are daemon-owned and rejected. Secrets are encrypted by the service and returned redacted.',
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: gatewayChannelCreateSchema,
     },
@@ -2389,7 +2432,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_outbound_targets_list',
     {
       description:
-        'List a page of Slack or Discord gateway outbound targets the caller can use. Authorization and branch scoping are applied before totals and paging. Advance with offset=nextOffset while hasMore is true. Secrets are never returned.',
+        'List a page of Slack, Discord, or Microsoft Teams gateway outbound targets the caller can use. Authorization and branch scoping are applied before totals and paging. Teams entries list known_channels: standard channels in teams the bot has received a message from. Advance with offset=nextOffset while hasMore is true. Secrets are never returned.',
       annotations: { readOnlyHint: true },
       inputSchema: z.strictObject({
         branchId: mcpOptionalId('branchId', 'Branch', 'Filter by target branch ID.'),
@@ -2398,7 +2441,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'Gateway channel',
           'Filter by gateway channel ID.'
         ),
-        channelType: z.enum(['slack', 'discord']).optional(),
+        channelType: z.enum(['slack', 'discord', 'teams']).optional(),
         limit: mcpLimit(25, 100),
         offset: mcpOptionalNonNegativeInt('offset', 'Number of authorized targets to skip.'),
       }),
@@ -2426,7 +2469,12 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         for (const channel of allChannels) {
           if (!channel) continue;
           if (args.channelType && channel.channel_type !== args.channelType) continue;
-          if (channel.channel_type !== 'slack' && channel.channel_type !== 'discord') continue;
+          if (
+            channel.channel_type !== 'slack' &&
+            channel.channel_type !== 'discord' &&
+            channel.channel_type !== 'teams'
+          )
+            continue;
           if (
             (callerSessionBranchId || args.branchId) &&
             channel.target_branch_id !== branchFilterId
@@ -2451,24 +2499,37 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               ? { default_outbound_target: outbound.default_outbound_target }
               : {}),
             accepted_target_formats:
-              channel.channel_type === 'discord'
-                ? [
-                    'channel:<snowflake>',
-                    ...(isDiscordDirectMessagesEnabled(channel.config) ? ['user:<snowflake>'] : []),
-                  ]
-                : [
-                    'channel:C123',
-                    '#project-updates',
-                    'channel_name:project-updates',
-                    'user@example.com',
-                  ],
+              channel.channel_type === 'teams'
+                ? ['channel:<19:…@thread.tacv2>']
+                : channel.channel_type === 'discord'
+                  ? [
+                      'channel:<snowflake>',
+                      ...(isDiscordDirectMessagesEnabled(channel.config)
+                        ? ['user:<snowflake>']
+                        : []),
+                    ]
+                  : [
+                      'channel:C123',
+                      '#project-updates',
+                      'channel_name:project-updates',
+                      'user@example.com',
+                    ],
           });
         }
 
         channels.sort((a, b) => a.gateway_channel_id.localeCompare(b.gateway_channel_id));
         const limit = args.limit ?? 25;
         const offset = args.offset ?? 0;
-        const page = channels.slice(offset, offset + limit);
+        const page: Array<(typeof channels)[number] & { known_channels?: TeamsKnownChannel[] }> =
+          channels.slice(offset, offset + limit);
+        // Teams IDs cannot be guessed, so list reachable channels for the returned page only.
+        for (const entry of page) {
+          if (entry.channel_type !== 'teams') continue;
+          const channel = allChannels.find(
+            (candidate) => candidate?.id === entry.gateway_channel_id
+          );
+          if (channel) entry.known_channels = await teamsKnownChannels(ctx, db, channel);
+        }
         const hasMore = offset + page.length < channels.length;
         return textResult({
           channels: page,
@@ -3070,7 +3131,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_emit_message',
     {
       description:
-        "Send a proactive Slack or Discord message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake> or user:<snowflake> when DMs are enabled. DM targets require current server membership; replies go to the recipient’s DM session, not the sending session. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
+        "Send a proactive Slack, Discord, or Microsoft Teams message through an outbound-enabled gateway channel and persist a seed/audit record. Slack targets may be channel IDs, channel names, or user emails; Discord targets are channel:<snowflake> or user:<snowflake> when DMs are enabled; Teams targets are channel:<19:…@thread.tacv2> for a standard channel the bot can reach (see known_channels). DM targets require current server membership; replies go to the recipient’s DM session, not the sending session. The emit starts a fresh provider message and does not create a thread-session mapping until a human replies; in Teams the reply must @mention the bot, and the post says so. When called from a session, outbound is restricted to channels whose target branch matches the calling session's branch.",
       annotations: { destructiveHint: false, idempotentHint: false },
       inputSchema: z.strictObject({
         gatewayChannelId: mcpRequiredId(
@@ -3078,7 +3139,10 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'Gateway channel',
           'Gateway channel ID (UUIDv7 or short ID).'
         ),
-        message: mcpRequiredString('message', 'Message to send through Slack or Discord.'),
+        message: mcpRequiredString(
+          'message',
+          'Message to send through Slack, Discord, or Microsoft Teams.'
+        ),
         target: outboundTargetSchema.optional().describe('Omit to use default_outbound_target.'),
         threadTs: slackOptionalTimestampSchema(
           'threadTs',

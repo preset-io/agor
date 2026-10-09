@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isAllowedTeamsServiceUrl } from '../teams-service-url';
-import { classifyTeamsSendFailure, prepareTeamsSend, TeamsSendError } from './teams-send';
+import {
+  classifyTeamsSendFailure,
+  prepareTeamsSend,
+  startTeamsChannelThread,
+  TeamsSendError,
+} from './teams-send';
 
 const address = {
   activityId: 'activity-1',
@@ -179,5 +184,98 @@ describe('classifyTeamsSendFailure', () => {
     expect(send(500)).toEqual({ kind: 'terminal', code: 'provider_http_500' });
     expect(send(400)).toEqual({ kind: 'terminal', code: 'provider_http_400' });
     expect(send(403)).toEqual({ kind: 'terminal', code: 'provider_http_403' });
+  });
+});
+
+describe('startTeamsChannelThread', () => {
+  const CHANNEL = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
+  const input = { channelId: CHANNEL, tenantId: 'tenant-1', appId: 'teams-app' };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('creates the channel post, reads the root, and replies with later chunks', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(201, { id: `${CHANNEL};messageid=1616990000001`, activityId: '' })
+      )
+      .mockResolvedValueOnce(jsonResponse(201, { id: '1616990000002' }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await startTeamsChannelThread(
+      address,
+      { getAccessToken: async () => 'bot-token' },
+      { ...input, chunks: ['first', 'second'] }
+    );
+    expect(result).toEqual({ rootMessageId: '1616990000001', sentChunks: 2 });
+    const [createUrl, createInit] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(createUrl).toBe('https://smba.trafficmanager.net/amer/v3/conversations');
+    expect(JSON.parse(String(createInit.body))).toMatchObject({
+      isGroup: true,
+      bot: { id: '28:teams-app' },
+      tenantId: 'tenant-1',
+      channelData: { channel: { id: CHANNEL }, tenant: { id: 'tenant-1' } },
+      activity: { type: 'message', text: 'first', textFormat: 'markdown' },
+    });
+    expect(fetchMock.mock.calls[1]?.[0]).toBe(
+      `https://smba.trafficmanager.net/amer/v3/conversations/${CHANNEL};messageid=1616990000001/activities/1616990000001`
+    );
+  });
+
+  it('prefers activityId for the root and reports a later-chunk failure as partial', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(201, { id: CHANNEL, activityId: '1616990000005' }))
+      .mockResolvedValueOnce(jsonResponse(502, {}));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await startTeamsChannelThread(
+      address,
+      { getAccessToken: async () => 'bot-token' },
+      { ...input, chunks: ['first', 'second'] }
+    );
+    expect(result).toMatchObject({ rootMessageId: '1616990000005', sentChunks: 1 });
+    expect(classifyTeamsSendFailure(result.error)).toEqual({
+      kind: 'ambiguous',
+      code: 'provider_http_502',
+    });
+  });
+
+  it('refuses a disallowed host before any token, and classifies first-chunk failures', async () => {
+    const getAccessToken = vi.fn(async () => 'bot-token');
+    await expect(
+      startTeamsChannelThread(
+        { ...address, serviceUrl: 'https://attacker.example/' },
+        { getAccessToken },
+        { ...input, chunks: ['x'] }
+      )
+    ).rejects.toMatchObject({ phase: 'prepare', reason: 'service_url_not_allowed' });
+    expect(getAccessToken).not.toHaveBeenCalled();
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(429, {}, { 'retry-after': '1' }))
+    );
+    const limited = await startTeamsChannelThread(
+      address,
+      { getAccessToken },
+      { ...input, chunks: ['x'] }
+    ).catch((caught: unknown) => caught);
+    expect(classifyTeamsSendFailure(limited)).toEqual({
+      kind: 'retry',
+      code: 'provider_rate_limited',
+      retryAfterMs: 1000,
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(201, { id: CHANNEL }))
+    );
+    const unaddressable = await startTeamsChannelThread(
+      address,
+      { getAccessToken },
+      { ...input, chunks: ['x'] }
+    ).catch((caught: unknown) => caught);
+    expect(classifyTeamsSendFailure(unaddressable)).toMatchObject({ kind: 'ambiguous' });
   });
 });

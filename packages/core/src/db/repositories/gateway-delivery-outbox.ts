@@ -168,9 +168,10 @@ export async function resolveDeliveryMapping(
     provider_installation_id: string | null;
     provider_config_generation: number;
   }>;
+  // Discord seed sessions reply through the legacy after-hook; Teams seeds are real reply chains.
   const candidate = candidates.find((row) => {
     const metadata = (row.mapping_metadata as Record<string, unknown> | null) ?? {};
-    return typeof metadata.outbound_seed_id !== 'string';
+    return channelType !== 'discord' || typeof metadata.outbound_seed_id !== 'string';
   });
   if (!candidate || typeof candidate.provider_installation_id !== 'string') return null;
   return {

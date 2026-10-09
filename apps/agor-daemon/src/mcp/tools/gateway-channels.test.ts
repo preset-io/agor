@@ -4054,3 +4054,100 @@ describe('Teams channel history agent tools (MCP)', () => {
     expect(schema.safeParse({ nextLink: 'https://graph.microsoft.com/x' }).success).toBe(false);
   });
 });
+
+describe('Teams outbound targets (MCP)', () => {
+  const TEAMS_CHANNEL = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
+  const OTHER = '19:9b8a7f6e5d4c4b3a2f1e0d9c8b7a6f5e@thread.tacv2';
+  const teamsChannel = (config: Record<string, unknown>) => ({
+    ...slackChannel,
+    id: 'chan-teams',
+    name: 'Eng Teams',
+    channel_type: 'teams',
+    provider_config_generation: 2,
+    config: {
+      app_id: 'teams-app',
+      app_password: 'teams-secret',
+      microsoft_tenant_id: 'ms',
+      ...config,
+    },
+  });
+
+  function setup(config: Record<string, unknown>) {
+    spyCallerSessionBranch('branch-1');
+    vi.spyOn(GatewayChannelRepository.prototype, 'findAll').mockResolvedValue([
+      teamsChannel(config),
+    ] as any);
+    vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+    const anchors = vi
+      .spyOn(TeamsConversationAddressRepository.prototype, 'loadFencedTeamAnchors')
+      .mockResolvedValue([
+        {
+          ok: true,
+          row: { team_id: '19:team@thread.tacv2' },
+          address: { serviceUrl: 'https://smba.trafficmanager.net/amer/' },
+        },
+      ] as any);
+    const listTeamChannels = vi.fn(async () => [
+      { id: TEAMS_CHANNEL, name: 'General' },
+      { id: OTHER, name: 'Releases' },
+    ]);
+    vi.mocked(getConnector).mockReturnValue({ listTeamChannels } as any);
+    return { anchors, listTeamChannels };
+  }
+
+  it('lists Teams only with proactive sends on, with allowlisted known channels', async () => {
+    const off = setup({ outbound_enabled: false });
+    let tools = await captureTools('admin');
+    let payload = JSON.parse(
+      (await tools.agor_gateway_outbound_targets_list.handler({})).content[0].text
+    );
+    expect(payload.channels).toEqual([]);
+    expect(off.listTeamChannels).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const on = setup({ outbound_enabled: true, allowed_channel_ids: [OTHER] });
+    tools = await captureTools('admin');
+    payload = JSON.parse(
+      (await tools.agor_gateway_outbound_targets_list.handler({ channelType: 'teams' })).content[0]
+        .text
+    );
+    expect(payload.channels).toEqual([
+      expect.objectContaining({
+        gateway_channel_id: 'chan-teams',
+        channel_type: 'teams',
+        accepted_target_formats: ['channel:<19:…@thread.tacv2>'],
+        known_channels: [{ teams_channel_id: OTHER, name: 'Releases' }],
+      }),
+    ]);
+    expect(on.listTeamChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: '19:team@thread.tacv2',
+        cacheScope: expect.objectContaining({ agorTenantId: 'tenant-test' }),
+      })
+    );
+    expect(JSON.stringify(payload)).not.toContain('teams-secret');
+  });
+
+  it('falls back to formats only when Teams cannot list channels', async () => {
+    const { listTeamChannels } = setup({ outbound_enabled: true });
+    listTeamChannels.mockRejectedValue(new Error('Teams unavailable'));
+    const tools = await captureTools('admin');
+    const payload = JSON.parse(
+      (await tools.agor_gateway_outbound_targets_list.handler({})).content[0].text
+    );
+    expect(payload.channels[0]).toMatchObject({ known_channels: [] });
+  });
+
+  it('accepts Teams channel targets in the emit schema', async () => {
+    const tools = await captureTools('member');
+    const schema = tools.agor_gateway_emit_message.cfg.inputSchema;
+    expect(
+      schema.safeParse({ gatewayChannelId: 'chan-teams', message: 'x', target: `channel:${OTHER}` })
+        .success
+    ).toBe(true);
+    expect(
+      schema.safeParse({ gatewayChannelId: 'chan-teams', message: 'x', target: 'channel:19:a b' })
+        .success
+    ).toBe(false);
+  });
+});

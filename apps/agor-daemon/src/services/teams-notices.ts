@@ -26,7 +26,7 @@ export interface TeamsDirectSendInput {
   timeoutMs?: number;
 }
 
-/** One fenced, unqueued send; `outbound_enabled: false` turns every such post off. */
+/** One fenced, unqueued send through the stored address. */
 async function sendTeamsDirect(
   input: TeamsDirectSendInput,
   event: 'notice' | 'typing',
@@ -37,13 +37,7 @@ async function sendTeamsDirect(
   ) => Promise<unknown>
 ): Promise<TeamsNoticeOutcome> {
   const { channel, threadId } = input;
-  if (
-    !channel.enabled ||
-    channel.channel_type !== 'teams' ||
-    (channel.config as Record<string, unknown>).outbound_enabled === false
-  ) {
-    return 'skipped';
-  }
+  if (!channel.enabled || channel.channel_type !== 'teams') return 'skipped';
   try {
     const fenced = await input.addresses.loadFenced({ channel, threadId });
     if (!fenced.ok) {

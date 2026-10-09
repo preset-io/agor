@@ -21,6 +21,7 @@ import {
   GatewayListenerError,
   getConnector,
   TeamsMemberLookupError,
+  TeamsSendError,
 } from '@agor/core/gateway';
 import type {
   GatewayChannel,
@@ -884,7 +885,7 @@ describe('GatewayService user alignment operational logs', () => {
     expect(String(promptCreate.mock.calls[0][0].prompt)).toContain('> From: Ada\n');
   });
 
-  it('names attachments it cannot read and omits the reply note when outbound is off', async () => {
+  it('names attachments it cannot read and keeps the reply note with proactive sends off', async () => {
     const { service, promptCreate } = teamsAlignedHarness({ alignedUser });
     const channel = await (
       service as unknown as { channelRepo: { findByKey: () => Promise<GatewayChannel> } }
@@ -925,7 +926,7 @@ describe('GatewayService user alignment operational logs', () => {
       '(Attachments you could not read: "report 1 .pdf" (unsupported file type).'
     );
     expect(prompt).toContain('suggest pasting the text instead.');
-    expect(prompt).not.toContain('Note: Any assistant message you send');
+    expect(prompt).toContain('Note: Any assistant message you send');
   });
 
   function teamsFileCreate(
@@ -6470,10 +6471,10 @@ describe('GatewayService Teams notices', () => {
     expect(stopAll).toHaveBeenCalledOnce();
   });
 
-  it('does not type in channel threads or when outbound is off', async () => {
-    for (const [conversationType, outbound] of [
-      ['channel', true],
-      ['personal', false],
+  it('does not type in channel threads, and types with proactive sends off', async () => {
+    for (const [conversationType, outbound, types] of [
+      ['channel', true, false],
+      ['personal', false, true],
     ] as const) {
       const { service } = makeGatewayHarness({
         channel: {
@@ -6497,7 +6498,7 @@ describe('GatewayService Teams notices', () => {
       await runWithTenantContext('tenant-channel', () =>
         service.updateProgress({ session_id: 'sess-1', state: 'working', task_id: 'task-1' })
       );
-      expect(start).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(types ? 1 : 0);
     }
   });
 
@@ -6642,5 +6643,297 @@ describe('GatewayService Teams notices', () => {
       '19:c|root-1',
       expect.stringMatching(/isn't linked to an Agor user/)
     );
+  });
+});
+
+describe('GatewayService Teams proactive sends', () => {
+  const TEAMS_CHANNEL = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
+  const SIBLING = '19:9b8a7f6e5d4c4b3a2f1e0d9c8b7a6f5e@thread.tacv2';
+  const ROOT = '1616990000001';
+  const channel = {
+    ...slackChannel,
+    id: 'teams-outbound-channel' as never,
+    channel_type: 'teams',
+    channel_key: 'teams-outbound-key',
+    config: {
+      app_id: 'teams-app',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-a',
+      outbound_enabled: true,
+    },
+    provider_installation_id: 'teams-app',
+    provider_config_generation: 3,
+  } as GatewayChannel;
+  const anchorAddress = { serviceUrl: 'https://smba.trafficmanager.net/amer/' };
+  const fenced = (overrides: Record<string, unknown> = {}) => ({
+    ok: true,
+    row: {
+      thread_id: `${TEAMS_CHANNEL}|1616989510408`,
+      team_id: '19:team@thread.tacv2',
+      team_aad_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+      teams_channel_type: null,
+      ...overrides,
+    },
+    address: anchorAddress,
+  });
+
+  function emitHarness(
+    options: {
+      config?: Record<string, unknown>;
+      direct?: unknown;
+      anchors?: unknown[];
+      start?: ReturnType<typeof vi.fn>;
+      channels?: Array<{ id: string; name: string }>;
+    } = {}
+  ) {
+    const teamsChannel = {
+      ...channel,
+      config: { ...(channel.config as Record<string, unknown>), ...options.config },
+    } as GatewayChannel;
+    const harness = makeGatewayHarness({ channel: teamsChannel });
+    const create = vi.fn(async (data: Record<string, unknown>) => ({ id: 'seed-1', ...data }));
+    Object.assign(harness.outboundRepo, { create });
+    const addresses = {
+      loadFencedByConversation: vi.fn(
+        async () => options.direct ?? { ok: false, code: 'conversation_address_missing' }
+      ),
+      loadFencedTeamAnchors: vi.fn(async () => options.anchors ?? []),
+      revokeConversations: vi.fn(async () => 1),
+    };
+    (harness.service as unknown as { teamsAddressRepo: unknown }).teamsAddressRepo = addresses;
+    const startChannelThread =
+      options.start ?? vi.fn(async () => ({ rootMessageId: ROOT, sentChunks: 1 }));
+    const listTeamChannels = vi.fn(async () => options.channels ?? []);
+    vi.spyOn(teamsConnectorCache, 'get').mockReturnValue({
+      formatMessage: (text: string) => text,
+      startChannelThread,
+      listTeamChannels,
+      invalidateTokens: vi.fn(),
+    } as never);
+    const emit = (target = `channel:${TEAMS_CHANNEL}`) =>
+      runWithTenantContext('tenant-channel', () =>
+        harness.service.emitMessage({
+          gatewayChannelId: teamsChannel.id,
+          message: 'Release notes are ready',
+          target,
+          emittedByUserId: 'user-1' as UserID,
+          userRole: 'admin',
+        })
+      );
+    return { ...harness, create, addresses, startChannelThread, listTeamChannels, emit };
+  }
+
+  it('refuses when proactive sends are off or unset, before any Teams call', async () => {
+    for (const outbound of [false, undefined]) {
+      const { emit, startChannelThread, addresses } = emitHarness({
+        config: { outbound_enabled: outbound },
+      });
+      await expect(emit()).rejects.toThrow('Gateway outbound is disabled');
+      expect(addresses.loadFencedByConversation).not.toHaveBeenCalled();
+      expect(startChannelThread).not.toHaveBeenCalled();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('posts into a seen channel and stores a seed keyed exactly like a reply thread', async () => {
+    const { emit, startChannelThread, create } = emitHarness({ direct: fenced() });
+    const result = await emit();
+    expect(startChannelThread).toHaveBeenCalledWith(anchorAddress, {
+      channelId: TEAMS_CHANNEL,
+      chunks: [expect.stringContaining('_To reply, @mention Agor in this thread._')],
+      signal: expect.any(AbortSignal),
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel_type: 'teams',
+        platform_channel_id: TEAMS_CHANNEL,
+        platform_message_id: ROOT,
+        platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        message_text: 'Release notes are ready',
+        platform_permalink: expect.stringContaining('groupId=fbe2bf47-16c8-47cf-b4a5-4b9b187c508b'),
+      })
+    );
+    expect(result).toMatchObject({ success: true, platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}` });
+  });
+
+  it('anchors a sibling channel only when its team lists it', async () => {
+    const listed = emitHarness({
+      anchors: [fenced()],
+      channels: [{ id: SIBLING, name: 'Releases' }],
+    });
+    await expect(listed.emit(`channel:${SIBLING}`)).resolves.toMatchObject({ success: true });
+    expect(listed.listTeamChannels).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: '19:team@thread.tacv2',
+        serviceUrl: anchorAddress.serviceUrl,
+      })
+    );
+    vi.restoreAllMocks();
+
+    const unlisted = emitHarness({ anchors: [fenced()], channels: [] });
+    await expect(unlisted.emit(`channel:${SIBLING}`)).rejects.toThrow(
+      'has not seen this Teams channel'
+    );
+    expect(unlisted.startChannelThread).not.toHaveBeenCalled();
+  });
+
+  it('refuses allowlist misses, private channels, and malformed targets', async () => {
+    const outsideChannels = emitHarness({
+      direct: fenced(),
+      config: { allowed_channel_ids: [SIBLING] },
+    });
+    await expect(outsideChannels.emit()).rejects.toThrow('allowed_channel_ids');
+    expect(outsideChannels.addresses.loadFencedByConversation).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const outsideTeams = emitHarness({
+      direct: fenced(),
+      config: { allowed_team_ids: ['19:other@thread.tacv2'] },
+    });
+    await expect(outsideTeams.emit()).rejects.toThrow('allowed_team_ids');
+    vi.restoreAllMocks();
+
+    const privateChannel = emitHarness({ direct: fenced({ teams_channel_type: 'private' }) });
+    await expect(privateChannel.emit()).rejects.toThrow('standard channels only');
+    vi.restoreAllMocks();
+
+    const malformed = emitHarness({ direct: fenced() });
+    await expect(malformed.emit('channel:C123')).rejects.toThrow('channel:<19:');
+    expect(malformed.startChannelThread).not.toHaveBeenCalled();
+  });
+
+  it('never stores a seed after an ambiguous first post, and retries one short rate limit', async () => {
+    const ambiguous = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => {
+        throw new TeamsSendError({ phase: 'send', status: 502 });
+      }),
+    });
+    await expect(ambiguous.emit()).rejects.toThrow('Teams may have posted the message');
+    expect(ambiguous.create).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+
+    const start = vi
+      .fn()
+      .mockRejectedValueOnce(new TeamsSendError({ phase: 'send', status: 429, retryAfterMs: 0 }))
+      .mockResolvedValueOnce({ rootMessageId: ROOT, sentChunks: 1 });
+    const limited = emitHarness({ direct: fenced(), start });
+    await expect(limited.emit()).resolves.toMatchObject({ success: true });
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the seed and reports a partial post when a later chunk fails', async () => {
+    const { emit, create } = emitHarness({
+      direct: fenced(),
+      start: vi.fn(async () => ({
+        rootMessageId: ROOT,
+        sentChunks: 1,
+        error: new TeamsSendError({ phase: 'send', status: 502 }),
+      })),
+    });
+    await expect(emit()).resolves.toMatchObject({ success: true, partial: true });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: expect.objectContaining({ partial: true }) })
+    );
+  });
+
+  it('starts the session from a mentioned reply to a seed, without catch-up', async () => {
+    const seed = {
+      id: 'seed-1',
+      platform_thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      message_text: 'Release notes are ready',
+      emitted_by_user_id: 'user-1',
+      metadata: {},
+    } as unknown as GatewayOutboundMessage;
+    const fetchProviderHistory = vi.fn();
+    const { service, outboundRepo, promptCreate, threadMapRepo, completeReplyAdmission } =
+      makeGatewayHarness({
+        channel,
+        outboundSeed: seed,
+        connector: { sendMessage: vi.fn(), fetchProviderHistory },
+      });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+      text: 'looks good, ship it',
+      user_name: 'Ada',
+      metadata: {
+        teams_conversation_type: 'channel',
+        teams_has_mention: true,
+        teams_user_name: 'Ada',
+      },
+      teams_catch_up: {
+        activity_id: '1616990000009',
+        timestamp: '2021-03-29T03:55:32.035Z',
+        service_url: 'https://smba.trafficmanager.net/amer/',
+        team_id: '19:team@thread.tacv2',
+        team_group_id: null,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b1' as never,
+    };
+    await expect(
+      service.create(
+        withVerifiedHttpGatewayAuthority(data, {
+          id: data.gateway_inbound_event_id,
+          gateway_channel_id: channel.id,
+          processing_token: 'claim-token',
+          provider_config_generation: 3,
+          verified_app_id: 'teams-app',
+          verified_tenant_id: 'tenant-a',
+          thread_id: data.thread_id,
+        })
+      )
+    ).resolves.toMatchObject({ success: true });
+    expect(outboundRepo.admitReplySession).toHaveBeenCalledWith(channel.id, data.thread_id);
+    expect(threadMapRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thread_id: `${TEAMS_CHANNEL}|${ROOT}`,
+        metadata: expect.objectContaining({ outbound_seed_id: 'seed-1' }),
+      })
+    );
+    expect(completeReplyAdmission).toHaveBeenCalledWith('seed-1', 'sess-new');
+    expect(fetchProviderHistory).not.toHaveBeenCalled();
+    const prompt = String(promptCreate.mock.calls[0][0].prompt);
+    expect(prompt).toContain(
+      'This Microsoft Teams thread began from a proactive Agor gateway message'
+    );
+    expect(prompt).toContain('Microsoft Teams sender name: Ada');
+    expect(prompt).toContain('Release notes are ready');
+    expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+      'map-new',
+      '1616990000009'
+    );
+  });
+
+  it('never admits a seed for personal chats', async () => {
+    const { service, outboundRepo } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: 'a:personal' }),
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      sendTeamsSystemMessage: vi.fn(async () => undefined),
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: 'a:personal',
+      text: 'hello',
+      metadata: { teams_conversation_type: 'personal' },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-0000000000b2' as never,
+    };
+    await service.create(
+      withVerifiedHttpGatewayAuthority(data, {
+        id: data.gateway_inbound_event_id,
+        gateway_channel_id: channel.id,
+        processing_token: 'claim-token',
+        provider_config_generation: 3,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'tenant-a',
+        thread_id: data.thread_id,
+      })
+    );
+    expect(outboundRepo.admitReplySession).not.toHaveBeenCalled();
   });
 });

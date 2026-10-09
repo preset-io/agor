@@ -19,6 +19,7 @@ import {
 import {
   BranchRepository,
   DiscordMessageDeliveryRepository,
+  type FencedTeamsAddress,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
   type GatewayListenerDiscoveryCursor,
@@ -32,6 +33,7 @@ import {
   isDatabaseUniqueConstraintError,
   isMCPSlackConnectCardEnabled,
   isPostgresDatabase,
+  isStandardChannelType,
   MCPServerRepository,
   type MCPSlackConnectDueCursor,
   MessagesRepository,
@@ -66,6 +68,8 @@ import {
   buildDiscordDirectMessageThreadKey,
   buildDiscordLegacyThreadKey,
   buildDiscordMessageThreadKey,
+  chunkMarkdown,
+  classifyTeamsSendFailure,
   DISCORD_METADATA_KEY,
   type DiscordAuthorityMetadata,
   DiscordDirectMessageError,
@@ -93,7 +97,10 @@ import {
   parseSlackThreadId,
   type SlackAgorMessageMetadataEventType,
   sanitizeGatewayProviderError,
+  TEAMS_MESSAGE_TEXT_BUDGET,
+  type TeamsChannelThreadResult,
   TeamsMemberLookupError,
+  utf16Length,
 } from '@agor/core/gateway';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
@@ -145,6 +152,7 @@ import {
   SessionStatus,
   TaskStatus,
   teamsAttachmentDeadlineMs,
+  teamsOutboundChannelTarget,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   validateDiscordConfig,
 } from '@agor/core/types';
@@ -174,7 +182,11 @@ import {
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
 import { prepareTeamsCatchUp, type TeamsCatchUpTrigger } from '../utils/teams-catch-up.js';
-import { teamsConnectorCache } from '../utils/teams-connector-cache.js';
+import {
+  type TeamsSendConnector,
+  teamsConnectorCache,
+  teamsGraphCacheScope,
+} from '../utils/teams-connector-cache.js';
 import {
   createTenantBoundDataAccess,
   type TenantBoundDataAccess,
@@ -468,6 +480,9 @@ interface EmitGatewayMessageData {
 
 interface EmitGatewayMessageResult {
   success: true;
+  /** Teams: the thread was created but a later chunk failed. */
+  partial?: true;
+  warning?: string;
   gateway_outbound_message_id: string;
   gateway_channel_id: string;
   channel_type: ChannelType;
@@ -817,6 +832,11 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
 const SLACK_GATEWAY_REPLY_NOTE =
   'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
 
+const TEAMS_PROACTIVE_REPLY_HINT = '_To reply, @mention Agor in this thread._';
+const TEAMS_PROACTIVE_MAX_CHUNKS = 3;
+const TEAMS_PROACTIVE_TIMEOUT_MS = 15_000;
+const TEAMS_PROACTIVE_ANCHOR_TEAMS = 5;
+
 const TEAMS_GATEWAY_REPLY_NOTE =
   'Note: Any assistant message you send in this current Agor session is posted back to the Microsoft Teams conversation it came from.';
 
@@ -952,28 +972,26 @@ function buildSeededThreadInitialPrompt(args: {
   metadata?: Record<string, unknown>;
 }): string {
   const isDiscord = args.channel.channel_type === 'discord';
+  const isTeams = args.channel.channel_type === 'teams';
   const discordMetadata = isDiscord ? parseDiscordAuthorityMetadata(args.metadata) : null;
-  const provider = isDiscord ? 'Discord' : 'Slack';
-  const senderName =
-    typeof args.metadata?.slack_user_name === 'string' ? args.metadata.slack_user_name : undefined;
+  const provider = isDiscord ? 'Discord' : isTeams ? 'Microsoft Teams' : 'Slack';
+  const metadataString = (key: string) =>
+    typeof args.metadata?.[key] === 'string' ? (args.metadata[key] as string) : undefined;
+  const senderName = metadataString(isTeams ? 'teams_user_name' : 'slack_user_name');
+  // Teams keeps only the display name; its AAD ID and email are not in safe metadata.
   const senderId = isDiscord
     ? typeof discordMetadata?.[DISCORD_METADATA_KEY.authorId] === 'string'
       ? discordMetadata[DISCORD_METADATA_KEY.authorId]
       : undefined
-    : typeof args.metadata?.slack_user_id === 'string'
-      ? args.metadata.slack_user_id
-      : undefined;
-  const senderEmail =
-    !isDiscord && typeof args.metadata?.slack_user_email === 'string'
-      ? args.metadata.slack_user_email
-      : undefined;
+    : isTeams
+      ? undefined
+      : metadataString('slack_user_id');
+  const senderEmail = !isDiscord && !isTeams ? metadataString('slack_user_email') : undefined;
   const channelName = isDiscord
     ? typeof discordMetadata?.[DISCORD_METADATA_KEY.channelId] === 'string'
       ? discordMetadata[DISCORD_METADATA_KEY.channelId]
       : args.seed.platform_channel_id
-    : typeof args.metadata?.slack_channel_name === 'string'
-      ? args.metadata.slack_channel_name
-      : undefined;
+    : metadataString(isTeams ? 'teams_channel_name' : 'slack_channel_name');
 
   const lines = [
     '[Gateway context]',
@@ -4441,8 +4459,7 @@ export class GatewayService {
         data.state === 'working' &&
         data.task_id &&
         tenantId &&
-        (conversationType === 'personal' || conversationType === 'groupchat') &&
-        (channel.config as TeamsGatewayConfig).outbound_enabled !== false
+        (conversationType === 'personal' || conversationType === 'groupchat')
       ) {
         this.teamsTyping.start({
           tenantId,
@@ -4842,8 +4859,12 @@ export class GatewayService {
     const channel = await this.channelRepo.findById(data.gatewayChannelId);
     if (!channel) throw new Error('Gateway channel not found');
     if (!channel.enabled) throw new Error('Gateway channel is disabled');
-    if (channel.channel_type !== 'slack' && channel.channel_type !== 'discord') {
-      throw new Error('Gateway outbound beta supports Slack and Discord channels');
+    if (
+      channel.channel_type !== 'slack' &&
+      channel.channel_type !== 'discord' &&
+      channel.channel_type !== 'teams'
+    ) {
+      throw new Error('Gateway outbound supports Slack, Discord, and Microsoft Teams channels');
     }
 
     const config = channel.config as Record<string, unknown>;
@@ -4864,6 +4885,10 @@ export class GatewayService {
     if (!target) throw new Error('No usable default outbound target configured');
     if (channel.channel_type === 'discord' && data.threadTs) {
       throw new Error('Discord proactive outbound does not accept thread targets');
+    }
+    if (channel.channel_type === 'teams') {
+      if (data.threadTs) throw new Error('Teams proactive outbound does not accept thread targets');
+      return this.emitTeamsChannelPost(channel, data, target);
     }
 
     const connector = getConnector(channel.channel_type as ChannelType, channel.config);
@@ -4945,6 +4970,165 @@ export class GatewayService {
       platform_thread_id: platformThreadId,
       ...(sent.permalink ? { platform_permalink: sent.permalink } : {}),
     };
+  }
+
+  /** Start a standard-channel thread from a fenced anchor and store it as a seed; a mentioned reply starts the session. */
+  private async emitTeamsChannelPost(
+    channel: GatewayChannel,
+    data: EmitGatewayMessageData,
+    target: string
+  ): Promise<EmitGatewayMessageResult> {
+    const config = channel.config as TeamsGatewayConfig;
+    const channelId = teamsOutboundChannelTarget(target);
+    if (!channelId) {
+      throw new Error('Teams proactive targets must be channel:<19:…@thread.tacv2>');
+    }
+    const allowedChannels = config.allowed_channel_ids ?? [];
+    if (allowedChannels.length > 0 && !allowedChannels.includes(channelId)) {
+      throw new Error("Teams channel is not in this gateway channel's allowed_channel_ids");
+    }
+    const tenantId = getCurrentTenantId();
+    const connector = teamsConnectorCache.get(tenantId, channel);
+    const anchor = await this.resolveTeamsChannelAnchor(channel, connector, channelId, tenantId);
+    const teamId = anchor.row.team_id as string;
+    const allowedTeams = config.allowed_team_ids ?? [];
+    if (allowedTeams.length > 0 && !allowedTeams.includes(teamId)) {
+      throw new Error("Teams channel's team is not in this gateway channel's allowed_team_ids");
+    }
+    const chunks = chunkMarkdown(
+      `${connector.formatMessage(data.message)}\n\n${TEAMS_PROACTIVE_REPLY_HINT}`,
+      { limit: TEAMS_MESSAGE_TEXT_BUDGET, measure: utf16Length, label: 'Teams' }
+    );
+    if (chunks.length > TEAMS_PROACTIVE_MAX_CHUNKS) {
+      throw new Error(
+        'Message is too long for a proactive Teams post; shorten it or link to the details.'
+      );
+    }
+
+    let sent: TeamsChannelThreadResult | undefined;
+    for (let attempt = 0; !sent; attempt += 1) {
+      try {
+        sent = await connector.startChannelThread(anchor.address, {
+          channelId,
+          chunks,
+          signal: AbortSignal.timeout(TEAMS_PROACTIVE_TIMEOUT_MS),
+        });
+      } catch (error) {
+        const outcome = classifyTeamsSendFailure(error);
+        // Only a provider-proven non-acceptance with a short wait is retried, once.
+        if (outcome.kind === 'retry' && attempt === 0 && (outcome.retryAfterMs ?? 0) <= 2_000) {
+          if (outcome.refreshToken) connector.invalidateTokens();
+          await new Promise((resolve) => setTimeout(resolve, outcome.retryAfterMs ?? 250));
+          continue;
+        }
+        if (outcome.kind === 'revoked') {
+          await this.teamsAddressRepo
+            .revokeConversations(channel.id, [channelId], outcome.reason)
+            .catch(() => 0);
+        }
+        console.warn(
+          `[gateway.teams.proactive] event=send_failed channel_id=${channel.id} outcome=${outcome.kind} code=${outcome.code}`
+        );
+        if (outcome.kind === 'ambiguous') {
+          throw new Error(
+            'Teams may have posted the message; check the channel before sending it again.'
+          );
+        }
+        throw new Error(`Teams API failure: ${outcome.code}`);
+      }
+    }
+
+    const rootId = sent.rootMessageId;
+    const groupId = anchor.row.team_aad_group_id;
+    const permalink = groupId
+      ? `https://teams.microsoft.com/l/message/${encodeURIComponent(channelId)}/${rootId}?${new URLSearchParams(
+          {
+            tenantId: config.microsoft_tenant_id ?? '',
+            groupId,
+            parentMessageId: rootId,
+          }
+        ).toString()}`
+      : null;
+    const partial = sent.error !== undefined;
+    // The thread exists even when a later chunk failed, so its seed is stored either way.
+    const row = await this.outboundRepo.create({
+      gateway_channel_id: channel.id,
+      channel_type: channel.channel_type,
+      platform_channel_id: channelId,
+      platform_message_id: rootId,
+      platform_thread_id: `${channelId}|${rootId}`,
+      platform_permalink: permalink,
+      target_branch_id: channel.target_branch_id,
+      emitted_by_user_id: data.emittedByUserId,
+      emitted_by_session_id: data.emittedBySessionId ?? null,
+      emitted_by_task_id:
+        (data.emittedByTaskId as GatewayOutboundMessage['emitted_by_task_id']) ?? null,
+      emitted_by_schedule_id:
+        (data.emittedByScheduleId as GatewayOutboundMessage['emitted_by_schedule_id']) ?? null,
+      message_text: data.message,
+      message_preview: previewText(data.message),
+      metadata: {
+        target,
+        ...(data.purpose ? { purpose: data.purpose } : {}),
+        ...(partial ? { partial: true, sent_chunks: sent.sentChunks } : {}),
+      },
+    });
+    await this.channelRepo.updateLastMessage(channel.id);
+    console.log(
+      `[gateway] Proactive teams outbound ${shortId(row.id)} sent via ${shortId(channel.id)}${partial ? ' partial=true' : ''}`
+    );
+    return {
+      success: true,
+      gateway_outbound_message_id: row.id,
+      gateway_channel_id: channel.id,
+      channel_type: channel.channel_type,
+      platform_channel_id: channelId,
+      platform_message_id: rootId,
+      platform_thread_id: `${channelId}|${rootId}`,
+      ...(permalink ? { platform_permalink: permalink } : {}),
+      ...(partial
+        ? {
+            partial: true,
+            warning: `Only ${sent.sentChunks} of ${chunks.length} parts were posted; the thread exists and replies still start a session.`,
+          }
+        : {}),
+    };
+  }
+
+  /** A fenced address proving the bot can reach the target channel: its own, or a sibling in a team that lists it. */
+  private async resolveTeamsChannelAnchor(
+    channel: GatewayChannel,
+    connector: TeamsSendConnector,
+    channelId: string,
+    tenantId: string | undefined
+  ): Promise<Extract<FencedTeamsAddress, { ok: true }>> {
+    const direct = await this.teamsAddressRepo.loadFencedByConversation({
+      channel,
+      conversationId: channelId,
+    });
+    if (direct.ok && direct.row.team_id) {
+      if (!isStandardChannelType(direct.row.teams_channel_type)) {
+        throw new Error('Teams proactive posts go to standard channels only');
+      }
+      return direct;
+    }
+    const anchors = await this.teamsAddressRepo.loadFencedTeamAnchors({
+      channel,
+      limit: TEAMS_PROACTIVE_ANCHOR_TEAMS,
+    });
+    for (const anchor of anchors) {
+      const channels = await connector
+        .listTeamChannels({
+          teamId: anchor.row.team_id as string,
+          serviceUrl: anchor.address.serviceUrl as string,
+          cacheScope: teamsGraphCacheScope(channel, tenantId),
+        })
+        .catch(() => []);
+      if (channels.some((candidate) => candidate.id === channelId)) return anchor;
+    }
+    throw new Error(
+      'Agor has not seen this Teams channel or its team yet; mention the bot in that team once, then try again.'
+    );
   }
 
   /**
@@ -5583,8 +5767,14 @@ export class GatewayService {
       ?.outbound_seed_id;
     const threadOwnedByUnseededMapping =
       !!existingMapping && typeof existingMappingSeedId !== 'string';
+    // A Teams channel thread can be a proactive seed; personal and group chats cannot.
+    const teamsChannelThread =
+      channel.channel_type === 'teams' &&
+      String(data.metadata?.teams_conversation_type ?? '').toLowerCase() === 'channel';
     if (
-      (channel.channel_type === 'slack' || channel.channel_type === 'discord') &&
+      (channel.channel_type === 'slack' ||
+        channel.channel_type === 'discord' ||
+        teamsChannelThread) &&
       !threadOwnedByUnseededMapping &&
       !discordDm
     ) {
@@ -6287,6 +6477,12 @@ export class GatewayService {
         });
         promptText = teamsCatchUp.prompt;
         teamsCursorToWrite = teamsCatchUp.cursor;
+      } else if (
+        channel.channel_type === 'teams' &&
+        /^\d{1,20}$/.test(data.teams_catch_up?.activity_id ?? '')
+      ) {
+        // A seed reply skips catch-up; the next mention reads only what follows it.
+        teamsCursorToWrite = data.teams_catch_up?.activity_id;
       }
       if (channel.channel_type === 'slack' && !outboundSeed) {
         const currentTs = getSlackMessageTs(data.metadata);
@@ -6500,11 +6696,7 @@ export class GatewayService {
       if (channel.channel_type === 'slack') {
         promptText = prependSlackGatewayReplyNote(promptText);
       }
-      // With outbound off nothing is posted back, so the note would be wrong.
-      if (
-        channel.channel_type === 'teams' &&
-        (channel.config as TeamsGatewayConfig).outbound_enabled !== false
-      ) {
+      if (channel.channel_type === 'teams') {
         promptText = `${TEAMS_GATEWAY_REPLY_NOTE}\n\n${promptText}`;
       }
       if (discordUnaddressed) {

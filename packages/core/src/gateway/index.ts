@@ -127,6 +127,7 @@ export {
   TEAMS_THREAD_HISTORY_DEFAULT_LIMIT,
   TeamsChannelHistoryError,
 } from './connectors/teams-channel-history';
+export type { TeamsTeamChannel } from './connectors/teams-graph';
 export { resetTeamsGraphCaches } from './connectors/teams-graph';
 export type { TeamsProviderHistoryContext } from './connectors/teams-history';
 export { fetchTeamsProviderHistory } from './connectors/teams-history';
@@ -140,6 +141,7 @@ export {
 export type {
   PreparedTeamsSend,
   TeamsAccessTokenProvider,
+  TeamsChannelThreadResult,
   TeamsSendOutcome,
 } from './connectors/teams-send';
 export {

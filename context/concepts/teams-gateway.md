@@ -33,7 +33,8 @@ Durable state is limited to:
 **Bounded exception:** the inbound row carries the encrypted normalized activity
 only until admission or dead-letter, never past `payload_expires_at`. Completion
 nulls it, and tenant export never carries it. No other Teams message body,
-transcript, or token is stored or logged.
+transcript, or token is stored or logged. A proactive seed stores only the
+Agor-authored `message_text`, as on Slack and Discord.
 
 ## Ingress (`POST /gateway/teams/:gatewayChannelId/activities`)
 
@@ -135,7 +136,7 @@ is a serial lane.
 Delivery failure never rolls back the Task or re-admits the prompt. System
 notices (denials, "not linked", the session link) and typing indicators are
 best-effort direct sends through the same fenced address loader and host
-allowlist, outside the outbox. `outbound_enabled: false` turns all of them off.
+allowlist, outside the outbox. `outbound_enabled` gates only proactive sends.
 
 ## Notices, typing, and attachments
 
@@ -211,6 +212,29 @@ validation.
 The address row keeps the team ID, the team's M365 group ID, and the channel
 type in plaintext: non-secret routing facts Teams sends on some activities. The
 address itself stays encrypted.
+
+## Proactive sends
+
+`outbound_enabled` (default false; the migration sets it false on every Teams
+row) opts in to `agor_gateway_emit_message` with a `channel:<19:…@thread.tacv2>`
+target. The send is synchronous and not durable, as on Slack and Discord.
+
+- The service URL, tenant, and team come only from a fenced, unrevoked
+  standard-channel address: the target channel's own, or another channel's in a
+  team whose Bot Connector channel listing includes the target. There is never a
+  configured or agent-supplied service URL. Allowlists apply to both the channel
+  and its team.
+- The first chunk creates the post with `POST v3/conversations` (read directly:
+  the SDK adapter drops `activityId`); at most three chunks. A provider-proven
+  non-acceptance with a short `Retry-After` is retried once. An unknown outcome
+  stores no seed and is reported as possibly posted. A failure after the first
+  chunk keeps the seed and reports a partial post.
+- The seed's `platform_thread_id` is exactly `channel|root`, the key
+  normalization gives every activity in that reply chain, so admission needs no
+  alias. Only channel conversations reach the seed gate.
+- A reply must still @mention the bot (the post says so); the mention rule is
+  unchanged. A seeded session skips catch-up and moves the cursor to the reply,
+  and its answers go through the outbox like any other mapping.
 
 ## Migration
 

@@ -131,7 +131,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       db: Database,
       tenantId: TenantID,
       user: { user_id: string },
-      sessionId?: string
+      sessionId?: string,
+      toolName = 'agor_gateway_teams_channel_posts_list'
     ): Handler {
       const app = feathers();
       app.set('config', {});
@@ -155,7 +156,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       } as unknown as McpServer;
       registerGatewayChannelTools(tenantScopedToolProxy(server, ctx), ctx);
-      return handlers.agor_gateway_teams_channel_posts_list!;
+      return handlers[toolName]!;
     }
 
     it("reads through the caller's own tenant address and never another tenant's", async () => {
@@ -200,6 +201,37 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         replay({ gatewayChannelId: a.channel.id, teamsChannelId: TEAMS_CHANNEL })
       ).rejects.toThrow(/calling session not found/);
       expect(getConnector).not.toHaveBeenCalled();
+    });
+
+    it("lists only the caller tenant's Teams targets and anchors", async () => {
+      const db = createTenantScopedDatabaseProxy(rawDb, { label: 'daemon database' });
+      const tenantA = `teams-targets-a-${generateId()}` as TenantID;
+      const tenantB = `teams-targets-b-${generateId()}` as TenantID;
+      const a = await seedTenant(tenantA, db, true);
+      const b = await seedTenant(tenantB, db, false);
+      const listTeamChannels = vi.fn(async () => [{ id: TEAMS_CHANNEL, name: 'General' }]);
+      vi.mocked(getConnector).mockReset();
+      vi.mocked(getConnector).mockReturnValue({ listTeamChannels } as never);
+      const targets = 'agor_gateway_outbound_targets_list';
+
+      const own = toolFor(db, tenantA, a.user, undefined, targets);
+      const ownPayload = JSON.parse((await own({ channelType: 'teams' })).content[0]!.text);
+      expect(ownPayload.channels).toEqual([
+        expect.objectContaining({
+          gateway_channel_id: a.channel.id,
+          known_channels: [{ teams_channel_id: TEAMS_CHANNEL, name: 'General' }],
+        }),
+      ]);
+
+      listTeamChannels.mockClear();
+      // Tenant B sees only its own channel, and its channel has no anchor from tenant A's address.
+      const foreign = toolFor(db, tenantB, b.user, undefined, targets);
+      const foreignPayload = JSON.parse((await foreign({ channelType: 'teams' })).content[0]!.text);
+      expect(foreignPayload.channels).toEqual([
+        expect.objectContaining({ gateway_channel_id: b.channel.id, known_channels: [] }),
+      ]);
+      expect(JSON.stringify(foreignPayload)).not.toContain(a.channel.id);
+      expect(listTeamChannels).not.toHaveBeenCalled();
     });
   }
 );

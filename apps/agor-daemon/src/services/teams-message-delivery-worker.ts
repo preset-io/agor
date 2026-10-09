@@ -290,13 +290,6 @@ export class TeamsMessageDeliveryWorker {
     ) {
       throw new DeliveryControlError('config_generation_changed', 'canceled');
     }
-    if ((channel.config as Record<string, unknown>).outbound_enabled === false) {
-      throw new DeliveryControlError('outbound_disabled', 'canceled');
-    }
-    const metadata = (mapping.metadata as Record<string, unknown> | null) ?? {};
-    if (typeof metadata.outbound_seed_id === 'string') {
-      throw new DeliveryControlError('proactive_seed_mapping', 'canceled');
-    }
     return { message, mapping, channel };
   }
 
