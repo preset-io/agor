@@ -12,7 +12,6 @@ import {
   EyeInvisibleOutlined,
   MessageOutlined,
   ReloadOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
 import {
   type SandpackPredefinedTemplate,
@@ -20,7 +19,7 @@ import {
   SandpackProvider,
   type SandpackSetup,
 } from '@codesandbox/sandpack-react';
-import { Alert, Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
+import { Button, Layout, Space, Spin, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -29,13 +28,19 @@ import {
   ArtifactSandpackErrorReporter,
   ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
-import { getDaemonUrl } from '@/config/daemon';
-import { getAuthHeaders } from '@/utils/authHeaders';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { ArtifactConsentModal } from '../components/ArtifactConsentModal/ArtifactConsentModal';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
+import {
+  ArtifactLegacyNotice,
+  ArtifactLoadErrorNotice,
+} from '../components/SessionCanvas/canvas/ArtifactNotices';
+import {
+  type ArtifactLoadFailure,
+  fetchArtifactPayload,
+} from '../components/SessionCanvas/canvas/artifactLoadError';
 import { useStableSandpackProviderInputs } from '../components/SessionCanvas/canvas/utils/sandpackDefaults';
 import { ThemeSwitcher } from '../components/ThemeSwitcher';
 
@@ -196,7 +201,7 @@ export function ArtifactFullscreenPage({
   const [artifact, setArtifact] = useState<Artifact | null>(null);
   const [payload, setPayload] = useState<ArtifactPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ArtifactLoadFailure | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
   const lastHashRef = useRef<string | null>(null);
 
@@ -204,36 +209,28 @@ export function ArtifactFullscreenPage({
 
   const fetchArtifact = useCallback(async () => {
     if (!artifactIdParam) return;
-    try {
-      setLoading(true);
-      setError(null);
-      const payloadResponse = await fetch(
-        `${getDaemonUrl()}/artifacts/${artifactIdParam}/payload`,
-        {
-          headers: getAuthHeaders(),
-        }
-      );
-      if (!payloadResponse.ok) {
-        throw new Error(`Failed to load artifact: ${payloadResponse.statusText}`);
-      }
-      const nextPayload = (await payloadResponse.json()) as ArtifactPayload;
-      setPayload(nextPayload);
-      if (client) {
-        try {
-          const metadata = await client.service('artifacts').get(nextPayload.artifact_id);
-          setArtifact(metadata as Artifact);
-        } catch {
-          // Metadata only powers the optional "back to board" link; payload
-          // access is the authoritative visibility/trust check for rendering.
-          setArtifact(null);
-        }
-      }
-      lastHashRef.current = nextPayload.content_hash;
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
+    setLoading(true);
+    setError(null);
+    const result = await fetchArtifactPayload(artifactIdParam);
+    if (result.failure) {
+      setError(result.failure);
       setLoading(false);
+      return;
     }
+    const nextPayload = result.payload;
+    setPayload(nextPayload);
+    if (client) {
+      try {
+        const metadata = await client.service('artifacts').get(nextPayload.artifact_id);
+        setArtifact(metadata as Artifact);
+      } catch {
+        // Metadata only powers the optional "back to board" link; payload
+        // access is the authoritative visibility/trust check for rendering.
+        setArtifact(null);
+      }
+    }
+    lastHashRef.current = nextPayload.content_hash;
+    setLoading(false);
   }, [artifactIdParam, client]);
 
   useEffect(() => {
@@ -308,16 +305,14 @@ export function ArtifactFullscreenPage({
 
   const body = (() => {
     if (loading && !payload) {
-      return <Spin size="large" tip="Loading artifact..." />;
+      return <Spin size="large" tip="Loading artifact…" />;
     }
     if (error) {
       return (
-        <Alert
-          type="error"
-          showIcon
-          title="Failed to load artifact"
-          description={error}
-          action={<Button onClick={fetchArtifact}>Retry</Button>}
+        <ArtifactLoadErrorNotice
+          failure={error}
+          onRetry={fetchArtifact}
+          style={{ alignSelf: 'flex-start', flex: 1, margin: token.sizeMD }}
         />
       );
     }
@@ -325,13 +320,9 @@ export function ArtifactFullscreenPage({
     return (
       <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
         {payload.legacy?.is_legacy && (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<WarningOutlined />}
-            message="Legacy artifact — may not render correctly"
-            description="Open the board artifact card for the copyable upgrade prompt."
-            style={{ borderRadius: 0 }}
+          <ArtifactLegacyNotice
+            upgradeInstructions={payload.legacy.upgrade_instructions}
+            style={{ borderRadius: 0, flexShrink: 0, maxHeight: '50%', overflowY: 'auto' }}
           />
         )}
         <style>{`

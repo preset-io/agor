@@ -1,44 +1,21 @@
 /**
- * Shared "tone" mapping for session/task statuses.
- *
- * Returns a coarse semantic tone (`'processing' | 'warning' | 'error' |
- * 'success' | 'default'`) suitable as the `color` for AntD `<Tag>` /
- * `<Badge>`. Components that need a richer presentation (icon + label per
- * status) keep their own per-status config and can reach for this util when
- * they only need the tone.
- *
- * Accepts the union of `SessionStatus`, `TaskStatus`, and the `'pending'`
- * synonym used by `Pill.StatusPill`. Picked to match the prevailing
- * convention across `TaskStatusIcon`, `TimerPill`, and
- * `BranchModal/tabs/SessionsTab` — notably:
- * - `stopping` → warning (transitional, not "live")
- * - `awaiting_input` → processing (interactive, awaiting user)
- * - `awaiting_permission` → warning (passive, blocking)
- * - `queued` / `created` / `pending` / `stopped` → default
- *
- * NOTE: `TaskStatusIcon` and `Pill.StatusPill` still maintain their own
- * per-status icon+label tables. Migrating their color field to consume this
- * helper is a future cleanup — they should keep their icon/label tables
- * (richer presentation), but defer color/tone to here.
+ * The one session status vocabulary: desktop rows, mobile pills and Home all read
+ * labels, descriptions and tones from here. Tones follow #2977: red = broke,
+ * amber = needs you, blue = in progress.
  */
 import { type Session, SessionStatus } from '@agor-live/client';
 
 export type StatusTone = 'processing' | 'warning' | 'error' | 'success' | 'default';
 
-/**
- * Status values this helper maps. Covers `SessionStatus`, `TaskStatus`, and
- * the `'pending'` synonym used by `Pill.StatusPill`. Accepts a wider `string`
- * type so callers don't need to narrow before passing — unknown values fall
- * through to `'default'`.
- */
+/** `SessionStatus`, `TaskStatus` and the `'pending'` synonym; unknown values are `'default'`. */
 export type StatusInput = Session['status'] | string;
 
 export function getSessionStatusTone(status: StatusInput): StatusTone {
   switch (status) {
     case 'running':
-    case 'awaiting_input':
-      return 'processing';
     case 'stopping':
+      return 'processing';
+    case 'awaiting_input':
     case 'awaiting_permission':
     case 'timed_out':
       return 'warning';
@@ -46,7 +23,6 @@ export function getSessionStatusTone(status: StatusInput): StatusTone {
       return 'error';
     case 'completed':
       return 'success';
-    // idle, queued, created, pending, stopped → default
     default:
       return 'default';
   }
@@ -55,16 +31,51 @@ export function getSessionStatusTone(status: StatusInput): StatusTone {
 export const isSessionFailed = (session: Pick<Session, 'status'>): boolean =>
   session.status === SessionStatus.FAILED;
 
-const STATUS_LABELS: Record<SessionStatus, string> = {
-  [SessionStatus.RUNNING]: 'Running',
-  [SessionStatus.AWAITING_PERMISSION]: 'Awaiting permission',
-  [SessionStatus.AWAITING_INPUT]: 'Awaiting input',
-  [SessionStatus.STOPPING]: 'Stopping',
-  [SessionStatus.TIMED_OUT]: 'Timed out',
-  [SessionStatus.FAILED]: 'Failed',
-  [SessionStatus.IDLE]: 'Idle',
-  [SessionStatus.COMPLETED]: 'Completed',
+const STATUS_COPY: Record<SessionStatus, { label: string; description: string }> = {
+  [SessionStatus.RUNNING]: { label: 'Running', description: 'Running' },
+  [SessionStatus.AWAITING_PERMISSION]: {
+    label: 'Waiting for approval',
+    description: 'The agent is waiting for your approval.',
+  },
+  [SessionStatus.AWAITING_INPUT]: {
+    label: 'Waiting for your reply',
+    description: 'The agent is waiting for your reply.',
+  },
+  [SessionStatus.STOPPING]: { label: 'Stopping', description: 'Stopping the agent…' },
+  [SessionStatus.TIMED_OUT]: {
+    label: 'Approval timed out',
+    description: 'The agent stopped waiting for approval.',
+  },
+  [SessionStatus.FAILED]: {
+    label: 'Last run failed',
+    description: 'The last run ended with an error.',
+  },
+  [SessionStatus.IDLE]: { label: 'Idle', description: 'Idle' },
+  [SessionStatus.COMPLETED]: { label: 'Done', description: 'Done' },
 };
 
+const SCHEDULED_RUN_DIDNT_START = {
+  label: "Scheduled run didn't start",
+  description: "This scheduled run didn't start.",
+};
+
+export const READY_STATUS = { label: 'Ready', description: 'Ready for your next message.' };
+
+export interface SessionStatusCopy {
+  label: string;
+  description: string;
+}
+
+/** The scheduler writes `failed` and its init failure code together, so the code names the cause. */
+export function describeSessionStatus(
+  session: Pick<Session, 'status'> & Partial<Pick<Session, 'scheduler_init_failure_code'>>
+): SessionStatusCopy {
+  if (isSessionFailed(session) && session.scheduler_init_failure_code) {
+    return SCHEDULED_RUN_DIDNT_START;
+  }
+  const fallback = session.status.replaceAll('_', ' ');
+  return STATUS_COPY[session.status as SessionStatus] ?? { label: fallback, description: fallback };
+}
+
 export const getSessionStatusLabel = (status: string): string =>
-  STATUS_LABELS[status as SessionStatus] ?? status.replaceAll('_', ' ');
+  describeSessionStatus({ status: status as SessionStatus }).label;

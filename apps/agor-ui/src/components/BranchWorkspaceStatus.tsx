@@ -4,15 +4,52 @@ import {
   canDismissBranchWorkspaceNotification,
   projectBranchWorkspaceOperation,
 } from '@agor-live/client';
-import { CloseOutlined } from '@ant-design/icons';
-import { Alert, Button, Spin, Tooltip, Typography, theme } from 'antd';
+import { Tooltip, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import {
   useAuthenticatedAuthorityScope,
   useAuthorityOperationGuard,
 } from '../hooks/useAuthorityOperationGuard';
+import { formatActionError } from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 import { REACT_FLOW_NO_DRAG_CLASS } from '../utils/reactFlowDragClasses';
+import { CompactNotice, type CompactNoticeType } from './CompactNotice';
+
+type WorkspaceOperation = NonNullable<ReturnType<typeof projectBranchWorkspaceOperation>>;
+
+const WORKSPACE_COPY = {
+  clean: {
+    accepted: "Agor is cleaning up this branch's files…",
+    failed: "Agor couldn't clean up this branch's files.",
+    unknown: 'Agor lost track of this cleanup, so some files may already be gone.',
+    succeeded: 'Cleanup finished.',
+  },
+  archive: {
+    accepted: 'Agor is archiving this branch…',
+    failed: "Agor couldn't archive this branch's files.",
+    unknown: 'Agor lost track of this archive, so some files may already be gone.',
+    succeeded: 'Branch archived.',
+  },
+} as const;
+
+/** `unknown` covers an executor that reported no outcome and a run past its deadline. */
+export function describeWorkspaceOperation(operation: WorkspaceOperation): {
+  type: CompactNoticeType;
+  message: string;
+} {
+  const copy = WORKSPACE_COPY[operation.action];
+  switch (operation.status) {
+    case 'accepted':
+    case 'running':
+      return { type: 'info', message: copy.accepted };
+    case 'failed':
+      return { type: 'error', message: copy.failed };
+    case 'unknown':
+      return { type: 'warning', message: copy.unknown };
+    case 'succeeded':
+      return { type: 'neutral', message: copy.succeeded };
+  }
+}
 
 /** A single workspace outcome, not an activity log. Dismissal never releases maintenance. */
 export function BranchWorkspaceStatus({
@@ -89,72 +126,43 @@ export function BranchWorkspaceStatus({
       if (request.isCurrent()) setDismissedScope(guard);
     } catch (error) {
       if (request.isCurrent())
-        showError(
-          error instanceof Error ? error.message : 'Could not dismiss workspace notification'
-        );
+        showError(formatActionError('dismiss the notification', error, { idempotent: true }));
     } finally {
       if (request.isCurrent()) setPendingScope(null);
     }
   };
 
   if (!current || dismissedScope === guard) return null;
-  const label =
-    current.action === 'clean' || current.filesystem_action === 'cleaned'
-      ? 'Branch cleanup'
-      : 'Archive workspace';
-  const statusLabel = {
-    accepted: 'queued',
-    running: 'in progress',
-    succeeded: 'completed',
-    failed: 'failed',
-    unknown: 'needs attention',
-  }[current.status];
+  const notice = describeWorkspaceOperation(current);
   const timestamp = current.finished_at || current.started_at || current.requested_at;
-  const inProgress = current.status === 'accepted' || current.status === 'running';
+  const canDismiss = dismissible && managementScope === guard && authority.connectionReady;
   return (
-    <Alert
+    <CompactNotice
       className={REACT_FLOW_NO_DRAG_CLASS}
-      showIcon
-      style={{ marginBottom: detailed ? undefined : token.marginSM }}
-      icon={inProgress ? <Spin size="small" /> : undefined}
-      styles={{ section: { minWidth: 0 } }}
-      type={
-        current.status === 'failed' || current.status === 'unknown'
-          ? 'error'
-          : current.status === 'succeeded'
-            ? 'success'
-            : 'info'
+      type={notice.type}
+      message={<Tooltip title={timestamp}>{notice.message}</Tooltip>}
+      details={
+        current.error
+          ? [
+              { label: 'Error', value: current.error, code: true },
+              { label: 'Branch', value: branch.name, code: true },
+            ]
+          : undefined
       }
-      title={<Tooltip title={timestamp}>{`${label} ${statusLabel}`}</Tooltip>}
-      description={
-        current.error && (
-          <Typography.Paragraph
-            style={{ marginBottom: 0, overflowWrap: 'anywhere' }}
-            ellipsis={detailed ? false : { rows: 2, expandable: true, symbol: 'Show details' }}
-          >
-            {current.error}
-          </Typography.Paragraph>
-        )
+      actions={
+        canDismiss
+          ? [{ label: 'Dismiss', onClick: () => void dismiss(), loading: pending }]
+          : undefined
       }
-      action={
-        dismissible &&
-        managementScope === guard && (
-          <Button
-            type="text"
-            size="small"
-            icon={<CloseOutlined />}
-            loading={pending}
-            disabled={pending || !authority.connectionReady}
-            aria-label="Dismiss notification for everyone"
-            title="Dismiss notification for everyone"
-            style={{ color: token.colorTextSecondary }}
-            onClick={(event) => {
-              event.stopPropagation();
-              void dismiss();
-            }}
-          />
-        )
-      }
+      role="status"
+      onClick={(event) => event.stopPropagation()}
+      // Offline cards block pointer events; Details and Copy stay usable (Dismiss is hidden offline).
+      style={{
+        marginBottom: detailed ? undefined : token.marginSM,
+        minWidth: 0,
+        maxWidth: '100%',
+        pointerEvents: 'auto',
+      }}
     />
   );
 }

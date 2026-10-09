@@ -21,6 +21,11 @@ import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
+import {
+  ENVIRONMENT_NO_CONTROL,
+  getEnvironmentOutcome,
+  getEnvironmentProblemLine,
+} from '../EnvironmentPill/environmentStatusCopy';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
 import { Tag } from '../Tag';
 
@@ -96,6 +101,8 @@ export function BranchHeaderPill({
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
+  const outcome = getEnvironmentOutcome(env);
+  const unconfirmed = outcome?.status === 'unknown';
   const environmentUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
   const commandActive = hasActiveEnvironmentCommand(env);
   // Surface the active environment variant name on the label instead of the
@@ -111,9 +118,7 @@ export function BranchHeaderPill({
   // `others_can`: group grants are not present on this branch payload, and the
   // daemon is the source of truth for environment authorization.
   const resolvedCanControlEnvironment = canControlEnvironment ?? true;
-  const controlDisabledTooltip = resolvedCanControlEnvironment
-    ? undefined
-    : "Requires branch 'all' permission or admin access";
+  const controlDisabledTooltip = resolvedCanControlEnvironment ? undefined : ENVIRONMENT_NO_CONTROL;
   const actionButtonStyle =
     truncateToFit && !compact ? NARROW_ACTION_BUTTON_STYLE : DEFAULT_ACTION_BUTTON_STYLE;
 
@@ -196,7 +201,6 @@ export function BranchHeaderPill({
   // --- Environment status helpers ---
 
   const getEnvTooltip = () => {
-    if (!hasConfig) return 'Click to configure environment';
     const healthCheck = env?.last_health_check;
     const healthMessage = healthCheck?.message ? ` - ${healthCheck.message}` : '';
     switch (inferredState) {
@@ -204,20 +208,17 @@ export function BranchHeaderPill({
         return environmentUrl
           ? `Healthy - ${environmentUrl}${healthMessage}`
           : `Healthy${healthMessage}`;
-      case 'unhealthy':
-        return environmentUrl
-          ? `Unhealthy - ${environmentUrl}${healthMessage}`
-          : `Unhealthy${healthMessage}`;
       case 'running':
         return environmentUrl
           ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
           : `Started (health unavailable${healthMessage})`;
       case 'starting':
-        return 'Starting...';
+        return 'Starting…';
       case 'stopping':
-        return 'Stopping...';
+        return 'Stopping…';
+      case 'unhealthy':
       case 'error':
-        return 'Failed to start';
+        return getEnvironmentProblemLine(env) ?? '';
       default:
         return 'Stopped';
     }
@@ -331,7 +332,11 @@ export function BranchHeaderPill({
                       padding: '0 2px',
                     }}
                   >
-                    <EnvironmentStatusIcon state={inferredState} size={11} />
+                    <EnvironmentStatusIcon
+                      state={inferredState}
+                      unconfirmed={unconfirmed}
+                      size={11}
+                    />
                     <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
                       {envLabel}
                     </span>
@@ -354,7 +359,11 @@ export function BranchHeaderPill({
                       font: 'inherit',
                     }}
                   >
-                    <EnvironmentStatusIcon state={inferredState} size={11} />
+                    <EnvironmentStatusIcon
+                      state={inferredState}
+                      unconfirmed={unconfirmed}
+                      size={11}
+                    />
                     <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
                       {envLabel}
                     </span>
@@ -395,9 +404,13 @@ export function BranchHeaderPill({
                       : isStarting
                         ? 'Cancel startup'
                         : isStopping
-                          ? 'Stopping...'
+                          ? 'Stopping…'
                           : status === 'error' && env?.command_attempt
-                            ? 'Retry Stop (previous outcome unconfirmed)'
+                            ? outcome?.action === 'stop'
+                              ? outcome.status === 'unknown'
+                                ? "Stop again. Agor couldn't confirm the last stop."
+                                : "Stop again. The environment didn't stop."
+                              : 'Stop environment'
                             : 'Not running')
                   }
                 >
@@ -436,7 +449,12 @@ export function BranchHeaderPill({
 
               {/* Nuke button */}
               {showNukeEnvironment && !compact && onNukeEnvironment && branch.nuke_command && (
-                <Tooltip title={controlDisabledTooltip ?? 'Nuke environment (destructive)'}>
+                <Tooltip
+                  title={
+                    controlDisabledTooltip ??
+                    'Nuke environment. This removes all its data and volumes.'
+                  }
+                >
                   <Button
                     type="text"
                     size="small"

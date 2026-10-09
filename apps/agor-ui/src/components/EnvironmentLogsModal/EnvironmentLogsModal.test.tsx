@@ -119,28 +119,58 @@ describe('EnvironmentLogsModal', () => {
     );
 
     await waitFor(async () => {
-      const node = await findByText(/\(no logs\)/);
+      const node = await findByText('No logs yet.');
       expect(node).toBeInTheDocument();
     });
   });
 
-  it('renders error state with the daemon-supplied error message', async () => {
-    const client = makeClient({
-      logs: '',
-      timestamp: new Date('2026-05-10T12:00:00Z').toISOString(),
-      error: 'No logs command configured',
-    });
+  it.each([
+    {
+      shape: 'an error in the response',
+      first: (find: ReturnType<typeof vi.fn>) =>
+        find.mockResolvedValueOnce({ logs: '', timestamp: 'then', error: 'Provider down' }),
+      raw: 'Provider down',
+    },
+    {
+      shape: 'a rejected request',
+      first: (find: ReturnType<typeof vi.fn>) => find.mockRejectedValueOnce(new Error('timeout')),
+      raw: 'timeout',
+    },
+  ])(
+    'shows a load error for $shape and clears it after Try again succeeds',
+    async ({ first, raw }) => {
+      const find = vi.fn();
+      first(find).mockResolvedValue({ logs: 'Back up', timestamp: 'now' });
+      render(
+        <EnvironmentLogsModal
+          open
+          onClose={() => {}}
+          branch={mockBranch as Branch}
+          client={{ service: () => ({ find }) } as unknown as AgorClient}
+        />
+      );
+      const alert = await screen.findByRole('alert');
+      expect(alert).toHaveAttribute('data-notice-type', 'error');
+      expect(within(alert).getByText("Couldn't load the logs.")).toBeInTheDocument();
+      fireEvent.click(within(alert).getByRole('button', { name: /Details/ }));
+      expect(within(alert).getByText(raw)).toBeInTheDocument();
+      fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
+      await waitFor(() => expect(screen.getByText('Back up')).toBeVisible());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    }
+  );
 
-    const { findByRole } = render(
-      <EnvironmentLogsModal open onClose={() => {}} branch={mockBranch as Branch} client={client} />
+  it('shows truncation as a neutral note with the shown line count', async () => {
+    render(
+      <EnvironmentLogsModal
+        open
+        onClose={() => {}}
+        branch={mockBranch as Branch}
+        client={makeClient({ logs: 'a\nb\nc', timestamp: '2026-05-10T12:00:00Z', truncated: true })}
+      />
     );
-
-    // Assert the antd Alert is rendered with the message (regression on the
-    // earlier `title` typo, which made the alert empty).
-    const alert = await findByRole('alert');
-    expect(
-      within(alert).getByText('Runtime logs unavailable: No logs command configured')
-    ).toBeInTheDocument();
+    const note = await screen.findByText('Showing the last 3 lines.');
+    expect(note.closest('[data-notice-type]')).toHaveAttribute('data-notice-type', 'neutral');
   });
 
   const failed: BranchEnvironmentInstance = {
@@ -205,9 +235,7 @@ describe('EnvironmentLogsModal', () => {
     );
     await waitFor(() => expect(screen.getByText(/Cannot resolve the pushed/)).toBeVisible());
     fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
-    await waitFor(() =>
-      expect(screen.getByText('No runtime logs command configured.')).toBeVisible()
-    );
+    await waitFor(() => expect(screen.getByText('No logs command set up.')).toBeVisible());
     expect(find).not.toHaveBeenCalled();
   });
 
@@ -225,7 +253,7 @@ describe('EnvironmentLogsModal', () => {
       />
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Runtime' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Provider unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load the logs.");
     fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
     await waitFor(() => expect(screen.getByText(/Cannot resolve the pushed/)).toBeVisible());
   });
@@ -364,10 +392,76 @@ describe('EnvironmentLogsModal', () => {
         client={null}
       />
     );
-    await waitFor(() => expect(screen.getByText('Stop outcome unknown')).toBeVisible());
-    expect(screen.getByRole('alert')).toHaveTextContent('Check provider state before retrying');
+    await waitFor(() =>
+      expect(
+        screen
+          .getByText("Agor couldn't confirm how this command ended. The output may be incomplete.")
+          .closest('[data-notice-type]')
+      ).toHaveAttribute('data-notice-type', 'warning')
+    );
+    expect(screen.queryByText('Stop outcome unknown')).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeVisible());
     expect(document.querySelector('img')).toBeNull();
+  });
+
+  it.each([
+    {
+      name: 'shows a failed start as an error notice with its result under Details',
+      environment: failed,
+      visible: ["The environment didn't start."],
+      hidden: ['Start failed', 'start command exited with code 1'],
+      noticeType: 'error',
+    },
+    {
+      name: 'shows a failed nuke as an error notice',
+      environment: {
+        status: 'error',
+        last_command: { action: 'nuke', status: 'failed', timestamp: '2026-10-02T21:48:00Z' },
+      },
+      visible: ["The nuke didn't finish."],
+      hidden: ['Nuke failed'],
+      noticeType: 'error',
+    },
+    {
+      name: 'shows last_error as an error, not as command output, while the status is error',
+      environment: { status: 'error', last_error: 'spawn ENOENT' },
+      visible: ['The environment reported an error.'],
+      hidden: ['spawn ENOENT', 'Environment error'],
+      noticeType: 'error',
+    },
+    {
+      name: 'hides a stale last_error once the status leaves error',
+      environment: { status: 'stopped', last_error: 'spawn ENOENT' },
+      visible: ['No command history.'],
+      hidden: ['spawn ENOENT', 'The environment reported an error.'],
+      noticeType: undefined,
+    },
+  ] satisfies Array<{
+    name: string;
+    environment: BranchEnvironmentInstance;
+    visible: string[];
+    hidden: string[];
+    noticeType: string | undefined;
+  }>)('$name', async ({ environment, visible, hidden, noticeType }) => {
+    render(
+      <EnvironmentLogsModal
+        open
+        onClose={() => {}}
+        branch={
+          { ...mockBranch, logs_command: undefined, environment_instance: environment } as Branch
+        }
+        client={null}
+      />
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+    for (const text of visible) await waitFor(() => expect(screen.getByText(text)).toBeVisible());
+    for (const text of hidden) expect(screen.queryByText(text)).not.toBeInTheDocument();
+    if (noticeType) {
+      expect(screen.getByText(visible[0]).closest('[data-notice-type]')).toHaveAttribute(
+        'data-notice-type',
+        noticeType
+      );
+    }
   });
 
   it('does not expose another branch’s retained output or late runtime response', async () => {

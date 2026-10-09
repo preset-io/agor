@@ -169,7 +169,7 @@ export function describeTurnOutcome(
           detailsLead:
             status === TaskStatus.FAILED
               ? 'Reopening did not stop the previous work. Messages already received are saved.'
-              : 'Use Retry cleanup before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
+              : 'Try again before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
         };
   }
   if (status === TaskStatus.STOPPING) {

@@ -87,7 +87,7 @@ export function useMutationGate(): MutationGate {
     return {
       canMutate: false,
       reason: 'out-of-sync',
-      message: 'Daemon was upgraded — refresh the page to continue.',
+      message: 'Agor was updated. Reload the page to continue.',
     };
   }
   // `connecting` is set immediately on socket drop, while `connected` stays
@@ -98,14 +98,14 @@ export function useMutationGate(): MutationGate {
     return {
       canMutate: false,
       reason: 'reconnecting',
-      message: 'Reconnecting to daemon…',
+      message: 'Reconnecting to Agor…',
     };
   }
   if (!connected) {
     return {
       canMutate: false,
       reason: 'disconnected',
-      message: 'Disconnected from daemon. Action unavailable.',
+      message: "Lost connection to Agor. Try again once it's back.",
     };
   }
   return { canMutate: true, reason: null, message: null };

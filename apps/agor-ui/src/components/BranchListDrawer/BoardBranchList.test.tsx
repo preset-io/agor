@@ -81,7 +81,7 @@ const makeEmittingClient = (branches: () => Branch[]) => {
 };
 
 const renderList = (
-  client: AgorClient,
+  client: AgorClient | null,
   registerRecenter: (nodeId: string) => boolean = () => false
 ) => {
   const Harness: React.FC = () => {
@@ -109,6 +109,22 @@ describe('BoardBranchList', () => {
     expect(screen.getByText('Archived')).toBeInTheDocument();
     // Zone pinning label from the enriched branch list API is surfaced.
     expect(screen.getByText('In Review')).toBeInTheDocument();
+  });
+
+  it.each([
+    [{ filesystem_status: 'failed' }, 'Setup failed'],
+    [{ filesystem_status: 'cleaned' }, 'Files removed'],
+    [{ deletion_status: 'deleting' }, 'Deleting'],
+    [{ deletion_status: 'deletion_failed' }, 'Deletion failed'],
+  ] as [Partial<Branch>, string][])('tags a branch %j as "%s"', async (state, label) => {
+    renderList(makeClient([{ ...shownBranch, ...state }]));
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it('shows no status tag for a ready branch', async () => {
+    renderList(makeClient([{ ...shownBranch, filesystem_status: 'ready' }]));
+    await screen.findByText('feature/visible');
+    expect(screen.queryByText(/Setup failed|Files removed|Deleting|Setting up/)).toBeNull();
   });
 
   it('fetches board-scoped branches without an archived filter', async () => {
@@ -177,5 +193,64 @@ describe('BoardBranchList', () => {
     // useRecenterMap forwards a sub-target options object as the second arg
     // (sessionId/ensureVisible); the branch id is all this row cares about.
     expect(recenter).toHaveBeenCalledWith('branch-shown', expect.anything());
+  });
+
+  it.each([
+    { branches: [], text: 'No branches on this board yet.', footer: '0 branches' },
+    { branches: [shownBranch], text: 'feature/visible', footer: '1 branch' },
+    { branches: [shownBranch, hiddenBranch], text: 'feature/visible', footer: '2 branches' },
+  ])('shows "$footer" once loaded', async ({ branches, text, footer }) => {
+    renderList(makeClient(branches));
+
+    expect(await screen.findByText(text)).toBeInTheDocument();
+    expect(screen.getByText(footer)).toBeInTheDocument();
+  });
+
+  it('shows a skeleton, not the empty state, while there is no client', () => {
+    renderList(null);
+
+    expect(screen.queryByText('No branches on this board yet.')).not.toBeInTheDocument();
+    expect(screen.queryByText('0 branches')).not.toBeInTheDocument();
+  });
+
+  it('reports a first-load failure without a count and loads again on Try again', async () => {
+    const client = makeClient([shownBranch]);
+    const service = client.service('branches') as unknown as {
+      findAll: ReturnType<typeof vi.fn>;
+    };
+    service.findAll.mockRejectedValueOnce(new Error('Request timed out'));
+    renderList(client);
+
+    expect(await screen.findByText("Couldn't load branches.")).toBeInTheDocument();
+    expect(screen.queryByText('0 branches')).not.toBeInTheDocument();
+    expect(screen.queryByText('No branches on this board yet.')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Details/ }));
+    expect(screen.getByText('Request timed out')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText('feature/visible')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load branches.")).not.toBeInTheDocument();
+  });
+
+  it('keeps the last list under a warning when a refresh fails', async () => {
+    let fail = false;
+    const { client, emit, findAll } = makeEmittingClient(() => [shownBranch]);
+    findAll.mockImplementation(() =>
+      fail ? Promise.reject(new Error('Request timed out')) : Promise.resolve([shownBranch])
+    );
+    renderList(client);
+    await screen.findByText('feature/visible');
+
+    fail = true;
+    act(() => {
+      emit('branches', 'patched', shownBranch);
+    });
+
+    expect(
+      await screen.findByText("Couldn't refresh branches. This list may be out of date.")
+    ).toBeInTheDocument();
+    expect(screen.getByText('feature/visible')).toBeInTheDocument();
+    expect(screen.getByText('1 branch')).toBeInTheDocument();
   });
 });

@@ -40,4 +40,16 @@ describe('MobileTabBar', () => {
     expect(ask.querySelector('.anticon-edit')).toBeTruthy();
     expect(ask).toHaveTextContent('');
   });
+  it.each([
+    [1, '1 session needs your approval'],
+    [3, '3 sessions need your approval'],
+  ])('describes a Home badge of %i as "%s"', (count, description) => {
+    render(<MobileTabBar activeTab="home" onSelect={vi.fn()} sessionsBadge={count} />);
+    expect(screen.getByRole('button', { name: 'Home' })).toHaveAccessibleDescription(description);
+  });
+
+  it('has no Home badge description when nothing needs approval', () => {
+    render(<MobileTabBar activeTab="home" onSelect={vi.fn()} sessionsBadge={0} />);
+    expect(screen.getByRole('button', { name: 'Home' })).not.toHaveAttribute('aria-describedby');
+  });
 });

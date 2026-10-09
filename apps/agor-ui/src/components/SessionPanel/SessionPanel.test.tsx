@@ -547,7 +547,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       } as unknown as AgorClient,
       activeSession: { ...session, status: 'stopping', agentic_tool: 'codex' },
     });
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry cleanup' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
     expect(await screen.findByText(message as string)).toBeVisible();
     expect(create).toHaveBeenCalledOnce();
   });
@@ -576,7 +576,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     });
 
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Retry cleanup' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
     fireEvent.click(await screen.findByRole('button', { name: 'Reopen anyway…' }));
 
     const dialog = within(

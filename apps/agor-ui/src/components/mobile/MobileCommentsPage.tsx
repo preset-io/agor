@@ -1,10 +1,13 @@
 import type { AgorClient, Board, BoardComment, Branch, User } from '@agor-live/client';
-import { Alert } from 'antd';
+import { Typography } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { mapToArray } from '@/utils/mapHelpers';
+import { useAgorStore } from '../../store/agorStore';
 import { getBoardEmoji } from '../BoardTile';
 import { CommentsPanel } from '../CommentsPanel';
+import { CompactNotice } from '../CompactNotice';
 import { mobilePageStyle } from './constants';
+import { BOARD_UNAVAILABLE } from './MobileBoardPage';
 import { MobileHeader } from './MobileHeader';
 
 interface MobileCommentsPageProps {
@@ -39,22 +42,23 @@ export const MobileCommentsPage: React.FC<MobileCommentsPageProps> = ({
 }) => {
   const { boardId } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
+  const loading = useAgorStore((state) => state.loading);
 
   const board = boardId ? boardById.get(boardId) : undefined;
   const boardComments = mapToArray(commentById).filter((c: BoardComment) => c.board_id === boardId);
 
-  if (!boardId) {
+  if (!boardId || !board) {
     return (
       <div style={{ padding: 16 }}>
-        <Alert type="error" title="No board ID provided" />
-      </div>
-    );
-  }
-
-  if (!board) {
-    return (
-      <div style={{ padding: 16 }}>
-        <Alert type="error" title="Board not found" />
+        {boardId && loading ? (
+          <Typography.Text type="secondary">Loading board…</Typography.Text>
+        ) : (
+          <CompactNotice
+            type="neutral"
+            message={boardId ? BOARD_UNAVAILABLE : 'This link is missing a board.'}
+            actions={[{ label: 'Back to home', onClick: () => navigate('/m') }]}
+          />
+        )}
       </div>
     );
   }

@@ -31,7 +31,9 @@ import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { RepoCleanupSettingsModal } from '../../ArchiveDeleteBranchModal/RepoCleanupSettingsModal';
 import { boardSelectOptions } from '../../BoardTile';
+import { describeBranchStatus } from '../../BranchFilesystemRecovery/describeBranchStatus';
 import { BranchWorkspaceStatus } from '../../BranchWorkspaceStatus';
+import { CompactNotice } from '../../CompactNotice';
 import { MCPServerSelect } from '../../MCPServerSelect';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
@@ -105,6 +107,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   };
 
   const isTeammateBranch = isTeammate(branch);
+  const deletionNotice = branch.deletion_status ? describeBranchStatus(branch, 'unknown') : null;
 
   return (
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
@@ -115,17 +118,12 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
           currentUser={currentUser}
           detailed
         />
-        {branch.deletion_status && (
-          <Alert
-            type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
-            title={
-              branch.deletion_status === 'deletion_failed'
-                ? 'Deletion failed'
-                : 'Deletion in progress'
-            }
-            description={
-              branch.deletion_error || 'The branch is unavailable until cleanup is verified.'
-            }
+        {deletionNotice && (
+          <CompactNotice
+            type={deletionNotice.type}
+            role="status"
+            message={deletionNotice.message}
+            details={deletionNotice.details}
           />
         )}
 

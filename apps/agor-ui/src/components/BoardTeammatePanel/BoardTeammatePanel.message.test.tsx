@@ -48,8 +48,38 @@ describe('BoardTeammatePanel messages', () => {
     });
   });
 
-  it('routes teammate assignment failures through the centralized message wrapper', async () => {
-    const setPrimaryTeammate = vi.fn().mockRejectedValue(new Error('assignment refused'));
+  it.each([
+    {
+      raw: 'You need Board Editor or Manager access to set primary teammate',
+      toast:
+        "Couldn't assign the teammate. You need edit access to this board. (You need Board Editor or Manager access to set primary teammate)",
+    },
+    {
+      raw: 'Board Editor or Manager access is required to assign a teammate',
+      toast:
+        "Couldn't assign the teammate. You need edit access to this board. (Board Editor or Manager access is required to assign a teammate)",
+    },
+    {
+      raw: 'This board already has a primary teammate. Reload before assigning.',
+      toast:
+        "Couldn't assign the teammate. This board already has a teammate, so refresh to see it. (This board already has a primary teammate. Reload before assigning.)",
+    },
+    {
+      raw: 'Board or teammate not found',
+      toast:
+        "Couldn't assign the teammate. That teammate no longer exists. (Board or teammate not found)",
+    },
+    {
+      raw: 'assignment refused',
+      toast: "Couldn't assign the teammate. (assignment refused)",
+    },
+    {
+      raw: 'socket has been disconnected',
+      toast:
+        "The connection to Agor dropped before this was confirmed. If it didn't go through, try to assign the teammate again once the connection is back. (socket has been disconnected)",
+    },
+  ])('shows $raw as a plain toast', async ({ raw, toast }) => {
+    const setPrimaryTeammate = vi.fn().mockRejectedValue(new Error(raw));
     const client = {
       service: (path: string) => {
         if (path === 'boards') return { setPrimaryTeammate };
@@ -75,11 +105,7 @@ describe('BoardTeammatePanel messages', () => {
     await waitFor(() => expect(assign).toBeEnabled());
     fireEvent.click(assign);
 
-    await waitFor(() =>
-      expect(messageApi.showError).toHaveBeenCalledWith(
-        'Failed to assign teammate: assignment refused'
-      )
-    );
+    await waitFor(() => expect(messageApi.showError).toHaveBeenCalledWith(toast));
     expect(messageApi.showSuccess).not.toHaveBeenCalled();
   });
   it('assigns an inherited teammate from another board with one atomic request', async () => {

@@ -2,9 +2,9 @@
  * Tests for the ConnectionStatus navbar tag state machine.
  *
  * The state machine is non-trivial: it has to discriminate transient
- * reconnects (silent), stuck-too-long reconnects (escalate to red
- * "Can't reconnect"), short-gap reconnects (green flash), and long-gap
- * reconnects (yellow "Reconnected — sync again?" cue). Pinning the behavior
+ * reconnects (silent), stuck-too-long reconnects (escalate to
+ * "Still reconnecting"), short-gap reconnects (green flash), and long-gap
+ * reconnects (yellow "Reconnected, sync now" cue). Pinning the behavior
  * here prevents two specific regressions we already burned on:
  *
  *   1. Timer started on `connecting && !connected` — missed the 1.5s
@@ -12,7 +12,7 @@
  *      flipping `connecting=true`, so sub-grace reconnects silently
  *      dropped the green flash.
  *   2. A successful token-refresh reconnect didn't publish to React state,
- *      leaving the navbar stuck on "Reconnecting" forever. That fix lives in
+ *      leaving the navbar stuck on "Reconnecting…" forever. That fix lives in
  *      useAgorClient; we cover the navbar's reaction to its state.
  */
 
@@ -71,28 +71,28 @@ describe('ConnectionStatus', () => {
   it('renders the Reconnecting tag when connecting and forwards clicks to onRetry', () => {
     const onRetry = vi.fn();
     render(<ConnectionStatus connected={false} connecting={true} onRetry={onRetry} />);
-    const tag = screen.getByText('Reconnecting');
+    const tag = screen.getByText('Reconnecting…');
     expect(tag).toBeInTheDocument();
     fireEvent.click(tag);
     expect(onRetry).toHaveBeenCalledOnce();
   });
 
-  it('escalates to "Can\'t reconnect — retry" after STUCK_RECONNECT_MS (20s)', () => {
+  it('escalates to "Still reconnecting" after STUCK_RECONNECT_MS (20s)', () => {
     const retry = vi.fn();
     render(<ConnectionStatus connected={false} connecting={true} onRetry={retry} />);
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
 
     // Sub-threshold: still Reconnecting.
     act(() => {
       vi.advanceTimersByTime(19_000);
     });
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
 
     // Crosses 20s threshold on the next per-second tick.
     act(() => {
       vi.advanceTimersByTime(2_000);
     });
-    const tag = screen.getByText("Can't reconnect — retry");
+    const tag = screen.getByText('Still reconnecting');
     expect(tag).toBeInTheDocument();
     fireEvent.click(tag);
     expect(retry).toHaveBeenCalledOnce();
@@ -101,7 +101,7 @@ describe('ConnectionStatus', () => {
 
   it('shows brief green "Connected" flash after a short reconnect (< stale threshold)', () => {
     const { rerender } = render(<ConnectionStatus connected={false} connecting={true} />);
-    expect(screen.getByText('Reconnecting')).toBeInTheDocument();
+    expect(screen.getByText('Reconnecting…')).toBeInTheDocument();
 
     // 3s of downtime — well below STALE_THRESHOLD_MS.
     act(() => {
@@ -119,7 +119,7 @@ describe('ConnectionStatus', () => {
     expect(screen.queryByText('Connected')).not.toBeInTheDocument();
   });
 
-  it('shows "Reconnected — sync again?" cue after a long reconnect (≥ stale threshold)', () => {
+  it('shows "Reconnected, sync now" cue after a long reconnect (≥ stale threshold)', () => {
     const retry = vi.fn();
     const { rerender } = render(
       <ConnectionStatus connected={false} connecting={true} onRetry={retry} />
@@ -131,12 +131,12 @@ describe('ConnectionStatus', () => {
     });
 
     rerender(<ConnectionStatus connected={true} connecting={false} onRetry={retry} />);
-    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
+    expect(screen.getByText('Reconnected, sync now')).toBeInTheDocument();
     // Green flash should NOT show — the two cues never compete.
     expect(screen.queryByText('Connected')).not.toBeInTheDocument();
 
     // Retry synchronization without a page reload or lost drafts.
-    fireEvent.click(screen.getByText('Reconnected — sync again?'));
+    fireEvent.click(screen.getByText('Reconnected, sync now'));
     expect(retry).toHaveBeenCalledOnce();
     expect(reloadSpy).not.toHaveBeenCalled();
   });
@@ -147,12 +147,12 @@ describe('ConnectionStatus', () => {
       vi.advanceTimersByTime(15_000);
     });
     rerender(<ConnectionStatus connected={true} connecting={false} />);
-    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
+    expect(screen.getByText('Reconnected, sync now')).toBeInTheDocument();
 
     const dismiss = screen.getByLabelText('Dismiss');
     fireEvent.click(dismiss);
 
-    expect(screen.queryByText('Reconnected — sync again?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reconnected, sync now')).not.toBeInTheDocument();
     expect(reloadSpy).not.toHaveBeenCalled();
   });
 
@@ -162,12 +162,12 @@ describe('ConnectionStatus', () => {
       vi.advanceTimersByTime(15_000);
     });
     rerender(<ConnectionStatus connected={true} connecting={false} />);
-    expect(screen.getByText('Reconnected — sync again?')).toBeInTheDocument();
+    expect(screen.getByText('Reconnected, sync now')).toBeInTheDocument();
 
     act(() => {
       vi.advanceTimersByTime(61_000);
     });
-    expect(screen.queryByText('Reconnected — sync again?')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reconnected, sync now')).not.toBeInTheDocument();
   });
 
   /**
@@ -200,7 +200,7 @@ describe('ConnectionStatus', () => {
     expect(screen.getByText('Connected')).toBeInTheDocument();
   });
 
-  it('renders Out of sync (highest priority) when outOfSync is true, click reloads', () => {
+  it('renders New version, reload (highest priority) when outOfSync is true, click reloads', () => {
     mockConnectionState.mockReturnValue({
       outOfSync: true,
       capturedSha: 'abc1234',
@@ -209,7 +209,7 @@ describe('ConnectionStatus', () => {
       connecting: false,
     });
     render(<ConnectionStatus connected={true} connecting={false} />);
-    const tag = screen.getByText('Out of sync — refresh');
+    const tag = screen.getByText('New version, reload');
     expect(tag).toBeInTheDocument();
     fireEvent.click(tag);
     expect(reloadSpy).toHaveBeenCalledOnce();
@@ -222,5 +222,51 @@ describe('ConnectionStatus', () => {
     expect(tag).toBeInTheDocument();
     fireEvent.click(tag);
     expect(onRetry).toHaveBeenCalledOnce();
+  });
+  it('shows nothing during the 1.5 s grace window (connected stays true while connecting)', () => {
+    const { container } = render(<ConnectionStatus connected={true} connecting={true} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it.each([
+    {
+      name: 'disconnected',
+      props: { connected: false, connecting: false },
+      label: 'Disconnected',
+      tooltip: 'Lost connection to Agor. Click to reconnect.',
+    },
+    {
+      name: 'reconnecting',
+      props: { connected: false, connecting: true },
+      label: 'Reconnecting…',
+      tooltip: 'Reconnecting to Agor. Click to try now.',
+    },
+  ])('shows the $name tooltip', async ({ props, label, tooltip }) => {
+    render(<ConnectionStatus {...props} />);
+    fireEvent.mouseEnter(screen.getByText(label));
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.getByText(tooltip)).toBeInTheDocument();
+  });
+
+  it('keeps both versions in brackets in the new-version tooltip', async () => {
+    mockConnectionState.mockReturnValue({
+      outOfSync: true,
+      capturedSha: 'abc1234',
+      currentSha: 'def5678',
+      connected: true,
+      connecting: false,
+    });
+    render(<ConnectionStatus connected={true} connecting={false} />);
+    fireEvent.mouseEnter(screen.getByText('New version, reload'));
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(
+      screen.getByText(
+        "Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost. (abc1234 → def5678)"
+      )
+    ).toBeInTheDocument();
   });
 });

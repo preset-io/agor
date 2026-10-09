@@ -23,7 +23,7 @@ export const MobileSessionRow: React.FC<MobileSessionRowProps> = ({ session, bra
       subtitle={[branch?.name, session.model_config?.model].filter(Boolean).join(' · ')}
       ariaLabel={`Open ${title}`}
       onPress={() => navigate(`/m/session/${session.session_id}`)}
-      trailing={<StatusPill status={session.status} />}
+      trailing={<StatusPill session={session} />}
     />
   );
 };

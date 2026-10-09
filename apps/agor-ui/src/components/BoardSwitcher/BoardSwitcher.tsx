@@ -82,6 +82,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
   const canManage = useCanManageBoard(client, currentBoard, currentUser);
 
   const branchCountByBoard = useBranchCounts(client);
+  // The hook reads an empty map until its first reply, so a zero shows only once some count has loaded.
+  const branchCountsLoaded = branchCountByBoard.size > 0;
 
   const showFilter = boards.length >= FILTER_THRESHOLD;
 
@@ -121,13 +123,13 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
       ? sortedBoards.filter((board) => board.name.toLowerCase().includes(filterText.toLowerCase()))
       : sortedBoards;
 
-    if (showFilter && filteredBoards.length === 0) {
+    if (filteredBoards.length === 0) {
       return [
         {
           key: '__empty__',
           label: (
             <Text type="secondary" style={{ fontStyle: 'italic' }}>
-              No boards found
+              {sortedBoards.length > 0 ? `No boards match “${filterText}”.` : 'No boards yet.'}
             </Text>
           ),
           disabled: true,
@@ -161,7 +163,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
             </Flex>
             <Badge
               count={branchCount}
-              showZero
+              showZero={branchCountsLoaded}
               styles={{
                 root: { flexShrink: 0 },
                 indicator: {
@@ -185,11 +187,11 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
     boards,
     currentBoardId,
     branchCountByBoard,
+    branchCountsLoaded,
     branchById,
     handleBoardClick,
     token,
     filterText,
-    showFilter,
     keyboardTooltipBoardId,
   ]);
 

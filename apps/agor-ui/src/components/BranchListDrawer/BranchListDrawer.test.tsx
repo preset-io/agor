@@ -1,6 +1,9 @@
 import type { Board, Branch, Repo, Session } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
+import { boardScopeKey } from '../../store/scopeMerge';
+import { boardCoverage } from '../../test/userScopeCoverage';
 
 vi.mock('../../utils/sessionTitle', () => ({
   getSessionDisplayTitle: (session: { title?: string }) => session.title ?? 'Untitled session',
@@ -35,7 +38,57 @@ const session = {
   last_updated: '2026-05-31T00:00:00.000Z',
 } as unknown as Session;
 
+const setPartition = (status: 'loading' | 'loaded' | 'error') =>
+  agorStore.getState().setCoverage(boardScopeKey(board.board_id), boardCoverage(status));
+
+const renderEmptyList = () =>
+  render(
+    <BoardSessionList
+      board={board}
+      currentBoardId={board.board_id}
+      branchById={new Map([[branch.branch_id, branch]])}
+      repoById={new Map()}
+      sessionsByBranch={new Map()}
+      onSessionClick={vi.fn()}
+    />
+  );
+
 describe('BoardSessionList', () => {
+  beforeEach(() => setPartition('loaded'));
+  afterEach(() => agorStore.getState().reset());
+
+  it.each([
+    { status: 'loading', text: 'Loading sessions…', count: false },
+    { status: 'loaded', text: 'No sessions on this board yet.', count: true },
+  ] as const)('says "$text" for an empty $status board', ({ status, text, count }) => {
+    setPartition(status);
+    renderEmptyList();
+    expect(screen.getByText(text)).toBeInTheDocument();
+    expect(screen.queryByText('0 sessions') !== null).toBe(count);
+  });
+
+  it('claims no empty board when its partition failed to load', () => {
+    setPartition('error');
+    renderEmptyList();
+    expect(screen.queryByText('No sessions on this board yet.')).toBeNull();
+    expect(screen.queryByText('Loading sessions…')).toBeNull();
+  });
+
+  it('names the query when a search matches nothing', async () => {
+    render(
+      <BoardSessionList
+        board={board}
+        currentBoardId={board.board_id}
+        branchById={new Map([[branch.branch_id, branch]])}
+        repoById={new Map()}
+        sessionsByBranch={new Map([[branch.branch_id, [session]]])}
+        onSessionClick={vi.fn()}
+      />
+    );
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'zebra' } });
+    expect(await screen.findByText('No results for “zebra”.')).toBeInTheDocument();
+  });
+
   it('shows the branch as quiet metadata on the session row', () => {
     render(
       <BoardSessionList

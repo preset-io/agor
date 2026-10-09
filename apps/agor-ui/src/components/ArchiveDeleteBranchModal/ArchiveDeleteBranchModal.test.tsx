@@ -212,11 +212,28 @@ it('a failed deletion cannot be changed back into archive', async () => {
       onCancel={vi.fn()}
     />
   );
-  await screen.findByText('Deletion failed');
+  await screen.findByText("Agor couldn't finish deleting this branch.");
   expect(screen.getByRole('radio', { name: /Archive \(recommended\)/ })).toBeDisabled();
   expect(screen.getByRole('radio', { name: /Delete completely/ })).toBeChecked();
   fireEvent.click(screen.getByRole('button', { name: 'Delete Permanently' }));
   expect(confirm).toHaveBeenCalledWith({ metadataAction: 'delete', filesystemAction: 'deleted' });
+});
+
+it('an in-progress deletion uses the card notice and is read-only', async () => {
+  const { client, branch } = fixture(true);
+  branch.deletion_status = 'deleting';
+  render(
+    <ArchiveDeleteBranchModal
+      client={client}
+      currentUser={makeUser({ role: 'admin' })}
+      branch={branch}
+      open
+      onConfirm={vi.fn()}
+      onCancel={vi.fn()}
+    />
+  );
+  expect(await screen.findByText('Agor is deleting this branch…')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Delete Permanently' })).toBeDisabled();
 });
 
 it('does not promise to preserve files when archive explicitly removes the workspace', async () => {

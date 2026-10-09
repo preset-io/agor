@@ -11,8 +11,8 @@ import type {
   SpawnConfig,
   User,
 } from '@agor-live/client';
-import { getTeammateConfig, hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Drawer, Layout, Typography } from 'antd';
+import { getTeammateConfig, hasMinimumRole, ROLES, SessionStatus } from '@agor-live/client';
+import { Button, Drawer, Layout, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
@@ -45,15 +45,16 @@ import {
 } from '../../store/selectors';
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
 import { isOwnActiveSession } from '../../utils/sessionSearch';
-import { getSessionStatusTone } from '../../utils/sessionStatus';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
+import { CompactNotice } from '../CompactNotice';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
+import { PrimaryLookupFailedNotice } from '../PrimaryAssistantCompose/PrimaryLookupFailedNotice';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
@@ -70,6 +71,12 @@ import { sessionBoardId } from './sessionBoardId';
 import { useMobileBack } from './useMobileBack';
 
 const NO_BOARDS: never[] = [];
+
+const connectionBannerStyle: React.CSSProperties = {
+  flexShrink: 0,
+  borderRadius: 0,
+  borderInline: 0,
+};
 
 interface MobileAppProps {
   client: AgorClient | null;
@@ -113,6 +120,8 @@ interface MobileAppProps {
   onToggleReaction?: (commentId: string, emoji: string) => void;
   onDeleteComment?: (commentId: string) => void;
   onLogout?: () => void;
+  /** Reconnects the existing client without discarding unsaved work. */
+  onRetryConnection?: () => void;
   /** Settings link to an external app (e.g. a hosting console), opened in a new tab */
   externalAppLink?: string;
   externalAppLabel?: string;
@@ -157,6 +166,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   onToggleReaction,
   onDeleteComment,
   onLogout,
+  onRetryConnection,
   externalAppLink,
   externalAppLabel,
   onOpenWorkspaceSettings,
@@ -171,7 +181,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const navigation = useAppNavigation();
   const location = useLocation();
   const goBackHome = useMobileBack('/m');
-  const { connected, connecting } = useConnectionState();
+  const { connected, connecting, outOfSync, capturedSha, currentSha } = useConnectionState();
   const reducedMotion = usePrefersReducedMotion();
   // Self-subscribe to the entity maps this surface drills into. The subscription
   // used to live in the outer App shell; relocating it here makes MobileApp the
@@ -205,6 +215,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     branch: resolvedPrimaryBranch,
     ownedByCaller: primaryBranchIsOwned,
     setBranch: setPrimaryBranch,
+    resolving: resolvingPrimaryBranch,
+    failed: primaryLookupFailed,
     refresh: refreshPrimaryBranch,
   } = usePrimaryTeammate(client, user?.user_id, authGeneration);
   // A branch resolved for a previous caller is never shown or used as an Ask target.
@@ -303,7 +315,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     let count = 0;
     for (const session of sessionById.values()) {
       if (!isOwnActiveSession(session, user?.user_id)) continue;
-      if (getSessionStatusTone(session.status) === 'processing') count++;
+      if (session.status === SessionStatus.AWAITING_PERMISSION) count++;
     }
     return count;
   }, [sessionById, user?.user_id]);
@@ -360,12 +372,13 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     if (!client || creatingSessionRef.current) return;
     const branch = primaryBranch ?? (await refreshPrimaryBranch());
     if (branch === undefined) return;
-    // No primary (or a transient resolve failure): open the mobile-native
-    // picker — never fall through to the desktop Settings modal.
+    // No primary, or a failed lookup: the mobile-native sheet shows the
+    // picker or the failure — never the desktop Settings modal.
     if (!branch) {
       setAskPickerOpen(true);
       return;
     }
+    setAskPickerOpen(false);
     await startPrimarySession(branch);
   }, [client, primaryBranch, refreshPrimaryBranch, startPrimarySession]);
 
@@ -461,18 +474,36 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         boxSizing: 'border-box',
       }}
     >
-      {!connected && (
-        <Alert
-          banner
-          type={connecting ? 'info' : 'warning'}
-          showIcon
-          message={
-            connecting
-              ? 'Reconnecting...'
-              : "You're offline. Changes may not be saved until you reconnect."
-          }
-          style={{ flexShrink: 0 }}
+      {outOfSync ? (
+        <CompactNotice
+          type="warning"
+          role="status"
+          message={`Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost.${
+            capturedSha && currentSha ? ` (${capturedSha} → ${currentSha})` : ''
+          }`}
+          actions={[{ label: 'Reload page', onClick: () => window.location.reload() }]}
+          style={connectionBannerStyle}
         />
+      ) : (
+        !connected &&
+        (connecting ? (
+          <CompactNotice
+            type="warning"
+            role="status"
+            message="Reconnecting to Agor…"
+            style={connectionBannerStyle}
+          />
+        ) : (
+          <CompactNotice
+            type="error"
+            role="alert"
+            message="Lost connection to Agor. You can't make changes until it's back."
+            actions={
+              onRetryConnection ? [{ label: 'Reconnect', onClick: onRetryConnection }] : undefined
+            }
+            style={connectionBannerStyle}
+          />
+        ))
       )}
       {/* Proactive connect-AI / integrations banner, shared with desktop. Hidden
           on full-screen sub-views (session detail, comments). */}
@@ -655,35 +686,45 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         onClose={() => setAskPickerOpen(false)}
         placement="bottom"
         height="auto"
-        title="Choose your primary assistant"
+        title={primaryLookupFailed ? 'Ask your primary assistant' : 'Choose your primary assistant'}
         {...reducedMotionSurface(reducedMotion)}
         styles={{ body: { paddingBottom: 'env(safe-area-inset-bottom)' } }}
       >
-        <Typography.Paragraph type="secondary">
-          Pick the teammate to message from the Ask button. You can change it later in Settings.
-        </Typography.Paragraph>
-        <PrimaryTeammatePicker
-          key={`${user?.user_id ?? 'anonymous'}:${authGeneration}`}
-          client={client}
-          currentUserId={user?.user_id}
-          authenticationGeneration={authGeneration}
-          compact
-          onPicked={(branch) => {
-            setPrimaryBranch(branch);
-            setAskPickerOpen(false);
-            void startPrimarySession(branch);
-          }}
-        />
-        <Button
-          type="link"
-          style={{ paddingInline: 0 }}
-          onClick={() => {
-            setAskPickerOpen(false);
-            onOpenWorkspaceSettings('teammates');
-          }}
-        >
-          Create a new teammate
-        </Button>
+        {primaryLookupFailed ? (
+          <PrimaryLookupFailedNotice
+            connected={connected}
+            retrying={resolvingPrimaryBranch}
+            onRetry={() => void askPrimaryAssistant()}
+          />
+        ) : (
+          <>
+            <Typography.Paragraph type="secondary">
+              Pick the teammate to message from the Ask button. You can change it later in Settings.
+            </Typography.Paragraph>
+            <PrimaryTeammatePicker
+              key={`${user?.user_id ?? 'anonymous'}:${authGeneration}`}
+              client={client}
+              currentUserId={user?.user_id}
+              authenticationGeneration={authGeneration}
+              compact
+              onPicked={(branch) => {
+                setPrimaryBranch(branch);
+                setAskPickerOpen(false);
+                void startPrimarySession(branch);
+              }}
+            />
+            <Button
+              type="link"
+              style={{ paddingInline: 0 }}
+              onClick={() => {
+                setAskPickerOpen(false);
+                onOpenWorkspaceSettings('teammates');
+              }}
+            >
+              Create a new teammate
+            </Button>
+          </>
+        )}
       </Drawer>
 
       <Drawer
