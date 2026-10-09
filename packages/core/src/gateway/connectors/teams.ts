@@ -677,14 +677,18 @@ const TEAMS_CODE_SEGMENT = /(`{3,}|~{3,})[\s\S]*?(?:\1|$)|(`+)[^\n]*?(?<!`)\2(?!
  * `<details>` collapses to a bold summary; code passes through unchanged.
  */
 export function formatTeamsMarkdown(markdown: string): string {
-  const formatProse = (prose: string) =>
-    stripTeamsMarkup(
+  const formatProse = (prose: string) => {
+    const stripped = stripTeamsMarkup(
       prose
         .replace(/<details>\s*<summary>([\s\S]*?)<\/summary>\s*/gi, (_match, summary: string) => {
           return `**${summary.trim()}**\n`;
         })
         .replace(/\s*<\/details>/gi, '')
     );
+    // Teams markdown drops a lone newline; a hard break keeps the line.
+    return stripped.replace(/([^\n])\n(?=[^\n])/g, '$1  \n');
+  };
+
   let formatted = '';
   let offset = 0;
   for (const match of markdown.matchAll(TEAMS_CODE_SEGMENT)) {

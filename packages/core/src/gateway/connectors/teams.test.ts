@@ -375,6 +375,13 @@ describe('TeamsConnector', () => {
       );
     });
 
+    it('keeps single line breaks in prose but not inside code', () => {
+      // Live QA: Teams markdown rendered `a\nb` as one line.
+      expect(connector.formatMessage!('first\nsecond\n\nthird\n```\ncode a\ncode b\n```')).toBe(
+        'first  \nsecond\n\nthird\n```\ncode a\ncode b\n```'
+      );
+    });
+
     it('handles empty input', () => {
       expect(connector.formatMessage!('')).toBe('');
     });
