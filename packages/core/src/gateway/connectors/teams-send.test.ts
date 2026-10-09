@@ -130,6 +130,21 @@ describe('prepareTeamsSend', () => {
 
     await expect(prepared.send('x'.repeat(40_001))).rejects.toMatchObject({ status: 413 });
   });
+
+  it('preserves Retry-After when a precondition response is classified for delivery', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse(412, {}, { 'retry-after': '7' }))
+    );
+    const prepared = await prepareTeamsSend(address, { getAccessToken: async () => 'token' });
+    const error = await prepared.send('x').catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ phase: 'send', status: 412, retryAfterMs: 7_000 });
+    expect(classifyTeamsSendFailure(error)).toEqual({
+      kind: 'retry',
+      code: 'provider_http_412',
+      retryAfterMs: 7_000,
+    });
+  });
 });
 
 describe('classifyTeamsSendFailure', () => {

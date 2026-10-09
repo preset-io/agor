@@ -104,7 +104,9 @@ export function classifyTeamsSendFailure(error: unknown): TeamsSendOutcome {
   if (status === 429) {
     return { kind: 'retry', code: 'provider_rate_limited', retryAfterMs: error.retryAfterMs };
   }
-  if (status === 412) return { kind: 'retry', code: 'provider_http_412' };
+  if (status === 412) {
+    return { kind: 'retry', code: 'provider_http_412', retryAfterMs: error.retryAfterMs };
+  }
   if (status === 401) return { kind: 'retry', code: 'provider_http_401', refreshToken: true };
   if (status === 413) return { kind: 'too_large', code: 'provider_http_413' };
   const reason = error.providerCode ? REVOKING_PROVIDER_CODES[error.providerCode] : undefined;
