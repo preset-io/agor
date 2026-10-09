@@ -365,6 +365,10 @@ Set the app's redirect URL to the callback the Catalog form shows.
   Preview Program, with both the product API and its MCP API enabled. These
   servers don't challenge unauthenticated clients, so Agor starts sign-in from
   the catalog recipe and requests Google's recommended scopes.
+- **Canva:** a Canva Developer Portal integration with **Canva MCP** enabled. See
+  [Canva's MCP access guide](https://www.canva.dev/docs/apps/mcp/access/).
+- **Dropbox:** an App Console app with scoped access and **Full Dropbox**. See
+  [Dropbox's MCP guide](https://help.dropbox.com/integrations/connect-dropbox-mcp-server).
 
 Agor authenticates your app at the provider's token endpoint the way the
 provider advertises (HTTP Basic, or form-body credentials when that is all it
@@ -373,9 +377,10 @@ supports), and refreshes the same way.
 ### Stable hosted callback
 
 By default the redirect URI is this daemon's own OAuth callback. An operator can
-instead route customer-owned app callbacks through a stable Agor Cloud origin. All
-other OAuth servers (including DCR and pre-registered ones) keep the daemon's own
-callback:
+instead route customer-owned app callbacks through a stable Agor Cloud origin.
+Providers that only accept pre-approved callback URLs for Dynamic Client
+Registration also use it once they have approved Agor's. All other OAuth servers
+(including other DCR and pre-registered ones) keep the daemon's own callback:
 
 ```yaml
 mcp_oauth_relay:

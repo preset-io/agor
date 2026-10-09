@@ -134,14 +134,17 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
     })),
   };
 });
-vi.mock('@agor/core/mcp-catalog', async (importOriginal) => ({
-  // Preserve the pure recipe lookup now used by configured-app issuer pinning.
-  findCatalogEntry: (await importOriginal<typeof import('@agor/core/mcp-catalog')>())
-    .findCatalogEntry,
-  loadCatalog: vi.fn().mockResolvedValue([]),
-  probeRemoteAuthType,
-  probeRemoteBearerToken,
-}));
+vi.mock('@agor/core/mcp-catalog', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@agor/core/mcp-catalog')>();
+  return {
+    // Preserve the pure recipe lookups used by configured-app issuer pinning.
+    findCatalogEntry: original.findCatalogEntry,
+    catalogRelayIssuer: original.catalogRelayIssuer,
+    loadCatalog: vi.fn().mockResolvedValue([]),
+    probeRemoteAuthType,
+    probeRemoteBearerToken,
+  };
+});
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';

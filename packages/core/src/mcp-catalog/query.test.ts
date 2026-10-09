@@ -11,7 +11,7 @@
 import { catalogDisplayName, type MCPCatalogEntry } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import { findCatalogEntry, loadCatalog } from './catalog';
-import { filterCatalog } from './query';
+import { catalogRelayIssuer, filterCatalog } from './query';
 
 function entry(overrides: Partial<MCPCatalogEntry> & { name: string }): MCPCatalogEntry {
   return {
@@ -305,8 +305,6 @@ describe('catalog visibility', () => {
       'com.vercel/vercel-mcp',
       'com.intercom/mcp',
       'com.squareup/mcp',
-      'com.canva/mcp',
-      'com.dropbox/mcp',
       'com.newrelic/mcp-server',
       // 2026-10-07 additions held back; reasons are dated in curated.yaml.
       'com.shortcut/mcp',
@@ -324,9 +322,40 @@ describe('catalog visibility', () => {
       expect(findCatalogEntry(full, name)).toBeDefined();
       expect(filterCatalog(full, { search: name })).toEqual([]);
     }
-    for (const publisher of ['asana', 'incident', 'datadog']) {
+    for (const publisher of ['asana', 'canva', 'dropbox', 'incident', 'datadog']) {
       expect(visible.some((e) => e.name.includes(publisher))).toBe(true);
     }
     expect(filterCatalog(full.map((e) => ({ ...e, hidden: false })))).toHaveLength(full.length);
+  });
+});
+
+describe('catalogRelayIssuer', () => {
+  it('names the configured app or allowlisted DCR issuer, and nothing else', async () => {
+    const full = await loadCatalog();
+    expect(
+      full
+        .filter((e) => catalogRelayIssuer(e))
+        .map((e) => [e.name, catalogRelayIssuer(e)])
+        .sort()
+    ).toEqual(
+      [
+        ['com.asana/mcp', 'https://app.asana.com'],
+        ['com.box/mcp', 'https://api.box.com'],
+        ['com.canva/mcp', 'https://mcp.canva.com'],
+        ['com.dropbox/mcp', 'https://www.dropbox.com'],
+        ['com.frontapp/mcp', 'https://app.frontapp.com'],
+        ['com.googleapis.calendarmcp/mcp', 'https://accounts.google.com'],
+        ['com.googleapis.docsmcp/mcp', 'https://accounts.google.com'],
+        ['com.googleapis.drivemcp/mcp', 'https://accounts.google.com'],
+        ['com.googleapis.gmailmcp/mcp', 'https://accounts.google.com'],
+        ['com.hubspot/mcp', 'https://mcp.hubspot.com'],
+        ['com.intercom/mcp', 'https://mcp.intercom.com'],
+        ['com.salesforce/mcp', 'https://login.salesforce.com'],
+        ['com.slack/mcp', 'https://mcp.slack.com'],
+        ['com.squareup/mcp', 'https://mcp.squareup.com'],
+        ['com.vercel/vercel-mcp', 'https://vercel.com'],
+        ['us.zoom/mcp', 'https://zoom.us'],
+      ].sort()
+    );
   });
 });

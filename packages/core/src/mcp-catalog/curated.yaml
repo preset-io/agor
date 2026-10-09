@@ -103,8 +103,11 @@ entries:
     auth_type: oauth
 
   - name: com.vercel/vercel-mcp
-    # Sept 9–10 review: documented provider-client or callback approval required.
-    # Historical evidence, not current provider certification.
+    # DCR admits approved clients only. A customer "Sign in with Vercel" app may
+    # work (documented only by Nango:
+    # https://nango.dev/docs/api-integrations/vercel-mcp/how-to-register-your-own-vercel-mcp-oauth-app);
+    # Vercel's docs do not confirm it. Keep hidden until one real connection
+    # succeeds with a customer app.
     hidden: true
     category: dev-tools
     capabilities: [deployments, projects, logs]
@@ -116,6 +119,12 @@ entries:
     remote_url: https://mcp.vercel.com
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://vercel.com/docs/sign-in-with-vercel
+        issuer: https://vercel.com
+        secret_required: true
 
   - name: com.wix/mcp
     category: dev-tools
@@ -630,9 +639,9 @@ unpublished:
     website_url: https://preset.io/
 
   - name: com.dropbox/mcp
-    # Sept 9–10 review: trusted-client DCR admission; observed nonspecific 403
-    # does not establish callback rejection. Not current provider certification.
-    hidden: true
+    # DCR admits trusted clients only; Dropbox documents bringing your own app
+    # (App Console, scoped access, full Dropbox, the callback as redirect URI).
+    # Protected-resource metadata names https://www.dropbox.com as issuer.
     category: data-storage
     capabilities: [files, web-search]
     benefit: Give an agent read access to project files without copying them into the repository.
@@ -643,6 +652,12 @@ unpublished:
     remote_url: https://mcp.dropbox.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
+        issuer: https://www.dropbox.com
+        secret_required: true
 
   - name: com.asana/mcp
     category: productivity
@@ -690,8 +705,10 @@ unpublished:
       compatibility_mode: strict
 
   - name: com.squareup/mcp
-    # Sept 9–10 review: documented provider-client or callback approval required.
-    # Historical evidence, not current provider certification.
+    # DCR admits allowlisted redirect URIs only, and there is no customer-app
+    # route. Request the allowlist in the Square developer forum's MCP category
+    # with each Cloud environment's stable callback; unhide once approved.
+    title: Square
     hidden: true
     category: productivity
     capabilities: [payments, crm]
@@ -703,10 +720,14 @@ unpublished:
     remote_url: https://mcp.squareup.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      stable_callback:
+        issuer: https://mcp.squareup.com
 
   - name: com.intercom/mcp
-    # Sept 9–10 review: documented provider-client or callback approval required.
-    # Historical evidence, not current provider certification.
+    # DCR admits allowlisted redirect URIs only, and there is no customer-app
+    # route. Ask Intercom support to allowlist the product name ("Agor") and
+    # each Cloud environment's exact stable callback; unhide once approved.
     hidden: true
     category: productivity
     capabilities: [crm, docs]
@@ -718,11 +739,14 @@ unpublished:
     remote_url: https://mcp.intercom.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      stable_callback:
+        issuer: https://mcp.intercom.com
 
   - name: com.canva/mcp
-    # Sept 9–10 review: documented provider-client or callback approval required.
-    # Historical evidence, not current provider certification.
-    hidden: true
+    # Canva supports a customer-owned app: a Developer Portal integration with
+    # "Canva MCP" enabled, its client ID and secret, and the callback as a
+    # redirect URL. Protected-resource metadata names https://mcp.canva.com.
     category: productivity
     capabilities: [design]
     benefit: Generate and export Canva designs from a session instead of switching to the editor.
@@ -733,6 +757,12 @@ unpublished:
     remote_url: https://mcp.canva.com/mcp
     transport: streamable-http
     auth_type: oauth
+    oauth:
+      dcr_mode: disabled
+      configured_client:
+        setup_url: https://www.canva.dev/docs/apps/mcp/access/
+        issuer: https://mcp.canva.com
+        secret_required: true
 
   - name: com.resend/mcp
     category: messaging

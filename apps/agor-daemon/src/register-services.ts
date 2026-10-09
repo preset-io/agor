@@ -91,6 +91,7 @@ import {
   normalizeDiscoveredMCPCapabilities,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
+import { catalogRelayIssuer } from '@agor/core/mcp-catalog';
 import type {
   MCPOAuthDynamicClientRegistrationRequest,
   OAuthFlowContext,
@@ -291,7 +292,7 @@ import {
 import { MCPOAuthClientRegistrationAuthority } from './services/mcp-oauth-client-registration-authority.js';
 import {
   catalogInstallDeclaresOAuth,
-  configuredCatalogIssuer,
+  catalogInstallRelayIssuer,
   logMCPOAuthCompatibilityPolicy,
   presentMCPOAuthEffectivePolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -2516,7 +2517,7 @@ export async function registerMCPServices(
     }
 
     let savedServerAuthority: MCPServer | undefined;
-    let configuredIssuer: string | undefined;
+    let relayIssuer: string | undefined;
     let effectiveMcpUrl = opts.mcpUrl;
     let effectiveClientId = opts.clientId;
     let effectiveClientSecret = opts.clientSecret;
@@ -2584,7 +2585,7 @@ export async function registerMCPServices(
       // Clone the row so later repository/service mutations cannot change the
       // in-memory authority captured by a standalone pending flow.
       savedServerAuthority = structuredClone(server);
-      configuredIssuer = await configuredCatalogIssuer(server);
+      relayIssuer = await catalogInstallRelayIssuer(server, Boolean(oauthRelay));
       if (durableOAuthFlows) {
         durableBinding = {
           tenantId: opts.tenantId!,
@@ -2595,9 +2596,10 @@ export async function registerMCPServices(
       }
     }
 
-    // Only customer-owned (configured_client) catalog apps use the hosted
-    // relay. Every other flow keeps the cell's direct callback, unchanged.
-    const relayFlow = Boolean(oauthRelay && configuredIssuer);
+    // Only customer-owned (configured_client) catalog apps and allowlisted DCR
+    // providers (stable_callback) use the hosted relay; DCR then registers the
+    // relay callback. Every other flow keeps the cell's direct callback.
+    const relayFlow = Boolean(oauthRelay && relayIssuer);
 
     // Local reservations are attempt-aware, so establish identity before
     // allocating a generation. PostgreSQL obtains its durable attempt ID from
@@ -2661,15 +2663,15 @@ export async function registerMCPServices(
           // spelling, e.g. Box/Google), since nothing is derived from it.
           // A configuration error, not an authority one: it classifies as
           // `issuer_mismatch` before DCR, relay `prepare`, or any attempt row.
-          if (configuredIssuer && relayFlow && issuer !== configuredIssuer)
+          if (relayIssuer && relayFlow && issuer !== relayIssuer)
             throw new OAuthConfigurationError(
               'issuer_mismatch',
-              'Configured app issuer must exactly match the authorization server issuer for the hosted callback relay; update the reviewed recipe'
+              'Catalog OAuth issuer must exactly match the authorization server issuer for the hosted callback relay; update the reviewed recipe'
             );
-          if (configuredIssuer && !oauthIssuerIdentifiersMatch(issuer, configuredIssuer))
+          if (relayIssuer && !oauthIssuerIdentifiersMatch(issuer, relayIssuer))
             throw new OAuthConfigurationError(
               'issuer_mismatch',
-              'Configured app issuer no longer matches its reviewed recipe'
+              'Catalog OAuth issuer no longer matches its reviewed recipe'
             );
           return oauthRelay && relayFlow ? oauthRelay.redirectUri(issuer) : redirectUri;
         },
@@ -4478,10 +4480,12 @@ export async function registerMCPServices(
   app.use(
     '/mcp-catalog/readiness',
     new MCPCatalogReadinessService(app, {
-      redirectUri: (entry) =>
-        entry.oauth?.configured_client && oauthRelay
-          ? oauthRelay.redirectUri(entry.oauth.configured_client.issuer)
-          : ctx.mcpOAuthCallbackUrl,
+      redirectUri: (entry) => {
+        const issuer = catalogRelayIssuer(entry);
+        if (issuer && oauthRelay) return oauthRelay.redirectUri(issuer);
+        // Without the relay, only a customer app needs the direct callback shown.
+        return entry.oauth?.configured_client ? ctx.mcpOAuthCallbackUrl : undefined;
+      },
       listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
       // Readiness is advisory and may not open credential material merely to
       // draw a button. Normal configuration writes revoke bound grants; this
