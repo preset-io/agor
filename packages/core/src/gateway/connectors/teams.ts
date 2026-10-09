@@ -5,6 +5,7 @@
  * ConversationReference and the Agents SDK owns Bot Framework auth/client
  * behavior. There is no per-channel listener or process-local address map. */
 
+import { createHash } from 'node:crypto';
 import { Activity } from '@microsoft/agents-activity';
 import { type AuthConfiguration, MsalTokenProvider } from '@microsoft/agents-hosting';
 import type {
@@ -19,9 +20,11 @@ import type {
   GatewayConnector,
   GatewayProviderHistoryRequest,
   GatewayProviderHistoryResult,
+  InboundFile,
   InboundSkippedFile,
 } from '../connector';
-import { isTeamsTokenHost } from '../teams-service-url';
+import { GATEWAY_READABLE_MIMES, readableMimeForFilename } from '../readable-files';
+import { isTeamsFileDownloadUrl, isTeamsTokenHost } from '../teams-service-url';
 import {
   fetchTeamsThreadHistory,
   listTeamsChannelPosts,
@@ -30,6 +33,7 @@ import {
 } from './teams-channel-history';
 import { fetchTeamsProviderHistory } from './teams-history';
 import {
+  botFrameworkScope,
   type PreparedTeamsSend,
   prepareTeamsSend,
   type TeamsAccessTokenProvider,
@@ -275,7 +279,9 @@ export interface NormalizedTeamsActivity {
   timestamp: string;
   address: Record<string, unknown>;
   metadata: Record<string, unknown>;
-  /** Files the sender attached; names only, since Agor does not read Teams attachments yet. */
+  /** Readable files with their download URLs; kept only in the encrypted inbound payload. */
+  files?: InboundFile[];
+  /** Attachments Agor will not read, by name, so the agent can say so. */
   skippedFiles?: InboundSkippedFile[];
 }
 
@@ -349,28 +355,71 @@ export function extractQuotedReplyText(
   return null;
 }
 
-const MAX_TEAMS_UNREAD_ATTACHMENTS = 10;
+const MAX_TEAMS_ATTACHMENTS = 10;
+const TEAMS_FILE_DOWNLOAD_INFO = 'application/vnd.microsoft.teams.file.download.info';
 
-/**
- * Name the files a sender attached so the agent can say it could not read
- * them. Only the name is kept: download URLs can carry access tokens.
- */
-export function teamsUnreadAttachments(attachments: unknown): InboundSkippedFile[] {
-  if (!Array.isArray(attachments)) return [];
-  const files: InboundSkippedFile[] = [];
-  for (const attachment of attachments) {
+/** Readable files (token-host images, SharePoint personal files) and named skips; URLs stay in the encrypted payload. */
+export function partitionTeamsInboundFiles(
+  attachments: unknown,
+  options: { filesEnabled: boolean; activityId: string }
+): { files: InboundFile[]; skipped: InboundSkippedFile[] } {
+  const files: InboundFile[] = [];
+  const skipped: InboundSkippedFile[] = [];
+  if (!Array.isArray(attachments)) return { files, skipped };
+  for (const [index, attachment] of attachments.entries()) {
+    if (files.length + skipped.length >= MAX_TEAMS_ATTACHMENTS) break;
     const record = asRecord(attachment);
     const contentType = stringValue(record.contentType)?.toLowerCase() ?? '';
     // The message's own HTML rendering (including quoted replies) and cards are not files.
     if (!contentType || contentType === 'text/html' || contentType.includes('.card.')) continue;
-    const fallback = contentType.startsWith('image/') ? 'image' : 'attachment';
-    files.push({
-      name: (stringValue(record.name) ?? fallback).slice(0, 200),
-      reason: 'unsupported_type',
-    });
-    if (files.length >= MAX_TEAMS_UNREAD_ATTACHMENTS) break;
+    const isImage = contentType.startsWith('image/');
+    const name = (
+      stringValue(record.name) ??
+      (isImage ? `image-${files.length + skipped.length + 1}` : 'attachment')
+    ).slice(0, 200);
+    const skip = (reason: InboundSkippedFile['reason']) => skipped.push({ name, reason });
+    if (contentType === 'reference') {
+      skip('channel_file');
+      continue;
+    }
+    if (!isImage && contentType !== TEAMS_FILE_DOWNLOAD_INFO) {
+      skip('unsupported_type');
+      continue;
+    }
+    if (!options.filesEnabled) {
+      skip('files_disabled');
+      continue;
+    }
+    const id = createHash('sha256')
+      .update(JSON.stringify([options.activityId, index]))
+      .digest('hex')
+      .slice(0, 16);
+    if (isImage) {
+      const url = stringValue(record.contentUrl);
+      if (!GATEWAY_READABLE_MIMES.has(contentType)) skip('unsupported_type');
+      else if (!isTeamsTokenHost(url)) skip('invalid');
+      else {
+        files.push({
+          id,
+          name,
+          mimetype: contentType,
+          size: -1,
+          url_private_download: url,
+          auth: 'provider_token',
+        });
+      }
+      continue;
+    }
+    const content = asRecord(record.content);
+    const url = stringValue(content.downloadUrl);
+    const mimetype =
+      readableMimeForFilename(name) ??
+      readableMimeForFilename(`.${stringValue(content.fileType) ?? ''}`);
+    if (!mimetype) skip('unsupported_type');
+    else if (!isTeamsFileDownloadUrl(url)) skip('invalid');
+    else files.push({ id, name, mimetype, size: -1, url_private_download: url });
   }
-  return files;
+  return { files, skipped };
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -453,7 +502,10 @@ export function normalizeTeamsActivity(
   const userId = stringValue(from.id) ?? 'unknown';
   const timestamp = stringValue(activityRecord.timestamp) ?? new Date().toISOString();
   const address = activity.getConversationReference() as unknown as Record<string, unknown>;
-  const skippedFiles = teamsUnreadAttachments(activityRecord.attachments);
+  const { files, skipped: skippedFiles } = partitionTeamsInboundFiles(activityRecord.attachments, {
+    filesEnabled: config.files === true,
+    activityId,
+  });
 
   return {
     activityId,
@@ -484,6 +536,7 @@ export function normalizeTeamsActivity(
       teams_user_name: stringValue(from.name),
       teams_has_mention: hasMention,
     },
+    ...(files.length > 0 ? { files } : {}),
     ...(skippedFiles.length > 0 ? { skippedFiles } : {}),
   };
 }
@@ -513,6 +566,14 @@ export class TeamsConnector implements GatewayConnector {
   /** Host check, token, and client; failures here happen before any provider effect. */
   prepareSend(address: Record<string, unknown>, textBudget?: number): Promise<PreparedTeamsSend> {
     return prepareTeamsSend(address, this.tokens, { textBudget });
+  }
+
+  /** The bot token for an inline image URL; refused unless the URL is on a Bot Connector host. */
+  async downloadToken(url: string): Promise<string> {
+    if (!isTeamsTokenHost(url)) {
+      throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
+    }
+    return this.tokens.getAccessToken(botFrameworkScope(url));
   }
 
   /** Drop cached Bot Framework tokens after a 401 so the next prepare fetches a new one. */

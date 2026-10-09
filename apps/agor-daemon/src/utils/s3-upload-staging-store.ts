@@ -24,7 +24,13 @@ import { DEFAULT_UPLOAD_MAX_BYTES, DEFAULT_UPLOAD_TTL_MS } from './upload-stagin
 const HANDLE_PATTERN = /^upl_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 type S3Metadata = Record<string, string | undefined>;
-const PROVENANCE = new Set(['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack']);
+const PROVENANCE = new Set([
+  'browser',
+  'gateway-slack',
+  'gateway-discord',
+  'gateway-teams',
+  'mcp-slack',
+]);
 
 interface ParsedS3Metadata {
   tenantId: string;

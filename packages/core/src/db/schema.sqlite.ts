@@ -2317,7 +2317,7 @@ export const uploads = sqliteTable(
       .notNull()
       .default('active'),
     provenance: text('provenance', {
-      enum: ['browser', 'gateway-slack', 'gateway-discord', 'mcp-slack'],
+      enum: ['browser', 'gateway-slack', 'gateway-discord', 'gateway-teams', 'mcp-slack'],
     }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     expires_at: t.timestamp('expires_at'),

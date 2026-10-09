@@ -1483,6 +1483,12 @@ const teamsSetupSchema = z.strictObject({
     'Existing Teams gateway channel ID used in the shared callback URL.'
   ),
   displayName: mcpOptionalNonEmptyString('displayName', 'Teams app display name.'),
+  files: z
+    .boolean()
+    .optional()
+    .describe(
+      "Match the channel's config.files: true sets supportsFiles so users can send files to the bot in personal chats."
+    ),
   callbackOrigin: z
     .string()
     .url()
@@ -1804,11 +1810,7 @@ async function resolveDiscordReadToolTarget(
 const TEAMS_CHANNEL_UNSEEN =
   'This gateway channel has not received an activity from that Teams channel, so Agor cannot read it.';
 
-/**
- * Target resolution for the Teams read tools: capability, branch scoping, the
- * session default, proof that this gateway channel has seen the Teams channel,
- * the allowlists, and the standard-channel rule.
- */
+/** Teams read-tool target: capability, branch, session default, seen-channel proof, allowlists, standard only. */
 async function resolveTeamsReadToolTarget(
   ctx: McpContext,
   args: { gatewayChannelId?: string; teamsChannelId?: string; rootMessageId?: string }
@@ -2327,6 +2329,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         gatewayChannelId: args.gatewayChannelId,
         ...(args.displayName ? { displayName: args.displayName } : {}),
         ...(args.callbackOrigin ? { callbackOrigin: args.callbackOrigin } : {}),
+        ...(args.files ? { files: true } : {}),
       };
       return textResult({
         manifest: buildTeamsSetupManifest(options),

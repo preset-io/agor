@@ -201,6 +201,7 @@ export {
 export { safeTeamsMetadata, TEAMS_SAFE_METADATA_KEYS } from './teams-metadata';
 export {
   isAllowedTeamsServiceUrl,
+  isTeamsFileDownloadUrl,
   isTeamsTokenHost,
   TEAMS_SERVICE_URL_HOSTS,
 } from './teams-service-url';

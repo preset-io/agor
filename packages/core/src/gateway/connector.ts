@@ -24,14 +24,17 @@ export interface InboundFile {
   id: string;
   name: string;
   mimetype: string;
+  /** Declared bytes, or -1 when the provider does not say; the downloader caps actual bytes. */
   size: number;
   url_private_download: string;
+  /** Set only when the provider requires the bot token for this URL (Teams inline images). */
+  auth?: 'provider_token';
 }
 
 /** An attachment the connector could not hand to the agent, kept so the user can be told. */
 export interface InboundSkippedFile {
   name: string;
-  reason: 'unsupported_type' | 'files_disabled' | 'invalid';
+  reason: 'unsupported_type' | 'files_disabled' | 'invalid' | 'channel_file';
 }
 
 /**

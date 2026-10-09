@@ -66,6 +66,7 @@ import {
 import { GatewayListenerError } from '../listener-error';
 import { chunkMarkdown, codePointLength } from '../markdown-chunker';
 import { gatewayFailureCode } from '../provider-error';
+import { GATEWAY_READABLE_MIMES, readableMimeForFilename } from '../readable-files';
 import {
   createDiscordReadBudget,
   type DiscordReadBudget,
@@ -265,27 +266,6 @@ const DISCORD_SIGNED_ATTACHMENT_QUERY = new Set(['ex', 'is', 'hm']);
  * Attachment types handed to the agent: images and text-like files. Mirrors
  * the daemon's gateway ingestion allowlist, which re-checks each download.
  */
-const DISCORD_READABLE_MIMES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-]);
-const DISCORD_READABLE_EXTENSIONS: ReadonlyArray<[RegExp, string]> = [
-  [/\.png$/, 'image/png'],
-  [/\.jpe?g$/, 'image/jpeg'],
-  [/\.gif$/, 'image/gif'],
-  [/\.webp$/, 'image/webp'],
-  [/\.(txt|log)$/, 'text/plain'],
-  [/\.(md|markdown)$/, 'text/markdown'],
-  [/\.csv$/, 'text/csv'],
-  [/\.json$/, 'application/json'],
-];
-
 /**
  * Discord attachment URLs are signed CDN URLs, not arbitrary user-provided
  * download targets. Keep the accepted shape narrow so the daemon can fetch
@@ -326,9 +306,8 @@ function discordAttachmentMime(contentType: unknown, filename: string): string |
   }
   const normalized =
     typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
-  if (normalized) return DISCORD_READABLE_MIMES.has(normalized) ? normalized : undefined;
-  const lowerName = filename.toLowerCase();
-  return DISCORD_READABLE_EXTENSIONS.find(([pattern]) => pattern.test(lowerName))?.[1];
+  if (normalized) return GATEWAY_READABLE_MIMES.has(normalized) ? normalized : undefined;
+  return readableMimeForFilename(filename);
 }
 
 /**

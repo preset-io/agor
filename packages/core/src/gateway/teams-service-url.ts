@@ -27,6 +27,23 @@ export function isAllowedTeamsServiceUrl(value: unknown): value is string {
   );
 }
 
+/** SharePoint hosts that serve personal-chat `downloadUrl`s; these never receive a token. */
+const TEAMS_FILE_DOWNLOAD_HOST_SUFFIXES = ['.sharepoint.com', '.sharepoint.us'] as const;
+
+/** A pre-authenticated Teams personal-chat file URL, fetched without any credential. */
+export function isTeamsFileDownloadUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password) return false;
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  return TEAMS_FILE_DOWNLOAD_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+}
+
 /** The one check before a Bot Framework token is attached to any request: Bot Connector hosts only. */
 export function isTeamsTokenHost(value: unknown): value is string {
   return isAllowedTeamsServiceUrl(value);

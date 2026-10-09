@@ -409,13 +409,28 @@ export const MIN_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
   request_timeout_ms: 1,
 };
 
-// One deadline for the whole read; stays under the 30 s inbound claim lease.
+// One deadline for the whole read; leaves attachment downloads room inside the inbound lease.
 export const MAX_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
   mode: 'best_effort',
   max_messages: 100,
   max_prompt_bytes: 64 * 1024,
-  request_timeout_ms: 20_000,
+  request_timeout_ms: 12_000,
 };
+
+/** Inbound claim lease; member lookup, catch-up, attachments, and admission all fit inside it. */
+export const TEAMS_INBOUND_LEASE_MS = 30_000;
+
+/** One deadline for all of a message's attachments: what the lease leaves after catch-up and 10 s of headroom. */
+export function teamsAttachmentDeadlineMs(config: Record<string, unknown>): number {
+  const catchUp = isRecord(config.catch_up) ? config.catch_up : {};
+  const catchUpMs =
+    catchUp.mode === 'off'
+      ? 0
+      : typeof catchUp.request_timeout_ms === 'number'
+        ? catchUp.request_timeout_ms
+        : DEFAULT_TEAMS_CATCH_UP.request_timeout_ms;
+  return Math.max(5_000, Math.min(12_000, TEAMS_INBOUND_LEASE_MS - 10_000 - catchUpMs));
+}
 
 export interface TeamsConfigValidationResult {
   ok: boolean;

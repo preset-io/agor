@@ -5,7 +5,7 @@ import type { GatewayChannel } from '@agor/core/types';
 /** The Teams connector surface outbound sends need. */
 export type TeamsSendConnector = Pick<
   TeamsConnector,
-  'prepareSend' | 'formatMessage' | 'invalidateTokens'
+  'prepareSend' | 'formatMessage' | 'invalidateTokens' | 'downloadToken'
 >;
 
 const MAX_CACHED_CONNECTORS = 256;
