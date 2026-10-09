@@ -169,4 +169,26 @@ describe('fetchTeamsSigningJwk', () => {
       expect.objectContaining({ redirect: 'error' })
     );
   });
+
+  it('accepts a Bot Framework JWKS the size of the live document', async () => {
+    const token = `${Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'key-1' })).toString('base64url')}.payload.signature`;
+    // The live document holds ~250 keys (~870 KB); a 256 KB cap rejected every Teams POST.
+    const filler = Array.from({ length: 250 }, (_, index) => ({
+      ...teamsSigningJwk,
+      kid: `filler-${index}`,
+      x5c: ['A'.repeat(3_400)],
+    }));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ keys: [...filler, teamsSigningJwk] }), { status: 200 })
+        )
+    );
+    const request = { headers: { authorization: `Bearer ${token}` } } as unknown as Request;
+    await expect(fetchTeamsSigningJwk(request, claims, config)).resolves.toMatchObject({
+      kid: 'key-1',
+    });
+  });
 });

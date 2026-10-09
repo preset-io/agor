@@ -56,6 +56,8 @@ const BOT_FRAMEWORK_JWKS = new Set([
   'https://login.botframework.com/v1/.well-known/keys',
   'https://login.botframework.azure.us/v1/.well-known/keys',
 ]);
+// The live Bot Framework document is ~870 KB (250 keys) as of 2026-10.
+const JWKS_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
 const JWKS_DOCUMENT_TTL_MS = 24 * 60 * 60_000;
 const JWKS_FORCED_REFRESH_INTERVAL_MS = 60_000;
 const jwksDocuments = new Map<string, { keys: TeamsSigningJwk[]; fetchedAt: number }>();
@@ -76,7 +78,7 @@ function bearerToken(req: Request): string | null {
 
 async function fetchJwksDocument(jwksUri: string): Promise<TeamsSigningJwk[]> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2_000);
+  const timeout = setTimeout(() => controller.abort(), 5_000);
   try {
     const response = await fetch(jwksUri, {
       headers: { accept: 'application/json' },
@@ -85,7 +87,7 @@ async function fetchJwksDocument(jwksUri: string): Promise<TeamsSigningJwk[]> {
     });
     if (!response.ok) throw new Error(`Bot Framework JWKS returned ${response.status}`);
     const body = await response.text();
-    if (Buffer.byteLength(body, 'utf8') > 256 * 1024) {
+    if (Buffer.byteLength(body, 'utf8') > JWKS_DOCUMENT_MAX_BYTES) {
       throw new Error('Bot Framework JWKS response is too large');
     }
     const parsed = JSON.parse(body) as { keys?: unknown };
