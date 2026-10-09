@@ -52,7 +52,7 @@ import {
   ControlButton,
   Controls,
   type Edge,
-  getRectOfNodes,
+  getNodesBounds,
   MiniMap,
   type Node,
   type NodeDragHandler,
@@ -1536,8 +1536,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position,
           parentId, // Set parent for relative positioning (moves with parent)
           // No extent constraint - comments can be dragged anywhere and re-pinned
+          // An explicit per-node `draggable` overrides `nodesDraggable`, so view-only must opt out here too.
           draggable:
-            mutationGate.canMutate && boardReady && canRepositionBoardComment(comment, currentUser),
+            !readOnly &&
+            mutationGate.canMutate &&
+            boardReady &&
+            canRepositionBoardComment(comment, currentUser),
           selectable: true,
           zIndex: 1000, // Always on top (elevateNodesOnSelect is disabled)
           data: {
@@ -1575,6 +1579,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       currentUser,
       mutationGate.canMutate,
       boardReady,
+      readOnly,
     ]);
 
     // Helper: Apply local position overrides to a set of incoming nodes (branches or cards).
@@ -1941,7 +1946,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           if (saved) {
             instance.setViewport(saved);
           } else if (first?.width && w && h) {
-            const rect = getRectOfNodes([first]);
+            const rect = getNodesBounds([first]);
             const width = Math.min(
               rect.width,
               w / (READ_ONLY_MIN_ZOOM * (1 + READ_ONLY_FIT_PADDING))

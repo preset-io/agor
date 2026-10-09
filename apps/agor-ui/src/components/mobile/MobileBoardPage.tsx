@@ -91,8 +91,9 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
 
   const tabParam = searchParams.get('tab') as BoardTeammatePanelTab | null;
   const activeTab = tabParam && BOARD_TABS.includes(tabParam) ? tabParam : 'board';
-  const setActiveTab = (tab: BoardTeammatePanelTab) =>
-    setSearchParams(tab === 'board' ? {} : { tab }, { replace: true });
+  const setActiveTab = useStableCallback((tab: BoardTeammatePanelTab) =>
+    setSearchParams(tab === 'board' ? {} : { tab }, { replace: true })
+  );
 
   const boards = useMemo(() => Array.from(boardById.values()), [boardById]);
   // Shallow-equal like desktop: unrelated socket churn keeps the array, so the canvas stays put.
@@ -114,6 +115,17 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   const openBranch = useStableCallback((branchId: string, tab?: BranchModalTab) =>
     onOpenBranch(branchId, tab ?? 'general')
   );
+  // Stable, like desktop's, so the memoized panel skips the shell's re-render on every session patch.
+  const sendComment = useStableCallback((content: string) => {
+    if (visitedBoardId) onSendComment(visitedBoardId, content);
+  });
+  const createSession = useStableCallback(onNewSession);
+  const forkSession = useStableCallback(onForkSession);
+  const spawnSession = useStableCallback(onSpawnSession);
+  const replyComment = useStableCallback(onReplyComment);
+  const resolveComment = useStableCallback(onResolveComment);
+  const toggleReaction = useStableCallback(onToggleReaction);
+  const deleteComment = useStableCallback(onDeleteComment);
   // Same element across shell re-renders (every session patch), so React skips the canvas subtree.
   const canvas = useMemo(
     () =>
@@ -174,15 +186,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             unreadCommentsCount={unreadCommentsCount}
             hasUserMentions={hasUserMentions}
             onSessionClick={openSession}
-            onCreateSession={onNewSession}
-            onForkSession={onForkSession}
-            onSpawnSession={onSpawnSession}
+            onCreateSession={createSession}
+            onForkSession={forkSession}
+            onSpawnSession={spawnSession}
             onOpenSettings={openBranch}
-            onSendComment={(content) => onSendComment(board.board_id, content)}
-            onReplyComment={onReplyComment}
-            onResolveComment={onResolveComment}
-            onToggleReaction={onToggleReaction}
-            onDeleteComment={onDeleteComment}
+            onSendComment={sendComment}
+            onReplyComment={replyComment}
+            onResolveComment={resolveComment}
+            onToggleReaction={toggleReaction}
+            onDeleteComment={deleteComment}
           />
         </div>
       ) : (

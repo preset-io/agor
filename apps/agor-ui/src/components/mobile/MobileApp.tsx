@@ -48,7 +48,7 @@ import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/useBranchModalForm';
 import { CreateModals } from '../CreateModals';
 import { type HomeLocationState, HomePage } from '../HomePage';
-import { useHomeNeedsCount } from '../HomePage/useHomeNeedsCount';
+import { useHomeNeeds } from '../HomePage/useHomeNeeds';
 import { PrimaryTeammatePicker } from '../SettingsModal/PrimaryTeammatePicker';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { mobilePageStyle } from './constants';
@@ -300,9 +300,9 @@ export const MobileApp: React.FC<MobileAppProps> = ({
 
   const commentsBadge = useCommentsForYou(client, user).length;
 
-  // Home's "need you" count, computed once here: the tab bar and Home both read it.
-  const needsCount = useHomeNeedsCount(user?.user_id);
-  const homeBadge = needsCount + commentsBadge;
+  // Home's "need you" result, computed once here: the tab bar and Home both read it.
+  const homeNeeds = useHomeNeeds(user?.user_id);
+  const homeBadge = homeNeeds.needsCount + commentsBadge;
 
   // Start a FRESH session and land in its full-screen composer; an identity change mid-flight drops the result.
   const createAndOpenSession = useCallback(
@@ -462,7 +462,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
         />
       )}
       {/* Proactive connect-AI / integrations banner, shared with desktop. Hidden
-          on full-screen sub-views (session detail, comments). */}
+          on the session sub-view. */}
       {topBanner && !isSubView && <div style={{ flexShrink: 0 }}>{topBanner}</div>}
       <div
         style={{
@@ -494,7 +494,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
                   onAllBoards={openBoardList}
                   onSeeAllSessions={openSessionList}
                   onSeeAllTeammates={openTeammates}
-                  needsCount={needsCount}
+                  homeNeeds={homeNeeds}
                 />
               </div>
             }

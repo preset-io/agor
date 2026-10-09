@@ -35,21 +35,27 @@ export function useUserLocalStorage<T>(
   // Set while this instance's own write notice is dispatched, so it skips re-reading itself.
   const writingRef = useRef(false);
 
-  useEffect(() => {
-    setStoredValue(readStoredValue());
+  // Every value adopted from storage updates the ref first, so a functional
+  // update queued before React re-renders builds on it, not on the old value.
+  const adoptStoredValue = useCallback(() => {
+    const value = readStoredValue();
+    storedValueRef.current = value;
+    setStoredValue(value);
   }, [readStoredValue]);
+
+  useEffect(() => {
+    adoptStoredValue();
+  }, [adoptStoredValue]);
 
   // Keep per-user preferences consistent across instances and tabs, including storage clears.
   useEffect(() => {
     if (!storageKey || typeof window === 'undefined') return;
     const handleStorage = (event: StorageEvent) => {
-      if (event.key === storageKey || event.key === null) {
-        setStoredValue(readStoredValue());
-      }
+      if (event.key === storageKey || event.key === null) adoptStoredValue();
     };
     const handleWrite = (event: Event) => {
       if (!writingRef.current && (event as CustomEvent<string>).detail === storageKey) {
-        setStoredValue(readStoredValue());
+        adoptStoredValue();
       }
     };
     window.addEventListener('storage', handleStorage);
@@ -58,7 +64,7 @@ export function useUserLocalStorage<T>(
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener(USER_STORAGE_WRITE_EVENT, handleWrite);
     };
-  }, [readStoredValue, storageKey]);
+  }, [adoptStoredValue, storageKey]);
 
   const setValue = useCallback((value: T | ((val: T) => T)) => {
     const valueToStore = value instanceof Function ? value(storedValueRef.current) : value;

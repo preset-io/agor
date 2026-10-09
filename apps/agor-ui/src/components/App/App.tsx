@@ -1263,7 +1263,15 @@ export const App: React.FC<AppProps> = ({
         onSessionChange={setSelectedSessionId}
         onActiveUrlTargetChange={setActiveUrlTarget}
       />
-      <Layout style={{ height: '100vh' }}>
+      {/* `viewport-fit=cover` (index.html, for the phone shell) lets a tablet's home
+          indicator overlap the page, so keep the workspace above it. */}
+      <Layout
+        style={{
+          height: '100vh',
+          boxSizing: 'border-box',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+        }}
+      >
         <AppHeader
           user={user}
           authenticationGeneration={authenticationGeneration}

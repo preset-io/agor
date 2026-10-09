@@ -72,3 +72,27 @@ it('syncs other readers of the same key in this tab, without echoing to the writ
   expect(writer.result.current[0]).toBe(next);
   expect(other.result.current[0]).toBe(otherBefore);
 });
+
+it('applies a functional update to a value just received, before React re-renders', () => {
+  const writer = renderHook(() => useUserLocalStorage('a', 'count', 0));
+  const counter = renderHook(() => useUserLocalStorage('a', 'count', 0));
+
+  act(() => {
+    // Another tab writes 5, then this instance increments before any re-render.
+    localStorage.setItem('agor:user:a:count', '5');
+    window.dispatchEvent(new StorageEvent('storage', { key: 'agor:user:a:count' }));
+    counter.result.current[1]((n) => n + 1);
+  });
+  expect(counter.result.current[0]).toBe(6);
+  expect(localStorage.getItem('agor:user:a:count')).toBe('6');
+  // The same-tab notice carries it to the other reader.
+  expect(writer.result.current[0]).toBe(6);
+
+  act(() => {
+    // Same-tab write, then a functional update on the reader before React flushes.
+    writer.result.current[1](10);
+    counter.result.current[1]((n) => n + 1);
+  });
+  expect(counter.result.current[0]).toBe(11);
+  expect(writer.result.current[0]).toBe(11);
+});
