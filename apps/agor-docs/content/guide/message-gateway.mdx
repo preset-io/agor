@@ -610,8 +610,7 @@ final answer back into the same chat or channel thread.
   daemon serves it, so it works behind a load balancer. The host must be reachable
   over public HTTPS.
 - **Mentions.** Personal chats need no mention. Group chats and channels need an
-  `@mention` of the bot; other messages are ignored and not stored. The agent
-  receives the mentioning message only, not earlier replies in the thread.
+  `@mention` of the bot; other messages are ignored and not stored.
 - **Conversations.** A personal or group chat maps to one session. In a channel,
   each reply thread maps to its own session.
 - **Delivery.** Agor acknowledges Teams only after the activity is safely queued,
@@ -635,8 +634,8 @@ Open **Settings → Gateway → Add Channel**, choose **Microsoft Teams**, and f
 the three steps:
 
 1. **Channel.** Name, target branch, and **Enabled** (on by default).
-2. **Access.** Choose the identity mode (see below) and, optionally, allowlists
-   and agent configuration.
+2. **Access.** Choose the identity mode (see below) and, optionally, allowlists,
+   catch-up, and agent configuration.
 3. **Credentials & test.** Enter the App ID, client secret, and Tenant ID, then
    select **Test connection**. Agor requests a token from Microsoft with these
    credentials; a green result proves the App ID, secret, and tenant match.
@@ -676,6 +675,12 @@ They do not choose an identity.
    there with the `personal`, `team`, and `groupChat` bot scopes.
 3. Upload the custom app (or publish it to your organization) and install it in
    the chats and teams where you want it.
+
+**Channel catch-up (optional, off by default).** When enabled, a mention in a
+channel thread also gives the agent the replies posted since its last answer.
+It needs the `ChannelMessage.Read.Group` resource-specific permission, which a
+team owner grants when installing the app. Without it, the bot still answers the
+mention.
 
 ### 5. Use it
 
@@ -719,7 +724,7 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and a stateless `TeamsConnector` (Agents SDK outbound). Teams HTTP authentication, encrypted ingress, claims, and mapping are owned by the shared daemon route/worker rather than a connector-local server.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and a stateless `TeamsConnector` (Agents SDK outbound). Teams HTTP authentication, encrypted ingress, claims, mapping, and catch-up are owned by the shared daemon route/worker rather than a connector-local server.
 - **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Provider-specific durable delivery intents are queued in the same tenant transaction; workers perform provider effects after a claim and persist definitive or ambiguous terminal state.
 
 ### Adding a New Platform
@@ -853,6 +858,9 @@ authoritative mutation transaction.
 - **"Your Microsoft Teams account isn't linked to an Agor user."** With aligned
   users, create an Agor account with the sender's work email, or add their AAD
   object ID to the channel's user map.
+- **Channel catch-up is missing.** Catch-up is off by default and needs the
+  `ChannelMessage.Read.Group` permission granted in that team. The bot still
+  answers the mention without it.
 - **A reply shows as `ambiguous`.** Agor could not confirm whether Teams accepted
   it. Check the conversation in Teams before resending anything yourself; Agor
   does not resend it automatically.

@@ -1,8 +1,10 @@
 /**
  * Recommended Teams app manifest material. This is a setup artifact, not a
- * live-provider verification result.
+ * live-provider verification result. RSC catch-up remains best-effort and is
+ * never required for the current mention path.
  */
 
+export const TEAMS_RSC_APPLICATION_PERMISSIONS = ['ChannelMessage.Read.Group'] as const;
 export const TEAMS_BOT_SCOPES = ['personal', 'team', 'groupchat'] as const;
 
 export interface TeamsSetupManifestOptions {
@@ -33,7 +35,7 @@ export function teamsGatewayCallbackUrl(options: TeamsSetupManifestOptions): str
   return `${origin.origin}/gateway/teams/${encodeURIComponent(options.gatewayChannelId)}/activities`;
 }
 
-/** Return the smallest manifest that exposes the supported bot surfaces. */
+/** Return the smallest manifest that exposes the supported bot surfaces and RSC. */
 export function buildTeamsSetupManifest(
   options: TeamsSetupManifestOptions
 ): Record<string, unknown> {
@@ -73,5 +75,14 @@ export function buildTeamsSetupManifest(
       },
     ],
     ...(validDomain ? { validDomains: [validDomain] } : {}),
+    authorization: {
+      permissions: {
+        resourceSpecific: TEAMS_RSC_APPLICATION_PERMISSIONS.map((name) => ({
+          name,
+          type: 'Application',
+        })),
+      },
+    },
+    webApplicationInfo: { id: options.appId, resource: 'https://api.botframework.com' },
   };
 }

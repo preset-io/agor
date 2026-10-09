@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildTeamsSetupManifest, teamsGatewayCallbackUrl } from './teams-manifest';
 
 describe('Teams setup artifact', () => {
-  it('uses the shared callback and bot scopes without claiming live verification', () => {
+  it('uses the shared callback and standard-channel RSC without claiming live verification', () => {
     const options = {
       appId: 'app-123',
       gatewayChannelId: 'channel-123',
@@ -15,7 +15,11 @@ describe('Teams setup artifact', () => {
     expect(manifest.bots).toEqual([
       expect.objectContaining({ botId: 'app-123', scopes: ['personal', 'team', 'groupchat'] }),
     ]);
-    expect(manifest).not.toHaveProperty('authorization');
+    expect(manifest.authorization).toEqual({
+      permissions: {
+        resourceSpecific: [{ name: 'ChannelMessage.Read.Group', type: 'Application' }],
+      },
+    });
     expect(manifest).not.toHaveProperty('agor');
   });
 

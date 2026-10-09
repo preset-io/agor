@@ -2877,6 +2877,8 @@ export const threadSessionMap = pgTable(
 
     // Durable Discord catch-up cursor. Provider history itself is never stored.
     discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
+    // Durable Teams admission cursor. Provider history itself is never stored.
+    teams_last_admitted_activity_id: text('teams_last_admitted_activity_id'),
   },
   (table) => ({
     tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),

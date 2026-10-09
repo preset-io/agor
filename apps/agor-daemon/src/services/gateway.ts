@@ -167,6 +167,7 @@ import {
 } from '../utils/gateway-read-failure.js';
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
+import { prepareTeamsCatchUp, type TeamsCatchUpTrigger } from '../utils/teams-catch-up.js';
 import { teamsConnectorCache } from '../utils/teams-connector-cache.js';
 import {
   createTenantBoundDataAccess,
@@ -246,6 +247,8 @@ interface PostMessageData {
   listener_channel_id?: import('@agor/core/types').GatewayChannelID;
   /** Decrypted only for the alignment lookup; never persisted as metadata. */
   teams_user_aad_object_id?: string;
+  /** Verified Teams trigger coordinates for optional catch-up; never persisted. */
+  teams_catch_up?: TeamsCatchUpTrigger;
   /**
    * Conversation-member coordinates from the verified Teams activity, used only
    * for email alignment. Teams creates require verified queue authority, so
@@ -6178,6 +6181,23 @@ export class GatewayService {
           throw new GatewayCatchUpError('unsupported', 'Discord history is unavailable');
         }
       }
+      let teamsCursorToWrite: string | undefined;
+      if (channel.channel_type === 'teams' && !outboundSeed) {
+        const teamsCatchUp = await prepareTeamsCatchUp({
+          channel,
+          connector: () =>
+            this.getActiveListener(channel.id) ??
+            getConnector(channel.channel_type as ChannelType, channel.config),
+          threadId: mappingForCursor?.thread_id ?? data.thread_id,
+          currentText: data.text,
+          conversationType: data.metadata?.teams_conversation_type,
+          trigger: data.teams_catch_up,
+          cursor: mappingForCursor?.teams_last_admitted_activity_id,
+          tenantId: getCurrentTenantId(),
+        });
+        promptText = teamsCatchUp.prompt;
+        teamsCursorToWrite = teamsCatchUp.cursor;
+      }
       if (channel.channel_type === 'slack' && !outboundSeed) {
         const currentTs = getSlackMessageTs(data.metadata);
         const mappingMetadata = ((mappingForCursor?.metadata as Record<string, unknown>) ?? {}) as
@@ -6453,6 +6473,13 @@ export class GatewayService {
         await this.threadMapRepo.advanceDiscordLastAdmittedMessageId(
           mappingForCursor.id,
           discordCursorToWrite
+        );
+      }
+      // Only a complete Teams read moves its cursor; a fallback leaves the interval to re-read.
+      if (channel.channel_type === 'teams' && teamsCursorToWrite && mappingForCursor) {
+        await this.threadMapRepo.advanceTeamsLastAdmittedActivityId(
+          mappingForCursor.id,
+          teamsCursorToWrite
         );
       }
 

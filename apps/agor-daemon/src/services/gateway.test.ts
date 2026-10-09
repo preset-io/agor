@@ -370,6 +370,7 @@ function makeGatewayHarness(args: {
         mapping = { ...mapping, discord_last_admitted_message_id: cursor } as ThreadSessionMap;
       return true;
     }),
+    advanceTeamsLastAdmittedActivityId: vi.fn(async () => true),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = makeMapping({
         ...data,
@@ -2249,6 +2250,143 @@ describe('GatewayService durable listener delivery fences', () => {
     });
     expect(findById).not.toHaveBeenCalled();
     expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
+  describe('Teams standard-channel catch-up', () => {
+    const triggerId = '1616990132035';
+    const threadId = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2|1616989510408';
+    const channel: GatewayChannel = {
+      ...slackChannel,
+      id: 'teams-catch-up-channel' as never,
+      channel_type: 'teams',
+      channel_key: 'teams-catch-up-key',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-a',
+        catch_up: {
+          mode: 'best_effort',
+          max_messages: 50,
+          max_prompt_bytes: 16_384,
+          request_timeout_ms: 8_000,
+        },
+      },
+      provider_installation_id: 'teams-app',
+      provider_config_generation: 3,
+    } as GatewayChannel;
+
+    function admit(service: GatewayService) {
+      const data = {
+        channel_key: channel.channel_key,
+        thread_id: threadId,
+        text: 'what did we decide?',
+        user_name: 'Ada',
+        metadata: { teams_conversation_type: 'channel', teams_has_mention: true },
+        teams_catch_up: {
+          activity_id: triggerId,
+          timestamp: '2021-03-29T03:55:32.035Z',
+          service_url: 'https://smba.trafficmanager.net/amer/',
+          team_id: '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2',
+          team_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+        },
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000095' as never,
+        idempotency_task_id: '01927f9d-0000-7000-8000-000000000094' as never,
+      };
+      return service.create(
+        withVerifiedHttpGatewayAuthority(data, {
+          id: data.gateway_inbound_event_id,
+          gateway_channel_id: channel.id,
+          processing_token: 'claim-token',
+          provider_config_generation: 3,
+          verified_app_id: 'teams-app',
+          verified_tenant_id: 'tenant-a',
+          thread_id: threadId,
+        })
+      );
+    }
+
+    function harness(fetchProviderHistory: ReturnType<typeof vi.fn>) {
+      const result = makeGatewayHarness({
+        channel,
+        existingMapping: makeMapping({
+          channel_id: channel.id,
+          thread_id: threadId,
+          session_id: 'sess-teams' as never,
+          teams_last_admitted_activity_id: '1616990000000',
+        }),
+        connector: { sendMessage: vi.fn(), fetchProviderHistory },
+      });
+      Object.assign(result.service as unknown as Record<string, unknown>, {
+        taskRepo: { findById: vi.fn(async () => null) },
+      });
+      return result;
+    }
+
+    it('admits one complete interval through the shared formatter, then advances the cursor', async () => {
+      const fetchProviderHistory = vi.fn(async () => ({
+        threadId,
+        complete: true,
+        messages: [
+          {
+            providerMessageId: '1616990032035',
+            timestamp: '2021-03-29T03:53:52.035Z',
+            actorLabel: 'Robin Kline',
+            text: 'ship on Friday',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: false,
+            isMention: false,
+          },
+          {
+            providerMessageId: triggerId,
+            timestamp: '2021-03-29T03:55:32.035Z',
+            actorLabel: 'Teams participant',
+            text: '',
+            isBot: false,
+            isSystem: false,
+            isRich: false,
+            isTrigger: true,
+            isMention: true,
+          },
+        ],
+      }));
+      const { service, promptCreate, threadMapRepo } = harness(fetchProviderHistory);
+
+      await expect(admit(service)).resolves.toMatchObject({ success: true });
+      expect(fetchProviderHistory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          afterProviderCursor: '1616990000000',
+          triggerProviderCursor: triggerId,
+        })
+      );
+      const prompt = promptCreate.mock.calls[0][0].prompt as string;
+      expect(prompt).toContain('ship on Friday');
+      expect(prompt).toContain('what did we decide?');
+      expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).toHaveBeenCalledWith(
+        expect.any(String),
+        triggerId
+      );
+      expect(promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
+        threadMapRepo.advanceTeamsLastAdmittedActivityId.mock.invocationCallOrder[0]
+      );
+    });
+
+    it('admits the mention with history_status when the read fails and leaves the cursor', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const fetchProviderHistory = vi.fn(async () => {
+        throw new Error('Graph unavailable');
+      });
+      const { service, promptCreate, threadMapRepo } = harness(fetchProviderHistory);
+
+      await expect(admit(service)).resolves.toMatchObject({ success: true });
+      warn.mockRestore();
+      expect(promptCreate).toHaveBeenCalledOnce();
+      const prompt = promptCreate.mock.calls[0][0].prompt as string;
+      expect(prompt).toContain('history_status');
+      expect(prompt).toContain('what did we decide?');
+      expect(threadMapRepo.advanceTeamsLastAdmittedActivityId).not.toHaveBeenCalled();
+    });
   });
 
   it('uses short guarded tenant DB scopes while keeping provider startup outside transactions', async () => {

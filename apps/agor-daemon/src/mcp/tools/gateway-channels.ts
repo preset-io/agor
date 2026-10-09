@@ -25,6 +25,7 @@ import {
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
   type SlackWizardOptions,
+  TEAMS_RSC_APPLICATION_PERMISSIONS,
   teamsGatewayCallbackUrl,
   validateDiscordSetup,
 } from '@agor/core/gateway';
@@ -2094,7 +2095,7 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_teams_setup',
     {
       description:
-        'Generate the Microsoft Teams gateway setup artifact (admin-only): a desired Teams app manifest, the shared Agor callback URL, and explicit setup caveats. This is pure and honest: it creates no Azure/Teams resource, validates no credentials, and does not verify a live installation.',
+        'Generate the Microsoft Teams gateway setup artifact (admin-only): a desired Teams app manifest, the shared Agor callback URL, standard-channel RSC permission, and explicit setup caveats. This is pure and honest: it creates no Azure/Teams resource, validates no credentials, and does not verify a live installation.',
       annotations: { readOnlyHint: true },
       inputSchema: teamsSetupSchema,
     },
@@ -2109,15 +2110,17 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       return textResult({
         manifest: buildTeamsSetupManifest(options),
         callback_url: teamsGatewayCallbackUrl(options),
+        rsc_permissions: [...TEAMS_RSC_APPLICATION_PERMISSIONS],
         setup_steps: [
           'Register or select the Microsoft Entra application and Azure Bot identity for this channel; keep the app ID and tenant ID aligned with the Agor channel configuration.',
           'Configure the Azure Bot messaging endpoint to callback_url. Agor owns one shared HTTPS route; there is no per-channel port or path to configure.',
-          'Install the desired manifest in Teams for the users, teams, or group chats that should reach Agor.',
+          'Install the desired manifest in Teams and grant the standard-channel RSC permission where required by the tenant.',
           "Choose identity: align_teams_users (match each sender's Teams email to an Agor user; optional user_map overrides by AAD object ID) or a fixed agorUserId that every sender runs as.",
           'Enter the app password through the secure credential widget. Agor verifies the app ID, password, and Microsoft tenant with a client-credentials token request and enables the channel only when that succeeds.',
         ],
         caveats: [
           'GENERATED ONLY — no Azure or Teams resource was created, no credential was validated, and live activity delivery was not verified.',
+          'Channel catch-up is off by default. When enabled it needs resource-specific consent per team and never blocks the current mention.',
           'Outbound delivery is durable and HA, but a provider timeout after the effect marker is terminal ambiguous; operators must inspect the delivery rather than blindly retrying.',
         ],
       });

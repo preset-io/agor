@@ -116,10 +116,13 @@ export {
 } from './connectors/teams';
 export type { TeamsAddressRevocationEvent } from './connectors/teams-address-events';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export type { TeamsProviderHistoryContext } from './connectors/teams-history';
+export { fetchTeamsProviderHistory, resetTeamsHistoryCaches } from './connectors/teams-history';
 export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';
 export {
   buildTeamsSetupManifest,
   TEAMS_BOT_SCOPES,
+  TEAMS_RSC_APPLICATION_PERMISSIONS,
   teamsGatewayCallbackUrl,
 } from './connectors/teams-manifest';
 export type {

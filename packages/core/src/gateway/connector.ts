@@ -81,6 +81,8 @@ export interface GatewayProviderHistoryMessage {
   isRich: boolean;
   isTrigger: boolean;
   isMention: boolean;
+  /** Set only when the channel has a sender allowlist; untrusted context either way. */
+  senderAllowlisted?: boolean;
 }
 
 /** Request for one bounded, exclusive/inclusive provider-history interval. */
@@ -91,6 +93,10 @@ export interface GatewayProviderHistoryRequest {
   /** The live mention boundary is inclusive. */
   throughProviderCursor: string;
   triggerProviderCursor: string;
+  /** Provider coordinates from the verified trigger that the thread ID cannot carry. */
+  providerContext?: Readonly<Record<string, unknown>>;
+  /** One deadline for every provider call made for this interval. */
+  signal?: AbortSignal;
 }
 
 /** A complete, ordered provider-history interval. */
@@ -99,6 +105,8 @@ export interface GatewayProviderHistoryResult {
   messages: GatewayProviderHistoryMessage[];
   /** False means the connector could not prove complete interval coverage. */
   complete: boolean;
+  /** True when the connector kept only the newest messages of a longer interval. */
+  earlierOmitted?: boolean;
 }
 
 /** Durable provider polling checkpoint owned by the current listener lease. */

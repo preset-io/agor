@@ -2562,16 +2562,48 @@ const ChannelFormFields: React.FC<{
     },
     {
       key: 'teams-delivery',
-      label: <SectionLabel icon={<ToolOutlined />} title="Delivery" subtitle="optional" />,
+      label: (
+        <SectionLabel icon={<ToolOutlined />} title="Delivery and catch-up" subtitle="optional" />
+      ),
       children: (
-        <Form.Item
-          label="Enable outbound replies"
-          name="teams_outbound_enabled"
-          valuePropName="checked"
-          initialValue={true}
-        >
-          <Switch />
-        </Form.Item>
+        <>
+          <Form.Item label="Catch-up mode" name="teams_catch_up_mode" initialValue="off">
+            <Select
+              options={[
+                { value: 'best_effort', label: 'Best effort (bounded)' },
+                { value: 'off', label: 'Off' },
+              ]}
+            />
+          </Form.Item>
+
+          <Space.Compact block>
+            <Form.Item
+              label="Max catch-up messages"
+              name="teams_catch_up_max_messages"
+              initialValue={50}
+              style={{ flex: 1 }}
+            >
+              <InputNumber min={1} max={100} style={{ width: '100%' }} />
+            </Form.Item>
+            <Form.Item
+              label="Max prompt bytes"
+              name="teams_catch_up_max_prompt_bytes"
+              initialValue={16384}
+              style={{ flex: 1 }}
+            >
+              <InputNumber min={1} max={65536} style={{ width: '100%' }} />
+            </Form.Item>
+          </Space.Compact>
+
+          <Form.Item
+            label="Enable outbound replies"
+            name="teams_outbound_enabled"
+            valuePropName="checked"
+            initialValue={true}
+          >
+            <Switch />
+          </Form.Item>
+        </>
       ),
     },
     {
@@ -4271,6 +4303,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       }
       config.outbound_enabled = values.teams_outbound_enabled ?? true;
+      // The timeout is daemon-defaulted and bounded; the wizard keeps any stored value.
+      const storedCatchUp =
+        config.catch_up && typeof config.catch_up === 'object' && !Array.isArray(config.catch_up)
+          ? (config.catch_up as Record<string, unknown>)
+          : {};
+      config.catch_up = {
+        ...storedCatchUp,
+        mode: values.teams_catch_up_mode ?? 'off',
+        max_messages: (values.teams_catch_up_max_messages as number) ?? 50,
+        max_prompt_bytes: (values.teams_catch_up_max_prompt_bytes as number) ?? 16 * 1024,
+      };
     } else if (values.channel_type === 'shortcut') {
       if (values.shortcut_api_token) {
         config.api_token = sanitizeSecretValue(values.shortcut_api_token as string);
@@ -4654,6 +4697,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       ) {
         formValues.teams_user_map = JSON.stringify(teamsUserMap, null, 2);
       }
+      const catchUp = config?.catch_up as Record<string, unknown> | undefined;
+      formValues.teams_catch_up_mode = catchUp?.mode ?? 'off';
+      formValues.teams_catch_up_max_messages = catchUp?.max_messages ?? 50;
+      formValues.teams_catch_up_max_prompt_bytes = catchUp?.max_prompt_bytes ?? 16 * 1024;
       formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;

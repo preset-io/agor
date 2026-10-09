@@ -2505,6 +2505,8 @@ export const threadSessionMap = sqliteTable(
 
     // Durable Discord catch-up cursor. Provider history itself is never stored.
     discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
+    // Durable Teams admission cursor. Provider history itself is never stored.
+    teams_last_admitted_activity_id: text('teams_last_admitted_activity_id'),
   },
   (table) => ({
     uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(

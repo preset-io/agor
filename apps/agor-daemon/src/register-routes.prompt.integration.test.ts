@@ -289,6 +289,7 @@ describe('registered prompt route launch handoff', () => {
             app_id: 'teams-app',
             app_password: 'disposable-secret',
             microsoft_tenant_id: 'teams-tenant',
+            catch_up: { mode: 'off' },
           },
         });
         const inbound = new GatewayInboundEventRepository(f.db);
@@ -351,7 +352,7 @@ describe('registered prompt route launch handoff', () => {
           } else if (mutation === 'config-tuning') {
             await new GatewayChannelRepository(f.db).updateWithVerifiedProviderInstallation(
               channel.id,
-              { config: { ...channel.config, allowed_team_ids: ['another-team'] } },
+              { config: { ...channel.config, catch_up: { mode: 'off', max_messages: 10 } } },
               'teams-app',
               channel.provider_config_generation
             );

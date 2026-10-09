@@ -1,6 +1,6 @@
 /**
  * Bot Connector service-URL allowlist for Teams. Dependency-free so storage,
- * ingress, member lookup, and the send path share one check.
+ * ingress, catch-up, and the send path share one check.
  */
 
 /** Bot Connector hosts for commercial, GCC, GCC High, and DoD tenants. */

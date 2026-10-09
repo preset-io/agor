@@ -1188,9 +1188,11 @@ describe('GatewayChannelsTable Teams create wizard', () => {
         align_teams_users: true,
         allowed_team_ids: [],
         user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
+        catch_up: { mode: 'off' },
       },
     });
-    expect(channelCreate.mock.calls[0][0].config).not.toHaveProperty('catch_up');
+    // Catch-up stays off and the daemon owns the bounded request timeout default.
+    expect(channelCreate.mock.calls[0][0].config.catch_up).not.toHaveProperty('request_timeout_ms');
     // Same headroom rationale as the GitHub wizard test above: opens the real
     // channel-type Select, so it's among the heaviest tests in this file.
   }, 30_000);

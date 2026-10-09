@@ -18,6 +18,8 @@ ALTER TABLE "gateway_inbound_events" ADD COLUMN "next_attempt_at" timestamp with
 --> statement-breakpoint
 ALTER TABLE "gateway_inbound_events" ADD COLUMN "last_error_code" text;
 --> statement-breakpoint
+ALTER TABLE "thread_session_map" ADD COLUMN "teams_last_admitted_activity_id" text;
+--> statement-breakpoint
 -- Require explicit admin opt-in after reviewing the new callback and identity configuration.
 -- Temporary migration-only policies cover all tenants under FORCE RLS.
 CREATE POLICY "teams_cutover_select" ON "gateway_channels" FOR SELECT
