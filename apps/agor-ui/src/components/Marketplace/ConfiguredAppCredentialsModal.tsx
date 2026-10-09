@@ -18,8 +18,9 @@ export interface ConfiguredAppCredentialsModalProps {
  * Replace a customer-owned app install's Client ID and/or Client secret in
  * place, through the ordinary `mcp-servers` patch (same authorizer, sealing,
  * and redaction as Settings). The secret is write-only: the form only says
- * one is saved. A new Client ID usually comes with its own secret, so it is
- * required alongside an ID change when the recipe requires a secret.
+ * one is saved. A secret belongs to its Client ID, so an ID change always
+ * replaces it: a new secret is required when the recipe requires one, and
+ * otherwise the saved secret is cleared unless a new one is entered.
  */
 export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsModalProps> = ({
   server,
@@ -55,7 +56,13 @@ export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsMod
         auth: {
           type: 'oauth',
           oauth_client_id: trimmedId,
-          ...(newSecret ? { oauth_client_secret: newSecret } : {}),
+          // A secret never carries over to a different Client ID; `null`
+          // clears the saved one through the ordinary auth patch.
+          ...(newSecret
+            ? { oauth_client_secret: newSecret }
+            : idChanged && secretSaved
+              ? { oauth_client_secret: null }
+              : {}),
         },
         ...(server.config_version !== undefined
           ? { expected_config_version: server.config_version }
@@ -105,8 +112,10 @@ export const ConfiguredAppCredentialsModal: React.FC<ConfiguredAppCredentialsMod
           extra={
             <Text type="secondary">
               {secretSaved
-                ? idChanged && secretRequired
-                  ? 'A new Client ID needs its own Client secret.'
+                ? idChanged
+                  ? secretRequired
+                    ? 'A new Client ID needs its own Client secret.'
+                    : 'Changing the Client ID clears the saved secret unless you enter a new one.'
                   : 'A secret is saved and never shown. Leave blank to keep it.'
                 : 'No secret is saved.'}
             </Text>

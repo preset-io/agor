@@ -420,6 +420,10 @@ ${block}
       );
       const hubspot = (await loadCuratedCatalog()).find((e) => e.name === 'com.hubspot/mcp');
       expect(hubspot?.oauth?.configured_client?.credentials_hint).toMatch(/not the numeric App ID/);
+      const slack = (await loadCuratedCatalog()).find((e) => e.name === 'com.slack/mcp');
+      expect(slack?.oauth?.configured_client?.credentials_hint).toMatch(
+        /User Token Scopes \(not bot scopes\)/
+      );
     });
 
     it('refuses an unsupported method', () => {
@@ -673,7 +677,8 @@ describe('the shipped catalog', () => {
         expect.objectContaining({
           name: 'io.github.clerk/mcp-server',
           remote_url: 'https://mcp.clerk.com/mcp',
-          auth_type: 'none',
+          // 2026-10-09: Clerk moved this endpoint from no-auth to OAuth (DCR).
+          auth_type: 'oauth',
         }),
         expect.objectContaining({
           name: 'io.github.cloudinary/asset-management-mcp',

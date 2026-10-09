@@ -152,16 +152,20 @@ entries:
     auth_type: oauth
 
   - name: io.github.clerk/mcp-server
+    # 2026-10-09: the endpoint moved from no-auth to OAuth (401 challenge;
+    # authorization server https://clerk.clerk.com with DCR, PKCE S256, public
+    # clients). One test registration with an Agor callback was accepted.
     category: dev-tools
-    capabilities: [docs, code-search]
-    benefit: Pull Clerk's own SDK snippets for the framework you are in, so auth code compiles against the current API rather than a remembered one.
-    starter_prompt: Show Clerk's current pattern for protecting a server route in the framework I am using and check my implementation against it.
-    permission_disclosure: Reads Clerk's public documentation and SDK code snippets. No account, application, or end-user data is accessed.
+    capabilities: [docs, code-search, projects]
+    benefit: Pull Clerk's own SDK guidance for the framework you are in, and inspect your Clerk applications and users when you ask.
+    starter_prompt: Show Clerk's current pattern for protecting a server route in the framework I am using and check my implementation against it. Do not change anything in my Clerk account.
+    permission_disclosure: Acts as your Clerk user after you sign in. Clerk's requested scopes let it read your organizations, and read and manage your Clerk applications, their domains, and their users (including creating, changing, or deleting them where your role allows). Data returned by Clerk is sent to the agent and AI provider running this Agor session.
     icon_url: https://www.google.com/s2/favicons?domain=clerk.com&sz=64
+    website_url: https://clerk.com/docs
     popularity_rank: 50
     remote_url: https://mcp.clerk.com/mcp
     transport: streamable-http
-    auth_type: none
+    auth_type: oauth
 
   - name: com.supabase/mcp
     category: data-storage
@@ -1122,6 +1126,7 @@ unpublished:
         setup_url: https://docs.slack.dev/ai/slack-mcp-server
         issuer: https://mcp.slack.com
         secret_required: true
+        credentials_hint: At api.slack.com/apps, create an app From scratch in your workspace and turn on Features → Agents & AI Apps → Model Context Protocol. Under OAuth & Permissions, add the callback shown here as a Redirect URL and the requested scopes as User Token Scopes (not bot scopes). Copy the Client ID and Client Secret from Basic Information.
       # The token endpoint advertises only form-body client authentication.
       token_endpoint_auth_method: client_secret_post
 

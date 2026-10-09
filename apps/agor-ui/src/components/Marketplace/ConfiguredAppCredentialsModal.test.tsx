@@ -80,13 +80,33 @@ describe('ConfiguredAppCredentialsModal', () => {
     });
   });
 
-  it('allows a new Client ID alone when the recipe does not require a secret', async () => {
+  it('clears the saved secret with a new Client ID when the recipe does not require one', async () => {
     const { patch, id, save } = renderModal(false);
     fireEvent.change(id(), { target: { value: 'public-client' } });
+    expect(
+      screen.getByText('Changing the Client ID clears the saved secret unless you enter a new one.')
+    ).toBeTruthy();
     fireEvent.click(save());
     await waitFor(() =>
       expect(patch).toHaveBeenCalledWith('server-1', {
-        auth: { type: 'oauth', oauth_client_id: 'public-client' },
+        auth: { type: 'oauth', oauth_client_id: 'public-client', oauth_client_secret: null },
+        expected_config_version: 4,
+      })
+    );
+  });
+
+  it('sends the new secret with a new Client ID when one is entered for an optional-secret recipe', async () => {
+    const { patch, id, secret, save } = renderModal(false);
+    fireEvent.change(id(), { target: { value: 'public-client' } });
+    fireEvent.change(secret(), { target: { value: 'optional-secret' } });
+    fireEvent.click(save());
+    await waitFor(() =>
+      expect(patch).toHaveBeenCalledWith('server-1', {
+        auth: {
+          type: 'oauth',
+          oauth_client_id: 'public-client',
+          oauth_client_secret: 'optional-secret',
+        },
         expected_config_version: 4,
       })
     );

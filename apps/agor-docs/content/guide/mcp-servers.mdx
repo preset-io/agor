@@ -353,8 +353,12 @@ The same form serves these entries; each card links the provider's setup guide.
 Set the app's redirect URL to the callback the Catalog form shows.
 
 - **Slack (official MCP):** an internal or Slack Marketplace app (unlisted apps
-  cannot use MCP) with the user scopes the entry requests. This complements, and
-  does not replace, Agor's Slack gateway.
+  cannot use MCP). At api.slack.com/apps, create it **From scratch** in your workspace,
+  turn on **Features → Agents & AI Apps → Model Context Protocol**, add the callback the
+  Catalog form shows under **OAuth & Permissions → Redirect URLs**, add the requested
+  scopes as **User Token Scopes** (not bot scopes), then copy the Client ID and Client
+  Secret from **Basic Information**. This complements, and does not replace, Agor's
+  Slack gateway.
 - **Box:** a Box admin adds a **Box MCP server** integration and issues its
   client ID and secret.
 - **Front** (open beta): a Front developer app with **MCP Server** feature access.
