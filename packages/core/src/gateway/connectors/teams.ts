@@ -20,7 +20,7 @@ import type {
   GatewayProviderHistoryResult,
   InboundSkippedFile,
 } from '../connector';
-import { isAllowedTeamsServiceUrl } from '../teams-service-url';
+import { isTeamsTokenHost } from '../teams-service-url';
 import { fetchTeamsProviderHistory } from './teams-history';
 import {
   type PreparedTeamsSend,
@@ -200,7 +200,7 @@ export async function fetchTeamsMemberIdentity(
   } catch {
     throw new TeamsMemberLookupError('teams_service_url_invalid', false);
   }
-  if (!isAllowedTeamsServiceUrl(request.serviceUrl)) {
+  if (!isTeamsTokenHost(request.serviceUrl)) {
     throw new TeamsMemberLookupError('teams_service_url_invalid', false);
   }
   const getToken =

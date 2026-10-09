@@ -49,7 +49,12 @@ export interface TeamsVerifiedHttpAdmissionInput {
   /** Address coordinates; channel, thread, and verified identity come from this admission. */
   address: Pick<
     TeamsConversationAddressInput,
-    'conversationId' | 'rootMessageId' | 'teamId' | 'address'
+    | 'conversationId'
+    | 'rootMessageId'
+    | 'teamId'
+    | 'teamAadGroupId'
+    | 'teamsChannelType'
+    | 'address'
   >;
   providerConfigGeneration: number;
   verifiedAppId: string;

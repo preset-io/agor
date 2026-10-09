@@ -7,7 +7,7 @@
 import { Activity, type ConversationReference } from '@microsoft/agents-activity';
 import { ConnectorClient } from '@microsoft/agents-hosting';
 import type { TeamsAddressRevocationReason } from '../../types/gateway';
-import { isAllowedTeamsServiceUrl } from '../teams-service-url';
+import { isTeamsTokenHost } from '../teams-service-url';
 
 /** Text budget per Teams message in UTF-16 units; the hard activity limit is ~100 KB. */
 export const TEAMS_MESSAGE_TEXT_BUDGET = 40_000;
@@ -181,7 +181,7 @@ export async function prepareTeamsSend(
   if (typeof conversationId !== 'string' || !conversationId) {
     throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
   }
-  if (!isAllowedTeamsServiceUrl(reference.serviceUrl)) {
+  if (!isTeamsTokenHost(reference.serviceUrl)) {
     throw new TeamsSendError({ phase: 'prepare', reason: 'service_url_not_allowed' });
   }
   const serviceUrl = reference.serviceUrl;

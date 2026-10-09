@@ -54,6 +54,8 @@ CREATE TABLE "teams_conversation_addresses" (
 	"conversation_id" text NOT NULL,
 	"root_message_id" text,
 	"team_id" text,
+	"team_aad_group_id" text,
+	"teams_channel_type" text,
 	"encrypted_address" text NOT NULL,
 	"verified_app_id" text NOT NULL,
 	"verified_tenant_id" text NOT NULL,

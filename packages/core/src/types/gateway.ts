@@ -210,6 +210,8 @@ export interface TeamsConversationAddress {
   conversation_id: string;
   root_message_id: string | null;
   team_id: string | null;
+  team_aad_group_id: string | null;
+  teams_channel_type: string | null;
   encrypted_address: string;
   verified_app_id: string;
   verified_tenant_id: string;
@@ -297,12 +299,42 @@ export interface TeamsGatewayConfig {
   /** Alignment override: AAD object ID → tenant-owned immutable Agor User ID. */
   user_map?: TeamsUserMap;
   catch_up?: TeamsCatchUpConfig;
+  /** Read inline images and personal-chat files; needs `supportsFiles` in the app manifest. */
+  files?: boolean;
+  agent_tools?: TeamsAgentToolsConfig;
   /** False turns off every Teams post: replies, notices, and typing. */
   outbound_enabled?: boolean;
+  /** `channel:<19:…@thread.tacv2>` used when a proactive send names no target. */
+  default_outbound_target?: string | null;
   /** Accepted during migration only; no runtime effect. */
   tenant_id?: string;
   webhook_port?: number;
   webhook_path?: string;
+}
+
+/** Per-channel toggles for agent-callable Teams MCP tools; all off unless an admin enables them. */
+export interface TeamsAgentToolsConfig {
+  /** Read standard-channel threads and list channel posts through Graph. */
+  channel_history?: boolean;
+}
+
+export type TeamsAgentToolCapability = keyof TeamsAgentToolsConfig;
+
+export const TEAMS_AGENT_TOOL_DEFAULTS: Record<TeamsAgentToolCapability, boolean> = {
+  channel_history: false,
+};
+
+export function resolveTeamsAgentTools(raw: unknown): Record<TeamsAgentToolCapability, boolean> {
+  return resolveAgentToolToggles(raw, TEAMS_AGENT_TOOL_DEFAULTS);
+}
+
+/** A Teams channel conversation ID, the same string in Bot Framework and Graph. */
+export const TEAMS_CHANNEL_ID_PATTERN = /^19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)$/;
+
+/** The channel ID of a `channel:<19:…@thread.tacv2>` outbound target, or null. */
+export function teamsOutboundChannelTarget(target: string): string | null {
+  const channelId = target.trim().startsWith('channel:') ? target.trim().slice(8) : '';
+  return TEAMS_CHANNEL_ID_PATTERN.test(channelId) ? channelId : null;
 }
 
 export interface TeamsCatchUpConfig {
@@ -427,6 +459,22 @@ export function validateTeamsConfig(
     errors.push('user_map is only allowed when align_teams_users is true');
   }
   if (typeof raw.outbound_enabled !== 'boolean') errors.push('outbound_enabled must be a boolean');
+  if (raw.files !== undefined && typeof raw.files !== 'boolean') {
+    errors.push('files must be a boolean');
+  }
+  validateAgentToolToggles(raw.agent_tools, TEAMS_AGENT_TOOL_DEFAULTS, 'Teams', errors);
+  if (raw.default_outbound_target !== undefined && raw.default_outbound_target !== null) {
+    const channelId =
+      typeof raw.default_outbound_target === 'string'
+        ? teamsOutboundChannelTarget(raw.default_outbound_target)
+        : null;
+    const allowed = Array.isArray(raw.allowed_channel_ids) ? raw.allowed_channel_ids : [];
+    if (!channelId) {
+      errors.push('default_outbound_target must be channel:<19:…@thread.tacv2>');
+    } else if (allowed.length > 0 && !allowed.includes(channelId)) {
+      errors.push('default_outbound_target must target an allowed channel');
+    }
+  }
   if (!isRecord(raw.catch_up)) {
     errors.push('catch_up must be an object');
   } else {
@@ -727,7 +775,12 @@ export const DISCORD_AGENT_TOOL_DEFAULTS: Record<DiscordAgentToolCapability, boo
   channel_history: false,
 };
 
-function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
+function validateAgentToolToggles(
+  raw: unknown,
+  defaults: Record<string, boolean>,
+  provider: string,
+  errors: string[]
+): void {
   if (raw === undefined) return;
   if (Array.isArray(raw)) {
     if (raw.length > 0) errors.push('agent_tools must be [] or an object of capability toggles');
@@ -738,8 +791,8 @@ function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
     return;
   }
   for (const [key, value] of Object.entries(raw)) {
-    if (!Object.hasOwn(DISCORD_AGENT_TOOL_DEFAULTS, key)) {
-      errors.push(`agent_tools.${key} is not a supported Discord agent tool`);
+    if (!Object.hasOwn(defaults, key)) {
+      errors.push(`agent_tools.${key} is not a supported ${provider} agent tool`);
     } else if (typeof value !== 'boolean') {
       errors.push(`agent_tools.${key} must be a boolean`);
     }
@@ -753,9 +806,16 @@ function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
 export function resolveDiscordAgentTools(
   raw: unknown
 ): Record<DiscordAgentToolCapability, boolean> {
-  const resolved = { ...DISCORD_AGENT_TOOL_DEFAULTS };
+  return resolveAgentToolToggles(raw, DISCORD_AGENT_TOOL_DEFAULTS);
+}
+
+function resolveAgentToolToggles<K extends string>(
+  raw: unknown,
+  defaults: Record<K, boolean>
+): Record<K, boolean> {
+  const resolved = { ...defaults };
   if (!isRecord(raw)) return resolved;
-  for (const capability of Object.keys(resolved) as DiscordAgentToolCapability[]) {
+  for (const capability of Object.keys(resolved) as K[]) {
     if (typeof raw[capability] === 'boolean') resolved[capability] = raw[capability] as boolean;
   }
   return resolved;
@@ -1002,7 +1062,7 @@ export function validateDiscordConfig(
   if (raw.files !== undefined && typeof raw.files !== 'boolean') {
     errors.push('files must be a boolean');
   }
-  validateDiscordAgentTools(raw.agent_tools, errors);
+  validateAgentToolToggles(raw.agent_tools, DISCORD_AGENT_TOOL_DEFAULTS, 'Discord', errors);
 
   if (raw.outbound_enabled !== undefined && typeof raw.outbound_enabled !== 'boolean') {
     errors.push('outbound_enabled must be a boolean');

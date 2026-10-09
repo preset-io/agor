@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { validateTeamsConfig, withTeamsConfigDefaults } from './gateway';
+import {
+  resolveTeamsAgentTools,
+  teamsOutboundChannelTarget,
+  validateTeamsConfig,
+  withTeamsConfigDefaults,
+} from './gateway';
 
 const base = {
   app_id: 'teams-app',
@@ -33,5 +38,44 @@ describe('Teams config defaults', () => {
       allow_thread_replies_without_mention: true,
     });
     expect(validateTeamsConfig(legacy)).toEqual({ ok: true, errors: [] });
+  });
+});
+
+describe('Teams parity config', () => {
+  const channelId = '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2';
+
+  it('accepts files, agent tools, and a channel default target', () => {
+    const config = withTeamsConfigDefaults({
+      ...base,
+      files: true,
+      agent_tools: { channel_history: true },
+      default_outbound_target: `channel:${channelId}`,
+    });
+    expect(validateTeamsConfig(config)).toEqual({ ok: true, errors: [] });
+    expect(resolveTeamsAgentTools(config.agent_tools)).toEqual({ channel_history: true });
+    expect(resolveTeamsAgentTools(undefined)).toEqual({ channel_history: false });
+  });
+
+  it('rejects unknown agent tools, non-boolean files, and malformed or unallowed targets', () => {
+    const errors = (overrides: Record<string, unknown>) =>
+      validateTeamsConfig(withTeamsConfigDefaults({ ...base, ...overrides })).errors;
+    expect(errors({ agent_tools: { file_download: true } })).toEqual([
+      'agent_tools.file_download is not a supported Teams agent tool',
+    ]);
+    expect(errors({ agent_tools: { channel_history: 'yes' } })).toEqual([
+      'agent_tools.channel_history must be a boolean',
+    ]);
+    expect(errors({ files: 'true' })).toEqual(['files must be a boolean']);
+    expect(errors({ default_outbound_target: 'user:someone' })).toEqual([
+      'default_outbound_target must be channel:<19:…@thread.tacv2>',
+    ]);
+    expect(
+      errors({
+        default_outbound_target: `channel:${channelId}`,
+        allowed_channel_ids: ['19:other@thread.tacv2'],
+      })
+    ).toEqual(['default_outbound_target must target an allowed channel']);
+    expect(teamsOutboundChannelTarget(`channel:${channelId}`)).toBe(channelId);
+    expect(teamsOutboundChannelTarget('channel:C123')).toBeNull();
   });
 });

@@ -116,8 +116,9 @@ export {
 } from './connectors/teams';
 export type { TeamsAddressRevocationEvent } from './connectors/teams-address-events';
 export { teamsAddressRevocationFromActivity } from './connectors/teams-address-events';
+export { resetTeamsGraphCaches } from './connectors/teams-graph';
 export type { TeamsProviderHistoryContext } from './connectors/teams-history';
-export { fetchTeamsProviderHistory, resetTeamsHistoryCaches } from './connectors/teams-history';
+export { fetchTeamsProviderHistory } from './connectors/teams-history';
 export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';
 export {
   buildTeamsSetupManifest,
@@ -180,4 +181,8 @@ export {
   formatGatewaySystemPayload,
 } from './system-message';
 export { safeTeamsMetadata, TEAMS_SAFE_METADATA_KEYS } from './teams-metadata';
-export { isAllowedTeamsServiceUrl, TEAMS_SERVICE_URL_HOSTS } from './teams-service-url';
+export {
+  isAllowedTeamsServiceUrl,
+  isTeamsTokenHost,
+  TEAMS_SERVICE_URL_HOSTS,
+} from './teams-service-url';
