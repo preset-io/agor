@@ -501,10 +501,31 @@ export class TeamsConnector implements GatewayConnector {
   }
 
   formatMessage(markdown: string): string {
-    const collapsed = markdown.replace(
-      /<details>\s*<summary>([\s\S]*?)<\/summary>\s*([\s\S]*?)<\/details>/gi,
-      (_match, summary: string, content: string) => `**${summary.trim()}**\n${content.trim()}`
-    );
-    return stripHtmlTags(collapsed).trim();
+    return formatTeamsMarkdown(markdown);
   }
+}
+
+// Fenced blocks (an unclosed fence runs to the end, as in the chunker) and inline spans of any backtick length.
+const TEAMS_CODE_SEGMENT = /(`{3,}|~{3,})[\s\S]*?(?:\1|$)|(`+)[^\n]*?(?<!`)\2(?!`)/g;
+
+/**
+ * Teams renders some inline HTML in markdown, so prose drops HTML tags and
+ * `<details>` collapses to a bold summary; code passes through unchanged.
+ */
+export function formatTeamsMarkdown(markdown: string): string {
+  const formatProse = (prose: string) =>
+    stripHtmlTags(
+      prose
+        .replace(/<details>\s*<summary>([\s\S]*?)<\/summary>\s*/gi, (_match, summary: string) => {
+          return `**${summary.trim()}**\n`;
+        })
+        .replace(/\s*<\/details>/gi, '')
+    );
+  let formatted = '';
+  let offset = 0;
+  for (const match of markdown.matchAll(TEAMS_CODE_SEGMENT)) {
+    formatted += formatProse(markdown.slice(offset, match.index)) + match[0];
+    offset = match.index + match[0].length;
+  }
+  return (formatted + formatProse(markdown.slice(offset))).trim();
 }

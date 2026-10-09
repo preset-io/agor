@@ -406,6 +406,28 @@ describe('TeamsConnector', () => {
       expect(output).toContain('**Full diff**');
       expect(output).not.toContain('<details>');
     });
+
+    it('keeps fenced and inline code intact, including tags inside it', () => {
+      const fenced =
+        '```tsx\nconst items: Array<string> = [];\nreturn <Button onClick={go}>Go</Button>;\n```';
+      const input = `Use \`Array<string>\` and <b>bold</b>.\n\n${fenced}\n\nDone <br/>`;
+      expect(connector.formatMessage!(input)).toBe(
+        `Use \`Array<string>\` and bold.\n\n${fenced}\n\nDone`
+      );
+    });
+
+    it('keeps double-backtick spans and tilde fences intact', () => {
+      const input = 'Use ``Array<T>`` and <i>x</i>\n\n~~~\n<App />\n~~~';
+      expect(connector.formatMessage!(input)).toBe('Use ``Array<T>`` and x\n\n~~~\n<App />\n~~~');
+    });
+
+    it('keeps code inside a collapsed details block and an unclosed fence', () => {
+      const input =
+        '<details>\n<summary>Diff</summary>\n\n```diff\n+ <Foo />\n```\n</details>\n\n```\n<open>';
+      expect(connector.formatMessage!(input)).toBe(
+        '**Diff**\n```diff\n+ <Foo />\n```\n\n```\n<open>'
+      );
+    });
   });
 });
 
