@@ -832,7 +832,9 @@ const teamsThreadHistorySchema = z.strictObject({
   includeBotMessages: z
     .boolean()
     .optional()
-    .describe('Include bot and system messages. Defaults to false.'),
+    .describe(
+      'Include bot and system replies; the root post is always included. Defaults to false.'
+    ),
   format: z
     .enum(['messages', 'markdown'])
     .optional()
