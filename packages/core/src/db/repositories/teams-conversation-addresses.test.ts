@@ -129,6 +129,26 @@ describe('TeamsConversationAddressRepository', () => {
           rootMessageId: 'root-9',
         })
       );
+      // A personal chat and another team on the same gateway channel are outside the removal.
+      const survivors = [
+        input(channel, {
+          threadId: 'a:personal-chat-1',
+          conversationId: 'a:personal-chat-1',
+          rootMessageId: null,
+          teamId: null,
+          address: {
+            serviceUrl: 'https://smba.trafficmanager.net/emea/',
+            conversation: { id: 'a:personal-chat-1' },
+          },
+        }),
+        input(channel, {
+          threadId: '19:other@thread.tacv2|root-3',
+          conversationId: '19:other@thread.tacv2',
+          rootMessageId: 'root-3',
+          teamId: '19:other-team@thread.tacv2',
+        }),
+      ];
+      for (const survivor of survivors) await addresses.refresh(survivor);
       const removal = teamsAddressRevocationFromActivity(
         {
           type: 'conversationUpdate',
@@ -146,6 +166,11 @@ describe('TeamsConversationAddressRepository', () => {
         expect(await addresses.loadFenced({ channel, threadId })).toEqual({
           ok: false,
           code: 'conversation_address_revoked',
+        });
+      }
+      for (const survivor of survivors) {
+        expect(await addresses.loadFenced({ channel, threadId: survivor.threadId })).toMatchObject({
+          ok: true,
         });
       }
       await addresses.refresh(input(channel));
