@@ -1,15 +1,16 @@
 import type { ReactiveSessionState, Session, Task } from '@agor-live/client';
 import { SessionStatus, TaskStatus } from '@agor-live/client';
-import { act, fireEvent, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionLatestTaskPeek } from './SessionLatestTaskPeek';
 
 const mock = vi.hoisted(() => ({
   state: null as ReactiveSessionState | null,
+  handle: null as { resync: () => Promise<void> } | null,
   taskBlockProps: null as Record<string, unknown> | null,
 }));
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
-  useSharedReactiveSession: () => ({ handle: null, state: mock.state }),
+  useSharedReactiveSession: () => ({ handle: mock.handle, state: mock.state }),
 }));
 vi.mock('../../contexts/AppActionsContext', () => ({ useAppActions: () => ({}) }));
 vi.mock('../../contexts/ConnectionContext', () => ({ useConnectionDisabled: () => false }));
@@ -47,6 +48,7 @@ function streamUpdate() {
 
 beforeEach(() => {
   mock.taskBlockProps = null;
+  mock.handle = null;
   frames = new Map();
   nextFrame = 0;
   hidden = false;
@@ -183,5 +185,70 @@ describe('preview recovery actions', () => {
     };
     view.rerender(peek());
     expect(mock.taskBlockProps).toMatchObject({ task: failed, canStartTurn: false });
+  });
+});
+
+describe('preview load errors', () => {
+  it.each([
+    {
+      error: 'Request timed out',
+      terminal: false,
+      message: "Couldn't load the latest activity.",
+      action: 'Try again',
+      details: true,
+    },
+    {
+      error: 'You do not have access to this session',
+      terminal: true,
+      message:
+        "This session isn't available. It may have been deleted, or you may not have access.",
+      action: null,
+      details: true,
+    },
+    {
+      error: 'Session was removed',
+      terminal: true,
+      message: 'This session was deleted.',
+      action: null,
+      details: false,
+    },
+  ])('$message', ({ error, terminal, message, action, details }) => {
+    if (!mock.state) throw new Error('missing state');
+    const resync = vi.fn(async () => {});
+    mock.handle = { resync };
+    mock.state = { ...mock.state, error, terminal };
+    render(peek());
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Details' }) !== null).toBe(details);
+    if (action) {
+      fireEvent.click(screen.getByRole('button', { name: action }));
+      expect(resync).toHaveBeenCalledOnce();
+    } else {
+      expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+    }
+  });
+});
+
+describe('queued preview', () => {
+  it('shows a queued message as one info notice with the message under Details', () => {
+    if (!mock.state) throw new Error('missing state');
+    mock.state = {
+      ...mock.state,
+      tasks: [],
+      queuedTasks: [
+        {
+          task_id: 'task-q',
+          status: TaskStatus.QUEUED,
+          created_at: '',
+          full_prompt: 'Fix the build',
+        } as Task,
+      ],
+    };
+    render(peek());
+    const notice = screen.getByText('This message is waiting in the queue.');
+    expect(notice.closest('[data-notice-type]')).toHaveAttribute('data-notice-type', 'info');
+    expect(screen.queryByText('Fix the build')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('Fix the build')).toBeInTheDocument();
   });
 });

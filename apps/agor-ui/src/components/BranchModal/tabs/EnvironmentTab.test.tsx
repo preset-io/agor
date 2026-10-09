@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setAuthConfigForTests } from '../../../hooks/useAuthConfig';
 import { EnvironmentTab } from './EnvironmentTab';
 
-vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({ isAdmin: true }) }));
+const permissions = vi.hoisted(() => ({ isAdmin: true }));
+vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => permissions }));
 vi.mock('../../CodeEditor', () => ({ CodeEditor: () => null }));
 
 const failure: BranchEnvironmentInstance = {
@@ -48,7 +49,10 @@ const repo: Repo = {
 };
 
 describe('EnvironmentTab diagnostics', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    permissions.isAdmin = true;
+  });
 
   beforeEach(() => {
     __setAuthConfigForTests(
@@ -63,14 +67,14 @@ describe('EnvironmentTab diagnostics', () => {
     );
   });
 
-  function setup(canControlEnvironment = true) {
+  function setup(canControlEnvironment: boolean | undefined, testBranch = branch) {
     const on = vi.fn();
     const client = { service: () => ({ on, removeListener: vi.fn() }) } as unknown as AgorClient;
     render(
       <ConfigProvider theme={{ algorithm: theme.darkAlgorithm, token: { motion: false } }}>
         <App>
           <EnvironmentTab
-            branch={branch}
+            branch={testBranch}
             repo={repo}
             client={client}
             canControlEnvironment={canControlEnvironment}
@@ -82,9 +86,12 @@ describe('EnvironmentTab diagnostics', () => {
   }
 
   it('shows one compact failure, collapses guidance, and opens the actionable output in Logs', async () => {
-    setup();
+    setup(true);
     expect(screen.getAllByRole('alert')).toHaveLength(1);
-    expect(screen.getByRole('alert')).toHaveTextContent(/^Start failed$/);
+    expect(screen.getByRole('alert')).toHaveAttribute('data-notice-type', 'error');
+    expect(
+      within(screen.getByRole('alert')).getByText("The environment didn't start.")
+    ).toBeInTheDocument();
     expect(screen.queryByText(/Cannot resolve the pushed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Retry Stop to request cleanup/)).not.toBeInTheDocument();
     expect(screen.queryByText(/No health check configured/)).not.toBeInTheDocument();
@@ -105,10 +112,54 @@ describe('EnvironmentTab diagnostics', () => {
     setup(false);
     expect(screen.getByText('View Logs').closest('button')!).toBeDisabled();
     expect(screen.getByText('Start').closest('button')!).toBeDisabled();
+    expect(screen.getByText('Start').closest('button')!).toHaveAttribute(
+      'title',
+      'You need full control of this branch to control its environment.'
+    );
+  });
+
+  it('does not claim missing permission when access was not decided', () => {
+    permissions.isAdmin = false;
+    setup(undefined);
+    expect(screen.getByText('Start').closest('button')!).toBeDisabled();
+    expect(screen.getByText('Start').closest('button')!).not.toHaveAttribute('title');
+  });
+
+  it.each([
+    {
+      shape: 'stale last_error on a stopped environment',
+      environment: { status: 'stopped', last_error: 'old failure' },
+      notice: null,
+    },
+    {
+      shape: 'error without a command',
+      environment: { status: 'error', last_error: 'spawn ENOENT' },
+      notice: { type: 'error', message: 'The environment reported an error.' },
+    },
+    {
+      shape: 'unhealthy running environment',
+      environment: {
+        status: 'running',
+        last_health_check: { status: 'unhealthy', timestamp: 'now', message: 'HTTP 503' },
+      },
+      notice: { type: 'warning', message: 'Running, but the health check failed.' },
+    },
+  ] satisfies Array<{
+    shape: string;
+    environment: BranchEnvironmentInstance;
+    notice: { type: string; message: string } | null;
+  }>)('shows the right banner for $shape', ({ environment, notice }) => {
+    setup(true, { ...branch, environment_instance: environment });
+    if (!notice) {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      return;
+    }
+    expect(screen.getByRole('alert')).toHaveAttribute('data-notice-type', notice.type);
+    expect(within(screen.getByRole('alert')).getByText(notice.message)).toBeInTheDocument();
   });
 
   it('keeps status and command logs synchronized with same-branch patches only', async () => {
-    const on = setup();
+    const on = setup(true);
     const update = on.mock.calls.find(([event]) => event === 'patched')?.[1];
     const patched: Branch = {
       ...branch,
@@ -123,9 +174,12 @@ describe('EnvironmentTab diagnostics', () => {
       },
     };
     act(() => update({ ...patched, branch_id: 'branch-b' }));
-    expect(screen.getByRole('alert')).toHaveTextContent('Start failed');
+    expect(screen.getByRole('alert')).toHaveTextContent("The environment didn't start.");
     act(() => update(patched));
-    expect(screen.getByRole('alert')).toHaveTextContent('Stop outcome unknown');
+    expect(screen.getByRole('alert')).toHaveAttribute('data-notice-type', 'warning');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      "Agor couldn't confirm the environment stopped. Check the logs before you try again."
+    );
     fireEvent.click(screen.getByText('View Logs').closest('button')!);
     await waitFor(() =>
       expect(

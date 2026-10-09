@@ -18,7 +18,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 vi.mock('../../contexts/ConnectionContext', () => ({
-  useConnectionDisabled: () => false,
+  useMutationGate: () => ({ canMutate: true, reason: null, message: null }),
 }));
 
 // AppHeader's own render count. ConnectionStatus is rendered unconditionally on

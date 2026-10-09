@@ -2,6 +2,7 @@ import { DEFAULT_AGENTIC_TOOL_NAME } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
@@ -378,5 +379,70 @@ describe('MobileApp branch actions', () => {
       }),
       'board-1',
     ]);
+  });
+});
+
+const ONLINE = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null as string | null,
+  currentSha: null as string | null,
+};
+
+describe('MobileApp connection banner', () => {
+  it.each([
+    { state: { connected: false, connecting: true }, text: 'Reconnecting to Agor…', action: null },
+    {
+      state: { connected: false },
+      text: "Lost connection to Agor. You can't make changes until it's back.",
+      action: 'Reconnect',
+    },
+    {
+      state: { outOfSync: true, capturedSha: 'abc123', currentSha: 'def456' },
+      text: "Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost. (abc123 → def456)",
+      action: 'Reload page',
+    },
+  ])('shows "$text"', ({ state, text, action }) => {
+    const onRetryConnection = vi.fn();
+    render(
+      <ConnectionProvider value={{ ...ONLINE, ...state }}>
+        {mobileAppTree('/m', { onRetryConnection })}
+      </ConnectionProvider>
+    );
+    expect(screen.getByText(text)).toBeInTheDocument();
+    if (action) expect(screen.getByRole('button', { name: action })).toBeInTheDocument();
+    if (action === 'Reconnect') {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+      expect(onRetryConnection).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('shows nothing while connected', () => {
+    render(<ConnectionProvider value={ONLINE}>{mobileAppTree('/m', {})}</ConnectionProvider>);
+    expect(screen.queryByText(/Agor/)).not.toBeInTheDocument();
+  });
+});
+
+describe('MobileApp Ask with a failed primary lookup', () => {
+  it('reports the failure instead of offering the picker, and Try again starts the session', async () => {
+    const getPrimaryTeammate = vi.fn().mockRejectedValue(new Error('Request timed out'));
+    const onCreateSession = vi.fn(async () => ({ sessionId: 'session-new' }));
+    const client = { service: () => ({ getPrimaryTeammate }) };
+    render(
+      <ConnectionProvider value={ONLINE}>
+        {mobileAppTree('/m', { client, user: { user_id: 'user-1' }, onCreateSession })}
+      </ConnectionProvider>
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+
+    expect(await screen.findByText("Couldn't load your primary assistant.")).toBeInTheDocument();
+    expect(screen.queryByTestId('teammate-picker')).not.toBeInTheDocument();
+
+    getPrimaryTeammate.mockResolvedValue(primaryBranch);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
   });
 });

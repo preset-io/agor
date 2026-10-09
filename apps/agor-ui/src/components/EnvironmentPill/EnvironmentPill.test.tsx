@@ -1,5 +1,5 @@
 import type { Branch, Repo } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 
@@ -16,8 +16,13 @@ vi.mock('antd', async () => {
     Space: ({ children }: { children: React.ReactNode }) =>
       React.createElement(React.Fragment, null, children),
     Spin: () => React.createElement('span', null, 'loading'),
-    Tooltip: ({ children }: { children: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
+    Tooltip: ({ children, title }: { children: React.ReactNode; title?: React.ReactNode }) =>
+      React.createElement(
+        React.Fragment,
+        null,
+        children,
+        React.createElement('span', { 'data-testid': 'tooltip' }, title)
+      ),
     Tag: Object.assign(
       ({ children, ...props }: React.HTMLAttributes<HTMLSpanElement>) =>
         React.createElement('span', props, children),
@@ -308,5 +313,112 @@ describe('EnvironmentPill', () => {
 
     expect(screen.getByText('env')).toBeInTheDocument();
     expect(screen.queryByText('default')).not.toBeInTheDocument();
+  });
+
+  const tooltips = () => screen.getAllByTestId('tooltip').map((node) => node.textContent);
+  const settled = (action: 'start' | 'stop' | 'nuke', outcome: 'failed' | 'unknown'): Branch =>
+    ({
+      ...branch,
+      environment_instance: {
+        status: 'error',
+        command_attempt: { id: 'attempt', action, finished_at: 'done' },
+        last_command: { action, status: outcome, timestamp: 'done', message: 'exit 1' },
+      },
+    }) as Branch;
+
+  it.each([
+    {
+      shape: 'failed start',
+      branch: settled('start', 'failed'),
+      icon: 'close-circle',
+      logs: 'View environment logs',
+      status: "The environment didn't start. Check the logs.",
+      stop: 'Stop environment',
+    },
+    {
+      shape: 'failed stop',
+      branch: settled('stop', 'failed'),
+      icon: 'close-circle',
+      logs: 'View environment logs',
+      status: "The environment didn't stop. Check the logs.",
+      stop: "Stop again. The environment didn't stop.",
+    },
+    {
+      shape: 'unconfirmed stop',
+      branch: settled('stop', 'unknown'),
+      icon: 'warning',
+      logs: 'View environment logs',
+      status: "Agor couldn't confirm the last stop. Check the logs before you try again.",
+      stop: "Stop again. Agor couldn't confirm the last stop.",
+    },
+    {
+      shape: 'failed nuke',
+      branch: settled('nuke', 'failed'),
+      icon: 'close-circle',
+      logs: 'View environment logs',
+      status: "The nuke didn't finish. Check the logs.",
+      stop: 'Stop environment',
+    },
+    {
+      shape: 'stopped',
+      branch,
+      icon: 'stop',
+      logs: 'No logs yet.',
+      status: 'Stopped',
+      stop: 'Environment not running',
+    },
+  ])(
+    'describes a $shape environment by its last action',
+    ({ branch, icon, logs, status, stop }) => {
+      render(<EnvironmentPill {...defaultProps} branch={branch} />);
+      expect(tooltips()).toEqual([
+        status,
+        'Start environment',
+        stop,
+        logs,
+        'Nuke environment. This removes all its data and volumes.',
+        'Configure environment',
+      ]);
+      // The severity shows in the status icon: amber for an unconfirmed outcome.
+      const statusIcon = within(screen.getByText('env').parentElement!).getByRole('img');
+      expect(statusIcon).toHaveAttribute('aria-label', icon);
+    }
+  );
+
+  it('describes an unhealthy environment without its URL', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            environment_instance: {
+              status: 'running',
+              last_health_check: { status: 'unhealthy', timestamp: 'now', message: 'HTTP 503' },
+            },
+          } as Branch
+        }
+      />
+    );
+    expect(tooltips()[0]).toBe('Running, but the health check failed. (HTTP 503)');
+  });
+
+  it('explains the unconfigured pill', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        repo={{ repo_id: 'repo-unconfigured', slug: 'preset-io/unconfigured' } as Repo}
+      />
+    );
+    expect(tooltips()).toEqual(['No environment set up yet. Use the edit button to add one.']);
+  });
+
+  it('gives the no-permission reason only when control is denied', () => {
+    const noControl = 'You need full control of this branch to control its environment.';
+    const { rerender } = render(<EnvironmentPill {...defaultProps} />);
+    expect(tooltips()).not.toContain(noControl);
+    rerender(<EnvironmentPill {...defaultProps} canControlEnvironment={false} />);
+    expect(tooltips().filter((title) => title === noControl)).toHaveLength(4);
+    expect(screen.getByRole('button', { name: 'Start environment' })).toBeDisabled();
   });
 });

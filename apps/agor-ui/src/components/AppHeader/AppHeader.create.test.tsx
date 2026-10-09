@@ -11,8 +11,16 @@ import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { AppHeader } from './AppHeader';
 
+const OPEN_GATE = { canMutate: true, reason: null, message: null };
+const gate = vi.hoisted(() => ({
+  current: { canMutate: true, reason: null, message: null } as {
+    canMutate: boolean;
+    reason: string | null;
+    message: string | null;
+  },
+}));
 vi.mock('../../contexts/ConnectionContext', () => ({
-  useConnectionDisabled: () => false,
+  useMutationGate: () => gate.current,
 }));
 vi.mock('../BoardSwitcher', () => ({ BoardSwitcher: () => <div /> }));
 vi.mock('../BrandLogo', () => ({ BrandLogo: () => <div /> }));
@@ -43,6 +51,7 @@ async function openMenu() {
 describe('AppHeader navbar create button', () => {
   beforeEach(() => {
     agorStore.setState({ ...EMPTY_MAPS });
+    gate.current = OPEN_GATE;
   });
 
   it('lists Teammate, Branch and Board for members, and reports the picked flow', async () => {
@@ -80,5 +89,19 @@ describe('AppHeader navbar create button', () => {
   it('renders no create button when onCreate is absent', () => {
     renderHeader(<AppHeader />);
     expect(screen.queryByRole('button', { name: 'Create new' })).toBeNull();
+  });
+
+  it.each([
+    { reason: 'disconnected', message: "Lost connection to Agor. Try again once it's back." },
+    { reason: 'reconnecting', message: 'Reconnecting to Agor…' },
+    { reason: 'out-of-sync', message: 'Agor was updated. Reload the page to continue.' },
+  ])('explains why create is disabled while $reason', async ({ reason, message }) => {
+    gate.current = { canMutate: false, reason, message };
+    renderHeader(<AppHeader user={asRole('member')} onCreate={vi.fn()} />);
+    // getByRole would compute AntD's disabled-button styles, which jsdom can't parse.
+    const button = screen.getByLabelText('Create new');
+    expect(button).toBeDisabled();
+    fireEvent.mouseEnter(button.parentElement!);
+    expect(await screen.findByText(message)).toBeInTheDocument();
   });
 });

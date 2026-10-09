@@ -16,6 +16,7 @@
 import { lazy, Suspense, useRef } from 'react';
 import { useInViewportOnce } from '../../../hooks/useInViewportOnce';
 import type { ArtifactNodeData } from './ArtifactNode';
+import { ArtifactLoadBoundary } from './ArtifactNotices';
 import { NodeLoadingPlaceholder } from './NodeLoadingPlaceholder';
 
 const ArtifactNodeInner = lazy(() =>
@@ -31,7 +32,9 @@ export const ArtifactNode = (props: { data: ArtifactNodeData; selected?: boolean
   return (
     <div ref={ref}>
       {seen ? (
-        <Suspense fallback={placeholder}>{<ArtifactNodeInner {...props} />}</Suspense>
+        <ArtifactLoadBoundary style={{ width: props.data.width, boxSizing: 'border-box' }}>
+          <Suspense fallback={placeholder}>{<ArtifactNodeInner {...props} />}</Suspense>
+        </ArtifactLoadBoundary>
       ) : (
         placeholder
       )}

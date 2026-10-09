@@ -1,7 +1,7 @@
 // biome-ignore-all lint/plugin/noHardcodedColorProperty: log output intentionally uses a fixed terminal-like surface
 import type { AgorClient, Branch } from '@agor-live/client';
 import { ReloadOutlined } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Modal, Space, Tabs, Typography, theme } from 'antd';
+import { Button, Checkbox, Modal, Space, Tabs, Typography, theme } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthConfig } from '../../hooks/useAuthConfig';
 import {
@@ -9,6 +9,7 @@ import {
   hasEnvironmentCommandLogs,
 } from '../../utils/environmentCommand';
 import { Ansi } from '../AnsiText';
+import { CompactNotice } from '../CompactNotice';
 import { ErrorBoundary } from '../ErrorBoundary';
 import { EnvironmentCommandLogs } from './EnvironmentCommandLogs';
 
@@ -48,9 +49,10 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
     !!branch.logs_command &&
     !/^https?:\/\//i.test(branch.logs_command.trim());
   const runtimeUnavailableReason = !branch.logs_command
-    ? 'No runtime logs command configured.'
+    ? 'No logs command set up.'
     : shellLogsUnavailable
-      ? (featuresConfig?.environmentCommands?.shellLogsReason ?? 'Runtime shell logs unavailable.')
+      ? (featuresConfig?.environmentCommands?.shellLogsReason ??
+        "Logs aren't available for this environment.")
       : undefined;
   const commandStatus = getEnvironmentCommandStatus(branch.environment_instance);
   const preferCommands =
@@ -119,7 +121,7 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
         const errorData = {
           logs: '',
           timestamp: new Date().toISOString(),
-          error: error instanceof Error ? error.message : 'Failed to fetch logs',
+          error: error instanceof Error ? error.message : String(error),
         };
         setLogs(errorData);
         logsRef.current = errorData;
@@ -188,12 +190,10 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
             Fetched at: {formatTimestamp(logs.timestamp)}
           </Text>
           {logs.truncated && (
-            <Alert
-              title="Logs truncated (showing last 500 lines)"
-              type="warning"
-              showIcon
+            <CompactNotice
+              type="neutral"
+              message={`Showing the last ${logs.logs.split('\n').length} lines.`}
               style={{ marginTop: 8 }}
-              banner
             />
           )}
         </div>
@@ -201,7 +201,13 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
 
       {/* Error state */}
       {logs?.error && (
-        <Alert title={`Runtime logs unavailable: ${logs.error}`} type="error" showIcon />
+        <CompactNotice
+          type="error"
+          role="alert"
+          message="Couldn't load the logs."
+          actions={[{ label: 'Try again', onClick: () => void fetchLogs(false, true), loading }]}
+          details={[{ label: 'Error', value: logs.error, code: true }]}
+        />
       )}
 
       {/* Logs display */}
@@ -222,7 +228,7 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
             color: '#fff',
           }}
         >
-          {logs.logs ? <Ansi>{String(logs.logs)}</Ansi> : '(no logs)'}
+          {logs.logs ? <Ansi>{String(logs.logs)}</Ansi> : 'No logs yet.'}
         </div>
       )}
 
@@ -239,7 +245,7 @@ const EnvironmentLogsContent: React.FC<EnvironmentLogsModalProps> = ({
             justifyContent: 'center',
           }}
         >
-          Loading logs...
+          Loading logs…
         </div>
       )}
     </Space>

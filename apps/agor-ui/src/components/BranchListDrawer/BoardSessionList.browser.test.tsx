@@ -97,13 +97,11 @@ it('follows the teammate panel row grammar', async () => {
   }
 
   // Status marks and names match the panel's.
+  expect(within(row('Final independent')).getByRole('img', { name: 'Ready' })).toBeVisible();
   expect(
-    within(row('Final independent')).getByRole('img', { name: 'Ready for prompt' })
-  ).toBeVisible();
-  expect(
-    within(row('Independent PostgreSQL QA')).getByRole('img', { name: 'Awaiting permission' })
+    within(row('Independent PostgreSQL QA')).getByRole('img', { name: 'Waiting for approval' })
   ).toHaveClass('status-dot-run');
-  expect(row('Independent PostgreSQL QA')).toHaveAccessibleName(/; awaiting permission$/);
+  expect(row('Independent PostgreSQL QA')).toHaveAccessibleName(/; waiting for approval$/);
   // Running is a spinner, centered on the row like the dots.
   const spinner = within(row('Implement Teams')).getByRole('img', { name: 'Running' });
   expect(spinner).toHaveClass('anticon-spin');
@@ -127,7 +125,7 @@ it('follows the teammate panel row grammar', async () => {
   expect(getComputedStyle(row('Remediate').parentElement!).backgroundColor).toBe(
     resolve(token.colorErrorBg)
   );
-  expect(within(row('Remediate')).getByRole('img', { name: 'Latest task failed' })).toBeVisible();
+  expect(within(row('Remediate')).getByRole('img', { name: 'Last run failed' })).toBeVisible();
   const titleColor = (name: string) =>
     getComputedStyle(within(row(name)).getByText(new RegExp(`^${name}`))).color;
   expect(titleColor('Resync')).toBe(resolve(token.colorTextSecondary));

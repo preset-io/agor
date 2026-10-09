@@ -17,6 +17,12 @@ import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
+import {
+  ENVIRONMENT_NO_CONTROL,
+  ENVIRONMENT_NOT_CONFIGURED,
+  getEnvironmentOutcome,
+  getEnvironmentProblemLine,
+} from './environmentStatusCopy';
 
 interface EnvironmentPillProps {
   repo: Repo; // Need repo for environment_config
@@ -60,9 +66,7 @@ export function EnvironmentPill({
   // `others_can`: group grants are not present on the branch payload, and the
   // daemon is the source of truth for environment authorization.
   const resolvedCanControlEnvironment = canControlEnvironment ?? true;
-  const controlDisabledTooltip = resolvedCanControlEnvironment
-    ? undefined
-    : "Requires branch 'all' permission or admin access";
+  const controlDisabledTooltip = resolvedCanControlEnvironment ? undefined : ENVIRONMENT_NO_CONTROL;
 
   // Prefer reported access links, retaining the user-editable static fallback.
   const environmentUrl = getEnvironmentAccessUrls(env, branch.app_url)[0]?.url;
@@ -83,7 +87,7 @@ export function EnvironmentPill({
   // Case 1: No config at all - show grayed discovery pill
   if (!hasConfig) {
     return (
-      <Tooltip title="Click to configure environment (optional)">
+      <Tooltip title={ENVIRONMENT_NOT_CONFIGURED}>
         <Button
           size="small"
           aria-label="Configure environment"
@@ -111,6 +115,8 @@ export function EnvironmentPill({
 
   // Infer environment state by combining runtime status + health check
   const inferredState = getEnvironmentState(env);
+  const outcome = getEnvironmentOutcome(env);
+  const unconfirmed = outcome?.status === 'unknown';
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -142,12 +148,7 @@ export function EnvironmentPill({
     isStopping ||
     !canStop;
 
-  // Build helpful tooltip based on inferred state
   const getTooltipText = () => {
-    if (!hasConfig) {
-      return 'Click to configure environment';
-    }
-
     const healthCheck = env?.last_health_check;
     const healthMessage = healthCheck?.message ? ` - ${healthCheck.message}` : '';
 
@@ -156,22 +157,19 @@ export function EnvironmentPill({
         return environmentUrl
           ? `Healthy - ${environmentUrl}${healthMessage}`
           : `Healthy${healthMessage}`;
-      case 'unhealthy':
-        return environmentUrl
-          ? `Unhealthy - ${environmentUrl}${healthMessage}`
-          : `Unhealthy - check failed${healthMessage}`;
       case 'running':
         return environmentUrl
           ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
           : `Started (health unavailable${healthMessage})`;
       case 'starting':
-        return environmentUrl ? `Starting... - ${environmentUrl}` : 'Starting...';
+        return environmentUrl ? `Starting… - ${environmentUrl}` : 'Starting…';
       case 'stopping':
-        return 'Stopping...';
+        return 'Stopping…';
+      case 'unhealthy':
       case 'error':
-        return 'Failed to start - click to configure';
+        return getEnvironmentProblemLine(env) ?? '';
       default:
-        return 'Stopped - click to configure';
+        return 'Stopped';
     }
   };
 
@@ -188,7 +186,7 @@ export function EnvironmentPill({
       case 'stopping':
         return 'blue'; // Blue for transitioning
       case 'error':
-        return 'red'; // Red for errors
+        return unconfirmed ? 'orange' : 'red';
       default:
         return 'default'; // Gray for stopped
     }
@@ -230,7 +228,7 @@ export function EnvironmentPill({
               }}
             >
               <Space size={4} align="center">
-                <EnvironmentStatusIcon state={inferredState} size={12} />
+                <EnvironmentStatusIcon state={inferredState} unconfirmed={unconfirmed} size={12} />
                 <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{envLabel}</span>
               </Space>
             </a>
@@ -247,7 +245,7 @@ export function EnvironmentPill({
               }}
             >
               <Space size={4} align="center">
-                <EnvironmentStatusIcon state={inferredState} size={12} />
+                <EnvironmentStatusIcon state={inferredState} unconfirmed={unconfirmed} size={12} />
                 <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{envLabel}</span>
               </Space>
             </div>
@@ -305,7 +303,11 @@ export function EnvironmentPill({
                       : status === 'stopping'
                         ? 'Environment is stopping'
                         : status === 'error' && env?.command_attempt
-                          ? 'Retry Stop (previous outcome unconfirmed)'
+                          ? outcome?.action === 'stop'
+                            ? outcome.status === 'unknown'
+                              ? "Stop again. Agor couldn't confirm the last stop."
+                              : "Stop again. The environment didn't stop."
+                            : 'Stop environment'
                           : 'Environment not running')
                 }
               >
@@ -333,8 +335,7 @@ export function EnvironmentPill({
             {onViewLogs && (
               <Tooltip
                 title={
-                  controlDisabledTooltip ??
-                  (canViewLogs ? 'View environment logs' : 'No environment logs available')
+                  controlDisabledTooltip ?? (canViewLogs ? 'View environment logs' : 'No logs yet.')
                 }
               >
                 <Button
@@ -362,7 +363,7 @@ export function EnvironmentPill({
               <Tooltip
                 title={
                   controlDisabledTooltip ??
-                  'Nuke environment (destructive - removes all data and volumes)'
+                  'Nuke environment. This removes all its data and volumes.'
                 }
               >
                 <Button

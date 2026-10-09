@@ -7,7 +7,7 @@ import { type CSSProperties, memo, useMemo } from 'react';
 import { useHref, useNavigate } from 'react-router-dom';
 import { resolveExternalAppLink } from '@/utils/externalAppLink';
 import { mapToArray } from '@/utils/mapHelpers';
-import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useMutationGate } from '../../contexts/ConnectionContext';
 import { useMCPCatalogModal } from '../../contexts/MCPCatalogModalContext';
 import { useTheme } from '../../contexts/ThemeContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
@@ -190,7 +190,8 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   // Single source of truth for "is the daemon usable right now?". Captures
   // disconnected, the 1.5s reconnect grace window, and out-of-sync. Don't
   // gate off raw `connected` — it stays true through the grace window.
-  const mutationDisabled = useConnectionDisabled();
+  const mutationGate = useMutationGate();
+  const mutationDisabled = !mutationGate.canMutate;
 
   const externalApp = resolveExternalAppLink(externalAppLink, externalAppLabel);
 
@@ -295,7 +296,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
         <Divider orientation="vertical" style={{ height: 32, margin: '0 8px' }} />
         {/* Disconnected pattern: navbar elements that lead to server-fetching
             or mutating surfaces are *disabled* (not hidden) via
-            useConnectionDisabled (covers disconnect + reconnect grace window
+            useMutationGate (covers disconnect + reconnect grace window
             + out-of-sync). Local-only navigation (BoardSwitcher,
             RecentBoardPills, theme, external doc link, presence display)
             stays fully alive — those never depend on the daemon.
@@ -358,20 +359,23 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
           onSettingsClick={onSettingsClick}
         />
         {onCreate && hasMinimumRole(user?.role, ROLES.MEMBER) && (
-          <Tooltip title="Create new">
-            <CreateMenu
-              onSelect={onCreate}
-              isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
-              disabled={mutationDisabled}
-            >
-              <Button
-                type="text"
-                icon={<PlusOutlined style={{ fontSize: token.fontSizeLG }} />}
-                aria-label="Create new"
+          <Tooltip title={mutationGate.message ?? 'Create new'}>
+            {/* A disabled button fires no hover events, so the wrapper carries the tooltip. */}
+            <span style={{ display: 'inline-flex' }}>
+              <CreateMenu
+                onSelect={onCreate}
+                isAdmin={hasMinimumRole(user?.role, ROLES.ADMIN)}
                 disabled={mutationDisabled}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-              />
-            </CreateMenu>
+              >
+                <Button
+                  type="text"
+                  icon={<PlusOutlined style={{ fontSize: token.fontSizeLG }} />}
+                  aria-label="Create new"
+                  disabled={mutationDisabled}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                />
+              </CreateMenu>
+            </span>
           </Tooltip>
         )}
         <Tooltip title="Knowledge Base">

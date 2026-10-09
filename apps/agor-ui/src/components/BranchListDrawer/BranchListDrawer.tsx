@@ -7,6 +7,8 @@ import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { useIdleReady } from '../../hooks/useIdleReady';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useStableCallback } from '../../hooks/useStableCallback';
+import { useAgorStore } from '../../store/agorStore';
+import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import {
   getMatchSnippet,
   isSessionSearchActive,
@@ -314,6 +316,11 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
   const { token } = theme.useToken();
   const [searchQuery, setSearchQuery] = useState('');
   const [sort, setSort] = useLocalStorage<SessionSort>(SESSION_SORT_STORAGE_KEY, 'recent');
+  // The board's sessions arrive with its partition; until it loads, "no sessions" isn't known yet.
+  const partitionStatus = useAgorStore(
+    useMemo(() => makeBoardPartitionSelector(currentBoardId), [currentBoardId])
+  )?.status;
+  const sessionsLoaded = partitionStatus === 'loaded';
 
   // Filter sessions by current board (branch-centric model)
   const boardSessions = useMemo(() => {
@@ -410,22 +417,19 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
               >
                 <SearchOutlined style={{ fontSize: 16, color: token.colorTextTertiary }} />
               </div>
-              <Typography.Text strong style={{ fontSize: 13 }}>
-                No results
-              </Typography.Text>
               <Typography.Text
                 type="secondary"
-                style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 200 }}
+                style={{ fontSize: 12, textAlign: 'center', lineHeight: 1.5, maxWidth: 240 }}
               >
-                Nothing matched <Typography.Text code>{trimmedQuery}</Typography.Text>
+                {`No results for “${trimmedQuery}”.`}
               </Typography.Text>
             </div>
-          ) : (
+          ) : partitionStatus === 'error' ? null : (
             <Typography.Text
               type="secondary"
               style={{ display: 'block', textAlign: 'center', padding: '24px 0', fontSize: 12 }}
             >
-              No sessions in this board
+              {sessionsLoaded ? 'No sessions on this board yet.' : 'Loading sessions…'}
             </Typography.Text>
           )
         ) : (
@@ -447,7 +451,7 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
       </div>
 
       {/* Board Info Footer */}
-      {board && (
+      {board && (searchActive || sessionsLoaded || board.description) && (
         <div
           style={{
             flexShrink: 0,
@@ -463,9 +467,13 @@ export const BoardSessionList: React.FC<BoardSessionListProps> = ({
                 {board.description && ` • ${board.description}`}
               </>
             ) : (
-              `${boardSessions.length} session${boardSessions.length === 1 ? '' : 's'}${
-                board.description ? ` • ${board.description}` : ''
-              }`
+              [
+                sessionsLoaded &&
+                  `${boardSessions.length} ${boardSessions.length === 1 ? 'session' : 'sessions'}`,
+                board.description,
+              ]
+                .filter(Boolean)
+                .join(' • ')
             )}
           </Typography.Text>
         </div>

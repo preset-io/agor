@@ -31,10 +31,10 @@ import {
 import * as yaml from '@agor-live/client/yaml';
 import {
   CheckCircleOutlined,
-  CloseCircleOutlined,
   CodeOutlined,
   DownloadOutlined,
   EditOutlined,
+  ExclamationCircleOutlined,
   FileTextOutlined,
   FireOutlined,
   LoadingOutlined,
@@ -63,6 +63,7 @@ import { useAuthConfig } from '../../../hooks/useAuthConfig';
 import { useConfirmNukeEnvironment } from '../../../hooks/useConfirmNukeEnvironment';
 import { useEnvironmentStart } from '../../../hooks/useEnvironmentStart';
 import { usePermissions } from '../../../hooks/usePermissions';
+import { formatActionError } from '../../../utils/connectionErrors';
 import { getEnvironmentCommandStatus, hasEnvironmentLogs } from '../../../utils/environmentCommand';
 import {
   getEnvironmentState,
@@ -71,7 +72,14 @@ import {
 import { useThemedMessage } from '../../../utils/message';
 import { useThemedModal } from '../../../utils/modal';
 import { CodeEditor } from '../../CodeEditor';
+import { CompactNotice } from '../../CompactNotice';
 import { EnvironmentLogsModal } from '../../EnvironmentLogsModal';
+import {
+  ENVIRONMENT_NO_CONTROL,
+  getEnvironmentOutcome,
+  getEnvironmentProblemLabel,
+  getEnvironmentProblemNotice,
+} from '../../EnvironmentPill/environmentStatusCopy';
 import { EnvironmentAccessLinks } from './EnvironmentAccessLinks';
 import { EnvironmentDisclaimer } from './EnvironmentDisclaimer';
 
@@ -111,6 +119,12 @@ function snapshotFromBranch(wt: Branch): BranchRenderedSnapshot {
   };
 }
 
+/** `syntax` separates YAML parse errors from schema and policy errors. */
+interface YamlError {
+  message: string;
+  syntax?: boolean;
+}
+
 function prettyYaml(value: unknown): string {
   try {
     return yaml.dump(value, { indent: 2, lineWidth: 100, noRefs: true });
@@ -147,9 +161,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     featuresConfig?.managedEnvsExecutionMode ?? MANAGED_ENV_EXECUTION_MODE_DEFAULT;
   const isWebhookMode = managedEnvsExecutionMode === 'webhook-only';
   const canTriggerEnv = canControlEnvironment ?? isAdmin;
-  const triggerDisabledTooltip = canTriggerEnv
-    ? undefined
-    : "Requires branch 'all' permission or admin access";
+  const triggerDisabledTooltip =
+    canControlEnvironment === false ? ENVIRONMENT_NO_CONTROL : undefined;
   const lifecycleFieldHelp = isWebhookMode
     ? 'Use public HTTP(S) URLs for start, stop, nuke, and logs.'
     : 'Commands accept shell scripts or HTTP(S) webhooks.';
@@ -162,14 +175,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   const [repoYamlText, setRepoYamlText] = useState(() =>
     repo.environment ? prettyYaml(repo.environment) : ''
   );
-  const [repoYamlError, setRepoYamlError] = useState<string | null>(null);
+  const [repoYamlError, setRepoYamlError] = useState<YamlError | null>(null);
 
   // ----- Branch snapshot editor state -----
   const [isEditingSnapshot, setIsEditingSnapshot] = useState(false);
   const [snapshotYamlText, setSnapshotYamlText] = useState(() =>
     prettyYaml(snapshotFromBranch(branch))
   );
-  const [snapshotYamlError, setSnapshotYamlError] = useState<string | null>(null);
+  const [snapshotYamlError, setSnapshotYamlError] = useState<YamlError | null>(null);
 
   // ----- Variant picker -----
   const availableVariants: string[] = repo.environment
@@ -250,7 +263,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       if (!(await startEnvironment(branch.branch_id))) return;
       showSuccess('Environment start requested');
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to start environment');
+      showError(formatActionError('start the environment', error, { idempotent: false }));
     } finally {
       setIsStarting(false);
     }
@@ -262,7 +275,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       await client.service(`branches/${branch.branch_id}/stop`).create({});
       showSuccess('Environment stop requested');
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to stop environment');
+      showError(formatActionError('stop the environment', error, { idempotent: true }));
     } finally {
       setIsStopping(false);
     }
@@ -274,7 +287,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       await client.service(`branches/${branch.branch_id}/restart`).create({});
       showSuccess('Environment restart requested');
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to restart environment');
+      showError(formatActionError('restart the environment', error, { idempotent: false }));
     } finally {
       setIsRestarting(false);
     }
@@ -287,7 +300,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         await client.service(`branches/${branch.branch_id}/nuke`).create({});
         showSuccess('Environment nuke requested');
       } catch (error) {
-        showError(error instanceof Error ? error.message : 'Failed to nuke environment');
+        showError(formatActionError('nuke the environment', error, { idempotent: true }));
       } finally {
         setIsNuking(false);
       }
@@ -332,7 +345,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
       setSnapshotYamlError(null);
       if (updated.environment_variant) setSelectedVariant(updated.environment_variant);
     } catch (error) {
-      showError(error instanceof Error ? error.message : 'Failed to render environment');
+      showError(formatActionError('render the environment', error, { idempotent: true }));
     } finally {
       setIsRendering(false);
     }
@@ -365,14 +378,17 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // `packages/core/src/config/variant-resolver.ts`.
   const validateRepoYaml = (text: string): RepoEnvironment | null => {
     if (!text.trim()) {
-      setRepoYamlError('Empty — paste or write a RepoEnvironment YAML document');
+      setRepoYamlError({ message: 'Empty — paste or write a RepoEnvironment YAML document' });
       return null;
     }
     let parsed: unknown;
     try {
       parsed = yaml.load(text);
     } catch (err) {
-      setRepoYamlError(err instanceof Error ? err.message : 'Invalid YAML');
+      setRepoYamlError({
+        message: err instanceof Error ? err.message : 'Invalid YAML',
+        syntax: true,
+      });
       return null;
     }
     try {
@@ -381,14 +397,16 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         try {
           validateRepoEnvironmentLifecyclePolicy(validated, managedEnvsExecutionMode);
         } catch (err) {
-          setRepoYamlError(err instanceof Error ? err.message : 'Invalid webhook lifecycle URL');
+          setRepoYamlError({
+            message: err instanceof Error ? err.message : 'Invalid webhook lifecycle URL',
+          });
           return null;
         }
       }
       setRepoYamlError(null);
       return validated;
     } catch (err) {
-      setRepoYamlError(err instanceof Error ? err.message : 'Invalid RepoEnvironment');
+      setRepoYamlError({ message: err instanceof Error ? err.message : 'Invalid RepoEnvironment' });
       return null;
     }
   };
@@ -410,27 +428,30 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   // ----- Snapshot editor save/cancel -----
   const validateSnapshotYaml = (text: string): BranchRenderedSnapshot | null => {
     if (!text.trim()) {
-      setSnapshotYamlError('Empty — provide at least `start` and `stop`');
+      setSnapshotYamlError({ message: 'Empty — provide at least `start` and `stop`' });
       return null;
     }
     let parsed: unknown;
     try {
       parsed = yaml.load(text);
     } catch (err) {
-      setSnapshotYamlError(err instanceof Error ? err.message : 'Invalid YAML');
+      setSnapshotYamlError({
+        message: err instanceof Error ? err.message : 'Invalid YAML',
+        syntax: true,
+      });
       return null;
     }
     if (typeof parsed !== 'object' || parsed === null) {
-      setSnapshotYamlError('Expected a YAML mapping (object)');
+      setSnapshotYamlError({ message: 'Expected a YAML mapping (object)' });
       return null;
     }
     const obj = parsed as BranchRenderedSnapshot;
     if (!obj.start || typeof obj.start !== 'string') {
-      setSnapshotYamlError('`start` is required and must be a string');
+      setSnapshotYamlError({ message: '`start` is required and must be a string' });
       return null;
     }
     if (!obj.stop || typeof obj.stop !== 'string') {
-      setSnapshotYamlError('`stop` is required and must be a string');
+      setSnapshotYamlError({ message: '`stop` is required and must be a string' });
       return null;
     }
     if (isWebhookMode) {
@@ -446,7 +467,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           'branch environment'
         );
       } catch (err) {
-        setSnapshotYamlError(err instanceof Error ? err.message : 'Invalid webhook lifecycle URL');
+        setSnapshotYamlError({
+          message: err instanceof Error ? err.message : 'Invalid webhook lifecycle URL',
+        });
         return null;
       }
     }
@@ -516,7 +539,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
           onUpdateRepo(repo.repo_id, { environment: updated.environment });
           showSuccess('Imported .agor.yml');
         } catch (error) {
-          showError(error instanceof Error ? error.message : 'Failed to import .agor.yml');
+          showError(formatActionError('import .agor.yml', error, { idempotent: true }));
         }
       },
     });
@@ -547,7 +570,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             .create({ branch_id: branch.branch_id });
           showSuccess('Environment configuration exported to .agor.yml');
         } catch (error) {
-          showError(error instanceof Error ? error.message : 'Failed to export .agor.yml');
+          showError(formatActionError('export .agor.yml', error, { idempotent: true }));
         }
       },
     });
@@ -555,7 +578,9 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
 
   // ----- Derived UI state -----
   const inferredState = getEnvironmentState(environment);
-  const commandStatus = getEnvironmentCommandStatus(environment);
+  const commandStatus = commandActive ? getEnvironmentCommandStatus(environment) : null;
+  const problemNotice = commandActive ? null : getEnvironmentProblemNotice(environment);
+  const unconfirmed = getEnvironmentOutcome(environment)?.status === 'unknown';
   const canViewLogs = hasEnvironmentLogs(
     environment,
     branch.logs_command,
@@ -577,7 +602,8 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
   );
 
   const statusBadge = useMemo(() => {
-    const stateText = getEnvironmentStateDescription(inferredState);
+    const stateText =
+      getEnvironmentProblemLabel(environment) ?? getEnvironmentStateDescription(inferredState);
     switch (inferredState) {
       case 'healthy':
         return (
@@ -587,7 +613,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         );
       case 'unhealthy':
         return (
-          <Typography.Text strong style={{ color: token.colorError }}>
+          <Typography.Text strong style={{ color: token.colorWarning }}>
             {stateText}
           </Typography.Text>
         );
@@ -602,21 +628,21 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
         return <Typography.Text strong>{stateText}</Typography.Text>;
       case 'error':
         return (
-          <Typography.Text strong type="danger">
+          <Typography.Text strong type={unconfirmed ? 'warning' : 'danger'}>
             {stateText}
           </Typography.Text>
         );
       default:
         return <Typography.Text type="secondary">{stateText}</Typography.Text>;
     }
-  }, [inferredState, token]);
+  }, [inferredState, environment, unconfirmed, token]);
 
   const healthIcon =
     envStatus === 'running' && lastHealthCheck ? (
       lastHealthCheck.status === 'healthy' ? (
         <CheckCircleOutlined style={{ color: token.colorSuccess }} />
       ) : lastHealthCheck.status === 'unhealthy' ? (
-        <CloseCircleOutlined style={{ color: token.colorError }} />
+        <ExclamationCircleOutlined style={{ color: token.colorWarning }} />
       ) : null
     ) : null;
 
@@ -723,7 +749,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                   danger
                   title={
                     triggerDisabledTooltip ??
-                    'Nuke environment (destructive - removes all data and volumes)'
+                    'Nuke environment. This removes all its data and volumes.'
                   }
                 >
                   Nuke
@@ -734,37 +760,29 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 icon={<FileTextOutlined />}
                 onClick={() => setLogsModalOpen(true)}
                 disabled={!canTriggerEnv || !canViewLogs}
-                title={
-                  !canTriggerEnv
-                    ? triggerDisabledTooltip
-                    : !canViewLogs
-                      ? 'No command output or runtime logs available'
-                      : undefined
-                }
+                title={triggerDisabledTooltip ?? (!canViewLogs ? 'No logs yet.' : undefined)}
               >
                 View Logs
               </Button>
             </div>
 
-            {commandStatus && (commandActive || commandStatus.type !== 'info') && (
-              <Alert
+            {commandStatus && (
+              <CompactNotice
                 style={{ marginTop: token.marginSM }}
-                type={commandStatus.type}
-                showIcon
-                title={commandStatus.text}
+                type="info"
+                role="status"
+                message={commandStatus.text}
               />
             )}
-            {!commandActive &&
-              commandStatus?.type !== 'error' &&
-              commandStatus?.type !== 'warning' &&
-              lastHealthCheck?.status === 'unhealthy' && (
-                <Alert
-                  style={{ marginTop: token.marginSM }}
-                  type="error"
-                  showIcon
-                  title="Health check failed"
-                />
-              )}
+            {problemNotice && (
+              <CompactNotice
+                style={{ marginTop: token.marginSM }}
+                type={problemNotice.type}
+                role="alert"
+                message={problemNotice.message}
+                details={problemNotice.details}
+              />
+            )}
           </Card>
         )}
 
@@ -788,7 +806,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                     {shellLogsUnavailable && (
                       <Typography.Text type="secondary">
                         {featuresConfig?.environmentCommands?.shellLogsReason ??
-                          'Runtime shell logs are unavailable on this instance.'}
+                          "Logs aren't available for this environment."}
                       </Typography.Text>
                     )}
                   </Space>
@@ -809,7 +827,7 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 <p style={{ marginBottom: 8 }}>
                   {isAdmin
                     ? 'Import from an existing .agor.yml or add variants in the repo editor below.'
-                    : 'Ask an admin to set up environment commands in the repo editor below.'}
+                    : 'Ask an administrator to set up environment commands in the repo editor below.'}
                 </p>
                 {isAdmin && (
                   <Space>
@@ -922,7 +940,16 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               maxHeight="480px"
             />
             {repoYamlError && (
-              <Alert type="error" showIcon title={`Invalid repo environment: ${repoYamlError}`} />
+              <CompactNotice
+                type="error"
+                role="alert"
+                message={
+                  repoYamlError.syntax
+                    ? "Couldn't save. The environment config isn't valid YAML."
+                    : "Couldn't save. The environment config isn't valid."
+                }
+                details={[{ label: 'Error', value: repoYamlError.message, code: true }]}
+              />
             )}
             {isEditingRepo && (
               <Space>
@@ -1037,7 +1064,16 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               maxHeight="480px"
             />
             {snapshotYamlError && (
-              <Alert type="error" showIcon title={`Invalid snapshot: ${snapshotYamlError}`} />
+              <CompactNotice
+                type="error"
+                role="alert"
+                message={
+                  snapshotYamlError.syntax
+                    ? "Couldn't save. The snapshot isn't valid YAML."
+                    : "Couldn't save. The snapshot isn't valid."
+                }
+                details={[{ label: 'Error', value: snapshotYamlError.message, code: true }]}
+              />
             )}
             {isEditingSnapshot && (
               <Space>

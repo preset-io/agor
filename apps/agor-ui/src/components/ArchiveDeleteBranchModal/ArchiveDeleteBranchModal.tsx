@@ -16,10 +16,17 @@ import {
 } from '../../hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '../../utils/message';
 import { BranchCleanupWarning } from '../BranchCleanupWarning';
+import { describeBranchStatus } from '../BranchFilesystemRecovery/describeBranchStatus';
+import { CompactNotice } from '../CompactNotice';
 import { RepoCleanupSettingsModal } from './RepoCleanupSettingsModal';
 import { useArchiveDeleteEligibility } from './useArchiveDeleteEligibility';
 
 const { Text } = Typography;
+
+const PRIMARY_ACTION_LEADS = {
+  retire: "Couldn't retire the teammate.",
+  clear: "Couldn't remove this board's primary teammate.",
+} as const;
 
 interface ArchiveDeleteBranchModalProps {
   client?: AgorClient | null;
@@ -63,7 +70,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const { showSuccess } = useThemedMessage();
   const [primaryAction, setPrimaryAction] = useState<'clear' | 'retire' | null>(null);
   const [confirmPrimary, setConfirmPrimary] = useState<'clear' | 'retire' | null>(null);
-  const [primaryError, setPrimaryError] = useState<string>();
+  const [primaryError, setPrimaryError] = useState<{ message: string; raw?: string }>();
   const teammate = isTeammate(branch) && !branch.archived;
   // Unavailable board data is unknown, not proof this teammate is non-primary.
   // The server independently enforces clearance before admitting retirement.
@@ -74,8 +81,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const primaryReason = teammate
     ? 'For an active teammate, use explicit file-preserving retirement below. Permanent deletion is available after retirement.'
     : undefined;
-  const primaryDisabled = !!eligibility.managementReason || connectionDisabled || !!primaryAction;
-  const boardActionDisabled = connectionDisabled || !!primaryAction || !eligibility.canEditBoard;
+  // While a deletion runs the modal is read-only: it shows status, nothing can be submitted.
+  const deleting = branch.deletion_status === 'deleting';
+  const primaryDisabled =
+    deleting || !!eligibility.managementReason || connectionDisabled || !!primaryAction;
+  const boardActionDisabled =
+    deleting || connectionDisabled || !!primaryAction || !eligibility.canEditBoard;
   const runPrimaryAction = async (action: 'clear' | 'retire') => {
     if (!client || (action === 'clear' ? boardActionDisabled : primaryDisabled || boardPrimary))
       return;
@@ -101,13 +112,17 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
     } catch (error) {
       if (!operation.isCurrent()) return;
       setPrimaryError(
-        error instanceof Error ? error.message : 'Teammate action failed. Refresh and try again.'
+        error instanceof Error && error.message
+          ? { message: PRIMARY_ACTION_LEADS[action], raw: error.message }
+          : { message: "Couldn't update the teammate." }
       );
       eligibility.refresh();
     } finally {
       if (operation.isCurrent()) setPrimaryAction(null);
     }
   };
+  // The modal itself is the retry path, so the notice needs no action or access lookup.
+  const deletionNotice = branch.deletion_status ? describeBranchStatus(branch, 'unknown') : null;
   const canConfigure = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const [metadataAction, setMetadataAction] = useState<BranchMetadataAction>(initialMetadataAction);
 
@@ -169,7 +184,7 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
   const okText = metadataAction === 'archive' ? 'Archive Branch' : 'Delete Permanently';
   const okButtonProps = {
     danger: metadataAction === 'delete',
-    disabled: !!actionReason || connectionDisabled || !!primaryAction,
+    disabled: deleting || !!actionReason || connectionDisabled || !!primaryAction,
   };
 
   return (
@@ -278,17 +293,12 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
           />
         )}
 
-        {branch.deletion_status && (
-          <Alert
-            type={branch.deletion_status === 'deletion_failed' ? 'error' : 'info'}
-            title={
-              branch.deletion_status === 'deletion_failed'
-                ? 'Deletion failed'
-                : 'Deletion in progress'
-            }
-            description={
-              branch.deletion_error || 'The branch remains unavailable until deletion finishes.'
-            }
+        {deletionNotice && (
+          <CompactNotice
+            type={deletionNotice.type}
+            role="status"
+            message={deletionNotice.message}
+            details={deletionNotice.details}
           />
         )}
         {metadataAction === 'delete' && actionReason && (
@@ -489,9 +499,16 @@ export const ArchiveDeleteBranchModal: React.FC<ArchiveDeleteBranchModalProps> =
             : 'Archives this teammate and its sessions and clears all personal primary preferences. All files stay intact. No replacement is selected.'}
         </p>
         {primaryError && (
-          <div role="alert" aria-label="Teammate action failed">
-            {primaryError}
-          </div>
+          <CompactNotice
+            role="alert"
+            type="error"
+            message={primaryError.message}
+            details={
+              primaryError.raw
+                ? [{ label: 'Error', value: primaryError.raw, code: true }]
+                : undefined
+            }
+          />
         )}
       </Modal>
       {client && currentUser && settingsRepo && canConfigure && settingsOpen && (

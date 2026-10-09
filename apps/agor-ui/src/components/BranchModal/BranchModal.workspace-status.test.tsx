@@ -63,14 +63,14 @@ it.each([false, true])(
         .map((call) => call.id)
     ).toEqual([branch.branch_id]);
     fireEvent.change(notes, { target: { value: 'Unsaved draft' } });
-    expect(screen.getByText('Branch cleanup completed')).not.toBeNull();
+    expect(screen.getByText('Cleanup finished.')).not.toBeNull();
 
     act(() => receivePatch({ ...branch, branch_id: generateId(), workspace_operation: undefined }));
-    expect(screen.getByText('Branch cleanup completed')).not.toBeNull();
+    expect(screen.getByText('Cleanup finished.')).not.toBeNull();
 
     // Another manager dismisses the outcome. The modal prop stays a snapshot.
     act(() => receivePatch({ ...branch, workspace_operation: undefined }));
-    expect(screen.queryByText('Branch cleanup completed')).toBeNull();
+    expect(screen.queryByText('Cleanup finished.')).toBeNull();
     expect(agorStore.getState().branchById.has(branch.branch_id)).toBe(!archived);
     expect(notes.value).toBe('Unsaved draft');
 
@@ -85,7 +85,8 @@ it.each([false, true])(
         },
       })
     );
-    expect(screen.getByText('Branch cleanup failed')).not.toBeNull();
+    expect(screen.getByText("Agor couldn't clean up this branch's files.")).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     expect(screen.getByText('New failure')).not.toBeNull();
     expect(notes.value).toBe('Unsaved draft');
     mounted.unmount();

@@ -24,6 +24,7 @@ import { useBranchCounts } from '../../hooks/useBranchCounts';
 import { BoardCollapse } from '../BoardCollapse';
 import { getBoardEmoji } from '../BoardTile';
 import { type CreateModalKind, createMenuItems } from '../CreateMenu';
+import { SessionStatusIcon } from '../Pill/SessionStatusIcon';
 
 /** Prefix for the "Create new" submenu's leaf keys, e.g. `create:board`. */
 const CREATE_KEY_PREFIX = 'create:';
@@ -65,7 +66,14 @@ const BoardPanel: React.FC<{
     canUseMemberWorkspaceServices,
     background: true,
   });
-  return boardReady ? children : <Spin size="small" style={{ display: 'block' }} />;
+  return boardReady ? (
+    children
+  ) : (
+    <Space size={8}>
+      <Spin size="small" />
+      <Text type="secondary">Loading…</Text>
+    </Space>
+  );
 };
 
 export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
@@ -150,16 +158,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
     return getSessionDisplayTitle(session, { fallbackChars: 50 });
   };
 
-  // Get session status icon
-  const getSessionStatusIcon = (session: Session): string => {
-    if (session.status === 'running') return '▶️';
-    if (session.status === 'completed') return '✅';
-    if (session.status === 'failed') return '❌';
-    return '⏸️';
-  };
-
   const boards = useMemo(() => mapToArray(boardById), [boardById]);
   const branchCountByBoard = useBranchCounts(client);
+  // The hook reads an empty map until its first reply, so a zero shows only once some count has loaded.
+  const branchCountsLoaded = branchCountByBoard.size > 0;
   const boardPanel = (boardId: string, body: React.ReactNode) => (
     <BoardPanel
       client={client}
@@ -212,6 +214,11 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
         height: 'calc(100vh - 64px)',
       }}
     >
+      {boards.length === 0 && (
+        <Text type="secondary" style={{ display: 'block', padding: token.padding }}>
+          No boards yet.
+        </Text>
+      )}
       <BoardCollapse
         destroyOnHidden
         items={boards.map((board: Board) => {
@@ -227,7 +234,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                 <Badge
                   count={branchCountByBoard.get(board.board_id) ?? 0}
                   style={{ backgroundColor: token.colorPrimaryBg }}
-                  showZero
+                  showZero={branchCountsLoaded}
                 />
                 <Button
                   type="text"
@@ -263,7 +270,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
             children: boardPanel(
               board.board_id,
               boardBranches.length === 0 ? (
-                <Text type="secondary">No branches on this board</Text>
+                <Text type="secondary">No branches on this board yet.</Text>
               ) : (
                 <Collapse
                   defaultActiveKey={[]}
@@ -289,7 +296,9 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                             <Text strong>{branch.name}</Text>
                           </div>
                           <Text type="secondary" style={{ fontSize: 12, paddingLeft: 28 }}>
-                            {branchSessions.length} sessions
+                            {branchSessions.length === 1
+                              ? '1 session'
+                              : `${branchSessions.length} sessions`}
                           </Text>
                         </div>
                       ),
@@ -299,7 +308,7 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                             type="secondary"
                             style={{ padding: '8px 0 8px 28px', display: 'block' }}
                           >
-                            No sessions yet
+                            No sessions yet.
                           </Text>
                         ) : (
                           <div>
@@ -332,10 +341,10 @@ export const MobileNavTree: React.FC<MobileNavTreeProps> = ({
                                   }}
                                 >
                                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                    <span>{getSessionStatusIcon(session)}</span>
                                     <Text>{getSessionTitle(session)}</Text>
+                                    <SessionStatusIcon session={session} />
                                   </div>
-                                  <Text type="secondary" style={{ fontSize: 11, paddingLeft: 28 }}>
+                                  <Text type="secondary" style={{ fontSize: 11 }}>
                                     {session.agentic_tool}
                                     {session.model_config?.model &&
                                       ` • ${session.model_config.model}`}

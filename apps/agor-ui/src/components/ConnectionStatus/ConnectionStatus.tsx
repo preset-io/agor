@@ -21,7 +21,7 @@ export interface ConnectionStatusProps {
 const STUCK_RECONNECT_MS = 20_000;
 
 /**
- * Disconnect duration above which we surface the "Reconnected — sync again?"
+ * Disconnect duration above which we surface the "Reconnected, sync now"
  * cue on the next successful reconnect. Below this, the user almost
  * certainly didn't miss anything material (real-time events that fire in a
  * 1–10s gap are rare enough not to warrant nagging). At 10s we start to
@@ -31,7 +31,7 @@ const STUCK_RECONNECT_MS = 20_000;
 const STALE_THRESHOLD_MS = 10_000;
 
 /**
- * How long the "Reconnected — sync again?" cue stays in the navbar before
+ * How long the "Reconnected, sync now" cue stays in the navbar before
  * auto-dismissing. The cue is a *suggestion*, not a requirement — the
  * around-hook + per-conversation resync listeners catch the common cases;
  * this nudges the user only when the gap was long enough that something
@@ -84,18 +84,18 @@ const StatusTag: React.FC<StatusTagProps> = ({ tooltip, icon, color, onClick, ch
  *
  * State machine, in priority order:
  *
- * 1. **Out of sync** (warning, click → reload) — daemon SHA changed under us.
+ * 1. **New version, reload** (warning, click → reload) — daemon SHA changed under us.
  *    Reload is mandatory; UI bundle assumes a contract that's no longer there.
- * 2. **Can't reconnect** (error, click → reload) — we've been `connecting`
+ * 2. **Still reconnecting** (warning, click → retry) — we've been `connecting`
  *    for > STUCK_RECONNECT_MS without succeeding. Honest "this isn't
  *    fixing itself" cue.
  * 3. **Disconnected** (error, click → retry) — `!connected && !connecting`,
  *    typically socket-server-disconnect after the manual-reconnect cap is
  *    hit.
- * 4. **Reconnecting** (warning, click → retry) — the normal transient
- *    reconnect window. Click is a manual escape hatch in case socket.io's
+ * 4. **Reconnecting…** (warning, click → retry) — the normal transient
+ *    reconnect window, once the 1.5 s grace window has passed. Click is a manual escape hatch in case socket.io's
  *    own retry is on a slow cycle.
- * 5. **Reconnected — sync again?** (warning info, click → reload, × dismiss) —
+ * 5. **Reconnected, sync now** (warning, click → retry, × dismiss) —
  *    just reconnected after a gap ≥ STALE_THRESHOLD_MS. The byId caches
  *    and reactive sessions auto-resync for the common cases, but a long
  *    gap can drop subtle updates (sessions removed/added, comments,
@@ -133,7 +133,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // Brief green "Connected" flash after a short reconnect (< stale threshold)
   // so the user gets a quick "we noticed and fixed it" confirmation when
   // there's no other cue to render. Long reconnects show the actionable
-  // "Reconnected — sync again?" cue instead, so the two never compete.
+  // "Reconnected, sync now" cue instead, so the two never compete.
   const [showConnected, setShowConnected] = useState(false);
 
   // Forces re-render every second while `connecting`, so the stuck-reconnect
@@ -197,10 +197,8 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // may reference removed services. No auto-reload, since it would nuke a
   // half-typed message or open modal.
   if (outOfSync) {
-    const tooltipTitle =
-      capturedSha && currentSha
-        ? `Daemon was upgraded from ${capturedSha} to ${currentSha} since this tab loaded. Click to reload and pick up the latest UI. Anything unsaved (form text, etc.) will be lost.`
-        : 'Backend was updated — click to reload for the latest UI. Anything unsaved will be lost.';
+    const versions = capturedSha && currentSha ? ` (${capturedSha} → ${currentSha})` : '';
+    const tooltipTitle = `Agor was updated since this tab opened. Reload to get the latest version, but anything you haven't saved will be lost.${versions}`;
     return (
       <StatusTag
         tooltip={tooltipTitle}
@@ -208,7 +206,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
         color="warning"
         onClick={() => window.location.reload()}
       >
-        <span>Out of sync — refresh</span>
+        <span>New version, reload</span>
       </StatusTag>
     );
   }
@@ -218,17 +216,17 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
     disconnectStartedAt !== null &&
     Date.now() - disconnectStartedAt >= STUCK_RECONNECT_MS;
 
-  // --- 2. Can't reconnect (escalated stuck state) ---
+  // --- 2. Still reconnecting (escalated stuck state) ---
   // Retry the existing client; routine network recovery must not discard drafts.
   if (stuckTooLong) {
     return (
       <StatusTag
-        tooltip="Still reconnecting to the daemon. Retry without discarding unsaved work."
+        tooltip="Agor hasn't answered for 20 seconds. Click to try again without losing unsaved work."
         icon={<ReloadOutlined />}
-        color="error"
+        color="warning"
         onClick={onRetry}
       >
-        <span>Can't reconnect — retry</span>
+        <span>Still reconnecting</span>
       </StatusTag>
     );
   }
@@ -239,7 +237,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   if (!connected && !connecting) {
     return (
       <StatusTag
-        tooltip="Connection lost. Click to retry connection."
+        tooltip="Lost connection to Agor. Click to reconnect."
         icon={<WarningOutlined />}
         color="error"
         onClick={onRetry}
@@ -253,20 +251,22 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   // Used to be passive. The click handler gives the user an escape hatch
   // when socket.io's exponential backoff is on a 5s sleep — instead of
   // sitting and waiting, they can force a retry attempt right now.
+  // Inside the 1.5 s grace window (`connected` still true) show nothing, as mobile does.
   if (connecting) {
+    if (connected) return null;
     return (
       <StatusTag
-        tooltip="Reconnecting to daemon… Click to retry immediately."
+        tooltip="Reconnecting to Agor. Click to try now."
         icon={<LoadingOutlined spin />}
         color="warning"
         onClick={onRetry}
       >
-        <span>Reconnecting</span>
+        <span>Reconnecting…</span>
       </StatusTag>
     );
   }
 
-  // --- 5. Reconnected — sync again? (post-long-gap cue) ---
+  // --- 5. Reconnected, sync now (post-long-gap cue) ---
   // Suggested, not required. The around-hook + per-conversation resync
   // listeners already pick up the common cases; this nudges the user only
   // when the gap was long enough that something subtle (a removed session,
@@ -276,7 +276,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   if (staleSince !== null) {
     return (
       <StatusTag
-        tooltip="Some data may be stale after a longer disconnect. Click to reconnect and sync again without discarding unsaved work, or × to dismiss."
+        tooltip="You were disconnected for a while, so some data may be out of date. Click to sync without losing unsaved work."
         icon={<ReloadOutlined />}
         color="warning"
         onClick={() => {
@@ -284,7 +284,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
           onRetry?.();
         }}
       >
-        <span>Reconnected — sync again?</span>
+        <span>Reconnected, sync now</span>
         <CloseOutlined
           aria-label="Dismiss"
           onClick={(e) => {
@@ -299,11 +299,11 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
   // --- 6. Connected (ephemeral success flash for short reconnects) ---
   // Only set when the gap was below STALE_THRESHOLD_MS — long-gap
-  // reconnects route to "Reconnected — sync again?" above instead, so the
+  // reconnects route to "Reconnected, sync now" above instead, so the
   // two cues never compete.
   if (showConnected) {
     return (
-      <StatusTag tooltip="Connected to daemon" icon={<CheckCircleOutlined />} color="success">
+      <StatusTag tooltip="Connected to Agor." icon={<CheckCircleOutlined />} color="success">
         <span>Connected</span>
       </StatusTag>
     );

@@ -54,7 +54,7 @@ it.each(['light', 'dark'])(
       </ConfigProvider>
     );
 
-    expect(screen.getByText('Awaiting permission')).toBeVisible();
+    expect(screen.getByText('Waiting for approval')).toBeVisible();
     const name = screen.getByText(creator.name!);
     expect(name.parentElement!.querySelector('.ant-avatar')!.getBoundingClientRect().width).toBe(
       16

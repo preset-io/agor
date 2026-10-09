@@ -103,6 +103,20 @@ async function waitForConfirmationClosed() {
     expect(visible).toHaveLength(1);
   });
 }
+async function expectTeammateError(message: string, raw?: string) {
+  const notice = await waitFor(() => {
+    const node = screen.getByText(message).closest('[data-notice-type]');
+    expect(node).toHaveAttribute('data-notice-type', 'error');
+    expect(node).toHaveAttribute('role', 'alert');
+    return node as HTMLElement;
+  });
+  if (!raw) {
+    expect(within(notice).queryByRole('button', { name: /Details/ })).toBeNull();
+    return;
+  }
+  await click(within(notice).getByRole('button', { name: /Details/ }));
+  await waitFor(() => expect(within(notice).getByText(raw)).toBeVisible());
+}
 for (const width of [1280, 390]) {
   it(`Archive explains primary protection, confirms clear/retire, and retains actionable errors at ${width}px`, async () => {
     await page.viewport(width, 850);
@@ -141,10 +155,9 @@ for (const width of [1280, 390]) {
       expect(screen.getByRole('button', { name: 'Retire teammate' })).toBeVisible()
     );
     await click(screen.getByRole('button', { name: 'Retire teammate' }));
-    await waitFor(() =>
-      expect(screen.getByRole('alert', { name: 'Teammate action failed' }).textContent).toContain(
-        'unfinished tasks'
-      )
+    await expectTeammateError(
+      "Couldn't retire the teammate.",
+      'Branch has unfinished tasks; stop or cancel them before maintenance'
     );
     expect(f.cancel).not.toHaveBeenCalled();
     expect(f.confirm).not.toHaveBeenCalled();
@@ -193,10 +206,9 @@ for (const boardRead of ['absent', 'forbidden', 'failed', 'access-failed'] as co
     const confirm = await screen.findByRole('button', { name: 'Retire teammate' });
     await waitFor(() => expect(confirm).toBeVisible());
     await click(confirm);
-    await waitFor(() =>
-      expect(screen.getByRole('alert', { name: 'Teammate action failed' }).textContent).toContain(
-        'Clear or replace the board primary'
-      )
+    await expectTeammateError(
+      "Couldn't retire the teammate.",
+      'Clear or replace the board primary before retirement'
     );
     expect(f.clear).not.toHaveBeenCalled();
     expect(f.cancel).not.toHaveBeenCalled();
@@ -250,3 +262,25 @@ it('confirmation can be cancelled and an admitted retirement stays pending witho
   await act(async () => complete());
   await waitFor(() => expect(f.cancel).toHaveBeenCalledOnce());
 });
+
+for (const { rejection, message, raw } of [
+  {
+    rejection: new Error('Board changed'),
+    message: "Couldn't remove this board's primary teammate.",
+    raw: 'Board changed',
+  },
+  { rejection: 'offline', message: "Couldn't update the teammate.", raw: undefined },
+]) {
+  it(`shows a clear-primary failure as "${message}"`, async () => {
+    const f = mount();
+    f.clear.mockRejectedValueOnce(rejection);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Clear board primary' })).toBeEnabled()
+    );
+    await click(screen.getByRole('button', { name: 'Clear board primary' }));
+    const confirm = await screen.findByRole('button', { name: 'Clear primary' });
+    await waitFor(() => expect(confirm).toBeVisible());
+    await click(confirm);
+    await expectTeammateError(message, raw);
+  });
+}

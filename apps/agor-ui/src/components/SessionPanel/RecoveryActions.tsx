@@ -23,10 +23,10 @@ export function RecoveryActions({
     return null;
   return (
     <Flex vertical gap="small">
-      <Typography.Text>Cleanup needs attention. Retry before continuing.</Typography.Text>
+      <Typography.Text>Cleanup needs attention. Try again before continuing.</Typography.Text>
       <Flex gap="small" wrap>
         <Button type="primary" onClick={onRetry} loading={busy} disabled={disconnected || busy}>
-          Retry cleanup
+          Try again
         </Button>
         {canReopen ? (
           <Button danger onClick={onReopen} disabled={disconnected || busy}>
