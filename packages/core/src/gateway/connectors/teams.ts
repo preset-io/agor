@@ -14,8 +14,13 @@ import type {
   GatewayConnectionTestResult,
   TeamsGatewayConfig,
 } from '../../types/gateway';
-import type { GatewayConnector } from '../connector';
+import type {
+  GatewayConnector,
+  GatewayProviderHistoryRequest,
+  GatewayProviderHistoryResult,
+} from '../connector';
 import { isAllowedTeamsServiceUrl } from '../teams-service-url';
+import { fetchTeamsProviderHistory } from './teams-history';
 import {
   type PreparedTeamsSend,
   prepareTeamsSend,
@@ -33,6 +38,7 @@ export const TEAMS_NOT_VERIFIABLE = [
   'The Azure Bot messaging endpoint points at this channel callback URL',
   'The Teams app is installed in the team, group chat, or personal scope',
   'Inbound activities reach Agor through your public HTTPS ingress',
+  'Resource-specific consent for channel catch-up',
 ] as const;
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
@@ -439,6 +445,7 @@ export function normalizeTeamsActivity(
       teams_channel_name: stringValue(channel.name),
       teams_team_name: stringValue(team.name),
       teams_team_id: stringValue(team.id),
+      teams_team_aad_group_id: stringValue(team.aadGroupId),
       teams_user_name: stringValue(from.name),
       teams_has_mention: hasMention,
     },
@@ -480,6 +487,12 @@ export class TeamsConnector implements GatewayConnector {
   /** No unfenced sends: replies and notices use `prepareSend` with a fenced stored address. */
   async sendMessage(): Promise<string> {
     throw new TeamsSendError({ phase: 'prepare', reason: 'address_invalid' });
+  }
+
+  async fetchProviderHistory(
+    req: GatewayProviderHistoryRequest
+  ): Promise<GatewayProviderHistoryResult> {
+    return fetchTeamsProviderHistory(this.config, req);
   }
 
   /** Prove the configured app credentials; see {@link probeTeamsCredentials}. */

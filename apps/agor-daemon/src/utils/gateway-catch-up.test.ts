@@ -126,6 +126,65 @@ describe('provider-neutral gateway catch-up', () => {
     ).rejects.toThrow('byte limit');
   });
 
+  it('drops the oldest messages to fit when trimming is requested, and notes it', async () => {
+    const messages = ['900000000000000002', '900000000000000003', '900000000000000004'].map(
+      (id) => ({ ...base, providerMessageId: id, text: `message ${id} ${'x'.repeat(200)}` })
+    );
+    const connector = {
+      channelType: 'teams',
+      sendMessage: async () => '',
+      fetchProviderHistory: async () =>
+        result([
+          ...messages,
+          { ...base, providerMessageId: '900000000000000006', isTrigger: true },
+        ]),
+    } as GatewayConnector;
+    const request = {
+      threadId: result([]).threadId,
+      afterProviderCursor: '900000000000000001',
+      throughProviderCursor: '900000000000000006',
+      triggerProviderCursor: '900000000000000006',
+    };
+    const full = await fetchGatewayCatchUp({
+      connector,
+      request,
+      provider: 'Microsoft Teams',
+      currentText: 'current',
+      maxPromptBytes: 64 * 1024,
+    });
+    const limit = Buffer.byteLength(full.prompt, 'utf8') - 100;
+    const trimmed = await fetchGatewayCatchUp({
+      connector,
+      request,
+      provider: 'Microsoft Teams',
+      currentText: 'current',
+      maxPromptBytes: limit,
+      trimOldestToFit: true,
+    });
+    expect(Buffer.byteLength(trimmed.prompt, 'utf8')).toBeLessThanOrEqual(limit);
+    expect(trimmed.cursor).toBe('900000000000000006');
+    const data = JSON.parse(trimmed.prompt.split('\n')[2]);
+    expect(
+      data.previous_messages.map((m: { provider_message_id: string }) => m.provider_message_id)
+    ).toEqual(['900000000000000003', '900000000000000004']);
+    expect(data.omitted_note).toBe('Earlier messages in this thread were omitted');
+  });
+
+  it('notes provider-side omission without trimming', () => {
+    const prompt = formatGatewayCatchUpPrompt({
+      provider: 'Microsoft Teams',
+      threadId: result([]).threadId,
+      currentText: 'current',
+      result: {
+        ...result([base, { ...base, providerMessageId: '900000000000000006', isTrigger: true }]),
+        earlierOmitted: true,
+      },
+    });
+    expect(JSON.parse(prompt.split('\n')[2]).omitted_note).toBe(
+      'Earlier messages in this thread were omitted'
+    );
+  });
+
   it('accounts for UTF-8 bytes after structural encoding', async () => {
     const history = result([
       { ...base, providerMessageId: '900000000000000006', isTrigger: true, text: '😀' },

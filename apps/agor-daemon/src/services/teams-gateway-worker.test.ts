@@ -23,6 +23,12 @@ function channel(): GatewayChannel {
       microsoft_tenant_id: 'tenant-1',
       require_mention: true,
       allow_thread_replies_without_mention: true,
+      catch_up: {
+        mode: 'best_effort',
+        max_messages: 50,
+        max_prompt_bytes: 16 * 1024,
+        request_timeout_ms: 100,
+      },
       outbound_enabled: true,
     },
     provider_installation_id: 'teams-app',
@@ -136,8 +142,16 @@ function makeWorker(options: {
 }
 
 describe('TeamsGatewayWorker inbound admission', () => {
-  it('admits the current mention with its original authority', async () => {
-    const setup = makeWorker({ activity: activity() });
+  it('admits the current mention with its original authority and verified catch-up coordinates', async () => {
+    const setup = makeWorker({
+      activity: activity({
+        activityId: '1616990132035',
+        metadata: {
+          ...activity().metadata,
+          teams_team_aad_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+        },
+      }),
+    });
     await setup.worker.checkOnce();
 
     const request = setup.create.mock.calls[0]?.[0] as Record<string, unknown>;
@@ -155,6 +169,13 @@ describe('TeamsGatewayWorker inbound admission', () => {
       teams_conversation_type: 'channel',
       teams_channel_type: 'standard',
       teams_has_mention: true,
+    });
+    expect(request.teams_catch_up).toEqual({
+      activity_id: '1616990132035',
+      timestamp: now.toISOString(),
+      service_url: 'https://smba.trafficmanager.net/teams/',
+      team_id: 'team-1',
+      team_group_id: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
     });
     expect(setup.complete).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: 'session-1', taskId: 'task-1' })

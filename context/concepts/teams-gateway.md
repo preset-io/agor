@@ -25,7 +25,8 @@ Durable state is limited to:
    `provider_installation_id` fences;
 2. inbound idempotency rows (`gateway_inbound_events`), one durable outcome per
    `(channel, teams:activity:[conversation, activityId])`;
-3. the thread/session mapping;
+3. the thread/session mapping and `teams_last_admitted_activity_id` (epoch-ms
+   activity IDs, compared numerically);
 4. one encrypted conversation address per (channel, thread);
 5. the final-response outbox (`teams_message_deliveries`).
 
@@ -79,7 +80,8 @@ Channel configuration writes lock the channel row first, so a revocation that
 commits first refuses the Task; one that commits after cannot retract it.
 
 Task and Session IDs derive from the event ID, so a retry after a crash
-reconciles the existing Task. A mention is admitted with its own text only.
+reconciles the existing Task. The cursor advances only after durable admission,
+from its expected predecessor.
 
 ## Identity
 
@@ -139,12 +141,22 @@ through the same fenced address loader, outside the outbox.
 Addresses have no TTL. Each queued activity refreshes the address and re-arms a
 revoked one. An address is bound to the verified app and Microsoft tenant, not
 the configuration generation: a credential or tenant change makes it stale, an
-allowlist edit does not. Deliveries in flight at the moment of any
+allowlist or catch-up edit does not. Deliveries in flight at the moment of any
 edit still cancel at the effect-start fence.
 Bot removal (`installationUpdate` remove, bot in `membersRemoved`, team or
 channel deletion) and provider errors proving the bot can no longer post revoke
 the address; deliveries then cancel as revoked. Hosts outside the Bot Framework
 allowlist are refused before a token is attached.
+
+## Catch-up
+
+Off by default. When enabled, a channel mention reads replies after the cursor
+through the shared provider-history path and formats them as an untrusted block.
+RSC is per team, so a Graph 403 means "not granted here", not a bad token. A
+failed read admits the current mention and leaves the cursor unchanged. When
+more replies arrived than the cap allows, the newest ones are kept (and trimmed
+oldest-first to the byte limit) with an omission note, and the cursor advances,
+as Slack does. Personal chats have no catch-up.
 
 ## Migration
 
@@ -158,5 +170,3 @@ plain, as for Discord, while channel foreign keys stay tenant-composite.
 Teams SDK 2.x or a global `serviceUrl`; multi-tenant bot registrations; Graph
 transcript mirrors; typing or progress indicators; replay or repair APIs for
 ambiguous deliveries; Tasks for messages that did not mention the bot.
-
-Follow-up: channel catch-up (earlier thread replies as context for a mention).

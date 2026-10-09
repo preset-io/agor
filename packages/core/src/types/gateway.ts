@@ -294,12 +294,43 @@ export interface TeamsGatewayConfig {
   user_map?: TeamsUserMap;
   require_mention?: boolean;
   allow_thread_replies_without_mention?: boolean;
+  catch_up?: TeamsCatchUpConfig;
   outbound_enabled?: boolean;
   /** Accepted during migration only; no runtime effect. */
   tenant_id?: string;
   webhook_port?: number;
   webhook_path?: string;
 }
+
+export interface TeamsCatchUpConfig {
+  mode: 'off' | 'best_effort';
+  max_messages: number;
+  max_prompt_bytes: number;
+  request_timeout_ms: number;
+}
+
+// Off until live validation proves Graph/RSC catch-up for a tenant.
+export const DEFAULT_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'off',
+  max_messages: 50,
+  max_prompt_bytes: 16 * 1024,
+  request_timeout_ms: 8_000,
+};
+
+export const MIN_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'off',
+  max_messages: 1,
+  max_prompt_bytes: 1,
+  request_timeout_ms: 1,
+};
+
+// One deadline for the whole read; stays under the 30 s inbound claim lease.
+export const MAX_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'best_effort',
+  max_messages: 100,
+  max_prompt_bytes: 64 * 1024,
+  request_timeout_ms: 20_000,
+};
 
 export interface TeamsConfigValidationResult {
   ok: boolean;
@@ -340,11 +371,15 @@ export function validateTeamsUserMap(value: unknown): TeamsConfigValidationResul
 
 /** Apply safe defaults without importing a provider SDK. */
 export function withTeamsConfigDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+  const catchUp = isRecord(raw.catch_up)
+    ? { ...DEFAULT_TEAMS_CATCH_UP, ...raw.catch_up }
+    : { ...DEFAULT_TEAMS_CATCH_UP };
   return {
     ...raw,
     require_mention: raw.require_mention ?? true,
     allow_thread_replies_without_mention: raw.allow_thread_replies_without_mention ?? true,
     align_teams_users: raw.align_teams_users ?? false,
+    catch_up: catchUp,
     outbound_enabled: raw.outbound_enabled ?? true,
   };
 }
@@ -395,6 +430,24 @@ export function validateTeamsConfig(
     errors.push('allow_thread_replies_without_mention must be a boolean');
   }
   if (typeof raw.outbound_enabled !== 'boolean') errors.push('outbound_enabled must be a boolean');
+  if (!isRecord(raw.catch_up)) {
+    errors.push('catch_up must be an object');
+  } else {
+    const mode = raw.catch_up.mode;
+    if (mode !== 'off' && mode !== 'best_effort')
+      errors.push('catch_up.mode must be off or best_effort');
+    for (const key of ['max_messages', 'max_prompt_bytes', 'request_timeout_ms'] as const) {
+      const value = raw.catch_up[key];
+      if (
+        typeof value !== 'number' ||
+        !Number.isSafeInteger(value) ||
+        value < MIN_TEAMS_CATCH_UP[key] ||
+        value > MAX_TEAMS_CATCH_UP[key]
+      ) {
+        errors.push(`catch_up.${key} must be a bounded integer`);
+      }
+    }
+  }
   return { ok: errors.length === 0, errors };
 }
 
@@ -1392,6 +1445,8 @@ export interface ThreadSessionMap {
   metadata: Record<string, unknown> | null;
   /** Last Discord message ID whose mention Task was durably admitted. */
   discord_last_admitted_message_id: string | null;
+  /** Last Teams activity ID whose mention Task was durably admitted. */
+  teams_last_admitted_activity_id: string | null;
 }
 
 /**

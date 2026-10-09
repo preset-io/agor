@@ -78,8 +78,9 @@ function stringMetadata(activity: NormalizedTeamsActivity, key: string): string 
 }
 
 /**
- * HA worker for queue-first Teams ingress; final replies are delivered by
- * `TeamsMessageDeliveryWorker`.
+ * HA worker for queue-first Teams ingress. Optional history catch-up runs
+ * inside GatewayService admission on the shared provider-history path; final
+ * replies are delivered by `TeamsMessageDeliveryWorker`.
  */
 export class TeamsGatewayWorker {
   private readonly loop: GatewayDeliveryLoop<InboundRef>;
@@ -214,6 +215,13 @@ export class TeamsGatewayWorker {
               user_name: activity.userName ?? activity.userId,
               metadata: safeTeamsMetadata(activity.metadata),
               teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
+              teams_catch_up: {
+                activity_id: activity.activityId,
+                timestamp: activity.timestamp,
+                service_url: activity.serviceUrl,
+                team_id: stringMetadata(activity, 'teams_team_id'),
+                team_group_id: stringMetadata(activity, 'teams_team_aad_group_id'),
+              },
               teams_member: {
                 service_url: activity.serviceUrl,
                 conversation_id: activity.conversationId,

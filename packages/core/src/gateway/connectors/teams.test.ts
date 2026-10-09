@@ -482,6 +482,41 @@ describe('normalizeTeamsActivity', () => {
     );
   });
 
+  it('captures the team M365 group GUID Graph needs alongside the Teams team thread ID', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        id: '1616990132035',
+        conversation: {
+          id: '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2;messageid=1616989510408',
+          conversationType: 'channel',
+          tenantId: 'tenant-1',
+        },
+        replyToId: '1616989510408',
+        text: '<at>Agor</at> summarize',
+        entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: '28:app-123' } }],
+        channelData: {
+          teamsChannelId: '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2',
+          teamsTeamId: '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2',
+          channel: { id: '19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2' },
+          team: {
+            id: '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2',
+            name: 'Contoso',
+            aadGroupId: 'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b',
+          },
+          tenant: { id: 'tenant-1' },
+        },
+      }),
+      config
+    );
+    expect(normalized.conversationId).toBe('19:4a95f7d8db4c4e7fae857bcebe0623e6@thread.tacv2');
+    expect(normalized.metadata.teams_team_id).toBe(
+      '19:1c3bd6d47a4c4f3e8b2a9d2e7c1f0a11@thread.tacv2'
+    );
+    expect(normalized.metadata.teams_team_aad_group_id).toBe(
+      'fbe2bf47-16c8-47cf-b4a5-4b9b187c508b'
+    );
+  });
+
   it('deduplicates by base conversation and activity, not activity alone or reply-chain suffix', () => {
     const eventId = (conversationId: string, id = 'same-activity') =>
       normalizeTeamsActivity(

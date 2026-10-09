@@ -421,7 +421,7 @@ export function registerTeamsGatewayIngressRoute(input: {
           .json({ error: 'Teams bot self-message rejected', code: 'bot_self_message' });
         return;
       }
-      // Unmentioned group/channel traffic and empty summons are never stored.
+      // Unmentioned group/channel traffic (RSC receive-all) and empty summons are never stored.
       if (
         (normalized.conversationType.toLowerCase() !== 'personal' && !normalized.hasMention) ||
         !normalized.text.trim()

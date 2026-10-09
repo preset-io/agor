@@ -17,6 +17,8 @@ ALTER TABLE `gateway_inbound_events` ADD `next_attempt_at` integer DEFAULT 0 NOT
 --> statement-breakpoint
 ALTER TABLE `gateway_inbound_events` ADD `last_error_code` text;
 --> statement-breakpoint
+ALTER TABLE `thread_session_map` ADD `teams_last_admitted_activity_id` text;
+--> statement-breakpoint
 -- Existing configurations require explicit admin opt-in after review.
 UPDATE `gateway_channels` SET `enabled` = 0 WHERE `channel_type` = 'teams' AND `enabled` = 1;
 --> statement-breakpoint

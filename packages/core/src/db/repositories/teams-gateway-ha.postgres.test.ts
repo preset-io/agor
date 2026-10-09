@@ -39,6 +39,7 @@ import {
   teamsAdmission,
   teamsDeliveryWriters,
 } from './teams-gateway-ha.test-support';
+import { ThreadSessionMapRepository } from './thread-session-map';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -149,6 +150,27 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
         )
       )
     ).toBeNull();
+  });
+
+  it('keeps the Teams catch-up cursor monotonic across replicas', async () => {
+    const tenantId = `teams-pg-${generateId()}` as TenantID;
+    const { mapping } = await seedTeamsChannel(dbA, tenantId);
+    expect(
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
+          mapping.id,
+          '1700000002000'
+        )
+      )
+    ).toBe(true);
+    expect(
+      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
+          mapping.id,
+          '1700000001000'
+        )
+      )
+    ).toBe(false);
   });
 
   it('limits system-scope inbound discovery to queued Teams rows in every tenant', async () => {

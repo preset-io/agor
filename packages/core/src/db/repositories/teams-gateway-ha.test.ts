@@ -20,6 +20,7 @@ import {
   teamsAdmission,
   teamsDeliveryWriters,
 } from './teams-gateway-ha.test-support';
+import { ThreadSessionMapRepository } from './thread-session-map';
 
 describe('Teams gateway HA repositories', () => {
   const priorMasterSecret = process.env.AGOR_MASTER_SECRET;
@@ -34,6 +35,27 @@ describe('Teams gateway HA repositories', () => {
   for (const [name, run] of TEAMS_SHARED_CASES) {
     ownedDbTest(name, ({ db }) => run(sqliteTeamsHarness(db)));
   }
+
+  ownedDbTest(
+    'advances the Teams catch-up cursor numerically and never backwards',
+    async ({ db }) => {
+      const { mapping } = await seedTeamsGateway(db);
+      const maps = new ThreadSessionMapRepository(db);
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, '1700000000999')).toBe(true);
+      // Lexically larger but numerically older: a stale replica cannot move it back.
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, '999999999999')).toBe(false);
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, '1700000000999')).toBe(
+        false
+      );
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, '1700000001000')).toBe(true);
+      await expect(
+        maps.advanceTeamsLastAdmittedActivityId(mapping.id, 'activity-2')
+      ).rejects.toThrow(/Invalid Teams message ID/);
+      expect((await maps.findById(mapping.id))?.teams_last_admitted_activity_id).toBe(
+        '1700000001000'
+      );
+    }
+  );
 
   ownedDbTest(
     'commits encrypted admission once and refreshes the durable address on retries',
