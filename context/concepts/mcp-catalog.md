@@ -108,8 +108,11 @@ to whatever a redirect names.
   HubSpot). The daemon resolves it from the install's catalog provenance
   (`catalogTokenEndpointAuthMethod`) for both the code exchange and every
   refresh; nothing is stored per grant, and manual servers always use Basic.
-  The health audit flags a declared method the token endpoint no longer
-  advertises. **Rolling upgrade:** replicas that predate the field refresh
+  The health audit flags a recipe whose effective method (declared, else Basic)
+  the token endpoint doesn't advertise. The field describes the provider and
+  should almost never change: changing or removing it after grants exist makes
+  their next refresh use the new method, and a provider that refuses it drops
+  the grant, so users reconnect. **Rolling upgrade:** replicas that predate the field refresh
   with Basic, so a Slack/HubSpot grant issued mid-rollout can fail an old
   replica's refresh with `invalid_client` and need reconnecting. Finish the
   rollout before connecting those providers.

@@ -84,6 +84,10 @@ const catalogEntryOAuthSchema = z
       .strict()
       .optional(),
     stable_callback: z.object({ issuer: issuerUrl }).strict().optional(),
+    // Describes the provider, so it should almost never change. Changing or
+    // removing it after grants exist makes their next refresh use the new
+    // method; a provider that refuses it drops the grant and users reconnect.
+    // The health audit flags a method the token endpoint does not advertise.
     token_endpoint_auth_method: z.enum(MCP_OAUTH_TOKEN_ENDPOINT_AUTH_METHODS).optional(),
     client_id: nonEmpty.optional(),
     dcr_mode: z.enum(MCP_OAUTH_DCR_MODES).optional(),

@@ -282,17 +282,23 @@ describe('auditCatalogHealth', () => {
 });
 
 it.each([
-  [['client_secret_post'], 'credential-required'],
-  [['client_secret_basic'], 'oauth-metadata-not-ready'],
-  [undefined, 'oauth-metadata-not-ready'],
-])(
-  'flags a recipe declaring client_secret_post the token endpoint does not advertise (%j)',
-  async (supported, status) => {
+  // [declared method, advertised list, expected status]
+  ['client_secret_post', ['client_secret_post'], 'credential-required'],
+  ['client_secret_post', ['client_secret_basic'], 'oauth-metadata-not-ready'],
+  ['client_secret_post', undefined, 'oauth-metadata-not-ready'],
+  ['client_secret_basic', ['client_secret_post'], 'oauth-metadata-not-ready'],
+  ['client_secret_basic', ['client_secret_basic', 'client_secret_post'], 'credential-required'],
+  // Omitted recipe method is HTTP Basic; an omitted list is Basic only.
+  [undefined, ['client_secret_post'], 'oauth-metadata-not-ready'],
+  [undefined, undefined, 'credential-required'],
+] as const)(
+  'checks the effective token auth method %s against advertised %j',
+  async (method, supported, status) => {
     const configured = {
       ...entry('oauth'),
       oauth: {
         dcr_mode: 'disabled' as const,
-        token_endpoint_auth_method: 'client_secret_post' as const,
+        ...(method ? { token_endpoint_auth_method: method } : {}),
         configured_client: {
           issuer: 'https://issuer.example',
           setup_url: 'https://issuer.example/apps',
@@ -305,7 +311,7 @@ it.each([
       issuer: 'https://issuer.example',
       authServerMetadata: {
         issuer: 'https://issuer.example',
-        ...(supported ? { token_endpoint_auth_methods_supported: supported } : {}),
+        ...(supported ? { token_endpoint_auth_methods_supported: [...supported] } : {}),
       },
     });
     const [result] = await auditCatalogHealth([configured], {
@@ -318,6 +324,25 @@ it.each([
     );
   }
 );
+
+it('does not apply the HTTP Basic default to a DCR entry, which has no client secret', async () => {
+  oauthMocks.resolveMCPOAuthDiscovery.mockResolvedValueOnce({ kind: 'authorization-server' });
+  oauthMocks.validateMCPOAuthMetadata.mockResolvedValueOnce({
+    issuer: 'https://issuer.example',
+    authServerMetadata: {
+      issuer: 'https://issuer.example',
+      token_endpoint_auth_methods_supported: ['none'],
+    },
+    registrationEndpoint: 'https://issuer.example/register',
+  });
+  const [result] = await auditCatalogHealth([entry('oauth')], {
+    probe: async () => ({ authType: 'oauth' }),
+  });
+  // The method check runs before the DCR endpoint checks; whatever those
+  // conclude, a DCR entry is never refused for the client authentication.
+  expect(result.reason).not.toBe('metadata_incompatible');
+  expect(result.status).not.toBe('oauth-metadata-not-ready');
+});
 
 it.each(['https://issuer.example', 'https://wrong.example', 'https://issuer.example/'])(
   'audits configured BYO without DCR or claiming the customer credential works (%s)',
