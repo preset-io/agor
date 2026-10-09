@@ -1,83 +1,118 @@
+import { catalogServerSlug, type MCPCatalogEntry } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Alert, Button, Flex, Spin, Typography, theme } from 'antd';
+import { CheckCircleFilled, SearchOutlined } from '@ant-design/icons';
+import { Alert, Button, Flex, Input, Select, Skeleton, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
-import type { OnboardingIntegrationRecommendation } from '../../utils/onboardingGoals';
-import {
-  type OnboardingSlackGatewayIntent,
-  readOnboardingSlackGateways,
-} from '../../utils/onboardingSlack';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CatalogTab } from '../Marketplace/CatalogTab';
-import { OnboardingRecommendationCard } from './OnboardingRecommendationCard';
-import { OnboardingToolRow } from './OnboardingToolRow';
+import {
+  ALL_CATEGORIES,
+  CATEGORY_OPTIONS,
+  type CategoryFilter,
+  DEFAULT_SORT,
+  entryTitle,
+} from '../Marketplace/catalogPresentation';
+import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
+import { type CatalogFilterState, useCatalogSearch } from '../Marketplace/useCatalogSearch';
+import { McpLogo } from '../McpLogo';
 
 interface Props {
   client: AgorClient | null;
   user?: User | null;
   connected: boolean;
   authGeneration: number;
-  kit: OnboardingIntegrationRecommendation[];
-  isSelected: (id: string) => boolean;
-  onToggle: (id: string) => void;
   onConnected: (serverId: string) => void;
-  gatewayIntent: OnboardingSlackGatewayIntent;
-  onGatewayIntent: (intent: OnboardingSlackGatewayIntent) => void;
 }
 
-function ToolsForIdentity(props: Props) {
+interface TileProps {
+  entry: MCPCatalogEntry;
+  client: AgorClient | null;
+  connected: boolean;
+  authGeneration: number;
+  userId?: string;
+  readinessRevision: number;
+  onOpen: (event: React.MouseEvent<HTMLElement>) => void;
+}
+
+function ToolTile({
+  entry,
+  client,
+  connected,
+  authGeneration,
+  userId,
+  readinessRevision,
+  onOpen,
+}: TileProps) {
   const { token } = theme.useToken();
-  const {
+  const statusId = useId();
+  const title = entryTitle(entry);
+  const { readiness, refresh } = useCatalogReadiness({
     client,
-    user,
-    connected,
+    entryKey: entry.name,
+    ready: connected,
     authGeneration,
-    kit,
-    isSelected,
-    onToggle,
-    gatewayIntent,
-    onGatewayIntent,
-  } = props;
+    userId,
+  });
+  useEffect(() => {
+    if (readinessRevision > 0) void refresh();
+  }, [readinessRevision, refresh]);
+  const isConnected = readiness?.state === 'installed_ready';
+
+  return (
+    <Tooltip
+      title={
+        <>
+          <strong>{title}</strong>
+          <br />
+          {entry.benefit}
+        </>
+      }
+      trigger={['hover', 'focus']}
+    >
+      <Button
+        block
+        aria-label={`${title}: view details`}
+        aria-describedby={isConnected ? statusId : undefined}
+        aria-haspopup="dialog"
+        onClick={onOpen}
+        style={{
+          height: '100%',
+          minHeight: token.controlHeightLG,
+          padding: token.paddingXS,
+          justifyContent: 'flex-start',
+          textAlign: 'left',
+          whiteSpace: 'normal',
+        }}
+      >
+        <Flex align="center" gap={token.marginXS} style={{ minWidth: 0 }}>
+          <McpLogo id={catalogServerSlug(entry.name)} size={token.sizeMD} color={token.colorText} />
+          <Flex vertical style={{ minWidth: 0 }}>
+            <Typography.Paragraph
+              ellipsis={{ rows: 2 }}
+              style={{ margin: 0, fontSize: token.fontSize, overflowWrap: 'break-word' }}
+            >
+              {title}
+            </Typography.Paragraph>
+            {isConnected && (
+              <Typography.Text id={statusId} type="success" style={{ fontSize: token.fontSizeSM }}>
+                <CheckCircleFilled /> Connected
+              </Typography.Text>
+            )}
+          </Flex>
+        </Flex>
+      </Button>
+    </Tooltip>
+  );
+}
+
+function ToolsForIdentity({ client, user, connected, authGeneration, onConnected }: Props) {
+  const { token } = theme.useToken();
+  const narrow = useMediaQuery('(max-width: 480px)');
+  const [filters, setFilters] = useState<CatalogFilterState>({ search: '', sort: DEFAULT_SORT });
+  const { matches, status, error, retry } = useCatalogSearch(client, connected, filters, 1);
   const [readinessRevision, setReadinessRevision] = useState(0);
   const [entry, setEntry] = useState<string>();
   const trigger = useRef<HTMLElement | null>(null);
-  const [gateways, setGateways] =
-    useState<Awaited<ReturnType<typeof readOnboardingSlackGateways>>>();
-  const [gatewayError, setGatewayError] = useState(false);
-  const [retry, setRetry] = useState(0);
-  const slack = kit.find((rec) => rec.id === 'slack');
-  const hasSlack = !!slack;
-  const slackDescriptionId = useId();
-  const slackSelected = hasSlack && isSelected('slack');
-  const canRequestGateway =
-    slackSelected &&
-    !!client &&
-    connected &&
-    !gatewayError &&
-    gateways?.length === 0 &&
-    hasMinimumRole(user?.role, ROLES.ADMIN);
-  useEffect(() => {
-    // The single selection is an opt-in to assistance, not resource creation.
-    // Completion still rechecks the caller's role and fresh scoped inventory.
-    const intent = canRequestGateway ? 'request-new' : 'prefer-existing';
-    if (gatewayIntent !== intent) onGatewayIntent(intent);
-  }, [canRequestGateway, gatewayIntent, onGatewayIntent]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: retry explicitly refreshes the permission-scoped inventory
-  useEffect(() => {
-    if (!client || !connected || !hasSlack) return;
-    let cancelled = false;
-    setGateways(undefined);
-    setGatewayError(false);
-    void readOnboardingSlackGateways(client)
-      .then((value) => {
-        if (!cancelled) setGateways(value);
-      })
-      .catch(() => {
-        if (!cancelled) setGatewayError(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [client, connected, hasSlack, retry]);
   const close = () => {
     setEntry(undefined);
     const source = trigger.current;
@@ -85,73 +120,87 @@ function ToolsForIdentity(props: Props) {
       if (source?.isConnected) source.focus();
     });
   };
+
   return (
-    <Flex vertical gap="small">
-      <Typography.Paragraph type="secondary" style={{ fontSize: token.fontSizeSM }}>
-        Connect tools here without leaving setup. Connections are optional. Connect saves only your
-        MCP connection; Back and Skip do not delete saved connections.
+    <Flex vertical gap={token.marginSM} style={{ flex: '1 1 auto', minHeight: 0 }}>
+      <Typography.Paragraph style={{ color: token.colorTextSecondary, margin: 0 }}>
+        Your teammate can work with all of these tools. Connect one now, or skip and do it later.
       </Typography.Paragraph>
-      <Flex vertical role="list" aria-label="Suggested MCP tools" gap={token.marginXS}>
-        {kit
-          .filter((rec) => rec.setup.surface !== 'slack')
-          .map((rec) => (
-            <OnboardingToolRow
-              key={rec.id}
-              readinessRevision={readinessRevision}
-              recommendation={rec}
-              client={client}
-              userId={user?.user_id}
-              connected={connected}
-              authGeneration={authGeneration}
-              selected={isSelected(rec.id)}
-              onToggle={() => onToggle(rec.id)}
-              onOpen={(event) => {
-                trigger.current = event.currentTarget;
-                if (rec.setup.surface === 'marketplace') setEntry(rec.setup.catalogEntryName);
-              }}
-            />
-          ))}
+      <Flex gap={token.marginXS}>
+        <Input
+          allowClear
+          prefix={<SearchOutlined />}
+          placeholder="Search tools"
+          aria-label="Search tools"
+          value={filters.search}
+          onChange={(event) => setFilters((prev) => ({ ...prev, search: event.target.value }))}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <Select<CategoryFilter>
+          prefix="Category"
+          aria-label="Filter by category"
+          value={filters.category ?? ALL_CATEGORIES}
+          onChange={(value) =>
+            setFilters((prev) => ({
+              ...prev,
+              category: value === ALL_CATEGORIES ? undefined : value,
+            }))
+          }
+          options={CATEGORY_OPTIONS}
+          popupMatchSelectWidth={false}
+          styles={{ prefix: { color: token.colorTextSecondary } }}
+          style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%' }}
+        />
       </Flex>
-      {slack && (
-        <OnboardingRecommendationCard
-          recommendation={slack}
-          descriptionId={slackDescriptionId}
-          selected={slackSelected}
-          onToggle={() => onToggle('slack')}
+      <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>
+        {status === 'error' ? (
+          <Alert
+            type="error"
+            showIcon
+            title="Could not load the catalog"
+            description={error}
+            action={
+              <Button size="small" onClick={retry}>
+                Retry
+              </Button>
+            }
+          />
+        ) : status === 'loading' ? (
+          <Skeleton active />
+        ) : matches.length === 0 ? (
+          <Typography.Text type="secondary">No tools match "{filters.search}".</Typography.Text>
+        ) : (
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: `repeat(${narrow ? 2 : 3}, minmax(0, 1fr))`,
+              gap: token.marginXS,
+            }}
+          >
+            {matches.map((item) => (
+              <ToolTile
+                key={item.name}
+                entry={item}
+                client={client}
+                connected={connected}
+                authGeneration={authGeneration}
+                userId={user?.user_id}
+                readinessRevision={readinessRevision}
+                onOpen={(event) => {
+                  trigger.current = event.currentTarget;
+                  setEntry(item.name);
+                }}
+              />
+            ))}
+          </div>
+        )}
+        <Typography.Paragraph
+          type="secondary"
+          style={{ fontSize: token.fontSizeSM, margin: `${token.marginSM}px 0 0` }}
         >
-          {!connected ? (
-            <Alert type="info" title="Reconnect to check Slack gateways." />
-          ) : gatewayError ? (
-            <Alert
-              type="warning"
-              title="Could not check Slack gateways"
-              action={<Button onClick={() => setRetry((value) => value + 1)}>Retry</Button>}
-            />
-          ) : !gateways ? (
-            <Spin aria-label="Checking Slack gateways" />
-          ) : gateways.length ? (
-            <>
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                Prefer your existing Slack gateway:{' '}
-                {gateways.map((gateway) => gateway.name).join(', ')}.
-              </Typography.Text>
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                It continues to serve its current teammate. We will not retarget it or create a
-                duplicate. Your new teammate must not use another branch’s gateway.
-              </Typography.Text>
-            </>
-          ) : hasMinimumRole(user?.role, ROLES.ADMIN) ? (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              No usable Slack gateway found. Your teammate can help create one if permissions allow.
-            </Typography.Text>
-          ) : (
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              No usable Slack gateway found. An administrator must create one; no new gateway will
-              be requested.
-            </Typography.Text>
-          )}
-        </OnboardingRecommendationCard>
-      )}
+          You can connect more tools anytime from the Catalog, or ask your teammate to help.
+        </Typography.Paragraph>
+      </div>
       {entry && (
         <CatalogTab
           client={client}
@@ -164,7 +213,7 @@ function ToolsForIdentity(props: Props) {
             entryName: entry,
             onClose: close,
             onConnected: (serverId) => {
-              props.onConnected(serverId);
+              onConnected(serverId);
               setReadinessRevision((value) => value + 1);
             },
           }}

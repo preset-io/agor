@@ -1,7 +1,7 @@
 /**
- * Tests for the 5-step OnboardingWizard (goals → workspace [name + template
- * gallery] → llm → tools → done). The revived tools step curates the
- * goal-tailored Connect kit and threads the selection through onComplete.
+ * Tests for the 4-step OnboardingWizard (workspace [name + template gallery]
+ * → llm → tools → done). The tools step is a browsable Catalog wall that only
+ * opens the existing Catalog drawer; nothing is selected or stored.
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
  * or offers "continue without key" / codex-cli-auth / provider-combobox affordances
@@ -28,7 +28,6 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
-import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
 const { TEST_BOARD_ID } = vi.hoisted(() => ({
@@ -102,7 +101,12 @@ function renderWizard(
     service: vi.fn((name: string) => {
       if (name === 'boards') return boardsService;
       if (name === 'users') return usersService;
-      return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
+      return {
+        on: vi.fn(),
+        off: vi.fn(),
+        get: vi.fn(async () => ({ state: 'no_auth' })),
+        find: vi.fn(async () => ({ data: [] })),
+      };
     }),
   };
   const props = {
@@ -195,207 +199,49 @@ describe('OnboardingWizard', () => {
     ).toContain('@media (prefers-reduced-motion: reduce)');
   });
 
-  it('starts on the goals step; selecting a goal advances without saving partial progress', async () => {
-    const onUpdateUser = vi.fn(async () => undefined);
-    renderWizard({ onUpdateUser });
+  it('starts on the teammate step: there is no goals step', () => {
+    renderWizard();
 
-    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
-    expect(screen.getByText('Ship without the busywork')).toBeInTheDocument();
-    expect(screen.getByText('Dig into anything')).toBeInTheDocument();
-    // Goals step is optional — no back button on the first step.
+    expect(screen.getByText('Hi New, meet your teammate')).toBeInTheDocument();
+    expect(screen.queryByText(/what do you want to get done/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Onboarding progress' })).toHaveTextContent(
+      'Step 1 of 4: Teammate. Current step.'
+    );
     expect(screen.queryByText('Back')).not.toBeInTheDocument();
-
-    clickButton('Ship without the busywork');
-    clickButton(/^continue/i);
-
-    // Goals now flows straight into the name + template gallery step.
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
-    expect(onUpdateUser).not.toHaveBeenCalled();
-  });
-
-  it('renders goal cards as title + description only, with no emoji icon', () => {
-    const { baseElement } = renderWizard({ initialStep: 'goals' });
-    // The six goal-card emoji that used to sit above each title are gone.
-    for (const emoji of ['🔍', '✍️', '🛠️', '👥', '🧱', '🔬']) {
-      expect(baseElement.textContent).not.toContain(emoji);
-    }
-    // Title + description still render.
-    expect(screen.getByText('Build me an app')).toBeInTheDocument();
-    expect(screen.getByText('A working app or dashboard on a live test env.')).toBeInTheDocument();
-  });
-
-  it('gives every goal card an even title→description gap and a one-line description floor', () => {
-    renderWizard({ initialStep: 'goals' });
-    // The description reserves a single line (not two): every goal description now
-    // fits on one line at the 2-col modal width, so a 2-line floor only added dead
-    // space and clipped the bottom card row. Row-mates equalize via grid stretch.
-    const shortDesc = screen.getByText('PRs, bug triage, and release notes, all handled.');
-    expect(shortDesc).toHaveStyle({ minHeight: '1.4em' });
-    // The title flows at its natural height with a single consistent gap below.
-    // It must NOT reserve a blank second line — doing so made one-line-title
-    // cards show a larger title→description gap than two-line ones.
-    const shortTitle = screen.getByText('Ship without the busywork');
-    expect(shortTitle).not.toHaveStyle({ minHeight: '2.6em' });
-    expect(shortTitle).toHaveStyle({ marginBottom: '5px' });
   });
 
   it('centers the modal so the footer stays on-screen on shorter viewports', () => {
-    renderWizard({ initialStep: 'goals' });
-    // antd flags a vertically-centered modal with ant-modal-centered on the wrap;
-    // this is the layout fix that keeps the Continue/Skip footer visible when the
-    // 6-card grid makes the modal tall.
+    renderWizard();
     expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
   });
 
-  it('selects a goal on a single click and keeps it selected (no self-deselect)', () => {
-    renderWizard({ initialStep: 'goals' });
-    const card = screen.getByText('Ship without the busywork').closest('button');
-    expect(card).toHaveAttribute('aria-pressed', 'false');
-    // One click = exactly one toggle → stays selected. (Regression: a double-fire
-    // would flip it straight back to false.)
-    fireEvent.click(card as HTMLButtonElement);
-    expect(card).toHaveAttribute('aria-pressed', 'true');
-    // A second, separate click is what deselects — proving one click = one toggle.
-    fireEvent.click(card as HTMLButtonElement);
-    expect(card).toHaveAttribute('aria-pressed', 'false');
-  });
-
-  it('shows no checkmark on a selected goal card — border + highlight only', () => {
-    renderWizard({ initialStep: 'goals' });
-    const card = screen
-      .getByText('Ship without the busywork')
-      .closest('button') as HTMLButtonElement;
-    fireEvent.click(card);
-    expect(card).toHaveAttribute('aria-pressed', 'true');
-    // The redundant selected-state checkmark is gone; selection is communicated
-    // by the border + background highlight alone.
-    expect(card.querySelector('.anticon-check')).toBeNull();
-  });
-
-  it('does not change a goal card border width on selection (no layout shift)', () => {
-    renderWizard({ initialStep: 'goals' });
-    const card = screen
-      .getByText('Ship without the busywork')
-      .closest('button') as HTMLButtonElement;
-    // Unselected and selected both use a 1.5px border — only the color changes —
-    // so the box model never shifts. A shift here is what made selection read as
-    // "it deselected" and baited a re-click.
-    const unselectedWidth = card.style.borderTopWidth || card.style.borderWidth;
-    expect(unselectedWidth).toBe('1.5px');
-    fireEvent.click(card);
-    expect(card).toHaveAttribute('aria-pressed', 'true');
-    const selectedWidth = card.style.borderTopWidth || card.style.borderWidth;
-    expect(selectedWidth).toBe(unselectedWidth);
-  });
-
-  it('explains the multi-select interaction and why it matters, not just a mechanic label', () => {
-    renderWizard({ initialStep: 'goals' });
-    // What to do (pick up to two) AND why (it shapes the first session).
-    expect(
-      screen.getByText(/pick up to two, and we'll shape your first session around them/i)
-    ).toBeInTheDocument();
-  });
-
-  it('is multi-select, order-preserving, and caps at two goals', async () => {
+  it('preselects the Team assistant and completes on the blank framework', async () => {
     const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'goals' });
+    renderWizard({ onComplete });
 
-    // First-picked = primary, second-picked = secondary (order preserved).
-    clickButton('Dig into anything');
-    clickButton('Ship without the busywork');
+    const assistant = screen.getByText('Team assistant').closest('[role="button"]');
+    expect(assistant).toHaveAttribute('aria-pressed', 'true');
+    // Re-clicking the default keeps it selected instead of leaving nothing picked.
+    fireEvent.click(assistant as HTMLElement);
+    expect(assistant).toHaveAttribute('aria-pressed', 'true');
 
-    // A third pick is blocked at the cap — its card is marked disabled (aria-disabled
-    // keeps it focusable so the explanatory tooltip stays reachable) and clicking
-    // it is a no-op rather than a fourth selection.
-    const thirdCard = screen.getByText('Build me an app').closest('button');
-    expect(thirdCard).toHaveAttribute('aria-disabled', 'true');
-    // The reason is exposed to assistive tech (part of the card's name), not hover-only.
-    expect(thirdCard).toHaveTextContent('Deselect one to swap it for this.');
-    fireEvent.click(thirdCard as HTMLButtonElement);
-    expect(thirdCard).toHaveAttribute('aria-pressed', 'false');
-
-    // Advance through the required workspace/tools steps to inspect the emitted
-    // goals + merged recommendations.
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Ada' } });
     clickButton(/^continue/i);
-    await findAndClickButton(/skip for now/i); // workspace
-    clickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // llm
     clickButton(/^continue/i); // tools
-    clickButton(/open my board/i);
+    clickButton(/meet ada/i);
 
-    // Completion is async (board creation, then onComplete), so wait for it.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
-          goals: ['dig-into-anything', 'ship-without-busywork'],
-          // Merge: first two of primary (dig) then first two of secondary (ship).
-          suggestedIntegrations: mergeGoalIntegrationRecs([
-            'dig-into-anything',
-            'ship-without-busywork',
-          ]),
+          templateId: 'blank',
+          sourceBranch: undefined,
+          sourceRemoteUrl: undefined,
         }),
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
     );
-  });
-
-  it('treats Skip as authoritative after experimenting with a goal selection', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'goals' });
-
-    clickButton('Ship without the busywork');
-    clickButton(/skip for now/i);
-    await findAndClickButton(/skip for now/i); // workspace
-    clickButton(/skip for now/i); // llm
-    clickButton(/^continue/i); // tools
-    clickButton(/open my board/i);
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        goals: [],
-        suggestedIntegrations: mergeGoalIntegrationRecs([]),
-      }),
-      expect.objectContaining({ isCurrent: expect.any(Function) })
-    );
-  });
-
-  it('disables Continue until a goal is picked; Skip is the only way through unselected', async () => {
-    const onUpdateUser = vi.fn(async () => undefined);
-    renderWizard({ onUpdateUser });
-
-    const continueButton = screen.getByText(/^continue/i).closest('button');
-    expect(continueButton).toBeDisabled();
-
-    fireEvent.click(continueButton as HTMLButtonElement);
-    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
-
-    clickButton(/skip for now/i);
-
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
-    expect(onUpdateUser).not.toHaveBeenCalled();
-  });
-
-  it('treats Skip as authoritative after experimenting with a goal selection', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'goals' });
-
-    clickButton('Ship without the busywork');
-    clickButton(/skip for now/i);
-    await findAndClickButton(/skip for now/i); // workspace
-    clickButton(/skip for now/i); // llm
-    clickButton(/^continue/i); // tools
-    clickButton(/open my board/i);
-
-    // Completion is async (board creation, then onComplete), so wait for it.
-    await waitFor(() =>
-      expect(onComplete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          goals: [],
-          suggestedIntegrations: mergeGoalIntegrationRecs([]),
-        }),
-        expect.objectContaining({ isCurrent: expect.any(Function) })
-      )
-    );
+    expect(onComplete.mock.calls[0][0]).not.toHaveProperty('goals');
   });
 
   it('LLM step recommends only Claude and Codex (GPT), and lets the user switch selection', async () => {
@@ -461,7 +307,7 @@ describe('OnboardingWizard', () => {
       );
     });
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
   });
 
   it('proceeds to save on an unknown auth result (transient) rather than rejecting the key', async () => {
@@ -488,7 +334,7 @@ describe('OnboardingWizard', () => {
       );
     });
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
   });
 
   it('blocks with the provider hint on a definitive unauthenticated result', async () => {
@@ -679,13 +525,13 @@ describe('OnboardingWizard', () => {
     );
     await waitFor(() => expect(screen.getByText(/^continue →/i).closest('button')).toBeEnabled());
     clickButton(/^continue →/i);
-    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
-    expect(screen.queryByText("You're ready to build.")).not.toBeInTheDocument();
+    expect(await screen.findByText('Connect your teammate')).toBeInTheDocument();
+    expect(screen.queryByText('Your teammate is almost ready.')).not.toBeInTheDocument();
     for (const service of ['repos', 'branches', 'sessions']) {
       expect(client.service).not.toHaveBeenCalledWith(service);
     }
     await findAndClickButton(/skip for now/i);
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
   });
 
   it('strips whitespace picked up from a wrapped terminal paste before saving a subscription token', async () => {
@@ -737,7 +583,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
 
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
@@ -806,7 +652,7 @@ describe('OnboardingWizard', () => {
     const onUpdateUser = vi.fn(async () => undefined);
     const { boardsService } = renderWizard({ initialStep: 'workspace', onUpdateUser });
 
-    expect(screen.getByText('Build your teammate')).toBeInTheDocument();
+    expect(screen.getByText('Hi New, meet your teammate')).toBeInTheDocument();
     // The teammate name is empty by default — the user names their teammate.
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
 
@@ -831,7 +677,12 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return { get: vi.fn(async () => user) };
-        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
+        return {
+          on: vi.fn(),
+          off: vi.fn(),
+          get: vi.fn(async () => ({ state: 'no_auth' })),
+          find: vi.fn(async () => ({ data: [] })),
+        };
       }),
     };
 
@@ -863,7 +714,12 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
+        return {
+          on: vi.fn(),
+          off: vi.fn(),
+          get: vi.fn(async () => ({ state: 'no_auth' })),
+          find: vi.fn(async () => ({ data: [] })),
+        };
       }),
     };
     const onComplete = vi.fn();
@@ -899,7 +755,12 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
+        return {
+          on: vi.fn(),
+          off: vi.fn(),
+          get: vi.fn(async () => ({ state: 'no_auth' })),
+          find: vi.fn(async () => ({ data: [] })),
+        };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -968,7 +829,12 @@ describe('OnboardingWizard', () => {
       service: vi.fn((name: string) => {
         if (name === 'boards') return boardsService;
         if (name === 'users') return usersService;
-        return { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) };
+        return {
+          on: vi.fn(),
+          off: vi.fn(),
+          get: vi.fn(async () => ({ state: 'no_auth' })),
+          find: vi.fn(async () => ({ data: [] })),
+        };
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
@@ -1009,9 +875,12 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'workspace' });
 
     const nameField = screen.getByLabelText('Teammate name');
-    expect(screen.getByText(/start from a template/i)).toBeInTheDocument();
+    expect(screen.getByText('Or start from a template')).toBeInTheDocument();
     const templateCard = screen.getByText('Competitive Analyst');
-    expect(screen.getByText('Start blank')).toBeInTheDocument();
+    expect(screen.getByText('Team assistant')).toBeInTheDocument();
+    // Onboarding drops the category chips; descriptions live in tooltips.
+    expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tracks every rival/)).not.toBeInTheDocument();
     // The gallery sits after the name field.
     expect(
       nameField.compareDocumentPosition(templateCard) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -1029,12 +898,10 @@ describe('OnboardingWizard', () => {
     const scrollRegion = grid.parentElement as HTMLElement;
     expect(scrollRegion.getAttribute('style') ?? '').toContain('overflow-y: auto');
 
-    // The step title, the name field, and the filter chips are the fixed header —
-    // none of them live inside the scrolling card region.
-    expect(scrollRegion.contains(screen.getByText('Build your teammate'))).toBe(false);
+    // The step title and the name field are the fixed header — neither lives
+    // inside the scrolling card region.
+    expect(scrollRegion.contains(screen.getByText('Hi New, meet your teammate'))).toBe(false);
     expect(scrollRegion.contains(screen.getByLabelText('Teammate name'))).toBe(false);
-    const chipGroup = screen.getByRole('radiogroup', { name: 'Filter templates by category' });
-    expect(scrollRegion.contains(chipGroup)).toBe(false);
 
     // The step container itself does not scroll — step 2 delegates all scrolling
     // to the inner card region, so the header physically can't be overlapped.
@@ -1110,7 +977,7 @@ describe('OnboardingWizard', () => {
 
     // Helper copy promises a fresh board made at the end — never "join your existing board".
     expect(screen.queryByText(/join your existing board/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/new board/i)).toBeInTheDocument();
+    expect(screen.getByText(/get their own board/i)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i); // workspace → llm: still NO board created
@@ -1134,11 +1001,8 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     const { client } = renderWizard({ onComplete });
 
-    // goals (optional — Continue is disabled without a selection, so skip)
-    clickButton(/skip for now/i);
-
     // workspace — name the teammate (the board is created later, at completion)
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i);
 
@@ -1152,12 +1016,12 @@ describe('OnboardingWizard', () => {
 
     // tools — curate step skipped, then the teammate-centric done hero.
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     // The wizard creates the board now (at completion) and emits the teammate
     // naming details + selected agent so the app shell can seed the first AI
-    // teammate on it. No template was picked → sourceBranch undefined. Board
+    // teammate on it. The default Team assistant → sourceBranch undefined. Board
     // creation precedes onComplete, so await it.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
@@ -1170,14 +1034,9 @@ describe('OnboardingWizard', () => {
           teammateEmoji: '🤖',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
-          templateId: null,
+          templateId: 'blank',
           agent: 'claude-code',
-          // Goals were skipped → the default MCP suggestion set flows through, and
-          // the goals threaded to the completion handler are empty.
-          suggestedIntegrations: [],
-          slackGatewayIntent: undefined,
           connectedMcpServerIds: [],
-          goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
@@ -1192,12 +1051,8 @@ describe('OnboardingWizard', () => {
   it('done step heroes the named teammate with a role pill + adaptive headline and NO recap line (template picked)', async () => {
     renderWizard();
 
-    // goals — pick one
-    clickButton('Ship without the busywork');
-    clickButton(/^continue →/i);
-
     // workspace — name + template (Product Manager → role pill + its avatar emoji)
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     const templateCard = screen.getByText('Product Manager').closest('[role="button"]');
     fireEvent.click(templateCard as HTMLElement);
@@ -1214,19 +1069,16 @@ describe('OnboardingWizard', () => {
     // tools — curate step skipped, then the teammate-centric done hero: name heroes
     // the headline, the template is the role pill, and one warm subline — nothing else.
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
     expect(
-      screen.getByText(
-        "Rusty is all yours. Start a chat and tell them what you need. You'll shape how they work as you go."
-      )
+      screen.getByText("Next, we'll set up Rusty's board and open your first chat.")
     ).toBeInTheDocument();
     // The single primary action is verb-first + named into the first session.
     expect(screen.getByText(/^meet rusty →$/i)).toBeInTheDocument();
-    // The recap line is GONE: neither the provider nor the goal is echoed on the
-    // success screen (only the hero avatar, headline, subcopy, role pill, CTA).
+    // The recap line is GONE: the provider is not echoed on the success screen
+    // (only the hero avatar, headline, subcopy, role pill, CTA).
     expect(screen.queryByText('Claude')).not.toBeInTheDocument();
-    expect(screen.queryByText('Ship without the busywork')).not.toBeInTheDocument();
     // The old dominating checklist + "What we set up" caption are gone.
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/open my board/i)).not.toBeInTheDocument();
@@ -1235,8 +1087,7 @@ describe('OnboardingWizard', () => {
   it('done step shows a warm generic success when the teammate was left unnamed (no checklist)', async () => {
     renderWizard();
 
-    clickButton(/skip for now/i); // goals
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     clickButton(/skip for now/i); // workspace — no name, no template
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i); // llm
@@ -1244,10 +1095,8 @@ describe('OnboardingWizard', () => {
 
     // No teammate to hero → the warm generic headline + board-open subcopy, and the
     // old skip-hint checklist is gone entirely.
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
-    expect(
-      screen.getByText("Your board is ready. Open it and start whenever you're ready.")
-    ).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
+    expect(screen.getByText("Next, we'll set up your board.")).toBeInTheDocument();
     expect(screen.queryByText('What we set up')).not.toBeInTheDocument();
     expect(screen.queryByText(/Skipped —/)).not.toBeInTheDocument();
     expect(screen.getByText(/open my board/i)).toBeInTheDocument(); // unnamed → generic CTA
@@ -1257,19 +1106,16 @@ describe('OnboardingWizard', () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
 
-    expect(screen.getByText(/what do you want to get done/i)).toBeInTheDocument();
-    clickButton(/skip for now/i);
-
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText('Choose your tools')).toBeInTheDocument();
+    expect(await screen.findByText('Connect your teammate')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
     // Final step is not skippable.
     expect(screen.queryByText(/skip for now/i)).not.toBeInTheDocument();
 
@@ -1290,10 +1136,7 @@ describe('OnboardingWizard', () => {
           sourceRemoteUrl: undefined,
           templateId: null,
           agent: null,
-          suggestedIntegrations: [],
-          slackGatewayIntent: undefined,
           connectedMcpServerIds: [],
-          goals: [],
         },
         expect.objectContaining({ isCurrent: expect.any(Function) })
       )
@@ -1312,16 +1155,76 @@ describe('OnboardingWizard', () => {
     );
     renderWizard({ onComplete, initialStep: 'done' });
 
+    expect(screen.getByText('Your teammate is almost ready.')).toBeInTheDocument();
+    expect(screen.queryByText('Chat in Slack')).not.toBeInTheDocument();
     clickButton(/open my board/i);
 
     // Loading affordance is visible and the button is disabled while pending.
-    expect(await screen.findByText(/setting up/i)).toBeInTheDocument();
-    const button = screen.getByText(/setting up/i).closest('button');
-    expect(button).toBeDisabled();
+    expect(await screen.findByText('Setting up…')).toBeInTheDocument();
+    expect(screen.getByText('Setting up…').closest('button')).toBeDisabled();
+    expect(screen.getByText('Setting up your board…')).toBeInTheDocument();
+    // Setup tips fill the wait, outside any live region.
+    const tip = screen.getByText('Chat in Slack');
+    expect(tip.closest('[aria-live]')).toBeNull();
+    expect(
+      screen.getByText(
+        'Connect a Slack channel and your team can ask your teammate for help right there.'
+      )
+    ).toBeInTheDocument();
 
     // Resolving completion lets the flow finish (parent closes the modal).
     resolveComplete();
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+  });
+
+  it('names the teammate while setting up and hides the tips on error', async () => {
+    let rejectComplete: (error: Error) => void = () => {};
+    const onComplete = vi.fn(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectComplete = reject;
+        })
+    );
+    renderWizard({
+      onComplete,
+      user: makeUser({ preferences: { onboarding: { teammateDisplayName: 'Ada' } } }),
+    });
+    clickButton(/^continue/i); // workspace
+    await findAndClickButton(/skip for now/i); // llm
+    clickButton(/^continue/i); // tools
+    expect(screen.getByText('Ada is almost ready.')).toBeInTheDocument();
+    expect(
+      screen.getByText("Next, we'll set up Ada's board and open your first chat.")
+    ).toBeInTheDocument();
+    clickButton(/meet ada/i);
+
+    expect(await screen.findByText('Setting up Ada…')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Ask for a dashboard, a prototype or a report. Ada builds it as an artifact on your board.'
+      )
+    ).toBeInTheDocument();
+
+    rejectComplete(new Error('workspace failed'));
+    expect(await screen.findByText('workspace failed')).toBeInTheDocument();
+    expect(screen.getByText('Ada needs one more try.')).toBeInTheDocument();
+    expect(screen.queryByText('Chat in Slack')).not.toBeInTheDocument();
+  });
+
+  it('welcomes the user by first name, with a fallback when there is none', () => {
+    const named = renderWizard({ user: makeUser({ name: 'Kasia Kowalska' }) });
+    expect(screen.getByText('Hi Kasia, meet your teammate')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Your teammate is your AI helper. They work with you and your team, and remember how you like things done.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText("They'll get their own board when you finish.")).toBeInTheDocument();
+    expect(screen.getByText('Pick a starting point')).toBeInTheDocument();
+    named.unmount();
+
+    renderWizard({ user: makeUser({ name: '' }) });
+    expect(screen.getByText('Hi there, meet your teammate')).toBeInTheDocument();
   });
 
   it('single-flights a double final click and creates/writes each resource once', async () => {
@@ -1427,7 +1330,7 @@ describe('OnboardingWizard', () => {
     });
     const { boardsService } = renderWizard({ onComplete, user });
 
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
@@ -1444,7 +1347,6 @@ describe('OnboardingWizard', () => {
       user: makeUser({
         preferences: {
           onboarding: {
-            goals: ['ship-without-busywork'],
             teammateDisplayName: 'Rusty',
             teammateEmoji: '⚖️',
             teammateTemplateId: 'legal-analyst',
@@ -1452,7 +1354,6 @@ describe('OnboardingWizard', () => {
         },
       }),
     });
-    clickButton(/continue/i); // Saved goal, not Skip.
     expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
     expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
       'aria-pressed',
@@ -1466,7 +1367,6 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
     expect(onComplete).toHaveBeenCalledWith(
       expect.objectContaining({
-        goals: ['ship-without-busywork'],
         teammateName: 'Rusty',
         teammateEmoji: '⚖️',
         templateId: 'legal-analyst',
@@ -1482,7 +1382,6 @@ describe('OnboardingWizard', () => {
       preferences: {
         onboarding: {
           boardId: 'board-resume',
-          goals: ['ship-without-busywork'],
           teammateDisplayName: 'Rusty',
           teammateEmoji: '⚖️',
           teammateTemplateId: 'legal-analyst',
@@ -1495,7 +1394,7 @@ describe('OnboardingWizard', () => {
       boardById: new Map([[resumedBoard.board_id, resumedBoard]]),
     });
 
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -1544,19 +1443,19 @@ describe('OnboardingWizard', () => {
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
     clickButton('Back'); // done → tools
-    await screen.findByText('Choose your tools');
+    await screen.findByText('Connect your teammate');
     clickButton('Back'); // tools → llm
     await screen.findByText('Connect your AI');
     clickButton('Back'); // llm → workspace
-    await screen.findByText('Build your teammate');
-    fireEvent.click(screen.getByText('Start blank').closest('[role="button"]') as HTMLElement);
+    await screen.findByText('Hi New, meet your teammate');
+    fireEvent.click(screen.getByText('Team assistant').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
     clickButton(/skip for now/i); // llm → tools
-    await screen.findByText('Choose your tools');
+    await screen.findByText('Connect your teammate');
     clickButton(/skip for now/i); // tools → done
 
-    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
     expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
     clickButton(/meet rusty/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -1596,8 +1495,6 @@ describe('OnboardingWizard', () => {
         clickButton('Back'); // done → tools
         clickButton('Back'); // tools → llm
         clickButton('Back'); // llm → workspace
-      } else {
-        clickButton(/skip for now/i); // goals → workspace
       }
       expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
       clickButton(/skip for now/i); // workspace → llm
@@ -1620,15 +1517,15 @@ describe('OnboardingWizard', () => {
   );
 
   it('exposes progress semantics and moves focus to the new step heading', async () => {
-    renderWizard({ initialStep: 'goals' });
+    renderWizard({ initialStep: 'llm' });
 
     const progress = screen.getByRole('list', { name: 'Onboarding progress' });
-    expect(progress).toHaveTextContent('Step 1 of 5: Goals. Current step.');
+    expect(progress).toHaveTextContent('Step 2 of 4: AI. Current step.');
     expect(progress.querySelector('[aria-current="step"]')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText(/what do you want to get done/i)).toHaveFocus());
+    await waitFor(() => expect(screen.getByText('Connect your AI')).toHaveFocus());
 
-    clickButton(/skip for now/i);
-    const heading = await screen.findByText('Build your teammate');
+    clickButton('Back');
+    const heading = await screen.findByText('Hi New, meet your teammate');
     await waitFor(() => expect(heading).toHaveFocus());
 
     const scroller = screen.getByRole('group', { name: 'Teammate template' })
@@ -1641,14 +1538,15 @@ describe('OnboardingWizard', () => {
   it('Back navigates to the previous step and preserves prior selections', async () => {
     renderWizard();
 
-    clickButton('Ship without the busywork');
+    fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
+    fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue/i);
-    expect(await screen.findByText('Build your teammate')).toBeInTheDocument();
+    expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');
-    expect(await screen.findByText(/what do you want to get done/i)).toBeInTheDocument();
-    // The prior goal selection survives the round-trip.
-    expect(screen.getByText('Ship without the busywork').closest('button')).toHaveAttribute(
+    expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
+    expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
       'aria-pressed',
       'true'
     );
@@ -1664,7 +1562,7 @@ describe('OnboardingWizard', () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
 
     final.unmount();
-    renderWizard({ onDismiss, initialStep: 'goals' });
+    renderWizard({ onDismiss });
     fireEvent.keyDown(document, { key: 'Escape', code: 'Escape' });
     await waitFor(() => expect(onDismiss).toHaveBeenCalledTimes(2));
   });
@@ -1684,146 +1582,29 @@ describe('OnboardingWizard', () => {
 
     fireEvent.click(close as HTMLButtonElement);
 
-    expect(onDismiss).toHaveBeenCalledWith(
-      expect.objectContaining({ boardId: TEST_BOARD_ID, goals: [] })
-    );
+    expect(onDismiss).toHaveBeenCalledWith(expect.objectContaining({ boardId: TEST_BOARD_ID }));
     expect(attempt.isCurrent()).toBe(false);
   });
 
-  it('tools step lets an admin drop a tool and does not open a second Catalog after completion', async () => {
-    const onComplete = vi.fn();
-    renderWizard({
-      onComplete,
-      initialStep: 'tools',
-      user: makeUser({ role: 'admin' }),
-    });
-
-    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
-    // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
-    const notion = screen.getByRole('checkbox', { name: 'Suggest Notion to my teammate' });
-    expect(notion).toBeChecked();
-    fireEvent.click(notion as HTMLButtonElement);
-    expect(notion).not.toBeChecked();
-
-    clickButton(/^continue →/i); // tools → done
-    clickButton(/open my board/i);
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
-      (rec: { name: string }) => rec.name
-    );
-    // The deselected Connect tool is gone; the others stay.
-    expect(emitted).not.toContain('Notion');
-    expect(emitted).toContain('Linear');
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
-    // Untouched suggestions are retained.
-    expect(emitted).toEqual(expect.arrayContaining(['Slack gateway messaging', 'GitHub']));
-  });
-
-  it('honors deselecting the teammate-assisted Slack recommendation', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
-
-    const askRow = screen.getByRole('checkbox', {
-      name: 'Suggest Slack gateway messaging to my teammate',
-    });
-    fireEvent.click(askRow as HTMLButtonElement);
-
-    clickButton(/^continue →/i); // tools → done
-    clickButton(/open my board/i);
-
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
-      (rec: { name: string }) => rec.name
-    );
-    expect(emitted).not.toContain('Slack gateway messaging');
-    expect(onComplete.mock.calls[0][0].slackGatewayIntent).toBeUndefined();
-    expect(emitted).toContain('GitHub');
-  });
-
-  it('lets members select tools without claiming that selection authorizes a connection', () => {
-    renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
-    expect(screen.getByText('Choose your tools')).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })).toBeChecked();
-    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })[0]).toBeEnabled();
-    expect(screen.getByText(/Connections are optional/i)).toBeInTheDocument();
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
-  });
-
-  it('resuming directly at completion does not invent unreviewed tool selections', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'done' });
-    clickButton(/open my board/i);
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0]).toMatchObject({
-      suggestedIntegrations: [],
-      slackGatewayIntent: undefined,
-    });
-  });
-
-  it('skipping tools suppresses both suggestions and the catalog handoff', async () => {
+  it('tools step is a browsable wall with nothing to select or store', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete, initialStep: 'tools' });
-    clickButton(/skip for now/i);
-    clickButton(/open my board/i);
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0]).toMatchObject({
-      suggestedIntegrations: [],
-      slackGatewayIntent: undefined,
-    });
-  });
 
-  it('selecting one tool after Skip and Back does not re-enable the other tools', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'tools' });
-    clickButton(/skip for now/i);
-    clickButton('Back');
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' }));
-    expect(screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })).toBeChecked();
+    expect(screen.getByText('Connect your teammate')).toBeInTheDocument();
     expect(
-      screen.getByRole('checkbox', { name: 'Suggest Linear to my teammate' })
-    ).not.toBeChecked();
-    clickButton(/^continue/i);
-    clickButton(/open my board/i);
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(
-      onComplete.mock.calls[0][0].suggestedIntegrations.map((rec: { id: string }) => rec.id)
-    ).toEqual(['github']);
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
-  });
+      screen.getByText(
+        'Your teammate can work with all of these tools. Connect one now, or skip and do it later.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search tools')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByText('Skip for now')).toBeInTheDocument();
 
-  it('deselecting every tool suppresses the handoff, including after Back', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete, initialStep: 'tools' });
-    for (const rec of mergeGoalIntegrationRecs([]))
-      fireEvent.click(screen.getByRole('checkbox', { name: `Suggest ${rec.name} to my teammate` }));
-    clickButton(/^continue/i);
-    clickButton('Back');
-    expect(
-      screen.getByRole('checkbox', { name: 'Suggest GitHub to my teammate' })
-    ).not.toBeChecked();
-    clickButton(/^continue/i);
+    clickButton(/^continue →/i);
     clickButton(/open my board/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0]).toMatchObject({
-      suggestedIntegrations: [],
-      slackGatewayIntent: undefined,
-    });
-  });
-
-  it('offers in-context Catalog actions for the shipping goal', async () => {
-    const onComplete = vi.fn();
-    renderWizard({ onComplete });
-    clickButton('Ship without the busywork');
-    clickButton(/^continue/i);
-    await findAndClickButton(/skip for now/i);
-    clickButton(/skip for now/i);
-    expect(screen.getAllByRole('button', { name: /^Sign in through Catalog/ })).toHaveLength(4);
-    expect(onComplete).not.toHaveBeenCalled();
-    clickButton(/^continue/i);
-    clickButton(/open my board/i);
-    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
-    expect(onComplete.mock.calls[0][0].catalogEntryName).toBeUndefined();
+    expect(onComplete.mock.calls[0][0]).toMatchObject({ connectedMcpServerIds: [] });
+    expect(onComplete.mock.calls[0][0]).not.toHaveProperty('suggestedIntegrations');
   });
 });
 
@@ -1840,7 +1621,12 @@ describe('Codex ChatGPT login import', () => {
           ? boardsService
           : name === 'codex-auth/import'
             ? { create }
-            : { on: vi.fn(), off: vi.fn(), get: vi.fn(async () => ({ state: 'no_auth' })) }
+            : {
+                on: vi.fn(),
+                off: vi.fn(),
+                get: vi.fn(async () => ({ state: 'no_auth' })),
+                find: vi.fn(async () => ({ data: [] })),
+              }
       ),
     };
     const rendered = renderWizard({ initialStep: 'llm', client: client as never });
@@ -1881,7 +1667,7 @@ describe('Codex ChatGPT login import', () => {
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
   });
 
   it('shows the daemon rejection message and stays on the LLM step', async () => {
@@ -1901,7 +1687,7 @@ describe('Codex ChatGPT login import', () => {
       await screen.findByText(/This file has no ChatGPT login tokens and no API key\./)
     ).toBeInTheDocument();
     expect(screen.getByText('Connect your AI')).toBeInTheDocument();
-    expect(screen.queryByText('Build your teammate')).not.toBeInTheDocument();
+    expect(screen.queryByText('Hi New, meet your teammate')).not.toBeInTheDocument();
   });
 
   it('switching auth methods clears the pasted value and error state', async () => {
@@ -1993,7 +1779,7 @@ describe('Codex ChatGPT device sign-in', () => {
           ? { create, find }
           : {
               create: vi.fn(),
-              find: vi.fn(),
+              find: vi.fn(async () => ({ data: [] })),
               on: vi.fn(),
               off: vi.fn(),
               get: vi.fn(async () => ({ state: 'no_auth' })),
@@ -2041,7 +1827,7 @@ describe('Codex ChatGPT device sign-in', () => {
     const connect = screen.getByText(/^connect →/i).closest('button');
     fireEvent.click(connect as HTMLButtonElement);
     await findAndClickButton(/skip for now/i); // tools → done
-    expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
+    expect(await screen.findByText('Your teammate is almost ready.')).toBeInTheDocument();
   });
 
   it('treats a gated account as a first-class state with working fallbacks', async () => {

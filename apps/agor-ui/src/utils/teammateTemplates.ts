@@ -12,16 +12,14 @@ import {
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { AVATAR_PALETTE } from './avatarPalette';
-import type { OnboardingGoalId } from './onboardingGoals';
 
 /**
  * Canonical teammate starter templates.
  *
  * A template pre-points a new teammate at a ready-made source branch in the
  * `preset-io/agor-teammate` repo. Card copy is locked product copy — do not
- * rewrite. This module is the single source of truth for the templates, the
- * goal→template recommendation mapping, and the pure helpers that drive the
- * TeammateGallery. Keep it dependency-light and side-effect-free.
+ * rewrite. This module is the single source of truth for the templates and
+ * the pure helpers that drive the TeammateGallery. Keep it dependency-light and side-effect-free.
  *
  * The `sourceBranch` values are a contract with a parallel workstream creating
  * matching branches in `preset-io/agor-teammate`. Use the exact names below.
@@ -177,7 +175,7 @@ export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
  * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
- * render "Start blank" first and never accidentally recommend it. Its
+ * render it first. Onboarding presents it as the recommended "Team assistant". Its
  * `sourceBranch` is the framework repo default; the wiring resolves it to the
  * repo's own default branch (the public template's for a github.com private fork).
  */
@@ -261,81 +259,16 @@ export function getTemplateForFrameworkSource({
   return getTemplateBySourceBranch(sourceBranch);
 }
 
-/**
- * Authoritative goal → recommended template mapping, in priority order. Goal
- * ids come from ONBOARDING_GOALS (onboardingGoals.ts). A goal that maps to no
- * template lists []. This is the single source of truth for recommendations.
- */
-export const GOAL_TEMPLATE_RECS = {
-  'personal-teammate': ['chief-of-staff'],
-  'status-updates': ['product-manager'],
-  'ship-without-busywork': ['product-manager'],
-  'team-teammate': ['product-manager'],
-  'hand-off-build': ['builder'],
-  'dig-into-anything': ['competitive-analyst', 'financial-analyst'],
-} as const satisfies Record<OnboardingGoalId, readonly TeammateTemplateId[]>;
-
-function isOnboardingGoalId(id: string): id is OnboardingGoalId {
-  return Object.hasOwn(GOAL_TEMPLATE_RECS, id);
-}
-
-/**
- * Templates to badge "Recommended" for the selected goals (max 2).
- *
- * Mirrors the primary-then-secondary/dedup approach of mergeGoalIntegrationRecs:
- * - 0 goals (or none mapping to a template) → [].
- * - 1 goal → that goal's recommended templates, capped at 2.
- * - 2 goals → the primary goal's top rec then the secondary goal's top rec,
- *   deduped and capped at 2.
- * Unknown goal ids and templates that don't exist are dropped.
- */
-export function recommendedTemplateIds(goals: readonly string[]): TeammateTemplateId[] {
-  const recLists = goals.filter(isOnboardingGoalId).map((id) => GOAL_TEMPLATE_RECS[id]);
-
-  let candidateIds: readonly TeammateTemplateId[];
-  if (recLists.length === 0) {
-    candidateIds = [];
-  } else if (recLists.length === 1) {
-    candidateIds = recLists[0];
-  } else {
-    candidateIds = [recLists[0][0], recLists[1][0]];
-  }
-
-  const seen = new Set<string>();
-  const result: TeammateTemplateId[] = [];
-  for (const id of candidateIds) {
-    if (result.length >= 2 || !id || seen.has(id) || !getTeammateTemplate(id)) continue;
-    seen.add(id);
-    result.push(id);
-  }
-  return result;
-}
-
 /** The gallery's active filter: everything, or a single category. */
 export type GalleryFilter = 'all' | TeammateCategoryId;
 
 /**
- * Cards to render for the given goals + active filter, already ordered:
- * - `all`      → recommended templates first (in recommendation order) with the
- *                rest in default order, and the blank starter always last.
- * - `<category>` → that category's templates in default order (no blank starter).
- *
- * Ordering lives here (not in the component) so it's a single, unit-tested rule.
+ * Cards to render for the active filter: `all` leads with the blank starter (so
+ * templates never read as required); a category shows only its templates.
  */
-export function galleryCardsForFilter(
-  goals: readonly string[],
-  filter: GalleryFilter
-): readonly TeammateGalleryCard[] {
+export function galleryCardsForFilter(filter: GalleryFilter): readonly TeammateGalleryCard[] {
   if (filter !== 'all') {
-    // A specific category: default order, blank starter excluded.
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
-
-  // All: blank first (so templates never read as required), then recommended, then the rest.
-  const recommendedCards = recommendedTemplateIds(goals)
-    .map((id) => getTeammateTemplate(id))
-    .filter((template): template is TeammateGalleryCard => Boolean(template));
-  const recommendedIds = new Set(recommendedCards.map((template) => template.id));
-  const rest = TEAMMATE_TEMPLATES.filter((template) => !recommendedIds.has(template.id));
-  return [BLANK_TEMPLATE, ...recommendedCards, ...rest];
+  return [BLANK_TEMPLATE, ...TEAMMATE_TEMPLATES];
 }
