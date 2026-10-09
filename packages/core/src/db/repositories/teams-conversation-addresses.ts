@@ -11,7 +11,7 @@ import type {
   TeamsConversationAddressID,
   TenantID,
 } from '@agor/core/types';
-import { and, desc, eq, inArray, isNotNull, isNull, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, or, type SQL, sql } from 'drizzle-orm';
 import { isAllowedTeamsServiceUrl } from '../../gateway/teams-service-url';
 import { generateId } from '../../lib/ids';
 import { TEAMS_ADDRESS_REVOCATION_REASONS } from '../../types/gateway';
@@ -290,7 +290,16 @@ export class TeamsConversationAddressRepository {
     }
     const result = await update(this.db, teamsConversationAddresses)
       .set({ revoked_at: new Date(), revoked_reason: reason })
-      .where(where)
+      // A redelivered or overlapping event keeps the first revocation and counts nothing.
+      .where(
+        and(
+          where,
+          or(
+            isNull(teamsConversationAddresses.revoked_at),
+            ne(teamsConversationAddresses.revoked_reason, reason)
+          )
+        ) as SQL
+      )
       .run();
     return result.rowsAffected;
   }
