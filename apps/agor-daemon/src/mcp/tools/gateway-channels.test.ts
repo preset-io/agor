@@ -1409,6 +1409,22 @@ describe('gateway session branch binding (MCP)', () => {
     expect(payload.hint).toBeUndefined();
   });
 
+  it('says when outbound channels exist but the caller lacks branch permission', async () => {
+    spyCallerSessionBranch('branch-1');
+    spyOutboundChannels();
+    vi.spyOn(BranchRepository.prototype, 'isOwner').mockResolvedValue(false);
+    vi.spyOn(BranchRepository.prototype, 'resolveUserPermission').mockResolvedValue(
+      'view' as never
+    );
+
+    const tools = await captureTools('member');
+    const result = await tools.agor_gateway_outbound_targets_list.handler({});
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.channels).toEqual([]);
+    expect(payload.hint).toContain('need Manager on the branch');
+  });
+
   it('returns empty with a binding note when branchId conflicts with the session branch', async () => {
     spyCallerSessionBranch('branch-1');
     spyOutboundChannels();
