@@ -196,13 +196,24 @@ it.each([
   const input = screen.getByPlaceholderText(/^Prompt here…/);
   await userEvent.click(input);
   await userEvent.keyboard('unsaved draft');
-  // Resize before the draft's debounced save can run.
+  // Resize before the draft's debounced save can run, then wait for React to
+  // render the new layout: desktop Send has a text label, phones are icon-only.
   await page.viewport(to, 700);
-  await waitFor(() => expect(isMobileViewport()).toBe(to < 1024));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'Send' }).textContent).toBe(to < 1024 ? '' : 'Send')
+  );
   // Same element: crossing the breakpoint must not remount the composer.
   expect(screen.getByPlaceholderText(/^Prompt here…/)).toBe(input);
   expect(input).toHaveValue('unsaved draft');
   expect(input).toHaveFocus();
+});
+
+it('tabs from the desktop input to the first toolbar control', async () => {
+  await page.viewport(1280, 700);
+  render(panel(SessionStatus.IDLE, false));
+  await userEvent.click(screen.getByPlaceholderText(/^Prompt here…/));
+  await userEvent.tab();
+  expect(screen.getByRole('button', { name: 'Attach files' })).toHaveFocus();
 });
 
 it('puts the phone composer in one chat bar that grows to five lines', async () => {

@@ -1131,8 +1131,21 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             gap: token.sizeUnit,
           }}
         >
-          {/* Left group */}
-          <Space size={4}>
+          {/* One tree position at every width, so crossing the breakpoint never
+              remounts PromptInput (and drops its unsaved text). It comes first so
+              desktop reads input then toolbar; there it takes its own row. */}
+          <div
+            style={
+              isMobile
+                ? { flex: 1, minWidth: 0 }
+                : { flexBasis: '100%', minWidth: 0, marginBottom: token.sizeUnit }
+            }
+          >
+            {promptInputSlot}
+          </div>
+
+          {/* Left group (drawn before the input on phones) */}
+          <Space size={4} style={isMobile ? { order: -1 } : undefined}>
             {barPinnedItems.includes('upload') && (
               <Tooltip
                 title={hoverTooltip(
@@ -1239,19 +1252,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Popover>
             )}
           </Space>
-
-          {/* One tree position at every width, so crossing the breakpoint never
-              remounts PromptInput (and drops its unsaved text). Desktop moves it
-              onto its own row above the buttons. */}
-          <div
-            style={
-              isMobile
-                ? { flex: 1, minWidth: 0 }
-                : { order: -1, flexBasis: '100%', minWidth: 0, marginBottom: token.sizeUnit }
-            }
-          >
-            {promptInputSlot}
-          </div>
 
           {/* Right group */}
           <Flex
