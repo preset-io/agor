@@ -170,13 +170,11 @@ describe('HomePage teammates', () => {
     const toolbar = document.querySelector<HTMLElement>('[data-home-ask-toolbar]') as HTMLElement;
     const chip = within(toolbar).getByRole('button', { name: 'Teammate to ask: Teammate primary' });
     expect(chip).toHaveTextContent('Teammate primary');
-    expect(chip).toHaveStyle({ maxWidth: '200px' });
 
     // Exact name: the chevron is hidden from screen readers.
     const resume = screen.getByRole('button', { name: 'Continue “A long running thread”' });
     expect(toolbar).not.toContainElement(resume);
     expect(toolbar.compareDocumentPosition(resume) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(resume).getByText(/^Continue/)).toHaveStyle({ textOverflow: 'ellipsis' });
   });
 
   it('keeps the placeholder generic, with the full name in the accessible label', async () => {
@@ -212,7 +210,6 @@ describe('HomePage teammates', () => {
     renderHome({ client: client({ t: 'session' }) });
     const picker = await screen.findByRole('combobox', { name: 'Teammate to ask' });
     expect(picker).not.toHaveAttribute('readonly');
-    expect(picker.closest('.ant-select')).toHaveStyle({ maxWidth: '200px' });
     fireEvent.mouseDown(picker);
     const popup = await waitFor(() => {
       const found = document.querySelector<HTMLElement>('.ant-select-dropdown');

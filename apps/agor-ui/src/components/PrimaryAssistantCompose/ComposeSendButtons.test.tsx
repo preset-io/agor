@@ -1,7 +1,7 @@
 import type { Branch } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { Tooltip } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ComposeSendButtons } from './ComposeSendButtons';
 
 const ada = {
@@ -11,6 +11,8 @@ const ada = {
 } as unknown as Branch;
 
 describe('ComposeSendButtons', () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it('names both actions in the full layout', () => {
     const onSend = vi.fn();
     render(<ComposeSendButtons branch={ada} submitting={null} onSend={onSend} />);
@@ -35,7 +37,12 @@ describe('ComposeSendButtons', () => {
   });
 
   it('skips the hover tooltips on touch screens, where they would stick after a tap', async () => {
-    // The test setup's matchMedia matches nothing, so there is no hover here.
+    // A touch screen: no media query matches, so there is no hover.
+    const matchMedia = window.matchMedia;
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: false,
+    }));
     render(
       <>
         <ComposeSendButtons branch={ada} submitting={null} onSend={vi.fn()} />

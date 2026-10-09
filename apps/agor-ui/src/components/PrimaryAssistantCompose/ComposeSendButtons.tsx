@@ -1,7 +1,7 @@
 import type { Branch } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
-import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { useCanHover } from '../../hooks/useCanHover';
 import { teammateLabel } from '../../utils/teammateLabels';
 import type { ComposeSendMode } from './usePrimaryAssistantSend';
 
@@ -25,7 +25,7 @@ export const ComposeSendButtons: React.FC<ComposeSendButtonsProps> = ({
   const board = branch ? `${teammateLabel(branch)}'s board` : "your primary assistant's board";
   const inactive = disabled || submitting !== null;
   // Hover tooltips stick after a tap on touch screens, so skip them there.
-  const canHover = useMediaQuery('(hover: hover)');
+  const canHover = useCanHover();
   const background = (
     <Tooltip
       title={

@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
@@ -245,6 +245,7 @@ describe('NavbarComposeButton', () => {
     goToSession.mockClear();
     localStorage.clear();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('shows the resolved primary teammate emoji on the collapsed trigger before opening', async () => {
     const withEmoji = makeBranch({
@@ -396,7 +397,6 @@ describe('NavbarComposeButton', () => {
     expect(
       await screen.findByText(/in the background on Ada's board\. Check on it anytime\./)
     ).toBeInTheDocument();
-    vi.mocked(window.matchMedia).mockRestore();
   });
 
   it('lets a dropped file be sent even with an empty prompt', async () => {
