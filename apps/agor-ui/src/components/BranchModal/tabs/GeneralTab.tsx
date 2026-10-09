@@ -24,6 +24,7 @@ import {
   Typography,
 } from 'antd';
 import { useState } from 'react';
+import { useServerRead } from '../../../hooks/useServerRead';
 import { useAgorStore } from '../../../store/agorStore';
 import { selectBranchById } from '../../../store/selectors';
 import { ArchiveActionButton } from '../../ArchiveButton';
@@ -81,9 +82,23 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const policy = resolveRepoCleanupPolicy(repo.cleanup_policy);
   const branchById = useAgorStore(selectBranchById);
-  // Settings retains the editing snapshot. Read live notification state without
-  // replacing that snapshot or resetting unsaved form fields.
-  const workspaceStatusBranch = branchById.get(branch.branch_id) ?? branch;
+  // Settings retains an editing snapshot, and the canvas store excludes archived
+  // branches. Keep only this status projection live without resetting form drafts.
+  const { data: workspaceStatusBranch } = useServerRead(
+    client,
+    branch.branch_id,
+    (client) => client.service('branches').get(branch.branch_id),
+    {
+      subscribe: (client, { patch }) => {
+        const service = client.service('branches');
+        const onPatched = (updated: Branch) => {
+          if (updated.branch_id === branch.branch_id) patch(() => updated);
+        };
+        service.on('patched', onPatched);
+        return () => service.off('patched', onPatched);
+      },
+    }
+  );
 
   const handleArchiveOrDelete = (options: BranchArchiveOrDeleteOptions) => {
     onArchiveOrDelete?.(branch.branch_id, options);
@@ -95,7 +110,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
     <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
       <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <BranchWorkspaceStatus
-          branch={workspaceStatusBranch}
+          branch={workspaceStatusBranch ?? branch}
           client={client}
           currentUser={currentUser}
           detailed
