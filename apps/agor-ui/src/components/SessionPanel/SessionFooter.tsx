@@ -263,7 +263,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
   // Overflow menu scale: one row height, one label size, one control height.
   const rowHeight = isMobile ? MOBILE_TOUCH_TARGET : token.controlHeight;
-  const controlSize = isMobile ? 'middle' : 'small';
   const controlHeight = isMobile ? token.controlHeight : token.controlHeightSM;
   const labelFontSize = isMobile ? token.fontSize : token.fontSizeSM;
 
@@ -446,7 +445,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               Effort
             </Typography.Text>
           </span>
-          <div style={settingControlStyle}>{renderEffortSelector(controlSize)}</div>
+          <div style={settingControlStyle}>{renderEffortSelector(actionSize)}</div>
         </div>
       )}
 
@@ -468,7 +467,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             compact
             iconOnly={false}
             plain
-            size={controlSize}
+            size={actionSize}
           />
         </div>
       </div>
@@ -835,6 +834,11 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         ? 'Agor is checking that the previous work has stopped.'
         : 'Stop';
 
+  const stopLabel = isStopping
+    ? recoveryTask?.termination_request?.cause === 'user_stop'
+      ? 'Stopping'
+      : 'Recovering'
+    : 'Stop';
   const recoveryFailed = recoveryTask?.sdk_failure?.termination === 'unverified';
   const showStop = !recoveryFailed && (isRunning || stopRequestInFlight);
   // isRunning also includes stopping for the action controls. Only advertise
@@ -1033,7 +1037,6 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                         height: 22,
                         display: 'inline-flex',
                         alignItems: 'center',
-                        minWidth: modelChipMinWidth,
                       }}
                       data-testid="model-chip"
                     >
@@ -1117,19 +1120,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           />
         )}
 
-        {/* Row 2 — Prompt textarea (inline in the action bar on phones). Crossing
-            the breakpoint remounts PromptInput; its unmount saveDraft keeps the text. */}
-        {!isMobile && promptInputSlot}
-
-        {/* Row 3 — Action bar. On phones it is a chat bar: the input grows
-            upward and the buttons stay aligned with its last line. */}
+        {/* Rows 2–3 — Prompt textarea and action bar. On phones they form one
+            chat bar: the input grows upward and the buttons stay aligned with
+            its last line. */}
         <div
           style={{
             display: 'flex',
             flexWrap: isMobile ? 'nowrap' : 'wrap',
             alignItems: isMobile ? 'flex-end' : 'center',
             gap: token.sizeUnit,
-            marginTop: isMobile ? 0 : token.sizeUnit * 2,
           }}
         >
           {/* Left group */}
@@ -1241,7 +1240,18 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             )}
           </Space>
 
-          {isMobile && <div style={{ flex: 1, minWidth: 0 }}>{promptInputSlot}</div>}
+          {/* One tree position at every width, so crossing the breakpoint never
+              remounts PromptInput (and drops its unsaved text). Desktop moves it
+              onto its own row above the buttons. */}
+          <div
+            style={
+              isMobile
+                ? { flex: 1, minWidth: 0 }
+                : { order: -1, flexBasis: '100%', minWidth: 0, marginBottom: token.sizeUnit }
+            }
+          >
+            {promptInputSlot}
+          </div>
 
           {/* Right group */}
           <Flex
@@ -1271,13 +1281,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 <Tooltip title={hoverTooltip(stopTooltip)}>
                   <Button
                     danger
-                    aria-label={
-                      recoveryTask?.termination_request?.cause === 'user_stop'
-                        ? 'Stopping'
-                        : isStopping
-                          ? 'Recovering'
-                          : 'Stop'
-                    }
+                    aria-label={stopLabel}
                     aria-busy={stopRequestInFlight || isStopping}
                     size={actionSize}
                     style={touchActionStyle}
@@ -1288,13 +1292,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     disabled={connectionDisabled || !isRunning || stopRequestInFlight || isStopping}
                   >
                     {/* Desktop keeps text labels; phones are icon-only touch targets. */}
-                    {isMobile
-                      ? null
-                      : isStopping
-                        ? recoveryTask?.termination_request?.cause === 'user_stop'
-                          ? 'Stopping…'
-                          : 'Recovering…'
-                        : 'Stop'}
+                    {isMobile ? null : isStopping ? `${stopLabel}…` : stopLabel}
                   </Button>
                 </Tooltip>
               )}

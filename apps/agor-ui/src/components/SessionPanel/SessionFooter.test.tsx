@@ -170,7 +170,7 @@ describe('SessionFooter', () => {
           <SessionFooter {...baseProps} />
         </ConfigProvider>
       );
-      const footer = screen.getByTestId('prompt-input').parentElement!.parentElement!;
+      const footer = screen.getByTestId('prompt-input').closest('[style*="padding-bottom"]')!;
       expect(footer).toHaveStyle({ paddingBottom: '12px', flexShrink: '0' });
     } finally {
       vi.restoreAllMocks();

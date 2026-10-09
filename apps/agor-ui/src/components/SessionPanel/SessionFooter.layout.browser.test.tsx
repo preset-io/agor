@@ -187,6 +187,24 @@ it('retains the bottom inset when resizing from mobile to desktop', async () => 
   });
 });
 
+it.each([
+  [1280, 390],
+  [390, 1280],
+])('keeps the typed draft and focus when resizing from %ipx to %ipx', async (from, to) => {
+  await page.viewport(from, 700);
+  render(panel(SessionStatus.IDLE, false));
+  const input = screen.getByPlaceholderText(/^Prompt here…/);
+  await userEvent.click(input);
+  await userEvent.keyboard('unsaved draft');
+  // Resize before the draft's debounced save can run.
+  await page.viewport(to, 700);
+  await waitFor(() => expect(isMobileViewport()).toBe(to < 1024));
+  // Same element: crossing the breakpoint must not remount the composer.
+  expect(screen.getByPlaceholderText(/^Prompt here…/)).toBe(input);
+  expect(input).toHaveValue('unsaved draft');
+  expect(input).toHaveFocus();
+});
+
 it('puts the phone composer in one chat bar that grows to five lines', async () => {
   await page.viewport(390, 700);
   render(panel(SessionStatus.RUNNING, false));

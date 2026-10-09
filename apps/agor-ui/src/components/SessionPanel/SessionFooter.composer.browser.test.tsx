@@ -25,11 +25,13 @@ afterEach(async () => {
 });
 
 const noop = vi.fn();
+// Not a known model family, so the chip shows the raw ID unshortened.
+const LONG_MODEL = 'frontier-reasoner-2026-10-preview-with-a-very-long-pinned-suffix';
 const props: SessionFooterProps = {
   session: {
     ...makeSession('composer-session', 'composer-branch', {
       status: SessionStatus.RUNNING,
-      model_config: { model: 'claude-opus-4-8-20251115-with-a-long-pinned-suffix' },
+      model_config: { model: LONG_MODEL },
     }),
     agentic_tool: 'claude-code',
   },
@@ -97,7 +99,19 @@ it.each([
   // Phones scroll the chip row; desktop wraps so focus rings are never clipped.
   expect(getComputedStyle(bar).overflowX).toBe(isMobile ? 'auto' : 'visible');
   expect(getComputedStyle(bar).flexWrap).toBe(isMobile ? 'nowrap' : 'wrap');
-  expect(screen.getByTestId('model-chip').getBoundingClientRect().width).toBeGreaterThanOrEqual(96);
+  const modelChip = screen.getByTestId('model-chip');
+  const modelLabel = within(modelChip).getByText(LONG_MODEL);
+  if (isMobile) {
+    // Phones hold a 96px floor and clip the name inside the chip.
+    expect(modelChip.getBoundingClientRect().width).toBeGreaterThanOrEqual(96);
+    expect(modelChip.getBoundingClientRect().width).toBeLessThanOrEqual(bar.clientWidth);
+    expect(modelLabel.scrollWidth).toBeGreaterThan(modelLabel.clientWidth);
+  } else {
+    expect(modelLabel.scrollWidth).toBeLessThanOrEqual(modelLabel.clientWidth);
+    expect(modelChip.getBoundingClientRect().right).toBeLessThanOrEqual(
+      bar.getBoundingClientRect().right
+    );
+  }
   expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
 
   const actions = ['Attach files', 'More options', 'Stop', 'Queue'].map((name) =>
@@ -141,7 +155,7 @@ it.each([
       continue;
     }
     const style = getComputedStyle(text);
-    expect([12, 14, 16, 20]).toContain(Number.parseFloat(style.fontSize));
+    expect([12, 14]).toContain(Number.parseFloat(style.fontSize));
     expect(style.textTransform).not.toBe('uppercase');
   }
   await page.screenshot({ path: `./.vitest/composer-${width}-${dark ? 'dark' : 'light'}.png` });
