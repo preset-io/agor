@@ -919,6 +919,17 @@ describe('the shipped catalog', () => {
     ]);
   });
 
+  it('gives every entry a starter prompt that runs without user-supplied input', async () => {
+    // A starter prompt is seeded into a new session right after connecting, so
+    // it must work as-is: no "the topic I name" or template placeholders.
+    const placeholder =
+      /\bI (?:name|link|choose|pick|specify|give|paste|describe|mention|provide|select)\b|\bI(?:'m| am) (?:using|working on)\b|<[^>]+>|\{[^}]+\}/i;
+    const offenders = (await loadCuratedCatalog())
+      .filter((entry) => placeholder.test(entry.starter_prompt))
+      .map((entry) => `${entry.name}: ${entry.starter_prompt}`);
+    expect(offenders).toEqual([]);
+  });
+
   it('carries no secret-shaped value anywhere in the file', async () => {
     const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
     // A credential recipe's `header:` names where the user's key goes (e.g.
