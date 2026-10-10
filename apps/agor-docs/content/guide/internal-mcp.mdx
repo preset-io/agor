@@ -347,6 +347,53 @@ JWT, tenant, user, and session context are attached automatically. **From an
 external client**, you configure the endpoint and personal API key yourself,
 and session context is absent unless you add it.
 
+### Prompt provenance
+
+Every prompt an MCP caller delivers — `agor_sessions_prompt` in any mode, the
+initial prompt of `agor_sessions_create` / `agor_sessions_spawn`, and a zone
+trigger fired by `agor_branches_set_zone` — arrives at the recipient with an
+`<agor_prompt_provenance>` block in front of it (behind the body, when the body
+is a slash command so provider dispatch still works).
+
+The block is stamped by the daemon at admission, from the authenticated
+request. Nothing on the wire contributes to it: a caller-supplied
+`prompt_provenance` metadata field is discarded unconditionally, and the
+`<agor_prompt_provenance>` tag is escaped out of every other prompt Agor admits
+— any prompt body, a two-step `tasks` create, and a child-completion callback
+carrying the child's output — so the tag can only appear where Agor put it.
+The durable record is `Task.metadata.prompt_provenance`; the rendered text is a
+projection of it.
+
+It names the origin Agor session, its branch and teammate, the Agor user
+account, the delivering tool, and how the origin identity was established — a
+signed session MCP token, or a personal API key that named a session it can
+read through `X-Agor-Session-Id`. Those two are not the same strength and are
+not rendered as though they were. A caller that authenticates with a personal
+API key and names no session is still admitted, and renders as "origin not
+established".
+
+Two things the block deliberately does not claim, because no code path carries
+them:
+
+- **It is not human approval.** The Agor user is the account the *calling
+  agent* ran under. A relay saying a person authorized something is that
+  agent's assertion, not Agor's.
+- **It authenticates the hop, not the content.** A genuine session that
+  ingested a poisoned page, issue body, or tool result emits a genuinely
+  stamped malicious relay.
+
+Prompts typed in the Agor UI and prompts from daemon-internal producers
+(callbacks, schedules, gateway deliveries, widget resumes) carry no block.
+That absence is meaningful in one direction only: an MCP caller cannot deliver
+text it composed without one, because the stamp comes from the request context
+rather than from any tool argument. A personal API key can also prompt over
+REST, so a missing block means "not delivered over MCP", not "typed by a
+human".
+
+Inbound gateway messages are a separate mechanism with its own context block,
+and Slack follow-ups still carry no provenance block at all. Retrofitting the
+gateway header onto this reservation is not part of this contract yet.
+
 ### Built-in transport contract
 
 Agor's built-in endpoint uses the stable TypeScript MCP SDK v2 in a dual-era,

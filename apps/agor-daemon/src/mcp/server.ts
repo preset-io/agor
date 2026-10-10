@@ -46,6 +46,7 @@ import type { Request, Response } from 'express';
 import { toJSONSchema } from 'zod/v4-mini';
 import { createApiKeyHostTenantResolver } from '../auth/api-key-host-tenant.js';
 import type { AuthenticatedParams, AuthenticatedUser } from '../declarations.js';
+import type { McpPromptProvenanceStamp } from '../utils/prompt-provenance.js';
 import { createMcpAuthRejectionLogger } from './auth-rejection-log.js';
 import { ToolDispatcher, toolDispatcherProxy } from './register-tool-proxy.js';
 import { tenantScopedToolProxy } from './tenant-scope.js';
@@ -97,7 +98,24 @@ export interface McpContext {
   /** Freshly authorized Session identity available to session-aware tool boundaries. */
   authenticatedSession?: Pick<Session, 'session_id' | 'agentic_tool' | 'branch_id'>;
   authenticatedUser: AuthenticatedUser;
-  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider' | 'tenant'>;
+  /**
+   * Base params for every service call this request makes.
+   *
+   * `_promptProvenance` rides here rather than being passed per call site so
+   * an MCP-originated prompt cannot be admitted unstamped by a tool that
+   * forgot to opt in.
+   */
+  baseServiceParams: Pick<AuthenticatedParams, 'user' | 'authenticated' | 'provider' | 'tenant'> & {
+    /**
+     * Optional in the type, always present at runtime. Test fixtures build
+     * partial contexts, and widening every one of them to carry a stamp they
+     * never use would trade a real guard for a ceremonial one. The guard that
+     * matters is structural and is asserted in `tools/prompt-provenance.test.ts`:
+     * every prompt call site passes `ctx.baseServiceParams` through rather
+     * than assembling params of its own.
+     */
+    _promptProvenance?: McpPromptProvenanceStamp;
+  };
 }
 
 /**
@@ -760,10 +778,15 @@ export function setupMCPRoutes(
       // holding a database transaction. Tool/repository operations open their
       // own short tenant units of work.
       return runWithTenantContext(tenant.tenant_id, async () => {
-        const baseServiceParams: Pick<
-          AuthenticatedParams,
-          'user' | 'authenticated' | 'provider' | 'tenant'
-        > = {
+        const promptProvenanceStamp = (
+          origin: Partial<McpPromptProvenanceStamp> = {}
+        ): McpPromptProvenanceStamp => ({
+          authenticated_by: isPersonalApiKey ? 'personal_api_key' : 'session_token',
+          origin_user_id: authenticatedUser.user_id as UserID,
+          origin_user_label: authenticatedUser.email || shortId(authenticatedUser.user_id),
+          ...origin,
+        });
+        const baseServiceParams: McpContext['baseServiceParams'] = {
           user: {
             user_id: authenticatedUser.user_id,
             email: authenticatedUser.email,
@@ -772,6 +795,14 @@ export function setupMCPRoutes(
           authenticated: true,
           provider: 'mcp',
           tenant,
+          // Session identity is added below, once the optional current Session
+          // context has been re-authorized. Everything here is read from the
+          // daemon's own request state; nothing on the JSON-RPC envelope
+          // contributes. `authenticated_by` keeps a signed session token
+          // distinct from a personal API key that merely NAMED a session it can
+          // read (`X-Agor-Session-Id` is re-authorized, not authenticated), so
+          // the weaker claim is never rendered as the stronger one.
+          _promptProvenance: promptProvenanceStamp(),
         };
 
         // Re-authorize every optional current-Session context through the
@@ -788,6 +819,11 @@ export function setupMCPRoutes(
               agentic_tool: session.agentic_tool,
               branch_id: session.branch_id,
             };
+            baseServiceParams._promptProvenance = promptProvenanceStamp({
+              origin_session_id: session.session_id,
+              origin_branch_id: session.branch_id,
+              ...(session.agentic_tool ? { origin_agentic_tool: session.agentic_tool } : {}),
+            });
           } catch {
             return res.status(403).json({
               ...jsonRpcError(
