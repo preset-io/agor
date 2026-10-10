@@ -21,13 +21,6 @@ export const HOME_HERO: HeroCopy = {
     'Bring your ^team^ and agents together. See the work on [live boards], learn from each other, and turn useful practices into workflows your team can share.',
 };
 
-// A/B candidate (not wired up yet): keeps the tested "Not Alone" problem
-// headline, widened past "coding", with the category in the subhead.
-export const HOME_HERO_PROBLEM: HeroCopy = {
-  headline: 'Your AI agents\nare working [alone]',
-  subheadline: 'Agor is {Multiplayer AI}: bring your team and agents together on live boards.',
-};
-
 // {word} → bold ink highlight (.headingStrong), [word] → teal/sky gradient
 // highlight (.headingAccent), ~~word~~ → struck-through/dimmed (.headingStrike,
 // for "crossing out" a word being replaced), *word* → italic (.headingItalic,
