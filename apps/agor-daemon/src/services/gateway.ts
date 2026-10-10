@@ -108,6 +108,7 @@ import type {
   Message,
   MessageID,
   MessageSource,
+  Paginated,
   Session,
   SessionID,
   Task,
@@ -159,6 +160,7 @@ import {
 } from '../utils/gateway-read-failure.js';
 import { isMcpRuntimeRecoveryEnabled } from '../utils/mcp-runtime-hints.js';
 import { issueMCPSlackRecoveryToken } from '../utils/mcp-slack-recovery-token.js';
+import { findActiveTasksForSession } from '../utils/session-tasks.js';
 import {
   createTenantBoundDataAccess,
   type TenantBoundDataAccess,
@@ -210,6 +212,7 @@ import {
   withSlackDeliveryDeadline,
 } from './mcp-slack-delivery-engine.js';
 import type { SessionParams } from './sessions.js';
+import type { TasksService } from './tasks.js';
 
 /**
  * Inbound message data (platform → session)
@@ -1026,6 +1029,14 @@ function buildShortcutInitialPrompt(text: string, metadata?: Record<string, unkn
     return text;
   }
 }
+
+const CHAT_COMMANDS_HELP = [
+  'Commands:',
+  '`stop` or `!stop-clear`: clears the queue and stops; text after it is sent next.',
+  '`!stop`: stops; the queue carries on.',
+  '`!queue`: lists the queued prompts.',
+  '`!help`: shows this list.',
+].join('\n');
 
 /**
  * Build a GatewayContext from channel + inbound message data.
@@ -4806,6 +4817,107 @@ export class GatewayService {
   }
 
   /**
+   * Runs "stop", "!stop-clear", "!stop", "!queue" or "!help" as the chat user.
+   * Returns the text to prompt next, '' if none, or undefined if not a command.
+   */
+  private async runChatCommand(
+    channel: GatewayChannel,
+    data: PostMessageData,
+    user: User,
+    sessionId: SessionID
+  ): Promise<string | undefined> {
+    const text = data.text.trim();
+    if (/^!help$/i.test(text)) {
+      await this.sendSystemMessage(channel, data.thread_id, CHAT_COMMANDS_HELP);
+      return '';
+    }
+    const stopMatch = /^(!stop-clear|!?stop)\s*(\n|[.,;:!?]+|$)/i.exec(text);
+    if (!stopMatch && !/^!queue$/i.test(text)) return undefined;
+    const command = !stopMatch ? 'queue' : /^!stop$/i.test(stopMatch[1]) ? 'stop' : 'panic';
+    const panic = command === 'panic';
+    const tenantId = getCurrentTenantId();
+    const asUser = {
+      user,
+      authenticated: true,
+      provider: 'gateway',
+      ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
+    } as AuthenticatedParams;
+    const tasks = this.app.service('tasks') as unknown as TasksService;
+
+    // Read the queue and the running task internally: external reads strip the
+    // chat author that the reply needs.
+    const queue =
+      command !== 'stop'
+        ? (
+            (await tasks.find({
+              query: { session_id: sessionId, status: TaskStatus.QUEUED, $sort: { created_at: 1 } },
+            })) as Paginated<Task>
+          ).data
+        : [];
+    const [active] =
+      command === 'queue' ? [] : await findActiveTasksForSession(this.app, sessionId);
+
+    // Clear first, so the stop cannot start the next queued prompt.
+    const cleared =
+      panic &&
+      queue.length > 0 &&
+      (await tasks
+        .cancelQueued({ session_id: sessionId, task_ids: queue.map((t) => t.task_id) }, asUser)
+        .then(
+          () => true,
+          () => false
+        ));
+    const replies: string[] = [];
+    if (active) {
+      const stop = await this.app
+        .service('/sessions/:id/stop')
+        .create({ expected_task_id: active.task_id }, { ...asUser, route: { id: sessionId } })
+        .catch((error: Error) => ({ success: false, reason: error.message }));
+      replies.push(stop.success ? 'Stopped.' : `Could not stop: ${stop.reason}`);
+    }
+
+    // List the queue that was or was not cleared, oldest first.
+    const line = (task: Task, index: number) => {
+      const source = task.metadata?.gateway_task_source;
+      const who = !source
+        ? 'Web UI or automation'
+        : source.provider_user_id === data.user_name
+          ? 'You'
+          : 'Someone else';
+      const minutes = Math.round((Date.now() - Date.parse(task.created_at)) / 60_000);
+      return `[${index + 1}] ${who}, ${minutes < 1 ? 'just now' : `${minutes} min ago`}`;
+    };
+
+    const shown = queue.slice(0, 5);
+    if (command === 'queue') {
+      replies.push(
+        queue.length > 0 ? 'Queued, oldest first:' : 'Nothing is queued.',
+        ...shown.map(line)
+      );
+    } else if (cleared) {
+      replies.push(...shown.map((task, index) => `Cleared ${line(task, index)}`));
+    } else if (queue.length > 0) {
+      replies.push('NOT Cleared:', ...shown.map(line));
+    }
+    if (queue.length > shown.length) {
+      replies.push(`${queue.length - shown.length} more ${cleared ? 'cleared' : 'still queued'}.`);
+    }
+
+    const reply =
+      replies.length > 0
+        ? replies.join('\n')
+        : panic
+          ? 'Nothing is running or queued.'
+          : 'Nothing is running.';
+    await this.sendSystemMessage(
+      channel,
+      data.thread_id,
+      panic ? `${reply}\n\n${CHAT_COMMANDS_HELP}` : reply
+    );
+    return stopMatch ? text.slice(stopMatch[0].length).trim() : '';
+  }
+
+  /**
    * Inbound routing: platform → session
    *
    * Authenticates via channel_key, looks up or creates a session
@@ -5257,6 +5369,18 @@ export class GatewayService {
           await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
         }
         return { success: false, sessionId: '', created: false };
+      }
+      if (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut') {
+        const contMessage = await this.runChatCommand(
+          channel,
+          data,
+          user,
+          existingMapping.session_id
+        );
+        if (contMessage === '') {
+          return { success: true, sessionId: existingMapping.session_id, created: false };
+        }
+        if (contMessage) data.text = contMessage;
       }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);

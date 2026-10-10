@@ -168,6 +168,10 @@ seed is recorded durably; the first eligible human reply to any seed chunk
 consumes that seed and starts the mapped session. Replies to later response
 chunks continue the same session.
 
+## Stopping a running session
+
+Send `stop` in a mapped thread, alone or followed by a new line or punctuation (any case, for example `stop.` or `STOP!`), to cancel its queued messages and stop the running one. Cancelling needs the same permission as removing queued messages in the UI; the reply lists what was and was not cleared. `!stop-clear` does the same as `stop`. `!stop` only stops the running message, and the queue carries on. `!queue` lists the queued messages, and `!help` lists these commands. Text after the keyword is then sent to the agent as a new instruction, so `STOP! Do this instead.` redirects it. In channels the bot still needs the `@mention`.
+
 ## Slack thread behavior
 
 In Slack channels, Agor uses a hard mention rule:

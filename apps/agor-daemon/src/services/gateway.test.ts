@@ -31,7 +31,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { SessionStatus } from '@agor/core/types';
+import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ingestDiscordInboundImages,
@@ -206,6 +206,14 @@ function makeGatewayHarness(args: {
   sessionSdkHomeScope?: SessionSdkHomeScope;
   sessionOwnerUserId?: UserID;
   outboundSeed?: GatewayOutboundMessage | null;
+  sessionTasks?: Array<{
+    task_id: string;
+    status: string;
+    created_at: string;
+    metadata?: { gateway_task_source: { provider_user_id: string } };
+  }>;
+  cancelFails?: boolean;
+  stopResult?: Record<string, unknown>;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
 }) {
   const channel = args.channel ?? slackChannel;
@@ -215,6 +223,14 @@ function makeGatewayHarness(args: {
     task_id: 'task-1',
     session_id: mapping?.session_id ?? 'sess-new',
     status: 'running',
+  }));
+  const stopCreate = vi.fn(async () => args.stopResult ?? { success: true, outcome: 'stopped' });
+  const cancelQueued = vi.fn(async () => {
+    if (args.cancelFails) throw new Error("You need 'all' permission to manage queued tasks.");
+    return { session_id: 'sess-1', queue: [] };
+  });
+  const tasksFind = vi.fn(async (params: { query: { status?: string } }) => ({
+    data: (args.sessionTasks ?? []).filter((task) => task.status === params.query.status),
   }));
   const sessionsCreate = vi.fn(async () => ({
     session_id: 'sess-new',
@@ -236,6 +252,8 @@ function makeGatewayHarness(args: {
         return { create: sessionsCreate, get: sessionsGet, setMCPServers };
       }
       if (name === '/sessions/:id/prompt') return { create: promptCreate };
+      if (name === '/sessions/:id/stop') return { create: stopCreate };
+      if (name === 'tasks') return { cancelQueued, find: tasksFind };
       throw new Error(`Unexpected service: ${name}`);
     },
   };
@@ -414,6 +432,9 @@ function makeGatewayHarness(args: {
     service,
     createUnscoped: create,
     promptCreate,
+    stopCreate,
+    cancelQueued,
+    tasksFind,
     sessionsCreate,
     sessionsGet,
     setMCPServers,
@@ -1552,6 +1573,182 @@ describe('GatewayService mapped-thread follow-ups', () => {
     const prompt = promptCreate.mock.calls[0][0].prompt as string;
     expect(prompt).toContain('any update?');
     expect(prompt).not.toContain('This Slack thread began from a proactive Agor gateway message');
+  });
+});
+
+describe('GatewayService stop keyword', () => {
+  const stopMessage = (text: string) => ({
+    channel_key: 'slack-key',
+    thread_id: 'C123-100.000000',
+    text,
+    user_name: 'U-me',
+    metadata: { channel: 'C123', channel_type: 'im', slack_message_ts: '103.000000' },
+  });
+  const task = (task_id: string, status: string, author?: string) => ({
+    task_id,
+    status,
+    created_at: new Date().toISOString(),
+    ...(author ? { metadata: { gateway_task_source: { provider_user_id: author } } } : {}),
+  });
+
+  it('clears the queue and stops the running task as the chat user, then prompts the rest', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, stopCreate, cancelQueued, tasksFind } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+      sessionTasks: [
+        task('run-theirs', TaskStatus.RUNNING, 'U-anna'),
+        task('queued-mine', TaskStatus.QUEUED, 'U-me'),
+        task('queued-theirs', TaskStatus.QUEUED, 'U-anna'),
+      ],
+    });
+
+    await service.create(stopMessage('STOP! Run the tests instead.'));
+
+    expect(cancelQueued).toHaveBeenCalledWith(
+      { session_id: 'sess-1', task_ids: ['queued-mine', 'queued-theirs'] },
+      expect.objectContaining({ provider: 'gateway', authenticated: true })
+    );
+    expect(stopCreate).toHaveBeenCalledWith(
+      { expected_task_id: 'run-theirs' },
+      expect.objectContaining({ provider: 'gateway', route: { id: 'sess-1' } })
+    );
+    expect(cancelQueued.mock.invocationCallOrder[0]).toBeLessThan(
+      stopCreate.mock.invocationCallOrder[0]
+    );
+    expect(tasksFind.mock.calls[0][0]).not.toHaveProperty('provider');
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain(
+      'Stopped.\\nCleared [1] You, just now\\nCleared [2] Someone else, just now\\n\\nCommands:'
+    );
+    const prompt = promptCreate.mock.calls[0][0].prompt as string;
+    expect(prompt).toContain('Run the tests instead.');
+    expect(prompt).not.toContain('STOP');
+  });
+
+  it('still stops, and lists what was not cleared, when the queue may not be cleared', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, stopCreate } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+      cancelFails: true,
+      sessionTasks: [
+        task('run-theirs', TaskStatus.RUNNING, 'U-anna'),
+        task('queued-mine', TaskStatus.QUEUED, 'U-me'),
+        task('queued-theirs', TaskStatus.QUEUED, 'U-anna'),
+        task('queued-ui', TaskStatus.QUEUED),
+        task('queued-ui-2', TaskStatus.QUEUED),
+        task('queued-ui-3', TaskStatus.QUEUED),
+        task('queued-ui-4', TaskStatus.QUEUED),
+      ],
+    });
+
+    await service.create(stopMessage('!stop-clear'));
+
+    expect(stopCreate).toHaveBeenCalledOnce();
+    expect(promptCreate).not.toHaveBeenCalled();
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain(
+      'Stopped.\\nNOT Cleared:\\n[1] You, just now\\n[2] Someone else, just now\\n[3] Web UI or automation, just now\\n[4] Web UI or automation, just now\\n[5] Web UI or automation, just now\\n1 more still queued.'
+    );
+  });
+
+  it('only stops for the !stop command, keeping the queue', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, stopCreate, cancelQueued } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+      sessionTasks: [
+        task('run-theirs', TaskStatus.RUNNING, 'U-anna'),
+        task('queued-theirs', TaskStatus.QUEUED, 'U-anna'),
+      ],
+    });
+
+    const result = await service.create(stopMessage('!stop'));
+
+    expect(result).toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+    expect(promptCreate).not.toHaveBeenCalled();
+    expect(stopCreate).toHaveBeenCalledOnce();
+    expect(cancelQueued).not.toHaveBeenCalled();
+    const reply = JSON.stringify(sendMessage.mock.calls);
+    expect(reply).toContain('Stopped.');
+    expect(reply).not.toContain('Cleared');
+    expect(reply).not.toContain('Commands:');
+  });
+
+  it('reports a failed stop and the age of queued prompts, or that nothing is running', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+      stopResult: { success: false, reason: 'Execution changed.' },
+      sessionTasks: [
+        task('run-theirs', TaskStatus.RUNNING, 'U-anna'),
+        {
+          ...task('queued-theirs', TaskStatus.QUEUED, 'U-anna'),
+          created_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+        },
+      ],
+    });
+    const idleMessage = vi.fn(async () => '104.000000');
+    const idle = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage: idleMessage },
+    });
+
+    await service.create(stopMessage('stop'));
+    await idle.service.create(stopMessage('stop'));
+
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain(
+      'Could not stop: Execution changed.\\nCleared [1] Someone else, 3 min ago'
+    );
+    expect(JSON.stringify(idleMessage.mock.calls)).toContain('Nothing is running or queued.');
+  });
+
+  it('only shows the commands for !help', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, stopCreate } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+    });
+
+    await service.create(stopMessage('!help'));
+
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain('Commands:');
+    expect(stopCreate).not.toHaveBeenCalled();
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('only lists the queue for !queue', async () => {
+    const sendMessage = vi.fn(async () => '104.000000');
+    const { service, promptCreate, stopCreate, cancelQueued } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage },
+      sessionTasks: [
+        task('run-theirs', TaskStatus.RUNNING, 'U-anna'),
+        task('queued-theirs', TaskStatus.QUEUED, 'U-anna'),
+        task('queued-mine', TaskStatus.QUEUED, 'U-me'),
+      ],
+    });
+
+    await service.create(stopMessage('!queue'));
+
+    expect(JSON.stringify(sendMessage.mock.calls)).toContain(
+      'Queued, oldest first:\\n[1] Someone else, just now\\n[2] You, just now'
+    );
+    expect(cancelQueued).not.toHaveBeenCalled();
+    expect(stopCreate).not.toHaveBeenCalled();
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('prompts a message that only starts with the word stop', async () => {
+    const { service, promptCreate, stopCreate } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      connector: { sendMessage: vi.fn(async () => '104.000000') },
+    });
+
+    await service.create(stopMessage('Stop using tabs'));
+
+    expect(stopCreate).not.toHaveBeenCalled();
+    expect(promptCreate).toHaveBeenCalledOnce();
   });
 });
 
