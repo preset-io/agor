@@ -22,14 +22,17 @@ vi.mock('@slack/socket-mode', () => ({
   },
 }));
 
+import type { GatewayInboundCallback } from '../connector';
 import {
   extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
   isSlackDirectMessageId,
   isSlackFileSourceAllowed,
+  isSlackInboundSurfaceAllowed,
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
   markdownToSlackPayload,
+  normalizeSlackReactionName,
   SLACK_AGOR_MESSAGE_METADATA_EVENT_TYPES,
   SLACK_REQUEST_TIMEOUT_METADATA_KEY,
   SlackConnector,
@@ -73,6 +76,291 @@ describe('Slack listener lifecycle', () => {
       }
     }
   );
+});
+
+describe('SlackConnector inbound reactions', () => {
+  type SlackEventHandler = (args: {
+    type: string;
+    body: Record<string, unknown>;
+    ack: () => Promise<void>;
+  }) => Promise<void>;
+
+  const reactedReply = {
+    ts: '200.000002',
+    thread_ts: '200.000000',
+    text: 'Ready to merge?',
+    user: 'UBOT',
+    bot_id: 'B1',
+  };
+
+  function reactionEvent(overrides: Record<string, unknown> = {}) {
+    return {
+      type: 'reaction_added',
+      user: 'UADA',
+      reaction: 'white_check_mark',
+      item_user: 'UBOT',
+      item: { type: 'message', channel: 'D123', ts: '200.000002' },
+      event_ts: '300.000001',
+      ...overrides,
+    };
+  }
+
+  async function startReactionListener(
+    args: {
+      config?: Record<string, unknown>;
+      channelInfo?: Record<string, unknown>;
+      replies?: ReturnType<typeof vi.fn>;
+      callback?: ReturnType<typeof vi.fn>;
+      durable?: boolean;
+    } = {}
+  ) {
+    socketModeMocks.instances.length = 0;
+    socketModeMocks.startImpl = () => Promise.resolve();
+    const connector = new SlackConnector({
+      bot_token: 'bot-redacted',
+      app_token: 'app-redacted',
+      inbound_reactions: true,
+      ...args.config,
+    });
+    const replies = args.replies ?? vi.fn(async () => ({ messages: [reactedReply] }));
+    const web = {
+      auth: { test: vi.fn().mockResolvedValue({ user_id: 'UBOT' }) },
+      conversations: {
+        replies,
+        info: vi.fn(async () => ({ ok: true, channel: args.channelInfo ?? { is_im: true } })),
+      },
+      users: {
+        info: vi.fn(async () => ({
+          user: { profile: { email: 'ada@example.com', display_name: 'Ada' } },
+        })),
+      },
+    };
+    (connector as unknown as { web: unknown }).web = web;
+    const callback = args.callback ?? vi.fn(async () => undefined);
+    await connector.startListening(callback as unknown as GatewayInboundCallback, {
+      durableEventIdempotency: args.durable ?? false,
+    });
+    const handler = socketModeMocks.instances[0].on.mock.calls.find(
+      ([name]) => name === 'slack_event'
+    )?.[1] as SlackEventHandler;
+    const emit = async (event: Record<string, unknown>) => {
+      const ack = vi.fn(async () => undefined);
+      await handler({
+        type: 'events_api',
+        body: { team_id: 'T1', event_id: 'Ev1', event },
+        ack,
+      });
+      return ack;
+    };
+    return { connector, callback, emit, replies, web };
+  }
+
+  it('routes a reaction on a bot reply to its thread root with reaction metadata', async () => {
+    const { callback, emit, replies } = await startReactionListener();
+
+    const ack = await emit(reactionEvent());
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(replies).toHaveBeenCalledWith({
+      channel: 'D123',
+      ts: '200.000002',
+      oldest: '200.000002',
+      inclusive: true,
+      limit: 2,
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      providerEventId: 'slack:reaction:T1:D123:200.000002:UADA:white_check_mark:added:300.000001',
+      threadId: 'D123-200.000000',
+      text: ':white_check_mark:',
+      userId: 'UADA',
+      metadata: {
+        channel: 'D123',
+        channel_type: 'im',
+        slack_user_id: 'UADA',
+        slack_team_id: 'T1',
+        slack_bot_user_id: 'UBOT',
+        slack_thread_ts: '200.000000',
+        slack_is_thread_reply: true,
+        slack_has_mention: false,
+        slack_event_type: 'reaction_added',
+        slack_reaction: 'white_check_mark',
+        slack_reaction_item_ts: '200.000002',
+        slack_reaction_item_user_id: 'UBOT',
+        slack_reaction_item_text: 'Ready to merge?',
+        slack_user_email: 'ada@example.com',
+        slack_user_name: 'Ada',
+      },
+    });
+    // A reaction has no message of its own, so it must not look like one.
+    expect(callback.mock.calls[0][0].metadata).not.toHaveProperty('slack_message_ts');
+  });
+
+  it('routes reaction_removed with a distinct provider event identity', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    await emit(reactionEvent({ type: 'reaction_removed' }));
+
+    expect(callback.mock.calls[0][0]).toMatchObject({
+      providerEventId: 'slack:reaction:T1:D123:200.000002:UADA:white_check_mark:removed:300.000001',
+      metadata: { slack_event_type: 'reaction_removed' },
+    });
+  });
+
+  it('ignores reactions entirely when inbound_reactions is off', async () => {
+    const { callback, emit, replies } = await startReactionListener({
+      config: { inbound_reactions: false },
+    });
+
+    const ack = await emit(reactionEvent());
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(replies).not.toHaveBeenCalled();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['the bot itself', { user: 'UBOT' }],
+    ['a non-message item', { item: { type: 'file', file: 'F1' } }],
+    ['a malformed emoji name', { reaction: 'x:<@U1>' }],
+    ['a missing reactor', { user: undefined }],
+  ])('ignores a reaction from %s', async (_label, overrides) => {
+    const { callback, emit } = await startReactionListener();
+
+    const ack = await emit(reactionEvent(overrides));
+
+    expect(ack).toHaveBeenCalledOnce();
+    expect(callback).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['public channels disabled', {}, 0],
+    [
+      'a channel outside the whitelist',
+      { enable_channels: true, allowed_channel_ids: ['C999'] },
+      0,
+    ],
+    [
+      'an enabled, whitelisted public channel',
+      { enable_channels: true, allowed_channel_ids: ['C123'] },
+      1,
+    ],
+  ])('applies surface filters: %s', async (_label, config, expectedCalls) => {
+    const { callback, emit } = await startReactionListener({
+      config,
+      channelInfo: { name: 'eng' },
+    });
+
+    await emit(reactionEvent({ item: { type: 'message', channel: 'C123', ts: '200.000002' } }));
+
+    expect(callback).toHaveBeenCalledTimes(expectedCalls);
+  });
+
+  it('falls back to the reacted message as the thread root when Slack cannot be read', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const replies = vi.fn(async () => {
+      throw new Error('missing_scope');
+    });
+    const { callback, emit } = await startReactionListener({ replies });
+
+    await emit(reactionEvent());
+
+    expect(callback.mock.calls[0][0].threadId).toBe('D123-200.000002');
+    expect(callback.mock.calls[0][0].metadata).not.toHaveProperty('slack_reaction_item_text');
+    warn.mockRestore();
+  });
+
+  it('uses the thread parent when Slack returns only the parent of a reacted reply', async () => {
+    const replies = vi.fn(async () => ({
+      messages: [{ ts: '200.000000', thread_ts: '200.000000', text: 'root' }],
+    }));
+    const { callback, emit } = await startReactionListener({ replies });
+
+    await emit(reactionEvent());
+
+    expect(callback.mock.calls[0][0].threadId).toBe('D123-200.000000');
+    expect(callback.mock.calls[0][0].metadata).not.toHaveProperty('slack_reaction_item_text');
+  });
+
+  it('delivers a repeated identical reaction once per cooldown', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    await emit(reactionEvent());
+    await emit(reactionEvent({ event_ts: '300.000002' }));
+    await emit(reactionEvent({ type: 'reaction_removed', event_ts: '300.000003' }));
+
+    // The add is delivered once; its removal is a distinct signal.
+    expect(callback).toHaveBeenCalledTimes(2);
+  });
+
+  it('caps reaction prompts per thread so emoji spam cannot queue a burst', async () => {
+    const { callback, emit } = await startReactionListener();
+
+    for (const [index, reaction] of ['one', 'two', 'three', 'four', 'five'].entries()) {
+      await emit(reactionEvent({ reaction, event_ts: `300.00000${index}` }));
+    }
+
+    expect(callback).toHaveBeenCalledTimes(3);
+  });
+
+  it('releases the rate limit when durable routing fails so the redelivery is accepted', async () => {
+    const callback = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('routing failed'))
+      .mockResolvedValueOnce(undefined);
+    const { emit } = await startReactionListener({ callback, durable: true });
+
+    await expect(emit(reactionEvent())).rejects.toThrow('routing failed');
+    const ack = await emit(reactionEvent());
+
+    expect(callback).toHaveBeenCalledTimes(2);
+    expect(ack).toHaveBeenCalledOnce();
+  });
+});
+
+describe('normalizeSlackReactionName', () => {
+  it.each([
+    'white_check_mark',
+    '+1',
+    '-1',
+    'thumbsup::skin-tone-2',
+    'man-woman-girl-boy',
+    'e-mail',
+  ])('accepts %s', (name) => {
+    expect(normalizeSlackReactionName(name)).toBe(name);
+  });
+
+  it.each(['', 'has space', 'x:<@U1>', 'a'.repeat(101), 42, undefined, 'x::skin-tone-9'])(
+    'rejects %s',
+    (name) => {
+      expect(normalizeSlackReactionName(name)).toBeNull();
+    }
+  );
+});
+
+describe('isSlackInboundSurfaceAllowed', () => {
+  const surfaces = {
+    enableChannels: true,
+    enableGroups: false,
+    enableMpim: false,
+    allowedChannelIds: ['C1'],
+  };
+
+  it('always allows DMs, even outside the whitelist', () => {
+    expect(isSlackInboundSurfaceAllowed('im', 'D9', surfaces)).toBe(true);
+  });
+
+  it('follows the surface toggle and whitelist for channel-like surfaces', () => {
+    expect(isSlackInboundSurfaceAllowed('channel', 'C1', surfaces)).toBe(true);
+    expect(isSlackInboundSurfaceAllowed('channel', 'C2', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('group', 'C1', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('mpim', 'C1', surfaces)).toBe(false);
+  });
+
+  it('fails closed on an unresolved or unknown conversation type', () => {
+    expect(isSlackInboundSurfaceAllowed(undefined, 'C1', surfaces)).toBe(false);
+    expect(isSlackInboundSurfaceAllowed('app_home', 'C1', surfaces)).toBe(false);
+  });
 });
 
 /**

@@ -242,19 +242,31 @@ Archiving is reversible and preserves the Session transcript for search and audi
 
 The wizard and manifest bake these in automatically. This table is for understanding what each capability grants, not a checklist to apply by hand. Scopes are bot scopes (requested in the manifest); `connections:write` is the one app-level scope, generated separately on the app-level (`xapp-`) token.
 
-| Capability                                | Bot scopes added                                                                    | Events added  |
-| ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------- |
-| **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`  |
-| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention` |
-| **Private channels**                      | `groups:history`, `groups:read`                                                     | —             |
-| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —             |
-| **Align Slack users**                     | `users:read.email`                                                                  | —             |
-| **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —             |
+| Capability                                | Bot scopes added                                                                    | Events added                         |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------ |
+| **Direct messages** (baseline, always on) | `chat:write`, `im:history`, `im:read`, `users:read`                                 | `message.im`                         |
+| **Public channels**                       | `app_mentions:read`, `channels:history`, `channels:read`                            | `app_mention`                        |
+| **Private channels**                      | `groups:history`, `groups:read`                                                     | —                                    |
+| **Group DMs**                             | `mpim:history`, `mpim:read`                                                         | —                                    |
+| **Align Slack users**                     | `users:read.email`                                                                  | —                                    |
+| **Outbound sends**                        | `chat:write.public`, `channels:read`, `groups:read`, `im:write`, `users:read.email` | —                                    |
+| **Deliver reactions to sessions**         | `reactions:read`                                                                    | `reaction_added`, `reaction_removed` |
 
 Notes:
 
 - `app_mentions:read` and the `app_mention` event are added whenever **any** channel-like surface (public channel, private channel, or group DM) is enabled. Those surfaces all trigger on `@`-mention, so no `message.channels` / `message.groups` / `message.mpim` events are requested.
 - `connections:write` never appears in the manifest. It lives on the app-level token you generate under **Basic Information → App-Level Tokens**.
+
+### Emoji reactions as input
+
+With **Deliver reactions to sessions** on (`config.inbound_reactions: true`, off by default), a human adding or removing an emoji reaction on a message in a thread that already has a session delivers a short prompt to that session, for example `[Slack reaction] Ada reacted :white_check_mark: to your message in this thread`, followed by a quoted excerpt of the reacted message. This lets you approve or acknowledge an agent's reply without typing.
+
+- A reaction never starts a session. Reactions in threads with no session, on surfaces the channel doesn't listen on, or outside `allowed_channel_ids` are ignored.
+- The bot's own reactions (including ones agents add with the reaction tools) are ignored. Reactors go through the same identity checks as messages (Slack user alignment or the fixed run-as user, plus branch prompt permission). Rejected reactions are dropped silently, without a notice in the thread.
+- Each reaction is rate limited: one prompt per message, user, emoji, and add/remove per minute, and at most three reaction prompts per thread per minute.
+- Reacted message text is passed as untrusted Slack content.
+
+Turning this on adds a scope and two events. Update the app manifest and reinstall the app to the workspace before relying on it.
 
 ## Discord behavior
 
