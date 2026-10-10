@@ -437,8 +437,12 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
 }) => {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const keyboardDismissedRef = useRef(false);
   // Restore focus only for keyboard dismissal, never for hover or outside clicks.
   const closeWithKeyboard = () => {
+    // Changing controlled open does not cancel AntD's pending hover callback.
+    // Ignore it until a fresh trigger interaction, including during exit motion.
+    keyboardDismissedRef.current = true;
     setOpen(false);
     triggerRef.current?.focus();
   };
@@ -483,7 +487,9 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
       title={null}
       trigger={['hover', 'click']}
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen || !keyboardDismissedRef.current) setOpen(nextOpen);
+      }}
       placement="top"
       mouseEnterDelay={0.3}
     >
@@ -492,6 +498,12 @@ export const ContextWindowPill: React.FC<ContextWindowPillProps> = ({
         type="text"
         aria-label={`Context window ${hasLimit ? `${percentage}% used` : 'usage unknown'}; show token breakdown`}
         aria-expanded={open}
+        onMouseEnter={() => {
+          keyboardDismissedRef.current = false;
+        }}
+        onClickCapture={() => {
+          keyboardDismissedRef.current = false;
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation();

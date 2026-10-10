@@ -1,10 +1,13 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { ContextWindowPill } from './Pill';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 // Exercise a real exit animation longer than the former 400 ms sleep as well as default motion.
 it.each([undefined, '0.6s'])(
@@ -67,6 +70,10 @@ it('does not reopen from a stationary hover after keyboard dismissal', async () 
   await waitFor(() => expect(rawDetails).not.toBeVisible(), { timeout: 2000 });
   expect(trigger).toHaveAttribute('aria-expanded', 'false');
   expect(trigger).toHaveFocus();
+
+  await act(async () => userEvent.unhover(trigger));
+  await act(async () => userEvent.hover(trigger));
+  await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'true'));
 });
 
 it('does not return focus on outside dismissal', async () => {
@@ -90,3 +97,32 @@ it('does not return focus on outside dismissal', async () => {
   await waitFor(() => expect(trigger).toHaveAttribute('aria-expanded', 'false'));
   expect(document.activeElement).toBe(outside);
 });
+
+it.each(['trigger', 'popup'])(
+  'keeps Escape dismissal closed when a delayed %s hover is still pending',
+  (hoverTarget) => {
+    vi.useFakeTimers();
+    render(
+      <ContextWindowPill
+        used={22}
+        limit={100}
+        taskMetadata={{ raw_sdk_response: { usage: { input_tokens: 22 } } }}
+      />
+    );
+    const trigger = screen.getByRole('button', { name: /Context window 22% used/ });
+    fireEvent.click(trigger);
+    const rawDetails = screen.getByRole('button', { name: /Raw SDK Response/ });
+    // Queue AntD's 300 ms hover-open callback, then dismiss before it fires.
+    fireEvent.mouseEnter(hoverTarget === 'trigger' ? trigger : rawDetails);
+    rawDetails.focus();
+    fireEvent.keyDown(rawDetails, { key: 'Escape' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    act(() => vi.advanceTimersByTime(1000));
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+
+    // An intentional click (also emitted by Enter/Space) can still reopen it.
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  }
+);
