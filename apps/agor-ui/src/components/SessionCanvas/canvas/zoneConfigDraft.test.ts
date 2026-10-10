@@ -1,4 +1,5 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: persisted zone color fixtures
+import { normalizeZoneLayoutPolicy } from '@agor/core/layout/zone-layout';
 import type { ZoneBoardObject } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import {
@@ -32,6 +33,39 @@ describe('zone configuration draft merge', () => {
     const empty = { ...zone, trigger: undefined };
     const draft = createZoneConfigDraft(empty, empty.label);
     expect(applyZoneConfigDraft(empty, draft, draft)).toBeUndefined();
+  });
+
+  it('preserves remote layout and binding on an appearance-only edit', () => {
+    const latest: ZoneBoardObject = {
+      ...zone,
+      layout_binding: 'inherit',
+      layout: { mode: 'auto', preset: 'compact_list', gap: 8 },
+    };
+    expect(applyZoneConfigDraft(latest, initial, { ...initial, name: 'Local name' })).toEqual({
+      ...latest,
+      label: 'Local name',
+    });
+  });
+
+  it('applies a layout override without overwriting received placement or automation', () => {
+    const inherited: ZoneBoardObject = { ...zone, layout_binding: 'inherit' };
+    const draft = createZoneConfigDraft(inherited, inherited.label, {
+      mode: 'auto',
+      preset: 'compact_list',
+      gap: 8,
+    });
+    const latest: ZoneBoardObject = { ...inherited, x: 99, trigger: undefined };
+    const edited = {
+      ...draft,
+      layoutBinding: 'override' as const,
+      layout: { ...draft.layout, columnGap: 4 },
+    };
+    expect(applyZoneConfigDraft(latest, draft, edited)).toEqual({
+      ...latest,
+      layout_binding: 'override',
+      layout: edited.layout,
+    });
+    expect(applyZoneConfigDraft(latest, draft, { ...edited, ...draft })).toBeUndefined();
   });
 
   it('preserves remote fields and trigger subfields while applying a prompt edit', () => {
@@ -141,11 +175,38 @@ describe('zone configuration draft copy', () => {
         'Border color: #123456',
         'Fill color: #abcdef',
         'Label size: 22',
+        'Layout: zone override',
+        `Layout settings: ${JSON.stringify(normalizeZoneLayoutPolicy(undefined))}`,
       ].join('\n')
     );
     const plain = { ...zone, trigger: undefined, borderColor: undefined, fontSize: undefined };
     expect(formatZoneConfigDraft(createZoneConfigDraft(plain, 'Plain'))).toBe(
-      ['Name: Plain', 'Prompt template: (none)', 'Locked: yes', 'Fill color: #abcdef'].join('\n')
+      [
+        'Name: Plain',
+        'Prompt template: (none)',
+        'Locked: yes',
+        'Fill color: #abcdef',
+        'Layout: zone override',
+        `Layout settings: ${JSON.stringify(normalizeZoneLayoutPolicy(undefined))}`,
+      ].join('\n')
     );
+  });
+
+  it('carries an edited layout and its binding, so a layout-only draft can be copied', () => {
+    const inherited = { ...zone, layout_binding: 'inherit' as const };
+    const draft = createZoneConfigDraft(inherited, inherited.label, {
+      mode: 'auto',
+      preset: 'compact_list',
+    });
+    expect(formatZoneConfigDraft(draft)).toContain('Layout: board default');
+    const edited = {
+      ...draft,
+      layoutBinding: 'override' as const,
+      layout: { ...draft.layout, columnGap: 4 },
+    };
+    const text = formatZoneConfigDraft(edited);
+    expect(text).toContain('Layout: zone override');
+    expect(text).toContain('"columnGap":4');
+    expect(text).toContain('"preset":"compact_list"');
   });
 });

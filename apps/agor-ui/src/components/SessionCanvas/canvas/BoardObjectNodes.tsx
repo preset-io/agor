@@ -2,8 +2,17 @@
  * Custom React Flow node components for board objects (text labels, zones, etc.)
  */
 
+import {
+  normalizeZoneLayoutPolicy,
+  setZoneLayoutMode,
+  type ZoneContentJustification,
+} from '@agor/core/layout/zone-layout';
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
+  AlignCenterOutlined,
+  AlignLeftOutlined,
+  AlignRightOutlined,
+  AppstoreOutlined,
   BgColorsOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
@@ -13,8 +22,10 @@ import {
   LockOutlined,
   MoreOutlined,
   SettingOutlined,
+  SyncOutlined,
   UnlockOutlined,
   VerticalAlignBottomOutlined,
+  VerticalAlignMiddleOutlined,
   VerticalAlignTopOutlined,
 } from '@ant-design/icons';
 import {
@@ -37,6 +48,7 @@ import { type BoardWriteTicket, hasBoardWriteTicketEnded } from '../../../store/
 import { getContrastingTextColor } from '../../../utils/theme';
 import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
+import { CANVAS_LAYOUT_CONTROLS_CLASS } from './SelectionLayoutPopover';
 import { STALE_DRAFT_TITLE, useCopyDraft } from './staleDraft';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
@@ -68,7 +80,13 @@ type BoardObjectUpdateResult = BoardWriteResult | undefined | Promise<BoardWrite
  */
 interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   objectId: string;
+  boardZoneLayoutDefaults?: ZoneBoardObject['layout'];
+  /** The shared multi-selection toolbar replaces this zone's individual controls. */
+  suppressToolbar?: boolean;
   pinnedItemCount?: number;
+  positionableItemCount?: number;
+  densityExpandableItemCount?: number;
+  compactDensityExpandableItemCount?: number;
   /**
    * `ticket`: captured when the edit began (an immediate action captures it
    * as it runs). `null` — nothing could be captured — is refused.
@@ -94,6 +112,9 @@ interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
    * deleted, e.g. by a reload): the canvas shows the draft to copy or discard.
    */
   onDraftLost?: (draft: { objectId: string; zoneName: string; text: string }) => void;
+  onArrangeContents?: (objectId: string) => void;
+  onJustifyContents?: (objectId: string, justification: ZoneContentJustification) => void;
+  onSetContentsCompact?: (objectId: string, compact: boolean) => void;
   /** Effective board.edit capability. Omitted only by isolated tests/fixtures. */
   canEdit?: boolean;
   /** Number of other zones whose rectangles intersect this zone. */
@@ -184,6 +205,15 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   const mutationGate = useMutationGate();
   const { authGeneration } = useConnectionState();
   const mutationDisabled = !mutationGate.canMutate || data.canEdit === false;
+  const normalizedLayout = normalizeZoneLayoutPolicy(data.layout);
+  const autoZoneEnabled = normalizedLayout.mode === 'auto';
+  const alignsInsideGridCells =
+    normalizedLayout.preset === 'grid' && (normalizedLayout.columns ?? 0) > 1;
+  const positionableItemCount = data.positionableItemCount ?? data.pinnedItemCount ?? 0;
+  const compactDensityCount = data.compactDensityExpandableItemCount ?? 0;
+  const densityExpandableCount = data.densityExpandableItemCount ?? 0;
+  const allDensityCompact =
+    densityExpandableCount > 0 && compactDensityCount === densityExpandableCount;
 
   // Inverse scale to keep toolbar at constant size regardless of zoom
   const scale = 1 / zoom;
@@ -218,6 +248,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       fontSize: data.fontSize,
       zIndex: data.zIndex,
       trigger: data.trigger,
+      layout: data.layout,
+      layout_binding: data.layout_binding,
     }),
     [
       data.x,
@@ -233,6 +265,8 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
       data.fontSize,
       data.zIndex,
       data.trigger,
+      data.layout,
+      data.layout_binding,
     ]
   );
 
@@ -326,6 +360,18 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
     }
   };
 
+  const handleToggleAutoZone = () => {
+    if (mutationDisabled || !data.onUpdate) return;
+    void data.onUpdate(
+      data.objectId,
+      createObjectData({
+        layout: setZoneLayoutMode(data.layout, autoZoneEnabled ? 'manual' : 'auto'),
+        layout_binding: 'override',
+      }),
+      captureTicket()
+    );
+  };
+
   // Effective label font size: sanitized persisted value or the theme default.
   // Sanitizing on read defends the DOM against bad fontSize data (negative,
   // non-finite, absurdly large) written via MCP/import.
@@ -373,7 +419,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         style={{
           width: '100%',
           height: '100%',
-          border: `2px solid ${borderColor}`,
+          borderWidth: 2,
+          borderStyle: 'solid',
+          borderColor,
           borderRadius: token.borderRadiusLG,
           background: backgroundColor,
           padding: token.padding,
@@ -385,7 +433,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           position: 'relative',
         }}
       >
-        {selected && !mutationDisabled && (
+        {selected && !data.suppressToolbar && !mutationDisabled && (
           <div
             className="nodrag nopan"
             role="toolbar"
@@ -587,8 +635,66 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
             <Dropdown
               trigger={['click']}
               placement="bottomRight"
+              classNames={{ root: CANVAS_LAYOUT_CONTROLS_CLASS }}
               menu={{
                 items: [
+                  {
+                    key: 'tidy',
+                    label: 'Tidy up contents',
+                    icon: <AppstoreOutlined />,
+                    disabled: positionableItemCount < 1,
+                  },
+                  {
+                    key: 'auto-zone',
+                    label: autoZoneEnabled ? 'Disable Auto Zone' : 'Enable Auto Zone',
+                    icon: <SyncOutlined />,
+                  },
+                  {
+                    key: 'align-contents',
+                    label: alignsInsideGridCells
+                      ? 'Align inside Grid cells'
+                      : 'Align content cluster',
+                    icon: <AlignCenterOutlined />,
+                    disabled: positionableItemCount < 1,
+                    children: [
+                      { key: 'align-left', label: 'Left', icon: <AlignLeftOutlined /> },
+                      {
+                        key: 'align-middle',
+                        label: 'Horizontal center',
+                        icon: <AlignCenterOutlined />,
+                      },
+                      { key: 'align-right', label: 'Right', icon: <AlignRightOutlined /> },
+                      { key: 'align-top', label: 'Top', icon: <VerticalAlignTopOutlined /> },
+                      {
+                        key: 'align-vertical-middle',
+                        label: 'Vertical center',
+                        icon: <VerticalAlignMiddleOutlined />,
+                      },
+                      {
+                        key: 'align-bottom',
+                        label: 'Bottom',
+                        icon: <VerticalAlignBottomOutlined />,
+                      },
+                    ],
+                  },
+                  {
+                    key: 'content-expansion',
+                    label: 'Content expansion',
+                    disabled: densityExpandableCount < 1,
+                    children: [
+                      {
+                        key: 'expand-contents',
+                        label: 'Expand eligible contents',
+                        disabled: compactDensityCount < 1,
+                      },
+                      {
+                        key: 'collapse-contents',
+                        label: 'Collapse eligible contents',
+                        disabled: allDensityCompact,
+                      },
+                    ],
+                  },
+                  { type: 'divider' },
                   {
                     key: 'arrange',
                     label:
@@ -633,6 +739,31 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                     if (zoneDialogOpen) return;
                     beginEdit();
                     setDeleteModalOpen(true);
+                    return;
+                  }
+                  if (key === 'tidy') {
+                    data.onArrangeContents?.(data.objectId);
+                    return;
+                  }
+                  if (key === 'auto-zone') {
+                    handleToggleAutoZone();
+                    return;
+                  }
+                  const justificationByKey: Partial<Record<string, ZoneContentJustification>> = {
+                    'align-left': 'left',
+                    'align-middle': 'middle',
+                    'align-right': 'right',
+                    'align-top': 'top',
+                    'align-vertical-middle': 'vertical_middle',
+                    'align-bottom': 'bottom',
+                  };
+                  const justification = justificationByKey[key];
+                  if (justification) {
+                    data.onJustifyContents?.(data.objectId, justification);
+                    return;
+                  }
+                  if (key === 'expand-contents' || key === 'collapse-contents') {
+                    data.onSetContentsCompact?.(data.objectId, key === 'collapse-contents');
                     return;
                   }
                   if (
@@ -789,6 +920,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           }
           draftReaderRef={configDraftReaderRef}
           zoneData={zoneData}
+          boardZoneLayoutDefaults={data.boardZoneLayoutDefaults}
           canEdit={data.canEdit !== false}
         />
       )}

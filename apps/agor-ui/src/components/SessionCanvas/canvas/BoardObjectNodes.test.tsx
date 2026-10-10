@@ -6,6 +6,7 @@ import { ReactFlowProvider } from 'reactflow';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { CommentNode, ZoneNode } from './BoardObjectNodes';
+import { CANVAS_LAYOUT_CONTROLS_CLASS } from './SelectionLayoutPopover';
 
 const zoneConfigModalRenderSpy = vi.hoisted(() => vi.fn());
 const { copySpy } = vi.hoisted(() => ({ copySpy: vi.fn(async (_text: string) => true) }));
@@ -38,6 +39,7 @@ function renderZone(
     selected?: boolean;
     canEdit?: boolean;
     onUpdate?: ReturnType<typeof vi.fn>;
+    data?: Record<string, unknown>;
     beginBoardWrite?: ReturnType<typeof vi.fn>;
     onDraftLost?: ReturnType<typeof vi.fn>;
   }
@@ -66,6 +68,7 @@ function renderZone(
         onReorder,
         beginBoardWrite: extra?.beginBoardWrite,
         onDraftLost: extra?.onDraftLost,
+        ...extra?.data,
       }}
     />,
     { wrapper }
@@ -101,6 +104,33 @@ describe('ZoneNode compact toolbar', () => {
 
     await waitFor(() => expect(onReorder).toHaveBeenCalledWith('zone-1', 'front'));
     expect(onReorder).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps layout actions in More instead of widening the toolbar', async () => {
+    const onArrangeContents = vi.fn();
+    const onSetContentsCompact = vi.fn();
+    renderZone(vi.fn(), CONNECTED, {
+      data: {
+        positionableItemCount: 2,
+        densityExpandableItemCount: 2,
+        compactDensityExpandableItemCount: 1,
+        onArrangeContents,
+        onSetContentsCompact,
+      },
+    });
+
+    expect(screen.queryByRole('button', { name: 'Tidy up contents' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'More zone actions' }));
+    const tidy = await screen.findByText('Tidy up contents');
+    expect(tidy.closest(`.${CANVAS_LAYOUT_CONTROLS_CLASS}`)).not.toBeNull();
+    fireEvent.click(tidy);
+    expect(onArrangeContents).toHaveBeenCalledWith('zone-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'More zone actions' }));
+    const expansion = await screen.findByText('Content expansion');
+    fireEvent.mouseEnter(expansion);
+    fireEvent.click(await screen.findByText('Collapse eligible contents'));
+    expect(onSetContentsCompact).toHaveBeenCalledWith('zone-1', true);
   });
 
   it('uses native keyboard-focusable buttons for common actions', () => {

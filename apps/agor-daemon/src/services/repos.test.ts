@@ -632,6 +632,123 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     );
   });
 
+  describe('zone placement', () => {
+    const repo = {
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'example/project',
+      local_path: '/managed/repos/project',
+      default_branch: 'main',
+    };
+    const boardId = '550e8400-e29b-41d4-a716-446655440003';
+    const layout = {
+      mode: 'manual',
+      preset: 'grid',
+      sortBy: 'position',
+      sortDirection: 'asc',
+      columns: 1,
+      padding: 20,
+      rowGap: 8,
+    };
+
+    function zoneApp(zone: Record<string, unknown>) {
+      const branch = {
+        branch_id: '550e8400-e29b-41d4-a716-446655440002',
+        repo_id: repo.repo_id,
+        name: 'zoned-feature',
+        path: '/managed/worktrees/example/project/zoned-feature',
+      };
+      const board = {
+        board_id: boardId,
+        objects: { planned: { type: 'zone', label: 'Planned', x: 0, y: 0, ...zone } },
+      };
+      const branches = { create: vi.fn(async () => branch), find: vi.fn(async () => []) };
+      const boards = { get: vi.fn(async () => board), patch: vi.fn(async () => ({})) };
+      const boardObjects = {
+        create: vi.fn(async () => undefined),
+        // One arranged resident at the zone frame origin.
+        find: vi.fn(async () => ({
+          data: [
+            {
+              object_id: 'resident',
+              entity_type: 'branch',
+              zone_id: 'planned',
+              position: { x: 20, y: 100 },
+              size: { width: 500, height: 200 },
+            },
+          ],
+        })),
+      };
+      const app = {
+        get: () => ({}),
+        sessionTokenService: { generateCommandToken: vi.fn(async () => 'token') },
+        settings: { authentication: { secret: 'test-secret' } },
+        service: vi.fn((name: string) => {
+          if (name === 'boards') return boards;
+          if (name === 'branches') return branches;
+          if (name === 'board-objects') return boardObjects;
+          throw new Error(`Unexpected service: ${name}`);
+        }),
+      } as unknown as Application;
+      const service = new ReposService({} as never, app);
+      vi.spyOn(service, 'get').mockResolvedValue(repo as never);
+      const create = () =>
+        service.createBranch(
+          repo.repo_id,
+          {
+            name: branch.name,
+            ref: branch.name,
+            createBranch: true,
+            sourceBranch: 'main',
+            boardId,
+            zoneId: 'planned',
+            storage_mode: 'worktree',
+          },
+          { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+        );
+      return { branches, boards, boardObjects, create };
+    }
+
+    it('pins a new branch into a contained slot that avoids the zone residents', async () => {
+      const f = zoneApp({ width: 812, height: 600, layout });
+
+      await f.create();
+
+      expect(f.boards.patch).not.toHaveBeenCalled();
+      expect(f.boardObjects.create).toHaveBeenCalledWith(
+        expect.objectContaining({ zone_id: 'planned', position: { x: 20, y: 308 } }),
+        expect.anything()
+      );
+    });
+
+    it('grows a height-resizable zone to hold the new branch', async () => {
+      const f = zoneApp({ width: 812, height: 340, layout: { ...layout, resize: 'height' } });
+
+      await f.create();
+
+      expect(f.boards.patch).toHaveBeenCalledWith(
+        boardId,
+        expect.objectContaining({
+          _action: 'applyLayout',
+          objects: { planned: expect.objectContaining({ height: 540 }) },
+        }),
+        expect.anything()
+      );
+      expect(f.boardObjects.create).toHaveBeenCalledWith(
+        expect.objectContaining({ zone_id: 'planned', position: { x: 20, y: 308 } }),
+        expect.anything()
+      );
+    });
+
+    it('rejects a full fixed-size zone before persisting a branch', async () => {
+      const f = zoneApp({ width: 812, height: 340, layout: { ...layout, resize: 'fixed' } });
+
+      await expect(f.create()).rejects.toThrow(/No free slot/);
+
+      expect(f.branches.create).not.toHaveBeenCalled();
+      expect(f.boardObjects.create).not.toHaveBeenCalled();
+    });
+  });
+
   it('rejects a client-selected template remote before persisting a branch', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
     const branches = { create: vi.fn(), find: vi.fn(async () => []) };

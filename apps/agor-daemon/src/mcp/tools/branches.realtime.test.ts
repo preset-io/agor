@@ -83,6 +83,10 @@ async function fixture(options: { rollback?: boolean; storageMode?: 'clone' | 'w
   };
   vi.spyOn(BranchRepository.prototype, 'findByRepoAndName').mockResolvedValue(null);
   vi.spyOn(BranchRepository.prototype, 'getAllUsedUniqueIds').mockResolvedValue([]);
+  // Zone placement planning reads the zone's existing occupants first; the
+  // fixture zone is empty.
+  vi.spyOn(BoardObjectRepository.prototype, 'count').mockResolvedValue(0);
+  vi.spyOn(BoardObjectRepository.prototype, 'findAll').mockResolvedValue([]);
   vi.spyOn(BoardObjectRepository.prototype, 'create').mockImplementation(async (data) => {
     placement = {
       ...data,

@@ -21,6 +21,7 @@ import {
 } from '@agor/core/realtime';
 import {
   BOARD_COMMENT_ATTACHMENT_POLICY,
+  BOARD_LAYOUT_APPLIED_EVENT,
   type BoardID,
   type BoardRemovalRealtimeVisibilitySnapshot,
   type BranchID,
@@ -838,6 +839,89 @@ async function resolveStreamingDelivery(
   return channels;
 }
 
+/**
+ * `boards layout-applied` carries the whole layout in one payload: the board
+ * row plus the authoritative `board-objects` rows it moved. The board half
+ * follows board visibility, but each placement must reach exactly the
+ * recipients its own `board-objects patched` event would: the board-objects
+ * role floor, and — for a placement attached to a branch/session — current
+ * view on every attached branch. Each recipient therefore gets the placements
+ * it may see; the board-level audience is never widened to placement rows.
+ */
+async function projectBoardLayoutDelivery(
+  delivery: PublishChannel | PublishChannel[],
+  data: unknown,
+  context: PublishContext,
+  accessCache: RealtimeAccessCache,
+  allowSuperadmin: boolean
+): Promise<PublishChannel[]> {
+  const record = asRecord(data);
+  const placements = Array.isArray(record?.placements) ? (record.placements as unknown[]) : [];
+  const placementContext: PublishContext = { ...context, path: 'board-objects' };
+  const placementFloor = realtimePublishPolicyFor('board-objects')?.minimumRole;
+
+  // `true`: board visibility (already applied) suffices; `false`: services
+  // only; a set: services, superadmins, and those users.
+  const audiences = await Promise.all(
+    placements.map(async (placement): Promise<boolean | ReadonlySet<UserID>> => {
+      const branchIds = await resolveBranchIdsFromBoardResource(
+        placement,
+        placementContext,
+        accessCache
+      );
+      if (branchIds === null) return false;
+      if (branchIds === undefined) return true;
+      let userIds: Set<UserID> | null = null;
+      for (const branchId of branchIds) {
+        const visibility = await accessCache.getBranchVisibility(branchId);
+        if (!visibility) return false;
+        if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) continue;
+        if (userIds) {
+          const intersection = new Set<UserID>();
+          for (const userId of userIds) {
+            if (visibility.userIds.has(userId)) intersection.add(userId);
+          }
+          userIds = intersection;
+        } else {
+          userIds = new Set(visibility.userIds);
+        }
+      }
+      return userIds ?? true;
+    })
+  );
+
+  const visibleIndexes = (connection: unknown): number[] => {
+    if (isServiceConnection(connection)) return placements.map((_, index) => index);
+    const user = userFromConnection(connection);
+    if (placementFloor && !hasMinimumRole(user?.role, placementFloor)) return [];
+    const superadmin = isSuperAdmin(user?.role, allowSuperadmin);
+    const userId = user?.user_id as UserID | undefined;
+    return audiences.flatMap((audience, index) =>
+      audience === true ||
+      (audience !== false && (superadmin || (userId !== undefined && audience.has(userId))))
+        ? [index]
+        : []
+    );
+  };
+
+  const projected: PublishChannel[] = [];
+  for (const channel of Array.isArray(delivery) ? delivery : [delivery]) {
+    const keyByConnection = new Map<unknown, string>();
+    for (const connection of channel.connections as unknown[]) {
+      keyByConnection.set(connection, visibleIndexes(connection).join(','));
+    }
+    for (const key of new Set(keyByConnection.values())) {
+      const indexes = new Set(key === '' ? [] : key.split(',').map(Number));
+      projected.push(
+        channel
+          .filter((connection: unknown) => keyByConnection.get(connection) === key)
+          .send({ ...record, placements: placements.filter((_, index) => indexes.has(index)) })
+      );
+    }
+  }
+  return projected;
+}
+
 function filterToUserIdsOrAdmins(
   authenticated: PublishChannel,
   userIds: Set<string> | Set<UserID>,
@@ -985,7 +1069,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       return { delivery: room ? [room] : ([] as PublishChannel[]), tenantId };
     }
 
-    const resolveDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {
+    const resolveAudienceDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {
       if (isStreamingEvent(context)) {
         return resolveStreamingDelivery(
           app,
@@ -1113,6 +1197,13 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
       if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) return tenantScoped;
       return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
+    };
+
+    const resolveDelivery = async (): Promise<PublishChannel | PublishChannel[]> => {
+      const audience = await resolveAudienceDelivery();
+      return context.path === 'boards' && context.event === BOARD_LAYOUT_APPLIED_EVENT
+        ? projectBoardLayoutDelivery(audience, data, context, accessCache, allowSuperadmin)
+        : audience;
     };
 
     let delivery =

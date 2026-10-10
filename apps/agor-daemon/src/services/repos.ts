@@ -54,6 +54,7 @@ import {
 } from '@agor/core/git/pure';
 import type {
   AuthenticatedParams,
+  Board,
   Branch,
   BranchID,
   CloneRepositoryResult,
@@ -90,6 +91,11 @@ import {
   startContainedExecutorCommand,
 } from '../utils/spawn-executor.js';
 import { withFreshTenantWrite } from '../utils/tenant-db-scope.js';
+import {
+  commitZoneEntityPlacementGrowth,
+  planZoneEntityPlacement,
+  type ZoneEntityPlacementPlan,
+} from '../utils/zone-placement.js';
 import { BRANCH_MATERIALIZATION_INTENT, type BranchParams } from './branches.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
 
@@ -818,6 +824,7 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
     // Validate boardId exists before creating DB record (FK constraint would reject it)
     // Board is stored for later use in smart positioning
     let board: { objects?: Record<string, { type?: string }> } | undefined;
+    let zonePlacement: ZoneEntityPlacementPlan | undefined;
     if (data.boardId) {
       try {
         board = await this.app.service('boards').get(data.boardId, params);
@@ -836,6 +843,15 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
             `Zone '${data.zoneId}' not found on board '${data.boardId}'. ` +
               `Provide a valid zoneId from the board's zone objects.`
           );
+        }
+        // Plan the zone slot before any row exists: a zone pin must be
+        // contained, so a fixed-size zone with no room fails here with a clear
+        // error instead of creating a branch whose pin cannot hold it.
+        if (!data.position) {
+          zonePlacement = await planZoneEntityPlacement(this.app, params ?? {}, {
+            board: board as Board,
+            zoneId: data.zoneId,
+          });
         }
       }
     }
@@ -921,15 +937,24 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       const resolvedZoneId = data.zoneId;
 
       try {
-        // If placing in a zone, compute zone-relative position
-        if (!position && resolvedZoneId && board) {
-          const zone = board.objects?.[resolvedZoneId];
-          if (zone?.type === 'zone') {
-            const { computeZoneRelativePosition } = await import(
-              '@agor/core/utils/board-placement'
+        // If placing in a zone, use the contained slot planned above, growing
+        // the zone first when its resize policy required it.
+        if (!position && zonePlacement) {
+          position = zonePlacement.position;
+          try {
+            await commitZoneEntityPlacementGrowth(
+              this.app,
+              params ?? {},
+              board as Board,
+              zonePlacement
             );
-            position = computeZoneRelativePosition(
-              zone as import('@agor/core/types').ZoneBoardObject
+          } catch (error) {
+            // The branch row already exists. Keep the pin at the planned slot —
+            // an undersized zone is visible and fixable by an arrange, whereas
+            // dropping the pin silently strands the branch outside its zone.
+            console.warn(
+              `⚠️  Could not grow zone ${zonePlacement.zoneId} for new branch; pinning without resize:`,
+              error instanceof Error ? error.message : String(error)
             );
           }
         }

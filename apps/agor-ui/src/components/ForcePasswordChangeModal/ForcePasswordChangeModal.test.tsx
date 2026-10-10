@@ -1,5 +1,5 @@
 import type { User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '@/contexts/ConnectionContext';
 import { ForcePasswordChangeModal } from './ForcePasswordChangeModal';
@@ -13,6 +13,41 @@ const user = (id: string): User =>
   }) as User;
 
 describe('ForcePasswordChangeModal authority fencing', () => {
+  it('does not call the lazy modal form while closed', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      render(
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            authGeneration: 1,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <ForcePasswordChangeModal
+            open={false}
+            user={user('admin-a')}
+            onChangePassword={vi.fn()}
+            onLogout={vi.fn()}
+          />
+        </ConnectionProvider>
+      );
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+      expect(
+        consoleError.mock.calls.some(([message]) =>
+          String(message).includes('Instance created by `useForm` is not connected')
+        )
+      ).toBe(false);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('erases A password fields and drops validation continuation before admin B can use it', async () => {
     const onChangePassword = vi.fn().mockResolvedValue(undefined);
     const view = (current: User, authGeneration: number) => (

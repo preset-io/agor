@@ -1,8 +1,9 @@
-import type { BoardEntityObject, CardWithType, Session } from '@agor-live/client';
+import type { Board, BoardEntityObject, CardWithType, Session } from '@agor-live/client';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeBranch, makeSession, withTestAuthority } from '../test/harness';
 import { beginPartitionLoad, endPartitionLoad, touchedSince } from './agorHydration';
 import {
+  boardLayoutApplied,
   boardObjectCreated,
   branchCreated,
   branchPatched,
@@ -230,6 +231,42 @@ describe('realtime admission (global hydration off)', () => {
     // The fence is still recorded, so the read keeps out what it raced.
     expect(touchedSince('sessions', 's-0', fence.startRevisions.sessions)).toBe(true);
     expect(touchedSince('cards', 'k-0', fence.startRevisions.cards)).toBe(true);
+    endPartitionLoad();
+  });
+
+  it('a layout batch admits only placements a scope holds, and fences every written id', () => {
+    seedBoard('b1', { branches: [], sessions: [] });
+    const fence = beginPartitionLoad();
+    const placement = (id: string, boardId: string) =>
+      ({
+        object_id: id,
+        board_id: boardId,
+        card_id: `card-${id}`,
+        entity_type: 'card',
+        position: { x: 10, y: 20 },
+      }) as BoardEntityObject;
+
+    boardLayoutApplied({
+      board_id: 'b9' as Board['board_id'],
+      board: { board_id: 'b9' } as Board,
+      placements: [placement('o-unloaded', 'b9')],
+    });
+    boardLayoutApplied({
+      board_id: 'b1' as Board['board_id'],
+      board: { board_id: 'b1' } as Board,
+      placements: [placement('o-loaded', 'b1')],
+    });
+
+    const state = agorStore.getState();
+    expect(state.boardObjectById.has('o-unloaded')).toBe(false);
+    expect(state.boardObjectsByBoardId.has('b9')).toBe(false);
+    expect(state.boardObjectById.has('o-loaded')).toBe(true);
+    // A partition read in flight keeps the live rows instead of its snapshot.
+    expect(touchedSince('boardObjects', 'o-unloaded', fence.startRevisions.boardObjects)).toBe(
+      true
+    );
+    expect(touchedSince('boardObjects', 'o-loaded', fence.startRevisions.boardObjects)).toBe(true);
+    expect(touchedSince('boards', 'b1', fence.startRevisions.boards)).toBe(true);
     endPartitionLoad();
   });
 

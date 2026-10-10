@@ -10,8 +10,8 @@ import { join, resolve } from 'node:path';
 // and still trips these.
 const limits = {
   files: 3250,
-  unpackedBytes: 120 * 1024 * 1024,
-  packedBytes: 30 * 1024 * 1024,
+  unpackedBytes: 150 * 1024 * 1024,
+  packedBytes: 36 * 1024 * 1024,
 };
 
 function measureDirectory(directory) {

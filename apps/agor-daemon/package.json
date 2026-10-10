@@ -17,7 +17,7 @@
   },
   "scripts": {
     "build": "tsup && tsc --emitDeclarationOnly --declaration --declarationMap --noEmit false --incremental false && node scripts/stamp-build-info.mjs",
-    "dev": "pnpm --filter @agor/core build && pnpm --filter @agor/agentic-tool-opencode build && pnpm --filter @agor/agentic-tools build && concurrently -k -n core,opencode,agentic-tools,daemon -c cyan,blue,magenta,green \"pnpm --filter @agor/core dev\" \"pnpm --filter @agor/agentic-tool-opencode dev\" \"pnpm --filter @agor/agentic-tools dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts\"",
+    "dev": "pnpm --filter @agor/git build && pnpm --filter @agor/core build && pnpm --filter @agor/agentic-tool-opencode build && pnpm --filter @agor/agentic-tools build && pnpm --filter @agor/executor build && concurrently -k -n core,opencode,agentic-tools,executor,daemon -c cyan,blue,magenta,yellow,green \"pnpm --filter @agor/core dev\" \"pnpm --filter @agor/agentic-tool-opencode dev\" \"pnpm --filter @agor/agentic-tools dev\" \"pnpm --filter @agor/executor dev\" \"./node_modules/.bin/tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts\"",
     "dev:daemon-only": "tsx watch --clear-screen=false --ignore 'node_modules/**' src/main.ts",
     "start": "node dist/main.js",
     "clean": "rm -rf dist",

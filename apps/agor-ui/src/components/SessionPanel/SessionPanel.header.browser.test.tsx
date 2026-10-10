@@ -87,7 +87,9 @@ it.each(['light', 'dark'])(
       }
     }
     await userEvent.click(search);
-    expect(screen.getByPlaceholderText('Search session...')).toHaveFocus();
+    await expect
+      .poll(() => document.activeElement)
+      .toBe(screen.getByPlaceholderText('Search session...'));
     await userEvent.keyboard('{Escape}');
     await userEvent.click(close);
     expect(onClose).toHaveBeenCalledOnce();

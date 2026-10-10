@@ -39,6 +39,7 @@ import type {
   Board,
   BoardComment,
   BoardEntityObject,
+  BoardLayoutAppliedEvent,
   Branch,
   CardType,
   CardWithType,
@@ -256,6 +257,29 @@ export function boardCreated(board: Board) {
 export function boardPatched(board: Board) {
   bumpRevision('boards', board.board_id);
   setMap('boardById', (prev) => replaceIfChanged(prev, board.board_id, board));
+}
+/**
+ * One layout commit: the board row and its moved placements land in one store
+ * notification, through the same fences as `boardPatched` and
+ * `boardObjectPatched` — each written id is stamped so a load in flight keeps
+ * it, and the placements go through `applyLive` so a row of a board nothing
+ * holds stays out and scope membership follows.
+ */
+export function boardLayoutApplied(event: BoardLayoutAppliedEvent) {
+  bumpRevision('boards', event.board.board_id);
+  const placementIds = event.placements.map((placement) => placement.object_id);
+  for (const objectId of placementIds) bumpRevision('boardObjects', objectId);
+  applyLive(
+    (previous) => {
+      const boardById = replaceIfChanged(previous.boardById, event.board.board_id, event.board);
+      let next = boardById === previous.boardById ? previous : { ...previous, boardById };
+      for (const placement of event.placements) {
+        next = upsertBoardObjectInMaps(next, placement, 'patch');
+      }
+      return next;
+    },
+    { boardObjects: placementIds }
+  );
 }
 export function boardRemoved(board: Board) {
   bumpRevision('boards', board.board_id);

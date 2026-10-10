@@ -71,7 +71,7 @@ dbTest(
         ]) {
           await expect(client.service('boards').find({ query })).rejects.toMatchObject({
             code: 400,
-            message: 'validation failed',
+            message: expect.stringContaining('Invalid query:'),
           });
         }
       }
@@ -85,7 +85,10 @@ dbTest(
             },
           },
         })
-      ).rejects.toMatchObject({ code: 400, message: 'validation failed' });
+      ).rejects.toMatchObject({
+        code: 400,
+        message: expect.stringContaining('Invalid query:'),
+      });
       const denied = await fetch(`${server.url}/boards?lean=true&$limit=1`, {
         headers: server.headers(stranger.user_id),
       });

@@ -3,6 +3,8 @@ import { performance } from 'node:perf_hooks';
 import type { UserID } from '@agor/core/types';
 import { eq, sql } from 'drizzle-orm';
 import { expect, vi } from 'vitest';
+import { normalizeBoardLayoutSettings } from '../../layout/board-layout-options';
+import { normalizeZoneLayoutPolicy } from '../../layout/zone-layout';
 import { update } from '../database-wrapper';
 import { boards } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
@@ -19,6 +21,49 @@ function omitAnnotations<T extends object>(board: T) {
   };
   return rest;
 }
+
+dbTest('lean reads retain exact layout provenance and defaults without writing', async ({ db }) => {
+  const repo = new BoardRepository(db);
+  const zone = {
+    type: 'zone' as const,
+    label: 'Example',
+    x: 91.5,
+    y: 91.5,
+    width: 700,
+    height: 740,
+  };
+  const defaults = normalizeZoneLayoutPolicy({ columnGap: 40, rowGap: 32, density: 'preserve' });
+  const board = await repo.create({
+    name: 'Example layout',
+    created_by: 'test-user',
+    objects: { zone },
+    zone_layout_defaults: defaults,
+  });
+  const layout_context = {
+    scope: 'board' as const,
+    root_ids: ['zone'],
+    settings: normalizeBoardLayoutSettings(
+      { trackAxis: 'columns', trackCount: 1, columnGap: 37.5, rowGap: 53.25, outerMargin: 91.5 },
+      1
+    ),
+    cells: { zone: { x: 91.5, y: 91.5, width: 700, height: 740, row: 0, column: 0 } },
+  };
+  const batch = { objects: { zone }, placements: {}, layout_context };
+  const applied = await repo.applyBoardLayout(board.board_id, batch);
+  expect(applied.changed).toBe(true);
+  for (const rows of [
+    await repo.findAll({ lean: true }),
+    (await repo.findPage({ lean: true, limit: 1 })).data,
+  ]) {
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).not.toHaveProperty('objects');
+    expect(rows[0].layout_context).toEqual(layout_context);
+    expect(rows[0].zone_layout_defaults).toEqual(defaults);
+  }
+  expect(await repo.findById(board.board_id)).toEqual(applied.board);
+  expect((await repo.applyBoardLayout(board.board_id, batch)).changed).toBe(false);
+  expect(await repo.findById(board.board_id)).toEqual(applied.board);
+});
 
 dbTest('lean lists remove only annotations before driver JSON decoding', async ({ db }) => {
   const repo = new BoardRepository(db);
