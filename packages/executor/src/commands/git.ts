@@ -14,7 +14,7 @@ import { validateExistingRestore } from './branch-restore-validation.js';
  * Feathers hooks handle WebSocket broadcasts automatically when records are created/updated.
  */
 
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
@@ -885,7 +885,6 @@ export async function handleGitBranchAdd(
 
   let client: AgorClient | null = null;
   let materializationWritesSettled = false;
-  let sourceResolutionAdmitted = false;
   let localHome = false;
   let filesystemRecovery = false;
   let gitEnv: UserGitEnvironment = {};
@@ -1080,8 +1079,6 @@ export async function handleGitBranchAdd(
       );
     }
 
-    // A rejected provenance capability must not create even a fallback directory.
-    sourceResolutionAdmitted = true;
     if (alreadyMaterialized) {
       console.log(
         `[git.branch.add] Existing checkout for '${branch}' already present at ${branchPath} — adopting it (idempotent retry)`
@@ -1274,33 +1271,6 @@ export async function handleGitBranchAdd(
     );
     console.error('[git.branch.add] Failed:', errorMessage);
 
-    // Fallback: preserve the historical empty-directory recovery behavior
-    // when git worktree add fails. No host permission repair is attempted.
-    const fallbackPath = resolvedBranchPath;
-    let fallbackCreated = false;
-    if (
-      fallbackPath &&
-      sourceResolutionAdmitted &&
-      !materializationWritesSettled &&
-      !localHome &&
-      !filesystemRecovery &&
-      !payload.params.restoreMode
-    ) {
-      // Step 1: Ensure directory exists
-      if (!existsSync(fallbackPath)) {
-        try {
-          mkdirSync(fallbackPath, { recursive: true });
-          console.log(`[git.branch.add] Fallback: created empty directory ${fallbackPath}`);
-          fallbackCreated = true;
-        } catch (mkdirError) {
-          console.error(
-            '[git.branch.add] Fallback: failed to create directory:',
-            mkdirError instanceof Error ? mkdirError.message : String(mkdirError)
-          );
-        }
-      }
-    }
-
     // Provide user-friendly error messages for common failures. Match on the
     // specific "ref already attached to another worktree" signal — NOT merely
     // the word "branch", which also appears in the non-empty-directory message
@@ -1346,7 +1316,6 @@ export async function handleGitBranchAdd(
           repoPath: resolvedRepoPath,
           branchName: resolvedBranchName,
           branchPath: resolvedBranchPath,
-          fallbackDirectoryCreated: fallbackCreated,
         },
       },
     };

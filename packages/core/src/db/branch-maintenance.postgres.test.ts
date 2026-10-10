@@ -8,7 +8,9 @@ import { executeRaw, rawRows } from './database-wrapper';
 import { runMigrations } from './migrate';
 import { BranchDeletionRepository } from './repositories/branch-deletion';
 import { BranchMaintenanceRepository } from './repositories/branch-maintenance';
+import { BranchWorkspaceOperationRepository } from './repositories/branch-workspace-operations';
 import { BranchRepository } from './repositories/branches';
+import { seedEnvironmentCommandBranch } from './repositories/environment-commands.test-support';
 import { KnowledgeNamespaceRepository } from './repositories/knowledge';
 import { RepoRepository } from './repositories/repos';
 import { UsersRepository } from './repositories/users';
@@ -178,6 +180,151 @@ it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
         await deletion.finalize(retry.claim, retry.execution, async () => {});
         expect(await new BranchRepository(scoped).findById(claim.branch_id)).toBeNull();
       });
+    } finally {
+      await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
+    }
+  },
+  60_000
+);
+
+it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
+  'metadata-only archival cannot claim or mutate a foreign tenant branch',
+  async () => {
+    const db = createDatabase({ dialect: 'postgresql', url: url! });
+    try {
+      await runMigrations(db, { allowOfflineCutover: true });
+      const tenantA = `archive-a-${generateId()}`;
+      const tenantB = `archive-b-${generateId()}`;
+      const { branch, claim } = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const { branch, user } = await seedEnvironmentCommandBranch(scoped);
+        await new BranchRepository(scoped).create({
+          repo_id: branch.repo_id,
+          name: 'overlap',
+          ref: 'overlap',
+          path: branch.path,
+          branch_unique_id: 9600005,
+          created_by: user.user_id,
+          filesystem_status: 'failed',
+        });
+        const { claim } = await new BranchMaintenanceRepository(scoped).claim(
+          branch.branch_id,
+          'metadata_archive',
+          user.user_id
+        );
+        await new BranchWorkspaceOperationRepository(scoped).prepare(
+          claim,
+          {
+            operation_id: claim.operation_id,
+            action: 'archive',
+            filesystem_action: 'preserved',
+            status: 'accepted',
+            requested_by: user.user_id,
+            requested_at: new Date().toISOString(),
+            deadline_at: new Date(Date.now() + 60_000).toISOString(),
+          },
+          { repo_id: branch.repo_id, path: branch.path, repo_path: '/fixture' }
+        );
+        return { branch, claim };
+      });
+      await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+        expect(
+          await new BranchMaintenanceRepository(scoped).reconcileInterruptedMetadataArchives()
+        ).toEqual({ scanned: 0, released: 0 });
+        await expect(
+          new BranchMaintenanceRepository(scoped).claim(branch.branch_id, 'metadata_archive')
+        ).rejects.toThrow('not found');
+        const workspace = new BranchWorkspaceOperationRepository(scoped);
+        await expect(workspace.archiveMetadata(claim)).rejects.toThrow('not found');
+        await expect(workspace.finishPreserve(claim)).rejects.toThrow('not found');
+      });
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        expect(await new BranchRepository(scoped).findById(branch.branch_id)).toMatchObject({
+          archived: false,
+        });
+        const maintenance = new BranchMaintenanceRepository(scoped);
+        expect(await maintenance.reconcileInterruptedMetadataArchives()).toEqual({
+          scanned: 1,
+          released: 1,
+        });
+        const { claim: recovered } = await maintenance.claim(
+          branch.branch_id,
+          'metadata_archive',
+          claim.requested_by
+        );
+        const workspace = new BranchWorkspaceOperationRepository(scoped);
+        // Recovery releases ownership, not archival metadata. Explicit retry
+        // prepares a fresh operation before completing the archive.
+        const operation = (await new BranchRepository(scoped).findById(branch.branch_id))!
+          .workspace_operation!;
+        await workspace.prepare(
+          recovered,
+          { ...operation, operation_id: recovered.operation_id },
+          { repo_id: branch.repo_id, path: branch.path, repo_path: '/fixture' }
+        );
+        await workspace.archiveMetadata(recovered);
+        await workspace.finishPreserve(recovered);
+        expect(await new BranchRepository(scoped).findById(branch.branch_id)).toMatchObject({
+          archived: true,
+          filesystem_status: 'ready',
+          workspace_operation: { status: 'succeeded' },
+        });
+        await expect(
+          new BranchMaintenanceRepository(scoped).claim(branch.branch_id, 'delete')
+        ).rejects.toThrow('overlaps');
+      });
+    } finally {
+      await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
+    }
+  }
+);
+
+it.skipIf(!url || process.env.AGOR_DB_DIALECT !== 'postgresql')(
+  'overlap patterns treat path metacharacters literally and ignore foreign tenant paths',
+  async () => {
+    const db = createDatabase({ dialect: 'postgresql', url: url! });
+    try {
+      await runMigrations(db, { allowOfflineCutover: true });
+      const tenantA = `literal-a-${generateId()}`;
+      const tenantB = `literal-b-${generateId()}`;
+      for (const literal of ['percent%', 'under_score', 'escape!', 'back\\slash']) {
+        const path = `/tmp/${generateId()}/${literal}`;
+        await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+          const { branch } = await seedEnvironmentCommandBranch(scoped);
+          await new BranchRepository(scoped).update(branch.branch_id, { path });
+        });
+        await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+          const { branch, user } = await seedEnvironmentCommandBranch(scoped);
+          const repo = new BranchRepository(scoped);
+          const maintenance = new BranchMaintenanceRepository(scoped);
+          await repo.update(branch.branch_id, { path });
+          // A foreign tenant's equal path must not affect admission.
+          await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
+          const lookalike = path
+            .replace('%', 'wildcard')
+            .replace('_', 'X')
+            .replace('!', '')
+            .replace('\\', '');
+          const sibling = await repo.create({
+            repo_id: branch.repo_id,
+            name: 'literal-sibling',
+            ref: 'literal-sibling',
+            branch_unique_id: 9600007,
+            path: `${lookalike}/child`,
+            created_by: user.user_id,
+          });
+          await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
+          await repo.update(branch.branch_id, { path: `${lookalike}/child` });
+          await repo.update(sibling.branch_id, { path });
+          await maintenance.release((await maintenance.claim(branch.branch_id, 'cleanup')).claim);
+          for (const siblingPath of [path, `${path}/child`, path.slice(0, path.lastIndexOf('/'))]) {
+            await repo.update(branch.branch_id, { path });
+            await repo.update(sibling.branch_id, { path: siblingPath });
+            await expect(maintenance.claim(branch.branch_id, 'cleanup')).rejects.toThrow(
+              'overlaps'
+            );
+          }
+        });
+      }
     } finally {
       await (db as typeof db & { $client: { end(): Promise<void> } }).$client.end();
     }
