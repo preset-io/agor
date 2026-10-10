@@ -136,6 +136,19 @@ export function createMigrationImpactRegistry(
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
   [
+    '0117_restore_session_indexes',
+    {
+      requiresOfflineCutover: false,
+      impact: defineMigrationImpact({
+        classification: 'performance',
+        userAction: 'none',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Recreates two declared SQLite session indexes dropped by an earlier table rebuild. Adds no columns or constraints, so older binaries are unaffected.',
+      }),
+    },
+  ],
+  [
     '0113_session_recency_not_null',
     {
       requiresOfflineCutover: false,
