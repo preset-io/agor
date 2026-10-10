@@ -13,6 +13,7 @@ import type {
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
+import { isCanonicalUuidV7 } from './id';
 import type { ScheduleID } from './schedule';
 import type { PermissionMode, Session } from './session';
 import type { DefaultModelConfig } from './user';
@@ -36,6 +37,12 @@ export type GatewayInboundEventID = UUID;
 /** Durable identity for one Discord assistant-message delivery attempt. */
 export type DiscordMessageDeliveryID = UUID;
 
+/** Durable identity for one Teams assistant-message delivery intent. */
+export type TeamsMessageDeliveryID = UUID;
+
+/** Durable identity for one encrypted Teams conversation address. */
+export type TeamsConversationAddressID = UUID;
+
 // ============================================================================
 // Enums
 // ============================================================================
@@ -56,6 +63,11 @@ export const DURABLE_GATEWAY_LISTENER_CHANNEL_TYPES = [
   'github',
   'shortcut',
   'discord',
+] as const satisfies readonly ChannelType[];
+
+/** Providers whose gateway-sourced Tasks must carry a queue admission fence. */
+export const GATEWAY_ADMISSION_FENCED_CHANNEL_TYPES = [
+  'teams',
 ] as const satisfies readonly ChannelType[];
 
 /**
@@ -79,6 +91,7 @@ export const GATEWAY_USER_ALIGNMENT_CONFIG_KEYS = {
   github: 'align_github_users',
   discord: 'align_discord_users',
   shortcut: 'align_shortcut_users',
+  teams: 'align_teams_users',
 } as const satisfies Partial<Record<ChannelType, string>>;
 
 /** A `ChannelType` that has a user-alignment switch. */
@@ -88,7 +101,7 @@ export type AlignableChannelType = keyof typeof GATEWAY_USER_ALIGNMENT_CONFIG_KE
 export type ThreadStatus = 'active' | 'archived' | 'paused';
 
 /** Internal processing state for a provider event idempotency occurrence. */
-export type GatewayInboundEventStatus = 'processing' | 'completed';
+export type GatewayInboundEventStatus = 'pending' | 'processing' | 'completed' | 'dead_letter';
 
 export type DiscordMessageDeliveryStatus =
   | 'pending'
@@ -132,6 +145,80 @@ export interface DiscordMessageDelivery {
   completed_at: string | null;
   canceled_at: string | null;
   dead_lettered_at: string | null;
+}
+
+export type TeamsMessageDeliveryStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'canceled'
+  | 'ambiguous'
+  | 'dead_letter';
+
+/** Bounded, content-free receipt for one Teams delivery chunk. */
+export interface TeamsMessageDeliveryChunkReceipt {
+  chunk_index: number;
+  provider_message_id: string;
+}
+
+/** Narrow durable intent for one Teams assistant message. */
+export interface TeamsMessageDelivery {
+  delivery_id: TeamsMessageDeliveryID;
+  message_id: UUID;
+  gateway_channel_id: GatewayChannelID;
+  thread_session_map_id: ThreadSessionMapID;
+  provider_installation_id: string;
+  provider_config_generation: number;
+  status: TeamsMessageDeliveryStatus;
+  attempt_count: number;
+  next_attempt_at: string;
+  claim_token: string | null;
+  claim_expires_at: string | null;
+  claim_generation: number;
+  /** Chunk whose send may have started but lacks a receipt; never blindly resent. */
+  ambiguous_chunk_index: number | null;
+  effect_started_at: string | null;
+  chunk_receipts: TeamsMessageDeliveryChunkReceipt[];
+  /** `<budget>:<sha256>` of the chunk plan, so a resumed delivery sends the same chunks. */
+  chunk_plan_digest: string | null;
+  last_error_code: string | null;
+  provider_message_id: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  canceled_at: string | null;
+  dead_lettered_at: string | null;
+}
+
+/** Why a Teams conversation address stopped being usable; `bot_disabled` is a suspension. */
+export const TEAMS_ADDRESS_REVOCATION_REASONS = [
+  'bot_removed',
+  'conversation_blocked',
+  'writes_blocked',
+  'conversation_not_found',
+  'conversation_deleted',
+  'bot_disabled',
+] as const;
+
+export type TeamsAddressRevocationReason = (typeof TEAMS_ADDRESS_REVOCATION_REASONS)[number];
+
+/** Encrypted Bot Framework conversation address; no TTL, invalidated by events and errors. */
+export interface TeamsConversationAddress {
+  address_id: TeamsConversationAddressID;
+  gateway_channel_id: GatewayChannelID;
+  thread_id: string;
+  conversation_id: string;
+  root_message_id: string | null;
+  team_id: string | null;
+  team_aad_group_id: string | null;
+  teams_channel_type: string | null;
+  encrypted_address: string;
+  verified_app_id: string;
+  verified_tenant_id: string;
+  provider_config_generation: number;
+  refreshed_at: string;
+  revoked_at: string | null;
+  revoked_reason: string | null;
 }
 
 /** Sensitive gateway config fields that must be encrypted at rest and redacted in responses. */
@@ -191,6 +278,320 @@ export function getRequiredSecretFields(
     default:
       return [];
   }
+}
+
+/**
+ * Canonical Teams gateway configuration. Legacy fields (per-port settings,
+ * `require_mention`, `allow_thread_replies_without_mention`) may stay in stored
+ * configs and are ignored.
+ */
+export type TeamsUserMap = Record<string, UserID>;
+
+export interface TeamsGatewayConfig {
+  app_id?: string;
+  app_password?: string;
+  microsoft_tenant_id?: string;
+  allowed_team_ids?: string[];
+  allowed_channel_ids?: string[];
+  allowed_user_aad_object_ids?: string[];
+  /** Match each sender's Teams email to an Agor user; unmatched senders are rejected. */
+  align_teams_users?: boolean;
+  /** Alignment override: AAD object ID → tenant-owned immutable Agor User ID. */
+  user_map?: TeamsUserMap;
+  catch_up?: TeamsCatchUpConfig;
+  /** Read inline images and personal-chat files; needs `supportsFiles` in the app manifest. */
+  files?: boolean;
+  agent_tools?: TeamsAgentToolsConfig;
+  /** Allows proactive channel posts (off by default); replies, notices, and typing are always on. */
+  outbound_enabled?: boolean;
+  /** `channel:<19:…@thread.tacv2>` used when a proactive send names no target. */
+  default_outbound_target?: string | null;
+  /** Accepted during migration only; no runtime effect. */
+  tenant_id?: string;
+  webhook_port?: number;
+  webhook_path?: string;
+}
+
+/** Per-channel toggles for agent-callable Teams MCP tools; all off unless an admin enables them. */
+export interface TeamsAgentToolsConfig {
+  /** Read standard-channel threads and list channel posts through Graph. */
+  channel_history?: boolean;
+}
+
+export type TeamsAgentToolCapability = keyof TeamsAgentToolsConfig;
+
+export const TEAMS_AGENT_TOOL_DEFAULTS: Record<TeamsAgentToolCapability, boolean> = {
+  channel_history: false,
+};
+
+export function resolveTeamsAgentTools(raw: unknown): Record<TeamsAgentToolCapability, boolean> {
+  return resolveAgentToolToggles(raw, TEAMS_AGENT_TOOL_DEFAULTS);
+}
+
+/** File metadata on a Teams history message; download URLs are never returned. */
+export interface TeamsChannelHistoryAttachment {
+  name: string;
+  content_type?: string;
+}
+
+export interface TeamsChannelHistoryMessage {
+  id: string;
+  iso_time: string;
+  actor_label: string;
+  author_aad_id?: string;
+  text: string;
+  /** Set when the text was cut to fit the read's byte budget. */
+  text_truncated?: true;
+  is_bot: boolean;
+  is_system: boolean;
+  is_mention: boolean;
+  attachments?: TeamsChannelHistoryAttachment[];
+}
+
+/** One page of a standard-channel reply chain; the first page also carries the root post. */
+export interface TeamsThreadHistoryResult {
+  channelId: string;
+  rootMessageId: string;
+  /** Chronological order. */
+  messages: TeamsChannelHistoryMessage[];
+  has_more: boolean;
+  /** Opaque Graph page token for the next page; never a URL. */
+  next_cursor: string | null;
+}
+
+export interface TeamsChannelPost {
+  id: string;
+  created_at: string;
+  last_modified_at: string;
+  actor_label: string;
+  subject?: string;
+  text_preview: string;
+  is_bot: boolean;
+  attachments?: TeamsChannelHistoryAttachment[];
+}
+
+export interface TeamsChannelPostsResult {
+  channelId: string;
+  /** Graph order: most recently active reply chain first. */
+  posts: TeamsChannelPost[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+/** A Teams channel conversation ID, the same string in Bot Framework and Graph. */
+export const TEAMS_CHANNEL_ID_PATTERN = /^19:[A-Za-z0-9_-]+@thread\.(?:tacv2|skype)$/;
+
+/** The channel ID of a `channel:<19:…@thread.tacv2>` outbound target, or null. */
+export function teamsOutboundChannelTarget(target: string): string | null {
+  const channelId = target.trim().startsWith('channel:') ? target.trim().slice(8) : '';
+  return TEAMS_CHANNEL_ID_PATTERN.test(channelId) ? channelId : null;
+}
+
+export interface TeamsCatchUpConfig {
+  mode: 'off' | 'best_effort';
+  max_messages: number;
+  max_prompt_bytes: number;
+  request_timeout_ms: number;
+}
+
+// On for new channels; without RSC consent a mention is admitted alone, as history unavailable.
+export const DEFAULT_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'best_effort',
+  max_messages: 50,
+  max_prompt_bytes: 16 * 1024,
+  request_timeout_ms: 8_000,
+};
+
+export const MIN_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'off',
+  max_messages: 1,
+  max_prompt_bytes: 1,
+  request_timeout_ms: 1,
+};
+
+// One deadline for the whole read; leaves attachment downloads room inside the inbound lease.
+export const MAX_TEAMS_CATCH_UP: TeamsCatchUpConfig = {
+  mode: 'best_effort',
+  max_messages: 100,
+  max_prompt_bytes: 64 * 1024,
+  request_timeout_ms: 12_000,
+};
+
+/** Inbound claim lease; member lookup, catch-up, attachments, and admission all fit inside it. */
+export const TEAMS_INBOUND_LEASE_MS = 30_000;
+
+/** One deadline for all of a message's attachments: the lease minus catch-up, the 5 s member lookup, and 10 s of headroom. */
+export function teamsAttachmentDeadlineMs(config: Record<string, unknown>): number {
+  const catchUp = isRecord(config.catch_up) ? config.catch_up : {};
+  const catchUpMs =
+    catchUp.mode === 'off'
+      ? 0
+      : typeof catchUp.request_timeout_ms === 'number'
+        ? catchUp.request_timeout_ms
+        : DEFAULT_TEAMS_CATCH_UP.request_timeout_ms;
+  return Math.max(3_000, Math.min(12_000, TEAMS_INBOUND_LEASE_MS - 15_000 - catchUpMs));
+}
+
+export interface TeamsConfigValidationResult {
+  ok: boolean;
+  errors: string[];
+}
+
+function isTeamsId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9._:@-]{1,256}$/.test(value.trim());
+}
+
+function validateTeamsList(
+  raw: Record<string, unknown>,
+  field: 'allowed_team_ids' | 'allowed_channel_ids' | 'allowed_user_aad_object_ids',
+  errors: string[]
+): void {
+  const value = raw[field];
+  if (value === undefined) return;
+  if (!Array.isArray(value) || value.some((item) => !isTeamsId(item))) {
+    errors.push(`${field} must contain only nonempty Teams identifiers`);
+  }
+}
+
+/** Validate Teams AAD object ID mappings to canonical tenant-owned User IDs. */
+export function validateTeamsUserMap(value: unknown): TeamsConfigValidationResult {
+  const valid =
+    value === undefined ||
+    (isRecord(value) &&
+      Object.entries(value).every(
+        ([aadId, userId]) => isTeamsId(aadId) && isCanonicalUuidV7(userId)
+      ));
+  return valid
+    ? { ok: true, errors: [] }
+    : {
+        ok: false,
+        errors: ['user_map must map Teams AAD object IDs to full lowercase UUIDv7 Agor User IDs'],
+      };
+}
+
+/** Apply safe defaults without importing a provider SDK. */
+export function withTeamsConfigDefaults(raw: Record<string, unknown>): Record<string, unknown> {
+  const catchUp = isRecord(raw.catch_up)
+    ? { ...DEFAULT_TEAMS_CATCH_UP, ...raw.catch_up }
+    : { ...DEFAULT_TEAMS_CATCH_UP };
+  return {
+    ...raw,
+    align_teams_users: raw.align_teams_users ?? false,
+    catch_up: catchUp,
+    outbound_enabled: raw.outbound_enabled ?? false,
+  };
+}
+
+/** Validate the non-secret, canonical Teams configuration at every write path. */
+export function validateTeamsConfig(
+  raw: Record<string, unknown>,
+  options: { requireAppPassword?: boolean } = {}
+): TeamsConfigValidationResult {
+  const errors: string[] = [];
+  if (
+    typeof raw.app_id !== 'string' ||
+    !raw.app_id.trim() ||
+    raw.app_id === GATEWAY_REDACTED_SENTINEL
+  ) {
+    errors.push('app_id is required');
+  }
+  if (typeof raw.microsoft_tenant_id !== 'string' || !raw.microsoft_tenant_id.trim()) {
+    errors.push('microsoft_tenant_id is required');
+  }
+  if (
+    options.requireAppPassword !== false &&
+    (typeof raw.app_password !== 'string' ||
+      !raw.app_password.trim() ||
+      raw.app_password === GATEWAY_REDACTED_SENTINEL)
+  ) {
+    errors.push('app_password is required');
+  }
+  for (const field of [
+    'allowed_team_ids',
+    'allowed_channel_ids',
+    'allowed_user_aad_object_ids',
+  ] as const) {
+    validateTeamsList(raw, field, errors);
+  }
+  errors.push(...validateTeamsUserMap(raw.user_map).errors);
+  if (typeof raw.align_teams_users !== 'boolean') {
+    errors.push('align_teams_users must be a boolean');
+  } else if (
+    raw.align_teams_users === false &&
+    isRecord(raw.user_map) &&
+    Object.keys(raw.user_map).length > 0
+  ) {
+    errors.push('user_map is only allowed when align_teams_users is true');
+  }
+  if (typeof raw.outbound_enabled !== 'boolean') errors.push('outbound_enabled must be a boolean');
+  if (raw.files !== undefined && typeof raw.files !== 'boolean') {
+    errors.push('files must be a boolean');
+  }
+  validateAgentToolToggles(raw.agent_tools, TEAMS_AGENT_TOOL_DEFAULTS, 'Teams', errors);
+  if (raw.default_outbound_target !== undefined && raw.default_outbound_target !== null) {
+    const channelId =
+      typeof raw.default_outbound_target === 'string'
+        ? teamsOutboundChannelTarget(raw.default_outbound_target)
+        : null;
+    const allowed = Array.isArray(raw.allowed_channel_ids) ? raw.allowed_channel_ids : [];
+    if (!channelId) {
+      errors.push('default_outbound_target must be channel:<19:…@thread.tacv2>');
+    } else if (allowed.length > 0 && !allowed.includes(channelId)) {
+      errors.push('default_outbound_target must target an allowed channel');
+    }
+  }
+  if (!isRecord(raw.catch_up)) {
+    errors.push('catch_up must be an object');
+  } else {
+    const mode = raw.catch_up.mode;
+    if (mode !== 'off' && mode !== 'best_effort')
+      errors.push('catch_up.mode must be off or best_effort');
+    for (const key of ['max_messages', 'max_prompt_bytes', 'request_timeout_ms'] as const) {
+      const value = raw.catch_up[key];
+      if (
+        typeof value !== 'number' ||
+        !Number.isSafeInteger(value) ||
+        value < MIN_TEAMS_CATCH_UP[key] ||
+        value > MAX_TEAMS_CATCH_UP[key]
+      ) {
+        errors.push(`catch_up.${key} must be a bounded integer`);
+      }
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * Canonical Teams setup validation shared by the UI, MCP tools, service and
+ * repository: aligned identity never carries a fixed fallback user.
+ */
+export function validateTeamsSetup(
+  config: Record<string, unknown>,
+  agorUserId: string | null | undefined,
+  options: { requireAppPassword?: boolean } = {}
+): TeamsConfigValidationResult {
+  const result = validateTeamsConfig(config, options);
+  const aligned = config.align_teams_users === true;
+  if (aligned && agorUserId) {
+    result.errors.push('aligned Teams identity cannot include agor_user_id');
+  }
+  if (!aligned && !agorUserId?.trim()) {
+    result.errors.push('fixed Teams identity requires agor_user_id');
+  }
+  return { ok: result.errors.length === 0, errors: result.errors };
+}
+
+/**
+ * The application identity a Teams credential probe proved, or null. Only a
+ * passing probe for the exact configured app ID authorizes enabling a channel.
+ */
+export function teamsVerifiedInstallationId(
+  result: Pick<GatewayConnectionTestResult, 'ok' | 'failures' | 'verifiedInstallationId'> | null,
+  expectedAppId: unknown
+): string | null {
+  if (result?.ok !== true || result.failures.length > 0) return null;
+  if (typeof expectedAppId !== 'string' || !expectedAppId.trim()) return null;
+  return result.verifiedInstallationId === expectedAppId ? expectedAppId : null;
 }
 
 /** Discord gateway configuration used by both the browser wizard and daemon. */
@@ -439,7 +840,12 @@ export const DISCORD_AGENT_TOOL_DEFAULTS: Record<DiscordAgentToolCapability, boo
   channel_history: false,
 };
 
-function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
+function validateAgentToolToggles(
+  raw: unknown,
+  defaults: Record<string, boolean>,
+  provider: string,
+  errors: string[]
+): void {
   if (raw === undefined) return;
   if (Array.isArray(raw)) {
     if (raw.length > 0) errors.push('agent_tools must be [] or an object of capability toggles');
@@ -450,8 +856,8 @@ function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
     return;
   }
   for (const [key, value] of Object.entries(raw)) {
-    if (!Object.hasOwn(DISCORD_AGENT_TOOL_DEFAULTS, key)) {
-      errors.push(`agent_tools.${key} is not a supported Discord agent tool`);
+    if (!Object.hasOwn(defaults, key)) {
+      errors.push(`agent_tools.${key} is not a supported ${provider} agent tool`);
     } else if (typeof value !== 'boolean') {
       errors.push(`agent_tools.${key} must be a boolean`);
     }
@@ -465,9 +871,16 @@ function validateDiscordAgentTools(raw: unknown, errors: string[]): void {
 export function resolveDiscordAgentTools(
   raw: unknown
 ): Record<DiscordAgentToolCapability, boolean> {
-  const resolved = { ...DISCORD_AGENT_TOOL_DEFAULTS };
+  return resolveAgentToolToggles(raw, DISCORD_AGENT_TOOL_DEFAULTS);
+}
+
+function resolveAgentToolToggles<K extends string>(
+  raw: unknown,
+  defaults: Record<K, boolean>
+): Record<K, boolean> {
+  const resolved = { ...defaults };
   if (!isRecord(raw)) return resolved;
-  for (const capability of Object.keys(resolved) as DiscordAgentToolCapability[]) {
+  for (const capability of Object.keys(resolved) as K[]) {
     if (typeof raw[capability] === 'boolean') resolved[capability] = raw[capability] as boolean;
   }
   return resolved;
@@ -714,7 +1127,7 @@ export function validateDiscordConfig(
   if (raw.files !== undefined && typeof raw.files !== 'boolean') {
     errors.push('files must be a boolean');
   }
-  validateDiscordAgentTools(raw.agent_tools, errors);
+  validateAgentToolToggles(raw.agent_tools, DISCORD_AGENT_TOOL_DEFAULTS, 'Discord', errors);
 
   if (raw.outbound_enabled !== undefined && typeof raw.outbound_enabled !== 'boolean') {
     errors.push('outbound_enabled must be a boolean');
@@ -1107,7 +1520,18 @@ export function mergeGatewayChannelConfigPatch(
       merged[field] = currentConfig[field];
     }
   }
-  return channelType === 'discord' && enabled ? withDiscordConfigDefaults(merged) : merged;
+  if (channelType === 'discord' && enabled) return withDiscordConfigDefaults(merged);
+  if (channelType === 'teams' && enabled) return withTeamsConfigDefaults(merged);
+  return merged;
+}
+
+/** A Teams app password rotation keeps the provider authority unchanged. */
+export function isTeamsCredentialOnlyConfigPatch(patch: {
+  config?: Record<string, unknown>;
+}): boolean {
+  if (Object.keys(patch).length !== 1 || !patch.config || Array.isArray(patch.config)) return false;
+  const keys = Object.keys(patch.config);
+  return keys.length === 1 && keys[0] === 'app_password';
 }
 
 /** Fields that change the provider authority generation and binding. */
@@ -1143,6 +1567,8 @@ export interface ThreadSessionMap {
   metadata: Record<string, unknown> | null;
   /** Last Discord message ID whose mention Task was durably admitted. */
   discord_last_admitted_message_id: string | null;
+  /** Last Teams activity ID whose mention Task was durably admitted. */
+  teams_last_admitted_activity_id: string | null;
 }
 
 /**
@@ -1203,6 +1629,15 @@ export interface GatewayInboundEvent {
   status: GatewayInboundEventStatus;
   processing_token: string;
   processing_expires_at: string;
+  /** Encrypted normalized payload, populated only for verified HTTP ingress. */
+  payload_encrypted: string | null;
+  payload_expires_at: string | null;
+  provider_config_generation: number;
+  verified_app_id: string | null;
+  verified_tenant_id: string | null;
+  attempt_count: number;
+  next_attempt_at: string;
+  last_error_code: string | null;
   session_id: SessionID | null;
   task_id: TaskID | null;
   received_at: string;

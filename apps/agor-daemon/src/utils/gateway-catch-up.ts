@@ -54,6 +54,8 @@ export function formatGatewayCatchUpPrompt(args: {
   threadId: string;
   currentText: string;
   result: GatewayProviderHistoryResult;
+  /** When set, drop the oldest messages until the prompt fits instead of failing. */
+  trimToBytes?: number;
 }): string {
   const triggerMessages = args.result.messages.filter((message) => message.isTrigger);
   if (
@@ -68,19 +70,51 @@ export function formatGatewayCatchUpPrompt(args: {
   const safeMessages = args.result.messages.filter(
     (message) => !message.isTrigger && !message.isBot && !message.isSystem && !message.isRich
   );
-  const structuredContext = {
+  const previousMessages = safeMessages.map((message) => ({
+    provider_message_id: message.providerMessageId,
+    timestamp: message.timestamp,
+    actor: message.actorLabel,
+    ...(typeof message.senderAllowlisted === 'boolean'
+      ? { sender_allowlisted: message.senderAllowlisted }
+      : {}),
+    text: message.text,
+  }));
+  for (let dropped = 0; ; dropped += 1) {
+    const prompt = renderUntrustedContext({
+      format: 'agor.gateway.untrusted-provider-context.v1',
+      provider: args.provider,
+      thread_id: args.threadId,
+      previous_messages: previousMessages.slice(dropped),
+      ...(args.result.earlierOmitted || dropped > 0
+        ? { omitted_note: 'Earlier messages in this thread were omitted' }
+        : {}),
+      current_summon: { text: args.currentText },
+    });
+    if (
+      args.trimToBytes === undefined ||
+      Buffer.byteLength(prompt, 'utf8') <= args.trimToBytes ||
+      dropped === previousMessages.length
+    ) {
+      return prompt;
+    }
+  }
+}
+
+/** The current summon alone, marked so the agent knows earlier context could not be read. */
+export function formatGatewayCatchUpFallbackPrompt(args: {
+  provider: string;
+  threadId: string;
+  currentText: string;
+  historyStatus: 'unavailable';
+}): string {
+  return renderUntrustedContext({
     format: 'agor.gateway.untrusted-provider-context.v1',
     provider: args.provider,
     thread_id: args.threadId,
-    previous_messages: safeMessages.map((message) => ({
-      provider_message_id: message.providerMessageId,
-      timestamp: message.timestamp,
-      actor: message.actorLabel,
-      text: message.text,
-    })),
+    history_status: args.historyStatus,
+    previous_messages: [],
     current_summon: { text: args.currentText },
-  };
-  return renderUntrustedContext(structuredContext);
+  });
 }
 
 function renderUntrustedContext(structuredContext: unknown): string {
@@ -101,6 +135,8 @@ export async function fetchGatewayCatchUp(args: {
   provider: string;
   currentText: string;
   maxPromptBytes: number;
+  /** Drop the oldest messages to fit `maxPromptBytes` instead of failing the read. */
+  trimOldestToFit?: boolean;
 }): Promise<{ prompt: string; cursor: string }> {
   if (!args.connector.fetchProviderHistory) {
     throw new GatewayCatchUpError('unsupported', 'Provider history is not available');
@@ -114,6 +150,7 @@ export async function fetchGatewayCatchUp(args: {
     threadId: args.request.threadId,
     currentText: args.currentText,
     result,
+    ...(args.trimOldestToFit ? { trimToBytes: args.maxPromptBytes } : {}),
   });
   if (Buffer.byteLength(prompt, 'utf8') > args.maxPromptBytes) {
     throw new GatewayCatchUpError(

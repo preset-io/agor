@@ -24,14 +24,17 @@ export interface InboundFile {
   id: string;
   name: string;
   mimetype: string;
+  /** Declared bytes, or -1 when the provider does not say; the downloader caps actual bytes. */
   size: number;
   url_private_download: string;
+  /** Set only when the provider requires the bot token for this URL (Teams inline images). */
+  auth?: 'provider_token';
 }
 
 /** An attachment the connector could not hand to the agent, kept so the user can be told. */
 export interface InboundSkippedFile {
   name: string;
-  reason: 'unsupported_type' | 'files_disabled' | 'invalid';
+  reason: 'unsupported_type' | 'files_disabled' | 'invalid' | 'channel_file';
 }
 
 /**
@@ -81,6 +84,8 @@ export interface GatewayProviderHistoryMessage {
   isRich: boolean;
   isTrigger: boolean;
   isMention: boolean;
+  /** Set only when the channel has a sender allowlist; untrusted context either way. */
+  senderAllowlisted?: boolean;
 }
 
 /** Request for one bounded, exclusive/inclusive provider-history interval. */
@@ -91,6 +96,10 @@ export interface GatewayProviderHistoryRequest {
   /** The live mention boundary is inclusive. */
   throughProviderCursor: string;
   triggerProviderCursor: string;
+  /** Provider coordinates from the verified trigger that the thread ID cannot carry. */
+  providerContext?: Readonly<Record<string, unknown>>;
+  /** One deadline for every provider call made for this interval. */
+  signal?: AbortSignal;
 }
 
 /** A complete, ordered provider-history interval. */
@@ -99,6 +108,8 @@ export interface GatewayProviderHistoryResult {
   messages: GatewayProviderHistoryMessage[];
   /** False means the connector could not prove complete interval coverage. */
   complete: boolean;
+  /** True when the connector kept only the newest messages of a longer interval. */
+  earlierOmitted?: boolean;
 }
 
 /** Durable provider polling checkpoint owned by the current listener lease. */

@@ -173,6 +173,13 @@ describe('Discord connector beta', () => {
     expect(chunks.join('')).toBe(`${'a'.repeat(1999)}\n${'b'.repeat(1999)}`);
   });
 
+  it('keeps cutting at the last whitespace, so resumed deliveries match their receipts', () => {
+    const text = `${'a'.repeat(1250)}\n${'word '.repeat(300)}`;
+    const chunks = chunkDiscordMessage(text);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([1996, 755]);
+    expect(chunks.join('')).toBe(text);
+  });
+
   it('does not split Unicode surrogate pairs at the chunk boundary', () => {
     const text = `${'a'.repeat(1999)}😀tail`;
     const chunks = chunkDiscordMessage(text);

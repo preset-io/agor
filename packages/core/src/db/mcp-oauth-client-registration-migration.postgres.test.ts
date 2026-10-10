@@ -401,6 +401,29 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await executeRaw(db, sql`DROP TABLE user_provider_oauth_grants`);
       // 0117 is newer than this watermark; replaying the chain must recreate it.
       await executeRaw(db, sql`DROP TABLE opencode_checkpoint_attempts`);
+      // Rewind 0118 (Teams gateway HA) the same way.
+      await executeRaw(db, sql`DROP TABLE teams_message_deliveries`);
+      await executeRaw(db, sql`DROP TABLE teams_conversation_addresses`);
+      await executeRaw(
+        db,
+        sql`DROP POLICY teams_gateway_inbound_discovery ON gateway_inbound_events`
+      );
+      await executeRaw(db, sql`DROP POLICY teams_gateway_ingress_discovery ON gateway_channels`);
+      await executeRaw(db, sql`DROP INDEX gateway_inbound_events_teams_lane_idx`);
+      await executeRaw(db, sql`DROP INDEX gateway_channels_teams_installation_unique`);
+      await executeRaw(db, sql`DROP INDEX gateway_channels_tenant_id_unique`);
+      await executeRaw(
+        db,
+        sql`ALTER TABLE gateway_inbound_events
+              DROP COLUMN payload_encrypted, DROP COLUMN payload_expires_at,
+              DROP COLUMN provider_config_generation, DROP COLUMN verified_app_id,
+              DROP COLUMN verified_tenant_id, DROP COLUMN attempt_count,
+              DROP COLUMN next_attempt_at, DROP COLUMN last_error_code`
+      );
+      await executeRaw(
+        db,
+        sql`ALTER TABLE thread_session_map DROP COLUMN teams_last_admitted_activity_id`
+      );
       await withPostgresTestTransaction(db, recreateHistoricalClaudeAuthority);
       await withPostgresTestTransaction(db, restoreHistoricalOwnerImmutability);
 

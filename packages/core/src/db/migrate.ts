@@ -135,6 +135,23 @@ export function createMigrationImpactRegistry(
 }
 
 const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
+  // SQLite and PostgreSQL number the same Teams migration differently.
+  ...['0117_teams_gateway_ha', '0118_teams_gateway_ha'].map(
+    (name) =>
+      [
+        name,
+        {
+          requiresOfflineCutover: false,
+          impact: defineMigrationImpact({
+            classification: 'protocol',
+            userAction: 'required',
+            rollbackCompatibility: 'compatible',
+            summary:
+              'Disables existing Teams channels; re-enable them once every daemon runs this version. Other providers keep working on older daemons. Disable Teams before rollback; never replay ambiguous deliveries.',
+          }),
+        },
+      ] as const
+  ),
   [
     '0113_session_recency_not_null',
     {

@@ -4,6 +4,10 @@ import {
   BranchRepository,
   createDatabaseAsync,
   createTenantScopedDatabaseProxy,
+  eq,
+  GatewayChannelRepository,
+  GatewayInboundEventRepository,
+  gatewayInboundEvents,
   generateId,
   getCurrentTenantDatabaseScope,
   MessagesRepository,
@@ -13,6 +17,7 @@ import {
   SessionRepository,
   TaskRepository,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import { type Application, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import type {
@@ -26,11 +31,17 @@ import type {
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterRoutesContext, registerRoutes } from './register-routes.js';
+import {
+  type GatewayAdmissionFenceParams,
+  teamsInboundAdmissionFence,
+  withVerifiedHttpGatewayAuthority,
+} from './services/gateway-authority.js';
 import { TasksService } from './services/tasks.js';
 
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const close of cleanup.splice(0)) close();
 });
 
@@ -143,13 +154,18 @@ async function fixture() {
   } finally {
     useSpy.mockRestore();
   }
-  const prompt = (data: { prompt: string; idempotencyTaskId?: TaskID }) =>
+  const prompt = (
+    data: { prompt: string; idempotencyTaskId?: TaskID; metadata?: Record<string, unknown> },
+    extraParams: GatewayAdmissionFenceParams = {}
+  ) =>
     app.service('sessions/:id/prompt').create(data, {
       route: { id: session.session_id },
       user: actor,
       tenant: { tenant_id: DEFAULT_STATIC_TENANT_ID, source: 'explicit' },
+      ...extraParams,
     } as AuthenticatedParams) as Promise<Task>;
   return {
+    db,
     scoped,
     session,
     actor,
@@ -222,5 +238,177 @@ describe('registered prompt route launch handoff', () => {
       task_id: first.task_id,
       session_id: f.session.session_id,
     });
+  });
+  it('runs a params-carried gateway fence inside the Task admission transaction', async () => {
+    const f = await fixture();
+    const idempotencyTaskId = generateId() as TaskID;
+    const original = GatewayInboundEventRepository.prototype.assertTeamsTaskAdmission;
+    const fence = vi
+      .spyOn(GatewayInboundEventRepository.prototype, 'assertTeamsTaskAdmission')
+      .mockImplementation(async function (this: GatewayInboundEventRepository, authority) {
+        expect(getCurrentTenantDatabaseScope()).toMatchObject({
+          kind: 'tenant',
+          transactionActive: true,
+        });
+        return original.call(this, authority);
+      });
+    const fenceParams = {
+      gatewayAdmissionFence: teamsInboundAdmissionFence({
+        id: generateId(),
+        gateway_channel_id: generateId(),
+        processing_token: 'stale-worker',
+        provider_config_generation: 1,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'teams-tenant',
+        thread_id: 'teams-thread',
+      }),
+    };
+    await expect(
+      f.prompt({ prompt: 'stale Teams authority', idempotencyTaskId }, fenceParams)
+    ).rejects.toThrow('admission authority');
+    expect(fence).toHaveBeenCalledOnce();
+    expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
+    expect(f.executeTask).not.toHaveBeenCalled();
+  });
+  it.each(['disable', 'config-tuning', 'reclaim', 'unchanged'] as const)(
+    'checks real prompt admission after asynchronous %s preparation',
+    async (mutation) => {
+      vi.stubEnv('AGOR_MASTER_SECRET', 'disposable-teams-admission-secret');
+      const f = await fixture();
+      const { channel, claim } = await f.scoped(async () => {
+        const channels = new GatewayChannelRepository(f.db);
+        const channel = await channels.create({
+          name: 'Teams admission fixture',
+          created_by: f.actor.user_id,
+          target_branch_id: f.session.branch_id,
+          agor_user_id: f.actor.user_id,
+          channel_type: 'teams',
+          enabled: true,
+          provider_installation_id: 'teams-app',
+          config: {
+            app_id: 'teams-app',
+            app_password: 'disposable-secret',
+            microsoft_tenant_id: 'teams-tenant',
+            catch_up: { mode: 'off' },
+          },
+        });
+        const inbound = new GatewayInboundEventRepository(f.db);
+        const input = {
+          channelId: channel.id,
+          providerEventId: 'activity-1',
+          threadId: 'thread-1',
+          payload: { text: 'hello' },
+          providerConfigGeneration: channel.provider_config_generation,
+          verifiedAppId: 'teams-app',
+          verifiedTenantId: 'teams-tenant',
+          address: {
+            conversationId: 'conversation-1',
+            rootMessageId: null,
+            address: { serviceUrl: 'https://smba.trafficmanager.net/teams/' },
+          },
+        };
+        const admitted = await inbound.admitVerifiedHttp(input);
+        const claim = await inbound.claimQueued(admitted.event.id, 'worker-a', 30_000);
+        if (!claim) throw new Error('missing fixture claim');
+        return { channel, claim };
+      });
+      let reached!: () => void;
+      let resume!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const pause = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const original = f.sessionsRepository.findById.bind(f.sessionsRepository);
+      vi.spyOn(f.sessionsRepository, 'findById').mockImplementationOnce(async (...args) => {
+        const session = await original(...args);
+        reached();
+        await pause;
+        return session;
+      });
+      const idempotencyTaskId = generateId() as TaskID;
+      const work = f.prompt(
+        { prompt: 'Teams mention', idempotencyTaskId },
+        { gatewayAdmissionFence: teamsInboundAdmissionFence(claim) }
+      );
+      try {
+        await Promise.race([ready, work]);
+        await f.scoped(async () => {
+          if (mutation === 'reclaim') {
+            await update(f.db, gatewayInboundEvents)
+              .set({ processing_expires_at: new Date(0) })
+              .where(eq(gatewayInboundEvents.id, claim.id))
+              .run();
+            expect(
+              await new GatewayInboundEventRepository(f.db).claimQueued(
+                claim.id,
+                'worker-b',
+                30_000
+              )
+            ).toBeTruthy();
+          } else if (mutation === 'disable') {
+            await new GatewayChannelRepository(f.db).update(channel.id, { enabled: false });
+          } else if (mutation === 'config-tuning') {
+            await new GatewayChannelRepository(f.db).updateWithVerifiedProviderInstallation(
+              channel.id,
+              { config: { ...channel.config, catch_up: { mode: 'off', max_messages: 10 } } },
+              'teams-app',
+              channel.provider_config_generation
+            );
+          }
+        });
+      } finally {
+        resume();
+      }
+      if (mutation === 'unchanged') {
+        await expect(work).resolves.toMatchObject({ task_id: idempotencyTaskId });
+        await vi.waitFor(() => expect(f.executeTask).toHaveBeenCalledOnce());
+        return;
+      }
+      await expect(work).rejects.toThrow('admission authority');
+      expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
+      expect(f.executeTask).not.toHaveBeenCalled();
+      expect(await f.scoped(() => f.sessionsRepository.countMessages(f.session.session_id))).toBe(
+        0
+      );
+    }
+  );
+  it('refuses a gateway-sourced Teams Task whose fence was dropped, even with data authority', async () => {
+    const f = await fixture();
+    const idempotencyTaskId = generateId() as TaskID;
+    const teamsSource = {
+      gateway_task_source: {
+        gateway_channel_id: generateId(),
+        channel_type: 'teams',
+        thread_id: 'teams-thread',
+        provider_user_id: 'teams-user',
+      },
+    };
+    // A hidden data-level authority alone no longer admits anything.
+    const data = withVerifiedHttpGatewayAuthority(
+      { prompt: 'unfenced Teams Task', idempotencyTaskId, metadata: teamsSource },
+      {
+        id: generateId(),
+        gateway_channel_id: generateId(),
+        processing_token: 'worker',
+        provider_config_generation: 1,
+        verified_app_id: 'teams-app',
+        verified_tenant_id: 'teams-tenant',
+        thread_id: 'teams-thread',
+      }
+    );
+    await expect(f.prompt(data)).rejects.toThrow('provider event fence');
+    expect(await f.scoped(() => f.taskRepo.findById(idempotencyTaskId))).toBeNull();
+    expect(f.executeTask).not.toHaveBeenCalled();
+
+    // Providers without a queue fence keep the ordinary internal path.
+    const slack = await f.prompt({
+      prompt: 'Slack Task',
+      metadata: {
+        gateway_task_source: { ...teamsSource.gateway_task_source, channel_type: 'slack' },
+      },
+    });
+    expect(slack.task_id).toBeTruthy();
   });
 });

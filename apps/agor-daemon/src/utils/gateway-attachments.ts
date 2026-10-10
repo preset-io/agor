@@ -4,7 +4,8 @@
  * Downloads supported files attached to inbound gateway messages and stores
  * them in the existing tenant/session/branch upload staging layer. Slack
  * downloads use the channel's bot token; Discord downloads use the signed CDN
- * URL supplied by the provider and never receive a channel credential.
+ * URL supplied by the provider and never receive a channel credential; Teams
+ * sends its bot token only to Bot Connector hosts.
  *
  * Other attachment types (PDFs, office documents, archives, media) are out of
  * scope and never downloaded. Downloads are restricted to provider-owned URLs
@@ -15,12 +16,13 @@
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { InboundFile } from '@agor/core/gateway';
-import { isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
+import { gatewayFailureCode, isAllowedDiscordAttachmentUrl } from '@agor/core/gateway';
 import type {
   BranchID,
   SessionID,
   TenantID,
   UploadMetadata,
+  UploadProvenance,
   UploadStagingStore,
   UserID,
 } from '@agor/core/types';
@@ -33,7 +35,7 @@ export interface AttachmentIngestResult {
   uploads: UploadMetadata[];
   /** Ingestable attachments that could not be fetched or stored. */
   failed: number;
-  /** Discord: names of the attachments counted in `failed`, so the user can be told. */
+  /** Discord and Teams: names of the attachments counted in `failed`, so the user can be told. */
   failedNames?: string[];
 }
 
@@ -84,7 +86,7 @@ function isAllowedIngestMime(rawMime: string): boolean {
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error
     ? signal.reason
-    : new Error('Discord attachment download timed out');
+    : new Error('attachment download timed out');
 }
 
 /**
@@ -146,8 +148,8 @@ function withAbort<T>(
   });
 }
 
-function discordDownloadTimeoutError(): Error {
-  return Object.assign(new Error('Discord attachment download timed out'), {
+function downloadTimeoutError(): Error {
+  return Object.assign(new Error('attachment download timed out'), {
     code: 'ETIMEDOUT' as const,
   });
 }
@@ -211,23 +213,32 @@ function discordImageMime(rawMime: string): string {
   return rawMime.split(';')[0].trim().toLowerCase();
 }
 
-/**
- * Download the live Discord attachments the gateway can ingest (images and
- * text-like files, as for Slack). Discord's URL is already
- * signed, so this path deliberately sends no Authorization header and
- * validates every manually-followed redirect against the same signed CDN
- * policy.
- */
-export async function ingestDiscordInboundImages(args: {
+/** How one provider's file is fetched: the URL predicate checked on every hop, and its headers. */
+export interface ProviderFileRequest {
+  isAllowedUrl: (rawUrl: string) => boolean;
+  headers: Record<string, string>;
+}
+
+/** Stage one message's readable files; every redirect hop is re-checked and a file failure is named, never thrown. */
+export async function ingestProviderInboundFiles(args: {
   files: InboundFile[];
+  /** Provider label for logs; never a URL or file name. */
+  label: string;
+  provenance: UploadProvenance;
+  /** Resolve how to fetch one file, or null to count it as unreadable. */
+  requestFor: (file: InboundFile) => Promise<ProviderFileRequest | null>;
   fetchImpl?: typeof fetch;
   tenantId: TenantID;
   sessionId: SessionID;
   branchId: BranchID;
   createdBy: UserID;
   store?: UploadStagingStore;
-  /** Test seam; production uses the fixed bounded deadline below. */
+  /** Per-file deadline; production uses the fixed bounded default. */
   downloadTimeoutMs?: number;
+  /** One deadline shared by every file of the message. */
+  signal?: AbortSignal;
+  /** Stage a text file served as `application/octet-stream` under its name's type (SharePoint does this). */
+  textFromOctetStream?: boolean;
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const store = args.store ?? getUploadStagingStore();
@@ -237,7 +248,7 @@ export async function ingestDiscordInboundImages(args: {
     downloadTimeoutMs <= 0 ||
     downloadTimeoutMs > MAX_TIMER_MS
   ) {
-    throw new Error('Invalid Discord attachment download timeout');
+    throw new Error('Invalid attachment download timeout');
   }
   const limits = getUploadLimits();
   const uploads: UploadMetadata[] = [];
@@ -245,57 +256,72 @@ export async function ingestDiscordInboundImages(args: {
   let failed = 0;
   let declaredTotalBytes = 0;
   let actualTotalBytes = 0;
+  const fail = (file: InboundFile, reason: string) => {
+    failed++;
+    failedNames.push(file.name);
+    console.warn(`[gateway] Skipping ${args.label} attachment: ${reason}`);
+  };
 
   for (const [index, file] of args.files.entries()) {
     if (index >= MAX_UPLOAD_FILES_PER_REQUEST) {
-      failed++;
-      failedNames.push(file.name);
-      console.warn(
-        `[gateway] Skipping Discord attachment: message exceeds ${MAX_UPLOAD_FILES_PER_REQUEST}-file limit`
-      );
+      fail(file, `message exceeds ${MAX_UPLOAD_FILES_PER_REQUEST}-file limit`);
       continue;
     }
+    // -1 means the provider did not declare a size; the stream limiter below still caps it.
+    const declaredSize = file.size === -1 ? 0 : file.size;
     if (
-      !Number.isSafeInteger(file.size) ||
-      file.size < 0 ||
-      file.size > limits.maxFileBytes ||
-      file.size > limits.maxTotalBytes - declaredTotalBytes
+      !Number.isSafeInteger(declaredSize) ||
+      declaredSize < 0 ||
+      declaredSize > limits.maxFileBytes ||
+      declaredSize > limits.maxTotalBytes - declaredTotalBytes
     ) {
-      failed++;
-      failedNames.push(file.name);
-      console.warn(
-        '[gateway] Skipping Discord attachment: declared size exceeds the upload limits'
-      );
+      fail(file, 'declared size exceeds the upload limits');
       continue;
     }
-    if (
-      !isAllowedIngestMime(file.mimetype) ||
-      !isAllowedDiscordAttachmentUrl(file.url_private_download)
-    ) {
-      failed++;
-      failedNames.push(file.name);
-      console.warn('[gateway] Skipping Discord attachment: unsupported type or URL');
+    if (args.signal?.aborted) {
+      fail(file, 'message download deadline passed');
       continue;
     }
-    declaredTotalBytes += file.size;
+    let request: ProviderFileRequest | null = null;
+    try {
+      // The shared deadline also bounds credential lookup, which has no abort signal of its own.
+      request = !isAllowedIngestMime(file.mimetype)
+        ? null
+        : args.signal
+          ? await withAbort(args.requestFor(file), args.signal)
+          : await args.requestFor(file);
+    } catch (error) {
+      fail(file, `credential unavailable code=${gatewayFailureCode(error)}`);
+      continue;
+    }
+    if (!request || !request.isAllowedUrl(file.url_private_download)) {
+      fail(file, 'unsupported type or URL');
+      continue;
+    }
+    declaredTotalBytes += declaredSize;
 
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(discordDownloadTimeoutError()),
-      downloadTimeoutMs
-    );
+    const timeout = setTimeout(() => controller.abort(downloadTimeoutError()), downloadTimeoutMs);
     timeout.unref?.();
+    const onSharedAbort = () => controller.abort(downloadTimeoutError());
+    args.signal?.addEventListener('abort', onSharedAbort, { once: true });
     let response: Response | undefined;
     try {
       response = await fetchFromAllowedHosts(
         file.url_private_download,
-        {},
+        request.headers,
         fetchImpl,
-        isAllowedDiscordAttachmentUrl,
+        request.isAllowedUrl,
         controller.signal
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const contentType = discordImageMime(response.headers.get('content-type') ?? '');
+      const servedType = discordImageMime(response.headers.get('content-type') ?? '');
+      const contentType =
+        args.textFromOctetStream &&
+        servedType === 'application/octet-stream' &&
+        !file.mimetype.startsWith('image/')
+          ? discordImageMime(file.mimetype)
+          : servedType;
       if (!isAllowedIngestMime(contentType)) {
         throw new Error(`unexpected content-type ${contentType || 'unknown'}`);
       }
@@ -315,9 +341,12 @@ export async function ingestDiscordInboundImages(args: {
       const aggregateLimiter = new Transform({
         transform(chunk: Buffer, _encoding, callback) {
           fileBytes += chunk.byteLength;
-          if (actualTotalBytes + fileBytes > limits.maxTotalBytes) {
+          if (
+            fileBytes > limits.maxFileBytes ||
+            actualTotalBytes + fileBytes > limits.maxTotalBytes
+          ) {
             callback(
-              Object.assign(new Error('Combined Discord attachment size exceeds upload limit'), {
+              Object.assign(new Error('Attachment size exceeds upload limit'), {
                 status: 413,
               })
             );
@@ -344,9 +373,13 @@ export async function ingestDiscordInboundImages(args: {
           },
           name: `${file.id}_${file.name}`,
           mimeType: contentType,
-          provenance: 'gateway-discord',
+          provenance: args.provenance,
           body: aggregateLimiter,
-          sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,
+          ...(Number.isFinite(declaredLength)
+            ? { sizeHint: declaredLength }
+            : file.size >= 0
+              ? { sizeHint: file.size }
+              : {}),
         });
         stagePromise = currentStagePromise;
         const currentSourcePipelinePromise = pipeline(source, aggregateLimiter);
@@ -359,7 +392,7 @@ export async function ingestDiscordInboundImages(args: {
             branchId: args.branchId,
             ref: staged.ref,
           });
-          throw new Error('Discord attachment download was empty');
+          throw new Error('attachment download was empty');
         }
         actualTotalBytes += staged.size;
         uploads.push(staged);
@@ -381,14 +414,37 @@ export async function ingestDiscordInboundImages(args: {
     } catch (error) {
       failed++;
       failedNames.push(file.name);
-      console.warn('[gateway] Failed to ingest Discord attachment:', error);
+      console.warn(
+        `[gateway] Failed to ingest ${args.label} attachment code=${gatewayFailureCode(error)}`
+      );
     } finally {
       clearTimeout(timeout);
+      args.signal?.removeEventListener('abort', onSharedAbort);
       if (response) await cancelResponseBody(response);
     }
   }
 
   return { uploads, failed, failedNames };
+}
+
+/** Discord attachments: signed CDN URLs, fetched with no credential on every hop. */
+export function ingestDiscordInboundImages(args: {
+  files: InboundFile[];
+  fetchImpl?: typeof fetch;
+  tenantId: TenantID;
+  sessionId: SessionID;
+  branchId: BranchID;
+  createdBy: UserID;
+  store?: UploadStagingStore;
+  /** Test seam; production uses the fixed bounded deadline below. */
+  downloadTimeoutMs?: number;
+}): Promise<AttachmentIngestResult> {
+  return ingestProviderInboundFiles({
+    ...args,
+    label: 'Discord',
+    provenance: 'gateway-discord',
+    requestFor: async () => ({ isAllowedUrl: isAllowedDiscordAttachmentUrl, headers: {} }),
+  });
 }
 
 /**
