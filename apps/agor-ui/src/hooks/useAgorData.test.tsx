@@ -402,6 +402,35 @@ describe('useAgorData — network recovery', () => {
       unmount();
     }
   });
+
+  it('still issues the secondary reads when an essential read rejects on a silent resync', async () => {
+    const { client, emitIo, onFetch, fetchCount } = makeMockClient();
+    const secondary = ['agentic-tool-settings', 'mcp-servers', 'gateway-channels', 'artifacts'];
+    const { result, unmount } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      await flush();
+      for (const name of secondary) expect(fetchCount(name, 'findAll')).toBe(1);
+
+      onFetch('board-comments', 'findAll', () => Promise.reject(new Error('Network unavailable')));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        act(() => emitIo('connect'));
+        await waitFor(() => expect(fetchCount('board-comments', 'findAll')).toBe(2));
+        await waitFor(() => {
+          for (const name of secondary) expect(fetchCount(name, 'findAll')).toBe(2);
+        });
+        expect(warn).toHaveBeenCalledWith(
+          '[useAgorData] silent refetch failed:',
+          expect.objectContaining({ message: 'Network unavailable' })
+        );
+      } finally {
+        warn.mockRestore();
+      }
+    } finally {
+      unmount();
+    }
+  });
 });
 
 describe('useAgorData — socket-event bailouts', () => {
@@ -1682,6 +1711,29 @@ describe('useAgorData — opened session transcript priority', () => {
       })
     );
     await waitFor(() => expect(selectTeammatesLoaded(agorStore.getState())).toBe(true));
+  });
+});
+
+describe('useAgorData — secondary reads follow the first-paint snapshot', () => {
+  it('defers secondary reads until the first paint lands, then fetches each once', async () => {
+    const mock = makeMockClient();
+    const commentsGate = deferred();
+    mock.onFetch('board-comments', 'findAll', (call) =>
+      call === 1 ? commentsGate.promise : undefined
+    );
+    const { result } = renderHook(() => useAgorData(mock.client));
+    const secondary = ['agentic-tool-settings', 'mcp-servers', 'gateway-channels', 'artifacts'];
+    await flush();
+    // The essential reads went out; nothing secondary competes with them.
+    expect(mock.fetchCount('boards', 'findAll')).toBe(1);
+    expect(mock.fetchCount('board-comments', 'findAll')).toBe(1);
+    for (const name of secondary) expect(mock.fetchCount(name, 'findAll')).toBe(0);
+    expect(mock.fetchCount('mcp-servers/oauth-status', 'find')).toBe(0);
+    commentsGate.resolve();
+    await waitForInitialLoad(result);
+    await flush();
+    for (const name of secondary) expect(mock.fetchCount(name, 'findAll')).toBe(1);
+    expect(mock.fetchCount('mcp-servers/oauth-status', 'find')).toBe(1);
   });
 });
 

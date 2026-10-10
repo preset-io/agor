@@ -26,7 +26,7 @@
  * of reads.
  */
 import type { AgorClient, Board, Branch, CardWithType, Session } from '@agor-live/client';
-import { PAGINATION } from '@agor-live/client';
+import { PAGINATION, PAGINATION_CHURN_MESSAGE } from '@agor-live/client';
 import { debounceWithMaxWait } from '../utils/debounceWithMaxWait';
 import { fencedRead, type HydratedCollection, touchedIdsSince } from './agorHydration';
 import { type AgorState, agorStore } from './agorStore';
@@ -302,10 +302,43 @@ export function requestBoardReload(
   reload.request();
 }
 
+// Canvas placements outlive their branches: archive keeps the stored position
+// for a future unarchive. Read only the placements of active branches (and
+// cards), like the partition's `archived: false` branch read, in bounded pages.
+// Unarchiving onto a loaded board marks it incomplete (`markArrivalIncomplete`),
+// so its reload reads the restored placement.
+export const BOARD_OBJECT_PAGE_LIMIT = 100;
+const MAX_PAGINATION_CHURN_RESTARTS = 2;
+
+// Offset pagination fails when membership changes between pages (a branch
+// archived mid-read). Restart only this collection from page one, a bounded
+// number of times; every other failure fails the partition load as before.
+async function readBoardPlacements(
+  client: AgorClient,
+  boardId: string,
+  isCurrent: () => boolean
+): Promise<BoardPartitionSnapshot['boardObjects']> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return (await client.service('board-objects').findAll({
+        query: {
+          board_id: boardId,
+          exclude_archived_branches: true,
+          $limit: BOARD_OBJECT_PAGE_LIMIT,
+        },
+      })) as BoardPartitionSnapshot['boardObjects'];
+    } catch (err) {
+      const churn = err instanceof Error && err.message === PAGINATION_CHURN_MESSAGE;
+      if (!churn || attempt >= MAX_PAGINATION_CHURN_RESTARTS || !isCurrent()) throw err;
+    }
+  }
+}
+
 async function fetchBoardPartition(
   client: AgorClient,
   boardId: string,
-  canUseMemberWorkspaceServices: boolean
+  canUseMemberWorkspaceServices: boolean,
+  isCurrent: () => boolean
 ): Promise<BoardPartitionSnapshot> {
   // The board-scoped first-paint queries of `useAgorData` (comments are
   // global and gated, so not part of a partition); each is pushed down to SQL
@@ -323,9 +356,7 @@ async function fetchBoardPartition(
       }),
     }) as Promise<Session[]>,
     canUseMemberWorkspaceServices
-      ? client
-          .service('board-objects')
-          .findAll({ query: { board_id: boardId, $limit: PAGINATION.DEFAULT_LIMIT } })
+      ? readBoardPlacements(client, boardId, isCurrent)
       : Promise.resolve(null),
     client
       .service('cards')
@@ -338,7 +369,7 @@ async function fetchBoardPartition(
     boardId,
     branches,
     sessions,
-    boardObjects: boardObjects as BoardPartitionSnapshot['boardObjects'],
+    boardObjects,
     cards,
     board,
     // Every read is an unbounded `findAll`.
@@ -403,7 +434,8 @@ export function loadBoardPartition(
     }
     try {
       const applied = await fencedRead(
-        () => fetchBoardPartition(client, boardId, options.canUseMemberWorkspaceServices),
+        () =>
+          fetchBoardPartition(client, boardId, options.canUseMemberWorkspaceServices, isCurrent),
         (snapshot, fence) => {
           store().applyMaps(
             (prev) =>

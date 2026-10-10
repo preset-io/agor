@@ -1,4 +1,5 @@
 import type { Board, BoardEntityObject, Branch, CardWithType, Session } from '@agor-live/client';
+import { PAGINATION_CHURN_MESSAGE } from '@agor-live/client';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BOARD,
@@ -32,6 +33,7 @@ import {
 import { agorStore } from './agorStore';
 import { holdBackgroundReads } from './backgroundReads';
 import {
+  BOARD_OBJECT_PAGE_LIMIT,
   evictUnloadedBoards,
   loadBoardPartition,
   makeBoardReadySelector,
@@ -303,6 +305,61 @@ describe('loadBoardPartition', () => {
     await load;
     expect(callsTo('board-objects')).toEqual([]);
     expect(ready()).toBe(true);
+  });
+
+  it('reads only the placements of active branches, in bounded pages', async () => {
+    const { client, release, queries } = makePartitionClient({});
+    const load = loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
+    release();
+    await load;
+    expect(queries('board-objects', 'findAll')).toEqual([
+      { board_id: BOARD, exclude_archived_branches: true, $limit: BOARD_OBJECT_PAGE_LIMIT },
+    ]);
+  });
+
+  it('restarts only the placement read when its pages churn, a bounded number of times', async () => {
+    const churn = () => Promise.reject(new Error(PAGINATION_CHURN_MESSAGE));
+    let failures = 1;
+    const { client, callsTo } = fakeFeathersClient(
+      {
+        'board-objects': {
+          findAll: () => (failures-- > 0 ? churn() : Promise.resolve([boardObject('o-1', 'br-1')])),
+        },
+        boards: { get: () => fullBoard() },
+      },
+      { fallback: async () => [] }
+    );
+    await expect(
+      loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true })
+    ).resolves.toBe(true);
+    expect(callsTo('board-objects', 'findAll')).toHaveLength(2);
+    expect(callsTo('sessions', 'findAll')).toHaveLength(1);
+    expect(agorStore.getState().boardObjectById.has('o-1')).toBe(true);
+    expect(ready()).toBe(true);
+
+    // Sustained churn fails the board with its retryable partition error.
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    failures = Number.POSITIVE_INFINITY;
+    agorStore.getState().setCoverage(boardScopeKey(BOARD), null);
+    await expect(
+      loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true })
+    ).resolves.toBe(false);
+    expect(callsTo('board-objects', 'findAll')).toHaveLength(5);
+    expect(selectBoardPartition(agorStore.getState(), BOARD)?.status).toBe('error');
+  });
+
+  it('never retries a placement read that failed for any other reason', async () => {
+    const { client, callsTo } = fakeFeathersClient(
+      {
+        'board-objects': { findAll: () => Promise.reject(new Error('Forbidden')) },
+        boards: { get: () => fullBoard() },
+      },
+      { fallback: async () => [] }
+    );
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await loadBoardPartition(client, BOARD, { canUseMemberWorkspaceServices: true });
+    expect(callsTo('board-objects', 'findAll')).toHaveLength(1);
+    expect(selectBoardPartition(agorStore.getState(), BOARD)?.status).toBe('error');
   });
 
   it('drops the apply when the authority changes mid-load', async () => {

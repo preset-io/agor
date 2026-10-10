@@ -109,7 +109,8 @@ import { recentBoardsStorageKey } from './useRecentBoards';
 // The first paint only needs what's required to render the canvas (branch
 // cards, their sessions, cards, comments, zones). Collections that aren't
 // needed to paint — mcp-servers, gateway-channels, artifacts, and the
-// oauth-status probe — are fetched in the BACKGROUND (see `fetchData`), and
+// oauth-status probe — are fetched in the BACKGROUND once the first-paint
+// snapshot lands (see `fetchData`), so they never compete with its reads, and
 // session↔MCP links per session on first need (`sessionMcpLinks`); none of
 // them is here, so the gate never waits on them. Their realtime subscriptions are still attached immediately in the
 // subscribe effect, so live updates land even before their fetch resolves.
@@ -589,6 +590,68 @@ export function useAgorData(
       if (silent) markWholesaleReplacement();
       let resyncFailed = false;
 
+      // Secondary reads (see the comment at the call below). Started once per
+      // load: on the happy path after the essential reads land, or, on a
+      // silent resync whose essential read threw, from the catch below —
+      // otherwise these slices would stay stale until the next resync.
+      let secondaryReadsStarted = false;
+      const startSecondaryReads = () => {
+        if (secondaryReadsStarted) return;
+        secondaryReadsStarted = true;
+        void runAuthorityHydration(
+          'agentic-tool-settings',
+          ['agenticToolSettings'],
+          () => client.service('agentic-tool-settings').findAll(),
+          (settings) => agorStore.getState().setAgenticToolSettings(settings)
+        );
+
+        void runAuthorityHydration(
+          'mcp-servers',
+          ['mcpServers'],
+          () =>
+            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
+            }));
+            agorStore.getState().markHydrated('mcpServersHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'gateway-channels',
+          ['gatewayChannels'],
+          () =>
+            client
+              .service('gateway-channels')
+              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          (list) => {
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
+            }));
+            agorStore.getState().markHydrated('gatewayChannelsHydrated');
+          }
+        );
+        void runAuthorityHydration(
+          'artifacts',
+          ['artifacts'],
+          () =>
+            client.service('artifacts').findAll({
+              query: {
+                $limit: PAGINATION.DEFAULT_LIMIT,
+                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
+              },
+            }),
+          (list) =>
+            agorStore.getState().applyMaps((prev) => ({
+              ...prev,
+              artifactById: buildById(list, 'artifact_id', prev.artifactById),
+            }))
+        );
+        void refetchOAuthDurableState(fetchAuthorityScope);
+      };
+
       try {
         if (!silent) {
           agorStore.getState().setLoading(true);
@@ -622,79 +685,10 @@ export function useAgorData(
           });
         };
 
-        // ── Background (non-gated) fetches ──────────────────────────────
-        // These collections are NOT needed to paint the canvas, so they must
-        // never block the first-paint gate. Fire-and-forget: each populates its
-        // own map slice on resolve. Their realtime subscriptions are attached in
-        // the subscribe effect BEFORE this fetch runs, so live events land even
-        // while these fetches are in flight — and `runHydration` only applies a
-        // snapshot when no live write to that collection raced (else it refetches
-        // a fresh one). We deliberately do NOT `track()` them — they're absent
-        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
-        // gate ignores them. We apply through the store's `applyMaps` (not the
-        // per-entity setters), keeping fetchData's deps stable so the subscribe
-        // effect doesn't re-fire.
-        // Route the full snapshot through the shared skip-apply-on-race / generation
-        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
-        // clobber a newer realtime upsert, and a fetch resolving after logout is
-        // dropped instead of repopulating the previous tenant. The apply sets the
-        // hydration gate, so it only flips once a quiet, current snapshot lands.
-        void runAuthorityHydration(
-          'agentic-tool-settings',
-          ['agenticToolSettings'],
-          () => client.service('agentic-tool-settings').findAll(),
-          (settings) => agorStore.getState().setAgenticToolSettings(settings)
-        );
-
-        void runAuthorityHydration(
-          'mcp-servers',
-          ['mcpServers'],
-          () =>
-            client.service('mcp-servers').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              mcpServerById: buildById(list, 'mcp_server_id', prev.mcpServerById),
-            }));
-            agorStore.getState().markHydrated('mcpServersHydrated');
-          }
-        );
         // Session↔MCP links are not read here: each session's load on first
         // need (`sessionMcpLinks`). A resync may have missed link events, so
         // every session counts as unloaded again and mounted readers reload.
         if (silent) resetSessionMcpLinks();
-        void runAuthorityHydration(
-          'gateway-channels',
-          ['gatewayChannels'],
-          () =>
-            client
-              .service('gateway-channels')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-          (list) => {
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              gatewayChannelById: buildById(list, 'id', prev.gatewayChannelById),
-            }));
-            agorStore.getState().markHydrated('gatewayChannelsHydrated');
-          }
-        );
-        void runAuthorityHydration(
-          'artifacts',
-          ['artifacts'],
-          () =>
-            client.service('artifacts').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
-              },
-            }),
-          (list) =>
-            agorStore.getState().applyMaps((prev) => ({
-              ...prev,
-              artifactById: buildById(list, 'artifact_id', prev.artifactById),
-            }))
-        );
-        void refetchOAuthDurableState(fetchAuthorityScope);
 
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
@@ -1038,6 +1032,27 @@ export function useAgorData(
         keepLiveWrites(commentsMap, agorStore.getState().commentById, touchedSinceLoad('comments'));
         agorStore.getState().applyMaps((prev) => ({ ...prev, commentById: commentsMap }));
         bumpRevision('comments');
+
+        // ── Secondary fetches — after the first-paint snapshot lands ────
+        // These collections are NOT needed to paint the canvas, so they must
+        // never block the first-paint gate, nor compete with its reads over a
+        // slow connection. Fire-and-forget: each populates its
+        // own map slice on resolve. Their realtime subscriptions are attached in
+        // the subscribe effect BEFORE this fetch runs, so live events land even
+        // while these fetches are in flight — and `runHydration` only applies a
+        // snapshot when no live write to that collection raced (else it refetches
+        // a fresh one). We deliberately do NOT `track()` them — they're absent
+        // from INITIAL_LOAD_ITEMS, so the loading checklist / `initialLoadComplete`
+        // gate ignores them. We apply through the store's `applyMaps` (not the
+        // per-entity setters), keeping fetchData's deps stable so the subscribe
+        // effect doesn't re-fire.
+        // Route the full snapshot through the shared skip-apply-on-race / generation
+        // lifecycle (like mcp-servers / gateway-channels) so an older snapshot can't
+        // clobber a newer realtime upsert, and a fetch resolving after logout is
+        // dropped instead of repopulating the previous tenant. The apply sets the
+        // hydration gate, so it only flips once a quiet, current snapshot lands.
+        startSecondaryReads();
+
         // User scope: the rest of my sessions, my branches, every
         // teammate I can view, and the branches my sessions and comment
         // threads reference. On a session route only its bulk U1 read is held
@@ -1125,6 +1140,9 @@ export function useAgorData(
           // failure so the next TOKENS_REFRESHED_EVENT (or reconnect) retries.
           console.warn('[useAgorData] silent refetch failed:', err);
           lastSilentFetchFailedRef.current = true;
+          // The essential reads failed before the secondary ones were issued;
+          // they are independent of them, so still refresh those slices.
+          startSecondaryReads();
         } else {
           debugFinishStatus = 'error';
           debugFinishError = err;
