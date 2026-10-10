@@ -74,11 +74,20 @@ const GATEWAY_INGEST_MIME_TYPES: ReadonlySet<string> = new Set([
   'text/plain',
   'text/markdown',
   'text/csv',
+  'text/tab-separated-values',
   'application/json',
 ]);
 
-function isAllowedIngestMime(rawMime: string): boolean {
-  return GATEWAY_INGEST_MIME_TYPES.has(normalizeUploadMimeType(rawMime));
+/** `extra` is the channel's `ingest_mime_types`; `type/*` entries match a whole family. */
+function isAllowedIngestMime(rawMime: string, extra: readonly unknown[] = []): boolean {
+  const mime = normalizeUploadMimeType(rawMime);
+  return (
+    GATEWAY_INGEST_MIME_TYPES.has(mime) ||
+    extra.some((entry) => {
+      const allowed = normalizeUploadMimeType(String(entry));
+      return allowed === mime || (allowed.endsWith('/*') && mime.startsWith(allowed.slice(0, -1)));
+    })
+  );
 }
 
 function abortReason(signal: AbortSignal): Error {
@@ -152,9 +161,9 @@ function discordDownloadTimeoutError(): Error {
   });
 }
 
-/** Image and text-like attachments the ingestion pipeline accepts. */
-export function isIngestableFile(file: InboundFile): boolean {
-  return isAllowedIngestMime(file.mimetype);
+/** Image and text-like attachments, plus the channel's `ingest_mime_types`. */
+export function isIngestableFile(file: InboundFile, extraMimeTypes?: readonly unknown[]): boolean {
+  return isAllowedIngestMime(file.mimetype, extraMimeTypes);
 }
 
 export function buildPromptWithAttachments(text: string, attachments: UploadMetadata[]): string {
@@ -406,11 +415,12 @@ export async function ingestInboundAttachments(args: {
   branchId: BranchID;
   createdBy: UserID;
   store?: UploadStagingStore;
+  extraMimeTypes?: readonly unknown[];
 }): Promise<AttachmentIngestResult> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const store = args.store ?? getUploadStagingStore();
 
-  const ingestable = args.files.filter(isIngestableFile);
+  const ingestable = args.files.filter((file) => isIngestableFile(file, args.extraMimeTypes));
   const uploads: UploadMetadata[] = [];
   let failed = 0;
 
@@ -448,12 +458,13 @@ export async function ingestInboundAttachments(args: {
       // Slack answers with an HTML login/error page (status 200) when the
       // token lacks files:read or cannot see the file — only accept response
       // bodies whose type the ingestion pipeline allows (which excludes
-      // text/html and script-bearing types like image/svg+xml).
-      const contentType = response.headers.get('content-type') ?? '';
-      if (!isAllowedIngestMime(contentType)) {
-        throw new Error(
-          `unexpected content-type ${contentType.split(';')[0].trim().toLowerCase() || 'unknown'}`
-        );
+      // text/html and script-bearing types like image/svg+xml). Slack serves
+      // snippets as force-download, which says nothing about the content, so
+      // the declared type stands in for it.
+      const served = normalizeUploadMimeType(response.headers.get('content-type'));
+      const contentType = served === 'application/force-download' ? file.mimetype : served;
+      if (!isAllowedIngestMime(contentType, args.extraMimeTypes)) {
+        throw new Error(`unexpected content-type ${served || 'unknown'}`);
       }
       const declaredLength = Number.parseInt(response.headers.get('content-length') ?? '', 10);
       if (Number.isFinite(declaredLength) && declaredLength > maxFileBytes) {
@@ -468,7 +479,7 @@ export async function ingestInboundAttachments(args: {
           createdBy: args.createdBy,
         },
         name: `${file.id}_${file.name}`,
-        mimeType: contentType.split(';')[0].trim().toLowerCase(),
+        mimeType: normalizeUploadMimeType(contentType),
         provenance: 'gateway-slack',
         body: Readable.fromWeb(response.body as never),
         sizeHint: Number.isFinite(declaredLength) ? declaredLength : file.size,

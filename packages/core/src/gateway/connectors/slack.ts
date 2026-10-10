@@ -16,6 +16,7 @@
  *     allow_thread_replies_without_mention?: boolean, // Legacy; ignored for Slack channel-like prompts
  *     allowed_channel_ids?: string[],               // Channel ID whitelist
  *     ingest_files?: boolean,                       // Forward message attachments (requires files:read)
+ *     ingest_mime_types?: string[],                 // Extra MIME types to ingest; `type/*` allowed
  *     agent_tools?: SlackAgentToolsConfig           // Agent-callable MCP tool toggles (gated in the daemon tool layer)
  *   }
  *

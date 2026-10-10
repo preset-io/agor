@@ -133,6 +133,7 @@ describe('isIngestableFile', () => {
   it('accepts allowlisted text-like types', () => {
     expect(isIngestableFile(makeFile({ mimetype: 'text/plain' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'text/csv' }))).toBe(true);
+    expect(isIngestableFile(makeFile({ mimetype: 'text/tab-separated-values' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'text/markdown' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'application/json' }))).toBe(true);
     expect(isIngestableFile(makeFile({ mimetype: 'Text/Plain; charset=utf-8' }))).toBe(true);
@@ -480,6 +481,57 @@ describe('ingestInboundAttachments', () => {
 
     expect(result).toEqual({ uploads: [], failed: 1 });
     expect(await fs.readdir(uploadDir)).toEqual([]);
+  });
+
+  it('judges a snippet served as force-download by its declared type', async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response('a\tb\n', { headers: { 'content-type': 'application/force-download' } })
+    );
+
+    const result = await ingestInboundAttachments({
+      files: [makeFile({ name: 'Untitled', mimetype: 'text/plain' })],
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.uploads[0].mimeType).toBe('text/plain');
+  });
+
+  it('ingests extra types only when the channel lists them', async () => {
+    const fetchImpl = vi.fn(
+      async () => new Response('PK', { headers: { 'content-type': 'application/zip' } })
+    );
+    const zip = makeFile({ name: 'logs.zip', mimetype: 'application/zip' });
+    const args = {
+      botToken: 'xoxb-test',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      tenantId,
+      sessionId,
+      branchId: '00000000-0000-0000-0000-000000000003' as never,
+      createdBy: '00000000-0000-0000-0000-000000000004' as never,
+      store,
+    };
+
+    expect(await ingestInboundAttachments({ ...args, files: [zip] })).toEqual({
+      uploads: [],
+      failed: 0,
+    });
+    const result = await ingestInboundAttachments({
+      ...args,
+      files: [zip],
+      extraMimeTypes: ['application/zip'],
+    });
+    expect(result.uploads[0].mimeType).toBe('application/zip');
+    expect(isIngestableFile(makeFile({ mimetype: 'application/pdf' }), ['application/*'])).toBe(
+      true
+    );
   });
 
   it('stores same-named files with distinct Slack IDs at distinct paths', async () => {
