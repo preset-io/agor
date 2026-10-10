@@ -20,6 +20,7 @@ import {
   createRestClient as createCoreRestClient,
   getApiKeyFromEnv,
   isDaemonRunning,
+  preloadRestClientTransport,
 } from '@agor/core/client';
 import type {
   AgenticToolCapabilities,
@@ -105,6 +106,7 @@ export {
   getApiKeyFromEnv,
   isDaemonRunning,
   LEAN_TRANSCRIPT_TASK_WINDOW,
+  preloadRestClientTransport,
   releaseReactiveSession,
   retainReactiveSession,
 };

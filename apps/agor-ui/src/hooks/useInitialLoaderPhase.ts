@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 
-export type LoaderPhase = 'loading' | 'complete' | 'fading' | 'done';
+export type LoaderPhase = 'loading' | 'fading' | 'done';
+
+/** How long the loading screen takes to fade out over the mounted workspace. */
+export const LOADER_FADE_MS = 280;
 
 interface Options {
   connecting: boolean;
@@ -12,11 +15,16 @@ interface Options {
 
 /**
  * Phase machine for the initial loading screen.
- *   loading → (all items done) → complete → (250ms) → fading → (280ms) → done
+ *   loading → (all items done) → fading → (LOADER_FADE_MS) → done
+ *
+ * The workspace mounts as soon as the phase leaves `loading`; the loading
+ * screen then fades out on top of it instead of holding the workspace back
+ * until the fade has finished. On a slow link every millisecond here is added
+ * straight to time-to-content, so there is no extra "all done" hold.
  *
  * Two effects are intentionally split: Effect 1 drives state transitions based
- * on many deps; Effect 2 drives timers based only on [loaderPhase] so an
- * in-progress holdTimer isn't cancelled by unrelated dep changes.
+ * on many deps; Effect 2 drives the timer based only on [loaderPhase] so an
+ * in-progress fade isn't cancelled by unrelated dep changes.
  *
  * The initialLoadComplete guard in Effect 1 blocks advancing during the
  * pre-fetch window: when the socket first connects, useAgorData briefly
@@ -36,18 +44,14 @@ export function useInitialLoaderPhase({
       if (dataError || mustChangePassword) {
         setLoaderPhase('done');
       } else if (initialLoadComplete) {
-        setLoaderPhase('complete');
+        setLoaderPhase('fading');
       }
     }
   }, [connecting, loading, loaderPhase, dataError, mustChangePassword, initialLoadComplete]);
 
   useEffect(() => {
-    if (loaderPhase === 'complete') {
-      const t = setTimeout(() => setLoaderPhase('fading'), 250);
-      return () => clearTimeout(t);
-    }
     if (loaderPhase === 'fading') {
-      const t = setTimeout(() => setLoaderPhase('done'), 280);
+      const t = setTimeout(() => setLoaderPhase('done'), LOADER_FADE_MS);
       return () => clearTimeout(t);
     }
   }, [loaderPhase]);

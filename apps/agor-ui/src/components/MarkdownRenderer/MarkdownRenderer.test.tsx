@@ -289,6 +289,13 @@ describe('MarkdownRenderer', () => {
     });
   });
 
+  it('loads KaTeX on demand and renders `$$` math once it arrives', async () => {
+    const { container } = render(<MarkdownRenderer content={'Energy: $$E = mc^2$$'} />);
+    await waitFor(() => expect(container.querySelector('.katex')).toBeInTheDocument(), {
+      timeout: 10_000,
+    });
+  });
+
   it('opens completed Mermaid diagrams in an interactive, dismissible dialog', async () => {
     class IntersectionObserverStub {
       private readonly callback: IntersectionObserverCallback;

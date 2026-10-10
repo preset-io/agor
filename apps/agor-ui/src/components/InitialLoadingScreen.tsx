@@ -1,12 +1,13 @@
 import { CheckCircleFilled } from '@ant-design/icons';
 import { Button, Flex, Spin, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   InitialLoadItem,
   InitialLoadItemKey,
   InitialLoadingStage,
   LoaderPhase,
 } from '../hooks';
+import { LOADER_FADE_MS } from '../hooks/useInitialLoaderPhase';
 import { AgorLogoSpinner } from './AgorLogoSpinner/AgorLogoSpinner';
 import { Tag } from './Tag';
 
@@ -24,6 +25,11 @@ interface Props {
   loadingStage?: InitialLoadingStage;
   items?: InitialLoadItem[];
   message?: string;
+  /**
+   * Cover the (already mounted) workspace while fading out, without taking
+   * pointer events, instead of occupying the page.
+   */
+  overlay?: boolean;
 }
 
 export function InitialLoadingScreen({
@@ -32,9 +38,27 @@ export function InitialLoadingScreen({
   loadingStage = 'fetching',
   items = [],
   message,
+  overlay = false,
 }: Props) {
   const { token } = theme.useToken();
   const [showDetails, setShowDetails] = useState(false);
+  // An overlay mounts already fading; flip its opacity after the first frame
+  // has painted so the transition runs instead of snapping to transparent.
+  const [faded, setFaded] = useState(false);
+  useEffect(() => {
+    if (phase !== 'fading') {
+      setFaded(false);
+      return;
+    }
+    let second = 0;
+    const first = requestAnimationFrame(() => {
+      second = requestAnimationFrame(() => setFaded(true));
+    });
+    return () => {
+      cancelAnimationFrame(first);
+      cancelAnimationFrame(second);
+    };
+  }, [phase]);
   const statusMessage =
     message ??
     (connecting
@@ -81,11 +105,20 @@ export function InitialLoadingScreen({
       vertical
       align="center"
       justify="center"
+      data-testid="initial-loading-screen"
       style={{
         minHeight: '100vh',
         backgroundColor: token.colorBgLayout,
-        opacity: phase === 'fading' ? 0 : 1,
-        transition: 'opacity 280ms ease-out',
+        opacity: phase === 'done' || faded ? 0 : 1,
+        transition: `opacity ${LOADER_FADE_MS}ms ease-out`,
+        ...(overlay
+          ? {
+              position: 'fixed',
+              inset: 0,
+              zIndex: token.zIndexPopupBase + 100,
+              pointerEvents: 'none',
+            }
+          : {}),
       }}
     >
       <AgorLogoSpinner size={96} />

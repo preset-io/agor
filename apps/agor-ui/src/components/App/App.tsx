@@ -67,7 +67,6 @@ import {
   selectFirstBoardId,
   selectSessionById,
 } from '../../store/selectors';
-import { SharedUserSettingsModal } from '../../surfaces/SharedUserSettingsModal';
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
@@ -79,21 +78,17 @@ import { getUserDefaultConfigurationSource } from '../AgenticToolConfigurationPi
 import { AppHeader } from '../AppHeader';
 import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
-import { BranchModal, type BranchModalTab } from '../BranchModal';
+import type { BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
 import { CreateModals } from '../CreateModals';
-import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
-import { NewSessionModal } from '../NewSessionModal';
+import { lazyWhenOpened } from '../lazyWhenOpened';
 import { SessionCanvas, type SessionCanvasRef } from '../SessionCanvas';
 import { SessionPanel } from '../SessionPanel';
 import { PendingToolChoicePanel } from '../SessionPanel/PendingToolChoicePanel';
-import { SessionSettingsModal } from '../SessionSettingsModal';
-import { SettingsModal } from '../SettingsModal';
 import { TeammatesDirectory } from '../TeammatesDirectory';
 import { TerminalModal, WEB_TERMINAL_MIN_ROLE } from '../TerminalModal';
-import { ThemeEditorModal } from '../ThemeEditorModal';
 import {
   getSelectTeammatePanelTabState,
   getShowCommentsPanelState,
@@ -288,6 +283,30 @@ export interface AppProps {
 // Stable empty-array sentinel; frozen at runtime, consumers only read it.
 const EMPTY_BOARDS: Board[] = Object.freeze([] as Board[]) as Board[];
 const EMPTY_SESSIONS: Session[] = Object.freeze([] as Session[]) as Session[];
+
+// Modals load on first open (see lazyWhenOpened): statically imported, their
+// graphs would sit in the chunk the workspace waits for before it can render.
+const SettingsModal = lazyWhenOpened(() =>
+  import('../SettingsModal').then((module) => module.SettingsModal)
+);
+const SharedUserSettingsModal = lazyWhenOpened(() =>
+  import('../../surfaces/SharedUserSettingsModal').then((module) => module.SharedUserSettingsModal)
+);
+const BranchModal = lazyWhenOpened(() =>
+  import('../BranchModal').then((module) => module.BranchModal)
+);
+const SessionSettingsModal = lazyWhenOpened(() =>
+  import('../SessionSettingsModal').then((module) => module.SessionSettingsModal)
+);
+const NewSessionModal = lazyWhenOpened(() =>
+  import('../NewSessionModal').then((module) => module.NewSessionModal)
+);
+const EnvironmentLogsModal = lazyWhenOpened(() =>
+  import('../EnvironmentLogsModal').then((module) => module.EnvironmentLogsModal)
+);
+const ThemeEditorModal = lazyWhenOpened(() =>
+  import('../ThemeEditorModal').then((module) => module.ThemeEditorModal)
+);
 
 // 320px keeps the three left-panel tabs (Teammate / All sessions / Comments)
 // on one readable line with Ant's tab padding at the 768px desktop breakpoint.

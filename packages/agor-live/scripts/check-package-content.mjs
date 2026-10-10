@@ -10,7 +10,9 @@ import { join, resolve } from 'node:path';
 // and still trips these.
 const limits = {
   files: 3250,
-  unpackedBytes: 120 * 1024 * 1024,
+  // Includes the UI's Brotli copies of its boot chunks (~1.4 MiB) next to
+  // their gzip copies; main was already at ~119.8 MiB of 120 without them.
+  unpackedBytes: 128 * 1024 * 1024,
   packedBytes: 30 * 1024 * 1024,
 };
 
