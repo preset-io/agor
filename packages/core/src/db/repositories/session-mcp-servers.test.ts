@@ -461,6 +461,10 @@ describe('SessionMCPServerRepository.setServers', () => {
 
     await repo.setServers(session.session_id, []);
 
+    expect(
+      (await new SessionRepository(db).findById(session.session_id))?.mcp_selection_explicit
+    ).toBe(true);
+
     const servers = await repo.listServers(session.session_id);
     expect(servers).toHaveLength(0);
   });

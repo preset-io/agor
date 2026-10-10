@@ -18,6 +18,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotFound } from '@agor/core/feathers';
+import { resolveEffectiveSessionMcpServers } from '@agor/core/mcp';
 import type { MCPServerID, TenantID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -170,7 +171,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       ]);
 
-      const foreignPrefix = foreignServer.mcp_server_id.replaceAll('-', '').slice(0, 31);
+      const foreignPrefix = String(foreignServer.mcp_server_id).replaceAll('-', '').slice(0, 31);
       for (const foreignId of [foreignServer.mcp_server_id, foreignPrefix]) {
         await expect(
           runWithTenantDatabaseScope(db, tenantA, () =>
@@ -197,6 +198,35 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         owner.server.mcp_server_id,
       ]);
       expect(events).toHaveLength(1);
+
+      // The persisted opt-out must work with the real non-superuser/RLS path,
+      // not only with raw SQLite fixtures or an executor-side empty mock.
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        const links = new SessionMCPServerRepository(scoped);
+        await links.setServers(session.session_id, []);
+        const stored = await new SessionRepository(scoped).findById(session.session_id);
+        expect(stored?.mcp_selection_explicit).toBe(true);
+        const global = vi.fn(async () => [owner.server]);
+        expect(
+          await resolveEffectiveSessionMcpServers(
+            stored!,
+            await links.listServers(session.session_id),
+            global,
+            owner.user.user_id
+          )
+        ).toEqual([]);
+        expect(global).not.toHaveBeenCalled();
+      });
+      await expect(
+        runWithTenantDatabaseScope(db, tenantB, (scoped) =>
+          new SessionMCPServerRepository(scoped).setServers(session.session_id, [])
+        )
+      ).rejects.toThrow();
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        expect(
+          (await new SessionRepository(scoped).findById(session.session_id))?.mcp_selection_explicit
+        ).toBe(true);
+      });
 
       // Foreign-tenant and genuinely deleted default IDs have the same public
       // outcome. Never consult an unscoped inventory to distinguish the two.

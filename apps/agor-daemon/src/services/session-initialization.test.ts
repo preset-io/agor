@@ -119,6 +119,34 @@ async function createSqliteHarness() {
 }
 
 describe('runSessionInitializationStages (SQLite)', () => {
+  it('commits explicit empty intent before admitting the initial prompt', async () => {
+    const { db, tenantId, seeded, mcpService } = await createSqliteHarness();
+    let admitted = false;
+    await runWithTenantContext(tenantId, () =>
+      runSessionInitializationStages({
+        db,
+        mcpServerIds: [],
+        setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
+        setEnvVarNames: vi.fn(),
+        publishMcpServersChanged: vi.fn(),
+        publishEnvVarNamesChanged: vi.fn(),
+        admitPrompt: async () => {
+          await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+            expect(
+              (await new SessionRepository(scoped).findById(seeded.session.session_id))
+                ?.mcp_selection_explicit
+            ).toBe(true);
+            expect(
+              await new SessionMCPServerRepository(scoped).listServers(seeded.session.session_id)
+            ).toEqual([]);
+          });
+          admitted = true;
+          return { task_id: generateId(), status: TaskStatus.CREATED } as Task;
+        },
+      })
+    );
+    expect(admitted).toBe(true);
+  });
   it('fails closed before configuration when ambient tenant identity is missing', async () => {
     const { db } = await createSqliteHarness();
     const setMcpServers = vi.fn();
@@ -157,10 +185,18 @@ describe('runSessionInitializationStages (SQLite)', () => {
             throw new Error('forced environment failure');
           },
           publishMcpServersChanged: () => {
-            expect(enqueueAfterTenantDatabaseCommit(() => events.push('mcp-event'))).toBe(true);
+            expect(
+              enqueueAfterTenantDatabaseCommit(() => {
+                events.push('mcp-event');
+              })
+            ).toBe(true);
           },
           publishEnvVarNamesChanged: () => {
-            expect(enqueueAfterTenantDatabaseCommit(() => events.push('env-event'))).toBe(true);
+            expect(
+              enqueueAfterTenantDatabaseCommit(() => {
+                events.push('env-event');
+              })
+            ).toBe(true);
           },
           admitPrompt,
         })
@@ -178,7 +214,7 @@ describe('runSessionInitializationStages (SQLite)', () => {
   it('publishes after commit and admits the prompt only after configuration is durable', async () => {
     const { db, tenantId, seeded, mcpService, envService, readState } = await createSqliteHarness();
     const stages: string[] = [];
-    const admittedTask = { task_id: generateId(), status: TaskStatus.PENDING } as Task;
+    const admittedTask = { task_id: generateId(), status: TaskStatus.CREATED } as Task;
 
     const result = await runWithTenantContext(tenantId, () =>
       runSessionInitializationStages({
@@ -188,10 +224,18 @@ describe('runSessionInitializationStages (SQLite)', () => {
         setMcpServers: (ids) => mcpService.setServers(seeded.session.session_id, ids),
         setEnvVarNames: (names) => envService.setAll(seeded.session.session_id, names),
         publishMcpServersChanged: () => {
-          expect(enqueueAfterTenantDatabaseCommit(() => stages.push('mcp-event'))).toBe(true);
+          expect(
+            enqueueAfterTenantDatabaseCommit(() => {
+              stages.push('mcp-event');
+            })
+          ).toBe(true);
         },
         publishEnvVarNamesChanged: () => {
-          expect(enqueueAfterTenantDatabaseCommit(() => stages.push('env-event'))).toBe(true);
+          expect(
+            enqueueAfterTenantDatabaseCommit(() => {
+              stages.push('env-event');
+            })
+          ).toBe(true);
         },
         admitPrompt: async () => {
           expect(await readState()).toEqual({
