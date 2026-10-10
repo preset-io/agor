@@ -31,6 +31,8 @@ interface TileProps {
   authGeneration: number;
   userId?: string;
   readinessRevision: number;
+  /** A drawer is open; a late hover/focus tooltip would sit atop it and swallow Escape. */
+  suppressTooltip: boolean;
   onOpen: (event: React.MouseEvent<HTMLElement>) => void;
 }
 
@@ -41,6 +43,7 @@ function ToolTile({
   authGeneration,
   userId,
   readinessRevision,
+  suppressTooltip,
   onOpen,
 }: TileProps) {
   const { token } = theme.useToken();
@@ -68,6 +71,7 @@ function ToolTile({
         </>
       }
       trigger={['hover', 'focus']}
+      open={suppressTooltip ? false : undefined}
     >
       <Button
         block
@@ -186,6 +190,7 @@ function ToolsForIdentity({ client, user, connected, authGeneration, onConnected
                 authGeneration={authGeneration}
                 userId={user?.user_id}
                 readinessRevision={readinessRevision}
+                suppressTooltip={entry !== undefined}
                 onOpen={(event) => {
                   trigger.current = event.currentTarget;
                   setEntry(item.name);

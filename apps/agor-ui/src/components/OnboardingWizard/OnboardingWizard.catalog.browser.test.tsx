@@ -238,6 +238,24 @@ describe('onboarding-owned Catalog in Chromium', () => {
     expect(JSON.stringify(update.mock.calls)).not.toContain('test-only-not-a-provider-credential');
   });
 
+  it('keeps a late tile tooltip from swallowing Escape for the open drawer', async () => {
+    const api = makeCatalogClient([githubHandoffEntry]);
+    render(<Harness api={api} complete={vi.fn()} update={vi.fn()} />);
+    const tile = await githubTile();
+    await openGitHub();
+    // A pointer left resting on the tile fires its delayed hover after the drawer opens. The
+    // tooltip portal would then be topmost and take Escape, leaving the drawer open.
+    tile.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    tile.dispatchEvent(new MouseEvent('mouseenter'));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(document.querySelector('.ant-tooltip:not(.ant-tooltip-hidden)')).toBeNull();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText(/bearer access token/)).not.toBeInTheDocument()
+    );
+    await waitFor(() => expect(tile).toHaveFocus());
+  });
+
   it('installs without workspace or session creation, retries a refused PAT and returns in context before completion', async () => {
     const api = makeCatalogClient([githubHandoffEntry]);
     api.connect.mockRejectedValueOnce(
