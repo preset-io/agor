@@ -10,6 +10,7 @@ import { LandingShell } from './landing/LandingShell';
 import { MultiplayerSection } from './landing/MultiplayerSection';
 import { ProblemSection } from './landing/ProblemSection';
 import { RosterSection } from './landing/RosterSection';
+import { SocialProofBand } from './landing/SocialProofBand';
 import { TeammatesSection } from './landing/TeammatesSection';
 
 /**
@@ -30,6 +31,8 @@ export function LandingPage() {
           the builder's command center, and the trust story; the problem cards
           close it out. */}
       <BoardSection sampler />
+      {/* What people building with Agor have written about it. */}
+      <SocialProofBand />
       <MultiplayerSection sampler />
       <TeammatesSection sampler />
       <RosterSection sampler />
