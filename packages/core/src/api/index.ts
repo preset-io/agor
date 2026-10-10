@@ -1517,6 +1517,15 @@ export function getApiKeyFromEnv(): string | null {
 }
 
 /**
+ * Begin loading the REST transport `createRestClient` imports on demand. The
+ * browser signs in over REST on every load, so starting this at boot keeps the
+ * sign-in request from waiting on a late, queued module fetch.
+ */
+export function preloadRestClientTransport(): Promise<void> {
+  return import('@feathersjs/rest-client').then(() => undefined);
+}
+
+/**
  * Create REST-only Feathers client for CLI (prevents hanging processes)
  *
  * Uses REST transport instead of WebSocket to avoid keeping Node.js processes alive.

@@ -2,6 +2,7 @@ import { resolveClaudeOAuthCapability } from '@agor/core/config';
 import { getPostgresSqlState, isPostgresDatabaseHandle } from '@agor/core/db';
 import { BRANCH_WORKSPACE_NOTIFICATION_DISMISS_SERVICE } from '@agor/core/types';
 import { BranchWorkspaceNotificationService } from './services/branch-workspace-notification';
+import { projectListSyncResult, stripListSyncQuery } from './utils/list-sync.js';
 import { sandboxManagedCredentialIsolationAvailable } from './utils/sandbox-wrap.js';
 /**
  * Authentication & Custom REST Routes Registration
@@ -6994,6 +6995,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     },
     before: {
       all: [enforcePasswordChange],
+      // Versioned list reads (utils/list-sync): app-level so `$sync` leaves
+      // the query before any service hook and the projection runs after all
+      // of them, on the exact payload the transport sends.
+      find: [stripListSyncQuery],
+    },
+    after: {
+      find: [projectListSyncResult],
     },
   });
 

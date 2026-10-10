@@ -38,6 +38,7 @@ export {
   createRestClient,
   getApiKeyFromEnv,
   isDaemonRunning,
+  preloadRestClientTransport,
 } from '../api/index.js';
 
 export * from '../config/browser.js';

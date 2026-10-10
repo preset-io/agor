@@ -146,7 +146,23 @@ export function fakeFeathersClient(
       (map.get(key) ?? []).filter((listener) => listener !== fn)
     );
 
-  const call = async (service: string, method: Method, args: unknown[]) => {
+  const call = async (service: string, method: Method, args: unknown[]): Promise<unknown> => {
+    // A versioned full-set read (store/listSync) is a `find` carrying `$sync`.
+    // Model it as the `findAll` it stands for (recorded with the plain query,
+    // answered by that reply), returned as a page of full rows.
+    const syncQuery = (args[0] as { query?: Record<string, unknown> } | undefined)?.query;
+    if (method === 'find' && syncQuery && '$sync' in syncQuery) {
+      const { $sync: _sync, $skip: _skip, ...query } = syncQuery;
+      const result = await call(service, 'findAll', [{ query }]);
+      const rows = Array.isArray(result) ? result : ((result as { data?: unknown[] }).data ?? []);
+      return {
+        total: rows.length,
+        limit: rows.length,
+        skip: 0,
+        data: rows,
+        $sync: { versions: '' },
+      };
+    }
     const withId =
       method === 'get' || method === 'patch' || method === 'update' || method === 'remove';
     const withData = method === 'create' || method === 'patch' || method === 'update';

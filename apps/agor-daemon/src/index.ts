@@ -661,8 +661,9 @@ async function startDaemonWithOwnedMetrics(
       app.use(
         UI_MOUNT_PATH,
         expressStaticGzip(uiPath, {
-          enableBrotli: false,
-          orderPreference: ['gz'],
+          // The UI build ships .br next to .gz for larger assets.
+          enableBrotli: true,
+          orderPreference: ['br', 'gz'],
           serveStatic: {
             etag: true,
             setHeaders: setBundledUiStaticHeaders,

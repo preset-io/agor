@@ -103,6 +103,8 @@ describe('MobileSessionsPage assistant scope with the store empty (Step 3)', () 
       io: { on: vi.fn(), off: vi.fn() },
       service: (name: string) => ({
         findAll: vi.fn(async () => (name === 'sessions' ? [assistantSession] : [])),
+        // Plain rows: answers a versioned read (store/listSync) like an older daemon.
+        find: vi.fn(async () => (name === 'sessions' ? [assistantSession] : [])),
         get: vi.fn(async () => ({ board_id: 'board-1', name: 'B', objects: {} })),
       }),
     } as unknown as AgorClient;

@@ -21,8 +21,8 @@ import {
 } from '@agor/core/db';
 import { type Application, feathers } from '@agor/core/feathers';
 import { sessionQueryValidator, typedValidateQuery } from '@agor/core/lib/feathers-validation';
-import type { Session, UserID, UUID } from '@agor/core/types';
-import { SESSION_LIST_ROW_SHAPE, SessionStatus } from '@agor/core/types';
+import type { ListSyncPage, Session, UserID, UUID } from '@agor/core/types';
+import { LIST_SYNC_HASH_LENGTH, SESSION_LIST_ROW_SHAPE, SessionStatus } from '@agor/core/types';
 import { afterEach, describe, expect, vi } from 'vitest';
 import type { SessionPageOptions } from '../../../../packages/core/src/db/repositories/sessions';
 import {
@@ -31,6 +31,7 @@ import {
 } from '../../../../packages/core/src/db/repositories/sessions.visibility-parity-test-helpers';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { scopeFindToAccessibleSessionsSql } from '../utils/branch-authorization';
+import { listSyncRowVersion, projectListSyncResult, stripListSyncQuery } from '../utils/list-sync';
 import { SessionsService } from './sessions';
 
 // The find() board_id path only touches the session repos built from `db`; the
@@ -795,5 +796,103 @@ describe('SessionsService writes — read_shape is never writable', () => {
 
     expect(merged.title).toBe('internal');
     expect(merged).not.toHaveProperty('read_shape');
+  });
+});
+
+describe('SessionsService.find — versioned list reads ($sync)', () => {
+  function syncApp(db: Database) {
+    const app = feathers<{ sessions: SessionsService }>();
+    app.use('sessions', createService(db));
+    app.service('sessions').hooks({
+      before: {
+        all: [typedValidateQuery(sessionQueryValidator)],
+        find: [scopeFindToAccessibleSessionsSql()],
+      },
+    });
+    // Registered exactly as the daemon does: app-level, around every service hook.
+    app.hooks({ before: { find: [stripListSyncQuery] }, after: { find: [projectListSyncResult] } });
+    return app;
+  }
+
+  type Page = ListSyncPage<Session>;
+  const fullRows = (page: Page) =>
+    page.data.filter((row): row is Session => typeof row !== 'number');
+
+  dbTest(
+    'returns unchanged rows as slots, changed rows in full, and never widens visibility',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        user_id: generateId(),
+        email: `sync-${generateId()}@example.invalid`,
+        role: 'member',
+      });
+      const visibleBranch = await createBranchOnBoard(db, null, user.user_id);
+      const hiddenBranch = await createBranchOnBoard(db, null);
+      const a = await createSession(db, visibleBranch, { title: 'a' });
+      const b = await createSession(db, visibleBranch, { title: 'b' });
+      const hidden = await createSession(db, hiddenBranch, { title: 'hidden' });
+      const app = syncApp(db);
+      const query = { archived: false, lean: true, $limit: 100, $sort: { updated_at: -1 } };
+      const read = (known: string) =>
+        app.service('sessions').find({
+          provider: 'socketio',
+          user,
+          query: { ...query, $sync: { known } },
+        }) as unknown as Promise<Page>;
+
+      // Cold: every row in full, with its version; identical to a plain read.
+      const plain = await app.service('sessions').find({ provider: 'socketio', user, query });
+      const first = await read('');
+      expect(fullRows(first)).toEqual(Array.isArray(plain) ? plain : plain.data);
+      expect(first.$sync.versions).toHaveLength(2 * LIST_SYNC_HASH_LENGTH);
+      expect(ids(fullRows(first) as never)).toEqual([a, b].sort());
+
+      // Warm: nothing changed, so every row is the slot of its version.
+      const second = await read(first.$sync.versions);
+      expect(second.data).toEqual([0, 1]);
+      expect(second.$sync.versions).toBe('');
+      expect(second.total).toBe(2);
+
+      // One row changes: only it comes back in full.
+      await new SessionRepository(db).update(b, { title: 'b2' });
+      const third = await read(first.$sync.versions);
+      expect(fullRows(third).map((s) => [s.session_id, s.title])).toEqual([[b, 'b2']]);
+      expect(third.data.filter((row) => typeof row === 'number')).toHaveLength(1);
+
+      // A hidden row's version (as another caller would see it) buys nothing:
+      // the scoped read never contains the row, so it is neither sent nor
+      // acknowledged, and the total counts visible rows only.
+      const adminView = (await app.service('sessions').find({
+        query: { ...query, $sync: { known: '' } },
+      })) as unknown as Session[] | { data: Session[] };
+      const hiddenRow = (Array.isArray(adminView) ? adminView : adminView.data).find(
+        (s) => s.session_id === hidden
+      );
+      expect(hiddenRow).toBeDefined();
+      const probe = await read(listSyncRowVersion(hiddenRow));
+      expect(probe.data.every((row) => typeof row !== 'number')).toBe(true);
+      expect(ids(fullRows(probe) as never)).toEqual([a, b].sort());
+
+      // A deleted row is simply absent; b2 is slot 2 (after a and the old b).
+      await new SessionRepository(db).delete(a);
+      const fourth = await read(first.$sync.versions + third.$sync.versions);
+      expect(fourth.total).toBe(1);
+      expect(fourth.data).toEqual([2]);
+    }
+  );
+
+  dbTest('rejects a malformed version list and ignores $sync on internal calls', async ({ db }) => {
+    const branch = await createBranchOnBoard(db, null);
+    const session = await createSession(db, branch);
+    const app = syncApp(db);
+    await expect(
+      app.service('sessions').find({ provider: 'socketio', query: { $sync: { known: 'short' } } })
+    ).rejects.toMatchObject({ name: 'BadRequest' });
+
+    const internal = await app.service('sessions').find({
+      query: { $limit: 10, $sync: { known: '' } },
+    });
+    expect(ids(internal)).toEqual([session]);
+    expect('$sync' in (internal as object)).toBe(false);
   });
 });

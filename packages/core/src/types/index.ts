@@ -22,6 +22,7 @@ export * from './group';
 export * from './id';
 export * from './knowledge';
 export * from './knowledge-transfer';
+export * from './list-sync';
 export * from './mcp';
 export * from './mcp-catalog';
 export * from './mcp-marketplace';

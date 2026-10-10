@@ -25,12 +25,20 @@
  * `requestBoardReload`, debounced so sustained arrivals cost a bounded number
  * of reads.
  */
-import type { AgorClient, Board, Branch, CardWithType, Session } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  BoardEntityObject,
+  Branch,
+  CardWithType,
+  Session,
+} from '@agor-live/client';
 import { PAGINATION } from '@agor-live/client';
 import { debounceWithMaxWait } from '../utils/debounceWithMaxWait';
 import { fencedRead, type HydratedCollection, touchedIdsSince } from './agorHydration';
 import { type AgorState, agorStore } from './agorStore';
 import { backgroundReadsClear, holdBackgroundReads } from './backgroundReads';
+import { findAllVersioned } from './listSync';
 import { captureLoadLifetime, isLoadLifetimeCurrent, type LoadLifetime } from './loadLifetime';
 import { anyOf, evictRows } from './retention';
 import {
@@ -309,36 +317,41 @@ async function fetchBoardPartition(
 ): Promise<BoardPartitionSnapshot> {
   // The board-scoped first-paint queries of `useAgorData` (comments are
   // global and gated, so not part of a partition); each is pushed down to SQL
-  // and RBAC-scoped by the daemon.
+  // and RBAC-scoped by the daemon. Versioned (store/listSync): reading the
+  // board again (a reconnect resync, a reload) transfers only changed rows.
   const [branches, sessions, boardObjects, cards, board] = await Promise.all([
-    client.service('branches').findAll({
-      query: { archived: false, board_id: boardId, $limit: PAGINATION.DEFAULT_LIMIT },
-    }) as Promise<Branch[]>,
-    client.service('sessions').findAll({
-      query: sessionListQuery({
+    findAllVersioned<Branch>(client, 'branches', {
+      archived: false,
+      board_id: boardId,
+      $limit: PAGINATION.DEFAULT_LIMIT,
+    }),
+    findAllVersioned<Session>(
+      client,
+      'sessions',
+      sessionListQuery({
         archived: false,
         board_id: boardId,
         $limit: PAGINATION.DEFAULT_LIMIT,
         $sort: { updated_at: -1 },
-      }),
-    }) as Promise<Session[]>,
+      })
+    ),
     canUseMemberWorkspaceServices
-      ? client
-          .service('board-objects')
-          .findAll({ query: { board_id: boardId, $limit: PAGINATION.DEFAULT_LIMIT } })
+      ? findAllVersioned<BoardEntityObject>(client, 'board-objects', {
+          board_id: boardId,
+          $limit: PAGINATION.DEFAULT_LIMIT,
+        })
       : Promise.resolve(null),
-    client
-      .service('cards')
-      .findAll({ query: { board_id: boardId, $limit: PAGINATION.DEFAULT_LIMIT } }) as Promise<
-      CardWithType[]
-    >,
+    findAllVersioned<CardWithType>(client, 'cards', {
+      board_id: boardId,
+      $limit: PAGINATION.DEFAULT_LIMIT,
+    }),
     client.service('boards').get(boardId) as Promise<Board>,
   ]);
   return {
     boardId,
     branches,
     sessions,
-    boardObjects: boardObjects as BoardPartitionSnapshot['boardObjects'],
+    boardObjects,
     cards,
     board,
     // Every read is an unbounded `findAll`.

@@ -59,6 +59,7 @@ import {
   selectBoardPartition,
   unloadBoardsForResync,
 } from '../store/boardPartitions';
+import { findAllVersioned, resetListSyncVersions } from '../store/listSync';
 import {
   captureLoadLifetime,
   isLoadLifetimeCurrent,
@@ -410,6 +411,7 @@ export function useAgorData(
     agorStore.getState().reset();
     resetHydrationRevisions();
     cancelAllHydrations();
+    resetListSyncVersions();
     // Drop any straggler frame-batched patches from a prior mount of the
     // singleton so they can't flush into this instance's fresh store.
     discardRealtimeNow();
@@ -739,9 +741,11 @@ export function useAgorData(
             // and `resolveDisplayedBoardId` scope resolution. The displayed
             // board's full record is fetched below, also on a reconnect resync
             // (its zones never flash off); other boards' records load with
-            // their partition.
-            client.service('boards').findAll({
-              query: { lean: true, $limit: PAGINATION.DEFAULT_LIMIT },
+            // their partition. Versioned (store/listSync): a reconnect resync
+            // transfers only the boards that changed.
+            findAllVersioned<Board>(client, 'boards', {
+              lean: true,
+              $limit: PAGINATION.DEFAULT_LIMIT,
             })
           ),
           track(
@@ -990,9 +994,9 @@ export function useAgorData(
         const [commentsList, boardLoaded] = await Promise.all([
           track(
             'board-comments',
-            client
-              .service('board-comments')
-              .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            findAllVersioned<BoardComment>(client, 'board-comments', {
+              $limit: PAGINATION.DEFAULT_LIMIT,
+            })
           ),
           boardScope
             ? loadDisplayedBoard(boardScope).then((loaded) => {
@@ -1202,6 +1206,9 @@ export function useAgorData(
       // OAuth state, credential presence), so an in-place identity replacement
       // gets the same map boundary as logout before the new authority resyncs.
       agorStore.getState().resetMaps();
+      // A reconnect of the same identity keeps its held row versions: that is
+      // what makes the reconnect resync cheap (store/listSync).
+      resetListSyncVersions();
     } else if (!canUseMemberWorkspaceServices) {
       bumpRevision('boardObjects');
       agorStore.getState().applyMaps((previousMaps) => ({
@@ -1253,6 +1260,7 @@ export function useAgorData(
     releaseOpenedTranscriptPrefetch();
     stopUserScope();
     agorStore.getState().resetMaps();
+    resetListSyncVersions();
     setHasInitiallyFetched(false);
   }, [client, releaseOpenedTranscriptPrefetch]);
 
@@ -1460,7 +1468,9 @@ export function useAgorData(
         'branch-removal-comments',
         ['comments'],
         () =>
-          client.service('board-comments').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+          findAllVersioned<BoardComment>(client, 'board-comments', {
+            $limit: PAGINATION.DEFAULT_LIMIT,
+          }),
         (allComments) =>
           agorStore.getState().applyMaps((prev) => ({
             ...prev,

@@ -81,6 +81,18 @@ type Listener = (payload: unknown) => void;
  * `sessions:find`) takes precedence over the bare name when present. `name:get` seeds `get`. A seed
  * may also be a function of the call's query (a scoped server, see `fakeServer`).
  */
+/** Deterministic 12-character stand-in for the daemon's row version. */
+function fakeRowVersion(row: unknown): string {
+  const text = JSON.stringify(row);
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < text.length; i += 1) {
+    h1 = Math.imul(h1 ^ text.charCodeAt(i), 0x01000193) >>> 0;
+    h2 = Math.imul(h2 ^ text.charCodeAt(i), 0x5bd1e995) >>> 0;
+  }
+  return `${h1.toString(36).padStart(7, '0').slice(-6)}${h2.toString(36).padStart(7, '0').slice(-6)}`;
+}
+
 function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>> = {}) {
   const serviceListeners = new Map<string, Map<string, Listener[]>>();
   const ioListeners = new Map<string, Listener[]>();
@@ -94,6 +106,10 @@ function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>
   const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
   const fetchArguments = new Map<string, unknown[]>();
+  // `$sync.known` sent by each versioned read, per service.
+  const versionedKnown = new Map<string, string[]>();
+  // Rows each versioned read answered as a slot, per service.
+  const versionedSlots = new Map<string, number[]>();
 
   const respond = async (name: string, method: 'findAll' | 'find', args?: unknown) => {
     const key = `${name}:${method}`;
@@ -112,6 +128,36 @@ function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>
   };
 
   const recordAndRespond = (name: string, method: 'findAll' | 'find', args: unknown) => {
+    // A versioned full-set read (store/listSync) is a `find` carrying `$sync`.
+    // Model it as the full-set `findAll` it replaces: same seed, counters and
+    // gates, recorded with the caller's plain query, answered as a page of
+    // full rows.
+    const query = (args as { query?: Record<string, unknown> } | undefined)?.query;
+    if (method === 'find' && query && '$sync' in query) {
+      const { $sync: sync, $skip: _skip, ...plainQuery } = query;
+      const key = `${name}:findAll`;
+      fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), { query: plainQuery }]);
+      const known = String((sync as { known?: string } | undefined)?.known ?? '');
+      versionedKnown.set(name, [...(versionedKnown.get(name) ?? []), known]);
+      return respond(name, 'findAll', { query: plainQuery }).then((result) => {
+        const rows = result as unknown[];
+        // Like the daemon: a row whose version the client sent comes back as
+        // that version's slot; every other row in full, with its version.
+        let versions = '';
+        const data = rows.map((row) => {
+          const version = fakeRowVersion(row);
+          const slot = known.indexOf(version);
+          if (slot >= 0 && slot % 12 === 0) return slot / 12;
+          versions += version;
+          return row;
+        });
+        versionedSlots.set(name, [
+          ...(versionedSlots.get(name) ?? []),
+          data.filter((entry) => typeof entry === 'number').length,
+        ]);
+        return { total: rows.length, limit: rows.length, skip: 0, data, $sync: { versions } };
+      });
+    }
     const key = `${name}:${method}`;
     fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), args]);
     return respond(name, method, args);
@@ -189,6 +235,8 @@ function makeMockClient(seed: Record<string, unknown[] | Record<string, unknown>
       fetchCounts.get(`${name}:${method}`) ?? 0,
     fetchArguments: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchArguments.get(`${name}:${method}`) ?? [],
+    versionedKnown: (name: string) => versionedKnown.get(name) ?? [],
+    versionedSlots: (name: string) => versionedSlots.get(name) ?? [],
   };
 }
 
@@ -923,6 +971,49 @@ describe('useAgorData — socket-event bailouts', () => {
       expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
       expect(agorStore.getState().boardObjectById.has('bo-1')).toBe(false);
     });
+  });
+
+  it('resyncs on reconnect by sending held versions and reusing unchanged rows', async () => {
+    // On the board, whose partition the resync reads again in place.
+    window.history.pushState({}, '', '/b/displayed/');
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+    const board = { board_id: 'board-1', slug: 'displayed', name: 'Displayed' };
+    const kept = makeSession({ session_id: 's-1', branch_id: 'b-1', title: 'kept' });
+    const edited = makeSession({ session_id: 's-2', branch_id: 'b-1', title: 'before' });
+    const branch = makeBranch({ branch_id: 'b-1' });
+    const gone = makeBranch({ branch_id: 'b-2' });
+    const seed: Record<string, unknown[]> = {
+      boards: [board],
+      'boards:get': board as never,
+      'sessions:find': [],
+      'sessions:findAll': [kept, edited],
+      'branches:findAll': [branch, gone],
+    };
+    const { client, emitIo, versionedKnown, versionedSlots } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    await waitForInitialLoad(result);
+    await waitFor(() => expect(agorStore.getState().branchById.has('b-2')).toBe(true));
+    const sessionReads = versionedKnown('sessions').length;
+    const branchReads = versionedKnown('branches').length;
+
+    // Missed while disconnected: one session edited, one branch gone.
+    seed['sessions:findAll'] = [kept, { ...edited, title: 'after' }];
+    seed['branches:findAll'] = [branch];
+    act(() => emitIo('connect'));
+
+    await waitFor(() => {
+      expect(agorStore.getState().sessionById.get('s-2')?.title).toBe('after');
+      expect(agorStore.getState().branchById.has('b-2')).toBe(false);
+    });
+    // The reconnect re-read of the board told the daemon what it held and got
+    // the unchanged rows back as slots, not in full.
+    expect(versionedKnown('sessions').length).toBeGreaterThan(sessionReads);
+    expect(versionedKnown('sessions').at(-1)).toHaveLength(2 * 12);
+    expect(versionedKnown('branches').length).toBeGreaterThan(branchReads);
+    expect(versionedKnown('branches').at(-1)).toHaveLength(2 * 12);
+    expect(versionedSlots('sessions').at(-1)).toBe(1);
+    expect(versionedSlots('branches').at(-1)).toBe(1);
+    expect(agorStore.getState().sessionById.get('s-1')?.title).toBe('kept');
   });
 
   it('dispatches `agor:artifact-patched` when the artifact actually changes', async () => {
