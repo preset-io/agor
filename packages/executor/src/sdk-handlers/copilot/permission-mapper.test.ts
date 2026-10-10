@@ -112,10 +112,11 @@ describe('createPermissionHandler', () => {
     );
   });
 
-  it('records the approval timeout that elapsed on the timed-out task', async () => {
+  it('records the elapsed approval timeout without a post-revocation session patch', async () => {
     const sessionId = 'test-session' as SessionID;
     const taskId = 'test-task' as TaskID;
     const tasksService = { patch: vi.fn().mockResolvedValue(undefined) };
+    const sessionsService = { patch: vi.fn().mockResolvedValue(undefined) };
     const handler = createPermissionHandler(sessionId, taskId, 'ask', {
       permissionService: {
         emitRequest: vi.fn(),
@@ -127,27 +128,33 @@ describe('createPermissionHandler', () => {
           decidedBy: 'system',
         }),
         cancelPendingRequests: vi.fn(),
-      } as any,
-      tasksService: tasksService as any,
-      sessionsRepo: {} as any,
-      messagesRepo: { getNextIndexBySessionId: vi.fn().mockResolvedValue(0) } as any,
+      },
+      tasksService,
+      sessionsRepo: {},
+      messagesRepo: { getNextIndexBySessionId: vi.fn().mockResolvedValue(0) },
       messagesService: {
         create: vi.fn().mockResolvedValue(undefined),
         patch: vi.fn().mockResolvedValue(undefined),
-      } as any,
-      sessionsService: { patch: vi.fn().mockResolvedValue(undefined) } as any,
+      },
+      sessionsService,
       permissionLocks: new Map(),
+    } as never);
+
+    const result = await handler({ kind: 'shell', command: 'ls', toolCallId: 'call-1' } as never);
+
+    expect(result).toEqual({
+      kind: 'denied-interactively-by-user',
+      feedback: 'Permission request timed out for: Shell: ls',
     });
-
-    await handler({ kind: 'shell', command: 'ls', toolCallId: 'call-1' } as any);
-
-    expect(tasksService.patch).toHaveBeenLastCalledWith(
-      taskId,
-      expect.objectContaining({
-        status: 'timed_out',
-        error_message: 'Permission request timed out after 600000ms.',
-      })
-    );
+    expect(tasksService.patch).toHaveBeenNthCalledWith(2, taskId, {
+      status: 'timed_out',
+      completed_at: expect.any(String),
+      error_message: 'Permission request timed out after 600000ms.',
+    });
+    expect(sessionsService.patch).toHaveBeenCalledTimes(1);
+    expect(sessionsService.patch).toHaveBeenNthCalledWith(1, sessionId, {
+      status: 'awaiting_permission',
+    });
   });
 });
 

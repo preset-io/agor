@@ -16,7 +16,9 @@ import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
+import * as databaseWrapper from '../database-wrapper';
 import { runDatabaseTransaction } from '../database-wrapper';
+import { sessions } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
@@ -2206,6 +2208,153 @@ describe('TaskRepository.update', () => {
       status: TaskStatus.COMPLETED,
       completed_at: '2026-07-10T20:00:00.000Z',
     });
+  });
+
+  for (const [taskStatus, sessionStatus] of [
+    [TaskStatus.COMPLETED, SessionStatus.IDLE],
+    [TaskStatus.FAILED, SessionStatus.FAILED],
+    [TaskStatus.STOPPED, SessionStatus.IDLE],
+    [TaskStatus.TIMED_OUT, SessionStatus.TIMED_OUT],
+  ] as const) {
+    dbTest(
+      `atomically projects terminal task status ${taskStatus} onto the owning Session`,
+      async ({ db }) => {
+        const taskRepo = new TaskRepository(db);
+        const sessionRepo = new SessionRepository(db);
+        const sessionId = await createSessionWithDeps(db);
+        const task = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: TaskStatus.RUNNING,
+            executor_connected_at: '2026-08-30T12:00:00.000Z',
+          })
+        );
+        await sessionRepo.update(sessionId, {
+          status: SessionStatus.RUNNING,
+          ready_for_prompt: false,
+          tasks: [task.task_id],
+          scheduled_from_branch: taskStatus === TaskStatus.TIMED_OUT,
+        });
+
+        await taskRepo.updateFromExecutor(task.task_id, { status: taskStatus });
+        await expect(taskRepo.findById(task.task_id)).resolves.toMatchObject({
+          status: taskStatus,
+          completed_at: expect.any(String),
+        });
+        await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+          status: sessionStatus,
+          ready_for_prompt: true,
+        });
+      }
+    );
+  }
+
+  dbTest(
+    'does not let an older terminal Task clobber a newer active Session claim',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionRepo = new SessionRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const older = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      const newer = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.RUNNING })
+      );
+      await sessionRepo.update(sessionId, {
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        tasks: [older.task_id, newer.task_id],
+      });
+
+      await taskRepo.update(older.task_id, { status: TaskStatus.FAILED });
+
+      await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+      });
+    }
+  );
+
+  dbTest(
+    'projects an older executor Task with a termination request despite a newer Task',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionRepo = new SessionRepository(db);
+      const sessionId = await createSessionWithDeps(db);
+      const older = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: '2026-08-30T12:00:00.000Z',
+          termination_request: {
+            cause: 'sdk_health_failure',
+            requested_at: '2026-08-30T12:01:00.000Z',
+          },
+        })
+      );
+      const newer = await taskRepo.create(
+        createTaskData({ session_id: sessionId, status: TaskStatus.QUEUED })
+      );
+      await sessionRepo.update(sessionId, {
+        status: SessionStatus.RUNNING,
+        ready_for_prompt: false,
+        tasks: [older.task_id, newer.task_id],
+      });
+
+      await taskRepo.updateFromExecutor(older.task_id, { status: TaskStatus.FAILED });
+
+      await expect(taskRepo.findById(older.task_id)).resolves.toMatchObject({
+        status: TaskStatus.FAILED,
+      });
+      await expect(sessionRepo.findById(sessionId)).resolves.toMatchObject({
+        status: SessionStatus.FAILED,
+        ready_for_prompt: true,
+        tasks: [older.task_id, newer.task_id],
+      });
+      await expect(taskRepo.findById(newer.task_id)).resolves.toMatchObject({
+        status: TaskStatus.QUEUED,
+      });
+    }
+  );
+
+  dbTest('rolls back a terminal Task when Session projection affects no rows', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionRepo = new SessionRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: '2026-08-30T12:00:00.000Z',
+      })
+    );
+    await sessionRepo.update(sessionId, {
+      status: SessionStatus.RUNNING,
+      ready_for_prompt: false,
+      tasks: [task.task_id],
+    });
+    const beforeTask = await taskRepo.findById(task.task_id);
+    const beforeSession = await sessionRepo.findById(sessionId);
+    const realUpdate = databaseWrapper.update;
+    const failedProjection = vi.fn().mockResolvedValue({ rowsAffected: 0 });
+    // Preserve the real transaction and Task write; inject only the defensive
+    // zero-row Session projection result, which cannot naturally occur under
+    // the owning Session lock.
+    const updateSpy = vi.spyOn(databaseWrapper, 'update').mockImplementation((txDb, table) => {
+      if (table !== sessions) return realUpdate(txDb, table);
+      return { set: () => ({ where: () => ({ run: failedProjection }) }) };
+    });
+    try {
+      await expect(
+        taskRepo.updateFromExecutor(task.task_id, { status: TaskStatus.TIMED_OUT })
+      ).rejects.toThrow('Session');
+      expect(failedProjection).toHaveBeenCalledTimes(1);
+    } finally {
+      updateSpy.mockRestore();
+    }
+    await expect(taskRepo.findById(task.task_id)).resolves.toEqual(beforeTask);
+    await expect(sessionRepo.findById(sessionId)).resolves.toEqual(beforeSession);
   });
 
   dbTest('computes terminal timing at the row-locked mutation boundary', async ({ db }) => {
