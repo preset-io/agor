@@ -91,7 +91,7 @@
     "express-rate-limit": "^8.7.0",
     "express-static-gzip": "^3.0.2",
     "feathers-swagger": "^3.0.0",
-    "handlebars": "^4.7.8",
+    "handlebars": "^4.7.10",
     "inquirer": "^12.10.0",
     "ioredis": "^5.11.1",
     "js-yaml": "^4.3.2",
