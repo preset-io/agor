@@ -25,13 +25,15 @@ export function useConfirmArchiveSession(client: AgorClient | null) {
         onStart?.();
         try {
           const result = await archiveSession(sessionId as SessionID);
-          if (result?.reconciliation === 'refresh-required') {
+          if (result.reconciliation === 'failed') {
+            // Surface the daemon's reason (e.g. "stop the running session
+            // first") instead of a generic failure.
+            showError(result.error);
+          } else if (result.reconciliation === 'refresh-required') {
             showWarning(ARCHIVE_REFRESH_WARNING);
-          } else if (result) {
+          } else {
             showSuccess('Session and same-branch children archived');
             onArchived?.();
-          } else {
-            showError('Failed to archive session');
           }
         } finally {
           onSettled?.();
