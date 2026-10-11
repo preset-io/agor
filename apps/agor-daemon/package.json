@@ -42,7 +42,7 @@
     "express-rate-limit": "^8.7.0",
     "express-static-gzip": "^3.0.2",
     "feathers-swagger": "^3.0.0",
-    "handlebars": "^4.7.8",
+    "handlebars": "^4.7.10",
     "ioredis": "^5.11.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
