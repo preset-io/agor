@@ -36,16 +36,18 @@ export default defineConfig({
     screenshot: 'on',
     trace: 'retain-on-failure',
   },
-  projects: [
-    {
-      name: 'chromium',
-      // Re-assert viewport + scale factor after the device spread — Desktop
-      // Chrome carries its own 1280x720 viewport that would otherwise win.
-      use: {
-        ...devices['Desktop Chrome'],
-        viewport: { width: 1920, height: 1080 },
-        deviceScaleFactor: scaleFactor,
-      },
+  // `flow`: the syllabus, one chained story from an empty workspace (npm test).
+  // `clips`: standalone shots, each from its own starting checkpoint; run one
+  // at a time through `npm run clip -- <id>` (support/clips.ts).
+  projects: ['flow', 'clips'].map((name) => ({
+    name,
+    testMatch: new RegExp(`/${name}/.*\\.spec\\.ts$`),
+    // Re-assert viewport + scale factor after the device spread — Desktop
+    // Chrome carries its own 1280x720 viewport that would otherwise win.
+    use: {
+      ...devices['Desktop Chrome'],
+      viewport: { width: 1920, height: 1080 },
+      deviceScaleFactor: scaleFactor,
     },
-  ],
+  })),
 });

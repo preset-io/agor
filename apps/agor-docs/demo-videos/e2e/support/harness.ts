@@ -20,6 +20,7 @@
 // single later lesson (the earlier lessons' state must already exist).
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { randomBytes, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
@@ -351,6 +352,30 @@ export function snapshotCheckpoint(name: string): void {
   rmSync(path.join(dest, 'cassette-proxy.log'), { force: true });
 }
 
+/**
+ * The daemon refuses to start without a deployment id and its JWT and
+ * master secrets (normally written by `agor init`). Give each scratch
+ * workspace its own, appended to config.yaml when missing so checkpoints
+ * from before these were required still boot.
+ */
+function ensureDaemonIdentity(): void {
+  const configPath = path.join(AGOR_HOME_DIR, 'config.yaml');
+  mkdirSync(AGOR_HOME_DIR, { recursive: true });
+  const current = existsSync(configPath) ? readFileSync(configPath, 'utf8') : '';
+  if (/^\s*deployment_id:/m.test(current)) return;
+  if (/^daemon:/m.test(current)) {
+    throw new Error(
+      `[harness] ${configPath} has a daemon: block without deployment_id; fix it by hand`
+    );
+  }
+  const block =
+    'daemon:\n' +
+    `  deployment_id: ${randomUUID()}\n` +
+    `  jwtSecret: ${randomBytes(32).toString('hex')}\n` +
+    `  masterSecret: ${randomBytes(32).toString('hex')}\n`;
+  writeFileSync(configPath, `${current}${current && !current.endsWith('\n') ? '\n' : ''}${block}`);
+}
+
 /** Global setup: reset scratch env from zero, spawn daemon + UI, mint auth state. */
 export async function setupHarness(): Promise<void> {
   const keepScratch = process.env.AGOR_E2E_KEEP_SCRATCH === '1';
@@ -390,12 +415,21 @@ export async function setupHarness(): Promise<void> {
       path.join(AGOR_HOME_DIR, 'config.yaml'),
       'execution:\n  executor_heartbeat:\n    stale_after_ms: 900000\n'
     );
+    ensureDaemonIdentity();
 
     const dbEnv: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL };
     console.log('[harness] migrating scratch database (no seed — the flow starts from zero)...');
     run('pnpm', ['agor', 'db', 'migrate', '-y'], REPO_ROOT, dbEnv);
   } else {
-    console.log('[harness] AGOR_E2E_KEEP_SCRATCH=1 and scratch DB exists — skipping reset.');
+    console.log(
+      fromCheckpoint
+        ? '[harness] restored checkpoint — bringing its database up to the current schema...'
+        : '[harness] AGOR_E2E_KEEP_SCRATCH=1 and scratch DB exists — skipping reset; migrating...'
+    );
+    // Checkpoints outlive schema changes: migrate (idempotent) so an older
+    // snapshot boots on today's daemon instead of failing on a missing column.
+    run('pnpm', ['agor', 'db', 'migrate', '-y'], REPO_ROOT, { ...process.env, DATABASE_URL });
+    ensureDaemonIdentity();
   }
 
   materializeClone(DEMO_REPO_URL, DEMO_REPO_MIRROR, DEMO_REPO_PATH, 'donut-shop');
@@ -419,6 +453,22 @@ export async function setupHarness(): Promise<void> {
     AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
     AGOR_ADMIN_PASSWORD: ADMIN_USER.password,
   };
+  // The daemon loads its workspace packages (@agor/core, @agor/git, the
+  // agentic tools...) from their built dist, and launches executors from
+  // packages/executor/dist. Build them, dependencies first, through turbo
+  // (cached, so a re-run with no package changes takes seconds).
+  // AGOR_E2E_SKIP_BUILD=1 skips it entirely.
+  if (process.env.AGOR_E2E_SKIP_BUILD !== '1') {
+    console.log(
+      '[harness] building daemon + executor dependencies (AGOR_E2E_SKIP_BUILD=1 skips)...'
+    );
+    run(
+      'pnpm',
+      ['turbo', 'run', 'build', '--filter=@agor/daemon^...', '--filter=@agor/executor...'],
+      REPO_ROOT,
+      process.env
+    );
+  }
   console.log(`[harness] starting daemon on :${DAEMON_PORT}...`);
   const daemonLog = logFd(path.join(SCRATCH_DIR, 'daemon.log'));
   const daemon = spawn('npx tsx src/main.ts', {

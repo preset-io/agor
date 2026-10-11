@@ -1,14 +1,47 @@
 ---
 name: demo-videos
-description: Build, record, verify, and stitch the Agor demo-video syllabus (apps/agor-docs/demo-videos/e2e) — the from-zero E2E suite whose lessons are simultaneously regression tests, training snippets, and the conference sizzle reel.
+description: Record footage of the REAL Agor app (daemon + UI) with Playwright at human pace — standalone clips (npm run clip), tutorial/how-to snippets, and the from-zero syllabus and its reel — in apps/agor-docs/demo-videos/e2e. Use for any real-app video; for choreographed fixture videos use marketing-scenes (start at agor-video if unsure).
 ---
 
-# Demo-video syllabus workflow
+# Real-app video capture
 
-The suite at `apps/agor-docs/demo-videos/e2e/` drives a REAL daemon + UI from
-an empty workspace. Every lesson in `tests/flow/` is three things at once: a
-regression test, a training-ready video snippet, and reel footage. Read this
-before touching any of it; it encodes several days of hard-won debugging.
+The suite at `apps/agor-docs/demo-videos/e2e/` drives a REAL daemon + UI in
+an isolated scratch workspace and records it with Playwright. It has two
+Playwright projects:
+
+- **`flow`** (`tests/flow/`, metadata in `support/syllabus.ts`): the
+  syllabus, one chained story from an empty workspace. Each lesson is a
+  regression test, a training snippet, and reel footage, and running it
+  leaves behind the checkpoint ladder clips start from.
+- **`clips`** (`tests/clips/`, metadata in `support/clips.ts`): standalone
+  shots. Each starts from a checkpoint (or empty), films one thing, and is
+  exported on its own. **New footage almost always goes here.**
+
+Read this before touching any of it; it encodes several days of hard-won
+debugging.
+
+## Making a clip (the usual job)
+
+1. **Pick a starting state.** `startFrom` names a directory in
+   `~/.agor-e2e/checkpoints/` (`pre-<lessonId>` snapshots the flow writes as
+   it runs, e.g. `pre-07-parallel-worktrees` = a board with the donut-shop
+   repo, branches and zones). If the ladder is missing or stale, run the
+   flow once: `npm run test:replay` (free; replays recorded agent turns).
+   Need state the ladder lacks? Seed it inside the clip before
+   `openLesson()` through the daemon's REST API (off camera), or add a
+   lesson that builds it.
+2. **Register it** in `support/clips.ts`: id, title, purpose, `startFrom`,
+   `agent`, beat-sheet `script`, `outputs` (`master` always; `site` for
+   agor.live renditions; `tv` for a 4K30 Roku master).
+3. **Write `tests/clips/<id>.spec.ts`** with only the pacing verbs (below).
+   Open with `openLesson(page, path, '<id>')` so boot screens are trimmed.
+   Copy `tests/clips/board-tour.spec.ts`.
+4. **Record + export:** `npm run clip -- <id>` (add `--live` for new agent
+   turns, `--4k` for native 4K capture, `--export-only` to re-export).
+   Output lands in `~/Desktop/agor_video/clips/<id>/` and the folder opens.
+5. **Verify** with the recipes below, then commit the spec + registry entry.
+   For site use, copy the renditions into `apps/agor-docs/public/videos/`
+   (see the `agor-video` skill for formats).
 
 ## Architecture map
 
@@ -47,6 +80,21 @@ before touching any of it; it encodes several days of hard-won debugging.
   gets repatched on the next run. If Playwright is upgraded and the stock
   strings change, the patch warns and degrades gracefully — fix the
   constants in harness.ts.
+
+## Harness facts that changed after the syllabus (Oct 2026)
+
+- The harness builds the daemon's workspace packages and the executor
+  through turbo before starting (`pnpm turbo run build
+--filter=@agor/daemon^... --filter=@agor/executor...`): ~6 min cold, seconds
+  when cached. `AGOR_E2E_SKIP_BUILD=1` skips it.
+- The daemon refuses to start without `daemon.deployment_id`, `jwtSecret`
+  and `masterSecret`; the harness writes fresh ones into the scratch
+  `config.yaml` (and adds them to older checkpoints).
+- Restored checkpoints are migrated to the current schema on every run, so
+  old snapshots still boot.
+- macOS has no `timeout`; run long suites in the background instead.
+- Biome ignores `demo-videos/e2e/` and there's no tsconfig there (tsx runs
+  it), so neither catches errors in these files; read them carefully.
 
 ## Iron rules
 
