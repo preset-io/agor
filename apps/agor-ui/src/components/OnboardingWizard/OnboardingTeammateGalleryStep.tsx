@@ -1,7 +1,7 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: intentional dark-glass onboarding input treatment, matching the owning wizard surface
 import { Flex, Input, Typography, theme } from 'antd';
 import { type Ref, useState } from 'react';
-import type { TeammateGalleryCardId } from '../../utils/teammateTemplates';
+import { DEFAULT_TEMPLATE_ID, type TeammateGalleryCardId } from '../../utils/teammateTemplates';
 import { EmojiPickerInput } from '../EmojiPickerInput/EmojiPickerInput';
 import { TeammateGalleryCards } from '../TeammateGallery/TeammateGallery';
 
@@ -124,9 +124,14 @@ export const OnboardingTeammateGalleryStep: React.FC<OnboardingTeammateGallerySt
           Pick a starting point
         </Text>
         <Paragraph style={{ color: token.colorTextSecondary, marginBottom: token.marginXS }}>
-          Start with Team assistant and shape them as you chat, or pick a template for a head start.
+          Pick the one closest to what you need. You can shape them as you chat.
         </Paragraph>
-        <TeammateGalleryCards value={selectedTemplateId} onChange={onTemplateChange} compact />
+        <TeammateGalleryCards
+          value={selectedTemplateId}
+          onChange={onTemplateChange}
+          compact
+          recommendedId={DEFAULT_TEMPLATE_ID}
+        />
         {showPublicStarterNote && (
           <Text type="secondary">
             With the public starter, home files stay on this installation without private backup.

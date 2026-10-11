@@ -2,13 +2,16 @@ import { TEAMMATE_FRAMEWORK_DEFAULT_BRANCH, TEAMMATE_FRAMEWORK_REPO_URL } from '
 import {
   AimOutlined,
   BuildOutlined,
+  CodeOutlined,
   FundOutlined,
   PlusOutlined,
   ProjectOutlined,
   RadarChartOutlined,
   ReconciliationOutlined,
   SafetyOutlined,
+  SearchOutlined,
   SolutionOutlined,
+  UserOutlined,
 } from '@ant-design/icons';
 import type { AntdIconProps } from '@ant-design/icons/lib/components/AntdIcon';
 import { AVATAR_PALETTE } from './avatarPalette';
@@ -16,13 +19,15 @@ import { AVATAR_PALETTE } from './avatarPalette';
 /**
  * Canonical teammate starter templates.
  *
- * A template pre-points a new teammate at a ready-made source branch in the
- * `preset-io/agor-teammate` repo. Card copy is locked product copy — do not
- * rewrite. This module is the single source of truth for the templates and
- * the pure helpers that drive the TeammateGallery. Keep it dependency-light and side-effect-free.
+ * A template either pre-points a new teammate at a ready-made source branch in
+ * the `preset-io/agor-teammate` repo, or is prompt-only: no branch (the
+ * framework default, like the blank starter) plus a `remit` line for the first
+ * session prompt. Card copy is product copy owned by design. This module is the
+ * single source of truth for the templates and the pure helpers that drive the
+ * TeammateGallery. Keep it dependency-light and side-effect-free.
  *
- * The `sourceBranch` values are a contract with a parallel workstream creating
- * matching branches in `preset-io/agor-teammate`. Use the exact names below.
+ * The `sourceBranch` values are a contract with `preset-io/agor-teammate`. Use
+ * the exact names below; add prompt-only templates rather than new branches.
  */
 
 /** Category buckets a template can belong to. The blank starter has none. */
@@ -48,10 +53,12 @@ export interface TeammateTemplate {
   category?: TeammateCategoryId;
   /** Default avatar emoji applied on selection; empty for the blank starter. */
   emoji: string;
-  /** Branch in the framework repo the teammate is cut from. */
-  sourceBranch: string;
+  /** Branch in the framework repo the teammate is cut from; omitted = framework default. */
+  sourceBranch?: string;
   /** Remote that owns sourceBranch when it differs from the teammate's destination repo. */
   sourceRemoteUrl?: string;
+  /** Prompt-only templates: what the teammate is for, fed into the first-session prompt. */
+  remit?: string;
 }
 
 const BUILT_IN_TEMPLATE_SOURCE = { sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL } as const;
@@ -83,21 +90,49 @@ export const BLANK_TEMPLATE_ID = 'blank';
 
 export const TEAMMATE_TEMPLATES = [
   {
-    id: 'competitive-analyst',
-    title: 'Competitive Analyst',
-    description:
-      "Tracks every rival's pricing, launches, and moves, then tells you what it means for the next deal.",
-    icon: RadarChartOutlined,
+    id: 'personal-assistant',
+    title: 'Personal assistant',
+    description: "Keeps up with Slack and your docs so you don't have to.",
+    icon: UserOutlined,
+    category: 'operate',
+    emoji: '🧑‍💼',
+    remit:
+      'Desired outcome: a useful recurring brief from Slack and connected docs. A first win is a digest of the channels and docs they care about.',
+  },
+  {
+    id: 'researcher',
+    title: 'Researcher',
+    description: 'Ask a question, get real research back.',
+    icon: SearchOutlined,
     category: 'grow',
-    emoji: '🔭',
-    sourceBranch: 'template/competitive-analyst',
+    emoji: '🔎',
+    remit:
+      'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
+  },
+  {
+    id: 'engineering-assistant',
+    title: 'Engineering assistant',
+    description: 'Handles PRs, bug triage and release notes.',
+    icon: CodeOutlined,
+    category: 'build',
+    emoji: '🧰',
+    remit:
+      'Desired outcome: less busywork around PRs, bug triage and release notes. A first win is scanning the relevant repo for an actionable issue or pull request.',
+  },
+  {
+    id: 'builder',
+    title: 'Builder',
+    description: 'Turns your idea into a working app or dashboard.',
+    icon: BuildOutlined,
+    category: 'build',
+    emoji: '🛠️',
+    sourceBranch: 'template/builder',
     ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'product-manager',
-    title: 'Product Manager',
-    description:
-      'Turns scattered feedback into a clean, prioritized backlog and keeps everyone in the loop.',
+    title: 'Product manager',
+    description: 'Turns feedback into a clear, prioritized backlog.',
     icon: ProjectOutlined,
     category: 'build',
     emoji: '🧭',
@@ -106,9 +141,8 @@ export const TEAMMATE_TEMPLATES = [
   },
   {
     id: 'chief-of-staff',
-    title: 'Chief of Staff',
-    description:
-      'Keeps your world in order: triages the noise, preps your meetings, and closes the loop on everything you hand off.',
+    title: 'Chief of staff',
+    description: 'Triages the noise, preps meetings, closes the loop.',
     icon: SolutionOutlined,
     category: 'operate',
     emoji: '🗂️',
@@ -116,10 +150,19 @@ export const TEAMMATE_TEMPLATES = [
     ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
+    id: 'competitive-analyst',
+    title: 'Competitive analyst',
+    description: "Tracks rivals' pricing, launches and moves for you.",
+    icon: RadarChartOutlined,
+    category: 'grow',
+    emoji: '🔭',
+    sourceBranch: 'template/competitive-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
+  },
+  {
     id: 'financial-analyst',
-    title: 'Financial Analyst',
-    description:
-      "Reads the numbers, catches what doesn't add up, and hands you the finding, not a spreadsheet.",
+    title: 'Financial analyst',
+    description: "Reads the numbers and flags what doesn't add up.",
     icon: FundOutlined,
     category: 'operate',
     emoji: '🧮',
@@ -128,8 +171,8 @@ export const TEAMMATE_TEMPLATES = [
   },
   {
     id: 'deal-desk',
-    title: 'Deal Desk Analyst',
-    description: 'Keeps every deal clean, every renewal on time, and every number ready to report.',
+    title: 'Deal desk analyst',
+    description: 'Keeps deals clean and renewals on time.',
     icon: ReconciliationOutlined,
     category: 'grow',
     emoji: '📐',
@@ -138,9 +181,8 @@ export const TEAMMATE_TEMPLATES = [
   },
   {
     id: 'sales-outbound',
-    title: 'Outbound Analyst',
-    description:
-      'Builds your target list, researches each prospect, and drafts the outreach. You hit send.',
+    title: 'Outbound analyst',
+    description: 'Builds target lists and drafts the outreach.',
     icon: AimOutlined,
     category: 'grow',
     emoji: '🎯',
@@ -149,23 +191,12 @@ export const TEAMMATE_TEMPLATES = [
   },
   {
     id: 'legal-analyst',
-    title: 'Legal Analyst',
-    description:
-      'Reads the redline, flags the risk, and tells you what to push back on before it costs you.',
+    title: 'Legal analyst',
+    description: 'Reads the redline and flags the risk.',
     icon: SafetyOutlined,
     category: 'operate',
     emoji: '⚖️',
     sourceBranch: 'template/legal-analyst',
-    ...BUILT_IN_TEMPLATE_SOURCE,
-  },
-  {
-    id: 'builder',
-    title: 'Builder',
-    description: 'Turns your idea into a working app or dashboard, spun up on a live test env.',
-    icon: BuildOutlined,
-    category: 'build',
-    emoji: '🛠️',
-    sourceBranch: 'template/builder',
     ...BUILT_IN_TEMPLATE_SOURCE,
   },
 ] as const satisfies readonly TeammateTemplate[];
@@ -174,22 +205,24 @@ export const TEAMMATE_TEMPLATES = [
 export type TeammateTemplateId = (typeof TEAMMATE_TEMPLATES)[number]['id'];
 
 /**
- * The blank starter card. Kept separate from TEAMMATE_TEMPLATES so callers can
- * render it first. Onboarding presents it as the recommended "Team assistant". Its
- * `sourceBranch` is the framework repo default; the wiring resolves it to the
- * repo's own default branch (the public template's for a github.com private fork).
+ * The blank starter card, shown last. Kept separate from TEAMMATE_TEMPLATES so
+ * it is never categorized. Its `sourceBranch` is the framework repo default; the
+ * wiring resolves it to the repo's own default branch (the public template's for
+ * a github.com private fork).
  */
 export const BLANK_TEMPLATE = {
   id: BLANK_TEMPLATE_ID,
-  title: 'Start blank',
-  description:
-    'No starter playbook. Tell your teammate what to do and which rules to follow, right in the chat.',
+  title: 'Start from scratch',
+  description: 'A blank teammate you shape as you chat.',
   icon: PlusOutlined,
-  emoji: '',
+  emoji: '✨',
   sourceBranch: TEAMMATE_FRAMEWORK_DEFAULT_BRANCH,
 } as const satisfies TeammateTemplate;
 
 export type TeammateGalleryCardId = TeammateTemplateId | typeof BLANK_TEMPLATE_ID;
+
+/** Onboarding's recommended, preselected starting point. */
+export const DEFAULT_TEMPLATE_ID = 'personal-assistant' satisfies TeammateTemplateId;
 
 /** Every card shown in the gallery: all templates plus the blank starter. */
 export const TEAMMATE_GALLERY_CARDS = [...TEAMMATE_TEMPLATES, BLANK_TEMPLATE] as const;
@@ -202,9 +235,10 @@ export function getTeammateTemplate(id?: string | null): TeammateGalleryCard | u
 /**
  * Source branch a teammate should be cut from for the given template.
  *
- * Real templates force their contract branch; the blank starter (or no
- * selection) returns undefined so branch creation falls back to the framework
- * repo's own default branch (the public template's for a github.com private fork).
+ * Branch templates force their contract branch; prompt-only templates, the
+ * blank starter, and no selection return undefined so branch creation falls back
+ * to the framework repo's own default branch (the public template's for a
+ * github.com private fork).
  */
 export function resolveTemplateSourceBranch(id?: string | null): string | undefined {
   if (!id || id === BLANK_TEMPLATE_ID) return undefined;
@@ -212,7 +246,7 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
   if (!template) {
     throw new Error(`Unknown teammate template id: ${id}`);
   }
-  return template.sourceBranch;
+  return 'sourceBranch' in template ? template.sourceBranch : undefined;
 }
 
 /** Remote that owns the selected template ref; blank/no selection defers to createTeammateBranch. */
@@ -238,7 +272,9 @@ export function getTemplateBySourceBranch(
 ): TeammateTemplate | undefined {
   const branch = sourceBranch?.trim();
   if (!branch || branch === BLANK_TEMPLATE.sourceBranch) return undefined;
-  return TEAMMATE_TEMPLATES.find((template) => template.sourceBranch === branch);
+  return TEAMMATE_TEMPLATES.find(
+    (template) => 'sourceBranch' in template && template.sourceBranch === branch
+  );
 }
 
 /**
@@ -263,12 +299,12 @@ export function getTemplateForFrameworkSource({
 export type GalleryFilter = 'all' | TeammateCategoryId;
 
 /**
- * Cards to render for the active filter: `all` leads with the blank starter (so
- * templates never read as required); a category shows only its templates.
+ * Cards to render for the active filter: `all` is every template in display
+ * order with the blank starter last; a category shows only its templates.
  */
 export function galleryCardsForFilter(filter: GalleryFilter): readonly TeammateGalleryCard[] {
   if (filter !== 'all') {
     return TEAMMATE_TEMPLATES.filter((template) => template.category === filter);
   }
-  return [BLANK_TEMPLATE, ...TEAMMATE_TEMPLATES];
+  return TEAMMATE_GALLERY_CARDS;
 }

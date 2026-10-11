@@ -70,7 +70,6 @@ export function OnboardingSetupTips({ teammateName }: { teammateName?: string })
           pauseOnHover
           pauseOnFocus
           pauseOnDotsHover
-          dotPosition="bottom"
         >
           {SETUP_TIPS.map(({ icon: Icon, title, line }) => (
             <div key={title}>

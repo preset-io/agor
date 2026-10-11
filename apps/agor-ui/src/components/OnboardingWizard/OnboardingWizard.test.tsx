@@ -215,11 +215,11 @@ describe('OnboardingWizard', () => {
     expect(document.querySelector('.ant-modal-centered')).toBeInTheDocument();
   });
 
-  it('preselects the Team assistant and completes on the blank framework', async () => {
+  it('preselects Personal assistant and completes it on the framework default branch', async () => {
     const onComplete = vi.fn();
     renderWizard({ onComplete });
 
-    const assistant = screen.getByText('Team assistant').closest('[role="button"]');
+    const assistant = screen.getByText('Personal assistant').closest('[role="button"]');
     expect(assistant).toHaveAttribute('aria-pressed', 'true');
     // Re-clicking the default keeps it selected instead of leaving nothing picked.
     fireEvent.click(assistant as HTMLElement);
@@ -234,7 +234,7 @@ describe('OnboardingWizard', () => {
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
         expect.objectContaining({
-          templateId: 'blank',
+          templateId: 'personal-assistant',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
         }),
@@ -875,12 +875,18 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'workspace' });
 
     const nameField = screen.getByLabelText('Teammate name');
-    expect(screen.getByText('Or start from a template')).toBeInTheDocument();
-    const templateCard = screen.getByText('Competitive Analyst');
-    expect(screen.getByText('Team assistant')).toBeInTheDocument();
-    // Onboarding drops the category chips; descriptions live in tooltips.
+    expect(
+      screen.getByText('Pick the one closest to what you need. You can shape them as you chat.')
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Or start from a template')).not.toBeInTheDocument();
+    const templateCard = screen.getByText('Competitive analyst');
+    expect(screen.getByText('Personal assistant')).toBeInTheDocument();
+    expect(screen.getByText('Start from scratch')).toBeInTheDocument();
+    // One even grid with a description line per card; no category chips.
     expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
-    expect(screen.queryByText(/Tracks every rival/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Tracks rivals' pricing, launches and moves for you.")
+    ).toBeInTheDocument();
     // The gallery sits after the name field.
     expect(
       nameField.compareDocumentPosition(templateCard) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -916,7 +922,7 @@ describe('OnboardingWizard', () => {
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     // Picking a template sets the default avatar (emoji) but never the name.
     // Gallery cards are role="button" divs, not buttons — click the card directly.
-    const legalCard = screen.getByText('Legal Analyst').closest('[role="button"]');
+    const legalCard = screen.getByText('Legal analyst').closest('[role="button"]');
     fireEvent.click(legalCard as HTMLElement);
     expect(screen.getByLabelText('Teammate name')).toHaveValue('Rusty');
 
@@ -945,7 +951,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ onComplete, initialStep: 'workspace' });
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
+    fireEvent.click(screen.getByText('Legal analyst').closest('[role="button"]') as HTMLElement);
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // llm → tools
     await findAndClickButton(/skip for now/i); // tools → done
@@ -1021,7 +1027,7 @@ describe('OnboardingWizard', () => {
 
     // The wizard creates the board now (at completion) and emits the teammate
     // naming details + selected agent so the app shell can seed the first AI
-    // teammate on it. The default Team assistant → sourceBranch undefined. Board
+    // teammate on it. The default Personal assistant is prompt-only → sourceBranch undefined. Board
     // creation precedes onComplete, so await it.
     await waitFor(() =>
       expect(onComplete).toHaveBeenCalledWith(
@@ -1034,7 +1040,7 @@ describe('OnboardingWizard', () => {
           teammateEmoji: '🤖',
           sourceBranch: undefined,
           sourceRemoteUrl: undefined,
-          templateId: 'blank',
+          templateId: 'personal-assistant',
           agent: 'claude-code',
           connectedMcpServerIds: [],
         },
@@ -1051,10 +1057,10 @@ describe('OnboardingWizard', () => {
   it('done step heroes the named teammate with a role pill + adaptive headline and NO recap line (template picked)', async () => {
     renderWizard();
 
-    // workspace — name + template (Product Manager → role pill + its avatar emoji)
+    // workspace — name + template (Product manager → role pill + its avatar emoji)
     expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    const templateCard = screen.getByText('Product Manager').closest('[role="button"]');
+    const templateCard = screen.getByText('Product manager').closest('[role="button"]');
     fireEvent.click(templateCard as HTMLElement);
     clickButton(/^continue →/i);
 
@@ -1070,7 +1076,7 @@ describe('OnboardingWizard', () => {
     // the headline, the template is the role pill, and one warm subline — nothing else.
     await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText('Rusty is almost ready.')).toBeInTheDocument();
-    expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
+    expect(screen.getByText('Product manager')).toBeInTheDocument(); // role pill
     expect(
       screen.getByText("Next, we'll set up Rusty's board and open your first chat.")
     ).toBeInTheDocument();
@@ -1355,7 +1361,7 @@ describe('OnboardingWizard', () => {
       }),
     });
     expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
-    expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
+    expect(screen.getByText('Legal analyst').closest('[role="button"]')).toHaveAttribute(
       'aria-pressed',
       'true'
     );
@@ -1448,7 +1454,9 @@ describe('OnboardingWizard', () => {
     await screen.findByText('Connect your AI');
     clickButton('Back'); // llm → workspace
     await screen.findByText('Hi New, meet your teammate');
-    fireEvent.click(screen.getByText('Team assistant').closest('[role="button"]') as HTMLElement);
+    fireEvent.click(
+      screen.getByText('Start from scratch').closest('[role="button"]') as HTMLElement
+    );
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
     clickButton(/skip for now/i); // llm → tools
@@ -1539,14 +1547,14 @@ describe('OnboardingWizard', () => {
     renderWizard();
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
+    fireEvent.click(screen.getByText('Legal analyst').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue/i);
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
 
     clickButton('Back');
     expect(await screen.findByText('Hi New, meet your teammate')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Rusty')).toBeInTheDocument();
-    expect(screen.getByText('Legal Analyst').closest('[role="button"]')).toHaveAttribute(
+    expect(screen.getByText('Legal analyst').closest('[role="button"]')).toHaveAttribute(
       'aria-pressed',
       'true'
     );

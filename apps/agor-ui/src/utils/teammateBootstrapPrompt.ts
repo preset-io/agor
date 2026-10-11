@@ -28,6 +28,8 @@ export interface TeammateBootstrapPromptContext {
   };
   /** Chosen template's title; present only when a real (non-blank) template resolved. */
   templateTitle?: string;
+  /** Prompt-only template's remit (no starter branch carries its playbook). */
+  templateRemit?: string;
   firstSession: true;
 }
 
@@ -52,6 +54,10 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
 
   if (context.templateTitle) {
     lines.push(`- Created from the ${context.templateTitle} template.`);
+  }
+
+  if (context.templateRemit) {
+    lines.push(`- Template remit: ${context.templateRemit}`);
   }
 
   if (context.user?.name) {
@@ -84,7 +90,7 @@ function formatTeammateBootstrapPrompt(context: TeammateBootstrapPromptContext):
   if (context.templateTitle) {
     const helpTarget = userName ?? 'them';
     lines.push(
-      `- Open as yourself: one warm line, in your persona's voice, naming who you are and that you're set up as a ${context.templateTitle} to help ${helpTarget}. Ground the opening in the template's remit; do not claim the user chose a goal.`
+      `- Open as yourself: one warm line, in your persona's voice, naming who you are and that you're set up from the ${context.templateTitle} template to help ${helpTarget}. Ground the opening in the template's remit; do not claim the user chose a goal.`
     );
     lines.push(
       "- Then 2-3 short bullets on how you'll help within that remit: concrete capabilities, not a catalog."
@@ -119,10 +125,10 @@ export function buildTeammateBootstrapPromptContext({
   const normalizedUserName = userName?.trim();
   const normalizedUserEmail = userEmail?.trim();
   // The blank starter is "no template" — never surface it as a persona.
-  const templateTitle =
-    templateId && templateId !== BLANK_TEMPLATE_ID
-      ? getTeammateTemplate(templateId)?.title
-      : undefined;
+  const template =
+    templateId && templateId !== BLANK_TEMPLATE_ID ? getTeammateTemplate(templateId) : undefined;
+  const templateTitle = template?.title;
+  const templateRemit = template && 'remit' in template ? template.remit : undefined;
 
   return {
     teammate: {
@@ -139,6 +145,7 @@ export function buildTeammateBootstrapPromptContext({
         }
       : {}),
     ...(templateTitle ? { templateTitle } : {}),
+    ...(templateRemit ? { templateRemit } : {}),
     ...(localHome ? { localHome: true } : {}),
     firstSession: true,
   };

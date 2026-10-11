@@ -1,12 +1,14 @@
-import { catalogServerSlug, type MCPCatalogEntry } from '@agor/core/types';
+import type { MCPCatalogEntry } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { CheckCircleFilled, SearchOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Select, Skeleton, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { CatalogEntryAvatar } from '../Marketplace/CatalogEntryAvatar';
 import { CatalogTab } from '../Marketplace/CatalogTab';
 import {
   ALL_CATEGORIES,
+  CATEGORY_LABELS,
   CATEGORY_OPTIONS,
   type CategoryFilter,
   DEFAULT_SORT,
@@ -14,7 +16,6 @@ import {
 } from '../Marketplace/catalogPresentation';
 import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
 import { type CatalogFilterState, useCatalogSearch } from '../Marketplace/useCatalogSearch';
-import { McpLogo } from '../McpLogo';
 
 interface Props {
   client: AgorClient | null;
@@ -89,7 +90,13 @@ function ToolTile({
         }}
       >
         <Flex align="center" gap={token.marginXS} style={{ minWidth: 0 }}>
-          <McpLogo id={catalogServerSlug(entry.name)} size={token.sizeMD} color={token.colorText} />
+          {/* Same logos as the Catalog, sized to the tile (28px). */}
+          <CatalogEntryAvatar
+            iconUrl={entry.icon_url}
+            title={title}
+            size={token.controlHeightSM + token.sizeXXS}
+            style={{ flexShrink: 0 }}
+          />
           <Flex vertical style={{ minWidth: 0 }}>
             <Typography.Paragraph
               ellipsis={{ rows: 2 }}
@@ -97,6 +104,9 @@ function ToolTile({
             >
               {title}
             </Typography.Paragraph>
+            <Typography.Text type="secondary" ellipsis style={{ fontSize: token.fontSizeSM }}>
+              {CATEGORY_LABELS[entry.category]}
+            </Typography.Text>
             {isConnected && (
               <Typography.Text id={statusId} type="success" style={{ fontSize: token.fontSizeSM }}>
                 <CheckCircleFilled /> Connected

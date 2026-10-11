@@ -5,6 +5,7 @@ import { stagePromptDraftSeed } from './promptDrafts';
 import { type SeedOnboardingTeammateInput, seedOnboardingTeammate } from './seedOnboardingTeammate';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import { createTeammateBranch } from './teammateCreation';
+import { resolveTemplateSourceBranch, resolveTemplateSourceRemoteUrl } from './teammateTemplates';
 import { waitForBranchFilesystemReady } from './waitForBranchFilesystemReady';
 
 // These are the two collaborators the completion path must actually invoke —
@@ -282,8 +283,34 @@ describe('seedOnboardingTeammate', () => {
 
     const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
     const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
-    expect(initialPrompt).toContain('- Created from the Legal Analyst template.');
+    expect(initialPrompt).toContain('- Created from the Legal analyst template.');
     expect(initialPrompt).toMatch(/Open as yourself: one warm line/);
+  });
+
+  it('creates a prompt-only template on the default branch with its remit in the prompt', async () => {
+    createTeammateBranchMock.mockResolvedValue({
+      branch_id: 'branch-1',
+      board_id: 'board-1',
+    } as Branch);
+    startTeammateBootstrapSessionMock.mockResolvedValue({ sessionId: 'session-1' });
+
+    // The wizard passes resolveTemplateSourceBranch/RemoteUrl, both undefined here.
+    const { input } = setup({
+      templateId: 'personal-assistant',
+      sourceBranch: resolveTemplateSourceBranch('personal-assistant'),
+      sourceRemoteUrl: resolveTemplateSourceRemoteUrl('personal-assistant'),
+    });
+    await seedOnboardingTeammate(input);
+
+    const branchInput = createTeammateBranchMock.mock.calls[0][0];
+    expect(branchInput.sourceBranch).toBeUndefined();
+    expect(branchInput.sourceRemoteUrl).toBeUndefined();
+    const sessionArg = startTeammateBootstrapSessionMock.mock.calls[0][0];
+    const initialPrompt = (sessionArg.sessionConfig as { initialPrompt: string }).initialPrompt;
+    expect(initialPrompt).toContain('- Created from the Personal assistant template.');
+    expect(initialPrompt).toContain(
+      '- Template remit: Desired outcome: a useful recurring brief from Slack and connected docs.'
+    );
   });
 
   it('forwards the template source branch to createTeammateBranch', async () => {

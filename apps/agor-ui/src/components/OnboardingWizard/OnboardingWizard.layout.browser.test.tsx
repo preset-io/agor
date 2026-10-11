@@ -241,10 +241,9 @@ describe('OnboardingWizard layout (real browser)', () => {
     // Chromium can preserve `repeat(auto-fit, minmax(...))` in computed style
     // at narrow viewports. Count the cards sharing the first rendered row
     // instead; this observes the layout result rather than its CSS spelling.
-    // Skip the full-width Team assistant header row so the first template row is measured.
-    const cardRects = Array.from(grid.querySelectorAll('[role="button"]'))
-      .filter((card) => card.getAttribute('aria-label') !== 'Team assistant')
-      .map((card) => card.getBoundingClientRect());
+    const cardRects = Array.from(grid.querySelectorAll('[role="button"]')).map((card) =>
+      card.getBoundingClientRect()
+    );
     const firstTop = cardRects[0]?.top;
     const renderedColumns = cardRects.filter((rect) => Math.abs(rect.top - firstTop) < 1).length;
     const expectedColumns = window.innerWidth <= 480 ? 2 : 3;
@@ -405,10 +404,10 @@ describe('OnboardingWizard layout (real browser)', () => {
     if (window.innerWidth < 700 || window.innerHeight < 800) return;
     renderWizardAt('workspace');
 
-    // workspace → name + Product Manager template → continue
+    // workspace → name + Product manager template → continue
     await screen.findByText('Hi New, meet your teammate');
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
-    fireEvent.click(screen.getByText('Product Manager').closest('[role="button"]') as HTMLElement);
+    fireEvent.click(screen.getByText('Product manager').closest('[role="button"]') as HTMLElement);
     fireEvent.click(screen.getByText(/^continue →/i).closest('button') as HTMLElement);
 
     // llm → connect Claude with a valid key

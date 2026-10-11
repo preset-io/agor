@@ -19,11 +19,14 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 - Welcome first: "Hi {first name}, meet your teammate" plus one line on what a teammate is. The
   title and that line collapse together when the cards scroll; the name field stays pinned.
 - Name and emoji come first among the controls.
-- **Team assistant** (the blank starter on the repo-default framework) is the top card, tagged
-  Recommended and preselected. Clearing a template falls back to it.
-- Other templates are secondary: "Or start from a template", then compact emoji + title cards with
-  the description in a Tooltip. No category chips. Use the shared `TeammateGallery` `compact`
-  variant; don't fork it.
+- "Pick a starting point": one even grid of template cards (3 columns, 2 at ≤480px), each antd icon
+  (the template's `icon`) + title + one description line (two-line clamp, full text in a tooltip). No hero card, no category
+  chips. **Personal assistant** is tagged Recommended and preselected; clearing a pick falls back
+  to it. "Start from scratch" (the blank starter) is last. Use the shared `TeammateGallery`
+  `compact` variant; Settings uses the same template list in its full gallery.
+- Template data lives in `teammateTemplates.ts`. Prefer **prompt-only** templates (no
+  `sourceBranch`, so the framework default branch like the blank starter, plus a `remit` line in
+  the first-session prompt) over new branches in `preset-io/agor-teammate`.
 
 ## Tools step: Catalog wall
 
@@ -32,10 +35,13 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 - **No selection, nothing stored.** Only connections confirmed in the Catalog drawer pass, as
   server IDs, to the first teammate session at completion. Back and Skip never delete connections.
 - The grid replaces the old one-row-per-provider layout: 3 columns, 2 at ≤480px. A tile is a
-  button with a monochrome inline-SVG `McpLogo` mark and the name; the description lives in a
+  button with the Catalog's own logo (`CatalogEntryAvatar` + `icon_url`, letter fallback), the
+  Catalog display title, and the category label as one secondary line; the description lives in a
   Tooltip on hover and focus. "Connected" comes from caller-scoped readiness
   (`useCatalogReadiness`), never inferred.
-- AntD components and theme tokens only; sentence case; no remote images.
+- Logo hosts must stay in the daemon's default CSP `img-src` (`MCP_CATALOG_CSP_IMG_SRCS`);
+  a blocked image falls back to the letter.
+- AntD components and theme tokens only; sentence case.
 
 ## You're ready step
 

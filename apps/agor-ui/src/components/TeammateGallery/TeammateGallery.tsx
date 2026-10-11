@@ -1,6 +1,6 @@
-import { TeamOutlined } from '@ant-design/icons';
-import { Button, Card, Flex, Segmented, Tooltip, Typography, theme } from 'antd';
-import { Fragment, useState } from 'react';
+import { Button, Card, Flex, Segmented, Typography, theme } from 'antd';
+import { useState } from 'react';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import {
   BLANK_TEMPLATE_ID,
   type GalleryFilter,
@@ -43,10 +43,35 @@ function useCardToggle(selected: boolean, onSelect: () => void, onClear: () => v
   };
 }
 
+/** A template's antd icon in a quiet square tile (main's blank-starter treatment). */
+const TemplateIcon: React.FC<{ icon: TeammateTemplate['icon'] }> = ({ icon: Icon }) => {
+  const { token } = theme.useToken();
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 34,
+        height: 34,
+        borderRadius: token.borderRadius,
+        background: token.colorFillTertiary,
+        flex: '0 0 auto',
+      }}
+    >
+      <Icon style={{ fontSize: token.fontSizeHeading3, color: token.colorTextSecondary }} />
+    </span>
+  );
+};
+
 interface GalleryCardProps {
   template: TeammateTemplate;
   selected: boolean;
   compact?: boolean;
+  /** Narrow compact cards put the icon above the title so titles keep their width. */
+  stacked?: boolean;
+  recommended?: boolean;
   onSelect: () => void;
   onClear: () => void;
 }
@@ -55,6 +80,8 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
   template,
   selected,
   compact,
+  stacked,
+  recommended,
   onSelect,
   onClear,
 }) => {
@@ -75,7 +102,7 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
 
   const toggleHandlers = useCardToggle(selected, onSelect, onClear);
 
-  const card = (
+  return (
     <Card
       hoverable
       role="button"
@@ -93,20 +120,30 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
         background,
         cursor: 'pointer',
       }}
-      styles={{
-        body: compact
-          ? { padding: token.paddingXS, height: '100%', display: 'flex', alignItems: 'center' }
-          : { padding: token.paddingSM },
-      }}
+      styles={{ body: { padding: compact ? token.paddingXS : token.paddingSM } }}
     >
       {compact ? (
-        <Flex align="center" gap={token.marginXS}>
-          <span aria-hidden="true" style={{ fontSize: token.fontSizeLG }}>
-            {template.emoji}
-          </span>
-          <Text strong style={{ fontSize: token.fontSize }}>
-            {template.title}
-          </Text>
+        <Flex vertical gap={token.marginXXS}>
+          <Flex vertical={stacked} align="flex-start" gap={token.marginXS}>
+            <TemplateIcon icon={template.icon} />
+            <Flex vertical align="flex-start" gap={token.marginXXS} style={{ minWidth: 0 }}>
+              <Text strong style={{ fontSize: token.fontSize }}>
+                {template.title}
+              </Text>
+              {recommended && (
+                <Tag color="processing" style={{ margin: 0, fontSize: token.fontSizeSM }}>
+                  Recommended
+                </Tag>
+              )}
+            </Flex>
+          </Flex>
+          <Paragraph
+            type="secondary"
+            ellipsis={{ rows: 2, tooltip: template.description }}
+            style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}
+          >
+            {template.description}
+          </Paragraph>
         </Flex>
       ) : (
         // Tight internal rhythm (marginXXS) so the card is no taller than its
@@ -140,41 +177,24 @@ const GalleryCard: React.FC<GalleryCardProps> = ({
       )}
     </Card>
   );
-  return compact ? (
-    <Tooltip title={template.description} trigger={['hover', 'focus']}>
-      {card}
-    </Tooltip>
-  ) : (
-    card
-  );
 };
 
 /**
- * The blank starter, rendered as a full-width header card spanning every grid
- * column (so the eight templates stay a clean grid with no orphan). It leads
- * the All view so picking a template never reads as required. It's a
- * deliberately understated "build your own" affordance — dashed neutral border,
- * no category color/pill, no Recommended badge — laid out horizontally (icon +
- * copy) since it's wide. Still single-selectable with the same softened,
- * no-layout-shift selected state (constant 1px dashed border, only its color
- * changes, plus a faint neutral wash).
- *
- * `recommended` (onboarding) presents the same starter as the default
- * "Team assistant" with a solid border and a Recommended tag.
+ * The blank starter in the full gallery, rendered as a full-width card spanning
+ * every grid column, after the templates. A deliberately understated "build
+ * your own" affordance — dashed neutral border, no category color/pill — laid
+ * out horizontally (icon + copy) since it's wide. Still single-selectable with
+ * the same softened, no-layout-shift selected state (constant 1px dashed
+ * border, only its color changes, plus a faint neutral wash). The compact
+ * (onboarding) grid renders it as an ordinary card instead.
  */
 const BlankCard: React.FC<{
   template: TeammateTemplate;
   selected: boolean;
-  recommended?: boolean;
   onSelect: () => void;
   onClear: () => void;
-}> = ({ template, selected, recommended, onSelect, onClear }) => {
+}> = ({ template, selected, onSelect, onClear }) => {
   const { token } = theme.useToken();
-  const Icon = recommended ? TeamOutlined : template.icon;
-  const title = recommended ? 'Team assistant' : template.title;
-  const description = recommended
-    ? 'Works with you and your team. A good place to start.'
-    : template.description;
 
   const borderColor = selected ? token.colorText : token.colorBorderSecondary;
   const background = selected ? token.colorFillQuaternary : undefined;
@@ -186,7 +206,7 @@ const BlankCard: React.FC<{
       hoverable
       role="button"
       aria-pressed={selected}
-      aria-label={title}
+      aria-label={template.title}
       tabIndex={0}
       {...toggleHandlers}
       style={{
@@ -195,7 +215,7 @@ const BlankCard: React.FC<{
         // Constant 1px dashed border in both states — only the color changes on
         // select, so no layout shift. Dashed + neutral reads as "build your own".
         borderWidth: 1,
-        borderStyle: recommended ? 'solid' : 'dashed',
+        borderStyle: 'dashed',
         borderColor,
         background,
         cursor: 'pointer',
@@ -203,33 +223,13 @@ const BlankCard: React.FC<{
       styles={{ body: { padding: token.paddingSM } }}
     >
       <Flex align="center" gap={token.margin}>
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 34,
-            height: 34,
-            borderRadius: token.borderRadius,
-            background: token.colorFillTertiary,
-            flex: '0 0 auto',
-          }}
-        >
-          <Icon style={{ fontSize: token.fontSizeHeading3, color: token.colorTextSecondary }} />
-        </span>
+        <TemplateIcon icon={template.icon} />
         <Flex vertical gap={token.marginXXS}>
-          <Flex align="center" wrap gap={token.marginXS}>
-            <Text strong style={{ fontSize: token.fontSize }}>
-              {title}
-            </Text>
-            {recommended && (
-              <Tag color="processing" style={{ marginInlineEnd: 0, fontSize: token.fontSizeSM }}>
-                Recommended
-              </Tag>
-            )}
-          </Flex>
+          <Text strong style={{ fontSize: token.fontSize }}>
+            {template.title}
+          </Text>
           <Paragraph type="secondary" style={{ fontSize: token.fontSizeSM, marginBottom: 0 }}>
-            {description}
+            {template.description}
           </Paragraph>
         </Flex>
       </Flex>
@@ -286,8 +286,10 @@ export const TeammateGalleryFilters: React.FC<TeammateGalleryFiltersProps> = ({
 
 export interface TeammateGalleryCardsProps extends TeammateGalleryProps {
   filter?: GalleryFilter;
-  /** Onboarding variant: recommended blank starter, then emoji + title template cards. */
+  /** Onboarding variant: one even grid of icon + title + one-line description cards. */
   compact?: boolean;
+  /** Card tagged Recommended (compact only). */
+  recommendedId?: TeammateGalleryCardId;
 }
 
 /** Card grid, independent of host-specific chrome. */
@@ -296,8 +298,10 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
   onChange,
   filter = 'all',
   compact,
+  recommendedId,
 }) => {
   const { token } = theme.useToken();
+  const narrow = useMediaQuery('(max-width: 480px)');
   const cards = galleryCardsForFilter(filter);
 
   return (
@@ -305,9 +309,8 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
       aria-label="Teammate template"
       style={{
         display: 'grid',
-        // Compact cards keep two per row on phones.
         gridTemplateColumns: compact
-          ? `repeat(auto-fit, minmax(min(150px, calc(50% - ${token.marginXS / 2}px)), 1fr))`
+          ? `repeat(${narrow ? 2 : 3}, minmax(0, 1fr))`
           : 'repeat(auto-fit, minmax(190px, 1fr))',
         gap: token.marginXS,
         padding: token.paddingXXS,
@@ -317,27 +320,22 @@ export const TeammateGalleryCards: React.FC<TeammateGalleryCardsProps> = ({
       }}
     >
       {cards.map((template) =>
-        template.id === BLANK_TEMPLATE_ID ? (
-          <Fragment key={template.id}>
-            <BlankCard
-              template={template}
-              selected={value === template.id}
-              recommended={compact}
-              onSelect={() => onChange(template.id)}
-              onClear={() => onChange(null)}
-            />
-            {compact && (
-              <Text type="secondary" style={{ gridColumn: '1 / -1', marginTop: token.marginXS }}>
-                Or start from a template
-              </Text>
-            )}
-          </Fragment>
+        template.id === BLANK_TEMPLATE_ID && !compact ? (
+          <BlankCard
+            key={template.id}
+            template={template}
+            selected={value === template.id}
+            onSelect={() => onChange(template.id)}
+            onClear={() => onChange(null)}
+          />
         ) : (
           <GalleryCard
             key={template.id}
             template={template}
             selected={value === template.id}
             compact={compact}
+            stacked={compact && narrow}
+            recommended={compact && template.id === recommendedId}
             onSelect={() => onChange(template.id)}
             onClear={() => onChange(null)}
           />

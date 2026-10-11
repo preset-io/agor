@@ -73,13 +73,28 @@ describe('buildTeammateBootstrapPrompt', () => {
       templateId: 'legal-analyst',
     });
 
-    expect(prompt).toContain('- Created from the Legal Analyst template.');
+    expect(prompt).toContain('- Created from the Legal analyst template.');
+    // Branch templates carry their playbook in the branch, not a remit line.
+    expect(prompt).not.toContain('Template remit:');
     expect(prompt).toMatch(/Open as yourself: one warm line, in your persona's voice/);
-    expect(prompt).toContain('set up as a Legal Analyst to help Max');
+    expect(prompt).toContain('set up from the Legal analyst template to help Max');
     expect(prompt).toMatch(/ground the opening in the template's remit/i);
     expect(prompt).toContain('- End with a single clear next step.');
     // Not the single-question fallback.
     expect(prompt).not.toMatch(/ask exactly one specific question about what/i);
+  });
+
+  it('adds a prompt-only template remit to the context', () => {
+    const prompt = buildTeammateBootstrapPrompt({
+      displayName: 'Scout',
+      userName: 'Max',
+      templateId: 'researcher',
+    });
+    expect(prompt).toContain('- Created from the Researcher template.');
+    expect(prompt).toContain(
+      '- Template remit: Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.'
+    );
+    expect(prompt).toContain('set up from the Researcher template to help Max');
   });
 
   it('treats the blank starter as no template (no persona, fallback opener)', () => {

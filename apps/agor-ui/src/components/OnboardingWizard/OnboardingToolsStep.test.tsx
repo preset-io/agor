@@ -19,6 +19,7 @@ const entries: MCPCatalogEntry[] = [
     ...catalogEntry,
     name: 'com.notion/mcp',
     title: 'Notion',
+    icon_url: 'https://www.google.com/s2/favicons?domain=notion.so&sz=64',
     category: 'productivity',
     benefit: 'Write and update docs.',
   },
@@ -69,6 +70,19 @@ describe('OnboardingToolsStep', () => {
     await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
     expect(tile('Notion')).toBeInTheDocument();
     expect(tile('Linear')).toBeInTheDocument();
+  });
+
+  it('shows the Catalog logo (letter fallback), display title and category on each tile', async () => {
+    renderStep();
+    const notion = await screen.findByRole('button', { name: 'Notion: view details' });
+    expect(within(notion).getByRole('img', { name: 'Notion logo' })).toHaveAttribute(
+      'src',
+      'https://www.google.com/s2/favicons?domain=notion.so&sz=64'
+    );
+    expect(within(notion).getByText('Productivity')).toBeInTheDocument();
+    const github = tile('GitHub');
+    expect(github.querySelector('.ant-avatar-string')).toHaveTextContent('G');
+    expect(within(github).getByText('Dev tools')).toBeInTheDocument();
   });
 
   it('marks connected tools from caller-scoped readiness', async () => {
