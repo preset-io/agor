@@ -431,8 +431,9 @@ async function runContainment(
         taskId: current.task_id,
         outcome: 'verified_absent',
         errorMessage:
-          ('errorMessage' in containment ? containment.errorMessage : undefined) ??
-          input.errorMessage,
+          'errorMessage' in containment && typeof containment.errorMessage === 'string'
+            ? containment.errorMessage
+            : input.errorMessage,
         coordinationToken,
       },
       { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
