@@ -66,11 +66,9 @@ export async function waitForMCPOAuthAttempt(
 }
 
 export function oauthAttemptFailureMessage(status: MCPOAuthAttemptStatus): string {
-  if (status === 'ambiguous') {
-    return 'OAuth exchange outcome is uncertain. Start a new sign-in; the previous authorization code will not be replayed.';
-  }
-  if (status === 'expired') return 'OAuth sign-in expired. Start a new sign-in.';
-  return 'OAuth sign-in did not complete. Start a new sign-in.';
+  if (status === 'ambiguous') return "Agor couldn't confirm the sign-in. Start a new sign-in.";
+  if (status === 'expired') return 'Sign-in expired. Start a new sign-in.';
+  return "Sign-in didn't finish. Start a new sign-in.";
 }
 
 /** Refetch and atomically apply both durable OAuth UI authorities. */

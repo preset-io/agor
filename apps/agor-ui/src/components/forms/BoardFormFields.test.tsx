@@ -69,7 +69,7 @@ describe('BoardFormFields general-settings permission gating', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'CSS' }));
 
     expect(
-      screen.getByText("You don't have permission to edit this board's appearance.")
+      screen.getByText('You need edit access to change how this board looks.')
     ).toBeInTheDocument();
     expect(screen.queryByLabelText('Background mode')).not.toBeInTheDocument();
   });

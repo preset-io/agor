@@ -1,5 +1,6 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest } from '@agor-live/client';
 import { useEffect, useRef, useState } from 'react';
+import { formatActionError } from '../../utils/connectionErrors';
 import type { RepoTabResult } from '../CreateDialog/tabs/RepoTab';
 import { RepoTab } from '../CreateDialog/tabs/RepoTab';
 import { CreateModalShell } from './CreateModalShell';
@@ -51,7 +52,7 @@ export const CreateRepoModal: React.FC<CreateRepoModalProps> = ({
         onClose();
       }
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : String(error));
+      setSubmitError(formatActionError('add the repository', error, { idempotent: false }));
     } finally {
       setIsSubmitting(false);
     }

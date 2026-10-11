@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { refreshTokensSingleFlight } from '../../utils/singleFlightRefresh';
 import { ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY } from '../../utils/tokenRefresh';
-import { uploadFilesToSession } from './upload';
+import { UploadConnectionError, uploadFilesToSession } from './upload';
 
 vi.mock('@agor-live/client', () => ({ createRestClient: vi.fn(async () => ({})) }));
 vi.mock('../../utils/singleFlightRefresh', () => ({ refreshTokensSingleFlight: vi.fn() }));
@@ -36,6 +36,22 @@ describe('uploadFilesToSession', () => {
     localStorage.clear();
     vi.restoreAllMocks();
     vi.mocked(refreshTokensSingleFlight).mockReset();
+  });
+
+  it('tags only a network rejection from fetch as an unconfirmed upload', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new DOMException('The operation was aborted.', 'AbortError'));
+    const upload = () =>
+      uploadFilesToSession({
+        sessionId: 'session-1',
+        daemonUrl: 'https://daemon.example',
+        files: [new File(['image'], 'shot.png')],
+        accessToken: null,
+      });
+
+    await expect(upload()).rejects.toBeInstanceOf(UploadConnectionError);
+    await expect(upload()).rejects.not.toBeInstanceOf(UploadConnectionError);
   });
 
   it('refreshes the stored token and retries once when the daemon returns 401', async () => {

@@ -34,10 +34,23 @@ describe('BoardPartitionStatus', () => {
     expect(screen.queryByTestId('board-syncing-pill')).not.toBeInTheDocument();
   });
 
+  it('shows a failed load as an error notice with the raw error under Details', () => {
+    agorStore.getState().setCoverage(boardScopeKey(BOARD), {
+      ...boardCoverage('error'),
+      error: 'socket has been disconnected',
+    });
+    render(<BoardPartitionStatus boardId={BOARD} />);
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load this board.");
+    expect(screen.queryByText('socket has been disconnected')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    expect(screen.getByText('socket has been disconnected')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeVisible();
+  });
+
   it('offers an inline retry after a failed load', () => {
     setPartition('error');
     render(<BoardPartitionStatus boardId={BOARD} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(agorStore.getState().coverage.has(boardScopeKey(BOARD))).toBe(false);
   });
 });

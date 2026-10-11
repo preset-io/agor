@@ -1,5 +1,6 @@
 import type { AgorClient, SessionID } from '@agor-live/client';
 import { App } from 'antd';
+import { formatActionError } from '../utils/connectionErrors';
 import { useThemedMessage } from '../utils/message';
 import { ARCHIVE_REFRESH_WARNING, useSessionActions } from './useSessionActions';
 
@@ -16,23 +17,23 @@ export function useConfirmArchiveSession(client: AgorClient | null) {
   const { archiveSession } = useSessionActions(client);
   return (sessionId: string, { onStart, onSettled, onArchived }: ArchiveCallbacks = {}) => {
     modal.confirm({
-      title: 'Archive session and same-branch children?',
+      title: 'Archive this session and its subsessions?',
       content:
-        'This archives the session and its same-branch forked or spawned descendants. Remote-created sessions stay active in their own branch.',
+        'Sessions started from it on this branch are archived too. Sessions on other branches stay active.',
       okText: 'Archive',
       cancelText: 'Cancel',
       onOk: async () => {
         onStart?.();
         try {
           const result = await archiveSession(sessionId as SessionID);
-          if (result?.reconciliation === 'refresh-required') {
-            showWarning(ARCHIVE_REFRESH_WARNING);
-          } else if (result) {
-            showSuccess('Session and same-branch children archived');
-            onArchived?.();
+          if (result.reconciliation === 'refresh-required') {
+            showWarning(ARCHIVE_REFRESH_WARNING, { duration: 0 });
           } else {
-            showError('Failed to archive session');
+            showSuccess('Session archived.');
+            onArchived?.();
           }
+        } catch (error) {
+          showError(formatActionError('archive the session', error, { idempotent: true }));
         } finally {
           onSettled?.();
         }

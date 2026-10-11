@@ -226,10 +226,15 @@ export function useThemedMessage() {
     [message]
   );
 
-  // Errors persist until the user dismisses them or a keyed update replaces
-  // them. Callers can still opt into a finite duration explicitly.
-  const showError = useCallback(
-    (content: React.ReactNode, options?: ThemedMessageOptions) => {
+  // A message that stays until dismissed gets a key and a Dismiss button, so
+  // it can be closed and replaced in place instead of stacking.
+  const openPersistent = useCallback(
+    (
+      open: typeof message.error,
+      kind: 'error' | 'message',
+      content: React.ReactNode,
+      options?: ThemedMessageOptions
+    ) => {
       const key = options?.key ?? createErrorMessageKey();
       const returnFocusTo =
         typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
@@ -246,18 +251,18 @@ export function useThemedMessage() {
         message.destroy(key);
       };
 
-      return message.error({
+      return open({
         content: (
           <MessageContent
             textContent={extractVisibleTextContent(content)}
-            kind="error"
+            kind={kind}
             onDismiss={handleDismiss}
             returnFocusTo={returnFocusTo}
           >
             {content}
           </MessageContent>
         ),
-        duration: options?.duration ?? 0,
+        duration: 0,
         key,
         onClose: handleClose,
       });
@@ -265,19 +270,40 @@ export function useThemedMessage() {
     [message]
   );
 
+  // Errors persist until the user dismisses them or a keyed update replaces
+  // them. Callers can still opt into a finite duration explicitly.
+  const showError = useCallback(
+    (content: React.ReactNode, options?: ThemedMessageOptions) =>
+      options?.duration
+        ? message.error({
+            content: (
+              <MessageContent textContent={extractVisibleTextContent(content)} kind="error">
+                {content}
+              </MessageContent>
+            ),
+            duration: options.duration,
+            key: options.key,
+            onClose: options.onClose,
+          })
+        : openPersistent(message.error, 'error', content, options),
+    [message, openPersistent]
+  );
+
   const showWarning = useCallback(
     (content: React.ReactNode, options?: ThemedMessageOptions) =>
-      message.warning({
-        content: (
-          <MessageContent textContent={extractVisibleTextContent(content)}>
-            {content}
-          </MessageContent>
-        ),
-        duration: options?.duration ?? 4,
-        key: options?.key,
-        onClose: options?.onClose,
-      }),
-    [message]
+      options?.duration === 0
+        ? openPersistent(message.warning, 'message', content, options)
+        : message.warning({
+            content: (
+              <MessageContent textContent={extractVisibleTextContent(content)}>
+                {content}
+              </MessageContent>
+            ),
+            duration: options?.duration ?? 4,
+            key: options?.key,
+            onClose: options?.onClose,
+          }),
+    [message, openPersistent]
   );
 
   const showInfo = useCallback(

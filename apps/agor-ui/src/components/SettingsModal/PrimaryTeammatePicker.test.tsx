@@ -272,3 +272,18 @@ it('can clear an inaccessible stored preference without selecting a replacement'
     expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: null, expectedUserId: USER_ID })
   );
 });
+
+describe('PrimaryTeammatePicker failures', () => {
+  it('shows a persistent themed error when clearing fails', async () => {
+    const current = teammate('branch-1', 'Ada');
+    seedStore([current]);
+    const { client, setPrimaryTeammate } = createClient(current);
+    setPrimaryTeammate.mockRejectedValueOnce(new Error('boom'));
+    renderPicker(client);
+    await screen.findByText(/Currently/);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear primary assistant' }));
+    expect(
+      await screen.findByText("Couldn't change your primary assistant. (boom)")
+    ).toBeInTheDocument();
+  });
+});

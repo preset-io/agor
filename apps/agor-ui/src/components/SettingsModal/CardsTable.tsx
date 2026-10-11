@@ -16,11 +16,18 @@ import {
 import { useMemo, useState } from 'react';
 import { useAgorStore } from '@/store/agorStore';
 import { selectBranchById } from '@/store/selectors';
+import {
+  type ActionErrorCopy,
+  describeActionError,
+  formatActionError,
+  isInFlightConnectionLossError,
+} from '@/utils/connectionErrors';
 import { mapToArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { getBoardEmoji } from '../BoardTile';
 import CardModal from '../CardModal/CardModal';
+import { ActionErrorNotice } from '../CompactNotice';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
@@ -61,6 +68,10 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   const [createTypeModalOpen, setCreateTypeModalOpen] = useState(false);
   const [createTypeModalMounted, setCreateTypeModalMounted] = useState(false);
   const [editTypeModalOpen, setEditTypeModalOpen] = useState(false);
+  const [typeError, setTypeError] = useState<ActionErrorCopy | null>(null);
+  const [savingType, setSavingType] = useState(false);
+  // A create whose reply was lost may have landed; block a second click until the form changes.
+  const [typeCreateUnconfirmed, setTypeCreateUnconfirmed] = useState(false);
   const [editingType, setEditingType] = useState<CardType | null>(null);
   const [cardModalCard, setCardModalCard] = useState<CardWithType | null>(null);
   const [cardModalOpen, setCardModalOpen] = useState(false);
@@ -126,8 +137,10 @@ export const CardsTable: React.FC<CardsTableProps> = ({
   // Card type CRUD handlers
   const handleCreateType = async () => {
     if (!client) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
+      setSavingType(true);
       const colorValue =
         typeof values.color === 'string'
           ? values.color
@@ -139,18 +152,22 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
       setCreateTypeModalOpen(false);
-      showSuccess('Card type created');
+      showSuccess('Card type created.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return; // validation error
-      console.error('Failed to create card type:', err);
-      showError('Failed to create card type');
+      setTypeError(describeActionError('create the card type', err, { idempotent: false }));
+      setTypeCreateUnconfirmed(isInFlightConnectionLossError(err));
+    } finally {
+      setSavingType(false);
     }
   };
 
   const handleUpdateType = async () => {
     if (!client || !editingType) return;
+    setTypeError(null);
     try {
       const values = await form.validateFields();
+      setSavingType(true);
       const colorValue =
         typeof values.color === 'string'
           ? values.color
@@ -162,11 +179,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
         json_schema: values.json_schema ? JSON.parse(values.json_schema) : undefined,
       });
       setEditTypeModalOpen(false);
-      showSuccess('Card type updated');
+      showSuccess('Card type updated.');
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'errorFields' in err) return;
-      console.error('Failed to update card type:', err);
-      showError('Failed to update card type');
+      setTypeError(describeActionError('save the card type', err, { idempotent: true }));
+    } finally {
+      setSavingType(false);
     }
   };
 
@@ -175,10 +193,9 @@ export const CardsTable: React.FC<CardsTableProps> = ({
     try {
       await client.service('card-types').remove(cardTypeId);
       if (selectedTypeId === cardTypeId) setSelectedTypeId(null);
-      showSuccess('Card type deleted');
+      showSuccess('Card type deleted.');
     } catch (err) {
-      console.error('Failed to delete card type:', err);
-      showError('Failed to delete card type');
+      showError(formatActionError('delete the card type', err, { idempotent: true }));
     }
   };
 
@@ -262,7 +279,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 
   // Type form content (shared between create and edit modals)
   const typeFormContent = (
-    <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+    <Form
+      form={form}
+      layout="vertical"
+      style={{ marginTop: 16 }}
+      onValuesChange={() => setTypeCreateUnconfirmed(false)}
+    >
       <Form.Item label="Name" style={{ marginBottom: 24 }}>
         <Flex gap={8}>
           <Form.Item name="emoji" noStyle>
@@ -279,8 +301,15 @@ export const CardsTable: React.FC<CardsTableProps> = ({
       <Form.Item
         name="json_schema"
         label="JSON Schema (optional)"
-        help="Define a JSON Schema to validate card data"
-        rules={[{ validator: validateJSON }]}
+        extra="Define a JSON Schema to validate card data"
+        rules={[
+          {
+            validator: (rule, value: string) =>
+              validateJSON(rule, value).catch(() =>
+                Promise.reject(new Error("The schema isn't valid JSON."))
+              ),
+          },
+        ]}
       >
         <JSONEditor placeholder='{"type": "object", "properties": {...}}' rows={4} />
       </Form.Item>
@@ -354,6 +383,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
               icon={<PlusOutlined />}
               onClick={() => {
                 form.resetFields();
+                setTypeCreateUnconfirmed(false);
                 setCreateTypeModalMounted(true);
                 setCreateTypeModalOpen(true);
               }}
@@ -529,10 +559,15 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           }}
           afterClose={() => {
             form.resetFields();
+            setTypeError(null);
+            setTypeCreateUnconfirmed(false);
             setCreateTypeModalMounted(false);
           }}
           okText="Create"
+          confirmLoading={savingType}
+          okButtonProps={{ disabled: typeCreateUnconfirmed }}
         >
+          {typeError && <ActionErrorNotice error={typeError} />}
           {typeFormContent}
         </AdaptiveSettingsModal>
       )}
@@ -548,10 +583,13 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           }}
           afterClose={() => {
             form.resetFields();
+            setTypeError(null);
             setEditingType(null);
           }}
           okText="Save"
+          confirmLoading={savingType}
         >
+          {typeError && <ActionErrorNotice error={typeError} />}
           {typeFormContent}
         </AdaptiveSettingsModal>
       )}

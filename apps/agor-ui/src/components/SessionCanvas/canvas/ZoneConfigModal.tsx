@@ -435,8 +435,7 @@ export const ZoneConfigModal = ({
         <Alert
           type="warning"
           showIcon
-          title="This zone uses a removed agentic tool"
-          description="Its saved trigger is preserved, but it cannot create a session. Choose a supported tool to migrate the zone explicitly."
+          title="This zone's agent is no longer available. Its trigger is kept, so choose another agent to use it again."
           style={{ marginBottom: token.margin }}
         />
       )}

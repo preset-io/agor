@@ -8,6 +8,7 @@ import {
 import { Alert, Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useLayoutEffect, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { describeActionError } from '@/utils/connectionErrors';
 import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
 import { Tag } from './Tag';
@@ -224,13 +225,11 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
       setInputValues((previous) =>
         previous[field] === raw ? { ...previous, [field]: '' } : previous
       );
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      // Never echo provider/server errors here: they can contain credential values.
-      setFieldErrors((previous) => ({
-        ...previous,
-        [field]: 'Could not save this field. Please try again.',
-      }));
+      // Only the formatted message, never the raw error: it can contain credential values.
+      const { message } = describeActionError('save this field', error, { idempotent: true });
+      setFieldErrors((previous) => ({ ...previous, [field]: message }));
     }
   };
 
@@ -240,12 +239,10 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     setFieldErrors((previous) => ({ ...previous, [field]: undefined }));
     try {
       await onClear(field);
-    } catch {
+    } catch (error) {
       if (!operation.isCurrent()) return;
-      setFieldErrors((previous) => ({
-        ...previous,
-        [field]: 'Could not clear this field. Please try again.',
-      }));
+      const { message } = describeActionError('clear this field', error, { idempotent: true });
+      setFieldErrors((previous) => ({ ...previous, [field]: message }));
     }
   };
 

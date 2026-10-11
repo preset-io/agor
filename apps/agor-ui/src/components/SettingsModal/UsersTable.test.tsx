@@ -203,3 +203,40 @@ describe('UsersTable role authority', () => {
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('new-user-password');
   });
 });
+
+describe('UsersTable groups load', () => {
+  beforeEach(() => {
+    __setAuthConfigForTests({ requireAuth: true });
+  });
+
+  it('shows a groups load failure above the table and retries on Try again', async () => {
+    const admin = user('admin', 'admin');
+    const groupsFindAll = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([{ group_id: 'g1', name: 'Engineering', slug: 'eng' }]);
+    const client = {
+      service: (path: string) => ({
+        findAll:
+          path === 'groups'
+            ? groupsFindAll
+            : vi.fn().mockResolvedValue([{ group_id: 'g1', user_id: 'admin' }]),
+      }),
+    } as unknown as ComponentProps<typeof UsersTable>['client'];
+    render(
+      <ConfigProvider theme={{ hashed: false }}>
+        <AntApp>
+          <UsersTable
+            userById={new Map([[admin.user_id, admin]])}
+            client={client}
+            currentUser={admin}
+          />
+        </AntApp>
+      </ConfigProvider>
+    );
+    expect(await screen.findByText("Couldn't load groups.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('Engineering')).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load groups.")).toBeNull();
+  });
+});
