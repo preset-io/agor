@@ -200,7 +200,7 @@ export const MobileSearchPage: React.FC<MobileSearchPageProps> = ({
               justifyContent: 'center',
             }}
           >
-            <Empty description={`No results for "${query.trim()}"`} />
+            <Empty description={`No results for “${query.trim()}”.`} />
           </div>
         ) : (
           sections.map((section) => (

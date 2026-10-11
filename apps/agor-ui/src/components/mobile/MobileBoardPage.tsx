@@ -1,4 +1,5 @@
 import type {
+  AgorClient,
   Artifact,
   Board,
   BoardEntityObject,
@@ -7,6 +8,7 @@ import type {
   CardWithType,
   Repo,
   Session,
+  User,
 } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import {
@@ -22,7 +24,6 @@ import {
   RobotOutlined,
   SettingOutlined,
   TagsOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
 import {
   Alert,
@@ -50,6 +51,9 @@ import { useAgorStore } from '../../store/agorStore';
 import { makeBoardPartitionSelector } from '../../store/boardPartitions';
 import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { getBoardEmoji } from '../BoardTile';
+import { BranchFilesystemRecovery, BranchStateTag } from '../BranchFilesystemRecovery';
+import { BranchWorkspaceStatus } from '../BranchWorkspaceStatus';
+import { CompactNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { BoardPartitionError } from '../SessionCanvas/BoardPartitionStatus';
 import { mobilePageStyle, mobileScrollAreaStyle } from './constants';
@@ -85,14 +89,13 @@ interface MobileBoardPageProps {
    * may be missing, so the page never infers "empty" from their absence.
    */
   boardReady?: boolean;
+  /** For the branch setup/files notice and its gated actions. */
+  client?: AgorClient | null;
+  currentUser?: User | null;
 }
 
-function statusColor(status: Branch['filesystem_status']): string {
-  if (status === 'ready') return 'success';
-  if (status === 'failed') return 'error';
-  if (status === 'creating') return 'processing';
-  return 'default';
-}
+export const BOARD_UNAVAILABLE =
+  "This board isn't available. It may have been deleted, or you may not have access.";
 
 function spatialSort<T extends { x: number; y: number }>(a: T, b: T): number {
   return a.y - b.y || a.x - b.x;
@@ -123,10 +126,14 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
   onOpenComments,
   userId,
   boardReady = true,
+  client = null,
+  currentUser,
 }) => {
   const { boardId = '' } = useParams<{ boardId: string }>();
   const navigate = useNavigate();
   const { token } = theme.useToken();
+  // Boards load with the first workspace read; until then a missing board may still arrive.
+  const loading = useAgorStore((state) => state.loading);
   const resolvedBoardId = boardById.has(boardId)
     ? boardId
     : resolveBoardFromUrlPure(boardId, boardById);
@@ -158,7 +165,15 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           onSearch={() => navigate('/m/search')}
         />
         <Content style={{ flex: 1, minHeight: 0, padding: token.padding }}>
-          <Empty description="Board not found" />
+          {loading ? (
+            <Text type="secondary">Loading board…</Text>
+          ) : (
+            <CompactNotice
+              type="neutral"
+              message={BOARD_UNAVAILABLE}
+              actions={[{ label: 'Back to home', onClick: () => navigate('/m') }]}
+            />
+          )}
         </Content>
       </div>
     );
@@ -250,9 +265,7 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
             <Text strong ellipsis style={{ minWidth: 0, flex: 1 }}>
               {name}
             </Text>
-            <Tag color={statusColor(branch.filesystem_status)} style={{ margin: 0 }}>
-              {branch.filesystem_status ?? 'unknown'}
-            </Tag>
+            <BranchStateTag branch={branch} style={{ margin: 0 }} />
           </Flex>
         }
       >
@@ -284,15 +297,16 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
           )}
           {!primary && (
             <Text type="secondary" ellipsis>
-              {repo?.slug ?? 'Repository unavailable'}
+              {repo?.slug ?? 'Repository not loaded.'}
             </Text>
           )}
-          {branch.filesystem_status === 'failed' && branch.error_message && (
-            <Flex gap={token.marginXS} align="flex-start">
-              <WarningOutlined style={{ color: token.colorError, marginTop: 3 }} />
-              <Text type="danger">{branch.error_message}</Text>
-            </Flex>
-          )}
+          <BranchWorkspaceStatus
+            branch={branch}
+            client={client}
+            currentUser={currentUser}
+            detailed
+          />
+          <BranchFilesystemRecovery branch={branch} client={client} currentUser={currentUser} />
           <List
             size="small"
             locale={{ emptyText: 'No sessions yet' }}
@@ -433,13 +447,14 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                 }
                 if (object.type !== 'artifact') return null;
                 const artifact = artifactById.get(object.artifact_id);
+                const buildFailed = artifact?.build_status === 'error';
                 return (
                   <Card
                     key={objectId}
                     size="small"
                     title={
                       <Space>
-                        <AppstoreOutlined /> {artifact?.name ?? 'Artifact unavailable'}
+                        <AppstoreOutlined /> {artifact?.name ?? 'Artifact not loaded yet.'}
                       </Space>
                     }
                     extra={
@@ -458,14 +473,28 @@ export const MobileBoardPage: React.FC<MobileBoardPageProps> = ({
                     <Flex vertical gap={token.marginXS}>
                       {artifact?.description && <Text>{artifact.description}</Text>}
                       <Space wrap>
-                        <Tag color={artifact?.build_status === 'error' ? 'error' : 'default'}>
-                          {artifact?.build_status ?? 'missing'}
-                        </Tag>
+                        {!artifact && <Tag>Not loaded yet</Tag>}
+                        {buildFailed && <Tag color="error">Build failed</Tag>}
                         {artifact?.template && <Tag>{artifact.template}</Tag>}
                       </Space>
-                      {artifact?.build_errors?.length ? (
-                        <Alert type="error" showIcon title={artifact.build_errors.join('\n')} />
-                      ) : null}
+                      {/* Successful builds can keep stale build_errors, so only a failed build shows them. */}
+                      {buildFailed && (
+                        <CompactNotice
+                          type="error"
+                          message="This artifact didn't build."
+                          details={
+                            artifact.build_errors?.length
+                              ? [
+                                  {
+                                    label: 'Build errors',
+                                    value: artifact.build_errors.join('\n'),
+                                    code: true,
+                                  },
+                                ]
+                              : undefined
+                          }
+                        />
+                      )}
                     </Flex>
                   </Card>
                 );

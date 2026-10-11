@@ -141,7 +141,7 @@ describe('BranchCard destructive operation states', () => {
       await confirm(action);
       const status = screen.getByRole('status');
       expect(status.textContent).toContain(
-        action === 'archive' ? 'Archiving branch…' : 'Deleting branch…'
+        action === 'archive' ? 'Archiving branch…' : 'Agor is deleting this branch…'
       );
       expect(screen.queryByRole('dialog')).toBeNull();
       expect(screen.queryByRole('region', { name: 'Branch sessions' })).toBeNull();
@@ -210,7 +210,7 @@ describe('BranchCard destructive operation states', () => {
       view({ onArchiveOrDelete, branch: { ...branch, deletion_status: 'deleting' } })
     );
     await act(async () => request.resolve());
-    expect(screen.getByRole('status').textContent).toContain('Deleting branch…');
+    expect(screen.getByRole('status').textContent).toContain('Agor is deleting this branch…');
     expect(mounted.container.querySelector('.ant-spin-spinning')).not.toBeNull();
     expect(screen.queryByRole('region', { name: 'Branch sessions' })).toBeNull();
 
@@ -220,23 +220,37 @@ describe('BranchCard destructive operation states', () => {
         branch: {
           ...branch,
           deletion_status: 'deletion_failed',
-          deletion_error: 'Cleanup requires reconciliation',
+          deletion_error:
+            'Permanent deletion failed during storage. Inspect executor logs and retry deletion.',
         },
       })
     );
-    expect(screen.getByRole('status').textContent).toContain('Deletion failed');
-    expect(screen.getByText('Cleanup requires reconciliation')).not.toBeNull();
+    expect(screen.getByRole('status').textContent).toContain(
+      "Agor couldn't finish deleting this branch."
+    );
     expect(mounted.container.querySelector('.ant-spin-spinning')).toBeNull();
     expect(screen.getByRole('region', { name: 'Branch sessions' })).not.toBeNull();
-    expect(screen.getByTitle('View deletion status or retry').hasAttribute('disabled')).toBe(false);
+    expect(screen.getByTitle('View deletion status').hasAttribute('disabled')).toBe(false);
 
     const retry = deferred();
     onArchiveOrDelete.mockReturnValue(retry.promise);
     await confirm('delete');
-    expect(screen.queryByText('Cleanup requires reconciliation')).toBeNull();
-    expect(screen.getByRole('status').textContent).toContain('Deleting branch…');
+    expect(screen.queryByText("Agor couldn't finish deleting this branch.")).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('Agor is deleting this branch…');
     await act(async () => retry.reject(new Error('Still blocked')));
-    expect(screen.getByText('Cleanup requires reconciliation')).not.toBeNull();
+    expect(screen.getByText("Agor couldn't finish deleting this branch.")).not.toBeNull();
+  });
+
+  it('opens a stuck deletion read-only and refuses to submit from it', async () => {
+    const onArchiveOrDelete = vi.fn();
+    render(view({ onArchiveOrDelete, branch: { ...branch, deletion_status: 'deleting' } }));
+    expect(screen.getByTitle('View deletion status').hasAttribute('disabled')).toBe(false);
+    await confirm('delete');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm archive' }));
+    });
+    expect(onArchiveOrDelete).not.toHaveBeenCalled();
+    expect(screen.getByRole('status').textContent).toContain('Agor is deleting this branch…');
   });
 
   it.each([{ panelMode: true }, { inPopover: true }, {}])(
@@ -245,7 +259,7 @@ describe('BranchCard destructive operation states', () => {
       const mounted = render(
         view({ ...surface, branch: { ...branch, deletion_status: 'deleting' } })
       );
-      expect(screen.getByRole('status').textContent).toContain('Deleting branch…');
+      expect(screen.getByRole('status').textContent).toContain('Agor is deleting this branch…');
       expect(mounted.container.querySelector('.ant-spin-spinning')).not.toBeNull();
       expect(screen.queryByRole('region', { name: 'Branch sessions' })).toBeNull();
     }

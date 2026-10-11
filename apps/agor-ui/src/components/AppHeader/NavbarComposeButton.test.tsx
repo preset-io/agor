@@ -4,6 +4,7 @@ import { App as AntApp, Checkbox, Form } from 'antd';
 import { useEffect } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { NavbarComposeButton } from './NavbarComposeButton';
 
@@ -195,8 +196,19 @@ function makeClient(primary: Branch | null): AgorClient {
   } as unknown as AgorClient;
 }
 
+const ONLINE = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 function renderCompose(opts: {
   primary: Branch | null;
+  client?: AgorClient;
+  connection?: Partial<typeof ONLINE>;
   currentBoardId?: string;
   pathname?: string;
   currentUser?: User | null;
@@ -211,20 +223,22 @@ function renderCompose(opts: {
   const onCreateSession = vi.fn(
     opts.onCreateSession ?? (async () => ({ sessionId: 'session-new' }))
   );
-  const client = makeClient(opts.primary);
+  const client = opts.client ?? makeClient(opts.primary);
   const renderElement = (renderOpts: typeof opts) => (
     <MemoryRouter initialEntries={[renderOpts.pathname ?? '/b/x/']}>
-      <AntApp>
-        <NavbarComposeButton
-          client={client}
-          currentUser={renderOpts.currentUser ?? null}
-          authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
-          isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
-          currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
-          onCreateSession={onCreateSession}
-          disabled={renderOpts.disabled}
-        />
-      </AntApp>
+      <ConnectionProvider value={{ ...ONLINE, ...renderOpts.connection }}>
+        <AntApp>
+          <NavbarComposeButton
+            client={client}
+            currentUser={renderOpts.currentUser ?? null}
+            authenticationGeneration={renderOpts.authenticationGeneration ?? 0}
+            isAuthenticationGenerationCurrent={renderOpts.isAuthenticationGenerationCurrent}
+            currentBoardId={renderOpts.currentBoardId ?? 'board-current'}
+            onCreateSession={onCreateSession}
+            disabled={renderOpts.disabled}
+          />
+        </AntApp>
+      </ConnectionProvider>
     </MemoryRouter>
   );
   const result = render(renderElement(opts));
@@ -598,5 +612,53 @@ describe('NavbarComposeButton', () => {
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['edited-mcp'] });
+  });
+
+  it.each([
+    { connected: true, text: "Couldn't load your primary assistant.", action: true },
+    {
+      connected: false,
+      text: "Couldn't load your primary assistant. The connection to Agor dropped. Try again once it's back.",
+      action: false,
+    },
+  ])(
+    'reports a failed primary lookup (connected: $connected) instead of the picker',
+    async ({ connected, text, action }) => {
+      const getPrimaryTeammate = vi.fn().mockRejectedValue(new Error('Request timed out'));
+      const client = { service: () => ({ getPrimaryTeammate }) } as unknown as AgorClient;
+      renderCompose({ primary: null, client, connection: { connected } });
+      openPopover();
+
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      expect(screen.queryByTestId('primary-picker')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Try again' }) !== null).toBe(action);
+    }
+  );
+
+  it('loads the primary again on Try again', async () => {
+    const getPrimaryTeammate = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Request timed out'))
+      .mockResolvedValue(primaryBranch);
+    const client = { service: () => ({ getPrimaryTeammate }) } as unknown as AgorClient;
+    renderCompose({ primary: null, client });
+    // Opening re-resolves too; fail every read until Try again.
+    getPrimaryTeammate.mockRejectedValueOnce(new Error('Request timed out'));
+    openPopover();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText(/Ada, your primary assistant/)).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't load your primary assistant.")).not.toBeInTheDocument();
+  });
+
+  it('explains why the trigger is disabled while offline', async () => {
+    renderCompose({ primary: primaryBranch, disabled: true, connection: { connected: false } });
+    fireEvent.mouseEnter(
+      screen.getByRole('button', { name: 'Compose — ask your primary assistant' }).parentElement!
+    );
+    expect(
+      await screen.findByText("Lost connection to Agor. Try again once it's back.")
+    ).toBeInTheDocument();
   });
 });

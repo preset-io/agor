@@ -82,3 +82,22 @@ it("badges a collapsed board with its branch-counts aggregate, not the store's b
   await waitFor(() => expect(document.querySelector('.ant-badge-count')).toHaveTextContent('4'));
   expect(reads()).toEqual([]);
 });
+
+it('says so when there are no boards', () => {
+  const { client } = makeClient();
+  render(
+    <MemoryRouter>
+      <MobileNavTree
+        client={client}
+        canUseMemberWorkspaceServices
+        boardById={new Map()}
+        branchById={new Map()}
+        sessionsByBranch={new Map()}
+        commentById={new Map()}
+        onOpenWorkspaceSettings={vi.fn()}
+        onOpenUserSettings={vi.fn()}
+      />
+    </MemoryRouter>
+  );
+  expect(screen.getByText('No boards yet.')).toBeInTheDocument();
+});

@@ -1,13 +1,15 @@
 import type { AgorClient, Branch, Session, SpawnConfig, User } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
-import { Empty, List, Segmented, Spin, theme } from 'antd';
+import { Button, Empty, List, Segmented, Spin, theme } from 'antd';
 import { useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMySessionsLoaded } from '../../store/userScope';
+import { MOBILE_TOUCH_TARGET } from '../../utils/deviceDetection';
 import { isOwnActiveSession, sortSessions } from '../../utils/sessionSearch';
 import { BranchSessionSections } from '../BranchCard';
+import { BranchFilesystemRecovery } from '../BranchFilesystemRecovery';
 import { mobileScrollAreaStyle } from './constants';
 import { MobileHeader } from './MobileHeader';
 import { MobileSessionRow } from './MobileSessionRow';
@@ -28,6 +30,8 @@ interface MobileSessionsPageProps {
   onSpawnSession: (sessionId: string, config: string | Partial<SpawnConfig>) => Promise<void>;
   /** Opens the agent picker to start a session on the given branch. */
   onCreateSessionOnBranch: (branchId: string) => void;
+  /** Starts a session with the primary assistant; omit when the caller can't create sessions. */
+  onAskPrimary?: () => void;
   /** Unread comments count for the header bell. */
   commentsBadge?: number;
   /** Opens comments/mentions from the header bell. */
@@ -54,6 +58,7 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
   onForkSession,
   onSpawnSession,
   onCreateSessionOnBranch,
+  onAskPrimary,
   commentsBadge,
   onOpenComments,
 }) => {
@@ -125,6 +130,11 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
           <Spin style={{ display: 'block', margin: '48px auto' }} />
         ) : scope === 'assistant' && primaryBranch ? (
           <div style={{ paddingInline: token.padding }}>
+            <BranchFilesystemRecovery
+              branch={primaryBranch}
+              client={client}
+              currentUser={currentUser}
+            />
             <BranchSessionSections
               branch={primaryBranch}
               sessions={assistantSessions}
@@ -149,7 +159,19 @@ export const MobileSessionsPage: React.FC<MobileSessionsPageProps> = ({
               justifyContent: 'center',
             }}
           >
-            <Empty description="No sessions yet. Ask your primary assistant to get started." />
+            {onAskPrimary ? (
+              <Empty description="No sessions yet. Ask your primary assistant to get started.">
+                <Button
+                  type="primary"
+                  style={{ minHeight: MOBILE_TOUCH_TARGET }}
+                  onClick={onAskPrimary}
+                >
+                  {primaryBranch ? `Ask ${assistantName}` : 'Ask your primary assistant'}
+                </Button>
+              </Empty>
+            ) : (
+              <Empty description="No sessions yet." />
+            )}
           </div>
         ) : (
           <List

@@ -2,10 +2,12 @@ import type { AgorClient, Board, BoardEntityObject, Branch, Repo } from '@agor-l
 import { EnvironmentOutlined } from '@ant-design/icons';
 import { Skeleton, Tag, Tooltip, Typography, theme } from 'antd';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
 import { formatRelativeTime, formatTimestampWithRelative } from '../../utils/time';
 import { BranchBoardLocatorIcon } from '../BranchBoardLocatorIcon';
+import { BranchStateTag } from '../BranchFilesystemRecovery';
+import { CompactNotice } from '../CompactNotice';
 import { RepoPill } from '../Pill';
 
 /**
@@ -25,7 +27,8 @@ export interface BoardBranchListProps {
 }
 
 /**
- * "All branches" tab body. Mirrors {@link BoardSessionList} but lists the
+ * "All branches" tab body. Render with `key={board.board_id}` so a new board
+ * starts from an empty, unloaded list. Mirrors {@link BoardSessionList} but lists the
  * branches associated with the current board — including archived (hidden)
  * ones, which the global store intentionally omits. Each row pans the board
  * camera onto the branch card, reusing the same recenter channel as the
@@ -40,40 +43,38 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
   const { token } = theme.useToken();
   const recenterMap = useRecenterMap();
   const [branches, setBranches] = useState<BoardBranch[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  // Keep client stable for the event-listener effect without re-subscribing.
-  const clientRef = useRef(client);
-  clientRef.current = client;
+  const [loading, setLoading] = useState(false);
+  // Set by the first successful read; until then the list shows a skeleton or the load error.
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const boardId = board?.board_id;
 
   const loadBranches = useCallback(async () => {
-    const currentClient = clientRef.current;
-    if (!currentClient || !boardId) {
-      setBranches([]);
-      setLoading(false);
-      return;
-    }
+    if (!client || !boardId) return;
 
     setLoading(true);
     try {
       // Omit the `archived` filter so BOTH shown and hidden branches come
       // back. The response is enriched with zone_id/zone_label by the daemon.
-      const result = await currentClient.service('branches').findAll({
+      const result = await client.service('branches').findAll({
         query: {
           board_id: boardId,
           $limit: 1000,
         },
       });
       setBranches(result as BoardBranch[]);
-    } catch {
-      // Keep the tab resilient: leave the last-known list in place.
+      setLoaded(true);
+      setLoadError(null);
+    } catch (error) {
+      // The last-known list stays in place under the refresh warning.
+      setLoadError(error instanceof Error ? error.message : String(error));
     } finally {
       setLoading(false);
     }
-  }, [boardId]);
+  }, [client, boardId]);
 
+  // Also loads once the client connects; until then the skeleton stays up.
   useEffect(() => {
     void loadBranches();
   }, [loadBranches]);
@@ -136,6 +137,14 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
     return null;
   }
 
+  // The count is hidden until the first read lands, so a failed load never reads "0 branches".
+  const footerText = [
+    loaded && `${sortedBranches.length} ${sortedBranches.length === 1 ? 'branch' : 'branches'}`,
+    board.description,
+  ]
+    .filter(Boolean)
+    .join(' • ');
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <section
@@ -144,16 +153,32 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
         tabIndex={0}
         style={{ padding: '8px 0', flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
-        {loading && branches.length === 0 ? (
-          <div style={{ padding: 16 }}>
-            <Skeleton active paragraph={{ rows: 4 }} title={false} />
-          </div>
+        {loadError && (
+          <CompactNotice
+            type={loaded ? 'warning' : 'error'}
+            role={loaded ? 'status' : 'alert'}
+            message={
+              loaded
+                ? "Couldn't refresh branches. This list may be out of date."
+                : "Couldn't load branches."
+            }
+            actions={[{ label: 'Try again', onClick: () => void loadBranches(), loading }]}
+            details={[{ label: 'Error', value: loadError, code: true }]}
+            style={{ marginInline: 24, marginBlockEnd: 8 }}
+          />
+        )}
+        {!loaded ? (
+          !loadError && (
+            <div style={{ padding: 16 }}>
+              <Skeleton active paragraph={{ rows: 4 }} title={false} />
+            </div>
+          )
         ) : sortedBranches.length === 0 ? (
           <Typography.Text
             type="secondary"
             style={{ display: 'block', textAlign: 'center', padding: '24px 0', fontSize: 12 }}
           >
-            No branches on this board
+            No branches on this board yet.
           </Typography.Text>
         ) : (
           sortedBranches.map((branch) => {
@@ -180,7 +205,7 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
                   onAfterBranchClick?.();
                 }}
               >
-                {/* Line 1: branch name · repo · archived state · pan-to button */}
+                {/* Line 1: branch name · archived and status tags · pan-to button */}
                 <div
                   style={{
                     display: 'flex',
@@ -200,6 +225,7 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
                       Archived
                     </Tag>
                   )}
+                  <BranchStateTag branch={branch} style={{ marginInlineEnd: 0, flexShrink: 0 }} />
                   <BranchBoardLocatorIcon branch={branch} size={14} />
                 </div>
 
@@ -255,20 +281,20 @@ export const BoardBranchList: React.FC<BoardBranchListProps> = ({
       </section>
 
       {/* Board Info Footer */}
-      <div
-        style={{
-          padding: '16px 24px',
-          borderTop: `1px solid ${token.colorBorder}`,
-          background: token.colorBgContainer,
-          flexShrink: 0,
-        }}
-      >
-        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {`${sortedBranches.length} branch${sortedBranches.length === 1 ? '' : 'es'}${
-            board.description ? ` • ${board.description}` : ''
-          }`}
-        </Typography.Text>
-      </div>
+      {footerText && (
+        <div
+          style={{
+            padding: '16px 24px',
+            borderTop: `1px solid ${token.colorBorder}`,
+            background: token.colorBgContainer,
+            flexShrink: 0,
+          }}
+        >
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {footerText}
+          </Typography.Text>
+        </div>
+      )}
     </div>
   );
 };

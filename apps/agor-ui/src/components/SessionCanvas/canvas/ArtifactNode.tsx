@@ -9,8 +9,6 @@ import type {
 import { artifactFullscreenPath, sessionPath, shortId } from '@agor-live/client';
 import {
   CheckCircleOutlined,
-  CloseCircleOutlined,
-  CopyOutlined,
   DeleteOutlined,
   ExportOutlined,
   EyeOutlined,
@@ -20,7 +18,6 @@ import {
   MessageOutlined,
   ReloadOutlined,
   UnlockOutlined,
-  WarningOutlined,
 } from '@ant-design/icons';
 import {
   type SandpackPredefinedTemplate,
@@ -29,7 +26,7 @@ import {
   type SandpackSetup,
   useSandpack,
 } from '@codesandbox/sandpack-react';
-import { Alert, Badge, Button, Card, Popconfirm, Spin, Tooltip, Typography, theme } from 'antd';
+import { Badge, Button, Card, Popconfirm, Spin, Tooltip, Typography, theme } from 'antd';
 import { compressToBase64 } from 'lz-string';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NodeResizer } from 'reactflow';
@@ -39,15 +36,14 @@ import {
   ArtifactSandpackErrorReporter,
   ArtifactTrustStatusIcon,
 } from '@/components/artifacts/ArtifactRenderSupport';
-import { getDaemonUrl } from '@/config/daemon';
-import { getAuthHeaders } from '@/utils/authHeaders';
-import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import type { BoardWriteTicket } from '../../../store/boardMutationGuard';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
+import { ArtifactLegacyNotice, ArtifactLoadErrorNotice } from './ArtifactNotices';
+import { type ArtifactLoadFailure, fetchArtifactPayload } from './artifactLoadError';
 import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
 
 ensureSandpackCryptoSubtle();
@@ -161,7 +157,7 @@ function CodeSandboxExporter({ artifactId }: { artifactId: string }) {
         form.submit();
       } catch (err) {
         showError(
-          `Open in CodeSandbox failed: ${err instanceof Error ? err.message : String(err)}`
+          `Couldn't open in CodeSandbox. (${err instanceof Error ? err.message : String(err)})`
         );
       } finally {
         form.remove();
@@ -188,7 +184,7 @@ export const ArtifactNode = ({
   const [interactMode, setInteractMode] = useState(false);
   const [payload, setPayload] = useState<ArtifactPayload | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ArtifactLoadFailure | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // Captured when the delete confirmation opens: a board reload drops it.
@@ -210,23 +206,16 @@ export const ArtifactNode = ({
 
   // Fetch artifact payload from daemon
   const fetchPayload = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const res = await fetch(`${getDaemonUrl()}/artifacts/${data.artifactId}/payload`, {
-        headers: getAuthHeaders(),
-      });
-      if (!res.ok) {
-        throw new Error(`Failed to load artifact: ${res.statusText}`);
-      }
-      const p: ArtifactPayload = await res.json();
-      lastHashRef.current = p.content_hash;
-      setPayload(p);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
+    setLoading(true);
+    setError(null);
+    const result = await fetchArtifactPayload(data.artifactId);
+    if (result.failure) {
+      setError(result.failure);
+    } else {
+      lastHashRef.current = result.payload.content_hash;
+      setPayload(result.payload);
     }
+    setLoading(false);
   }, [data.artifactId]);
 
   // Initial fetch
@@ -327,7 +316,7 @@ export const ArtifactNode = ({
     : loading
       ? 'processing'
       : 'success';
-  const headerBadgeTitle = error ? 'Failed to load' : loading ? 'Reloading...' : 'Live';
+  const headerBadgeTitle = error ? "Couldn't load" : loading ? 'Reloading…' : 'Live';
   // A loaded payload that's also in the error state is stale — the body
   // renders the error placeholder, so the header shouldn't expose
   // payload-acting controls (Export / Interact / Consent) that operate
@@ -400,7 +389,7 @@ export const ArtifactNode = ({
           />
         </Tooltip>
         {hasUsablePayload && (
-          <Tooltip title="Open in CodeSandbox (eject — daemon-injected capabilities won't carry over)">
+          <Tooltip title="Open in CodeSandbox. Features Agor adds to this artifact won't carry over.">
             <Button
               type="text"
               size="small"
@@ -537,14 +526,14 @@ export const ArtifactNode = ({
           size="small"
           title={cardTitle}
         >
-          <Spin indicator={<LoadingOutlined />} description="Loading artifact..." />
+          <Spin indicator={<LoadingOutlined />} description="Loading artifact…" />
         </Card>
       </>
     );
   }
 
   // Error state — title bar visible so the user can see which artifact
-  // failed and act on it (Retry / Delete) without guessing.
+  // failed and act on it (Try again / Delete) without guessing.
   if (error) {
     return (
       <>
@@ -553,36 +542,20 @@ export const ArtifactNode = ({
           style={cardOuterStyle}
           styles={{
             body: {
-              padding: 0,
+              padding: 8,
               flex: 1,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
+              overflow: 'auto',
             },
           }}
           size="small"
           title={cardTitle}
         >
-          <CloseCircleOutlined style={{ fontSize: 24, color: token.colorError }} />
-          <Typography.Text
-            type="danger"
-            style={{ fontSize: 12, textAlign: 'center', padding: '0 16px' }}
-          >
-            {error}
-          </Typography.Text>
-          <Button
-            className="nodrag nopan"
-            size="small"
-            icon={<ReloadOutlined />}
-            onClick={(e) => {
-              e.stopPropagation();
-              fetchPayload();
-            }}
-          >
-            Retry
-          </Button>
+          <ArtifactLoadErrorNotice
+            failure={error}
+            onRetry={fetchPayload}
+            className="nodrag nopan nowheel"
+            style={{ userSelect: 'text' }}
+          />
         </Card>
       </>
     );
@@ -590,8 +563,20 @@ export const ArtifactNode = ({
 
   if (!payload) return null;
 
+  // `nodrag nopan nowheel` + `userSelect` so the upgrade prompt can be
+  // selected and scrolled without dragging or zooming the canvas.
   const legacyBanner = payload.legacy?.is_legacy ? (
-    <LegacyBanner upgradeInstructions={payload.legacy.upgrade_instructions} />
+    <ArtifactLegacyNotice
+      upgradeInstructions={payload.legacy.upgrade_instructions}
+      className="nodrag nopan nowheel"
+      style={{
+        borderRadius: 0,
+        flexShrink: 0,
+        maxHeight: '50%',
+        overflowY: 'auto',
+        userSelect: 'text',
+      }}
+    />
   ) : null;
 
   return (
@@ -700,70 +685,3 @@ export const ArtifactNode = ({
     </>
   );
 };
-
-function LegacyBanner({ upgradeInstructions }: { upgradeInstructions: string }) {
-  const { token } = theme.useToken();
-  const { showSuccess, showError } = useThemedMessage();
-  const handleCopy = async () => {
-    const ok = await copyToClipboard(upgradeInstructions);
-    if (ok) showSuccess('Upgrade prompt copied — paste it to an agent');
-    else showError('Failed to copy — select the text manually and copy with the keyboard');
-  };
-  return (
-    <Alert
-      type="warning"
-      showIcon
-      icon={<WarningOutlined />}
-      // `nodrag nopan` so clicking on the banner doesn't start a React
-      // Flow node drag — without these, the user can't select the upgrade
-      // prompt text to copy it.
-      className="nodrag nopan"
-      style={{ borderRadius: 0, fontSize: 11, padding: '10px 14px' }}
-      title="Legacy artifact — won't render correctly"
-      description={
-        <details style={{ marginTop: 4 }}>
-          <summary style={{ cursor: 'pointer', color: token.colorTextSecondary }}>
-            Show upgrade prompt for an agent
-          </summary>
-          <div style={{ position: 'relative', marginTop: 6 }}>
-            <Button
-              type="text"
-              size="small"
-              icon={<CopyOutlined />}
-              onClick={handleCopy}
-              style={{
-                position: 'absolute',
-                top: 4,
-                right: 4,
-                zIndex: 1,
-                fontSize: 11,
-              }}
-            >
-              Copy
-            </Button>
-            <pre
-              style={{
-                whiteSpace: 'pre-wrap',
-                fontSize: 10,
-                margin: 0,
-                padding: 8,
-                paddingRight: 64, // leave room for the absolute-positioned copy button
-                background: token.colorFillTertiary,
-                borderRadius: 4,
-                maxHeight: 180,
-                overflow: 'auto',
-                // React Flow nodes default to `user-select: none` to keep
-                // drag clean — opt this <pre> back into text selection so
-                // users can copy the upgrade prompt manually too.
-                userSelect: 'text',
-                cursor: 'text',
-              }}
-            >
-              {upgradeInstructions}
-            </pre>
-          </div>
-        </details>
-      }
-    />
-  );
-}

@@ -9,7 +9,6 @@ import type {
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { LeftOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons';
 import {
-  Alert,
   Badge,
   Button,
   Empty,
@@ -35,6 +34,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { selectTeammatesLoaded } from '../../store/userScope';
+import { formatActionError } from '../../utils/connectionErrors';
 import { mapToArray } from '../../utils/mapHelpers';
 import { useThemedMessage } from '../../utils/message';
 import { BranchSessionSections } from '../BranchCard';
@@ -44,7 +44,68 @@ import { BoardBranchList, BoardSessionList } from '../BranchListDrawer';
 import { BranchMetadataRow } from '../BranchMetadataRow';
 import type { BranchModalTab } from '../BranchModal';
 import { CommentsPanel } from '../CommentsPanel';
+import { CompactNotice } from '../CompactNotice';
 import { MarkdownRenderer } from '../MarkdownRenderer';
+
+type TeammateLookup =
+  | { status: 'loading' }
+  | { status: 'found'; branch: Branch }
+  | { status: 'archived' }
+  | { status: 'denied' }
+  | { status: 'failed'; error: string };
+
+/**
+ * A board's primary teammate missing from the store may be archived, hidden from
+ * this viewer, or just outside the loaded teammate list; ask the server which.
+ */
+function usePrimaryTeammateLookup(
+  client: AgorClient | null,
+  teammateId: string | undefined,
+  enabled: boolean
+): { lookup: TeammateLookup; retry: () => void } {
+  const [attempt, setAttempt] = useState(0);
+  const key = `${teammateId}:${attempt}`;
+  const [result, setResult] = useState<{ key: string; lookup: TeammateLookup } | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !client || !teammateId) return;
+    let cancelled = false;
+    client
+      .service('branches')
+      .get(teammateId)
+      .then(
+        (branch: Branch) => {
+          if (cancelled) return;
+          setResult({
+            key,
+            lookup: branch.archived ? { status: 'archived' } : { status: 'found', branch },
+          });
+        },
+        (error: unknown) => {
+          if (cancelled) return;
+          const code = (error as { code?: unknown } | null)?.code;
+          setResult({
+            key,
+            lookup:
+              code === 403 || code === 404
+                ? { status: 'denied' }
+                : {
+                    status: 'failed',
+                    error: error instanceof Error ? error.message : String(error),
+                  },
+          });
+        }
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, client, teammateId, key]);
+
+  return {
+    lookup: result?.key === key ? result.lookup : { status: 'loading' },
+    retry: useCallback(() => setAttempt((n) => n + 1), []),
+  };
+}
 
 export type BoardTeammatePanelTab = 'teammate' | 'all-sessions' | 'all-branches' | 'comments';
 
@@ -100,8 +161,8 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   board,
   activeTab: controlledActiveTab,
   onTabChange,
-  primaryTeammateBranch,
-  primaryTeammateRepo,
+  primaryTeammateBranch: storedTeammateBranch,
+  primaryTeammateRepo: storedTeammateRepo,
   primaryTeammateInaccessible,
   boardReady = true,
   currentUserId,
@@ -139,11 +200,21 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const commentById = useAgorStore(selectCommentById);
   const boardObjects = board?.objects;
-  const canEditBoard = useCanManageBoard(
+  const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+  const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
+  const { lookup: teammateLookup, retry: retryTeammateLookup } = usePrimaryTeammateLookup(
     client,
-    board ?? undefined,
-    currentUserId ? userById.get(currentUserId) : undefined
+    board?.primary_teammate_id,
+    primaryTeammateInaccessible
   );
+  const primaryTeammateBranch =
+    storedTeammateBranch ??
+    (primaryTeammateInaccessible && teammateLookup.status === 'found'
+      ? teammateLookup.branch
+      : undefined);
+  const primaryTeammateRepo =
+    storedTeammateRepo ??
+    (primaryTeammateBranch ? repoById.get(primaryTeammateBranch.repo_id) : undefined);
   // A primary whose branch or repo is not loaded yet must not be offered for replacement.
   const canCreateTeammate =
     canEditBoard && !!onCreateTeammate && !board?.primary_teammate_id && !primaryTeammateBranch;
@@ -269,9 +340,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       });
       showSuccess('Teammate assigned');
     } catch (error) {
-      showError(
-        `Failed to assign teammate: ${error instanceof Error ? error.message : String(error)}`
-      );
+      showError(formatActionError('assign the teammate', error, { idempotent: true }));
     } finally {
       setAssigningTeammate(false);
     }
@@ -379,7 +448,11 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
               </div>
             </div>
 
-            <BranchFilesystemRecovery branch={primaryTeammateBranch} client={client} />
+            <BranchFilesystemRecovery
+              branch={primaryTeammateBranch}
+              client={client}
+              currentUser={currentUser}
+            />
             <BranchMetadataRow
               branch={primaryTeammateBranch}
               repo={primaryTeammateRepo}
@@ -442,15 +515,34 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
       );
     }
 
+    // The branch is known but its repo hasn't loaded: not the empty state.
+    if (primaryTeammateBranch) return boardLoadingSkeleton;
+
     if (primaryTeammateInaccessible) {
+      if (teammateLookup.status === 'loading' || teammateLookup.status === 'found') {
+        return boardLoadingSkeleton;
+      }
       return (
         <div style={{ padding: 16 }}>
-          <Alert
-            type="info"
-            showIcon
-            message="Teammate unavailable"
-            description="This board has a primary teammate, but you do not have access to that teammate branch."
-          />
+          {teammateLookup.status === 'failed' ? (
+            <CompactNotice
+              type="error"
+              role="alert"
+              message="Couldn't load this board's teammate."
+              actions={[{ label: 'Try again', onClick: retryTeammateLookup }]}
+              details={[{ label: 'Error', value: teammateLookup.error, code: true }]}
+            />
+          ) : (
+            <CompactNotice
+              type="neutral"
+              role="status"
+              message={
+                teammateLookup.status === 'archived'
+                  ? "This board's teammate is archived."
+                  : "This board's teammate isn't available. It may have been deleted, or you may not have access."
+              }
+            />
+          )}
         </div>
       );
     }
@@ -461,7 +553,7 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
             <Typography.Text type="secondary">
-              This board does not have a primary teammate yet.
+              This board doesn't have a primary teammate yet.
             </Typography.Text>
           }
           style={{ padding: '24px 0 16px' }}
@@ -558,7 +650,12 @@ const BoardTeammatePanelComponent: React.FC<BoardTeammatePanelProps> = ({
             children: board ? (
               <div style={{ height: 'calc(100vh - 112px)', overflow: 'auto' }}>
                 {sessionDetailsHydrated ? (
-                  <BoardBranchList board={board} repoById={repoById} client={client} />
+                  <BoardBranchList
+                    key={board.board_id}
+                    board={board}
+                    repoById={repoById}
+                    client={client}
+                  />
                 ) : (
                   <div style={{ padding: 16 }}>
                     <Skeleton active paragraph={{ rows: 4 }} title={false} />

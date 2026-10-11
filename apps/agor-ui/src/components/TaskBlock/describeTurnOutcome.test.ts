@@ -299,7 +299,7 @@ describe('describeTurnOutcome v3', () => {
       type: 'warning',
       message: 'Cleanup needs attention. The previous work may still change files.',
       detailsLead:
-        'Use Retry cleanup before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
+        'Try again before continuing. A branch owner or administrator can choose Reopen anyway, but that does not stop the previous work. Messages already received are saved.',
     });
   });
 
