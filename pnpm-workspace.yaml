@@ -154,3 +154,4 @@ minimumReleaseAgeExclude:
   - '@aws-sdk/client-s3@3.1132.0'
   - '@aws-sdk/lib-storage@3.1132.0'
   - open@11.0.4
+fetchTimeout: 600000

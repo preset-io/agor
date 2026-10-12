@@ -802,15 +802,16 @@ export const AutocompleteTextarea = React.forwardRef<
           setIsFileLoading(false);
           setIsKbLoading(false);
 
-          // Filter available commands by query, deduplicating between slashCommands and skills
+          // Deduplicate by invocation: Codex $skills are distinct from /commands.
           const q = slashTrigger.query.toLowerCase();
           const seen = new Set<string>();
           const commandResults: SlashCommandResult[] = [];
 
           for (const cmd of slashCommands) {
             const normalizedCmd = cmd.toLowerCase();
-            if (normalizedCmd.includes(q) && !seen.has(normalizedCmd)) {
-              seen.add(normalizedCmd);
+            const invocationKey = `/${normalizedCmd}`;
+            if (normalizedCmd.includes(q) && !seen.has(invocationKey)) {
+              seen.add(invocationKey);
               commandResults.push({
                 command: cmd,
                 source: 'built-in',
@@ -821,8 +822,9 @@ export const AutocompleteTextarea = React.forwardRef<
           }
           for (const skill of skills) {
             const normalizedSkill = skill.toLowerCase();
-            if (normalizedSkill.includes(q) && !seen.has(normalizedSkill)) {
-              seen.add(normalizedSkill);
+            const invocationKey = `${skillMentionStyle === 'dollar' ? '$' : '/'}${normalizedSkill}`;
+            if (normalizedSkill.includes(q) && !seen.has(invocationKey)) {
+              seen.add(invocationKey);
               commandResults.push(
                 skillMentionStyle === 'dollar'
                   ? {
@@ -1291,7 +1293,7 @@ export const AutocompleteTextarea = React.forwardRef<
               isKbDoc = true;
             } else if ('command' in item) {
               label = item.insertText;
-              itemKey = `cmd-${item.command}`;
+              itemKey = `cmd-${item.insertText}`;
               isCommand = true;
             } else if ('emoji' in item) {
               label = `${item.emoji} :${item.shortcode}:`;

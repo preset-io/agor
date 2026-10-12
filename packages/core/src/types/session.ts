@@ -427,6 +427,7 @@ export interface Session {
     codex_skills_discovery?: {
       session_id: SessionID;
       cwd: string;
+      include_plugins: boolean;
       refreshed_at_ms: number;
     };
     /**

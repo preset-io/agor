@@ -3350,7 +3350,7 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
       sessionId: SessionID,
       session: { custom_context?: Record<string, unknown> },
       branchPath: string
-    ) => void;
+    ) => Promise<void>;
   };
 
   const internals = (service: CodexPromptService): SkillsDiscoveryHarness =>
@@ -3389,7 +3389,8 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
     );
   };
 
-  // Discovery is fire-and-forget; drain its promise chain.
+  // Some focused scheduling tests intentionally do not await the private
+  // helper directly; drain its promise chain.
   const flushDiscovery = async (): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -3460,11 +3461,49 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
           codex_skills_discovery: {
             session_id: 'session-skills',
             cwd: '/work/branch-skills',
+            include_plugins: false,
             refreshed_at_ms: expect.any(Number),
           },
         },
       });
     });
+  });
+
+  it('persists discovery before starting a short-lived Codex stream', async () => {
+    let releaseDiscovery!: (skills: Array<{ name: string; enabled: boolean }>) => void;
+    appServerMocks.listCodexSkillsViaAppServer.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          releaseDiscovery = resolve;
+        })
+    );
+    mockSessionsRepo.findById.mockResolvedValue(sessionFixture());
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+
+    const service = makeService();
+    const stream = service.promptSessionStreaming('session-skills' as SessionID, 'hello');
+    const firstEvent = stream.next();
+
+    await vi.waitFor(() => {
+      expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    });
+    expect(mockStartThreadOptions).toEqual([]);
+
+    releaseDiscovery([{ name: 'deep-research', enabled: true }]);
+    await firstEvent;
+
+    expect(mockSessionsRepo.update).toHaveBeenCalledWith(
+      'session-skills',
+      expect.objectContaining({
+        custom_context: expect.objectContaining({ skills: ['deep-research'] }),
+      })
+    );
+    expect(mockStartThreadOptions).toHaveLength(1);
   });
 
   it('only advances the persistent refresh marker when skill names are already current', async () => {
@@ -3485,6 +3524,7 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
             codex_skills_discovery: {
               session_id: 'session-skills',
               cwd: '/work/branch-skills',
+              include_plugins: false,
               refreshed_at_ms: expect.any(Number),
             },
           },
@@ -3504,6 +3544,7 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
         codex_skills_discovery: {
           session_id: 'session-skills',
           cwd: '/work/branch-skills',
+          include_plugins: false,
           refreshed_at_ms: Date.now(),
         },
       })
@@ -3525,6 +3566,7 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
         codex_skills_discovery: {
           session_id: 'parent-session',
           cwd: '/work/branch-skills',
+          include_plugins: false,
           refreshed_at_ms: Date.now(),
         },
       })
@@ -3548,6 +3590,92 @@ describe('CodexPromptService - skills discovery for prompt autocomplete', () => 
       ['/work/branch-b'],
       expect.anything()
     );
+  });
+
+  it.each([NaN, Infinity, Date.now() + 60_000, Date.now() - 300_001])(
+    'refreshes an invalid, future, or expired timestamp (%s)',
+    async (refreshedAt) => {
+      appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+      scheduleDiscovery(
+        makeService(),
+        sessionFixture({
+          skills: [],
+          codex_skills_discovery: {
+            session_id: 'session-skills',
+            cwd: '/work/branch-skills',
+            include_plugins: false,
+            refreshed_at_ms: refreshedAt,
+          },
+        })
+      );
+      await flushDiscovery();
+      expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('coalesces concurrent callers and contains persistence failures', async () => {
+    let resolveDiscovery!: (skills: []) => void;
+    appServerMocks.listCodexSkillsViaAppServer.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDiscovery = resolve;
+        })
+    );
+    mockSessionsRepo.update.mockRejectedValueOnce(new Error('session deleted'));
+    const service = internals(makeService());
+    const first = service.scheduleCodexSkillsDiscovery(
+      'session-skills' as SessionID,
+      sessionFixture(),
+      '/work/branch-skills'
+    );
+    const second = service.scheduleCodexSkillsDiscovery(
+      'session-skills' as SessionID,
+      sessionFixture(),
+      '/work/branch-skills'
+    );
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    resolveDiscovery([]);
+    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+  });
+
+  it.each([false, true])('refreshes when plugin opt-in changes to %s', async (includePlugins) => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+    const service = makeService();
+    const initial = {
+      ...sessionFixture(),
+      permission_config: { codex: { includePlugins: !includePlugins } },
+    };
+    scheduleDiscovery(service, initial);
+    await flushDiscovery();
+    scheduleDiscovery(service, {
+      ...initial,
+      permission_config: { codex: { includePlugins } },
+    });
+    await flushDiscovery();
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(2);
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenLastCalledWith(
+      ['/work/branch-skills'],
+      expect.objectContaining({ includePlugins })
+    );
+  });
+
+  it('does not reuse persisted skills from a different plugin policy', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+    scheduleDiscovery(
+      makeService(),
+      sessionFixture({
+        skills: ['plugin:private-skill'],
+        codex_skills_discovery: {
+          session_id: 'session-skills',
+          cwd: '/work/branch-skills',
+          include_plugins: true,
+          refreshed_at_ms: Date.now(),
+        },
+      })
+    );
+    await flushDiscovery();
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    expect(customContextWrites()[0][1].custom_context.skills).toEqual([]);
   });
 
   it('swallows discovery failures without writing custom_context (older Codex CLI)', async () => {

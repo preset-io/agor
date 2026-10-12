@@ -19,7 +19,7 @@ afterEach(async () => {
   );
 });
 
-async function createFakeAppServer(): Promise<string> {
+async function createFakeAppServer(mode = 'success'): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'agor-codex-app-server-'));
   temporaryDirectories.push(directory);
   const command = join(directory, 'fake-codex');
@@ -34,6 +34,15 @@ lines.on('line', (line) => {
   if (request.method === 'initialize') {
     send({ id: request.id, result: {} });
   } else if (request.method === 'skills/list') {
+    if (${JSON.stringify(mode)} === 'timeout') return;
+    if (${JSON.stringify(mode)} === 'exit') process.exit(7);
+    if (${JSON.stringify(mode)} === 'error') {
+      send({ id: request.id, error: { code: -32601, message: 'unknown method skills/list' } });
+      return;
+    }
+    process.stdout.write('not-json\\n');
+    send({ method: 'notification' });
+    send({ id: 9999, result: {} });
     send({
       id: request.id,
       result: {
@@ -125,6 +134,32 @@ describe('extractCodexSkillsFromListResponse', () => {
 });
 
 describe('CodexAppServerClient', () => {
+  it.skipIf(process.platform === 'win32').each([
+    ['timeout', /Timed out/],
+    ['exit', /exited unexpectedly/],
+    ['error', /MCP operation failed/],
+  ] as const)('rejects %s failures and allows repeated cleanup', async (mode, error) => {
+    const client = new CodexAppServerClient({
+      command: await createFakeAppServer(mode),
+      timeoutMs: 500,
+    });
+    try {
+      await expect(client.listSkills(['/work/branch'])).rejects.toThrow(error);
+    } finally {
+      await client.close();
+      await client.close();
+    }
+  });
+
+  it('rejects a missing executable without hanging', async () => {
+    const client = new CodexAppServerClient({ command: '/nonexistent/agor-codex-sidecar' });
+    try {
+      await expect(client.listSkills(['/work/branch'])).rejects.toThrow();
+    } finally {
+      await client.close();
+    }
+  });
+
   it.skipIf(process.platform === 'win32')(
     'uses the supplied env as authoritative and sends skills/list with the requested cwd',
     async () => {

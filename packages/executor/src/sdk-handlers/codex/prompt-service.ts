@@ -222,11 +222,9 @@ function codexDebug(...args: unknown[]): void {
  */
 const SKILLS_DISCOVERY_TTL_MS = 5 * 60 * 1000;
 
-interface CodexSkillsDiscoveryMetadata {
-  session_id: SessionID;
-  cwd: string;
-  refreshed_at_ms: number;
-}
+type CodexSkillsDiscoveryMetadata = NonNullable<
+  NonNullable<Session['custom_context']>['codex_skills_discovery']
+>;
 
 function parseCodexSkillsDiscoveryMetadata(value: unknown): CodexSkillsDiscoveryMetadata | null {
   if (!value || typeof value !== 'object') return null;
@@ -234,6 +232,7 @@ function parseCodexSkillsDiscoveryMetadata(value: unknown): CodexSkillsDiscovery
   if (
     typeof candidate.session_id !== 'string' ||
     typeof candidate.cwd !== 'string' ||
+    typeof candidate.include_plugins !== 'boolean' ||
     typeof candidate.refreshed_at_ms !== 'number' ||
     !Number.isFinite(candidate.refreshed_at_ms)
   ) {
@@ -242,6 +241,7 @@ function parseCodexSkillsDiscoveryMetadata(value: unknown): CodexSkillsDiscovery
   return {
     session_id: candidate.session_id as SessionID,
     cwd: candidate.cwd,
+    include_plugins: candidate.include_plugins,
     refreshed_at_ms: candidate.refreshed_at_ms,
   };
 }
@@ -400,7 +400,7 @@ export class CodexPromptService {
   private instructionsFilePaths = new Map<SessionID, string>();
   private skillsDiscovery = new Map<
     SessionID,
-    { at: number; cwd: string; inFlight?: Promise<void> }
+    { at: number; cwd: string; includePlugins: boolean; inFlight?: Promise<void> }
   >();
 
   /**
@@ -1158,23 +1158,26 @@ export class CodexPromptService {
    *
    * Codex's exec/SDK surface never reports installed skills, so this asks the
    * local `codex app-server` sidecar (`skills/list`) with the branch path as
-   * cwd. Fire-and-forget: runs concurrently with the turn, is throttled per
-   * session so back-to-back prompts don't respawn the sidecar, and never
+   * cwd. The refresh is throttled per session so back-to-back prompts don't
+   * respawn the sidecar, and its handled promise is awaited before the turn so
+   * the one-task executor cannot exit before persistence completes. It never
    * fails the turn (older Codex CLIs without `skills/list` just log at debug).
    */
   private scheduleCodexSkillsDiscovery(
     sessionId: SessionID,
     session: Pick<Session, 'custom_context' | 'permission_config'>,
     branchPath: string
-  ): void {
+  ): Promise<void> {
     const now = Date.now();
+    const includePlugins = session.permission_config?.codex?.includePlugins === true;
     const state = this.skillsDiscovery.get(sessionId);
     if (
       state &&
       state.cwd === branchPath &&
+      state.includePlugins === includePlugins &&
       (state.inFlight || now - state.at < SKILLS_DISCOVERY_TTL_MS)
     ) {
-      return;
+      return state.inFlight ?? Promise.resolve();
     }
 
     // Executors are intentionally one-task processes, so an in-memory TTL
@@ -1187,16 +1190,17 @@ export class CodexPromptService {
     if (
       persisted?.session_id === sessionId &&
       persisted.cwd === branchPath &&
+      persisted.include_plugins === includePlugins &&
       persisted.refreshed_at_ms <= now &&
       now - persisted.refreshed_at_ms < SKILLS_DISCOVERY_TTL_MS
     ) {
-      return;
+      return Promise.resolve();
     }
 
     const inFlight = (async () => {
       const skills = await listCodexSkillsViaAppServer([branchPath], {
         env: this.buildAppServerEnv(),
-        includePlugins: session.permission_config?.codex?.includePlugins === true,
+        includePlugins,
       });
       const names = skills.map((skill) => skill.name).sort((a, b) => a.localeCompare(b));
 
@@ -1215,6 +1219,7 @@ export class CodexPromptService {
           codex_skills_discovery: {
             session_id: sessionId,
             cwd: branchPath,
+            include_plugins: includePlugins,
             refreshed_at_ms: Date.now(),
           },
         },
@@ -1222,9 +1227,7 @@ export class CodexPromptService {
       codexDebug(`✅ [Codex] Refreshed ${names.length} discovered skill(s) for autocomplete`);
     })();
 
-    this.skillsDiscovery.set(sessionId, { at: now, cwd: branchPath, inFlight });
-
-    void inFlight
+    const settled = inFlight
       .catch((error) => {
         codexDebug(
           '⚠️ [Codex] Skills discovery failed (autocomplete list not refreshed):',
@@ -1233,10 +1236,21 @@ export class CodexPromptService {
       })
       .finally(() => {
         const latest = this.skillsDiscovery.get(sessionId);
-        if (latest?.inFlight === inFlight) {
-          this.skillsDiscovery.set(sessionId, { at: Date.now(), cwd: branchPath });
+        if (latest?.inFlight === settled) {
+          this.skillsDiscovery.set(sessionId, { at: Date.now(), cwd: branchPath, includePlugins });
         }
       });
+
+    // Store the handled promise: a concurrent caller may await it, and skill
+    // discovery failures must never escape into prompt execution.
+    this.skillsDiscovery.set(sessionId, {
+      at: now,
+      cwd: branchPath,
+      includePlugins,
+      inFlight: settled,
+    });
+
+    return settled;
   }
 
   /**
@@ -1392,9 +1406,12 @@ export class CodexPromptService {
 
     codexDebug(`   Working directory: ${branch.path}`);
 
-    // Refresh the composer's skill autocomplete in the background; never
-    // blocks or fails the turn.
-    this.scheduleCodexSkillsDiscovery(sessionId, session, branch.path);
+    // The executor is a one-task process and exits as soon as the stream is
+    // complete. Await the sidecar refresh so a quick Codex turn cannot tear it
+    // down before the Session patch reaches the daemon (observed reliably in
+    // the SQLite development environment). Failures are swallowed inside the
+    // helper, so discovery still cannot fail the user's prompt.
+    await this.scheduleCodexSkillsDiscovery(sessionId, session, branch.path);
 
     await this.ensureForkedCodexThread(sessionId, session);
 

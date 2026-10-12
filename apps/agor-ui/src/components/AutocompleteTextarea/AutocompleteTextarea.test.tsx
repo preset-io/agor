@@ -28,7 +28,10 @@ const renderSlashAutocomplete = () => {
   return screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement;
 };
 
-const renderSkillsAutocomplete = (skillMentionStyle?: SkillMentionStyle) => {
+const renderSkillsAutocomplete = (
+  skillMentionStyle?: SkillMentionStyle,
+  slashCommands?: string[]
+) => {
   const Harness = () => {
     const [value, setValue] = useState('');
 
@@ -42,6 +45,7 @@ const renderSkillsAutocomplete = (skillMentionStyle?: SkillMentionStyle) => {
         userById={new Map()}
         skills={['weekly-meeting-plugin:collect-from-jira', 'deep-research']}
         skillMentionStyle={skillMentionStyle}
+        slashCommands={slashCommands}
       />
     );
   };
@@ -238,6 +242,30 @@ describe('AutocompleteTextarea', () => {
     await waitFor(() => {
       expect(textarea).toHaveValue('$weekly-meeting-plugin:collect-from-jira ');
     });
+  });
+
+  it('keeps a Codex skill distinct from a same-named slash command', async () => {
+    const textarea = renderSkillsAutocomplete('dollar', ['deep-research']);
+    fireEvent.change(textarea, { target: { value: '/deep', selectionStart: 5 } });
+    await waitFor(() => expect(screen.getAllByText('deep-research')).toHaveLength(2));
+    fireEvent.click(screen.getByText('skill'));
+    await waitFor(() => expect(textarea).toHaveValue('$deep-research '));
+  });
+
+  it('still deduplicates a Claude skill matching a slash command', async () => {
+    const textarea = renderSkillsAutocomplete('slash', ['deep-research']);
+    fireEvent.change(textarea, { target: { value: '/deep', selectionStart: 5 } });
+    expect(await screen.findAllByText('deep-research')).toHaveLength(1);
+    fireEvent.keyDown(textarea, { key: 'Tab' });
+    await waitFor(() => expect(textarea).toHaveValue('/deep-research '));
+  });
+
+  it('inserts a Codex skill with the keyboard while preserving trailing prompt text', async () => {
+    const textarea = renderSkillsAutocomplete('dollar');
+    fireEvent.change(textarea, { target: { value: '/deep summarize this', selectionStart: 5 } });
+    await screen.findByText('deep-research');
+    fireEvent.keyDown(textarea, { key: 'Tab' });
+    await waitFor(() => expect(textarea).toHaveValue('$deep-research  summarize this'));
   });
 
   it('combines Knowledge and file suggestions for @ queries without changing file search', async () => {
