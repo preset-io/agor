@@ -57,6 +57,8 @@ const REVEAL = lastSent + SHRINK + 0.1;
 const playFor = (bot: Bot) => (marks[bot].answered + 1.5 - marks[bot].sent) / ANSWER_RATE;
 const SEGMENT = REVEAL + Math.max(...ORDER.map(playFor)) + HOLD;
 export const BEBOP_SECONDS = LOGO + SEGMENT + END;
+/** Without the end card (for the combined reel). */
+export const BEBOP_BODY_SECONDS = LOGO + SEGMENT;
 
 const timing = (bot: Bot, i: number): PaneTiming => ({
   ...base(bot),
@@ -70,7 +72,7 @@ const timing = (bot: Bot, i: number): PaneTiming => ({
  * full screen while its question is typed, and closes back into its slice
  * on send; then all four play their real answers side by side.
  */
-export const AiTeammatesBebop: React.FC = () => {
+export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = true }) => {
   const { fps } = useVideoConfig();
   const f = (sec: number) => Math.round(sec * fps);
   return (
@@ -131,9 +133,11 @@ export const AiTeammatesBebop: React.FC = () => {
           <SliceTitle holdFor={TITLE_HOLD} />
         </Sequence>
       </Sequence>
-      <Sequence name="End" from={f(LOGO + SEGMENT)} premountFor={fps}>
-        <EndCard line="AI teammates that can do anything" />
-      </Sequence>
+      {withEnd ? (
+        <Sequence name="End" from={f(LOGO + SEGMENT)} premountFor={fps}>
+          <EndCard line="AI teammates that can do anything" />
+        </Sequence>
+      ) : null}
     </AbsoluteFill>
   );
 };

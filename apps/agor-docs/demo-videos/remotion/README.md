@@ -31,6 +31,15 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
     logo and title.
   - Timing comes from the clips' marks (`question`, `sent`, `answered`);
     pacing constants sit at the top of `Bebop.tsx`.
+- **Interfaces** (`src/interfaces/`): "talk to them from anywhere", 5s. The
+  same question to EngBot from Slack, Discord, Claude Desktop (through Agor's
+  MCP server) and Agor itself, in four comic panels cut by an off-axis cross
+  of black gutters, each punching in with a slanted tab. Slack, Discord and
+  Claude Desktop are hand-rolled stages (`stages.tsx`): each app's visual
+  grammar, not pixel clones, no third-party logos (like the website's Slack
+  scene). The Agor panel is the real EngBot clip.
+- **TeammatesReel** (`src/Reel.tsx`): the AI teammates segment hard-cut into
+  Interfaces, with one end card.
 - **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
   2x2 Brady Bunch grid. Kept for comparison.
 

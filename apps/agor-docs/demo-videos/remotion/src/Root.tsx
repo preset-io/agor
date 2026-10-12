@@ -1,10 +1,28 @@
 import { Composition } from 'remotion';
+import { INTERFACES_SECONDS, Interfaces } from './interfaces/Interfaces';
+import { REEL_SECONDS, TeammatesReel } from './Reel';
 import { AiTeammates, DURATION_SECONDS } from './teammates/AiTeammates';
 import { AiTeammatesBebop, BEBOP_SECONDS } from './teammates/Bebop';
 
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <Composition
+        id="TeammatesReel"
+        component={TeammatesReel}
+        durationInFrames={Math.ceil(REEL_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
+      <Composition
+        id="Interfaces"
+        component={Interfaces}
+        durationInFrames={Math.ceil(INTERFACES_SECONDS * 30)}
+        fps={30}
+        width={1920}
+        height={1080}
+      />
       <Composition
         id="AiTeammatesBebop"
         component={AiTeammatesBebop}

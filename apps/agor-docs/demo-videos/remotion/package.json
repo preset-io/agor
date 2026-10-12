@@ -29,6 +29,8 @@
     "lint": "eslint src && tsc",
     "sync": "node scripts/sync-clips.mjs",
     "render:teammates": "remotion render AiTeammatesBebop out/ai-teammates-bebop.mp4",
-    "render:teammates-grid": "remotion render AiTeammatesGrid out/ai-teammates-grid.mp4"
+    "render:teammates-grid": "remotion render AiTeammatesGrid out/ai-teammates-grid.mp4",
+    "render:interfaces": "remotion render Interfaces out/interfaces.mp4",
+    "render:reel": "remotion render TeammatesReel out/teammates-reel.mp4"
   }
 }
