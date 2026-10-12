@@ -151,12 +151,16 @@ export const PrimaryTeammatePicker: React.FC<PrimaryTeammatePickerProps> = ({
         </Typography.Text>
       )}
 
-      <Button
-        disabled={disabled || saving || !client || !currentUserId || loadFailed}
-        onClick={() => void handleChange(null)}
-      >
-        Clear primary assistant
-      </Button>
+      {/* Settings can clear a stored preference that no longer resolves; the compact
+          "no primary assistant yet" Ask flows only pick, which replaces it anyway. */}
+      {(current || !compact) && (
+        <Button
+          disabled={disabled || saving || !client || !currentUserId || loadFailed}
+          onClick={() => void handleChange(null)}
+        >
+          Clear primary assistant
+        </Button>
+      )}
       <Select
         showSearch
         loading={saving}

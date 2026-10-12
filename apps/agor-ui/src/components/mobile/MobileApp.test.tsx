@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '../../contexts/ThemeContext';
 import { agorStore } from '../../store/agorStore';
 import { setRealtimeAuthorityScope } from '../../store/realtimeBatch';
+import { OPEN_CREATE_FLOW_EVENT, requestShellPicker } from '../../utils/shellEvents';
 import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { MobileApp } from './MobileApp';
 
@@ -345,6 +346,39 @@ describe('MobileApp branch actions', () => {
     view.rerender(mobileAppTree('/m', { ...props, authGeneration: 4 }));
     await waitFor(() => expect(teammatePicker.mounts).toBe(mountsBefore + 1));
     expect(teammatePicker.props).toMatchObject({ authenticationGeneration: 4 });
+  });
+
+  it('opens the shared create-teammate flow from the Ask sheet, as desktop does', async () => {
+    const onOpenWorkspaceSettings = vi.fn();
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(
+      mobileAppTree('/m', {
+        client,
+        user: { user_id: 'user-1', role: 'member' },
+        onOpenWorkspaceSettings,
+      })
+    );
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Create a new teammate' }));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
+    // Not the Settings teammates tab, whose create button the phone shell had left unwired.
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
+  it('offers no create link to viewers, who cannot create teammates', async () => {
+    const client = { service: () => ({ getPrimaryTeammate: async () => null }) };
+    render(mobileAppTree('/m', { client, user: { user_id: 'user-1', role: 'viewer' } }));
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: 'Ask your primary assistant' }));
+    await screen.findByTestId('teammate-picker');
+    expect(screen.queryByRole('button', { name: 'Create a new teammate' })).not.toBeInTheDocument();
+  });
+
+  it("opens the shared create-teammate flow for Settings' Create AI teammate", async () => {
+    render(mobileAppTree('/m', { user: { user_id: 'user-1', role: 'member' } }));
+    act(() => requestShellPicker(OPEN_CREATE_FLOW_EVENT, 'teammate'));
+    expect(await screen.findByText('New AI teammate')).toBeInTheDocument();
   });
 
   it('starts Ask sessions with the caller saved agent defaults, like desktop quick compose', async () => {

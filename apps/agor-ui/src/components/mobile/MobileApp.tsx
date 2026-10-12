@@ -40,6 +40,7 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { clearOpenedSessionFlags } from '../../utils/sessionAttention';
+import { OPEN_CREATE_FLOW_EVENT, onShellPicker } from '../../utils/shellEvents';
 import { resolveBoardFromUrlPure, resolveSessionFromShortIdPure } from '../../utils/urlResolution';
 import { buildNewSessionConfig } from '../AgenticToolConfigurationPicker/newSessionConfig';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
@@ -285,6 +286,10 @@ export const MobileApp: React.FC<MobileAppProps> = ({
     onCreateRepo,
     onCreateLocalRepo,
   });
+
+  // Settings' "Create AI teammate" (rendered by the app root) opens the shared flow here.
+  const openCreate = createFlows.openCreate;
+  useEffect(() => onShellPicker(OPEN_CREATE_FLOW_EVENT, openCreate), [openCreate]);
 
   // NB: match `/m/session/` (detail) with the trailing slash so it never
   // swallows `/m/sessions` (the sessions list under Home).
@@ -644,16 +649,19 @@ export const MobileApp: React.FC<MobileAppProps> = ({
             void startPrimarySession(branch);
           }}
         />
-        <Button
-          type="link"
-          style={{ paddingInline: 0 }}
-          onClick={() => {
-            setAskPickerOpen(false);
-            onOpenWorkspaceSettings('teammates');
-          }}
-        >
-          Create a new teammate
-        </Button>
+        {canCreateSessions && (
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            onClick={() => {
+              // The shared create-teammate flow, as from Create new and desktop's "+".
+              setAskPickerOpen(false);
+              createFlows.openCreate('teammate');
+            }}
+          >
+            Create a new teammate
+          </Button>
+        )}
       </Drawer>
 
       <Drawer
