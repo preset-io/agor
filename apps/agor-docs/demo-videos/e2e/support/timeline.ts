@@ -86,8 +86,16 @@ export class Timeline {
   }
 }
 
-export function takeDir(clipId: string): string {
-  return path.join(TAKES_DIR, clipId);
+/**
+ * A take's name: the clip id, plus '@snappy' for the trailer-pace replay
+ * (AGOR_E2E_PACE=snappy), so the snappy take never overwrites the honest one.
+ */
+export function takeName(clipId: string, pace = process.env.AGOR_E2E_PACE): string {
+  return pace === 'snappy' ? `${clipId}@snappy` : clipId;
+}
+
+export function takeDir(clipId: string, pace = process.env.AGOR_E2E_PACE): string {
+  return path.join(TAKES_DIR, takeName(clipId, pace));
 }
 
 export function readTimeline(dir: string): TimelineEvent[] {

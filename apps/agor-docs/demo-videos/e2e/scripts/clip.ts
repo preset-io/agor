@@ -4,6 +4,8 @@
 //   npm run clip -- <id> --export-only  # re-export the last take (after editing
 //                                       # its timeline.jsonl: zooms, timing)
 //   npm run clip -- <id> --live         # agent clips: record real (metered) turns
+//   npm run clip -- <id> --snappy       # trailer pace: brisk beats, fast replay
+//                                       # (recorded agent clips only); writes <id>-snappy*
 //   npm run clip -- <id> --1080         # capture at 1080p (no lossless zoom)
 //   npm run clip -- <id> --reseed       # rebuild the clip's seed first
 //
@@ -19,6 +21,8 @@
 //   site:  <id>-1600.mp4 (CRF 23), <id>-540.mp4 (CRF 25)  — agor.live renditions
 //   tv:    <id>-4k30.mp4 (lanczos upscale, silent AAC for Roku)
 //   raw:   <id>-raw.mp4 (native 4K, no camera moves) + <id>-marks.json
+//   tight: <id>-tight.mp4 (+ -tight-raw.mp4, -tight-marks.json): still
+//          stretches squeezed to a beat (see planTighten in lib/render.ts)
 
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
@@ -28,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { type ClipMeta, clipById } from '../support/clips.ts';
 import { CACHE_DIR, CASSETTES_DIR, CHECKPOINTS_DIR } from '../support/harness.ts';
 import { readTimeline, takeDir } from '../support/timeline.ts';
-import { renderMaster } from './lib/render.ts';
+import { planTighten, renderMaster } from './lib/render.ts';
 import { ensureSeed } from './seed.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -38,6 +42,8 @@ const FONT = path.join(CACHE_DIR, 'reel-assets', 'SpaceGrotesk.ttf');
 
 interface Flags {
   live: boolean;
+  /** Trailer pace: brisk scene beats and a fast, low-latency replay. */
+  snappy: boolean;
   capture1080: boolean;
   reseed: boolean;
 }
@@ -89,19 +95,32 @@ function record(clip: ClipMeta, flags: Flags): void {
     }
     env.AGOR_E2E_AGENT_MODE = flags.live ? 'live' : 'replay';
   }
+  if (flags.snappy) {
+    if (flags.live)
+      throw new Error('--snappy replays a recorded take; capture it first with --live');
+    env.AGOR_E2E_PACE = 'snappy';
+    // Answers stream 3x faster and each model call starts within 150 ms;
+    // tool calls (queries, files, the gh stand-in) still really run.
+    env.AGOR_E2E_REPLAY_SPEED = '3';
+    env.AGOR_E2E_REPLAY_FIRST_CHUNK_MS = '150';
+  } else {
+    delete env.AGOR_E2E_PACE;
+  }
   env.AGOR_E2E_VIDEO = flags.capture1080 || clip.capture === '1080' ? '1080' : '4k';
   sh('npx', ['playwright', 'test', '--project=clips', `tests/clips/${clip.id}.spec.ts`], env);
 }
 
-function exportClip(clip: ClipMeta, open: boolean): void {
-  const dir = takeDir(clip.id);
+function exportClip(clip: ClipMeta, open: boolean, pace?: 'snappy'): void {
+  const dir = takeDir(clip.id, pace);
+  // The snappy take's files sit beside the honest ones: <id>-snappy*.
+  const name = pace === 'snappy' ? `${clip.id}-snappy` : clip.id;
   const events = readTimeline(dir);
   const filmed = events.flatMap((e) =>
     e.type === 'actor' && (e.video || e.frames) ? [e.actor] : []
   );
   const outDir = path.join(OUT_ROOT, clip.id);
   mkdirSync(outDir, { recursive: true });
-  const master = path.join(outDir, `${clip.id}.mp4`);
+  const master = path.join(outDir, `${name}.mp4`);
   console.log(`[clip] rendering ${clip.id} (${filmed.join(' + ')})...`);
   const warnings = renderMaster({
     takeDir: dir,
@@ -113,6 +132,22 @@ function exportClip(clip: ClipMeta, open: boolean): void {
   });
   for (const w of warnings) console.warn(`[clip] warning: ${w}`);
 
+  const ready = events.find((e) => e.type === 'ready');
+  const marks = events.flatMap((e) =>
+    e.type === 'mark' && ready
+      ? [{ label: e.label, frame: Math.round(((e.wall - ready.wall) * 30) / 1000) }]
+      : []
+  );
+  const writeMarks = (file: string, map: (frame: number) => number = (f) => f) =>
+    writeFileSync(
+      path.join(outDir, file),
+      `${JSON.stringify(
+        marks.map((m) => ({ label: m.label, seconds: Number((map(m.frame) / 30).toFixed(3)) })),
+        null,
+        2
+      )}\n`
+    );
+
   if (clip.outputs.includes('raw')) {
     console.log(`[clip] rendering the raw 4K cut...`);
     renderMaster({
@@ -120,17 +155,39 @@ function exportClip(clip: ClipMeta, open: boolean): void {
       events,
       actors: filmed,
       layout: 'single',
-      out: path.join(outDir, `${clip.id}-raw.mp4`),
+      out: path.join(outDir, `${name}-raw.mp4`),
       raw: true,
     });
-    const ready = events.find((e) => e.type === 'ready');
-    const marks = events.flatMap((e) =>
-      e.type === 'mark' && ready ? [{ label: e.label, seconds: (e.wall - ready.wall) / 1000 }] : []
+    writeMarks(`${name}-marks.json`);
+  }
+
+  if (clip.outputs.includes('tight')) {
+    // Tight cut: still stretches (thinking, queries, ticking timers)
+    // squeezed to a beat; motion, typing, marks and camera moves kept whole.
+    const plan = planTighten(dir, events, filmed[0]);
+    console.log(
+      `[clip] tight cut: ${(plan.frames / 30).toFixed(1)}s -> ${(plan.keptFrames / 30).toFixed(1)}s`
     );
-    writeFileSync(
-      path.join(outDir, `${clip.id}-marks.json`),
-      `${JSON.stringify(marks, null, 2)}\n`
-    );
+    renderMaster({
+      takeDir: dir,
+      events,
+      actors: filmed,
+      layout: 'single',
+      out: path.join(outDir, `${name}-tight.mp4`),
+      keep: plan.keep,
+    });
+    if (clip.outputs.includes('raw')) {
+      renderMaster({
+        takeDir: dir,
+        events,
+        actors: filmed,
+        layout: 'single',
+        out: path.join(outDir, `${name}-tight-raw.mp4`),
+        raw: true,
+        keep: plan.keep,
+      });
+    }
+    writeMarks(`${name}-tight-marks.json`, plan.map);
   }
 
   const h264 = [
@@ -152,9 +209,9 @@ function exportClip(clip: ClipMeta, open: boolean): void {
     '1',
     '-q:v',
     '3',
-    path.join(outDir, `${clip.id}-poster.jpg`),
+    path.join(outDir, `${name}-poster.jpg`),
   ]);
-  if (clip.outputs.includes('site')) {
+  if (clip.outputs.includes('site') && !pace) {
     for (const [w, h, crf, suffix] of [
       [1600, 900, 23, '1600'],
       [960, 540, 25, '540'],
@@ -172,7 +229,7 @@ function exportClip(clip: ClipMeta, open: boolean): void {
       ]);
     }
   }
-  if (clip.outputs.includes('tv')) {
+  if (clip.outputs.includes('tv') && !pace) {
     ffmpeg([
       '-i',
       master,
@@ -210,17 +267,18 @@ function main(): void {
   const id = args.find((a) => !a.startsWith('--'));
   if (!id) {
     throw new Error(
-      'Usage: npm run clip -- <id> [--export-only] [--live] [--1080] [--reseed] [--no-open]'
+      'Usage: npm run clip -- <id> [--export-only] [--live] [--snappy] [--1080] [--reseed] [--no-open]'
     );
   }
   const clip = clipById(id);
   const flags: Flags = {
     live: args.includes('--live'),
+    snappy: args.includes('--snappy'),
     capture1080: args.includes('--1080'),
     reseed: args.includes('--reseed'),
   };
   if (!args.includes('--export-only')) record(clip, flags);
-  exportClip(clip, !args.includes('--no-open'));
+  exportClip(clip, !args.includes('--no-open'), flags.snappy ? 'snappy' : undefined);
 }
 
 main();

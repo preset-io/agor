@@ -17,7 +17,12 @@ export type ClipOutput =
    * For editing elsewhere: the take at native capture size (4K) with no
    * camera moves, plus <id>-marks.json (studio.mark() times, in seconds).
    */
-  | 'raw';
+  | 'raw'
+  /**
+   * <id>-tight.mp4 (and -tight-raw.mp4 with 'raw'): the take with every
+   * still stretch squeezed to a short beat, plus -tight-marks.json.
+   */
+  | 'tight';
 
 export type ClipStart =
   /** A seed's cached state (support/seeds.ts): the usual choice. */
@@ -94,7 +99,7 @@ export const CLIPS: ClipMeta[] = [
       'DataBot finds two MAU definitions that disagree and measures the gap',
       'It writes a canonical dbt model, opens a PR, and answers with the numbers and the link',
     ],
-    outputs: ['master', 'raw'],
+    outputs: ['master', 'raw', 'tight'],
     timeoutMs: 20 * 60_000,
   },
   {
@@ -109,7 +114,7 @@ export const CLIPS: ClipMeta[] = [
       'EngBot reads the board (ticket branches) and GitHub PRs',
       'It answers with one row per person: Jira ticket, PRs opened, reviews',
     ],
-    outputs: ['master', 'raw'],
+    outputs: ['master', 'raw', 'tight'],
     timeoutMs: 20 * 60_000,
   },
   {
@@ -124,7 +129,7 @@ export const CLIPS: ClipMeta[] = [
       "LegalBot says don't sign: a one-month cap that also covers data breaches, and an uncapped customer",
       'It gives a redline against the playbook',
     ],
-    outputs: ['master', 'raw'],
+    outputs: ['master', 'raw', 'tight'],
     timeoutMs: 20 * 60_000,
   },
   {
@@ -139,7 +144,7 @@ export const CLIPS: ClipMeta[] = [
       'OpsBot queries the shop database and answers with a table vs the prior period',
       'It offers to build a live dashboard as an artifact',
     ],
-    outputs: ['master', 'raw'],
+    outputs: ['master', 'raw', 'tight'],
     timeoutMs: 20 * 60_000,
   },
 ];

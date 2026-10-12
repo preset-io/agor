@@ -60,7 +60,7 @@ members as actors, a virtual camera, and a seeded world. Copy
    pixels, so zooms up to 2x stay sharp in the 1080p master), then renders
    to `~/Desktop/agor_video/clips/<id>/`. Flags: `--export-only`
    (re-render the last take), `--live` (record agent turns), `--1080`,
-   `--reseed`, `--no-open`.
+   `--reseed`, `--no-open`, `--snappy` (trailer pace, below).
 5. **Tune without re-shooting:** the take's `timeline.jsonl` (in
    `~/Desktop/agor_video/takes/<id>/`) holds every camera
    move with its time, target rect, zoom, length and ease. Edit it and
@@ -69,6 +69,36 @@ members as actors, a virtual camera, and a seeded world. Copy
 6. **Verify** with the recipes below, then commit the spec, registry entry
    and any seed. For site use, copy the renditions into
    `apps/agor-docs/public/videos/` (formats in the `agor-video` skill).
+
+### Pace: honest, snappy and tight cuts
+
+One live capture gives three cuts:
+
+- **Honest** (`npm run clip -- <id>`): real timing, replayed from the
+  recording.
+- **Snappy** (`--snappy`): the trailer pace. Scene beats, holds, glides and
+  typing run at about half their demo duration
+  (`AGOR_E2E_PACE=snappy`, `paced()` in `support/pacing.ts`). The replay caps
+  each model call's wait for its first token at 150 ms and streams 3x faster
+  (`AGOR_E2E_REPLAY_FIRST_CHUNK_MS`, `AGOR_E2E_REPLAY_SPEED`). Tool calls
+  still really run. Nothing is cut, so timers and spinners stay consistent.
+  The take is `<id>@snappy`, and its files are `<id>-snappy*`.
+- **Tight** (`tight` in a clip's outputs): `planTighten()` in
+  `scripts/lib/render.ts` measures how many pixels change each frame and
+  squeezes every still stretch (thinking, queries, a ticking timer) to a 0.3 s
+  beat. It keeps motion, typing (marks `question`..`sent`), half a second
+  around every mark, and camera moves whole. It writes `-tight.mp4`,
+  `-tight-raw.mp4` and `-tight-marks.json` (marks remapped).
+
+For example, OpsBot runs 47.8 s honest, 27.7 s snappy, and 11.2 s snappy and
+tight.
+
+### Editing (Remotion)
+
+Reel and website edits are Remotion compositions in `../remotion`, fed by
+the snappy-tight raw cuts and their marks (`npm run sync` there). See that
+README. Remotion's license is free for individuals only: Preset needs a
+company license before anyone else uses it or it merges.
 
 ### How the camera and sync work
 

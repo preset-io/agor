@@ -27,6 +27,15 @@ Rules of thumb:
   replace them when authenticity matters more than polish; they still need
   the site renditions below.
 
+## Editing clips together
+
+Trailer, sizzle-reel and website edits are Remotion compositions in
+`apps/agor-docs/demo-videos/remotion/`, built from the real-app clips'
+snappy-tight raw cuts and marks (see its README and the `demo-videos`
+skill). Remotion's official agent skills install locally there
+(`npx skills add remotion-dev/skills`). Remotion's license is free for
+individuals only: a company license is needed before others use it.
+
 ## Shared rules
 
 1. **Never film private data.** Real-app capture runs against its own

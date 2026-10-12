@@ -71,6 +71,14 @@ function withRealCredential(
 }
 
 const REPLAY_SPEED = Number(process.env.AGOR_E2E_REPLAY_SPEED ?? 1) || 1;
+/**
+ * Snappy replays: cap the wait before a response's first chunk (the model's
+ * time to first token) at this many ms. The rest of the stream keeps its
+ * recorded rhythm, scaled by REPLAY_SPEED.
+ */
+const REPLAY_FIRST_CHUNK_MS = process.env.AGOR_E2E_REPLAY_FIRST_CHUNK_MS
+  ? Number(process.env.AGOR_E2E_REPLAY_FIRST_CHUNK_MS)
+  : null;
 
 interface Cassette {
   upstreamHost: string;
@@ -190,7 +198,13 @@ export async function startCassetteProxy(options: {
       res.writeHead(entry.responseStatus, headers);
       const replayStart = Date.now();
       for (const [i, chunkB64] of entry.responseChunksBase64.entries()) {
-        const due = (entry.responseChunkOffsetsMs?.[i] ?? 0) / REPLAY_SPEED;
+        const offsets = entry.responseChunkOffsetsMs;
+        const first = offsets?.[0] ?? 0;
+        const lead =
+          REPLAY_FIRST_CHUNK_MS === null
+            ? first / REPLAY_SPEED
+            : Math.min(first, REPLAY_FIRST_CHUNK_MS);
+        const due = lead + ((offsets?.[i] ?? 0) - first) / REPLAY_SPEED;
         const wait = replayStart + due - Date.now();
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         if (res.destroyed) return;

@@ -42,6 +42,7 @@ import {
   glideAndClick,
   glideTo,
   observePacing,
+  paced,
   pacedMove,
   setCursorPosition,
   settle,
@@ -88,7 +89,7 @@ export class Camera {
   }
 
   private async move(rect: Rect | null, options: FocusOptions): Promise<void> {
-    const ms = options.ms ?? 1000;
+    const ms = paced(options.ms ?? 1000);
     this.timeline.log({
       type: 'camera',
       actor: this.actor.key,
@@ -192,8 +193,9 @@ export class Actor {
   settle(): Promise<void> {
     return settle(this.page);
   }
+  /** Hold for `ms` at demo pace (shorter in a snappy take). */
   hold(ms: number): Promise<void> {
-    return this.page.waitForTimeout(ms);
+    return this.page.waitForTimeout(paced(ms));
   }
 
   /** Press on `from`, carry it by (dx, dy) at a deliberate pace, release. */

@@ -1,0 +1,22 @@
+{
+  "databot": {
+    "question": 1.267,
+    "sent": 3.933,
+    "answered": 8.1
+  },
+  "engbot": {
+    "question": 1.3,
+    "sent": 4.4,
+    "answered": 8.5
+  },
+  "legalbot": {
+    "question": 1.267,
+    "sent": 7.167,
+    "answered": 14.3
+  },
+  "opsbot": {
+    "question": 1.3,
+    "sent": 4.567,
+    "answered": 7.833
+  }
+}

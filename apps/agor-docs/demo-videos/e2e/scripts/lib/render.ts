@@ -296,6 +296,181 @@ function framesConcatList(dir: string, from: number, to: number): { file: string
   return { file, first: path.join(dir, index[0].file) };
 }
 
+interface ActorInput {
+  meta: Extract<TimelineEvent, { type: 'actor' }>;
+  src: Probe;
+  /** First frame (at FPS) of the clip in this input. */
+  start: number;
+  inputArgs: string[];
+}
+
+/** ffmpeg input args for one filmed actor, positioned so `start` is the clip's first frame. */
+function actorInput(
+  takeDir: string,
+  events: TimelineEvent[],
+  actor: string,
+  readyWall: number,
+  endWall: number
+): ActorInput {
+  const meta = events.find(
+    (e): e is Extract<TimelineEvent, { type: 'actor' }> => e.type === 'actor' && e.actor === actor
+  );
+  if (!meta) throw new Error(`${actor} is not in this take`);
+  if (meta.frames) {
+    // Frame-recorded take: a concat list that starts exactly at `ready`,
+    // each frame held until the next one was painted.
+    const list = framesConcatList(path.join(takeDir, meta.frames), readyWall, endWall);
+    return {
+      meta,
+      src: probe(list.first),
+      start: 0,
+      inputArgs: ['-f', 'concat', '-safe', '0', '-i', list.file],
+    };
+  }
+  // Older take: Playwright's webm, pinned to the clock by its sync flash.
+  const sync = events.find(
+    (e): e is Extract<TimelineEvent, { type: 'sync' }> => e.type === 'sync' && e.actor === actor
+  );
+  if (!meta.video) throw new Error(`${actor} was not filmed in this take`);
+  if (!sync) throw new Error(`no sync flash logged for ${actor}`);
+  const video = path.join(takeDir, meta.video);
+  if (!existsSync(video)) throw new Error(`missing ${video}`);
+  return {
+    meta,
+    src: probe(video),
+    start: findSyncFrame(video) + Math.round(((readyWall - sync.wall) * FPS) / 1000),
+    inputArgs: ['-i', video],
+  };
+}
+
+/** ffmpeg select expression for inclusive frame ranges. */
+function keepExpr(keep: [number, number][]): string {
+  return keep.map(([a, b]) => `between(n,${a},${b})`).join('+');
+}
+
+/** Tuning for planTighten(). */
+export interface TightenOptions {
+  /** Changed pixels (of 192x108) for a frame to count as action. */
+  activePixels: number;
+  /** Frames kept around any action, so motion eases in and out. */
+  padFrames: number;
+  /** A still stretch keeps this many frames: a beat, not a jump cut. */
+  pauseFrames: number;
+}
+
+export const DEFAULT_TIGHTEN: TightenOptions = { activePixels: 30, padFrames: 6, pauseFrames: 9 };
+
+export interface TightenPlan {
+  keep: [number, number][];
+  frames: number;
+  keptFrames: number;
+  /** Untightened frame -> tightened frame. */
+  map: (frame: number) => number;
+}
+
+/**
+ * Plan a tight cut of a single-actor take: keep every frame where something
+ * visibly happens (cursor, typing, new answer text, camera moves) and squeeze
+ * every still stretch (a model thinking, a query running, an elapsed-time
+ * counter ticking) down to a short beat. Protected: the clip's first second
+ * and last 2.5s, typing (marks 'question'..'sent'), half a second around
+ * every mark, and every camera move.
+ */
+export function planTighten(
+  takeDir: string,
+  events: TimelineEvent[],
+  actor: string,
+  options: TightenOptions = DEFAULT_TIGHTEN
+): TightenPlan {
+  const ready = events.find((e) => e.type === 'ready');
+  const end = [...events].reverse().find((e) => e.type === 'end');
+  if (ready?.type !== 'ready' || end?.type !== 'end') throw new Error('incomplete take');
+  const frames = Math.round(((end.wall - ready.wall) * FPS) / 1000);
+  const toFrame = (wall: number) => Math.round(((wall - ready.wall) * FPS) / 1000);
+  const { start, inputArgs } = actorInput(takeDir, events, actor, ready.wall, end.wall);
+
+  // How many pixels changed from one frame to the next, on a small gray copy.
+  const w = 192;
+  const h = 108;
+  const out = spawnSync(
+    'ffmpeg',
+    [
+      '-v',
+      'error',
+      ...inputArgs,
+      '-vf',
+      `fps=${FPS},setpts=N/${FPS}/TB,trim=start_frame=${start}:end_frame=${start + frames},scale=${w}:${h}:flags=area,format=gray`,
+      '-frames:v',
+      String(frames),
+      '-f',
+      'rawvideo',
+      '-',
+    ],
+    { maxBuffer: frames * w * h + 1024 }
+  );
+  if (out.status !== 0) throw new Error(`ffmpeg failed measuring activity: ${out.stderr}`);
+  const buf = out.stdout as Buffer;
+  const n = Math.min(frames, Math.floor(buf.length / (w * h)));
+  const keepFrame = new Uint8Array(n);
+  for (let f = 1; f < n; f++) {
+    let changed = 0;
+    const a = (f - 1) * w * h;
+    const b = f * w * h;
+    for (let p = 0; p < w * h; p++) if (Math.abs(buf[a + p] - buf[b + p]) > 10) changed++;
+    if (changed >= options.activePixels) {
+      for (
+        let k = Math.max(0, f - options.padFrames);
+        k <= Math.min(n - 1, f + options.padFrames);
+        k++
+      ) {
+        keepFrame[k] = 1;
+      }
+    }
+  }
+  const protect = (from: number, to: number) => {
+    for (let k = Math.max(0, from); k <= Math.min(n - 1, to); k++) keepFrame[k] = 1;
+  };
+  protect(0, FPS);
+  protect(n - Math.round(2.5 * FPS), n - 1);
+  const marks = events.filter(
+    (e): e is Extract<TimelineEvent, { type: 'mark' }> => e.type === 'mark'
+  );
+  for (const m of marks) protect(toFrame(m.wall) - FPS / 2, toFrame(m.wall) + FPS / 2);
+  const question = marks.find((m) => m.label === 'question');
+  const sent = marks.find((m) => m.label === 'sent');
+  if (question && sent) protect(toFrame(question.wall), toFrame(sent.wall));
+  for (const e of events) {
+    if (e.type === 'camera' && e.actor === actor) {
+      protect(toFrame(e.wall) - 3, toFrame(e.wall) + Math.round((e.ms * FPS) / 1000) + 3);
+    }
+  }
+  // Every still stretch keeps a short beat at its start.
+  for (let f = 0; f < n; ) {
+    if (keepFrame[f]) {
+      f++;
+      continue;
+    }
+    const runStart = f;
+    while (f < n && !keepFrame[f]) f++;
+    for (let k = runStart; k < Math.min(f, runStart + options.pauseFrames); k++) keepFrame[k] = 1;
+  }
+  const keep: [number, number][] = [];
+  const before = new Uint32Array(n + 1);
+  for (let f = 0; f < n; f++) {
+    before[f + 1] = before[f] + keepFrame[f];
+    if (!keepFrame[f]) continue;
+    const last = keep[keep.length - 1];
+    if (last && last[1] === f - 1) last[1] = f;
+    else keep.push([f, f]);
+  }
+  return {
+    keep,
+    frames: n,
+    keptFrames: before[n],
+    map: (frame) => before[Math.max(0, Math.min(n, frame))],
+  };
+}
+
 export type Layout = 'single' | 'split';
 
 export interface RenderInput {
@@ -313,6 +488,11 @@ export interface RenderInput {
    * own size (3840x2160 from a 4K take), for editing elsewhere.
    */
   raw?: boolean;
+  /**
+   * Tight cut: only these frame ranges (inclusive, in the untightened
+   * timeline) are kept, from planTighten(). Single layout only.
+   */
+  keep?: [number, number][];
 }
 
 /** Render the take to a 1080p30 h264 master. Returns warnings worth showing. */
@@ -325,6 +505,8 @@ export function renderMaster(input: RenderInput): string[] {
   const frames = Math.round(((end.wall - ready.wall) * FPS) / 1000);
   if (layout === 'single' && actors.length !== 1) throw new Error('single layout films one actor');
   if (layout === 'split' && actors.length !== 2) throw new Error('split layout films two actors');
+  if (input.keep && layout !== 'single') throw new Error('tight cuts are single layout only');
+  const outFrames = input.keep ? input.keep.reduce((n, [a, b]) => n + (b - a + 1), 0) : frames;
 
   const warnings: string[] = [];
   const args: string[] = ['-y', '-v', 'error'];
@@ -346,31 +528,14 @@ export function renderMaster(input: RenderInput): string[] {
   const paneH = (paneW * 9) / 16;
 
   actors.forEach((actor, i) => {
-    const meta = events.find(
-      (e): e is Extract<TimelineEvent, { type: 'actor' }> => e.type === 'actor' && e.actor === actor
+    const { meta, src, start, inputArgs } = actorInput(
+      input.takeDir,
+      events,
+      actor,
+      ready.wall,
+      end.wall
     );
-    let src: Probe;
-    let start: number;
-    if (meta?.frames) {
-      // Frame-recorded take: a concat list that starts exactly at `ready`,
-      // each frame held until the next one was painted.
-      const list = framesConcatList(path.join(input.takeDir, meta.frames), ready.wall, end.wall);
-      src = probe(list.first);
-      start = 0;
-      args.push('-f', 'concat', '-safe', '0', '-i', list.file);
-    } else {
-      // Older take: Playwright's webm, pinned to the clock by its sync flash.
-      const sync = events.find(
-        (e): e is Extract<TimelineEvent, { type: 'sync' }> => e.type === 'sync' && e.actor === actor
-      );
-      if (!meta?.video) throw new Error(`${actor} was not filmed in this take`);
-      if (!sync) throw new Error(`no sync flash logged for ${actor}`);
-      const video = path.join(input.takeDir, meta.video);
-      if (!existsSync(video)) throw new Error(`missing ${video}`);
-      src = probe(video);
-      start = findSyncFrame(video) + Math.round(((ready.wall - sync.wall) * FPS) / 1000);
-      args.push('-i', video);
-    }
+    args.push(...inputArgs);
     const plan = planCamera(events, actor, ready.wall, src, meta.viewport);
     warnings.push(...plan.warnings);
     const camera = input.raw ? null : cameraFilter(plan, src);
@@ -382,6 +547,7 @@ export function renderMaster(input: RenderInput): string[] {
         'setpts=PTS-STARTPTS',
         'format=yuv444p',
         ...(camera ? [camera] : []),
+        ...(input.keep ? [`select='${keepExpr(input.keep)}'`, `setpts=N/${FPS}/TB`] : []),
         `scale=${paneW}:${paneH}:flags=lanczos`,
         `setsar=1[p${i}]`,
       ].join(',')
@@ -395,7 +561,7 @@ export function renderMaster(input: RenderInput): string[] {
     // Two panes on the app's own dark canvas, captions underneath.
     const gap = (OUT_W - 2 * paneW) / 3;
     const top = Math.round((OUT_H - paneH) / 2) - 24;
-    const bg = `color=c=0x0b0d12:s=${OUT_W}x${OUT_H}:r=${FPS}:d=${(frames / FPS).toFixed(3)}[bg]`;
+    const bg = `color=c=0x0b0d12:s=${OUT_W}x${OUT_H}:r=${FPS}:d=${(outFrames / FPS).toFixed(3)}[bg]`;
     let label = '';
     if (input.font && existsSync(input.font)) {
       label = actors
@@ -420,7 +586,7 @@ export function renderMaster(input: RenderInput): string[] {
     '-map',
     '[out]',
     '-frames:v',
-    String(frames),
+    String(outFrames),
     '-r',
     String(FPS),
     '-c:v',

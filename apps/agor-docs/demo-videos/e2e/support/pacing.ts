@@ -45,14 +45,23 @@ export function cursorPosition(page: Page): { x: number; y: number } {
 
 const STEP_MS = 16; // target sampling cadence; wall-clock drives position
 
+/**
+ * Pace of the whole take. 'snappy' (AGOR_E2E_PACE=snappy, `npm run clip --
+ * <id> --snappy`) is the trailer/website cut: every beat, hold, glide and
+ * keystroke runs at roughly half the demo-pace duration. The motion is still
+ * eased and human, just brisk.
+ */
+export const PACE_FACTOR = process.env.AGOR_E2E_PACE === 'snappy' ? 0.5 : 1;
+export const paced = (ms: number): number => Math.round(ms * PACE_FACTOR);
+
 /** A short narrative pause between steps. */
 export function beat(page: Page): Promise<void> {
-  return page.waitForTimeout(700);
+  return page.waitForTimeout(paced(700));
 }
 
 /** A longer hold on a payoff (a card landing, a reply arriving). */
 export function settle(page: Page): Promise<void> {
-  return page.waitForTimeout(1800);
+  return page.waitForTimeout(paced(1800));
 }
 
 function easeInOut(t: number): number {
@@ -70,7 +79,13 @@ function easeInOut(t: number): number {
  * rightward move bows gently upward). Subtle (8% of the distance, capped)
  * and deterministic: enough to stop reading as robotic, never a sweep.
  */
-export async function pacedMove(page: Page, x: number, y: number, durationMs = 650): Promise<void> {
+export async function pacedMove(
+  page: Page,
+  x: number,
+  y: number,
+  demoDurationMs = 650
+): Promise<void> {
+  const durationMs = paced(demoDurationMs);
   const from = cursorPos.get(page) ?? { x: 960, y: 540 };
   const dx = x - from.x;
   const dy = y - from.y;
@@ -118,7 +133,7 @@ export async function glideTo(page: Page, target: Locator, durationMs = 650): Pr
   const box = await target.boundingBox();
   if (!box) throw new Error('glideTo: target has no bounding box (not visible?)');
   await pacedMove(page, box.x + box.width / 2, box.y + box.height / 2, durationMs);
-  await page.waitForTimeout(350);
+  await page.waitForTimeout(paced(350));
 }
 
 /** Glide to a target and click it — the standard demo interaction. */
@@ -127,7 +142,7 @@ export async function glideAndClick(page: Page, target: Locator, durationMs = 65
   const at = cursorPosition(page);
   observers.get(page)?.click(at.x, at.y);
   await target.click();
-  await page.waitForTimeout(250);
+  await page.waitForTimeout(paced(250));
 }
 
 /**
@@ -142,14 +157,14 @@ export async function spotlight(page: Page, target: Locator, dwellMs = 1400): Pr
   // timeout. The glide already parked the visible cursor on the target,
   // so a failed hover costs nothing on camera.
   await target.hover({ timeout: 10_000 }).catch(() => undefined);
-  await page.waitForTimeout(dwellMs);
+  await page.waitForTimeout(paced(dwellMs));
 }
 
 /** Click into a field and type at a human demo cadence. */
 export async function typeInto(page: Page, field: Locator, text: string): Promise<void> {
   await glideAndClick(page, field);
-  await page.keyboard.type(text, { delay: 45 });
-  await page.waitForTimeout(300);
+  await page.keyboard.type(text, { delay: PACE_FACTOR < 1 ? 24 : 45 });
+  await page.waitForTimeout(paced(300));
 }
 
 /** Per-lesson trim marks: how many seconds of app-loading to cut in the reel. */
