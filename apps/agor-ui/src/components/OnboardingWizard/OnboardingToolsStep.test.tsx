@@ -1,5 +1,6 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { getTeammateTemplate, type TeammateTemplate } from '../../utils/teammateTemplates';
 import {
   catalogEntry,
   catalogUser,
@@ -26,7 +27,7 @@ const entries: MCPCatalogEntry[] = [
   { ...catalogEntry, name: 'app.linear/linear', title: 'Linear', category: 'productivity' },
 ];
 
-function renderStep() {
+function renderStep(template?: TeammateTemplate) {
   const api = makeCatalogClient(entries);
   vi.mocked(api.client.service('mcp-catalog/readiness').get).mockImplementation(
     async (key: string) =>
@@ -41,6 +42,7 @@ function renderStep() {
       user={catalogUser}
       connected
       authGeneration={1}
+      template={template}
       onConnected={vi.fn()}
     />
   );
@@ -75,6 +77,34 @@ describe('OnboardingToolsStep', () => {
     fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by category' }));
     fireEvent.click(await screen.findByTitle('Observability'));
     expect(await screen.findByText('No tools to show.')).toBeInTheDocument();
+  });
+
+  it("lists the picked template's tools first and hides none", async () => {
+    const order = () =>
+      screen.getAllByRole('button', { name: /: view details$/ }).map((el) => el.ariaLabel);
+    renderStep();
+    await screen.findByText('GitHub');
+    expect(order()).toEqual([
+      'Linear: view details',
+      'Notion: view details',
+      'GitHub: view details',
+    ]);
+    cleanup();
+
+    // Chief of staff: Notion by name, then productivity, then the rest.
+    renderStep(getTeammateTemplate('chief-of-staff'));
+    await screen.findByText('GitHub');
+    expect(order()).toEqual([
+      'Notion: view details',
+      'Linear: view details',
+      'GitHub: view details',
+    ]);
+
+    // A category (or search) keeps the Catalog's order.
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Filter by category' }));
+    fireEvent.click(await screen.findByTitle('Productivity'));
+    await waitFor(() => expect(screen.queryByText('GitHub')).not.toBeInTheDocument());
+    expect(order()).toEqual(['Linear: view details', 'Notion: view details']);
   });
 
   it('shows the Catalog logo (letter fallback), display title and category on each tile', async () => {

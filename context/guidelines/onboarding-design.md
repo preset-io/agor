@@ -32,6 +32,12 @@ Legacy `preferences.onboarding.goals` and `persona` stay untouched: no migration
 
 - A browsable wall of the whole visible MCP Catalog, not a recommendation list. One non-wrapping
   toolbar: search + category select. Filtering reuses `useCatalogSearch` (core `filterCatalog`).
+- **Order follows the picked template; never filter.** A template may name `preferredTools`
+  (Catalog entry names) and rank `preferredToolCategories`; `sortToolsForTemplate` lists those
+  first and keeps the curated order for the rest. Only the unfiltered view is reordered; search
+  and the category filter use the Catalog's order. Every tool stays visible and nothing is
+  preselected. No template or "Start from scratch" keeps
+  the curated order. Names must exist in the Catalog (a unit test checks).
 - **No selection, nothing stored.** Only connections confirmed in the Catalog drawer pass, as
   server IDs, to the first teammate session at completion. Back and Skip never delete connections.
 - The grid replaces the old one-row-per-provider layout: 3 columns, 2 at ≤480px. A tile is a

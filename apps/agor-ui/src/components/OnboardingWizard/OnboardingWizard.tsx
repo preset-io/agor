@@ -1775,6 +1775,7 @@ export function OnboardingWizard({
         user={user}
         connected={onboardingAuthority.connectionReady && isCurrent()}
         authGeneration={onboardingAuthority.authGeneration}
+        template={getTeammateTemplate(selectedTemplateId)}
         onConnected={(serverId) =>
           setConnectedMcpServerIds((ids) => (ids.includes(serverId) ? ids : [...ids, serverId]))
         }

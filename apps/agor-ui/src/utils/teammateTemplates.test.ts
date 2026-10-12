@@ -1,3 +1,5 @@
+import { loadCatalog } from '@agor/core/mcp-catalog';
+import { isCatalogEntryVisible } from '@agor/core/mcp-catalog/query';
 import { describe, expect, it } from 'vitest';
 import { AVATAR_PALETTE } from './avatarPalette';
 import {
@@ -11,6 +13,7 @@ import {
   getTemplateForFrameworkSource,
   resolveTemplateSourceBranch,
   resolveTemplateSourceRemoteUrl,
+  sortToolsForTemplate,
   TEAMMATE_GALLERY_CARDS,
   TEAMMATE_TEMPLATES,
   TEMPLATE_CATEGORIES,
@@ -217,5 +220,64 @@ describe('getTemplateForFrameworkSource', () => {
         frameworkRepoId: undefined,
       })
     ).toBeUndefined();
+  });
+});
+
+describe('sortToolsForTemplate', () => {
+  // Curated order, as the tools wall receives it.
+  const catalog = [
+    { name: 'io.github.github/github-mcp-server', category: 'dev-tools' },
+    { name: 'app.linear/linear', category: 'dev-tools' },
+    { name: 'com.supabase/mcp', category: 'data-storage' },
+    { name: 'com.notion/mcp', category: 'productivity' },
+    { name: 'com.datadoghq/mcp', category: 'observability' },
+    { name: 'com.stripe/mcp', category: 'productivity' },
+    { name: 'ai.exa/exa', category: 'search' },
+    { name: 'com.paypal.mcp/mcp', category: 'productivity' },
+    { name: 'com.airtable/mcp', category: 'data-storage' },
+  ] as const;
+  const names = (entries: readonly { name: string }[]) => entries.map((entry) => entry.name);
+
+  it('keeps the curated order with no template or the blank starter', () => {
+    expect(names(sortToolsForTemplate(catalog))).toEqual(names(catalog));
+    expect(names(sortToolsForTemplate(catalog, BLANK_TEMPLATE))).toEqual(names(catalog));
+  });
+
+  it("lists the template's tools, then its categories, then the rest in curated order", () => {
+    const financial = getTeammateTemplate('financial-analyst');
+    expect(names(sortToolsForTemplate(catalog, financial))).toEqual([
+      // preferredTools, in their own order (Preset is not in this fixture)
+      'com.stripe/mcp',
+      'com.paypal.mcp/mcp',
+      // data-storage, then productivity, each in curated order
+      'com.supabase/mcp',
+      'com.airtable/mcp',
+      'com.notion/mcp',
+      // everything else, unchanged
+      'io.github.github/github-mcp-server',
+      'app.linear/linear',
+      'com.datadoghq/mcp',
+      'ai.exa/exa',
+    ]);
+  });
+
+  it('sorts without dropping, adding or mutating entries', () => {
+    const input = [...catalog];
+    for (const template of TEAMMATE_GALLERY_CARDS) {
+      const sorted = sortToolsForTemplate(input, template);
+      expect([...names(sorted)].sort()).toEqual([...names(catalog)].sort());
+    }
+    expect(names(input)).toEqual(names(catalog));
+  });
+
+  it('names only tools the shipped catalog shows', async () => {
+    const visible = new Set(
+      (await loadCatalog()).filter(isCatalogEntryVisible).map((entry) => entry.name)
+    );
+    for (const template of TEAMMATE_TEMPLATES) {
+      for (const tool of 'preferredTools' in template ? template.preferredTools : []) {
+        expect(visible, `${template.id} → ${tool}`).toContain(tool);
+      }
+    }
   });
 });

@@ -1,3 +1,4 @@
+import type { MCPCatalogCategory, MCPCatalogEntry } from '@agor/core/types';
 import { TEAMMATE_FRAMEWORK_DEFAULT_BRANCH, TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import {
   AimOutlined,
@@ -59,6 +60,10 @@ export interface TeammateTemplate {
   sourceRemoteUrl?: string;
   /** Prompt-only templates: what the teammate is for, fed into the first-session prompt. */
   remit?: string;
+  /** Catalog entry names onboarding's tools wall lists first, in this order. */
+  preferredTools?: readonly string[];
+  /** Catalog categories listed next, in this order. The rest keep the curated order. */
+  preferredToolCategories?: readonly MCPCatalogCategory[];
 }
 
 const BUILT_IN_TEMPLATE_SOURCE = { sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL } as const;
@@ -98,6 +103,14 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🧑‍💼',
     remit:
       'Desired outcome: a useful recurring brief from Slack and connected docs. A first win is a digest of the channels and docs they care about.',
+    preferredTools: [
+      'com.notion/mcp',
+      'app.fellow/mcp',
+      'com.atlassian/atlassian-mcp-server',
+      'com.asana/mcp',
+      'com.zapier/mcp',
+    ],
+    preferredToolCategories: ['productivity', 'messaging', 'search'],
   },
   {
     id: 'researcher',
@@ -108,6 +121,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🔎',
     remit:
       'Desired outcome: active research on demand. A first win is one evidence-backed finding about the competitor, market, or dataset they care about.',
+    preferredToolCategories: ['search', 'data-storage', 'productivity'],
   },
   {
     id: 'engineering-assistant',
@@ -118,6 +132,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🧰',
     remit:
       'Desired outcome: less busywork around PRs, bug triage and release notes. A first win is scanning the relevant repo for an actionable issue or pull request.',
+    preferredToolCategories: ['dev-tools', 'observability'],
   },
   {
     id: 'builder',
@@ -128,6 +143,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🛠️',
     sourceBranch: 'template/builder',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['io.github.github/github-mcp-server', 'com.supabase/mcp', 'com.netlify/mcp'],
+    preferredToolCategories: ['dev-tools', 'data-storage'],
   },
   {
     id: 'product-manager',
@@ -138,6 +155,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🧭',
     sourceBranch: 'template/product-manager',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['app.linear/linear', 'com.atlassian/atlassian-mcp-server', 'com.notion/mcp'],
+    preferredToolCategories: ['productivity', 'observability'],
   },
   {
     id: 'chief-of-staff',
@@ -148,6 +167,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🗂️',
     sourceBranch: 'template/chief-of-staff',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.notion/mcp', 'app.fellow/mcp', 'com.asana/mcp'],
+    preferredToolCategories: ['productivity', 'messaging'],
   },
   {
     id: 'competitive-analyst',
@@ -158,6 +179,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🔭',
     sourceBranch: 'template/competitive-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredToolCategories: ['search', 'productivity'],
   },
   {
     id: 'financial-analyst',
@@ -168,6 +190,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🧮',
     sourceBranch: 'template/financial-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.stripe/mcp', 'com.paypal.mcp/mcp', 'io.preset/mcp-gateway'],
+    preferredToolCategories: ['data-storage', 'productivity'],
   },
   {
     id: 'deal-desk',
@@ -178,6 +202,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '📐',
     sourceBranch: 'template/deal-desk-revops-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.attio/mcp', 'com.stripe/mcp'],
+    preferredToolCategories: ['productivity', 'messaging'],
   },
   {
     id: 'sales-outbound',
@@ -188,6 +214,8 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '🎯',
     sourceBranch: 'template/sales-outbound-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredTools: ['com.attio/mcp', 'com.apify/apify-mcp-server'],
+    preferredToolCategories: ['messaging', 'search', 'productivity'],
   },
   {
     id: 'legal-analyst',
@@ -198,6 +226,7 @@ export const TEAMMATE_TEMPLATES = [
     emoji: '⚖️',
     sourceBranch: 'template/legal-analyst',
     ...BUILT_IN_TEMPLATE_SOURCE,
+    preferredToolCategories: ['productivity', 'search'],
   },
 ] as const satisfies readonly TeammateTemplate[];
 
@@ -293,6 +322,27 @@ export function getTemplateForFrameworkSource({
 }): TeammateTemplate | undefined {
   if (!selectedRepoId || selectedRepoId !== frameworkRepoId) return undefined;
   return getTemplateBySourceBranch(sourceBranch);
+}
+
+/**
+ * Onboarding's tools wall order for a template: its `preferredTools`, then its
+ * `preferredToolCategories`, then everything else. The sort is stable, so ties
+ * keep the incoming (curated) order. It only reorders: nothing is dropped, and
+ * no template (or the blank starter) leaves the order unchanged.
+ */
+export function sortToolsForTemplate<T extends Pick<MCPCatalogEntry, 'name' | 'category'>>(
+  entries: readonly T[],
+  template?: TeammateTemplate
+): T[] {
+  const tools = template?.preferredTools ?? [];
+  const categories = template?.preferredToolCategories ?? [];
+  const rank = (entry: T) => {
+    const tool = tools.indexOf(entry.name);
+    if (tool >= 0) return tool;
+    const category = categories.indexOf(entry.category);
+    return tools.length + (category >= 0 ? category : categories.length);
+  };
+  return [...entries].sort((a, b) => rank(a) - rank(b));
 }
 
 /** The gallery's active filter: everything, or a single category. */

@@ -4,6 +4,7 @@ import { CheckCircleFilled, SearchOutlined } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Select, Skeleton, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useId, useRef, useState } from 'react';
 import { useMediaQuery } from '../../hooks/useMediaQuery';
+import { sortToolsForTemplate, type TeammateTemplate } from '../../utils/teammateTemplates';
 import { CatalogEntryAvatar } from '../Marketplace/CatalogEntryAvatar';
 import { CatalogTab } from '../Marketplace/CatalogTab';
 import {
@@ -15,13 +16,19 @@ import {
   entryTitle,
 } from '../Marketplace/catalogPresentation';
 import { useCatalogReadiness } from '../Marketplace/useCatalogReadiness';
-import { type CatalogFilterState, useCatalogSearch } from '../Marketplace/useCatalogSearch';
+import {
+  type CatalogFilterState,
+  isFilterActive,
+  useCatalogSearch,
+} from '../Marketplace/useCatalogSearch';
 
 interface Props {
   client: AgorClient | null;
   user?: User | null;
   connected: boolean;
   authGeneration: number;
+  /** Template picked in step 1; its preferred tools are listed first. */
+  template?: TeammateTemplate;
   onConnected: (serverId: string) => void;
 }
 
@@ -119,11 +126,20 @@ function ToolTile({
   );
 }
 
-function ToolsForIdentity({ client, user, connected, authGeneration, onConnected }: Props) {
+function ToolsForIdentity({
+  client,
+  user,
+  connected,
+  authGeneration,
+  template,
+  onConnected,
+}: Props) {
   const { token } = theme.useToken();
   const narrow = useMediaQuery('(max-width: 480px)');
   const [filters, setFilters] = useState<CatalogFilterState>({ search: '', sort: DEFAULT_SORT });
   const { matches, status, error, retry } = useCatalogSearch(client, connected, filters, 1);
+  // The template orders the default view only; a search or category keeps the Catalog's order.
+  const tools = isFilterActive(filters) ? matches : sortToolsForTemplate(matches, template);
   const [readinessRevision, setReadinessRevision] = useState(0);
   const [entry, setEntry] = useState<string>();
   const trigger = useRef<HTMLElement | null>(null);
@@ -181,7 +197,7 @@ function ToolsForIdentity({ client, user, connected, authGeneration, onConnected
           />
         ) : status === 'loading' ? (
           <Skeleton active />
-        ) : matches.length === 0 ? (
+        ) : tools.length === 0 ? (
           <Typography.Text type="secondary">
             {filters.search.trim()
               ? `No tools match "${filters.search.trim()}".`
@@ -195,7 +211,7 @@ function ToolsForIdentity({ client, user, connected, authGeneration, onConnected
               gap: token.marginXS,
             }}
           >
-            {matches.map((item) => (
+            {tools.map((item) => (
               <ToolTile
                 key={item.name}
                 entry={item}
