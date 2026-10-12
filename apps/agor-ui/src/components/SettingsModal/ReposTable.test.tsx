@@ -98,7 +98,9 @@ describe('ReposTable authority fencing', () => {
   });
 });
 
-describe('ReposTable cleanup configuration authority', () => {
+// Full drill-in edit flows (table, form, shell footer): 6-8s alone, so the
+// 15s default trips under full-suite load.
+describe('ReposTable cleanup configuration authority', { timeout: 30_000 }, () => {
   it.each([false, true])('omits unchanged policy from metadata saves (admin=%s)', async (admin) => {
     const repo = makeRepo({
       cleanup_policy: { enabled: true, command: './cleanup.sh', allow_branch_protection: true },
