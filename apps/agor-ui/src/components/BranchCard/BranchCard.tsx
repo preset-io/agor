@@ -84,6 +84,8 @@ interface BranchCardProps {
   onToggleCompact?: (branchId: string, compact: boolean) => void;
   /** Keep a called-out worktree's rolling Auto Zone deferral alive. */
   onAutoZoneInteraction?: (branchId: string) => void;
+  /** Off on the view-only canvas, where cards cannot be dragged. */
+  showDragHandle?: boolean;
   inPopover?: boolean; // NEW: Enable popover-optimized mode (hides board-specific controls)
   panelMode?: boolean; // Render inside side panel instead of as a draggable canvas card
   progressiveMountKey?: string | number | null;
@@ -122,6 +124,7 @@ const BranchCardComponent = ({
   compact = false,
   onToggleCompact,
   onAutoZoneInteraction,
+  showDragHandle = true,
   inPopover = false,
   panelMode = false,
   progressiveMountKey,
@@ -562,7 +565,7 @@ const BranchCardComponent = ({
               />
             </Tooltip>
           )}
-          {!inPopover && !panelMode && (
+          {!inPopover && !panelMode && showDragHandle && (
             <Button
               type="text"
               icon={<DragOutlined style={{ fontSize: 16 }} />}

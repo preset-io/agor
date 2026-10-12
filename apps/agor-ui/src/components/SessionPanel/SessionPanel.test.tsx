@@ -645,9 +645,9 @@ describe.each([390, 1280])('shared Stop path at %ipx', (width) => {
     // Proves the width actually selected the shell, so this cannot quietly run the desktop path twice.
     const closeLabel = viewport.isMobile ? 'Close' : 'Close panel';
     expect(screen.getByRole('button', { name: closeLabel })).toBeInTheDocument();
-    // Text lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
+    // Label lookup avoids jsdom's CSS-variable shorthand bug in accessible-name
     // calculation; real-browser QA covers the visible button and touch target.
-    const stop = screen.getByText('Stop').closest('button')!;
+    const stop = screen.getByLabelText('Stop');
     fireEvent.click(stop);
     fireEvent.click(stop);
     expect(stop).toBeDisabled();

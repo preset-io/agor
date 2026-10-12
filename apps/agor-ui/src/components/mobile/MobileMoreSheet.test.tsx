@@ -1,66 +1,135 @@
-/**
- * The mobile "More" sheet exposes the shared create flows via a "Create new"
- * row (parity with the desktop navbar "+").
- */
-
+import type { User } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { MemoryRouter, useLocation } from 'react-router-dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ThemeProvider } from '../../contexts/ThemeContext';
 import { MobileMoreSheet } from './MobileMoreSheet';
 
-vi.mock('../../contexts/ThemeContext', () => ({
-  useTheme: () => ({ themeMode: 'dark', setThemeMode: vi.fn() }),
-}));
-
-function renderSheet(isAdmin: boolean, { canCreate = true } = {}) {
-  const onCreate = vi.fn();
-  const onClose = vi.fn();
-  render(
-    <MemoryRouter>
-      <MobileMoreSheet
-        open
-        onClose={onClose}
-        boardById={new Map()}
-        branchById={new Map()}
-        sessionsByBranch={new Map()}
-        commentById={new Map()}
-        onOpenWorkspaceSettings={vi.fn()}
-        onOpenUserSettings={vi.fn()}
-        onCreate={canCreate ? onCreate : undefined}
-        isAdmin={isAdmin}
-      />
-    </MemoryRouter>
-  );
-  return { onCreate, onClose };
+function Probe() {
+  return <output aria-label="path">{useLocation().pathname}</output>;
 }
 
-describe('MobileMoreSheet — Create new', () => {
-  it('expands in place and opens the picked flow, closing the sheet first', () => {
-    const { onCreate, onClose } = renderSheet(false);
+function renderSheet(props: Partial<React.ComponentProps<typeof MobileMoreSheet>> = {}) {
+  const handlers = {
+    onClose: vi.fn(),
+    onOpenComments: vi.fn(),
+    onCreate: vi.fn(),
+    onOpenWorkspaceSettings: vi.fn(),
+    onOpenUserSettings: vi.fn(),
+    onLogout: vi.fn(),
+  };
+  render(
+    <ThemeProvider>
+      <MemoryRouter initialEntries={['/m']}>
+        <Probe />
+        <MobileMoreSheet
+          open
+          user={{ user_id: 'u1', name: 'Kasia Designer' } as User}
+          commentsBadge={3}
+          isAdmin={false}
+          {...handlers}
+          {...props}
+        />
+      </MemoryRouter>
+    </ThemeProvider>
+  );
+  return handlers;
+}
 
-    fireEvent.click(screen.getByText('Create new'));
+const rowNames = () =>
+  Array.from(screen.getByRole('dialog').querySelectorAll('.ant-list-item')).map(
+    (row) => row.getAttribute('aria-label') ?? row.textContent
+  );
 
+afterEach(() => vi.restoreAllMocks());
+
+describe('MobileMoreSheet', () => {
+  it('lists the destinations in order, with no board tree', () => {
+    renderSheet();
+    expect(rowNames()).toEqual([
+      'Profile: Kasia Designer',
+      'Create new',
+      'Search',
+      'Comments and mentions, 3 unread',
+      'Knowledge base',
+      'Settings',
+      'AppearanceLightDark',
+      'Documentation',
+      'Sign out',
+    ]);
+    expect(screen.queryByRole('button', { name: /board/i })).not.toBeInTheDocument();
+  });
+
+  it('closes before opening each destination', () => {
+    const handlers = renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: 'Comments and mentions, 3 unread' }));
+    expect(handlers.onClose).toHaveBeenCalled();
+    expect(handlers.onOpenComments).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }));
+    expect(handlers.onOpenWorkspaceSettings).toHaveBeenCalledWith('boards');
+    fireEvent.click(screen.getByRole('button', { name: 'Profile: Kasia Designer' }));
+    expect(handlers.onOpenUserSettings).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    expect(screen.getByRole('status', { name: 'path' })).toHaveTextContent('/m/search');
+  });
+
+  it('discloses the shared create flows under Create new, closing the sheet first', () => {
+    const handlers = renderSheet();
+    const create = screen.getByRole('button', { name: 'Create new' });
+    expect(create).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(create);
+    expect(create).toHaveAttribute('aria-expanded', 'true');
     for (const label of ['Teammate', 'Branch', 'Board']) {
-      expect(screen.getByText(label)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: label })).toBeInTheDocument();
     }
-    expect(screen.queryByText('Repository')).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByText('Board'));
-    expect(onClose).toHaveBeenCalled();
-    expect(onCreate).toHaveBeenCalledWith('board');
-    expect(onClose.mock.invocationCallOrder[0]).toBeLessThan(onCreate.mock.invocationCallOrder[0]);
+    expect(screen.queryByRole('button', { name: 'Repository' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Board' }));
+    expect(handlers.onCreate).toHaveBeenCalledWith('board');
+    expect(handlers.onClose.mock.invocationCallOrder[0]).toBeLessThan(
+      handlers.onCreate.mock.invocationCallOrder[0]
+    );
+    expect(create).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('lists Repository for admins', () => {
-    const { onCreate } = renderSheet(true);
-
-    fireEvent.click(screen.getByText('Create new'));
-    fireEvent.click(screen.getByText('Repository'));
-    expect(onCreate).toHaveBeenCalledWith('repository');
+    const handlers = renderSheet({ isAdmin: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Create new' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Repository' }));
+    expect(handlers.onCreate).toHaveBeenCalledWith('repository');
   });
 
-  it('hides the row when the user cannot create (viewers)', () => {
-    renderSheet(false, { canCreate: false });
-    expect(screen.queryByText('Create new')).not.toBeInTheDocument();
+  it('hides Create new when the user cannot create (viewers)', () => {
+    renderSheet({ onCreate: undefined });
+    expect(screen.queryByRole('button', { name: 'Create new' })).not.toBeInTheDocument();
+  });
+
+  it('opens a configured external app link in a new tab', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderSheet({
+      externalAppLink: 'https://console.example.test/',
+      externalAppLabel: 'Open Agor Cloud',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Open Agor Cloud' }));
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://console.example.test/',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('opens Documentation in a new tab, just above Sign out', () => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: 'Documentation' }));
+    expect(open).toHaveBeenCalledExactlyOnceWith(
+      'https://agor.live/guide/getting-started',
+      '_blank',
+      'noopener,noreferrer'
+    );
+  });
+
+  it('omits the external app row for a non-http(s) link', () => {
+    renderSheet({ externalAppLink: 'javascript:alert(1)', externalAppLabel: 'Open Agor Cloud' });
+    expect(screen.queryByText('Open Agor Cloud')).not.toBeInTheDocument();
   });
 });

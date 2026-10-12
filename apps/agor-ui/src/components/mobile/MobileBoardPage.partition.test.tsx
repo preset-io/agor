@@ -7,7 +7,14 @@ import { useBoardPartition } from '../../hooks/useBoardPartition';
 import { agorStore, useAgorStore } from '../../store/agorStore';
 import { makeBoardReadySelector } from '../../store/boardPartitions';
 import { fakeFeathersClient, ME, withTestAuthority } from '../../test/harness';
+import { BoardPartitionStatus } from '../SessionCanvas/BoardPartitionStatus';
 import { MobileBoardPage } from './MobileBoardPage';
+
+// The board tab's canvas, reduced to the partition overlay it renders (React Flow
+// and live cursors need a real socket).
+vi.mock('../SessionCanvas/SessionCanvas', () => ({
+  default: ({ board }: { board: Board }) => <BoardPartitionStatus boardId={board.board_id} />,
+}));
 
 // A real id: the cold route resolves its board by id or short-id prefix.
 const BOARD = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
@@ -25,16 +32,14 @@ function MobileBoardRoute({ client }: { client: AgorClient }) {
   const state = useAgorStore((s) => s);
   return (
     <MobileBoardPage
+      client={client}
       boardById={state.boardById}
       branchById={state.branchById}
-      repoById={state.repoById}
-      sessionsByBranch={state.sessionsByBranch}
-      boardObjectsByBoardId={state.boardObjectsByBoardId}
-      cardById={state.cardById}
-      artifactById={state.artifactById}
       onOpenBranch={vi.fn()}
       onNewSession={vi.fn()}
-      onGiveFirstTask={vi.fn()}
+      onForkSession={vi.fn(async () => {})}
+      onSpawnSession={vi.fn(async () => {})}
+      onSendComment={vi.fn()}
       boardReady={boardReady}
     />
   );
@@ -42,36 +47,44 @@ function MobileBoardRoute({ client }: { client: AgorClient }) {
 
 withTestAuthority();
 
-it('a cold mobile board whose partition fails offers Retry, and Retry loads it', async () => {
-  window.history.pushState({}, '', `/m/board/${BOARD}`);
-  onTestFinished(() => window.history.pushState({}, '', '/'));
-  vi.spyOn(console, 'warn').mockImplementation(() => {});
-  let partitionDown = true;
-  const { client } = fakeFeathersClient({
-    boards: { findAll: () => [board], get: () => board },
-    branches: {
-      findAll: ({ query }) => {
-        if (query.board_id && partitionDown) throw new Error('board read failed');
-        return [];
+// Every tab that waits on the partition offers Retry, not only the canvas.
+it.each([
+  ['Board', ''],
+  ['Teammate', '?tab=teammate'],
+  ['Sessions', '?tab=all-sessions'],
+])(
+  'a cold mobile board whose partition fails offers Retry on the %s tab, and Retry loads it',
+  async (_tab, search) => {
+    window.history.pushState({}, '', `/m/board/${BOARD}${search}`);
+    onTestFinished(() => window.history.pushState({}, '', '/'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let partitionDown = true;
+    const { client } = fakeFeathersClient({
+      boards: { findAll: () => [board], get: () => board },
+      branches: {
+        findAll: ({ query }) => {
+          if (query.board_id && partitionDown) throw new Error('board read failed');
+          return [];
+        },
       },
-    },
-  });
-  render(
-    <MemoryRouter initialEntries={[`/m/board/${BOARD}`]}>
-      <Routes>
-        <Route path="/m/board/:boardId" element={<MobileBoardRoute client={client} />} />
-      </Routes>
-    </MemoryRouter>
-  );
+    });
+    render(
+      <MemoryRouter initialEntries={[`/m/board/${BOARD}${search}`]}>
+        <Routes>
+          <Route path="/m/board/:boardId" element={<MobileBoardRoute client={client} />} />
+        </Routes>
+      </MemoryRouter>
+    );
 
-  // The global lists load; the board's partition fails: an error, not a skeleton forever.
-  const alert = await screen.findByRole('alert');
-  expect(alert).toHaveTextContent("Couldn't load this board.");
-  expect(document.querySelector('.ant-skeleton')).toBeNull();
+    // The global lists load; the board's partition fails: an error, not loading forever.
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent("Couldn't load this board.");
+    expect(screen.queryByTestId('board-partition-loading')).toBeNull();
+    expect(screen.queryByTestId('board-partition-skeleton')).toBeNull();
 
-  partitionDown = false;
-  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-  await waitFor(() => expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true));
-  expect(screen.queryByRole('alert')).toBeNull();
-  expect(document.querySelector('.ant-skeleton')).toBeNull();
-});
+    partitionDown = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(makeBoardReadySelector(BOARD)(agorStore.getState())).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  }
+);

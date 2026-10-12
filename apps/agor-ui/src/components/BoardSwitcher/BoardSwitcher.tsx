@@ -83,7 +83,8 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
 
   const branchCountByBoard = useBranchCounts(client);
 
-  const showFilter = boards.length >= FILTER_THRESHOLD;
+  // Touch has no type-ahead, so phones and tablets always get the search box.
+  const showFilter = boards.length >= FILTER_THRESHOLD || coarsePointer;
 
   useEffect(
     () =>
@@ -308,9 +309,10 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
                       prefix={<SearchOutlined style={{ color: token.colorTextQuaternary }} />}
                       value={filterText}
                       onChange={(e) => setFilterText(e.target.value)}
-                      size="small"
+                      // Large keeps 16px text on touch so iOS does not zoom on focus.
+                      size={coarsePointer ? 'large' : 'small'}
                       allowClear
-                      autoFocus
+                      autoFocus={!coarsePointer}
                       aria-label="Filter boards"
                     />
                   </div>

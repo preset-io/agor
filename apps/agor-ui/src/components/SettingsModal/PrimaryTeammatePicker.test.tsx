@@ -261,14 +261,24 @@ describe('PrimaryTeammatePicker', () => {
   });
 });
 
-it('can clear an inaccessible stored preference without selecting a replacement', async () => {
-  seedStore([]);
-  const { client, setPrimaryTeammate } = createClient(null);
-  setPrimaryTeammate.mockResolvedValueOnce(null);
-  renderPicker(client);
-  await screen.findByText(/No primary assistant set/);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear primary assistant' }));
-  await waitFor(() =>
-    expect(setPrimaryTeammate).toHaveBeenCalledWith({ branchId: null, expectedUserId: USER_ID })
-  );
+it('never offers to clear the primary assistant, in Settings or the compact Ask flows', async () => {
+  const ada = teammate('branch-1', 'Ada');
+  seedStore([ada]);
+  for (const [current, compact] of [
+    [null, true],
+    [ada, true],
+    [null, false],
+    [ada, false],
+  ] as const) {
+    const { client, getPrimaryTeammate } = createClient(current);
+    const view = render(
+      <AntApp>
+        <PrimaryTeammatePicker client={client} currentUserId={USER_ID} compact={compact} />
+      </AntApp>
+    );
+    await waitFor(() => expect(getPrimaryTeammate).toHaveBeenCalled());
+    if (current) await screen.findByText(/Currently/);
+    expect(screen.queryByRole('button', { name: /clear/i })).not.toBeInTheDocument();
+    view.unmount();
+  }
 });

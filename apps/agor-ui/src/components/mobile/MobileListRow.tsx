@@ -12,6 +12,9 @@ interface MobileListRowProps {
   trailing?: React.ReactNode;
   /** Adds the page gutter, for lists that are not already inside a padded card. */
   inset?: boolean;
+  danger?: boolean;
+  /** Set on rows that disclose nested rows. */
+  expanded?: boolean;
 }
 
 /** Touch-sized, keyboard-operable list row: ellipsised title, optional secondary line, optional trailing element. */
@@ -23,12 +26,15 @@ export const MobileListRow: React.FC<MobileListRowProps> = ({
   avatar,
   trailing,
   inset = false,
+  danger,
+  expanded,
 }) => {
   const { token } = theme.useToken();
   return (
     <List.Item
       {...pressableProps(onPress)}
       aria-label={ariaLabel}
+      aria-expanded={expanded}
       style={{
         cursor: 'pointer',
         paddingInline: inset ? token.padding : 0,
@@ -38,7 +44,11 @@ export const MobileListRow: React.FC<MobileListRowProps> = ({
       <List.Item.Meta
         avatar={avatar}
         title={
-          <Typography.Text ellipsis style={{ maxWidth: '100%' }}>
+          <Typography.Text
+            ellipsis
+            type={danger ? 'danger' : undefined}
+            style={{ maxWidth: '100%' }}
+          >
             {title}
           </Typography.Text>
         }

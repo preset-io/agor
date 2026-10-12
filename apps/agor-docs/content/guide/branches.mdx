@@ -462,12 +462,12 @@ Editor or Manager. **Clear board primary** remains available in **Archive or Del
 branch management alone does not grant board authority.
 
 Personal routing preferences are not a permanent veto over branch management, even
-when a former collaborator can no longer access the teammate. Users can also choose
-**Clear primary assistant** in their own settings, or call
-`users.setPrimaryTeammate({ branchId: null, expectedUserId })`, without choosing a
-replacement. Ordinary cleanup/archive/delete retains primary protection; retirement
-is a separate, explicit, file-preserving action. Permanent deletion, if wanted,
-remains a later authorized operation.
+when a former collaborator can no longer access the teammate: retirement clears them.
+In Settings, users change their primary assistant by picking another one. To unset it
+without a replacement, call `users.setPrimaryTeammate({ branchId: null, expectedUserId })`.
+Ordinary cleanup/archive/delete retains primary protection; retirement is a separate,
+explicit, file-preserving action. Permanent deletion, if wanted, remains a later
+authorized operation.
 
 ### Recovery rollout and operator preflight
 

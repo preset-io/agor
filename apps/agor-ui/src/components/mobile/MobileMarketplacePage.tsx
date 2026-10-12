@@ -5,14 +5,11 @@ import { useNavigate } from 'react-router-dom';
 import { useConnectionState } from '../../contexts/ConnectionContext';
 import { MCPCatalogContent } from '../Marketplace';
 import { mobileScrollAreaStyle } from './constants';
-import { MobileHeader } from './MobileHeader';
 
 interface MobileMarketplacePageProps {
   client: AgorClient | null;
   currentUser?: User | null;
   authGeneration: number;
-  commentsBadge?: number;
-  onOpenComments?: () => void;
 }
 
 /**
@@ -24,8 +21,6 @@ export const MobileMarketplacePage: React.FC<MobileMarketplacePageProps> = ({
   client,
   currentUser,
   authGeneration,
-  commentsBadge,
-  onOpenComments,
 }) => {
   const navigate = useNavigate();
   const { token } = theme.useToken();
@@ -33,12 +28,6 @@ export const MobileMarketplacePage: React.FC<MobileMarketplacePageProps> = ({
 
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <MobileHeader
-        title="Marketplace"
-        onSearch={() => navigate('/m/search')}
-        commentsBadge={commentsBadge}
-        onOpenComments={onOpenComments}
-      />
       <div style={{ ...mobileScrollAreaStyle, paddingInline: token.padding }}>
         <MCPCatalogContent
           client={client}
