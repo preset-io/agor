@@ -16,18 +16,22 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
 2. Pull them in: `npm run sync`. This copies the 4K tight raw cuts into
    `public/clips/` (git-ignored) and their marks into `src/teammates/marks.json`.
 3. Preview and edit: `npm run dev` (Remotion Studio).
-4. Render: `npm run render:teammates` writes `out/ai-teammates.mp4`.
+4. Render: `npm run render:teammates` writes `out/ai-teammates-bebop.mp4`.
 
 ## Compositions
 
-- **AiTeammates** (`src/teammates/`): "AI teammates that can do anything".
-  - Four teammates (DataBot, EngBot, LegalBot, OpsBot) answer real questions.
-  - Each question is typed close up, then the camera glides to the answer.
-  - The shot then shrinks into a corner of a 2x2 grid while the next one is
-    asked, and the piece ends on all four under a title.
-  - Timing comes from the clips' marks (`question`, `sent`, `answered`).
-  - Camera views are rectangles in the recorded window's CSS pixels
-    (`geometry.ts`).
+- **AiTeammatesBebop** (`src/teammates/Bebop.tsx`): "AI teammates that can
+  do anything", Cowboy Bebop-style.
+  - Opens with the Agor logo draw-on, then a title slam of two color blocks.
+  - Four rapid questions: a bot name card wipes across, the prompt is typed
+    close up with the name on screen, and on send the shot shrinks into a
+    slanted colored pane holding the sent question.
+  - Then all four panes play their real answers side by side.
+  - Ends on the logo and the title.
+  - Timing comes from the clips' marks (`question`, `sent`, `answered`);
+    pacing constants sit at the top of the file.
+- **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
+  2x2 Brady Bunch grid. Kept for comparison.
 
 ## Agent skills
 

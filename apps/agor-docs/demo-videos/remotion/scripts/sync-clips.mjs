@@ -37,6 +37,11 @@ for (const bot of BOTS) {
   marks[bot] = { question: byLabel.question, sent: byLabel.sent, answered: byLabel.answered };
   console.log(`${bot}: ${JSON.stringify(marks[bot])}`);
 }
+// The Agor logo draw-on (from the syllabus reel) opens the edits.
+copyFileSync(
+  path.join(ROOT, '..', 'animated_agor_logo', 'agor_logo_reveal_4k.mp4'),
+  path.join(ROOT, 'public', 'clips', 'agor-logo.mp4')
+);
 writeFileSync(
   path.join(ROOT, 'src', 'teammates', 'marks.json'),
   `${JSON.stringify(marks, null, 2)}\n`

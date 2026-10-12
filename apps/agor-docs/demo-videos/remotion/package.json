@@ -28,6 +28,7 @@
     "upgrade": "remotion upgrade",
     "lint": "eslint src && tsc",
     "sync": "node scripts/sync-clips.mjs",
-    "render:teammates": "remotion render AiTeammates out/ai-teammates.mp4"
+    "render:teammates": "remotion render AiTeammatesBebop out/ai-teammates-bebop.mp4",
+    "render:teammates-grid": "remotion render AiTeammatesGrid out/ai-teammates-grid.mp4"
   }
 }
