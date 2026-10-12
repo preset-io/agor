@@ -59,13 +59,12 @@ and narrow.
 
 ### Frontend state
 
-- One zustand store (`apps/agor-ui/src/store/agorStore.ts`) holds normalized entity rows. Only
-  `useAgorData` (fetches, Feathers realtime) and the store loaders write it. Transcripts live in
-  ref-counted handles (`retainReactiveSession`, `packages/client`), never in the store.
-- A reload keeps only the URL (board, session, branch), tokens, drafts, and UI preferences.
-- Memory: board rows are bounded (pins plus a 3-board LRU). Global collections (comments, users,
-  repos, boards) grow with the workspace. Session rows carry their full `tasks` id list. The
-  transcript trims to 30 turns only for a reader at the bottom. Give every new cache a bound.
+- One zustand store (`apps/agor-ui/src/store/agorStore.ts`) holds normalized entity rows. Route
+  entity updates through the store's hydration/realtime actions; keep optimistic state local.
+  Transcripts live in ref-counted handles (`retainReactiveSession`, `packages/client`), never in
+  the store.
+- Entity state is memory-only. A reload keeps only the URL, tokens, drafts, and UI preferences.
+- Give every cache an explicit retention policy.
 - Details: [`frontend-state.md`](context/concepts/frontend-state.md),
   [`user-first-scoped-hydration.md`](context/concepts/user-first-scoped-hydration.md).
 

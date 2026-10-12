@@ -2,13 +2,11 @@
 
 How the browser client holds data, what survives a reload, what writes each store, and what
 bounds it. `UI` = `apps/agor-ui/src`, `client` = `packages/client/src`,
-`core` = `packages/core/src`. Line numbers are as of `85d7ce81` and counts as of `97eafaca`; code
-wins when they drift.
+`core` = `packages/core/src`. Line numbers are as of `97eafaca`; code wins when they drift.
 
-Entity retention (scopes, coverage, pins, the partition LRU, reconnect resync) is specified in
-[`user-first-scoped-hydration.md`](user-first-scoped-hydration.md). This doc links there instead
-of repeating it. Everything here is a static reading of the code. Nothing is a heap measurement
-unless stated. A claim not verifiable statically is marked **unverified**.
+Entity retention (scopes, coverage, pins, the partition LRU, caps, reconnect resync) is specified
+in [`user-first-scoped-hydration.md`](user-first-scoped-hydration.md). This doc links there
+instead of repeating it. A claim not verifiable statically is marked **unverified**.
 
 ## Layers
 
@@ -70,8 +68,7 @@ global reads does not cap them.
 | `recipeIds` (`UI/components/BranchCard/sharedCssVarScope.ts:28`)                                    | theme recipe                                | LRU of 64 (`:84-87`)                                                                                                             |
 | `widgetComponents`, route loaders, `useEmojiAutocomplete` cache                                     | fixed                                       | Bounded by construction                                                                                                          |
 
-No `@agor/core` module that the UI loads at runtime holds mutable module state. Internal state
-in third-party dependencies (socket.io-client, Feathers) was not checked.
+No `@agor/core` module that the UI loads at runtime holds mutable module state.
 
 ### Transcript layer (`client/reactive-session.ts`)
 
@@ -81,7 +78,7 @@ in third-party dependencies (socket.io-client, Feathers) was not checked.
 | `CLIENT_STREAM_STATE.subs`, `roomWanters` (`:2804`)                                                                      | session / room                   | Deleted on last release (`:2916`, `:3002`); whole registry dropped at `:3006`    |
 | `keyToCanonical` (`:2869-2871`)                                                                                          | any id form                      | **No per-entry delete**; dropped only with the whole registry                    |
 | Handle state: `tasks`, `messagesByTask`, `toolsByTask`, `loadedTaskIds`, `streamingMessages`, `queuedTasks` (`:130-144`) | task / message                   | See [Transcript bounds](#transcript-bounds); emptied by `dispose()` (`:916-960`) |
-| Detail retention: `recentDetailTaskIds`, `detailPins`, `detailTaskIds` (`:294-296`)                                      | task                             | 10 recent + pinned + latest + executing turns                                    |
+| Detail retention: `recentDetailTaskIds`, `detailPins`, `detailTaskIds` (`:294-296`)                                      | task                             | See [Lifecycle and growth](#lifecycle-and-growth)                                |
 | Message and task journals (`:268-279`)                                                                                   | fetch token                      | Pruned to the fetches in flight (`:804-812`, `:845-853`)                         |
 | `retiredStreamTasks` (`:331`)                                                                                            | stream                           | Capped at 256 (`:43`, `:1083-1084`)                                              |
 | `detailBytesOf` (`:47`)                                                                                                  | message object                   | `WeakMap`                                                                        |
@@ -112,7 +109,7 @@ scope (`UI/components/BranchCard/SessionLatestTaskPeek.tsx:44-51`).
   - board, session, branch focus and artifact focus (`/b/`, `/s/`, `/w/`, `/a/`, at
     `UI/App.tsx:2283-2298`);
   - the settings section (`UI/hooks/useSettingsRoute.ts:39-44`);
-  - knowledge `?q` and `?mode` (`UI/pages/KnowledgePage.tsx:490-492`).
+  - knowledge `?q`, `?draft=page` and `?mode` (`UI/pages/KnowledgePage.tsx:490-492`).
 
   Modals, the terminal and panel selections are React state and do not survive a reload.
 
@@ -154,8 +151,21 @@ Per-entity localStorage keys never removed:
   - realtime handlers (`:1543-1683`).
 - The loaders: `userScope.ts`, `boardPartitions.ts`, `idReads.ts`, `sessionMcpLinks.ts`.
 - Eviction (`retention.ts:69`).
-- One direct component call: `mcpServerRemoved` after a delete
-  (`UI/components/Marketplace/MyServersTab.tsx:959`).
+- Direct calls from outside `UI/store/` and `useAgorData`. Each applies a server response:
+  - `UI/App.tsx`: `handleCreateRepo` passes `repoPatched` to `createRepository`
+    (`UI/utils/createRepository.ts`); `handleOnboardingComplete` calls `repoPatched`;
+    `handleCreateSession` calls `sessionCreated`;
+  - `UI/components/Marketplace/MyServersTab.tsx`: the `onRemove` handler calls
+    `mcpServerRemoved`;
+  - `UI/components/SettingsModal/AgenticToolsSection.tsx`: `patch` calls
+    `upsertAgenticToolSetting`;
+  - `UI/utils/mcpOAuthAttempt.ts`: `refetchMCPOAuthDurableState` calls `applyMaps`;
+  - `UI/utils/sessionMcpServers.ts`: `updateSessionMcpServers` calls `sessionMcpCreated` and
+    `sessionMcpRemoved`;
+  - `UI/hooks/useSessionActions.ts`: `archiveSession` re-reads the affected sessions through
+    `captureSessionPatchCommit` (`UI/store/realtimeBatch.ts`), which enqueues them as patches.
+- The demo routes `UI/pages/MarketingScreenshotPage.tsx` and
+  `UI/pages/marketing/MarketingVideoPage.tsx` seed the store with fixtures (`agorStore.setState`).
 
 The entity store takes no optimistic writes. Optimistic UI is component state:
 
@@ -179,39 +189,27 @@ The entity store takes no optimistic writes. Optimistic UI is component state:
   - Session patches coalesce to one per session per frame, latest wins
     (`UI/store/realtimeBatch.ts:251`). Dropping the earlier patches is safe because realtime events
     carry full records (`agorMaps.ts:34-36`).
-- **Admission:** a realtime write inserts a session, branch, board object or card only if a scope
-  or pin holds it (`retention.ts:180-214`). Every other collection inserts on any `created`
-  event.
+- **Admission:** scoped collections follow the hydration doc's entry rule
+  ([Retention and pins](user-first-scoped-hydration.md#retention-and-pins); `retention.ts:180-214`).
+  Every other collection inserts on any `created` event.
 
-**Transcript handles** register 23 listeners each. They cover the socket, sessions, tasks and
-messages (`client/reactive-session.ts:2022-2025, 2060-2065, 2133-2143, 2186-2193, 2470-2524`).
-Each handler drops events for other sessions (`matchesSession`, `:451`), and `dispose()` removes
-every listener (`:924`).
-
-**Gap: `removed` for a session misses remote surrogates.**
-
-- `sessionRemoved` filters only the session's own branch bucket, by id
-  (`agorRealtimeActions.ts:225-232`).
-- A remote-create surrogate of that session lives under the creator's branch
-  (`agorMaps.ts:521-523`). Surrogates the session created live in its own bucket under other ids.
-- Archive (`agorMaps.ts:279-292`) and branch hard delete (`agorStore.ts:483-497`) both strip
-  surrogates through `isSessionRowRemovedWith`. The direct path does not.
-- Hard delete is reachable from `UI/hooks/useSessionActions.ts:260`.
-- Only the cascade path is tested (`UI/store/agorStore.test.ts:194`). The stale surrogate lasts
-  until the next rebuild of that bucket. This was found by reading the code and not reproduced.
+**Transcript handles** register their own socket, session, task and message listeners
+(`client/reactive-session.ts:2022-2025, 2060-2065, 2133-2143, 2186-2193, 2470-2524`). Each
+handler drops events for other sessions (`matchesSession`, `:451`), and `dispose()` removes every
+listener (`:924`).
 
 ## Lifecycle and growth
 
 | Class            | Store                                                                                                                          | Bound or trigger                                                                                                                                           |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bounded          | Board partitions                                                                                                               | Displayed board + 3 LRU; mounted or loading boards are never evicted (`UI/store/boardPartitions.ts:129,172-199`)                                           |
-| Bounded          | User scope                                                                                                                     | 200 gated, 10,000 sessions, 1,000 teammates ([caps](user-first-scoped-hydration.md#caps))                                                                  |
+| Bounded          | Board partitions                                                                                                               | Displayed board + background LRU ([Retention and pins](user-first-scoped-hydration.md#retention-and-pins); `UI/store/boardPartitions.ts:129,172-199`)      |
+| Bounded          | User scope                                                                                                                     | [Caps](user-first-scoped-hydration.md#caps)                                                                                                                |
 | Bounded          | Transcript detail (tool payloads, reasoning)                                                                                   | 10 turns + protected turns, 32 MiB of strings (`client/reactive-session.ts:24,39,589-648`). Protected turns count against the budget but are never evicted |
 | Bounded          | Lean transcript, display order, reader at bottom                                                                               | 30 turns (`:31`), trimmed from `UI/components/ConversationView/ConversationView.tsx:471-492`                                                               |
 | Bounded          | Peek handles (`preview`)                                                                                                       | Latest + executing turns (`client/reactive-session.ts:1129-1146`)                                                                                          |
 | Bounded          | Event stream, presence, realtime batch, journals, retired streams, recent boards, zone colors                                  | See the tables above                                                                                                                                       |
 | Cleared-on-X     | All entity maps                                                                                                                | Mount (`useAgorData.ts:411`), identity change (`:1205`), logout (`:1256`)                                                                                  |
-| Cleared-on-X     | Scoped rows                                                                                                                    | Pin release, LRU eviction, end of resync (`UI/store/retention.ts:1-17`)                                                                                    |
+| Cleared-on-X     | Scoped rows                                                                                                                    | [Retention and pins](user-first-scoped-hydration.md#retention-and-pins) (`UI/store/retention.ts:1-17`)                                                     |
 | Cleared-on-X     | Reactive handle                                                                                                                | Last consumer unmounts (`UI/hooks/useSharedReactiveSession.ts:69-73`). Boot prefetch: within 10 s + 30 s grace (`openedTranscriptPrefetch.ts:34-35,80-83`) |
 | Cleared-on-X     | Session MCP links, `useServerRead`, `useFullSessionDetails`                                                                    | With their session, key or surface                                                                                                                         |
 | **Unbounded**    | Global collections (comments, users, repos, boards, card types, MCP servers, gateway channels, artifacts)                      | Workspace size; `created` events add rows for the tab's lifetime. Removals are applied                                                                     |
@@ -229,8 +227,10 @@ every listener (`:924`).
   is being read.
 - **Legacy order never trims.** A session the daemon does not report as `tasks_complete`
   (`core/types/session.ts:245-250`) is read in task-ID order
-  (`client/reactive-session.ts:1669,1811`). So are sessions whose task list stopped extending
-  (`:1375-1386`). `trimOlderTasks` refuses both.
+  (`client/reactive-session.ts:1669,1811`). A display-order handle also falls back to task-ID
+  order when a new task list disagrees with the accepted prefix, meaning placed positions moved
+  (`acceptLeanOrder`, `:1367-1386`). An unchanged list or an older prefix (a delayed event) keeps
+  display order. `trimOlderTasks` refuses task-ID order in both cases.
 - Detail is still bounded in both cases. Lean history keeps text blocks; it drops tool and
   thinking blocks (`core/types/message.ts:359,366-407`).
 - Whether trimming happens in a hidden tab depends on stick-to-bottom state there. **Unverified.**
@@ -240,10 +240,10 @@ every listener (`:924`).
 - **Session length:**
   - the lean transcript when it cannot trim;
   - the `tasks` array on every session row, re-sent in full with each session patch;
-  - lean text of the 30-turn window. That is a turn count, not a byte bound.
-- **Board size:** the displayed partition plus up to three background partitions (branches,
-  sessions, board objects, cards), and their canvas nodes. Each peek adds a handle with
-  23 listeners that filter every message, task and session event.
+  - lean text of the trim window. That is a turn count, not a byte bound.
+- **Board size:** the displayed partition plus the retained background partitions (branches,
+  sessions, board objects, cards), and their canvas nodes. Each peek adds a handle whose
+  listeners filter every message, task and session event.
 - **Workspace size:** the global collections, comments in particular.
 - **Tab lifetime:** global `created` events, the small unbounded maps, and localStorage keys
   (which also outlive the tab).
@@ -252,34 +252,36 @@ every listener (`:924`).
 
 Current behavior, by design or not yet addressed:
 
-- The lean transcript does not trim while the reader is scrolled up or an older page is loading
-  (`UI/components/ConversationView/ConversationView.tsx:471-492`), nor when the handle reads in
-  task-ID order (`client/reactive-session.ts:1333,1362-1368`). Its text grows with every turn
-  loaded while the session stays open.
+- The lean transcript grows with every turn loaded while it cannot trim: while the reader is
+  scrolled up or an older page is loading, and for a handle in task-ID order (a session not
+  reported `tasks_complete`, or one whose task list moved placed positions). See
+  [Transcript bounds](#transcript-bounds).
 - Global collections (comments, users, repos, boards, card types, MCP servers, gateway channels,
-  artifacts) are never evicted. Eviction covers only branches, sessions, board objects and cards
-  (`UI/store/retention.ts:195-211`). Global rows leave only on a `removed` event or a full clear.
+  artifacts) are never evicted; eviction covers only the scoped collections
+  ([Retention and pins](user-first-scoped-hydration.md#retention-and-pins)). Global rows leave only
+  on a `removed` event or a full clear.
 - Every session row, lean rows included, carries its full `tasks: TaskID[]` list
   (`core/types/session.ts:348`; `core/db/repositories/sessions.ts:228`).
 - Logout clears only the tokens and the draft seed (`UI/hooks/useAuth.ts:994,1017`;
   `UI/utils/tokenRefresh.ts:94-97`). Per-branch peek keys and per-session MCP-banner keys stay in
   localStorage (`UI/components/BranchCard/BranchCard.tsx:45,205-208`;
   `UI/components/SessionPanel/SessionFooter.tsx:239-242`).
+- Direct session removal can leave remote-create surrogate rows until their branch buckets are
+  rebuilt; identified statically, not reproduced. Tracked in
+  [#3076](https://github.com/preset-io/agor/issues/3076).
 
 Follow-up work is tracked in [#3077](https://github.com/preset-io/agor/issues/3077).
 
 ## Listener hygiene
 
-- 168 socket and Feathers registrations. 165 are removed with the same function reference. The
-  other 3 are removed by `removeAllListeners()` when the client is torn down
-  (`UI/hooks/useAgorClient.ts:475`). None are unmatched.
-- Every `setInterval` is cleared and every observer disconnected.
+- Pair every socket and Feathers registration with a removal that passes the same function
+  reference. Client teardown also calls `client.io.removeAllListeners()` (`useAgorClient`).
+- Clear every `setInterval` and disconnect every observer in the effect that created it.
 - Feathers maps `service.on` to the socket event `"<path> <event>"`, so `client.service()`
   returning a new object does not break pairing.
-- Traps rather than leaks:
-  - `client.session()` returns an un-refcounted handle (`client/reactive-session.ts:2747-2749`).
-    Use `retainReactiveSession`.
-  - `realtimeBatch.ts:243-245` registers one module-level `visibilitychange` listener, on purpose.
+- Hold transcripts with `retainReactiveSession`. `client.session()` returns an un-refcounted
+  handle (`client/reactive-session.ts:2747-2749`).
+- `realtimeBatch.ts:243-245` registers one module-level `visibilitychange` listener, on purpose.
 
 ## Broader architecture
 
@@ -293,15 +295,8 @@ Follow-up work is tracked in [#3077](https://github.com/preset-io/agor/issues/30
   - `UI/surfaces/DeviceRouter.tsx:9` switches between the desktop and phone shells.
   - `StrictMode` is disabled (`UI/main.tsx:33-37`), so double-mount bugs in effects do not
     surface in development.
-- **Providers:** memoized, except the theme value, an inline object
-  (`UI/contexts/ThemeContext.tsx:142`).
-- **Prop drilling and mixed ownership.** Counts exclude tests and marketing pages:
-  - 62 `userById=` props and 199 `client={client}` props.
-  - 80 whole-map `useAgorStore(select…)` subscriptions in 29 files, counting the 15 plain map
-    selectors at `UI/store/selectors.ts:39-54`.
-  - Some components both subscribe and drill, e.g. `AppHeader.tsx:180-182`.
-  - `MobileApp.tsx:182-188` subscribes to 7 maps and passes them down.
-  - Actions arrive both as props and through `AppActionsContext`
-    (`UI/components/App/App.tsx:1150`).
-- **Mixed sources:** `canSwitchTool` reads `tasks` from the store row while the panel renders
-  tasks from the handle (`SessionPanel.tsx:980`).
+- **Ownership.** Own state at the level that matches it:
+  - the shell: auth, routing, modals and CRUD handlers, shared through `AppActionsContext`
+    (`UI/contexts/AppActionsContext.tsx`);
+  - the store: entity rows, read through `UI/store/selectors.ts`;
+  - the handle: transcripts, through `useSharedReactiveSession`.
