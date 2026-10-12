@@ -269,11 +269,20 @@ describe('MCP servers the acting user has no credential for', () => {
   const remote = (id: string, auth: MCPServer['auth']) =>
     ({ ...server(id), transport: 'http', url: `https://mcp.${id}.test/mcp`, auth }) as MCPServer;
 
-  async function buildFor(userId: string, grants: Record<string, Record<string, string>>) {
+  async function buildFor(
+    userId: string,
+    grants: Record<string, Record<string, string>>,
+    lookupFails = false
+  ) {
     vi.stubEnv('AGOR_USER_ENV_KEYS', '');
     const servers = [
       remote('asana', { type: 'oauth', oauth_dcr_mode: 'disabled', oauth_client_id: 'app' }),
       remote('dcr', { type: 'oauth' }),
+      remote('m2m', {
+        type: 'oauth',
+        oauth_grant_type: 'client_credentials',
+        oauth_client_id: 'svc',
+      }),
       remote('linear', { type: 'bearer', token: '{{ user.env.LINEAR_API_KEY }}' }),
     ];
     const tool = new OpenCodeTool({
@@ -284,13 +293,15 @@ describe('MCP servers the acting user has no credential for', () => {
             sessionMCPRepo: { listEffectiveServers: vi.fn().mockResolvedValue(servers) } as never,
             mcpServerRepo: { findAll: vi.fn().mockResolvedValue([]) } as never,
             mcpOAuthAuthHeadersRepo: {
-              getAuthHeaders: async () =>
-                Object.fromEntries(
+              getAuthHeaders: async () => {
+                if (lookupFails) throw new Error('credential repository unavailable');
+                return Object.fromEntries(
                   Object.entries(grants[userId] ?? {}).map(([id, authorization]) => [
                     id,
                     { authorization },
                   ])
-                ),
+                );
+              },
             },
             forUserId: userId,
           },
@@ -330,5 +341,15 @@ describe('MCP servers the acting user has no credential for', () => {
     expect(urls(userA)).toContain('https://mcp.dcr.test/mcp');
     expect(userA.mcpSignInNotice).not.toContain('agor_widgets_request_oauth');
     expect(userA.mcpSignInNotice).toContain('missing environment variables: LINEAR_API_KEY');
+  });
+
+  it('asks to retry, not to Connect, when the credential lookup fails', async () => {
+    const config = await buildFor('user-a', {}, true);
+    expect(urls(config)).toEqual(['http://localhost:3030/mcp']);
+    // DCR is withheld too on OpenCode, but with the retry line, not Connect.
+    expect(config.mcpSignInNotice).toMatch(/couldn't load the sign-in[^#]*asana[^#]*dcr/);
+    expect(config.mcpSignInNotice).toMatch(/machine \(client-credentials\)[^#]*m2m/);
+    expect(config.mcpSignInNotice).not.toContain('never connected');
+    expect(config.mcpSignInNotice).not.toContain('unavailable until the user connects them');
   });
 });

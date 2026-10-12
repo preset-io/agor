@@ -1081,8 +1081,9 @@ export class OpenCodeTool {
         }
         let authHeaders: Record<string, string> | undefined;
         try {
-          authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+          authHeaders = await resolveScopedMCPAuthHeaders(scoped, { surfaceAuthorityError: true });
         } catch {
+          // A failed credential lookup is not a missing sign-in: retry advice.
           if (signIn.recordResolutionFailure(scoped)) continue;
           throw new Error(`Attached MCP server ${server.name} authentication failed`);
         }

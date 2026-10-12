@@ -15,6 +15,7 @@ import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
 import {
   getMcpServersForSession,
+  MCPOAuthAuthorityUnavailableError,
   MCPSignInNoticeCollector,
   resolveScopedMCPAuthHeaders,
 } from '@agor/core/mcp';
@@ -243,15 +244,20 @@ export class CopilotPromptService {
         };
 
         let authHeaders: Record<string, string> | undefined;
+        let lookupFailed = false;
         try {
-          authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+          authHeaders = await resolveScopedMCPAuthHeaders(scoped, { surfaceAuthorityError: true });
         } catch (error) {
+          // A failed credential lookup is not a missing sign-in: retry advice.
           if (signIn.recordResolutionFailure(scoped)) continue;
-          throw error;
+          // A DCR server keeps today's behavior: loaded without credentials.
+          if (!(error instanceof MCPOAuthAuthorityUnavailableError)) throw error;
+          lookupFailed = true;
         }
         // Withhold servers the acting user has no credential for (see the
         // collector); the notice tells the agent how the user fixes it.
         if (
+          !lookupFailed &&
           server.auth &&
           server.auth.type !== 'none' &&
           !authHeaders?.Authorization &&
