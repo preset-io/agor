@@ -1,0 +1,6 @@
+orbitly:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: warehouse/orbitly.duckdb

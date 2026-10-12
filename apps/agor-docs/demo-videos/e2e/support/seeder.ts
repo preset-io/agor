@@ -11,11 +11,17 @@
 // name you give it, which is how clips find things later.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { AgorApi } from './api.ts';
+import { PLACEHOLDER_TOKEN } from './cassette-proxy.ts';
 import { CAST, CAST_KEYS, type CastKey } from './cast.ts';
-import { DEMO_REPO_DEFAULT_BRANCH, PROXY_URL, resolveAgentMode, SECRETS_FILE } from './harness.ts';
+import {
+  DEMO_REPO_DEFAULT_BRANCH,
+  FRAMEWORK_REPO_SLUG,
+  PROXY_URL,
+  resolveAgentMode,
+} from './harness.ts';
 import type { BoardHandle, BranchHandle, SessionHandle, World } from './world.ts';
 
 /** A zone as the board stores it (packages/core/src/types/board.ts). */
@@ -43,16 +49,35 @@ export interface BranchSpec {
   from?: string;
   as?: CastKey;
   notes?: string;
+  /** Ticket link (e.g. a Jira issue), shown on the card and given to agents. */
+  issueUrl?: string;
+  /** Pull request link, shown on the card and given to agents. */
+  prUrl?: string;
 }
 
-const AGENT_MODELS: Record<string, string> = { 'claude-code': 'claude-sonnet-4-5' };
-
-function secret(name: string): string | null {
-  if (!existsSync(SECRETS_FILE)) return null;
-  for (const line of readFileSync(SECRETS_FILE, 'utf8').split('\n')) {
-    if (line.startsWith(`${name}=`)) return line.slice(name.length + 1).trim();
-  }
-  return null;
+export interface TeammateSpec {
+  /** Display name, e.g. 'DataBot'. */
+  displayName: string;
+  emoji: string;
+  /** One line shown under the name in the board's teammate panel. */
+  description: string;
+  /** Board (by world name) the teammate lives on and is primary for. */
+  board: string;
+  /**
+   * Who the teammate is and how it works, written into IDENTITY.md (which
+   * the framework reads at the start of every session).
+   */
+  identity: string;
+  /** About the person it works for, written into USER.md. */
+  user: string;
+  /** Extra files to write into the teammate's branch (relative paths), committed. */
+  files?: Record<string, string>;
+  /** Make it the board's primary teammate (one per board). */
+  primary?: boolean;
+  /** Card position on the board (canvas units; inside `zone` if given). */
+  at?: { x: number; y: number };
+  zone?: string;
+  as?: CastKey;
 }
 
 async function poll<T>(
@@ -124,19 +149,13 @@ export class Seeder {
   }
 
   /**
-   * Give cast members a working Claude Code connection routed through the
-   * cassette proxy (live: a real token from .e2e-secrets; otherwise a
-   * placeholder the replay cassette vouches for). Without one, Agor shows
+   * Give cast members a Claude Code connection routed through the cassette
+   * proxy. It holds a placeholder token, never a real one: in live mode the
+   * proxy swaps in the real token on the way upstream, and in replay mode
+   * the recorded responses vouch for it. Without a connection Agor shows
    * "No AI connected" banners on camera.
    */
   async connectAi(keys: CastKey[] = CAST_KEYS): Promise<void> {
-    const token =
-      resolveAgentMode() === 'live'
-        ? (secret('CLAUDE_CODE_OAUTH_TOKEN') ??
-          (() => {
-            throw new Error(`live mode needs CLAUDE_CODE_OAUTH_TOKEN in ${SECRETS_FILE}`);
-          })())
-        : 'sk-ant-oat01-replay-placeholder';
     for (const key of keys) {
       const api = await this.as(key);
       const id = await this.userId(key);
@@ -146,7 +165,7 @@ export class Seeder {
         agentic_tools: { 'claude-code': { ANTHROPIC_BASE_URL: PROXY_URL } },
       });
       await api.patch(`/users/${id}`, {
-        agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: token } },
+        agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: PLACEHOLDER_TOKEN } },
         agentic_auth_methods: { 'claude-code': 'api_key' },
         agentic_credential_sources: { 'claude-code': 'api_key' },
       });
@@ -261,6 +280,8 @@ export class Seeder {
       ...(spec.at ? { position: spec.at } : {}),
       ...(zoneId ? { zoneId } : {}),
       ...(spec.notes ? { notes: spec.notes } : {}),
+      ...(spec.issueUrl ? { issue_url: spec.issueUrl } : {}),
+      ...(spec.prUrl ? { pull_request_url: spec.prUrl } : {}),
     });
     const ready = await poll(
       `branch ${spec.name}`,
@@ -291,7 +312,12 @@ export class Seeder {
    * Write files into a branch's working directory and commit them: data for
    * a chart, a half-finished feature, whatever the clip needs to exist.
    */
-  commit(branch: string, files: Record<string, string>, message: string): void {
+  commit(
+    branch: string,
+    files: Record<string, string>,
+    message: string,
+    removed: string[] = []
+  ): void {
     const b = this.world.branch(branch);
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(b.dir, rel);
@@ -302,7 +328,7 @@ export class Seeder {
       const res = spawnSync('git', args, { cwd: b.dir, encoding: 'utf8' });
       if (res.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${res.stderr}`);
     };
-    git(['add', '--', ...Object.keys(files)]);
+    git(['add', '-A', '--', ...Object.keys(files), ...removed]);
     git([
       '-c',
       'user.name=Agor Demo',
@@ -318,7 +344,20 @@ export class Seeder {
   /** An agent session on a branch, started by a cast member. */
   async session(
     name: string,
-    spec: { branch: string; title: string; as?: CastKey; agent?: string }
+    spec: {
+      branch: string;
+      /** Leave out to let Agor title it from the first prompt, as it does for real sessions. */
+      title?: string;
+      as?: CastKey;
+      agent?: string;
+      /**
+       * Claude Code permission mode for the session. Default is the user's
+       * own default; 'bypassPermissions' lets a trusted teammate commit,
+       * push and open PRs without a prompt (its auto mode otherwise blocks
+       * an unrequested commit).
+       */
+      permissionMode?: 'default' | 'acceptEdits' | 'bypassPermissions';
+    }
   ): Promise<SessionHandle> {
     const api = await this.as(spec.as ?? 'sam');
     const branch = this.world.branch(spec.branch);
@@ -326,22 +365,14 @@ export class Seeder {
     const created = await api.post<{ session_id: string }>('/sessions', {
       branch_id: branch.id,
       agentic_tool: agent,
-      title: spec.title,
+      ...(spec.title ? { title: spec.title } : {}),
+      ...(spec.permissionMode ? { permission_config: { mode: spec.permissionMode } } : {}),
       status: 'idle',
-      ...(AGENT_MODELS[agent]
-        ? {
-            model_config: {
-              mode: 'alias',
-              model: AGENT_MODELS[agent],
-              updated_at: new Date().toISOString(),
-            },
-          }
-        : {}),
     });
     const handle: SessionHandle = {
       id: created.session_id,
       branchId: branch.id,
-      title: spec.title,
+      title: spec.title ?? '',
     };
     this.world.data.sessions[name] = handle;
     return handle;
@@ -379,6 +410,91 @@ export class Seeder {
       15 * 60_000,
       2000
     );
+  }
+
+  /**
+   * An AI teammate: a branch of the teammate framework repo (registered by
+   * the harness) with its persona written in and onboarding already done,
+   * set as the board's primary teammate. Recorded as a branch under
+   * `name`, so sessions can be started on it.
+   */
+  async teammate(name: string, spec: TeammateSpec): Promise<BranchHandle> {
+    const api = await this.as(spec.as ?? 'sam');
+    const admin = await this.as('sam');
+    const board = this.world.board(spec.board);
+    const framework = await admin.find<{ repo_id: string; default_branch?: string }>('/repos', {
+      slug: FRAMEWORK_REPO_SLUG,
+    });
+    if (!framework[0]) throw new Error('the teammate framework repo is not registered');
+    const branchName = `private-${name}`;
+    const created = await api.post<{ branch_id: string }>(
+      `/repos/${framework[0].repo_id}/branches`,
+      {
+        name: branchName,
+        ref: branchName,
+        createBranch: true,
+        sourceBranch: framework[0].default_branch ?? 'main',
+        boardId: board.id,
+        ...(spec.at ? { position: spec.at } : {}),
+        ...(spec.zone ? { zoneId: board.zones[spec.zone] } : {}),
+        notes: spec.description,
+        custom_context: {
+          teammate: {
+            kind: 'teammate',
+            displayName: spec.displayName,
+            emoji: spec.emoji,
+            frameworkRepo: FRAMEWORK_REPO_SLUG,
+            createdViaOnboarding: false,
+          },
+        },
+      }
+    );
+    const ready = await poll(
+      `teammate ${spec.displayName}`,
+      async () => {
+        const b = await api.get<{
+          filesystem_status?: string;
+          error_message?: string;
+          path: string;
+        }>(`/branches/${created.branch_id}`);
+        if (b.filesystem_status === 'failed') {
+          throw new Error(`teammate ${name} failed: ${b.error_message ?? 'unknown error'}`);
+        }
+        return b.filesystem_status === 'creating' ? null : b;
+      },
+      120_000
+    );
+    if (spec.primary) {
+      await admin.custom('/boards', 'setPrimaryTeammate', {
+        boardId: board.id,
+        branchId: created.branch_id,
+      });
+    }
+    const handle: BranchHandle = {
+      id: created.branch_id,
+      name: branchName,
+      dir: ready.path,
+      boardId: board.id,
+    };
+    this.world.data.branches[name] = handle;
+    // Onboarding done: the framework only runs it while ONBOARDING.md exists.
+    rmSync(path.join(ready.path, 'ONBOARDING.md'), { force: true });
+    // Claude Code loads CLAUDE.md (a link to AGENTS.md here) into every
+    // turn; IDENTITY.md is only read if the agent follows BOOT.md. Put the
+    // role in both so it always applies.
+    const agents = readFileSync(path.join(ready.path, 'AGENTS.md'), 'utf8');
+    this.commit(
+      name,
+      {
+        'AGENTS.md': `${agents.trimEnd()}\n\n## Who you are in this workspace\n\nYou are ${spec.displayName}. This overrides anything above about onboarding or adopting an identity.\n\n${spec.identity.trim()}\n`,
+        'IDENTITY.md': `# IDENTITY.md\n\n- **Name:** ${spec.displayName}\n- **Emoji:** ${spec.emoji}\n\n${spec.identity.trim()}\n`,
+        'USER.md': `# USER.md\n\n${spec.user.trim()}\n`,
+        ...(spec.files ?? {}),
+      },
+      `Set up ${spec.displayName}`,
+      ['ONBOARDING.md']
+    );
+    return handle;
   }
 
   /** A markdown note on a board. */

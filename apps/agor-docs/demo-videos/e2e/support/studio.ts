@@ -35,7 +35,7 @@ import { AgorApi } from './api.ts';
 import { CAST, type CastKey } from './cast.ts';
 import { clipById } from './clips.ts';
 import { installCursor } from './cursor.ts';
-import { BASE_URL, snapshotCheckpoint } from './harness.ts';
+import { BASE_URL, DEMO_TIMEZONE, snapshotCheckpoint } from './harness.ts';
 import {
   beat,
   cursorPosition,
@@ -48,6 +48,7 @@ import {
   spotlight,
   typeInto,
 } from './pacing.ts';
+import { FrameRecorder } from './recorder.ts';
 import { type Ease, type Rect, Timeline, takeDir } from './timeline.ts';
 import { readWorld, type World } from './world.ts';
 
@@ -128,7 +129,7 @@ export class Actor {
     readonly page: Page,
     readonly context: BrowserContext,
     readonly filmed: boolean,
-    private readonly timeline: Timeline
+    readonly timeline: Timeline
   ) {
     this.camera = new Camera(this, timeline);
     this.name = CAST[key].name;
@@ -138,27 +139,9 @@ export class Actor {
     });
   }
 
-  /**
-   * Navigate and wait out Agor's boot screens. A filmed actor flashes a
-   * sync card first (inside the boot time the export trims), which pins
-   * its video to the wall clock.
-   */
+  /** Navigate and wait out Agor's boot screens (the export cuts them). */
   async open(urlPath: string): Promise<void> {
     await this.page.goto(urlPath);
-    if (this.filmed) {
-      const wall = await this.page.evaluate(async () => {
-        const card = document.createElement('div');
-        card.style.cssText =
-          'position:fixed;inset:0;z-index:2147483647;background:#ff00ff;pointer-events:none';
-        document.documentElement.appendChild(card);
-        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
-        const shownAt = Date.now();
-        setTimeout(() => card.remove(), 400);
-        return shownAt;
-      });
-      this.timeline.log({ type: 'sync', actor: this.key, wall });
-      await this.page.waitForTimeout(450);
-    }
     // Boot screens are sequential ("Loading...", then "Loading workspace
     // data..."): wait for three quiet checks in a row, not the first gap.
     const loading = this.page.locator('text=/^Loading/');
@@ -300,6 +283,7 @@ export class Actor {
 export class Studio {
   readonly world: World;
   readonly actors = new Map<CastKey, Actor>();
+  private readonly recorders = new Map<CastKey, FrameRecorder>();
   private rolling = false;
 
   constructor(
@@ -333,32 +317,42 @@ export class Studio {
         value: JSON.stringify(options.sidePanel !== 'open'),
       },
     ];
+    // "Connect Slack, GitHub... via MCP" nudge: snoozed, as if the person had
+    // clicked "Maybe later" (the app honors at most 24 hours).
+    const userId = this.world.data.users[key]?.id;
+    if (userId) {
+      storage.push({
+        name: `agor:user:${userId}:onboarding:integrations-snoozed-until:v1`,
+        value: JSON.stringify(Date.now() + 23 * 3600_000),
+      });
+    }
     if (api.session.refreshToken) {
       storage.push({ name: 'agor-refresh-token', value: api.session.refreshToken });
     }
     const filmed = options.filmed === true;
-    const rawDir = path.join(this.timeline.dir, 'raw');
     const context = await this.browser.newContext({
       viewport: VIEWPORT,
       deviceScaleFactor: SCALE,
+      timezoneId: DEMO_TIMEZONE,
       baseURL: BASE_URL,
       storageState: { cookies: [], origins: [{ origin: BASE_URL, localStorage: storage }] },
-      ...(filmed
-        ? {
-            recordVideo: {
-              dir: rawDir,
-              size: { width: VIEWPORT.width * SCALE, height: VIEWPORT.height * SCALE },
-            },
-          }
-        : {}),
     });
     const page = await context.newPage();
     const actor = new Actor(key, page, context, filmed, this.timeline);
     this.actors.set(key, actor);
+    if (filmed) {
+      const recorder = new FrameRecorder(page, path.join(this.timeline.dir, `${key}-frames`), {
+        width: VIEWPORT.width * SCALE,
+        height: VIEWPORT.height * SCALE,
+      });
+      await recorder.start();
+      this.recorders.set(key, recorder);
+    }
     this.timeline.log({
       type: 'actor',
       actor: key,
-      video: filmed ? `${key}.webm` : null,
+      video: null,
+      frames: filmed ? `${key}-frames` : null,
       viewport: VIEWPORT,
       scale: SCALE,
     });
@@ -388,17 +382,11 @@ export class Studio {
   async wrap(passed: boolean): Promise<void> {
     await this.cut();
     for (const actor of this.actors.values()) await actor.stopPresence();
+    // Every frame on disk before anything closes.
+    for (const recorder of this.recorders.values()) await recorder.stop();
     // The end state, for clips that pick up where this one left off.
     if (passed) snapshotCheckpoint(`post-${this.clipId}`);
-    for (const actor of this.actors.values()) {
-      const video = actor.page.video();
-      await actor.context.close();
-      if (video && actor.filmed) {
-        await video.saveAs(path.join(this.timeline.dir, `${actor.key}.webm`));
-        await video.delete();
-      }
-    }
-    rmSync(path.join(this.timeline.dir, 'raw'), { recursive: true, force: true });
+    for (const actor of this.actors.values()) await actor.context.close();
   }
 }
 

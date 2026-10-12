@@ -38,7 +38,39 @@ interface CassetteEntry {
   responseHeaders: Record<string, string>;
   /** Response body chunks in original arrival order, base64-encoded — preserves SSE framing. */
   responseChunksBase64: string[];
+  /**
+   * When each chunk arrived, in ms after the request was sent. Replay waits
+   * the same way so a recorded answer streams onto the screen at its
+   * original pace (AGOR_E2E_REPLAY_SPEED scales it; cassettes recorded
+   * before this field existed replay instantly).
+   */
+  responseChunkOffsetsMs?: number[];
 }
+
+/**
+ * Seeded demo accounts store a placeholder credential (see Seeder.connectAi),
+ * so no real token ever lands in the scratch database or its checkpoints. In
+ * live mode the proxy swaps the placeholder for the real token it was started
+ * with (AGOR_E2E_REAL_AUTH_TOKEN, from .e2e-secrets) on the way upstream.
+ */
+export const PLACEHOLDER_TOKEN = 'sk-ant-oat01-replay-placeholder';
+const REAL_TOKEN = process.env.AGOR_E2E_REAL_AUTH_TOKEN ?? '';
+
+function withRealCredential(
+  headers: Record<string, string | string[] | undefined>
+): Record<string, string | string[] | undefined> {
+  if (!REAL_TOKEN) return headers;
+  const out = { ...headers };
+  for (const key of ['authorization', 'x-api-key']) {
+    const v = out[key];
+    if (typeof v === 'string' && v.includes(PLACEHOLDER_TOKEN)) {
+      out[key] = v.replace(PLACEHOLDER_TOKEN, REAL_TOKEN);
+    }
+  }
+  return out;
+}
+
+const REPLAY_SPEED = Number(process.env.AGOR_E2E_REPLAY_SPEED ?? 1) || 1;
 
 interface Cassette {
   upstreamHost: string;
@@ -156,7 +188,12 @@ export async function startCassetteProxy(options: {
         if (!STRIP_RESPONSE_HEADERS.has(k.toLowerCase())) headers[k] = v;
       }
       res.writeHead(entry.responseStatus, headers);
-      for (const chunkB64 of entry.responseChunksBase64) {
+      const replayStart = Date.now();
+      for (const [i, chunkB64] of entry.responseChunksBase64.entries()) {
+        const due = (entry.responseChunkOffsetsMs?.[i] ?? 0) / REPLAY_SPEED;
+        const wait = replayStart + due - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        if (res.destroyed) return;
         res.write(Buffer.from(chunkB64, 'base64'));
       }
       res.end();
@@ -174,10 +211,11 @@ export async function startCassetteProxy(options: {
         hostname: upstreamHost,
         path: req.url,
         method: req.method,
-        headers: { ...req.headers, host: upstreamHost },
+        headers: withRealCredential({ ...req.headers, host: upstreamHost }),
       },
       (upstreamRes) => {
         const responseChunks: Buffer[] = [];
+        const chunkOffsets: number[] = [];
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(upstreamRes.headers)) {
           if (typeof v === 'string') headers[k] = v;
@@ -185,6 +223,7 @@ export async function startCassetteProxy(options: {
         res.writeHead(upstreamRes.statusCode ?? 502, headers);
         upstreamRes.on('data', (chunk: Buffer) => {
           responseChunks.push(chunk);
+          chunkOffsets.push(Date.now() - t0);
           res.write(chunk);
         });
         upstreamRes.on('end', () => {
@@ -206,10 +245,18 @@ export async function startCassetteProxy(options: {
             responseStatus: upstreamRes.statusCode ?? 0,
             responseHeaders: headers,
             responseChunksBase64: responseChunks.map((c) => c.toString('base64')),
+            responseChunkOffsetsMs: chunkOffsets,
           });
         });
       }
     );
+    // A dropped network (or a sleeping laptop) can leave an upstream request
+    // hanging for many minutes before the socket errors. Give up after 90s of
+    // silence instead, so the agent's own retry kicks in promptly. Streaming
+    // responses send keep-alive pings far more often than that.
+    upstreamReq.setTimeout(90_000, () => {
+      upstreamReq.destroy(new Error('no data from upstream for 90s'));
+    });
     upstreamReq.on('error', (err) => {
       console.log(
         `[cassette-proxy] ${req.method} ${req.url} -> UPSTREAM_ERROR ${Date.now() - t0}ms ` +

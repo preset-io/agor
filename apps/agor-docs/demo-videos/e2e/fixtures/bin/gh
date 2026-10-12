@@ -1,0 +1,234 @@
+#!/usr/bin/env node
+// A stand-in for the GitHub CLI inside the demo workspace, so agents can
+// "open a PR" or list the team's PRs without touching real GitHub (and
+// without anything to reset between takes).
+//
+// The harness copies this file to <scratch>/bin/gh and puts that directory
+// first on the scratch daemon's PATH, so only agent sessions in the demo
+// workspace see it. Pull requests live in <scratch>/fake-github/<owner>__<repo>.json,
+// seeded by Seeder.github() and appended to by `gh pr create`.
+//
+// Supported: auth status, repo view, pr create|list|view|status|diff|checks,
+// search prs. Anything else fails the way a missing permission would.
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const STORE = path.join(path.dirname(fs.realpathSync(process.argv[1])), '..', 'fake-github');
+const LOGIN = 'sam-orbitlyhq';
+const args = process.argv.slice(2);
+
+function fail(msg, code = 1) {
+  process.stderr.write(`${msg}\n`);
+  process.exit(code);
+}
+
+function flag(name, short) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === `--${name}` || (short && a === `-${short}`)) return args[i + 1];
+    if (a.startsWith(`--${name}=`)) return a.slice(name.length + 3);
+  }
+  return undefined;
+}
+const has = (name, short) => args.includes(`--${name}`) || (short ? args.includes(`-${short}`) : false);
+
+function git(cmd) {
+  try {
+    return execFileSync('git', cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function repoName() {
+  const explicit = flag('repo', 'R');
+  if (explicit) return explicit.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
+  const configured = git(['config', '--get', 'demo.github-repo']);
+  if (configured) return configured;
+  const url = git(['remote', 'get-url', 'origin']);
+  const m = url.match(/github\.com[:/]([^/]+\/[^/.]+)/);
+  if (m) return m[1];
+  const all = fs.existsSync(STORE) ? fs.readdirSync(STORE).filter((f) => f.endsWith('.json')) : [];
+  if (all.length === 1) return all[0].replace('__', '/').replace(/\.json$/, '');
+  fail('could not determine the repository; run inside a repo clone or pass --repo OWNER/REPO');
+}
+
+function load(repo) {
+  const file = path.join(STORE, `${repo.replace('/', '__')}.json`);
+  if (!fs.existsSync(file)) fail(`GraphQL: Could not resolve to a Repository with the name '${repo}'.`);
+  return { file, data: JSON.parse(fs.readFileSync(file, 'utf8')) };
+}
+
+function allRepos() {
+  if (!fs.existsSync(STORE)) return [];
+  return fs.readdirSync(STORE).filter((f) => f.endsWith('.json')).map((f) => {
+    const data = JSON.parse(fs.readFileSync(path.join(STORE, f), 'utf8'));
+    return { repo: f.replace('__', '/').replace(/\.json$/, ''), data };
+  });
+}
+
+function url(repo, n) {
+  return `https://github.com/${repo}/pull/${n}`;
+}
+
+function shape(repo, pr) {
+  return {
+    number: pr.number,
+    title: pr.title,
+    state: pr.state.toUpperCase(),
+    isDraft: !!pr.draft,
+    author: { login: pr.author },
+    headRefName: pr.head,
+    baseRefName: pr.base || 'main',
+    createdAt: pr.createdAt,
+    updatedAt: pr.updatedAt || pr.createdAt,
+    url: url(repo, pr.number),
+    body: pr.body || '',
+    additions: pr.additions || 0,
+    deletions: pr.deletions || 0,
+    reviewRequests: (pr.reviewers || []).map((login) => ({ login })),
+    reviews: (pr.reviews || []).map((r) => ({ author: { login: r.by }, state: r.state })),
+    reviewDecision: pr.reviewDecision || '',
+    labels: (pr.labels || []).map((name) => ({ name })),
+    repository: { nameWithOwner: repo },
+  };
+}
+
+function pick(obj, fields) {
+  if (!fields) return obj;
+  const out = {};
+  for (const f of fields.split(',')) out[f.trim()] = obj[f.trim()];
+  return out;
+}
+
+function ago(iso) {
+  const days = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 86400000));
+  return days === 0 ? 'today' : days === 1 ? 'about 1 day ago' : `about ${days} days ago`;
+}
+
+function table(repo, prs) {
+  if (prs.length === 0) return `no pull requests match your search in ${repo}`;
+  const rows = prs.map((p) => `#${p.number}\t${p.title}\t${p.head}\t${p.draft ? 'DRAFT' : p.state.toUpperCase()}\t${ago(p.createdAt)}`);
+  return `\nShowing ${prs.length} pull requests in ${repo}\n\n${rows.join('\n')}`;
+}
+
+function filterPrs(prs) {
+  const state = (flag('state', 's') || 'open').toLowerCase();
+  const author = flag('author', 'A');
+  const reviewer = flag('reviewed-by') || flag('reviewer');
+  const limit = Number(flag('limit', 'L') || 30);
+  return prs
+    .filter((p) => state === 'all' || p.state === state)
+    .filter((p) => !author || p.author === (author === '@me' ? LOGIN : author))
+    .filter((p) => !reviewer || (p.reviews || []).some((r) => r.by === reviewer) || (p.reviewers || []).includes(reviewer))
+    .sort((a, b) => b.number - a.number)
+    .slice(0, limit);
+}
+
+const [cmd, sub] = args;
+
+if (cmd === 'auth' && sub === 'status') {
+  console.log(`github.com\n  ✓ Logged in to github.com account ${LOGIN} (keyring)\n  - Active account: true\n  - Git operations protocol: https`);
+  process.exit(0);
+}
+
+if (cmd === 'repo' && sub === 'view') {
+  const repo = repoName();
+  const { data } = load(repo);
+  if (has('json')) console.log(JSON.stringify({ nameWithOwner: repo, description: data.description || '', defaultBranchRef: { name: 'main' } }));
+  else console.log(`${repo}\n${data.description || ''}`);
+  process.exit(0);
+}
+
+if (cmd === 'search' && sub === 'prs') {
+  const found = [];
+  for (const { repo, data } of allRepos()) {
+    for (const p of filterPrs(data.pulls)) found.push(shape(repo, p));
+  }
+  if (has('json')) console.log(JSON.stringify(found.map((p) => pick(p, flag('json')))));
+  else for (const p of found) console.log(`${p.repository.nameWithOwner}\t#${p.number}\t${p.title}\t${p.state}\t${p.author.login}`);
+  process.exit(0);
+}
+
+if (cmd !== 'pr') fail(`gh ${args.join(' ')}: not available in this workspace (the demo GitHub supports pr, repo view, search prs, auth status)`);
+
+const repo = repoName();
+const { file, data } = load(repo);
+
+function find(ref) {
+  const n = Number(String(ref || '').replace(/^.*\/pull\//, '').replace('#', ''));
+  const pr = ref ? data.pulls.find((p) => p.number === n || p.head === ref) : data.pulls.find((p) => p.head === git(['branch', '--show-current']));
+  if (!pr) fail(ref ? `no pull requests found for '${ref}'` : 'no pull requests found for the current branch');
+  return pr;
+}
+
+switch (sub) {
+  case 'create': {
+    const head = flag('head', 'H') || git(['branch', '--show-current']);
+    if (!head || head === 'main') fail('must be on a branch other than the base branch to open a pull request');
+    if (data.pulls.some((p) => p.head === head && p.state === 'open')) {
+      const existing = data.pulls.find((p) => p.head === head && p.state === 'open');
+      fail(`a pull request for branch "${head}" into branch "main" already exists:\n${url(repo, existing.number)}`);
+    }
+    let title = flag('title', 't');
+    let body = flag('body', 'b') || '';
+    const bodyFile = flag('body-file', 'F');
+    if (bodyFile) body = fs.readFileSync(bodyFile === '-' ? 0 : bodyFile, 'utf8');
+    if (!title || has('fill')) title = title || git(['log', '-1', '--format=%s']) || head;
+    const number = data.next || Math.max(0, ...data.pulls.map((p) => p.number)) + 1;
+    const now = new Date().toISOString();
+    data.pulls.push({
+      number,
+      title,
+      body,
+      head,
+      base: flag('base', 'B') || 'main',
+      author: LOGIN,
+      state: 'open',
+      draft: has('draft', 'd'),
+      createdAt: now,
+      updatedAt: now,
+      reviewers: (flag('reviewer', 'r') || '').split(',').filter(Boolean),
+    });
+    data.next = number + 1;
+    fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+    process.stderr.write(`\nCreating pull request for ${head} into main in ${repo}\n\n`);
+    console.log(url(repo, number));
+    break;
+  }
+  case 'list': {
+    const prs = filterPrs(data.pulls);
+    if (has('json')) console.log(JSON.stringify(prs.map((p) => pick(shape(repo, p), flag('json')))));
+    else console.log(table(repo, prs));
+    break;
+  }
+  case 'view': {
+    const target = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+    const pr = shape(repo, find(target));
+    if (has('json')) console.log(JSON.stringify(pick(pr, flag('json'))));
+    else {
+      console.log(`${pr.title} #${pr.number}\n${pr.state} • ${pr.author.login} wants to merge into ${pr.baseRefName} from ${pr.headRefName}`);
+      if (pr.reviews.length) console.log(`Reviewers: ${pr.reviews.map((r) => `${r.author.login} (${r.state})`).join(', ')}`);
+      console.log(`\n${pr.body}\n\nView this pull request on GitHub: ${pr.url}`);
+    }
+    break;
+  }
+  case 'status': {
+    const mine = data.pulls.filter((p) => p.author === LOGIN && p.state === 'open');
+    const asked = data.pulls.filter((p) => (p.reviewers || []).includes(LOGIN) && p.state === 'open');
+    console.log(`\nRelevant pull requests in ${repo}\n\nCreated by you\n${mine.map((p) => `  #${p.number}  ${p.title} [${p.head}]`).join('\n') || '  You have no open pull requests'}\n\nRequesting a code review from you\n${asked.map((p) => `  #${p.number}  ${p.title} [${p.head}]`).join('\n') || '  You have no pull requests to review'}`);
+    break;
+  }
+  case 'checks':
+    console.log('All checks were successful\n0 failing, 3 successful, 0 skipped, and 0 pending checks');
+    break;
+  case 'diff': {
+    const pr = find(args[2] && !args[2].startsWith('-') ? args[2] : undefined);
+    process.stdout.write(git(['diff', `${pr.base || 'main'}...${pr.head}`]));
+    break;
+  }
+  default:
+    fail(`gh pr ${sub || ''}: not available in this workspace`);
+}

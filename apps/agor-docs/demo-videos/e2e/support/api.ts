@@ -33,12 +33,19 @@ export class AgorApi {
     return new AgorApi({ accessToken: body.accessToken, refreshToken: body.refreshToken });
   }
 
-  private async call<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
+  private async call<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    query?: Query,
+    extraHeaders: Record<string, string> = {}
+  ): Promise<T> {
     const res = await fetch(`${DAEMON_URL}${path}${qs(query)}`, {
       method,
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${this.session.accessToken}`,
+        ...extraHeaders,
       },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
@@ -66,6 +73,11 @@ export class AgorApi {
 
   patch<T>(path: string, body: unknown, query?: Query): Promise<T> {
     return this.call<T>('PATCH', path, body, query);
+  }
+
+  /** A Feathers custom service method (e.g. boards.setPrimaryTeammate). */
+  custom<T>(path: string, method: string, body: unknown): Promise<T> {
+    return this.call<T>('POST', path, body, undefined, { 'x-service-method': method });
   }
 
   remove<T>(path: string, query?: Query): Promise<T> {

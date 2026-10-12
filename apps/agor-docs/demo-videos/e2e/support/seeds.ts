@@ -18,6 +18,8 @@
 import { CAST_KEYS } from './cast.ts';
 import { DEMO_REPO_PATH } from './harness.ts';
 import type { Seeder } from './seeder.ts';
+import { donutOps } from './seeds/donut-ops.ts';
+import { orbitly } from './seeds/orbitly.ts';
 
 export interface SeedDef {
   name: string;
@@ -25,6 +27,12 @@ export interface SeedDef {
   description: string;
   /** Runs real agent turns (needs the cassette proxy). */
   agent?: boolean;
+  /**
+   * Files or directories (relative to the e2e folder) the seed reads besides
+   * its own code: persona modules, fixture repos, datasets. Hashed into the
+   * cache key, so editing any of them rebuilds the seed.
+   */
+  inputs?: string[];
   run(s: Seeder): Promise<void>;
 }
 
@@ -95,6 +103,8 @@ export const SEEDS: SeedDef[] = [
       });
     },
   },
+  orbitly,
+  donutOps,
 ];
 
 export function seedByName(name: string): SeedDef {

@@ -16,7 +16,7 @@
 // caps zoom at what the source supports and says so.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Ease, Rect, TimelineEvent } from '../../support/timeline.ts';
 
@@ -266,6 +266,36 @@ export function cameraFilter(plan: CameraPlan, src: Probe): string | null {
   );
 }
 
+/**
+ * Write an ffconcat list for a frame-recorded actor covering [from, to] in
+ * wall time: the frame on screen at `from` first, every later frame held
+ * until the next was painted, the last held until `to`.
+ */
+function framesConcatList(dir: string, from: number, to: number): { file: string; first: string } {
+  const index = readFileSync(path.join(dir, 'index.jsonl'), 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { file: string; wall: number })
+    .sort((a, b) => a.wall - b.wall);
+  if (index.length === 0) throw new Error(`no frames recorded in ${dir}`);
+  let i = 0;
+  while (i + 1 < index.length && index[i + 1].wall <= from) i++;
+  const lines = ['ffconcat version 1.0'];
+  let at = from;
+  for (; i < index.length && at < to; i++) {
+    const until = Math.min(to, i + 1 < index.length ? index[i + 1].wall : to);
+    if (until <= at) continue;
+    lines.push(`file '${path.join(dir, index[i].file).replace(/'/g, "'\\''")}'`);
+    lines.push(`duration ${((until - at) / 1000).toFixed(4)}`);
+    at = until;
+  }
+  // The concat demuxer drops the last entry's duration unless it is repeated.
+  lines.push(lines[lines.length - 2]);
+  const file = path.join(dir, 'concat.ffconcat');
+  writeFileSync(file, `${lines.join('\n')}\n`);
+  return { file, first: path.join(dir, index[0].file) };
+}
+
 export type Layout = 'single' | 'split';
 
 export interface RenderInput {
@@ -278,6 +308,11 @@ export interface RenderInput {
   /** Pane captions for split layout (defaults to actor names). */
   labels?: Record<string, string>;
   font?: string;
+  /**
+   * Raw cut: skip the camera track and keep the source's full frame at its
+   * own size (3840x2160 from a 4K take), for editing elsewhere.
+   */
+  raw?: boolean;
 }
 
 /** Render the take to a 1080p30 h264 master. Returns warnings worth showing. */
@@ -294,27 +329,51 @@ export function renderMaster(input: RenderInput): string[] {
   const warnings: string[] = [];
   const args: string[] = ['-y', '-v', 'error'];
   const chains: string[] = [];
-  const paneW = layout === 'single' ? OUT_W : 928;
+  if (input.raw && layout !== 'single') throw new Error('raw export is single layout only');
+  const firstVideo = events.find(
+    (e): e is Extract<TimelineEvent, { type: 'actor' }> =>
+      e.type === 'actor' && e.actor === actors[0]
+  );
+  let rawWidth = OUT_W;
+  if (input.raw && firstVideo?.frames) {
+    const index = readFileSync(path.join(input.takeDir, firstVideo.frames, 'index.jsonl'), 'utf8');
+    const first = JSON.parse(index.split('\n')[0]) as { file: string };
+    rawWidth = probe(path.join(input.takeDir, firstVideo.frames, first.file)).width;
+  } else if (input.raw && firstVideo?.video) {
+    rawWidth = probe(path.join(input.takeDir, firstVideo.video)).width;
+  }
+  const paneW = layout === 'single' ? rawWidth : 928;
   const paneH = (paneW * 9) / 16;
 
   actors.forEach((actor, i) => {
     const meta = events.find(
       (e): e is Extract<TimelineEvent, { type: 'actor' }> => e.type === 'actor' && e.actor === actor
     );
-    const sync = events.find(
-      (e): e is Extract<TimelineEvent, { type: 'sync' }> => e.type === 'sync' && e.actor === actor
-    );
-    if (!meta?.video) throw new Error(`${actor} was not filmed in this take`);
-    if (!sync) throw new Error(`no sync flash logged for ${actor}`);
-    const video = path.join(input.takeDir, meta.video);
-    if (!existsSync(video)) throw new Error(`missing ${video}`);
-    const src = probe(video);
-    const syncFrame = findSyncFrame(video);
-    const start = syncFrame + Math.round(((ready.wall - sync.wall) * FPS) / 1000);
+    let src: Probe;
+    let start: number;
+    if (meta?.frames) {
+      // Frame-recorded take: a concat list that starts exactly at `ready`,
+      // each frame held until the next one was painted.
+      const list = framesConcatList(path.join(input.takeDir, meta.frames), ready.wall, end.wall);
+      src = probe(list.first);
+      start = 0;
+      args.push('-f', 'concat', '-safe', '0', '-i', list.file);
+    } else {
+      // Older take: Playwright's webm, pinned to the clock by its sync flash.
+      const sync = events.find(
+        (e): e is Extract<TimelineEvent, { type: 'sync' }> => e.type === 'sync' && e.actor === actor
+      );
+      if (!meta?.video) throw new Error(`${actor} was not filmed in this take`);
+      if (!sync) throw new Error(`no sync flash logged for ${actor}`);
+      const video = path.join(input.takeDir, meta.video);
+      if (!existsSync(video)) throw new Error(`missing ${video}`);
+      src = probe(video);
+      start = findSyncFrame(video) + Math.round(((ready.wall - sync.wall) * FPS) / 1000);
+      args.push('-i', video);
+    }
     const plan = planCamera(events, actor, ready.wall, src, meta.viewport);
     warnings.push(...plan.warnings);
-    const camera = cameraFilter(plan, src);
-    args.push('-i', video);
+    const camera = input.raw ? null : cameraFilter(plan, src);
     chains.push(
       [
         `[${i}:v]fps=${FPS}`,
@@ -371,7 +430,7 @@ export function renderMaster(input: RenderInput): string[] {
     '-preset',
     'slow',
     '-crf',
-    '18',
+    input.raw ? '14' : '18',
     '-movflags',
     '+faststart',
     '-an',

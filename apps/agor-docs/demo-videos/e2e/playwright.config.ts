@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { BASE_URL, STORAGE_STATE_PATH, TEST_RESULTS_DIR } from './support/harness';
+import { BASE_URL, DEMO_TIMEZONE, STORAGE_STATE_PATH, TEST_RESULTS_DIR } from './support/harness';
 
 // AGOR_E2E_VIDEO=4k renders the UI at deviceScaleFactor 2 and records
 // 3840x2160 of genuine 2x raster detail. Chromium's screencast (which
@@ -28,6 +28,7 @@ export default defineConfig({
   timeout: 120_000,
   use: {
     baseURL: BASE_URL,
+    timezoneId: DEMO_TIMEZONE,
     viewport: { width: 1920, height: 1080 },
     // Signed-in from the first frame: the harness mints this storageState
     // over REST so login is never part of a recording.
@@ -51,7 +52,7 @@ export default defineConfig({
       ...devices['Desktop Chrome'],
       viewport: { width: 1920, height: 1080 },
       deviceScaleFactor: scaleFactor,
-      launchOptions: { args: fourK ? ['--force-device-scale-factor=2'] : [] },
+      launchOptions: { channel: 'chromium', args: fourK ? ['--force-device-scale-factor=2'] : [] },
     },
   })),
 });

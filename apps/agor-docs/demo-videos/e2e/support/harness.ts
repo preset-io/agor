@@ -22,6 +22,8 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
+  chmodSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -72,7 +74,15 @@ export const CACHE_DIR = path.join(REPO_ROOT, '.e2e-cache');
 // and the next run starts clean.
 export const DEMO_REPO_URL = 'https://github.com/preset-io/donut-shop';
 export const DEMO_REPO_MIRROR = path.join(CACHE_DIR, 'donut-shop.git');
-export const DEMO_REPO_PATH = path.join(SCRATCH_DIR, 'projects', 'donut-shop');
+export const PROJECTS_DIR = path.join(SCRATCH_DIR, 'projects');
+export const DEMO_REPO_PATH = path.join(PROJECTS_DIR, 'donut-shop');
+// Committed demo material: fictional repos, datasets, documents, and the
+// GitHub stand-in (fixtures/bin/gh).
+export const FIXTURES_DIR = path.join(HERE, '../fixtures');
+// Agents' sessions find `gh` here first (the daemon's PATH starts with it),
+// and the stand-in keeps its pull requests in FAKE_GITHUB_DIR.
+export const SCRATCH_BIN_DIR = path.join(SCRATCH_DIR, 'bin');
+export const FAKE_GITHUB_DIR = path.join(SCRATCH_DIR, 'fake-github');
 export const DEMO_REPO_DEFAULT_BRANCH = 'master';
 
 // The teammate framework repo (preset-io/agor-teammate). The onboarding
@@ -85,6 +95,19 @@ export const FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.gi
 export const FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
 export const FRAMEWORK_REPO_MIRROR = path.join(CACHE_DIR, 'agor-teammate.git');
 export const FRAMEWORK_REPO_PATH = path.join(DATA_HOME, 'repos', 'preset-io', 'agor-teammate');
+
+// One clock for every recording, wherever it's made: the daemon, agents'
+// tools (DuckDB's current_date), the browser and the seeded data all run in
+// this zone, so "today", relative dates and on-screen times don't shift with
+// the recording machine's location. Set at import, before any child process
+// starts, so everything this suite spawns inherits it.
+export const DEMO_TIMEZONE = process.env.AGOR_E2E_TIMEZONE ?? 'America/Los_Angeles';
+process.env.TZ = DEMO_TIMEZONE;
+
+/** Today's date in the demo timezone (YYYY-MM-DD). */
+export function demoToday(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: DEMO_TIMEZONE });
+}
 
 export const DAEMON_PORT = 3131;
 export const UI_PORT = 5199;
@@ -449,6 +472,11 @@ export async function setupHarness(): Promise<void> {
   }
 
   materializeClone(DEMO_REPO_URL, DEMO_REPO_MIRROR, DEMO_REPO_PATH, 'donut-shop');
+  // The GitHub stand-in, refreshed every run (checkpoints may hold an older copy).
+  mkdirSync(SCRATCH_BIN_DIR, { recursive: true });
+  mkdirSync(FAKE_GITHUB_DIR, { recursive: true });
+  copyFileSync(path.join(FIXTURES_DIR, 'bin', 'gh'), path.join(SCRATCH_BIN_DIR, 'gh'));
+  chmodSync(path.join(SCRATCH_BIN_DIR, 'gh'), 0o755);
   materializeClone(FRAMEWORK_REPO_URL, FRAMEWORK_REPO_MIRROR, FRAMEWORK_REPO_PATH, 'agor-teammate');
 
   // Real agentic-tool keys (CLAUDE_CODE_OAUTH_TOKEN / OPENAI_API_KEY / ...)
@@ -457,6 +485,9 @@ export async function setupHarness(): Promise<void> {
   const daemonEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...secrets,
+    // Executors inherit the daemon's PATH: agents get the GitHub stand-in
+    // instead of the real gh (no real PRs from a demo take).
+    PATH: `${SCRATCH_BIN_DIR}:${process.env.PATH ?? ''}`,
     DATABASE_URL,
     AGOR_HOME: AGOR_HOME_DIR,
     AGOR_DATA_HOME: DATA_HOME,
@@ -528,6 +559,9 @@ export async function setupHarness(): Promise<void> {
         AGOR_E2E_AGENT_MODE: agentMode,
         CASSETTE_PATH,
         AGOR_E2E_CASSETTE_APPEND: process.env.AGOR_E2E_CASSETTE_APPEND ?? '',
+        // Live mode only: swapped in for the seeded placeholder credential.
+        AGOR_E2E_REAL_AUTH_TOKEN:
+          agentMode === 'live' ? (secrets.CLAUDE_CODE_OAUTH_TOKEN ?? '') : '',
         PROXY_PORT: String(PROXY_PORT),
       },
       stdio: ['ignore', proxyLog, proxyLog],
@@ -541,7 +575,7 @@ export async function setupHarness(): Promise<void> {
 
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
-  await waitForHealth(`${DAEMON_URL}/health`, 120_000);
+  await waitForHealth(`${DAEMON_URL}/health`, 300_000);
   await waitForHealth(BASE_URL, 120_000);
   const accessToken = await writeStorageState();
   await registerFrameworkRepo(accessToken);

@@ -2,12 +2,12 @@
 // zoom a clip after the fact, written as JSONL while the clip records.
 //
 // All times are wall-clock milliseconds (Date.now()). Each filmed actor's
-// video carries a sync flash (see studio.ts), which ties its frames to the
-// same wall clock, so camera moves, clicks, and chapter marks land on the
-// right frame no matter when each browser started recording.
+// frames carry the wall time they were painted (support/recorder.ts), so
+// camera moves, clicks, and chapter marks land on the right frame no matter
+// when each browser started recording.
 //
 // The file lives in the take directory beside the actors' videos
-// (<TEST_RESULTS_DIR>/takes/<clipId>/timeline.jsonl). It is plain text on
+// (~/Desktop/agor_video/takes/<clipId>/timeline.jsonl). It is plain text on
 // purpose: nudge a camera move's `ms` or `zoom` by hand and re-export with
 // `npm run clip -- <id> --export-only` instead of re-shooting.
 
@@ -15,7 +15,9 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import path from 'node:path';
 import { TEST_RESULTS_DIR } from './harness.ts';
 
-export const TAKES_DIR = path.join(TEST_RESULTS_DIR, 'takes');
+// Beside (not inside) Playwright's results folder, which it wipes at the
+// start of every run: takes must survive to be re-exported.
+export const TAKES_DIR = path.join(path.dirname(TEST_RESULTS_DIR), 'takes');
 
 /** A rectangle in CSS pixels of the actor's viewport. */
 export interface Rect {
@@ -38,13 +40,15 @@ export type TimelineEvent =
   | {
       type: 'actor';
       actor: string;
-      /** Video file name inside the take dir (filmed actors only). */
+      /** Video file name inside the take dir (older takes recorded with Playwright's recorder). */
       video: string | null;
+      /** Frames directory inside the take dir (support/recorder.ts), for filmed actors. */
+      frames?: string | null;
       viewport: { width: number; height: number };
       /** Device pixels per CSS pixel the video was captured at. */
       scale: number;
     }
-  /** The wall time the actor's sync flash was on screen. */
+  /** The wall time the actor's sync flash was on screen (Playwright-recorder takes only). */
   | { type: 'sync'; actor: string; wall: number }
   /** The scene starts here: every filmed video is cut to begin at this instant. */
   | { type: 'ready'; wall: number }

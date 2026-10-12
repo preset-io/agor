@@ -62,7 +62,7 @@ members as actors, a virtual camera, and a seeded world. Copy
    (re-render the last take), `--live` (record agent turns), `--1080`,
    `--reseed`, `--no-open`.
 5. **Tune without re-shooting:** the take's `timeline.jsonl` (in
-   `~/Desktop/agor_video/raw-recordings/takes/<id>/`) holds every camera
+   `~/Desktop/agor_video/takes/<id>/`) holds every camera
    move with its time, target rect, zoom, length and ease. Edit it and
    `--export-only`. The export warns when a resting cursor falls outside
    the camera's frame or an explicit zoom exceeds what the source holds.
@@ -72,10 +72,17 @@ members as actors, a virtual camera, and a seeded world. Copy
 
 ### How the camera and sync work
 
-- Each filmed actor's video starts with a one-frame-exact sync: `open()`
-  paints a magenta card during the boot screens and logs its wall time;
-  the renderer finds that frame, so every timeline event lands on the
-  right frame no matter when each browser started recording.
+- Filmed actors are recorded by `support/recorder.ts`, not Playwright's
+  recorder: Chromium's screencast frames (JPEG, true 4K) are written to
+  `<take>/<actor>-frames/` with the wall time each was painted, and nothing
+  is encoded until export. Playwright's recorder encodes VP8 in real time
+  and falls minutes behind on long 4K takes. Frames only arrive when the
+  screen changes, so still stretches cost nothing; motion captures at
+  60-70 fps. Sync is exact from the timestamps (older webm takes still
+  render via their magenta sync flash).
+- Clips launch Chromium's **new headless mode** (`channel: 'chromium'` in
+  `playwright.config.ts`). The default headless shell delivered only ~13
+  fps of 4K frames on the real app; new headless delivers 60+.
 - `scripts/lib/render.ts` applies the camera with ffmpeg's `perspective`
   filter (per-frame corner expressions, cubic sampling: sub-pixel smooth
   pans, unlike `crop`/`zoompan`), as a balanced `if()` tree over the
@@ -84,6 +91,58 @@ members as actors, a virtual camera, and a seeded world. Copy
 - The board's side panel starts collapsed (`actor(..., { sidePanel: 'open' })`
   to keep it); other localStorage UI prefs can be added the same way in
   `Studio.actor`.
+
+## Teammate Q&A clips and fictional companies
+
+- `support/seeds/orbitly.ts`: **Orbitly**, a fictional B2B SaaS (field-service
+  scheduling). Engineering board with branches named for Jira tickets
+  (`issue_url`, `pull_request_url`), sessions by their owners, and three
+  teammates: **DataBot** (dbt project + DuckDB warehouse cloned into its
+  branch), **EngBot** (reads the board and PRs), **LegalBot** (playbook in its
+  branch; the contract is attached on camera).
+- `support/seeds/donut-ops.ts`: the Donut Shop with **OpsBot** and the
+  shop's real demo history in a local DuckDB.
+- A teammate is `Seeder.teammate()`: a branch of the framework repo with
+  `custom_context.teammate`, its persona written into `IDENTITY.md`/`USER.md`,
+  `ONBOARDING.md` removed. The persona is where to steer what the answer
+  looks like.
+- `support/scenes.ts` `askTeammate()`: open the seeded empty session,
+  optionally attach a file, type, send, wait for the real turn over REST,
+  hold. Marks `question`, `sent`, `answered`.
+- Outputs include `raw`: `<id>-raw.mp4` (native 4K, no camera) plus
+  `<id>-marks.json`, for editing elsewhere.
+
+**Fixtures** (`fixtures/`, committed):
+
+- `repos/<name>/` become real git repos with a local bare "GitHub" remote
+  (`localRepo()`; `url.<bare>.insteadOf` keeps the github.com URL working
+  offline).
+- `bin/gh` is a GitHub CLI stand-in. The harness copies it into the scratch
+  workspace and puts it first on the daemon's PATH, so agents can open and
+  list PRs without touching real GitHub. Its data is
+  `<scratch>/fake-github/<owner>__<repo>.json`, seeded by `fakeGithub()`.
+- `data/orbitly/build.sql` generates the SaaS warehouse deterministically
+  (hash-based "randomness") ending today. `data/donut-shop/` is a Parquet
+  export of the DonutShop MotherDuck database; `buildDonutShopWarehouse()`
+  drops stray post-history orders and shifts every date so the last full day
+  of trade is yesterday.
+- `docs/*.html` render to PDFs with `scripts/build-fixture-docs.ts`.
+
+**Time and clocks:** everything runs in `DEMO_TIMEZONE` (default
+`America/Los_Angeles`, `AGOR_E2E_TIMEZONE` overrides): the daemon, agents'
+tools, the browser and the seeded data, so takes look the same wherever
+they're recorded. Seed checkpoints include today's date in their cache key
+and rebuild once a day, so relative dates never go stale. A replayed answer
+keeps the wording of the day it was captured; recapture with `--live` when
+that matters.
+
+**Agent turns:** seeded accounts hold a placeholder credential; in live mode
+the cassette proxy swaps in the real `CLAUDE_CODE_OAUTH_TOKEN` on the way
+upstream, so a real token never lands in the scratch DB or checkpoints.
+Replay streams each answer at its recorded pace (`AGOR_E2E_REPLAY_SPEED`
+scales it). The proxy gives up on an upstream request after 90 s of
+silence so a network drop doesn't hang a take, and `npm run clip` runs
+under `caffeinate` (closing the lid still sleeps the Mac).
 
 ## Architecture map
 
@@ -140,6 +199,11 @@ members as actors, a virtual camera, and a seeded world. Copy
   does). There's no tsconfig; typecheck with the root `tsc` and
   `--ignoreConfig --allowImportingTsExtensions --module nodenext
 --moduleResolution nodenext --strict --skipLibCheck <files>`.
+- **Timezone bug, fixed in #3069:** on SQLite Agor read `CURRENT_TIMESTAMP`
+  as local time, so outside UTC every executor heartbeat was off by the
+  host's offset (east of UTC: agent turns killed as `heartbeat_lost` within
+  seconds). If turns die instantly with a huge `approx_heartbeat_age_ms`,
+  check that fix is in the branch.
 - **4K needs `--force-device-scale-factor=2`** (set in
   `playwright.config.ts` when `AGOR_E2E_VIDEO=4k`). Without it, Chromium's
   screencast drops to CSS-pixel frames after the first navigation and a

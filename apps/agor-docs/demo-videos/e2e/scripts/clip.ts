@@ -18,9 +18,10 @@
 //   <id>-poster.jpg
 //   site:  <id>-1600.mp4 (CRF 23), <id>-540.mp4 (CRF 25)  — agor.live renditions
 //   tv:    <id>-4k30.mp4 (lanczos upscale, silent AAC for Roku)
+//   raw:   <id>-raw.mp4 (native 4K, no camera moves) + <id>-marks.json
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,7 +96,9 @@ function record(clip: ClipMeta, flags: Flags): void {
 function exportClip(clip: ClipMeta, open: boolean): void {
   const dir = takeDir(clip.id);
   const events = readTimeline(dir);
-  const filmed = events.flatMap((e) => (e.type === 'actor' && e.video ? [e.actor] : []));
+  const filmed = events.flatMap((e) =>
+    e.type === 'actor' && (e.video || e.frames) ? [e.actor] : []
+  );
   const outDir = path.join(OUT_ROOT, clip.id);
   mkdirSync(outDir, { recursive: true });
   const master = path.join(outDir, `${clip.id}.mp4`);
@@ -109,6 +112,26 @@ function exportClip(clip: ClipMeta, open: boolean): void {
     font: FONT,
   });
   for (const w of warnings) console.warn(`[clip] warning: ${w}`);
+
+  if (clip.outputs.includes('raw')) {
+    console.log(`[clip] rendering the raw 4K cut...`);
+    renderMaster({
+      takeDir: dir,
+      events,
+      actors: filmed,
+      layout: 'single',
+      out: path.join(outDir, `${clip.id}-raw.mp4`),
+      raw: true,
+    });
+    const ready = events.find((e) => e.type === 'ready');
+    const marks = events.flatMap((e) =>
+      e.type === 'mark' && ready ? [{ label: e.label, seconds: (e.wall - ready.wall) / 1000 }] : []
+    );
+    writeFileSync(
+      path.join(outDir, `${clip.id}-marks.json`),
+      `${JSON.stringify(marks, null, 2)}\n`
+    );
+  }
 
   const h264 = [
     '-c:v',
@@ -174,7 +197,15 @@ function exportClip(clip: ClipMeta, open: boolean): void {
   if (open && process.platform === 'darwin') spawnSync('open', [outDir]);
 }
 
+/** Keep the Mac from idle-sleeping while this process runs (a long agent take). */
+function stayAwake(): void {
+  if (process.platform !== 'darwin') return;
+  const awake = spawn('caffeinate', ['-dimsu', '-w', String(process.pid)], { stdio: 'ignore' });
+  awake.unref();
+}
+
 function main(): void {
+  stayAwake();
   const args = process.argv.slice(2);
   const id = args.find((a) => !a.startsWith('--'));
   if (!id) {

@@ -1,0 +1,14 @@
+name: orbitly
+version: '1.0.0'
+config-version: 2
+profile: orbitly
+
+model-paths: ['models']
+analysis-paths: ['analyses']
+
+models:
+  orbitly:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

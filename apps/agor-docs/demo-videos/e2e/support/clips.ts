@@ -12,7 +12,12 @@ export type ClipOutput =
   /** agor.live renditions: 1600×900, 960×540, poster. */
   | 'site'
   /** Conference TV / Roku: 4K30 upscale with a silent AAC track. */
-  | 'tv';
+  | 'tv'
+  /**
+   * For editing elsewhere: the take at native capture size (4K) with no
+   * camera moves, plus <id>-marks.json (studio.mark() times, in seconds).
+   */
+  | 'raw';
 
 export type ClipStart =
   /** A seed's cached state (support/seeds.ts): the usual choice. */
@@ -74,6 +79,68 @@ export const CLIPS: ClipMeta[] = [
       'Camera follows the card, then pulls back wide',
     ],
     outputs: ['master', 'site'],
+  },
+  // "AI teammates can do anything": four short Q&A moments for the sizzle
+  // reel. Exported raw (native 4K, no camera) with marks for the edit.
+  {
+    id: 'teammate-databot',
+    title: '@DataBot: how do we define MAU?',
+    purpose:
+      'Sizzle reel, AI teammates segment: a data teammate turns a question into a dbt model and a PR.',
+    start: { seed: 'orbitly' },
+    agent: true,
+    script: [
+      'Sam types "How do we define MAU?" in DataBot\'s session',
+      'DataBot finds two MAU definitions that disagree and measures the gap',
+      'It writes a canonical dbt model, opens a PR, and answers with the numbers and the link',
+    ],
+    outputs: ['master', 'raw'],
+    timeoutMs: 20 * 60_000,
+  },
+  {
+    id: 'teammate-engbot',
+    title: "@EngBot: what's the team working on?",
+    purpose:
+      'Sizzle reel, AI teammates segment: an engineering-manager teammate summarizes tickets, PRs and reviews.',
+    start: { seed: 'orbitly' },
+    agent: true,
+    script: [
+      'Sam asks EngBot what the team is working on right now',
+      'EngBot reads the board (ticket branches) and GitHub PRs',
+      'It answers with one row per person: Jira ticket, PRs opened, reviews',
+    ],
+    outputs: ['master', 'raw'],
+    timeoutMs: 20 * 60_000,
+  },
+  {
+    id: 'teammate-legalbot',
+    title: '@LegalBot: review the limitations of liability',
+    purpose:
+      'Sizzle reel, AI teammates segment: a legal teammate catches a bad clause and proposes a redline.',
+    start: { seed: 'orbitly' },
+    agent: true,
+    script: [
+      "Sam attaches a vendor MSA (PDF) in LegalBot's session and asks for a liability review",
+      "LegalBot says don't sign: a one-month cap that also covers data breaches, and an uncapped customer",
+      'It gives a redline against the playbook',
+    ],
+    outputs: ['master', 'raw'],
+    timeoutMs: 20 * 60_000,
+  },
+  {
+    id: 'teammate-opsbot',
+    title: '@OpsBot: how are my sales doing?',
+    purpose:
+      'Sizzle reel, AI teammates segment: an ops teammate answers from live data and offers a dashboard.',
+    start: { seed: 'donut-ops' },
+    agent: true,
+    script: [
+      'Sam asks OpsBot how sales did over the last 90 days',
+      'OpsBot queries the shop database and answers with a table vs the prior period',
+      'It offers to build a live dashboard as an artifact',
+    ],
+    outputs: ['master', 'raw'],
+    timeoutMs: 20 * 60_000,
   },
 ];
 
