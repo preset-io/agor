@@ -296,7 +296,8 @@ export const HomeAskBox = memo(function HomeAskBox({
           // The chip names the teammate, so the placeholder stays short enough for one line.
           placeholder="Ask anything…"
           aria-label={`Ask ${name}`}
-          style={{ fontSize: token.fontSizeLG, paddingInline: 0 }}
+          // Default input inline padding keeps typed text and the placeholder off the focus ring.
+          style={{ fontSize: token.fontSizeLG }}
         />
         <Flex align="center" gap={token.marginXS} data-home-ask-toolbar>
           <AskTargetSelect
