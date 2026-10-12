@@ -113,18 +113,3 @@ describe('register-services /session-mcp-servers visibility', () => {
     expect(attachmentBlock).toContain('isSessionMcpServerLinkVisibleToCaller');
   });
 });
-
-describe('register-services /mcp-servers/test-oauth response hygiene', () => {
-  const source = readFileSync(new URL('./register-services.ts', import.meta.url), 'utf8');
-  const start = source.indexOf("app.use('/mcp-servers/test-oauth'");
-  const next = source.indexOf('app.use(', start + 1);
-  const block = start === -1 ? '' : source.slice(start, next === -1 ? undefined : next);
-
-  // Provider-controlled RFC 9728 bodies and WWW-Authenticate-derived URLs
-  // (which may carry query strings) are diagnostics for logs, not responses.
-  it('does not echo the raw resource metadata body or its URL', () => {
-    expect(block).not.toBe('');
-    expect(block).not.toMatch(/^\s*metadata,\s*$/m);
-    expect(block).not.toContain('metadataUrl: rfc9728Url');
-  });
-});

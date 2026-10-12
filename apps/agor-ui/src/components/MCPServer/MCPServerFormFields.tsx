@@ -299,7 +299,6 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           mcpStatusText?: string;
           tokenUrlSource?: string;
           requiresBrowserFlow?: boolean;
-          authorizationServers?: string[];
           wwwAuthenticate?: string;
           responseHeaders?: Record<string, string>;
           hint?: string;

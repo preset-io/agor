@@ -4840,7 +4840,6 @@ export async function registerMCPServices(
         let prefetchedAuthServerMetadata:
           | import('@agor/core/tools/mcp/oauth-mcp-transport').AuthorizationServerMetadata
           | null = null;
-        let discoverySource: string | null = null;
         if (probeResponse.status === 401) {
           assertInitialRequestAuthority?.();
           const { resolveMCPOAuthDiscovery } = await import(
@@ -4853,11 +4852,9 @@ export async function registerMCPServices(
           });
           if (discovery?.kind === 'resource-metadata') {
             metadataUrl = discovery.metadataUrl;
-            discoverySource = `RFC 9728 ${discovery.source}`;
             console.log(`[OAuth Test] Resolved resource metadata source=${discovery.source}`);
           } else if (discovery?.kind === 'authorization-server') {
             prefetchedAuthServerMetadata = discovery.authServerMetadata;
-            discoverySource = `AS-direct (${discovery.discoveredAt})`;
             console.log('[OAuth Test] Resolved authorization-server metadata directly');
           }
         }
@@ -4972,17 +4969,11 @@ export async function registerMCPServices(
                 success: true,
                 oauthType: 'oauth2.1',
                 message: prefetchedAuthServerMetadata.registration_endpoint
-                  ? `OAuth 2.1 auto-discovery successful via ${discoverySource} (DCR supported). Click "Start OAuth Flow" to authenticate.`
-                  : `OAuth 2.1 auto-discovery successful via ${discoverySource}. Click "Start OAuth Flow" to authenticate.`,
-                authServerMetadata: {
-                  authorizationEndpoint: prefetchedAuthServerMetadata.authorization_endpoint,
-                  tokenEndpoint: prefetchedAuthServerMetadata.token_endpoint,
-                  registrationEndpoint: prefetchedAuthServerMetadata.registration_endpoint,
-                },
+                  ? 'OAuth 2.1 auto-discovery successful via authorization-server metadata (DCR supported). Click "Start OAuth Flow" to authenticate.'
+                  : 'OAuth 2.1 auto-discovery successful via authorization-server metadata. Click "Start OAuth Flow" to authenticate.',
                 supportsDynamicClientRegistration:
                   !!prefetchedAuthServerMetadata.registration_endpoint,
                 requiresBrowserFlow: true,
-                discoverySource,
               };
             }
 
@@ -5046,15 +5037,6 @@ export async function registerMCPServices(
               message: authServerMetadata?.registration_endpoint
                 ? 'OAuth 2.1 auto-discovery successful (DCR supported). Click "Start OAuth Flow" to authenticate.'
                 : 'OAuth 2.1 auto-discovery successful. Click "Start OAuth Flow" to authenticate.',
-              authorizationServers: metadata.authorization_servers,
-              scopesSupported: metadata.scopes_supported,
-              authServerMetadata: authServerMetadata
-                ? {
-                    authorizationEndpoint: authServerMetadata.authorization_endpoint,
-                    tokenEndpoint: authServerMetadata.token_endpoint,
-                    registrationEndpoint: authServerMetadata.registration_endpoint,
-                  }
-                : null,
               supportsDynamicClientRegistration: !!authServerMetadata?.registration_endpoint,
               requiresBrowserFlow: true,
             };
