@@ -96,9 +96,55 @@ tight.
 ### Editing (Remotion)
 
 Reel and website edits are Remotion compositions in `../remotion`, fed by
-the snappy-tight raw cuts and their marks (`npm run sync` there). See that
-README. Remotion's license is free for individuals only: Preset needs a
-company license before anyone else uses it or it merges.
+the raw cuts and their marks (`npm run sync` there). Load the `agor-reel`
+skill for the edit itself. Remotion's license is free for individuals only:
+Preset needs a company license before anyone else uses it or it merges.
+
+### UI walkthrough clips (no agent turns)
+
+The "Raise AI teammates together" clips (`raise-*`, seed
+`teammates-together`) film settings screens, pickers and forms. What made
+them reliable:
+
+- **Scout first.** Before writing the real spec, run a throwaway clip that
+  only navigates and `page.screenshot()`s each state into the scratchpad
+  (register it in `clips.ts` as `capture: '1080'`, delete it after). One
+  pass maps every selector and layout; it is far cheaper than failing
+  takes.
+- **`page.setDefaultTimeout(20_000)`** at the top of every spec. Playwright's
+  default action timeout here is unlimited, so a wrong selector hangs until
+  the clip's `timeoutMs` (15 minutes) instead of failing fast.
+- **Ant Design specifics** (`support/raise.ts` has helpers):
+  - Select dropdowns are virtual lists: options below the fold don't exist
+    in the DOM. Type to filter (`showSearch` selects) with `pickOption()`,
+    don't scroll and hope.
+  - Open options: `.ant-select-dropdown:not(.ant-select-dropdown-hidden)
+.ant-select-item-option`; `skim()` glides the cursor down them.
+  - `Escape` can close every stacked modal, not just the top one. Close a
+    nested modal with its own button, scoped to it
+    (`.ant-modal:has-text("...")`).
+  - Placeholders repeat across a page (a search box and a form field):
+    pass `{ exact: true }`.
+  - Buttons with icons have the icon in their accessible name: match
+    `/New$/`, not `/^New$/`.
+- **Deep links** skip clicking through menus: `/settings/<section>`
+  (`teammates`, `mcp`, ...), `/kb/<namespace>`. A teammate's tabs
+  (Knowledge, Files, Schedules) open from Settings → Teammates → "Edit
+  teammate". `HEARTBEAT.md` has no dedicated view; its Files tab preview
+  renders it.
+- **Seeding Knowledge**: `POST /kb/namespaces` then `/kb/documents` with
+  `content_text`. Graph edges come from markdown links to
+  `/kb/<namespace>/<path>` in the content.
+- **Seeded schedules really run** on the scratch daemon's scheduler. Use
+  cron times that won't land during a take.
+- **Boot screens between pages** stay in raw cuts (`actor.open()` mid-clip).
+  The edit picks its beats by marks, so they never show.
+
+### Choosing source times for the edit
+
+`ffmpeg -ss <t> -i clip` (seek before input) can land seconds off on these
+clips. Pick `trimBefore` times from decode-accurate frames (`-i clip -ss
+<t>`), or from marks.
 
 ### How the camera and sync work
 

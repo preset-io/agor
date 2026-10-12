@@ -31,8 +31,8 @@ Rules of thumb:
 
 Trailer, sizzle-reel and website edits are Remotion compositions in
 `apps/agor-docs/demo-videos/remotion/`, built from the real-app clips'
-snappy-tight raw cuts and marks (see its README and the `demo-videos`
-skill). Remotion's official agent skills install locally there
+raw cuts and marks. Load the `agor-reel` skill (brand look, camera framing,
+review loop, Evan's motion notes). Remotion's official agent skills install locally there
 (`npx skills add remotion-dev/skills`). Remotion's license is free for
 individuals only: a company license is needed before others use it.
 
