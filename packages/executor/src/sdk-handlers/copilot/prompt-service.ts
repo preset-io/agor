@@ -13,7 +13,11 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { shortId } from '@agor/core/db';
-import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import {
+  getMcpServersForSession,
+  MCPSignInNoticeCollector,
+  resolveScopedMCPAuthHeaders,
+} from '@agor/core/mcp';
 import {
   renderAgorSessionIdentity,
   renderAgorSystemPrompt,
@@ -166,8 +170,13 @@ export class CopilotPromptService {
     sessionId: SessionID,
     taskId: TaskID,
     mcpToken?: string
-  ): Promise<{ servers: Record<string, unknown>; toolPermissions: McpToolPermissionIndex }> {
+  ): Promise<{
+    servers: Record<string, unknown>;
+    toolPermissions: McpToolPermissionIndex;
+    signInNotice?: string;
+  }> {
     const copilotMcpServers: Record<string, unknown> = {};
+    const signIn = new MCPSignInNoticeCollector();
 
     // Fetch MCP servers for this session
     const session = await this.sessionsRepo.findById(sessionId);
@@ -233,7 +242,23 @@ export class CopilotPromptService {
           tools: ['*'],
         };
 
-        const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+        let authHeaders: Record<string, string> | undefined;
+        try {
+          authHeaders = await resolveScopedMCPAuthHeaders(scoped);
+        } catch (error) {
+          if (signIn.recordResolutionFailure(scoped)) continue;
+          throw error;
+        }
+        // Withhold servers the acting user has no credential for (see the
+        // collector); the notice tells the agent how the user fixes it.
+        if (
+          server.auth &&
+          server.auth.type !== 'none' &&
+          !authHeaders?.Authorization &&
+          signIn.recordMissingGrant(scoped)
+        ) {
+          continue;
+        }
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         if (headers) serverConfig.headers = headers;
 
@@ -257,9 +282,11 @@ export class CopilotPromptService {
       console.log(`   📝 [Copilot MCP] Configured Agor MCP server (HTTP)`);
     }
 
+    const signInNotice = signIn.render();
     return {
       servers: copilotMcpServers,
       toolPermissions: buildMcpToolPermissionIndex(mcpServers),
+      ...(signInNotice ? { signInNotice } : {}),
     };
   }
 
@@ -338,11 +365,11 @@ export class CopilotPromptService {
       // MCP resolution runs first: it produces the `tool_permissions` index the
       // permission handler enforces from, and that handler is the only place a
       // denied tool can be stopped on this runtime.
-      const { servers: mcpServers, toolPermissions } = await this.buildMcpServers(
-        sessionId,
-        taskId || ('' as TaskID),
-        session.mcp_token
-      );
+      const {
+        servers: mcpServers,
+        toolPermissions,
+        signInNotice,
+      } = await this.buildMcpServers(sessionId, taskId || ('' as TaskID), session.mcp_token);
 
       // Build session configuration with interactive permission support
       const permissionDeps: PermissionDeps | undefined =
@@ -521,7 +548,13 @@ export class CopilotPromptService {
       const timeoutMs = 10 * 60 * 1000; // 10 minutes
       try {
         await copilotSession.sendAndWait(
-          { prompt: `${prompt}\n\n${renderAgorSessionIdentity(sessionId)}` },
+          {
+            // Per-turn Agor context (identity, MCP sign-in state) rides on the
+            // provider prompt so a resumed session sees the current state.
+            prompt: [prompt, renderAgorSessionIdentity(sessionId), signInNotice]
+              .filter(Boolean)
+              .join('\n\n'),
+          },
           timeoutMs
         );
       } catch (error) {

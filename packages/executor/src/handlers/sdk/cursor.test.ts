@@ -1,5 +1,11 @@
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import type { SessionID, TaskID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  realMcpScoping,
+  shippedAsanaInstall,
+  userEnvBearerInstall,
+} from '../../../test/helpers/real-mcp-scoping.js';
 import {
   isExecutorCleanupUnverified,
   markCoordinatorTerminationAbort,
@@ -112,6 +118,51 @@ it('refreshes Cursor request identity without persisting the identity block as u
       expect.objectContaining({ content: 'Inherited ID: A' })
     );
   }
+});
+
+it('withholds MCP servers the acting user has no credential for and tells the agent', async () => {
+  mocks.send.mockResolvedValue({
+    stream: async function* () {},
+    wait: async () => ({ status: 'completed', result: '' }),
+  });
+  vi.stubEnv('AGOR_USER_ENV_KEYS', '');
+  const real = await realMcpScoping([await shippedAsanaInstall('shared'), userEnvBearerInstall()]);
+  vi.mocked(getMcpServersForSession).mockImplementationOnce(real.getMcpServersForSession);
+  vi.mocked(resolveScopedMCPAuthHeaders)
+    .mockImplementationOnce(real.resolveScopedMCPAuthHeaders)
+    .mockImplementationOnce(real.resolveScopedMCPAuthHeaders);
+  const services = {
+    'config/resolve-api-key': { create: async () => ({ apiKey: 'test-key' }) },
+    sessions: {
+      get: async (id: string) => ({
+        session_id: id,
+        branch_id: 'branch-1',
+        sdk_session_id: 'provider-thread-A',
+      }),
+    },
+    branches: { get: async () => ({ path: '/workspace' }) },
+    messages: { find: async () => [], create: vi.fn() },
+    tasks: { patch: vi.fn() },
+  };
+  try {
+    await executeCursorTask({
+      client: { service: (name: keyof typeof services) => services[name] } as never,
+      sessionId: 'session-1' as SessionID,
+      taskId: 'task-1' as TaskID,
+      prompt: 'hi',
+      abortController: new AbortController(),
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+
+  // Nothing left to load: Cursor gets no MCP config at all.
+  expect(mocks.configured.mock.lastCall?.[0].mcpServers).toBeUndefined();
+  const prompt = mocks.send.mock.lastCall?.[0] as string;
+  expect(prompt).toMatch(/^hi\n\n<agor_session_identity>/);
+  expect(prompt).toContain('- mcpServerId: asana-id, label: "Asana"');
+  expect(prompt).toContain('agor_widgets_request_oauth');
+  expect(prompt).toContain('missing environment variables: LINEAR_API_KEY');
 });
 
 describe('Cursor Stop and teardown evidence', () => {

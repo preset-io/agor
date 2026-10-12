@@ -42,11 +42,29 @@ export async function shippedAsanaInstall(oauthMode: 'per_user' | 'shared'): Pro
   } as MCPServer;
 }
 
+/** A PAT server whose bearer token comes from the acting user's `LINEAR_API_KEY`. */
+export function userEnvBearerInstall(): MCPServer {
+  return {
+    mcp_server_id: 'linear-id' as MCPServerID,
+    name: 'linear',
+    display_name: 'Linear',
+    scope: 'global',
+    enabled: true,
+    transport: 'http',
+    url: 'https://mcp.linear.test/mcp',
+    auth: { type: 'bearer', token: '{{ user.env.LINEAR_API_KEY }}' },
+  } as MCPServer;
+}
+
 /**
  * Real implementations to install into a test file's mocks. Scoping sees only
- * `servers`, and the executor auth-header authority returns no grant for any.
+ * `servers`. The executor auth-header authority returns the grants listed for
+ * the acting user (`forUserId`) in `grantsByUser`, and none otherwise.
  */
-export async function realMcpScoping(servers: MCPServer[]) {
+export async function realMcpScoping(
+  servers: MCPServer[],
+  options: { grantsByUser?: Record<string, Record<string, string>> } = {}
+) {
   const mcp = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
   const jwt = await vi.importActual<typeof import('@agor/core/tools/mcp/jwt-auth')>(
     '@agor/core/tools/mcp/jwt-auth'
@@ -61,7 +79,14 @@ export async function realMcpScoping(servers: MCPServer[]) {
           listEffectiveServers: async () => servers,
         },
         mcpServerRepo: { findAll: async () => [] },
-        mcpOAuthAuthHeadersRepo: { getAuthHeaders: async () => ({}) },
+        mcpOAuthAuthHeadersRepo: {
+          getAuthHeaders: async (ids: string[]) => {
+            const grants = options.grantsByUser?.[deps.forUserId ?? ''] ?? {};
+            return Object.fromEntries(
+              ids.filter((id) => grants[id]).map((id) => [id, { authorization: grants[id] }])
+            );
+          },
+        },
       } as Parameters<typeof mcp.getMcpServersForSession>[1],
       caps
     );

@@ -39,6 +39,8 @@ vi.mock('@agor/core/agentic-integrations', () => ({
   })),
 }));
 
+import { resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
+import { realMcpScoping, shippedAsanaInstall } from '../../../test/helpers/real-mcp-scoping.js';
 import { expectSignalQuiescence } from '../../../test/helpers/signal-quiescence.js';
 import { CopilotPromptService } from './prompt-service.js';
 
@@ -174,5 +176,47 @@ describe('CopilotPromptService MCP identity scoping', () => {
       }),
       { toolFiltering: 'intercept' }
     );
+  });
+
+  it('withholds a configured-client server without a grant and tells the agent per turn', async () => {
+    const dcr = {
+      mcp_server_id: 'dcr-id',
+      name: 'dcr',
+      scope: 'global',
+      enabled: true,
+      transport: 'http',
+      url: 'https://mcp.dcr.test/mcp',
+      auth: { type: 'oauth' },
+    };
+    const real = await realMcpScoping([await shippedAsanaInstall('per_user'), dcr as never]);
+    mocks.getMcpServersForSession.mockImplementationOnce(real.getMcpServersForSession);
+    vi.mocked(resolveScopedMCPAuthHeaders)
+      .mockImplementationOnce(real.resolveScopedMCPAuthHeaders)
+      .mockImplementationOnce(real.resolveScopedMCPAuthHeaders);
+    const service = new CopilotPromptService(
+      {} as never,
+      {
+        findById: vi.fn().mockResolvedValue({
+          created_by: 'user-a',
+          branch_id: 'branch-1',
+          sdk_session_id: 'provider-thread-A',
+        }),
+      } as never,
+      {} as never,
+      { findById: vi.fn().mockResolvedValue({ path: '/workspace' }) } as never
+    );
+    for await (const _event of service.promptSessionStreaming('session-1' as SessionID, 'hi')) {
+      // Consume the provider turn.
+    }
+
+    const { mcpServers } = mocks.configured.mock.lastCall![0];
+    expect(mcpServers.asana).toBeUndefined();
+    // Copilot marks a DCR server as needing auth and carries on: still loaded.
+    expect(mcpServers.dcr).toMatchObject({ url: 'https://mcp.dcr.test/mcp' });
+    const { prompt } = mocks.sendAndWait.mock.lastCall![0];
+    expect(prompt).toMatch(/^hi\n\n<agor_session_identity>/);
+    expect(prompt).toContain('- mcpServerId: asana-id, label: "Asana"');
+    expect(prompt).toContain('- mcpServerId: dcr-id, label: "dcr"');
+    expect(prompt).toContain('unavailable until the user connects them');
   });
 });

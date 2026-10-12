@@ -99,6 +99,10 @@ notices. Rolling back to a binary without gateway support also restores direct
 credentials even if the saved mode says `enforced`; treat it as the same security
 downgrade, not a way to retain enforcement on an older binary.
 
+## When a user hasn't connected a server
+
+Agor checks MCP credentials for the user who sent each prompt, including prompts from Slack and other gateways. If that user hasn't signed in to an OAuth server, or hasn't set the environment variable a token server reads (for example `{{ user.env.LINEAR_API_KEY }}`), the agent still runs without that server. Agor tells the agent which servers are unavailable and how to fix it: a Connect card for OAuth, or a secure form for the missing variable. Variable names are shown, never their values. Gemini and OpenCode never get these servers. Claude Code, Codex, Copilot and Cursor still get servers that use Dynamic Client Registration, but mark them as needing sign-in. Other users' credentials are never used.
+
 ## Recovering a provider-deleted OAuth client (administrators)
 
 If sign-in repeatedly fails at the provider with an unknown/deleted client, ordinary reconnect may keep selecting the same saved Dynamic Client Registration (DCR). Agor automatically retires that exact registration only when the provider's token endpoint returns a structured `invalid_client` or `unauthorized_client` error. A browser/authorization-page error alone does not authorize retirement.
