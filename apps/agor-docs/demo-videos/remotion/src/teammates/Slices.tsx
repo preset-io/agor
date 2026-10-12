@@ -10,6 +10,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { ON_FILL } from '../brand/palette';
 
 // An accordion of four slanted slices sharing the frame.
 //
@@ -224,7 +225,7 @@ export const Slices: React.FC<{
                 fontWeight: 700,
                 letterSpacing: '-0.01em',
                 lineHeight: 1.12,
-                color: '#0b0d12',
+                color: ON_FILL,
                 clipPath: `inset(0 ${100 * (1 - focus)}% 0 0)`,
               }}
             >
@@ -286,7 +287,7 @@ export const Slices: React.FC<{
                 fontSize: nameSize,
                 fontWeight: 700,
                 letterSpacing: '-0.02em',
-                color: '#0b0d12',
+                color: ON_FILL,
                 opacity: fit,
               }}
             >

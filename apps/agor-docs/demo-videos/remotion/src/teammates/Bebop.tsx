@@ -7,6 +7,8 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { WORDMARK_SETTLED } from '../brand/AgorWordmark';
+import { AQUA, BG, DEEP_TEAL, INK, LIME, TEAL } from '../brand/palette';
 import { EndCard, LogoIntro, NAVY } from './Cards';
 import marks from './marks.json';
 import { EXIT, PROMPT_LEAD, promptSeconds, REVEAL, type SliceSpec, Slices } from './Slices';
@@ -16,7 +18,7 @@ const { fontFamily } = loadFont('normal', { weights: ['500', '600', '700'] });
 type Bot = keyof typeof marks;
 
 // Pacing, in seconds.
-const LOGO = 3.4; // the draw-on is finished and shining by here
+const LOGO = WORDMARK_SETTLED + 0.25; // the wordmark has landed and shone
 const TITLE_HOLD = 2.3; // the slices and the title, before the first opens
 const PROMPT_RATE = 1.8;
 const ANSWER_RATE = 1.25;
@@ -35,7 +37,7 @@ const SLICES: SliceSpec[] = [
     clip: 'databot.mp4',
     name: 'DataBot',
     emoji: '📊',
-    color: '#2dd4bf',
+    color: DEEP_TEAL,
     question: 'How do we define MAU?',
     insight: 'Reconciled two conflicting MAU definitions and opened a PR',
     focus: { cx: 1235, cy: 600 },
@@ -44,7 +46,7 @@ const SLICES: SliceSpec[] = [
     clip: 'engbot.mp4',
     name: 'EngBot',
     emoji: '🛠️',
-    color: '#60a5fa',
+    color: TEAL,
     question: "What's the team working on right now?",
     insight: "Rolled up who's on what, PR by PR, and what's blocked",
     focus: { cx: 1235, cy: 620 },
@@ -53,7 +55,7 @@ const SLICES: SliceSpec[] = [
     clip: 'legalbot.mp4',
     name: 'LegalBot',
     emoji: '⚖️',
-    color: '#fbbf24',
+    color: AQUA,
     question: 'Review the limitations of liability in this contract',
     insight: 'Redlined the liability cap against our playbook',
     focus: { cx: 1235, cy: 450 },
@@ -62,7 +64,7 @@ const SLICES: SliceSpec[] = [
     clip: 'opsbot.mp4',
     name: 'OpsBot',
     emoji: '📈',
-    color: '#f472b6',
+    color: LIME,
     question: 'How are my sales doing over the last 90 days?',
     insight: 'Sales up 15% on the prior 90 days, led by web and POS',
     focus: { cx: 1235, cy: 540 },
@@ -101,7 +103,7 @@ export const AiTeammatesBebop: React.FC<{ withEnd?: boolean }> = ({ withEnd = tr
         <LogoIntro />
       </Sequence>
       <Sequence name="Slices" from={f(LOGO)} durationInFrames={f(SEGMENT)} premountFor={fps}>
-        <AbsoluteFill style={{ background: '#000' }} />
+        <AbsoluteFill style={{ background: BG }} />
         <Slices
           slices={SLICES}
           timing={{
@@ -138,7 +140,7 @@ export const FadeToBlack: React.FC<{ at: number; seconds?: number }> = ({ at, se
   return (
     <AbsoluteFill
       style={{
-        background: '#000',
+        background: BG,
         zIndex: 30,
         opacity: interpolate(t, [at, at + seconds], [0, 1], clamp),
       }}
@@ -158,7 +160,7 @@ export const BandTitle: React.FC<{ text: string; holdFor: number }> = ({ text, h
     <AbsoluteFill style={{ justifyContent: 'center', zIndex: 20 }}>
       <div
         style={{
-          background: '#0b0d12',
+          background: BG,
           padding: '34px 0 40px',
           textAlign: 'center',
           clipPath: `inset(0 ${100 * outP}% 0 ${100 * (1 - inP)}%)`,
@@ -166,7 +168,7 @@ export const BandTitle: React.FC<{ text: string; holdFor: number }> = ({ text, h
       >
         <div
           style={{
-            color: '#f4f7fb',
+            color: INK,
             fontSize: 112,
             fontWeight: 700,
             letterSpacing: '-0.03em',

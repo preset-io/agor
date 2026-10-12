@@ -12,6 +12,7 @@ import {
   useCurrentFrame,
   useVideoConfig,
 } from 'remotion';
+import { AQUA, BG, DEEP_TEAL, INK, LIME, ON_FILL, TEAL } from '../brand/palette';
 import { FadeToBlack } from '../teammates/Bebop';
 import marks from '../teammates/marks.json';
 import {
@@ -231,7 +232,7 @@ const PanelFrame: React.FC<{
             top: nameY - (52 + (LABEL_SIZE - 52) * crop) * 0.62,
             textAlign: 'center',
             whiteSpace: 'nowrap',
-            color: '#0b0d12',
+            color: ON_FILL,
             fontSize: 52 + (LABEL_SIZE - 52) * crop,
             fontWeight: 700,
             letterSpacing: '-0.02em',
@@ -256,7 +257,7 @@ const Title: React.FC<{ text: string }> = ({ text }) => {
     <AbsoluteFill style={{ justifyContent: 'center', zIndex: 20 }}>
       <div
         style={{
-          background: '#050608',
+          background: BG,
           padding: '34px 0 40px',
           textAlign: 'center',
           clipPath: `inset(0 ${100 * out}% 0 0)`,
@@ -264,7 +265,7 @@ const Title: React.FC<{ text: string }> = ({ text }) => {
       >
         <div
           style={{
-            color: '#f4f7fb',
+            color: INK,
             fontSize: 112,
             fontWeight: 700,
             letterSpacing: '-0.03em',
@@ -357,10 +358,10 @@ export const Interfaces: React.FC = () => {
   const t = frame / fps;
   const gutters = interpolate(t, [SPIN_AT[3] + SPIN * 0.6, SPIN_AT[3] + SPIN], [0, 1], clamp);
   return (
-    <AbsoluteFill style={{ background: '#050608', fontFamily }}>
+    <AbsoluteFill style={{ background: BG, fontFamily }}>
       <PanelFrame
         corner="tl"
-        color="#f472b6"
+        color={DEEP_TEAL}
         name="Slack"
         mark={<BrandMark icon="slack-icon" size={130} />}
         spinAt={SPIN_AT[0]}
@@ -371,7 +372,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="tr"
-        color="#60a5fa"
+        color={AQUA}
         name="Discord"
         mark={<BrandMark icon="discord-icon" size={140} />}
         spinAt={SPIN_AT[1]}
@@ -382,7 +383,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="bl"
-        color="#fbbf24"
+        color={LIME}
         name="Claude Desktop + MCP"
         mark={<BrandMark icon="model-context-protocol" size={140} viewBox="0 0 70 69" />}
         spinAt={SPIN_AT[2]}
@@ -393,7 +394,7 @@ export const Interfaces: React.FC = () => {
       </PanelFrame>
       <PanelFrame
         corner="br"
-        color="#2dd4bf"
+        color={TEAL}
         name="Agor"
         mark={<Img src={staticFile('agor-logo.svg')} style={{ width: 150, height: 150 }} />}
         spinAt={SPIN_AT[3]}
@@ -408,8 +409,8 @@ export const Interfaces: React.FC = () => {
         style={{ position: 'absolute', inset: 0, opacity: gutters }}
         aria-hidden="true"
       >
-        <line x1={TOP_X} y1={-10} x2={BOTTOM_X} y2={1090} stroke="#050608" strokeWidth={GUTTER} />
-        <line x1={-10} y1={LEFT_Y} x2={1930} y2={RIGHT_Y} stroke="#050608" strokeWidth={GUTTER} />
+        <line x1={TOP_X} y1={-10} x2={BOTTOM_X} y2={1090} stroke={BG} strokeWidth={GUTTER} />
+        <line x1={-10} y1={LEFT_Y} x2={1930} y2={RIGHT_Y} stroke={BG} strokeWidth={GUTTER} />
       </svg>
       <Title text="Access Agor from where you work" />
       <FadeToBlack at={FADE_AT} seconds={FADE} />

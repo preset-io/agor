@@ -20,9 +20,16 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
 
 ## Compositions
 
+Colors follow agor.live's dark palette (`src/brand/palette.ts`). The
+wordmark letters in `public/wordmark/` are cut from the flat horizontal
+lockup; the mark itself is a frame-driven port of
+`../animated_agor_logo/index_4k.html`.
+
 - **AiTeammatesBebop** (`src/teammates/Bebop.tsx`, `Slices.tsx`): "AI teammates
   that can do anything", Cowboy Bebop-style.
-  - The Agor logo draws on, then four colored slanted slices slam in under the
+  - The Agor logo draws on and the "agor" letters crash in from the right,
+    shoving the mark left into the centered wordmark (`src/brand/`), then
+    four colored slanted slices slam in under the
     title.
   - Each slice is a color with its teammate's name centered in it; the name
     grows with the slice, and a strip too narrow for it shows just the emoji.

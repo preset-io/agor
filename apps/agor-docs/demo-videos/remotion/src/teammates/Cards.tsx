@@ -1,25 +1,21 @@
-import { Video } from '@remotion/media';
-import {
-  AbsoluteFill,
-  Easing,
-  Freeze,
-  interpolate,
-  staticFile,
-  useCurrentFrame,
-  useVideoConfig,
-} from 'remotion';
+import { AbsoluteFill, Easing, interpolate, useCurrentFrame, useVideoConfig } from 'remotion';
+import { AgorWordmark, WORDMARK_SETTLED } from '../brand/AgorWordmark';
+import { BG_GRADIENT, INK, ON_FILL, TEAL } from '../brand/palette';
 
 const ease = Easing.bezier(0.16, 1, 0.3, 1);
 const clamp = { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' } as const;
-export const NAVY = 'linear-gradient(180deg, #141f38 0%, #070a10 100%)';
-export const TEAL = '#2dd4bf';
+export const NAVY = BG_GRADIENT;
 
-/** The Agor logo draw-on, from the syllabus reel. */
-export const LogoIntro: React.FC = () => (
-  <AbsoluteFill style={{ background: NAVY }}>
-    <Video src={staticFile('clips/agor-logo.mp4')} muted />
-  </AbsoluteFill>
-);
+/** The Agor logo draws on, then the wordmark crashes in (src/brand/AgorWordmark.tsx). */
+export const LogoIntro: React.FC = () => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  return (
+    <AbsoluteFill style={{ background: NAVY }}>
+      <AgorWordmark t={frame / fps} />
+    </AbsoluteFill>
+  );
+};
 
 /** Title: two color blocks slam in from opposite sides, Bebop-style. */
 export const TitleCard: React.FC<{ top: string; bottom: string }> = ({ top, bottom }) => {
@@ -31,7 +27,7 @@ export const TitleCard: React.FC<{ top: string; bottom: string }> = ({ top, bott
         style={{
           alignSelf: 'flex-start',
           background: TEAL,
-          color: '#06121a',
+          color: ON_FILL,
           fontSize: 150,
           fontWeight: 700,
           letterSpacing: '-0.03em',
@@ -49,7 +45,7 @@ export const TitleCard: React.FC<{ top: string; bottom: string }> = ({ top, bott
         style={{
           alignSelf: 'flex-end',
           marginTop: 28,
-          color: '#f4f7fb',
+          color: INK,
           fontSize: 92,
           fontWeight: 600,
           letterSpacing: '-0.02em',
@@ -92,61 +88,41 @@ export const NameCard: React.FC<{
         ),
       }}
     >
-      <div style={{ color: '#0b0d12', fontSize: 190, fontWeight: 700, letterSpacing: '-0.04em' }}>
+      <div style={{ color: ON_FILL, fontSize: 190, fontWeight: 700, letterSpacing: '-0.04em' }}>
         {emoji} @{name}
       </div>
     </AbsoluteFill>
   );
 };
 
-/** End card: the panes dim behind the finished logo and the title. */
-/** The sign-off: the finished logo on the navy card (an optional line under it). */
+/** The sign-off: the finished wordmark (an optional line under it). */
 export const EndCard: React.FC<{ line?: string }> = ({ line }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   return (
     <AbsoluteFill
-      style={{
-        background: NAVY,
-        opacity: interpolate(frame, [0, 0.5 * fps], [0, 1], clamp),
-        justifyContent: 'center',
-        alignItems: 'center',
-      }}
+      style={{ background: NAVY, opacity: interpolate(frame, [0, 0.5 * fps], [0, 1], clamp) }}
     >
-      <div
-        style={{
-          width: 1280,
-          height: 720,
-          marginTop: line ? -160 : 0,
-          // Feather the logo clip's own background into the card's.
-          maskImage: 'radial-gradient(ellipse 45% 55% at center, black 55%, transparent 100%)',
-          WebkitMaskImage:
-            'radial-gradient(ellipse 45% 55% at center, black 55%, transparent 100%)',
-        }}
-      >
-        <Freeze frame={Math.round(6 * fps)}>
-          <Video
-            src={staticFile('clips/agor-logo.mp4')}
-            muted
-            style={{ width: '100%', height: '100%' }}
-          />
-        </Freeze>
-      </div>
-      <div
-        style={{
-          marginTop: -150,
-          // Above the feathered logo video, which otherwise dims the middle words.
-          position: 'relative',
-          zIndex: 2,
-          color: '#f4f7fb',
-          fontSize: 76,
-          fontWeight: 700,
-          letterSpacing: '-0.02em',
-          opacity: interpolate(frame, [0.35 * fps, 0.8 * fps], [0, 1], clamp),
-        }}
-      >
-        {line ?? null}
-      </div>
+      <AbsoluteFill style={{ translate: `0px ${line ? -90 : 0}px` }}>
+        <AgorWordmark t={WORDMARK_SETTLED + 1} />
+      </AbsoluteFill>
+      {line ? (
+        <div
+          style={{
+            position: 'absolute',
+            top: 770,
+            width: '100%',
+            textAlign: 'center',
+            color: INK,
+            fontSize: 76,
+            fontWeight: 700,
+            letterSpacing: '-0.02em',
+            opacity: interpolate(frame, [0.35 * fps, 0.8 * fps], [0, 1], clamp),
+          }}
+        >
+          {line}
+        </div>
+      ) : null}
     </AbsoluteFill>
   );
 };
