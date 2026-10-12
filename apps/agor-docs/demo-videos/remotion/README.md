@@ -22,14 +22,15 @@ sizzle reel and website, as [Remotion](https://www.remotion.dev) compositions.
 
 - **AiTeammatesBebop** (`src/teammates/Bebop.tsx`): "AI teammates that can
   do anything", Cowboy Bebop-style.
-  - Opens with the Agor logo draw-on, then a title slam of two color blocks.
-  - Four rapid questions: a bot name card wipes across, the prompt is typed
-    close up with the name on screen, and on send the shot shrinks into a
-    slanted colored pane holding the sent question.
-  - Then all four panes play their real answers side by side.
-  - Ends on the logo and the title.
+  - The Agor logo draws on.
+  - Four colored slices (one per teammate) slam in under the title.
+  - One by one, each slice opens to full screen while its question is typed
+    (bot name tag on screen), and on send closes back into its slice, now
+    showing the session.
+  - Then all four play their real answers side by side, and it ends on the
+    logo and title.
   - Timing comes from the clips' marks (`question`, `sent`, `answered`);
-    pacing constants sit at the top of the file.
+    pacing constants sit at the top of `Bebop.tsx`.
 - **AiTeammatesGrid** (`src/teammates/AiTeammates.tsx`): the first try, a
   2x2 Brady Bunch grid. Kept for comparison.
 

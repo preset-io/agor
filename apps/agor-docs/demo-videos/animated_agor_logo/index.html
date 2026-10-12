@@ -49,53 +49,53 @@
 
   /* --- dot growth: pops in during the fast initial spin, growing from radius 0
      and fading from fully transparent up to opaque together, in lockstep, across
-     that same initial lap (0%-16%, matching the rigid-spin phase). r and opacity
+     that same initial lap (0%-18%, matching the rigid-spin phase). r and opacity
      used to hit their targets at different percentages (14% vs 16%), which meant
      a dot could be most of the way opaque while still visibly mid-grow — a
      washed-out "translucent blob" instead of a clean materialize. Tying both to
-     the same 16% endpoint keeps them proportional the whole way. --- */
+     the same 18% endpoint keeps them proportional the whole way. --- */
   @keyframes grow{
     0%{ r:0; opacity:0; animation-timing-function:linear; }
-    16%{ r:40; opacity:1; }
+    18%{ r:40; opacity:1; }
     100%{ r:40; opacity:1; }
   }
   .dot{
-    animation:grow 4.5s ease-out forwards;
+    animation:grow 3s ease-out forwards;
   }
 
   /* --- orbit collapse: alongside the grow/fade above, each dot's whole arm is
      also scaled down to nothing at the center point and expands back out to full
-     orbit radius over the same 0%-16% window — so dots don't just fade in sitting
+     orbit radius over the same 0%-18% window — so dots don't just fade in sitting
      out at full orbit distance, they appear to coalesce from the center and fly
      outward as they grow and fade on. --- */
   @keyframes arm-scale{
     0%{ scale:0; animation-timing-function:linear; }
-    16%{ scale:1; }
+    18%{ scale:1; }
     100%{ scale:1; }
   }
 
   /* --- orbit spin ---
-     Phase A (0%-16%): quick, tight rigid spin — all four dots rotate by the exact
+     Phase A (0%-18%): quick, tight rigid spin — all four dots rotate by the exact
      same amount, linearly, so their 90°-apart spacing is preserved throughout.
-     Phase B (16%-60%): every dot eases into its own final (unevenly-spaced)
+     Phase B (18%-58%): every dot eases into its own final (unevenly-spaced)
      resting angle at the same landing time — the moment the comet-tail arcs
      below finish drawing behind the forward dot of each pair. */
   @keyframes spin{
     0%{ rotate:var(--s); animation-timing-function:linear; }
-    16%{ rotate:calc(var(--s) - 270deg); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
-    60%{ rotate:0deg; }
+    18%{ rotate:calc(var(--s) - 270deg); animation-timing-function:cubic-bezier(.22,.8,.36,1); }
+    58%{ rotate:0deg; }
     100%{ rotate:0deg; }
   }
-  .arm{ animation:spin 4.5s linear forwards, arm-scale 4.5s linear forwards; }
+  .arm{ animation:spin 3s linear forwards, arm-scale 3s linear forwards; }
 
   /* --- inner ring: sweeps on concurrently with the comet-tail arcs, as the dots slow to a halt --- */
   @keyframes ring-sweep{
     0%{ stroke-dashoffset:var(--len); }
-    16%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
-    60%{ stroke-dashoffset:0; }
+    18%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.22,.8,.36,1); }
+    58%{ stroke-dashoffset:0; }
     100%{ stroke-dashoffset:0; }
   }
-  #ring{ animation:ring-sweep 4.5s linear forwards; }
+  #ring{ animation:ring-sweep 3s linear forwards; }
 
   /* --- connecting arcs: comet tails emitted behind the forward dot of each pair —
      same keyframe timing and easing as .arm's spin, so the tail's length always
@@ -103,24 +103,24 @@
      the tail reaches it. --- */
   @keyframes draw-arc{
     0%{ stroke-dashoffset:var(--len); }
-    16%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.16,.84,.44,1); }
-    60%{ stroke-dashoffset:0; }
+    18%{ stroke-dashoffset:var(--len); animation-timing-function:cubic-bezier(.22,.8,.36,1); }
+    58%{ stroke-dashoffset:0; }
     100%{ stroke-dashoffset:0; }
   }
-  .arc{ animation:draw-arc 4.5s linear forwards; }
+  .arc{ animation:draw-arc 3s linear forwards; }
 
   /* --- the A: one continuous stroke — up the long leg, round the peak, down the
-     short leg — starts the instant the anchoring dot stops moving. --- */
+     short leg — starts as the anchoring dot settles (50%), overlapping its last creep, so there is no pause. --- */
   @keyframes draw-apath{
-    0%,60%{ stroke-dashoffset:var(--len); }
-    82%{ stroke-dashoffset:0; }
+    0%,50%{ stroke-dashoffset:var(--len); }
+    74%{ stroke-dashoffset:0; }
     100%{ stroke-dashoffset:0; }
   }
-  .apath{ animation:draw-apath 4.5s ease-out forwards; }
+  .apath{ animation:draw-apath 3s ease-out forwards; }
 
   /* --- crossbar ("shrink up" version): appears at large size right as the short leg's
      own endpoint touches the ring (which happens to be almost exactly when the A-path
-     finishes drawing, ~82% — the leg's dot sits almost precisely on the ring's radius
+     finishes drawing, ~74% — the leg's dot sits almost precisely on the ring's radius
      by design). The starting curve is a true cubic-bezier approximation of the ring's
      own circle (same center, same 189 radius) between the two points where each leg
      crosses it — so at the moment it appears it's genuinely coincident with the ring,
@@ -128,17 +128,17 @@
      into the final small curve. Ring is on top of the bar in the DOM, so the bar reads
      as sliding out from behind it. --- */
   @keyframes crossbar-grow{
-    0%,82%{ d:path("M261.42,523.76 C292.62,544.77 329.38,556.00 367.00,556.00 C405.39,556.00 442.88,544.31 474.46,522.48"); opacity:0; }
-    83%{ opacity:1; }
-    95%{ d:path("M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"); }
+    0%,74%{ d:path("M261.42,523.76 C292.62,544.77 329.38,556.00 367.00,556.00 C405.39,556.00 442.88,544.31 474.46,522.48"); opacity:0; }
+    75%{ opacity:1; }
+    88%{ d:path("M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"); }
     100%{ d:path("M293.84,404.67 C307.45,431.55 335.34,450 367.5,450 C400,450 428.13,431.17 441.58,403.83"); }
   }
-  .crossbar{ animation:crossbar-grow 4.5s ease-out forwards; }
+  .crossbar{ animation:crossbar-grow 3s ease-out forwards; }
 
   /* --- finishing shine: a single soft diagonal light sweep across the completed mark.
      Masked to a static copy of the logo's own final silhouette, so only the shapes
      light up, never the background. Runs once, on its own delay (starts right as the
-     4.5s build finishes) rather than as a percentage of the shared timeline.
+     3s build finishes) rather than as a percentage of the shared timeline.
      Animates the rect's own `x` attribute rather than a CSS transform — a
      transform on a masked SVG element breaks the mask's alignment in Chrome
      (confirmed directly: same element, same mask, only difference is transform
@@ -146,7 +146,7 @@
      while moving, the attribute-animated version stays perfectly confined). The
      diagonal angle comes from the gradient's own direction instead of a skew. --- */
   .shine{
-    animation:shine-sweep 1.1s ease-in-out 4.5s 1 both;
+    animation:shine-sweep 0.9s ease-in-out 3s 1 both;
   }
   svg :is(.shine){ animation-play-state:paused; }
   svg.ready :is(.shine){ animation-play-state:running; }
@@ -249,7 +249,7 @@
 
   // scrub to a fixed point for review: index.html#0.93 freezes at 93% through the timeline
   function scrubTo(frac){
-    const dur = 4.5; // must match the CSS animation duration
+    const dur = 3; // must match the CSS animation duration
     const all = svg.querySelectorAll('.arm,.dot,.drawable,.crossbar');
     all.forEach(el => {
       el.style.animationDelay = (-frac * dur) + 's';

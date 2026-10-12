@@ -15,13 +15,13 @@ const fs = require('fs');
   const width = 3840,
     height = 2160;
   const fps = 30;
-  const totalDuration = 6.8; // seconds
-  const buildDuration = 4.5; // matches the page's own build animation duration
+  const totalDuration = 4.4; // seconds: 3s build + the shine + a short hold
+  const buildDuration = 3; // matches the page's own build animation duration
   const frameDir = path.join(__dirname, 'pngframes');
   fs.rmSync(frameDir, { recursive: true, force: true });
   fs.mkdirSync(frameDir, { recursive: true });
 
-  const browser = await chromium.launch({ headless: false });
+  const browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   await page.goto('file://' + path.join(__dirname, 'index_4k.html') + '#0');
